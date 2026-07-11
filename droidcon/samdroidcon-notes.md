@@ -514,13 +514,75 @@ Auth: compose → send → verify in sent folder against a test IMAP account. Co
 
 **Round 2 (Sam's direction, 2026-07-12): a REAL app on a stock Android device.**
 - Gmail — ❌ privacy (people would see his email; Google Auth pain).
-- **Google Calendar — Claude's recommendation.** The public repo already ships a committed
-  Calendar fixture trailmap (`trails/config/trailmaps/calendar/`, targeting
-  `com.google.android.calendar`, waypoint JSONs + screenshots) → ASSET C's waypoint-map
-  data mostly exists; stock app everyone has; fresh test account kills privacy. Journey:
-  "Add 'Trailblaze: Map Your App for AI' — Jul 17, W222 B — to my calendar with a reminder."
-- usa.droidcon.com — "pretty awesome" as a WEB (Playwright) scenario, less impressive
-  native; candidate for a short Act 6 web-target flourish, not the anchor.
+- Google Calendar — "great because we already have it."
+- **Contacts (Sam's new idea)** — "a great use case of being able to define a unified
+  trail with one goal and have it implemented in both places [Android + iOS]. It's also
+  not completely trivial, so it could be the one we end up using."
+- Sam: "We have the power to do both. So maybe I could get some agents working on both."
+- usa.droidcon.com — Sam's concern: **ephemeral** — the site changes next year, so the
+  committed example rots; "only useful at this one moment, but it still shows off
+  everything and I kind of like that."
+
+**Round-2 repo audit (2026-07-12, verified on main):**
+
+*Calendar trailmap* (`trails/config/trailmaps/calendar/`, target Google Calendar,
+`com.google.android.calendar`):
+- **Exactly 100 waypoints + 64 shortcuts committed** — the "100/64" ASSET C numbers ARE
+  this corpus. Quality is high: waypoints carry `required` + `forbidden` selectors with
+  prose descriptions (day_view forbids the multi-day "Open Day View" cell — real
+  discriminators, not toy matchers); ~70 have example.json + example.webp screenshots.
+- Coverage includes the notoriously painful corners: recurring-event edit/delete dialogs,
+  custom recurrence, timezone/repeat/notification pickers, Google sign-in flow, permission
+  dialogs (notification/location/photos), notification-fired + snooze, share intents,
+  widget config, quick-create in ~10 state variants.
+- Gaps: **zero committed calendar trails** (it's a map with no journeys), tools = 2 thin
+  launch tools only, Android-only (ios/web platform stubs empty).
+- Verdict: complex enough to be impressive **as the map** (ASSET C ready essentially
+  today); ASSET A's journey must be authored (which is fine — authoring is the demo).
+
+*Contacts* — richer than assumed, and asymmetric in a USEFUL way:
+- `trails/config/trailmaps/contacts/`: ONE trailmap already targeting BOTH platforms —
+  Google Contacts (android) + Apple Contacts (`com.apple.MobileAddressBook`, ios).
+  ~103 iOS waypoints + 81 iOS shortcuts committed; Android side has none.
+- `examples/ios-contacts/` = the repo's self-described "canonical mobile reference":
+  10 typed TS tools WITH unit tests (createContact, deleteContact, openContact,
+  searchContacts, searchAndVerify, verifyContactStructure, addPhoneNumber,
+  dismissKeyboardIfPresent, openApp, shared.ts utilities) + a per-target system prompt.
+- `trails/ios-contacts/`: 18 committed iOS trails; `trails/contacts/`: 3 baby Android
+  trails. **All in the OLD per-platform format** (`ios-iphone.trail.yaml`,
+  `android.trail.yaml`) with `blaze.yaml` (NL-only source) sitting next to each —
+  source + bytecode as a literal directory listing.
+- The unified-contacts demo therefore re-enacts Act 2 with the repo's real files: take
+  the journey that already exists on iOS ("create contact 'Trailblaze Demo', verify in
+  list" — recording = contacts_ios_openApp + contacts_ios_createContact), materialize
+  the SAME file with an android-phone recording → one unified trail, committable, and
+  it upgrades the repo's own examples off the v1 shape. Slide 17's fictional
+  `myapp_signInViaUI` YAML can later be swapped for this real file.
+
+*Proposed asset division (both apps, per Sam's "power to do both"):*
+- ASSET A (side-by-side + report walk): **Calendar** — "Add 'Trailblaze: Map Your App
+  for AI' — Jul 17, W222 B — with a reminder"; verify = event on the day grid.
+- ASSET B (CLI authoring): **Contacts** — blaze the Android half into the unified file
+  that already carries the iOS recording; end-card = one file, two `recording:` blocks.
+- ASSET C (graph flythrough): **Calendar's 100/64 map**; optional 5-second flash of
+  contacts-iOS (103/81) as a second map — proves pattern, not one-off.
+
+*Agent workstreams for Sam to kick off:*
+1. **Calendar journey** — author + record the add-event trail on a stock emulator with a
+   fresh test Google account; pin the Calendar app version; archive the run (ASSET A
+   needs the replay + its report). Acceptance: trail replays zero-LLM; report zip opens.
+2. **Contacts unification** — write the unified trail (ios-iphone recording ported from
+   test-create-contact-basic; android-phone recording blazed fresh via CLI, captured on
+   video for ASSET B). Acceptance: one file, both classifiers, both replay green.
+   Stretch: backfill a starter set of Android contacts waypoints so the map story isn't
+   iOS-only.
+
+*usa.droidcon.com framing (Claude's take):* the ephemerality is an ARGUMENT, not just a
+flaw — "this site will be different next year" is literally the staleness thesis
+(recordings rot; the NL journey survives; re-blaze re-materializes). Use as a
+moment-in-time flourish (b-roll, or committed as a dated `examples/droidcon-2026/` with
+a README saying it's a snapshot that will rot by design). Not the anchor — Sam's own
+read: web is less impressive for this room.
 
 Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow) still
 working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.

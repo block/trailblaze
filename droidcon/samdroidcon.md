@@ -756,6 +756,9 @@ class: text-center
 Pre-recorded. The verbs on screen are real: `trailblaze step --save` while driving,
 then `trailblaze run` to replay what was just saved. First time the audience sees the
 actual CLI — the "blaze" metaphor gets its concrete commands here.
+Candidate (Sam deciding): blaze the ANDROID half of the unified Contacts trail — the
+iOS recording already exists in-repo (contacts_ios_createContact), so the clip ends on
+one file with two recording blocks. Slide 17 made real.
 -->
 
 ---
@@ -915,11 +918,12 @@ class: text-center
 <div class="pt-4 opacity-60">the demo app's waypoint map — every named place, every shortcut between them</div>
 
 <!--
-Sam's call: this shows the waypoint map OF THE DEMO APP we pick (he'll get the data).
-If the demo app is Google Calendar, the data mostly exists — the public repo ships a
-committed Calendar fixture trailmap (trails/config/trailmaps/calendar/, targeting
-com.google.android.calendar) with waypoint JSONs + screenshots. Label the app honestly
-either way — protects the future framing.
+Sam's call: this shows the waypoint map OF THE DEMO APP we pick.
+VERIFIED 2026-07-12: the committed Calendar trailmap has EXACTLY 100 waypoints +
+64 shortcuts (trails/config/trailmaps/calendar/) — required+forbidden matchers,
+~70 with screenshots. Contacts-iOS is a second committed map: ~103 waypoints +
+81 shortcuts. Optional beat: flash the second map — "a pattern, not a one-off."
+Label the app honestly either way — protects the future framing.
 HAND-OFF: "The whole recipe, one slide."
 -->
 
