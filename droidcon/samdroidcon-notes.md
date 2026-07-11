@@ -9,8 +9,8 @@ Deck lives in `samdroidcon.md` — this file is scratch space so ideas don't tai
 - `samdroidcon-notes.md` — this file: Sam's brainstorm capture + decisions + open questions
 - `samdroidcon-research.md` — topic digests from deep-reading github.com/block/trailblaze
 - `samdroidcon-repo-map.md` — where everything lives in the trailblaze repo (navigation aid)
-- Setup for live preview: `.claude/launch.json` (runs local slidev binary, port 3030) and
-  project `.npmrc` (Block Artifactory registry needs the trailing slash for bun).
+- Setup for live preview: `.claude/launch.json` (runs local slidev binary, port 3030); a
+  local untracked `.npmrc` holds any machine-specific registry config.
   Fresh machine: `bun add @slidev/cli @slidev/theme-seriph`, then `bunx slidev samdroidcon.md`.
 
 ## Talk reframe (2026-07-11 brainstorm)
