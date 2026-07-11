@@ -97,18 +97,20 @@ new features + hardware-specific work automation can't reach yet.
 
 # Ten years on this problem
 
-- **2016 · Droidcon NYC** — the robot pattern + why screenshots matter
-- **2025 · Droidcon NYC** — the Trailblaze agent loop internals (with Brian)
-- **2026 · today** — 1.5 years in production at Square & Cash, and where it's going
+- **2016** — *"Espresso: A Screenshot is Worth 1,000 Words"*
+- **2025** — *"AI Driven Mobile Testing"* (with Brian Gardner)
+- **2026** — 1.5 years in production, and where it's going
 
 <div class="pt-8 opacity-70">
 
-*By the end you'll see what the map is — spoiler: you're already building it.*
+*By the end you'll see what the map is — you're already building it.*
 
 </div>
 
 <!--
-Title seed #1. Credentials in one slide, no dwelling.
+Both prior talks were Droidcon NYC. Title seed #1. Credentials in one slide, no dwelling.
+2025's future-work slide is a checklist this talk ticks off: "reuse the same prompts
+across platforms" → unified format; "custom app interactions" → custom tools/TS.
 HAND-OFF: "Our answer is a thesis about natural language and determinism."
 -->
 
@@ -362,23 +364,27 @@ At hundreds → thousands of trails, this is what makes maintenance survivable.
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
-# A screenshot was worth a thousand words
+# A screenshot was worth 1,000 words
 
-Per step, the report captures:
+Per step:
 
-- 📸 the **screenshot**
-- 🌲 the **view hierarchy**
-- 📜 the **logs**
-- 🤖 the **LLM transcript** (when AI was involved)
+- 📸 **screenshot**
+- 🌲 **view hierarchy**
+- 📜 **logs**
+- 🤖 **LLM transcript**
 
 <div class="pt-6 text-xl opacity-80">
 
-Now the LLM has **all the context it needs** to solve failures and iterate.
+Now it's worth 1,000 **tokens** — the LLM has everything it needs to iterate.
 
 </div>
 
 <!--
-The second 2016 thread (screenshots), upgraded for the LLM era.
+The second 2016 thread, upgraded: the LLM is the NEW AUDIENCE for test reports.
+2016 callback pair to narrate: "Oops, Your Test Failed" (wall of hierarchy text) →
+"Ahh, I See Why" (add the screenshot). In 2016 that context was for humans;
+today the same context is what lets the agent solve failures.
+2016: "To them it's just console output" → next slide (reports) answers it forever.
 -->
 
 ---

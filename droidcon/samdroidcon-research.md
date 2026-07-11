@@ -189,6 +189,42 @@ semantic recording, workspace-owned waypoint resolution for assertWaypoint.
 navigation over that map is the near-term vision." This is exactly Sam's 'philosophy of
 where we're going' angle — waypoints belong in the *future/vision* act, not as shipped fact.
 
+## Sam's previous talks (read from SpeakerDeck transcripts)
+
+**2016 · Droidcon NYC — "Espresso: A Screenshot is Worth 1,000 Words"** (102 slides, Capital One era).
+Arc: Espresso in 2 min → Screenshots (Why/How/When/Cost) → Maintainable Test Architecture
+(robot pattern) → tips. Verbatim gold:
+- Robot slides literally labeled **"What"** and **"How"**: "Test = What & How" (problem) →
+  "Robot = How, Test = What" (fix); "View Changed" X's every test → with robot, one X.
+- The one-liner: `new LoginRobot().assertLoginDisabled().username("sam").login().assertHomeScreenShown()`
+  — every robot method takes a screenshot ("Screenshots for Free").
+- Failure-diagnosis pair: "**Oops, Your Test Failed**" (wall of NoMatchingViewException
+  hierarchy text) → "**Ahh, I See Why**" (same + screenshot).
+- "NO ONE sees the value of your tests… yet" / "**To them it's just console output**" /
+  "Let EVERYONE see what's being tested."
+- **Mona Lisa exercise**: describe the Mona Lisa to someone blind — UIs are visual.
+- "ALWAYS on FAILURE"; "NEVER Thread.sleep()"; closing slide was just "**1,000 Words**".
+
+**2025 · Droidcon NYC — "AI Driven Mobile Testing: Blazing the Trail at Block"**
+(63 slides, **with Brian Gardner** — not Plummer). Arc: origin timeline (DragonCrawl Apr
+2024 → ai-test-agent Nov 2024 → 🧭 Trailblaze Mar 2025) → agent loop (do/while, GPT-4o-mini,
+Tap/InputText/Erase/Scroll + Halt) → productionizing (on-device Maestro driver for the Test
+Farm) → challenges (no tool calls → ToolChoice required; X,Y doesn't scale for recordings;
+Set-of-Mark) → architecture layers → future. **Future-work slide = 2026 checklist:**
+"iOS and Web support?", "**Reuse the same prompts across platforms**" (→ unified format!),
+"Custom App Interactions: Draw Signature, Connect Virtual Card Reader" (→ custom tools/TS),
+"MCP authoring improvements", "Show us your AI tools!". Screen state was already
+"View Hierarchy • Screenshot". Close: "Incremental adoption is key."
+
+**Callback hooks for 2026:**
+1. What-vs-how side-by-side: the 2016 LoginRobot one-liner next to a natural-language trail.
+2. "A screenshot was worth 1,000 words → now it's worth 1,000 **tokens**" — the LLM is the
+   new audience for test reports (Oops/Ahh pair reborn as agent context).
+3. "To them it's just console output" → standalone CDN reports readable by everyone AND agents.
+4. 2025's future-work slide → tick items off live ("we said we'd reuse prompts across
+   platforms — that became the unified trail format").
+5. Timeline device: extend the 2025 dated-milestones opener back to 2016 and forward to waypoints.
+
 ## Devlog timeline — the story beats (condensed from 87 devlogs)
 
 **Phases:** founding thesis (2025-10) → Kotlin/Maestro foundation (2026-01) → agent
