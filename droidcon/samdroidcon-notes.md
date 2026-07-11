@@ -162,6 +162,20 @@ Continuity with past talks:
 - Defaults to the **latest build**; can pin an **exact build** (e.g. for a regression).
 - This is public/shareable — it answers the "how do 7 targets run in CI" Q&A preempt.
 
+## Core points round 4 (2026-07-11, reacting to compiler slide)
+
+- **Self-heal = recompilation.** Because the NL source exists, we can *recompile* a step
+  against the app as it works RIGHT NOW: the LLM navigates the app to meet the laid-out
+  steps/objective — and appropriately reports if it cannot. (Extends the compiler metaphor;
+  self-heal slide should sit adjacent to the compiler slide.)
+- **Deep execution context is a key differentiator.** Per trail run Trailblaze captures
+  network calls, logcat, analytics events, screenshots, hierarchy, etc. — "deep detailed
+  context of the execution." That context is what lets the LLM recover well during
+  self-heal, not just try again blind.
+- **Source-code trace-back.** If the LLM also has your source, it can trace a failure back,
+  put in a fix or a new version, and continue. Block mostly tests **binary builds**, but
+  still traces issues back to source and finds the commits that caused them.
+
 ## Answers locked in (2026-07-11)
 
 - **Talk ethos:** developer conferences are about sharing technical thought process and

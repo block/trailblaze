@@ -185,6 +185,25 @@ NOT the device itself (Kotlin/Java is what actually runs the code on Android).
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
+# Self-heal = recompilation
+
+- App changed? **Recompile the step** — against the app *as it is now*
+- The agent meets the objective… **or says it can't**
+- **Off by default** — failures stay actionable
+- **% self-healed** = your staleness signal
+
+<!--
+The compiler metaphor completing itself: the NL source is still there, so we can recompile.
+Recovery works because the LLM gets DEEP EXECUTION CONTEXT for this run — screenshots,
+hierarchy, logcat, network calls, analytics events (full list lands in Act 3).
+Self-heal is the hinge between the two threads: when determinism breaks, the NL rescues it.
+A* cost model (recording=1.0, AI=5.0) lives on a BACKUP slide.
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+
 # YAML: the shared surface
 
 - Not plain YAML — the vocabulary is **your custom tools**
@@ -199,20 +218,6 @@ but a human approves before commit. Agent-authored, human-approved.
 This is the answer to "do you just trust the AI?"
 -->
 
----
-
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
-
-# Self-heal: the hinge
-
-- Recording fails → LLM re-solves **just that step** from the natural language
-- **Off by default** — failures stay actionable
-- **% passed via self-heal** = your recording-staleness health signal
-
-<!--
-Self-heal is the hinge between the two threads: when determinism breaks, the NL rescues it.
-A* cost model (recording=1.0, AI=5.0) lives on a BACKUP slide.
--->
 
 ---
 layout: center
@@ -393,9 +398,8 @@ At hundreds → thousands of trails, this is what makes maintenance survivable.
 
 Per step:
 
-- 📸 **screenshot**
-- 🌲 **view hierarchy**
-- 📜 **logs**
+- 📸 **screenshot** · 🌲 **view hierarchy**
+- 📜 **logcat** · 🌐 **network calls** · 📊 **analytics events**
 - 🤖 **LLM transcript**
 
 <div class="pt-6 text-xl opacity-80">
@@ -405,6 +409,10 @@ Now it's worth 1,000 **tokens** — the LLM has everything it needs to iterate.
 </div>
 
 <!--
+"Deep, detailed context of the execution" — this is WHY self-heal recovery works (Act 1
+callback) and why agents can diagnose. With source access, the LLM can trace a failure
+back to the commit that caused it — we mostly test binary builds at Block, and still
+trace issues back to source.
 The second 2016 thread, upgraded: the LLM is the NEW AUDIENCE for test reports.
 2016 callback pair to narrate: "Oops, Your Test Failed" (wall of hierarchy text) →
 "Ahh, I See Why" (add the screenshot). In 2016 that context was for humans;
