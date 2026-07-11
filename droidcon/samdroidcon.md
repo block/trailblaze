@@ -231,7 +231,7 @@ flowchart LR
   NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail +<br/>recordings"]
   REC -->|"accept"| GIT[("git")]
   GIT -->|"replay<br/>zero LLM"| CI["CI run"]
-  CI -->|"archive"| ZIP["📦 last<br/>hike"]
+  CI -->|"archive"| ZIP["📦 last<br/>run"]
   CI -.->|"app changed:<br/>self-heal 🤖"| GIT
 ```
 
@@ -241,7 +241,7 @@ flowchart LR
 The one-diagram version of the whole talk. Walk it left to right:
 author once with AI → human accepts → git is the source → CI replays free →
 every run archived → when the app changes, recompile and the loop closes.
-"Last successful hike" gets its own moment in Act 3.
+"Last successful run" gets its own moment in Act 3.
 -->
 
 
@@ -486,22 +486,22 @@ layout: center
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
-# The last hike down that trail
+# The last run down that trail
 
 <div class="pt-6 text-lg opacity-80">
 
 The trail is just **the steps to follow**.
 
 CI archives every run — so you can always pull
-**the last successful hike**: the pictures, the logs, everything.
+**the last successful run**: the pictures, the logs, everything.
 
 </div>
 
 <!--
-Sam's analogy — lean into it. A trail on disk loses the deep execution context;
-the archived zip preserves it per run. At any point: what was the latest successful
-run of this test? Pull it down, diagnose, debug.
-And sometimes on the hike you find the creek overflowing and route around it — self-heal.
+TERMINOLOGY: it's always a "run" — never a "hike."
+A trail on disk loses the deep execution context; the archived zip preserves it per run.
+At any point: what was the latest successful run of this test? Pull it down, diagnose, debug.
+And sometimes on a run you find the creek overflowing and route around it — self-heal.
 -->
 
 ---

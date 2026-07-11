@@ -187,7 +187,8 @@ Continuity with past talks:
 - **Recordings are disposable; the journey is not.** Sourced in git, you can drop the
   recordings for one platform (or all) and re-materialize them — the LLM has the past
   recording + all its context to do so.
-- **Archived runs = "the last hike down that trail."** A trail alone loses the deep
+- **Archived runs = "the last run down that trail."** (Terminology: always "run," NEVER
+  "hike" — Trailblaze never uses that word.) A trail alone loses the deep
   execution context (hierarchies, logs, network, analytics). In CI every run's zip is
   archived — at any point, pull a test's **latest successful run** for diagnostics: all the
   pictures and logs from the last time somebody went down that trail. The trail = the steps
