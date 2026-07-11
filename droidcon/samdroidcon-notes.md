@@ -449,6 +449,45 @@ title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grac
 - Secrets/test accounts (covered in Act 2, backup detail: --secret, sensitiveMemoryKeys).
 - A* cost model + execution modes detail. QuickJS/Bun runtime detail. Codegen pipeline.
 
+## Demo app decision (slide 12, ASSET A — side-by-side CLI blaze vs. recording replay)
+
+Sam's constraints: no toy demos (wikipedia/calculator/contacts), no other company's app
+(affiliation/bias), must be committable to block/trailblaze as a real example trail —
+"not smoke and mirrors, literally something sitting out there." Gmail-compose is a great
+personal-automation STORY but Google Auth + affiliation make it a bad committed demo —
+keep as a spoken anecdote.
+
+Options (Claude's ranking):
+
+**A. The droidcon conference app itself — RECOMMENDED.** Touchlab's DroidconKotlin
+(github.com/touchlab/DroidconKotlin) — open source, Kotlin Multiplatform, Android + iOS.
+Trail: "Find <this talk> in the schedule and bookmark it" (maybe + "verify it appears in
+My Agenda"). Why it wins: the audience literally has the app on their phones during the
+talk; zero auth; OSS so no affiliation; KMP Android+iOS = demos the unified format's
+multi-platform recordings in ONE file; committable as `trailmaps/droidcon/` + example
+trails. Ultra-meta: the agent finds the very talk being given.
+Risk: need a stable build — pin an APK/simulator build, don't depend on conference wifi.
+
+**B. Square POS (sandbox/demo mode) — the "real stuff" b-roll, video only.** Most
+production credibility ("this is what we actually drive, on Register hardware"). But the
+OSS scrub list treats Square POS references as sensitive → can't commit as an example;
+use as a short video segment only if cleared. Auth via a trailhead provisioning tool is
+itself a story beat.
+
+**C. Mastodon (official app, OSS).** Matches Sam's personal use case — content that lives
+only in a mobile app. Browse feed / post / verify. Messy real-world UI (infinite scroll,
+pull-to-refresh) shows off scrolling + assertions. Committable. Needs a test account.
+
+**D. Thunderbird for Android (OSS, ex-K-9).** The email-compose use case WITHOUT Google
+Auth: compose → send → verify in sent folder against a test IMAP account. Committable.
+
+**E. Goose desktop (Block's own OSS agent).** Trails already exist in the repo;
+"Trailblaze testing an AI agent" is memorable — but desktop, not mobile, for a Droidcon room.
+
+Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow) still
+working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.
+Could show a wall-clock/step counter on each side.
+
 ## Ideas
 
 _(brainstorm below — promote the keepers into the deck)_
