@@ -224,15 +224,18 @@ This is the answer to "do you just trust the AI?"
 
 # The trail lifecycle
 
-```mermaid {scale: 0.8}
+<div class="flex justify-center pt-10">
+
+```mermaid {scale: 0.9}
 flowchart LR
-  NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail<br/>+ recordings"]
-  REC -->|"human accepts"| GIT[("git")]
-  GIT -->|"replay · zero LLM"| CI["CI run"]
-  CI -->|"archive 📦"| ZIP["last successful hike"]
-  CI -.->|"app changed"| HEAL["self-heal 🤖"]
-  HEAL -.->|"recompiled recording"| GIT
+  NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail +<br/>recordings"]
+  REC -->|"accept"| GIT[("git")]
+  GIT -->|"replay<br/>zero LLM"| CI["CI run"]
+  CI -->|"archive"| ZIP["📦 last<br/>hike"]
+  CI -.->|"app changed:<br/>self-heal 🤖"| GIT
 ```
+
+</div>
 
 <!--
 The one-diagram version of the whole talk. Walk it left to right:
