@@ -229,6 +229,31 @@ Continuity with past talks:
 - "Trail map" (tool registry on disk) vs. the talk title "Map Your App for AI" — same map,
   different map, or intentional double meaning?
 
+## Sam's slide style (extracted from the 2016 + 2025 decks — apply to this deck)
+
+Content density & type:
+- **Many slides, each light** — 2016 was 102 slides, 2025 was 63 for ~40 min. Sam advances
+  fast; one idea per slide beats one slide with five bullets.
+- **Build sequences across consecutive slides**, not v-clicks on a dense slide: the 2016
+  What/How robot diagram evolved over ~10 slides; the 2025 architecture diagram added one
+  layer per slide. Repetition-with-addition is his reinforcement mechanic.
+- **Cumulative lists**: "1. See what's tested" → next slide adds "2. Diagnose failures" →
+  next adds "3. Share your tests."
+- **Real, verbatim code in small doses**: the do/while agent loop, a single data class, one
+  robot one-liner. Code is shown to be *read aloud*, not studied.
+- **Numbered evolution storytelling**: "1st Attempt → 2nd Attempt → 3rd Impl → Final" —
+  wrong turns narrated as a sequence, not a confession.
+- **Dated milestone timeline slides** (2025 origin: DragonCrawl Apr 2024 → ai-test-agent
+  Nov 2024 → Trailblaze Mar 2025).
+- **Headlines are statements or questions** ("What does 'AI Driven' mean?", "Oops, Your
+  Test Failed" → "Ahh, I See Why"), not topic labels.
+- **Punchline slides with 2–3 words** ("1,000 Words") for the big beats.
+- Agenda slide up front; explicit **Call To Action** close; occasional audience poll opener.
+
+Deck implication: prefer SPLITTING a bulleted slide into 2–3 light slides / a build
+sequence over cramming one slide. The 38-slide skeleton will likely grow to 55–65 slides
+at Sam's natural density — expected, not scope creep.
+
 ## Proposed outline v3 (2026-07-11 — after step-back + subagent review; v2 superseded)
 
 **The spine (state at end of Act 1, reprise on recipe slide):** two braided threads —
