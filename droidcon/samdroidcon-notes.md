@@ -584,6 +584,89 @@ moment-in-time flourish (b-roll, or committed as a dated `examples/droidcon-2026
 a README saying it's a snapshot that will rot by design). Not the anchor — Sam's own
 read: web is less impressive for this room.
 
+## Cross-app demo scenarios (2026-07-12, Sam + Claude design session)
+
+**Decision: focus = Calendar + Contacts.** Sam wants COMPLEX, CROSS-APP use cases
+("that usually works out pretty well") showing multiple layers. His sketch: start from
+a message → create contact → add picture → save number → back to the message → send to
+the new contact. His observation to honor: with `target: contacts`, only the contacts
+custom tools load — the other apps run on CORE tools (tapOn, inputText, launchApp,
+assertVisibleWithText, assertWithAi…). That texture change at the app boundary is a
+TEACHING moment, not a bug. Docs also list **cross-app memory** as a built-in agent
+feature (docs/index.md, Mobile-Agent-v3 lineage) — grounding for the narration.
+
+### Scenario A — "Unknown number → teammate" (flagship wow b-roll; ASSET B candidate)
+```yaml
+- config:
+    title: "Cross-app: turn an unknown number into a contact, then reply by name"
+    target: contacts
+- prompts:
+    - step: Open Messages and find the conversation from the unknown number ending in 0134
+    - step: Start creating a contact for that number from the conversation
+    - step: Name the contact "Casey Trailblaze" and save the number as mobile
+    - step: Add a photo to the contact using the camera
+    - verify: The contact card shows the name, mobile number, and photo
+    - step: Return to the conversation in Messages
+    - verify: The conversation now shows "Casey Trailblaze" instead of the raw number
+    - step: Reply "Welcome to the team!" and send it
+    - verify: The sent message appears in the thread
+```
+Layers: 3 apps (Messages → Contacts → Camera → Messages) · custom tools ONLY inside
+contacts (createContact/addPhoneNumber/verifyContactStructure) · core-tool fallback
+outside · the thread-renames-itself assertion = observable cross-app side effect ·
+same NL on iOS/Android with genuinely divergent recordings (Google Messages "Add
+contact" chip vs iOS thread-header → Info → Create New Contact) · iOS photo leg lands
+on committed waypoints (camera_capture, visual_identity_photo, photo crop).
+**Feasibility traps:** Android emulator — inbound SMS seedable (`adb emu sms send
+<num> <text>`; candidate trailhead tool via host-side exec), outbound shows in-thread
+w/o delivery = verify against the thread, camera = emulated scene. **iOS Simulator has
+NO SMS path (no simctl sms verb)** → record the iOS variant on a REAL iPhone, or demote
+iOS to the contacts-only core (create + photo + verify). NOT CI-safe as committed
+example because of the SMS dependency — treat as recorded b-roll.
+
+### Scenario B — "Invite the new teammate" (Calendar × Contacts; committable + ASSET A candidate)
+```yaml
+- config:
+    title: "Cross-app: create a contact, then invite them to the talk"
+    target: contacts   # or a composed demo trailmap — open question below
+- prompts:
+    - step: Create a contact "Casey Trailblaze" with email casey.trailblaze.demo@gmail.com
+    - verify: The contact shows the name and email
+    - step: Open Google Calendar and go to July 17
+    - step: Create an event "Trailblaze: Map Your App for AI" at 1:00 PM in room "W222 B"
+    - step: Add Casey Trailblaze as a guest
+    - step: Set a 30-minute notification
+    - step: Save the event
+    - verify: July 17 shows the event with one guest and a 30-minute reminder
+```
+Every calendar beat lands on a COMMITTED waypoint: quick_create_expanded,
+add_location, add_people + add_people_typing (guest autocomplete pulling from Contacts
+= the cross-app payoff), notification_picker, event_detail_with_attendees. Fully
+emulator-safe (no SMS, camera optional) → **the durable committed example**, replayable
+zero-LLM for ASSET A, and ASSET C can light up BOTH graphs and trace this trail across
+them. Stretch beat (optional, timing-fiddly): let the reminder fire and snooze it from
+the shade — event_notification_fired + snooze_options waypoints exist.
+
+### Scenario C — share-sheet coda (optional 9th step on A)
+Share the finished contact card from Contacts into Messages (share sheet = OS
+connective tissue; Android intents vs iOS share sheet, same NL).
+
+### Open technical question for the agent workstreams (answer FIRST)
+Sam's wrinkle — "we'd only get contacts tools" — may have a better answer than "that's
+fine": trailmaps compose via `dependencies:` (docs/trailmaps.md: transitive, field-level
+closest-wins; waypoints wired through loadResolvedRuntime). **Empirically check whether a
+tiny `trailmaps/droidcon-demo/` with `dependencies: [trailblaze, contacts, calendar]`
+surfaces BOTH apps' tools + waypoints in one run.** If yes: the demo trailmap IS the
+composition story on stage ("maps compose"). If no: run Scenario B with target:
+contacts and narrate the boundary honestly (calendar side on core tools — still lands
+on calendar waypoints? verify; waypoints may load only for the active trailmap).
+
+### Layer inventory the pair covers (for slide narration)
+custom tools ↔ core tools boundary · waypoint assertions inside the map · cross-app
+side-effect verification (thread rename, guest autocomplete) · camera/permission
+interruptions · unified NL + divergent per-platform recordings · trailmap composition
+(if dependencies pan out) · zero-LLM replay of a 3-app journey.
+
 Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow) still
 working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.
 Could show a wall-clock/step counter on each side.
