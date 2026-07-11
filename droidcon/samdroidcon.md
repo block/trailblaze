@@ -35,7 +35,7 @@ layout: center
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 0:00–4:00</div>
 
-# AI is at our disposal.
+# AIs at our disposal
 
 ## So how do we get good test coverage with it?
 
