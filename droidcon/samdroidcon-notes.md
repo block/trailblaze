@@ -220,6 +220,17 @@ Continuity with past talks:
   "An LLM needs to pick what's going on, but that doesn't mean monoliths — we still break
   things down into smaller, reusable pieces." Only the right surface is advertised.
 
+## Core points round 7 (2026-07-11)
+
+- **Trailblaze is not only for test authoring.** It gives agents-with-an-objective the
+  ability to interact with devices. A trailmap for an app on that device = the agent
+  navigates more effectively — fewer decisions, tools doing the work under the hood.
+- **"You never, ever, ever need a trail to use Trailblaze."** Immediate value = driving
+  UIs with an agent, period. No prerequisite. Deliberately designed so that all the data
+  is already being captured — so the moment you decide something's worth doing repeatedly,
+  you save it as a trail. Device control first; trails when you're ready.
+  (2026 version of 2025's closing message "incremental adoption is key.")
+
 ## Answers locked in (2026-07-11)
 
 - **Talk ethos:** developer conferences are about sharing technical thought process and

@@ -780,6 +780,44 @@ Title payoff = a NAMING, not a reveal.
 
 ---
 
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
+
+# Not just test authoring
+
+- An agent + an objective + a device — that's enough
+- With a **trailmap**: fewer decisions, tools do the work underneath
+- Everything is **already being captured**
+
+<!--
+Trailblaze = device control for agents, full stop. The trailmap makes any agent
+more effective at navigating YOUR app — testing is one (great) use of that.
+-->
+
+---
+layout: center
+class: text-center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
+
+# You never need a trail
+
+<div class="pt-6 text-xl opacity-80">
+
+Drive UIs with an agent on **day one**.
+
+When something's worth repeating — **save it**. It's all been recorded.
+
+</div>
+
+<!--
+Sam: "you never ever ever need a trail to use Trailblaze." Deliberate design:
+the data is always captured, so a repeatable moment converts to a trail for free.
+2025's close was "incremental adoption is key" — this is that promise, kept.
+-->
+
+---
+
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · The future</div>
 
 # Next: waypoints
