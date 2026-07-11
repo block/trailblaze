@@ -523,6 +523,58 @@ Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow)
 working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.
 Could show a wall-clock/step counter on each side.
 
+## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
+
+### Decisions only Sam can make (blocking)
+1. **Demo app** — still undecided; blocks ASSET A/B production. Recommendation on file:
+   DroidconKotlin (option A). DECIDE TODAY.
+2. **Production evidence** — everything shown is a fixture app. One beat of proof Block
+   runs this for real: scrubbed CI report/dashboard screenshot, "last night: N trails ×
+   M devices" number, or cleared Square POS b-roll. What's shareable?
+3. **A reliability stat** — any coarse pass-rate / %-self-healed number for Act 7, or a
+   prepped verbal answer for "does it actually pass?"
+4. **"Recordings are earned, not written"** (slide 29) — approve or reword.
+
+### Content gaps (Claude can fix on approval)
+5. **The abstract's economic hook never lands**: slow/expensive/non-deterministic → painful
+   in CI is nowhere on the main path. Add one Act 0/1 beat; spec ASSET A pt 1 as the
+   side-by-side with wall clocks (notes already say "the side-by-side IS the thesis").
+6. **`verify:` on slide 16 quietly contradicts "zero LLM replay"** — NL assertion with no
+   recording block. Either show a recorded assertion or add the speaker-note answer.
+7. **ASSET B has no slide** — referenced only in slide 32's note. Add placeholder slide.
+8. **The map is never shown as an artifact** — no trailmap.yaml/directory tree/toolbox
+   output anywhere. One slide in Act 4 Beat 1.
+9. **No agenda slide** — Sam's signature style (2016 + 2025 both had one). Add after slide 5.
+10. **Act 5 opens cold** — Maestro first mentioned in the table that replaces it; "other
+    half of slow" has no antecedent. One setup line: "replay was deterministic but every
+    action paid ~600ms of driver tax."
+11. **Slide 37→38 seam** — no hand-off into waypoints. Add: "that's the map today — here's
+    the part I haven't proven yet."
+12. **Whose agent?** — never says Claude Code/Codex IS the driving agent until CTA. One
+    line on slide 31/32. Plus ballpark authoring cost on backup 44.
+13. **CLI verbs** — deck only teaches "blaze" (metaphor); real commands are `step --save`,
+    `run`, `verify`, `check`. Show them once (CTA or ASSET B end-card).
+14. **Slide 21 granularity** — screenshot/hierarchy/transcript are per-step; logcat/network
+    are per-RUN opt-in captures; analytics is Sam's claim not verified in repo. Soften or verify.
+15. **No competitive-positioning backup** — guaranteed Q&A ("vs Maestro AI/Appium/SaaS?").
+    Research file has the ammo ("positioning gold"). One backup slide.
+
+### Production checklist (by Jul 16)
+- Record ASSET A pt1 (side-by-side + wall clocks), A pt2 (report walk), B (CLI toolbox
+  authoring w/ NL steps), C (waypoint graph flythrough) — durations unbudgeted; assign.
+- Square hardware imagery for slide 4 (currently emoji) — squareup.com/us/en/hardware.
+- QR code for slide 41.
+- Timing pinch points: Act 1 (8 slides + video in 5 min), Act 4 (9 slides + peak + ASSET B
+  in 6.5 min). Act 5 has the only slack. Rebalance after assets have durations.
+- Density pass (skeleton → Sam's 55–65-slide style) — timebox to ~1 day AFTER ordering freeze.
+- Stale-notes cleanup: the old "YAML stale on slides 6 & 10" item is DONE (slide 16 matches
+  spec); verify `supportedPlatforms` field name + `ctx.tools.tapOn` against the SDK before stage.
+
+### Verified clean (no action)
+All 7 core-points rounds represented · accuracy spot-checks pass (3x conservative, waypoint
+counts labeled as fixture, self-heal defaults, A* costs, product names, brew tap, tsc trick)
+· waypoints correctly future-framed · "hike" absent · 7 targets never drifts to 8.
+
 ## Ideas
 
 _(brainstorm below — promote the keepers into the deck)_
