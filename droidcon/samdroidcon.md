@@ -2,7 +2,7 @@
 theme: seriph
 title: 'Trailblaze: Map Your App for AI'
 info: |
-  Droidcon · Jul 17 2026 · W222 B · Sam Edwards
+  Droidcon USA 2026 · Jul 17 · W222 B · Sam Edwards
   Block's open-source CLI for driving real apps with AI. Explore once, replay forever.
 colorSchema: dark
 highlighter: shiki
@@ -19,7 +19,7 @@ class: cover text-center
 ## Map Your App for AI
 
 <div class="pt-10 text-lg opacity-70 tracking-wide">
-Sam Edwards · Block · Droidcon 2026
+Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
 <!--
@@ -35,12 +35,14 @@ layout: center
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 0:00–4:00</div>
 
-# AI is at our disposal.
+# AI can drive your app
 
-## So how do we get good test coverage with it?
+## So why is good test coverage still hard?
 
 <!--
 Open on the question, not the tool. Let it sit for a beat.
+Sam's framing: AI is prevalent and at our disposal — how do we get GOOD coverage with it?
+(Phrasing still open to iteration.)
 -->
 
 ---
@@ -49,16 +51,15 @@ Open on the question, not the tool. Let it sit for a beat.
 
 # The missing link
 
-- AI + mobile has **no canonical, natural-language way of interacting**
-- Plenty of AI solutions exist, but…
-  - platform-specific, **or**
-  - they **lose the link** between the natural-language objective and the actions actually performed
-- **The test case is WHAT should happen**
-- The "how" matters mainly for assertions you *deliberately* want mechanical
+- AI + mobile: **no canonical, natural-language way** to interact
+- Existing AI solutions: **platform-specific**, or…
+- …they **lose the link** between objective and actions
+- The test case is the **what**
 
 <!--
 This is the differentiating problem statement. "Losing the link" is the phrase to hit.
-Assertions thread returns in Act 2 (verify: steps) — don't leave dangling.
+Expand aloud: the "how" matters mainly for assertions you DELIBERATELY want mechanical
+and handwritten — that thread returns in Act 2 (verify: steps). Don't leave dangling.
 -->
 
 ---
@@ -161,11 +162,11 @@ Day-one framing from the very first devlog — never abandoned.
 
 - The **LLM constructs** it
 - The **human edits** it — and **accepts** it
-- The **commit blesses** it:
-  *"yes — this is how this natural-language case materializes on this platform"*
-- **Git** = the historical record of how every test evolves
+- The **commit blesses** it
+- **Git remembers** how every test evolved
 
 <!--
+The commit means: "yes — this is how this natural-language case materializes on this platform."
 The acceptance gate: AI authors (and heals) without human interaction,
 but a human approves before commit. Agent-authored, human-approved.
 This is the answer to "do you just trust the AI?"
@@ -229,13 +230,14 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 
 # Scale found our design flaw
 
-- v1: one trail file **per platform** (`android-phone.trail.yaml`, `ios-iphone.trail.yaml`, …)
+- v1: one trail file **per platform**
 - It worked. Then:
   - **file explosion**
-  - the natural-language steps **drifted** between platform copies
-- The "one business case" value prop quietly broke
+  - the natural language **drifted** between copies
+- The "one business case" promise quietly broke
 
 <!--
+Filenames to say aloud: android-phone.trail.yaml, ios-iphone.trail.yaml, ...
 Real production drift: credentials diverged, steps added to one file and not others.
 The recording pipeline couldn't fix it — each device recorded in isolation.
 -->
@@ -277,13 +279,14 @@ committed unified trails are single-platform so far.
 
 # Parameterize, don't hardcode
 
-- `{{memory.var}}` — seed values at the trail level
-- `--secret KEY=VAL` — redacted; only the key is recorded
-- **Reverse-substitution**: recordings swap literals back to `{{key}}`
-  → a recording never hardcodes a stale credential
+- `{{memory.var}}` — seeded at the trail level
+- `--secret` — redacted, only the key recorded
+- A recording **never hardcodes** a stale credential
 
 <!--
 60-second beat. Closes the loop on "credentials diverged" from the drift story.
+Mechanism (say aloud if useful): reverse-substitution — recordings swap captured
+literals back to {{key}} using a per-step memory snapshot.
 Guaranteed Q&A topic otherwise (test accounts in CI).
 -->
 
@@ -293,9 +296,9 @@ Guaranteed Q&A topic otherwise (test accounts in CI).
 
 # Trailheads: deterministic starts
 
-- A **trailhead is a tool** — designated as the trail's starting point
-- The test-setup method: clear app data · right launch args · land in a **known state**
-- Deterministic setup is the **precondition** for deterministic replay
+- A **trailhead is a tool** — the designated start
+- Clear app data · launch args · **known state**
+- Deterministic setup → deterministic replay
 
 <div class="pt-6 text-xl opacity-80">
 
@@ -335,9 +338,12 @@ The 10-year callback — a beat, not the spine. One slide of nostalgia, then the
 
 # The LLM twist
 
-- An LLM wants to decide **what** to do next
-- Make it figure out **how** — raw taps, "just explore" —
-  and you explode its context on decisions that should have been *one decision*
+- An LLM decides **what** to do next
+- Force it to figure out **how** → its context explodes
+
+<!--
+"How" = raw taps, "just explore" — many decisions that should have been ONE decision.
+-->
 
 <div class="pt-8">
 
@@ -415,11 +421,14 @@ who gets to write them, and how do agents reach them?"
 
 # Tools wanted out of the binary
 
-1. Tools in **Kotlin**, registered at compile time → fork + rebuild to extend
-   <span class="opacity-60">a wall for external teams · too slow for agents</span>
-2. Ship a binary (**Homebrew**) → now *nobody* can compile tools in
-3. **The inversion:** tools live **on the filesystem**, in a **trailmap**
-   <span class="opacity-60">your target + tools + toolsets + trails · plain npm packages</span>
+1. **Kotlin**, compiled in → fork to extend
+2. Ship a **binary** → nobody can extend
+3. **The inversion:** tools on the filesystem — the **trailmap**
+
+<!--
+1: a wall for external teams, too slow for agents iterating.
+3: trailmap = your target + tools + toolsets + trails, distributed as plain npm packages.
+-->
 
 <div class="pt-6 opacity-70">
 
@@ -470,10 +479,9 @@ Type-safe, and the language LLMs edit best. Wrong tool name or args = compile er
 
 # The CLI pivot
 
-- **MCP friction was real:** configure → restart your session;
-  a dev-loop code change → disconnected server
-- **As a CLI:** an agent with a skill installs it and uses it — *in the same session*
-- The fear: exposing all the tools… do we lose the natural language?
+- **MCP friction:** configure → restart · code change → disconnect
+- **CLI:** install and use — *in the same session*
+- The fear: do we lose the natural language?
 
 <!--
 Early 2026, huge unlock.
@@ -491,10 +499,10 @@ layout: center
 
 <div class="pt-8 text-lg opacity-80 max-w-3xl mx-auto">
 
-Each target is a trailmap → the CLI exposes its **toolbox** →
-the agent attaches the **natural-language step to every tool call**.
+Target = trailmap → CLI exposes its **toolbox** →
+every tool call carries its **natural-language step**.
 
-The link from our problem statement? **Never broken.**
+The link? **Never broken.**
 
 </div>
 
@@ -510,11 +518,10 @@ NL steps attached, ending on the saved trail file.
 
 # Trust, but compile
 
-One param change can ripple across **hundreds of YAML files** — that don't run on PR checks.
+One param change → **hundreds of YAML files** · no PR checks
 
-- **Gate 1:** strict YAML parsing — unknown fields are errors, not silently dropped
-- **Gate 2:** the **tsc trick** — every recorded tool call transpiled to
-  `client.tools.tapOn({...})` and compiled against your generated typings
+- **Gate 1:** strict parsing — unknown fields are **errors**
+- **Gate 2:** the **tsc trick** — recordings compiled as TypeScript
 
 <div class="pt-4 opacity-70">
 
@@ -523,7 +530,9 @@ Errors map back to `trail.yaml · step 3 [android-phone]`
 </div>
 
 <!--
-Keep the trick, narrate lightly — mechanics live on the slide.
+Gate 2 mechanics (say aloud): every recorded tool call transpiled to a
+client.tools.tapOn({...}) line, compiled against the generated typings.
+Keep the trick, narrate lightly.
 HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 -->
 
@@ -541,11 +550,12 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 <div class="pt-4 opacity-70">
 
-Honest: **iOS is still on Maestro** (replacement designed, not landed). Web was always Playwright.
+Honest: **iOS is still on Maestro** · web was always Playwright
 
 </div>
 
 <!--
+iOS replacement is designed, not landed.
 Maestro was the right first call — "not a permanent coupling" from day one.
 Numbers live on the slide; don't over-narrate.
 HAND-OFF: "We'd protected the language; now the determinism underneath it is fast. So — the map."
@@ -584,11 +594,15 @@ Title payoff = a NAMING, not a reveal.
 
 # Next: waypoints
 
-- **Named, assertable places** in your app · shortcuts between them · the interconnection graph
-- Real scaffolding shipped: schema, matcher, `assertWaypoint`, authoring CLI, graph viewer
-- Honestly: **an idea we haven't fully proven out yet — and I'm bullish**
-- Where it could take us: `goTo(waypoint)` via pathfinding · semantic recordings ·
-  one nav fix repairing every trail that used that edge
+- **Named, assertable places** · shortcuts between them · a graph
+- Scaffolding shipped: matcher · `assertWaypoint` · CLI · graph viewer
+- **Not fully proven out yet — and I'm bullish**
+- Ahead: `goTo(waypoint)` · one nav fix repairs every trail
+
+<!--
+Vision details: pathfinding over the graph, semantic recordings (record
+(shortcut, params) instead of raw taps).
+-->
 
 <!--
 Framed as the future step, not shipped fact. This is the "philosophy of where we're going."
@@ -618,13 +632,13 @@ HAND-OFF: "The whole recipe, one slide."
 
 # The recipe
 
-**Natural language on top:**
+**Natural language on top**
 trails in git · what-not-how tools · agent-authored, human-approved
 
-**Determinism underneath:**
-trailheads · typed + compiled recordings · a fast native driver
+**Determinism underneath**
+trailheads · compiled recordings · fast native driver
 
-**Self-heal as the hinge** — and your health signal
+**Self-heal** — the hinge, and your health signal
 
 <div class="pt-6 text-xl">
 
