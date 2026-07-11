@@ -124,14 +124,36 @@ layout: center
 
 <div class="pt-6 text-xl opacity-80">
 
-Agent drives the real app from natural language →
-saved as a **trail** → replayed deterministically, **zero LLM calls** in CI.
+Natural language → agent drives the real app →
+saved as a **trail** → replayed with **zero LLM calls**
 
 </div>
 
 <!--
 THE REFRAIN. Introduce here, echo at the close.
 Quick refresher for anyone who missed last year — 90 seconds max.
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+
+# We're blazing a lot of trails…
+
+## …so we have a **trailmap** 🧭
+
+<div class="pt-6 opacity-70">
+
+your tools · your trails · your app's map
+
+</div>
+
+<!--
+Introduce the trailmap BY NAME right here (Sam: "we're doing it, so we have a trailmap").
+Unpacked in Act 4 (tools live on the filesystem, in the trailmap);
+payoff in Act 6 (you've watched this map assemble).
 -->
 
 ---
@@ -143,31 +165,34 @@ Quick refresher for anyone who missed last year — 90 seconds max.
 | | |
 |---|---|
 | Natural language | the **source** |
+| The LLM + agent | the **compiler** |
 | Trail YAML | the **bytecode** |
-| Your device | the **runtime** |
+| Trailblaze | the **runtime** |
 
 <div class="pt-6 opacity-80">
 
-Compile once. Replay needs no LLM.
+Compile once. The runtime needs no LLM.
 
 </div>
 
 <!--
 Day-one framing from the very first devlog — never abandoned.
+Runtime = Trailblaze's Kotlin engine executing the trail on the device —
+NOT the device itself (Kotlin/Java is what actually runs the code on Android).
 -->
 
 ---
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
-# YAML is the shared surface
+# YAML: the shared surface
 
-- The **LLM constructs** it
-- The **human edits** it — and **accepts** it
-- The **commit blesses** it
-- **Git remembers** how every test evolved
+- Not plain YAML — the vocabulary is **your custom tools**
+- The **LLM constructs** · the **human edits & accepts**
+- **Git remembers**
 
 <!--
+Your tools, exposed as YAML into the LLM — that's what makes it composable.
 The commit means: "yes — this is how this natural-language case materializes on this platform."
 The acceptance gate: AI authors (and heals) without human interaction,
 but a human approves before commit. Agent-authored, human-approved.
