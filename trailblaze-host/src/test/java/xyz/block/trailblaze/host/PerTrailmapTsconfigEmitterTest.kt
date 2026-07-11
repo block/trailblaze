@@ -419,17 +419,21 @@ class PerTrailmapTsconfigEmitterTest {
     val workspaceRoot = newWorkspaceRootWithBundle()
     val trailmapDir = File(workspaceRoot, "config/trailmaps/crlf").apply { mkdirs() }
     val gitignore = File(trailmapDir, ".gitignore").apply {
-      writeText("local-cache/\r\ntools/tsconfig.json\r\ntools/trailblaze-client.d.ts\r\n")
+      writeText(
+        "local-cache/\r\ntools/tsconfig.json\r\ntools/trailblaze-client.d.ts\r\n" +
+          "tools/trailblaze-tool-descriptors.json\r\n",
+      )
     }
 
     val trailmap = filesystemTrailmap(id = "crlf", trailmapDir = trailmapDir)
     PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
 
     val content = gitignore.readText()
-    // Both entries already present → no-op write. Content stays exactly as the
+    // All framework entries already present → no-op write. Content stays exactly as the
     // CRLF original.
     assertEquals(
-      "local-cache/\r\ntools/tsconfig.json\r\ntools/trailblaze-client.d.ts\r\n",
+      "local-cache/\r\ntools/tsconfig.json\r\ntools/trailblaze-client.d.ts\r\n" +
+        "tools/trailblaze-tool-descriptors.json\r\n",
       content,
       "CRLF gitignore with framework entries already present should not be rewritten",
     )

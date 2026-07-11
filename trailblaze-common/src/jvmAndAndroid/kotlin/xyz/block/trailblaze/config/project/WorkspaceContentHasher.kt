@@ -31,6 +31,10 @@ import xyz.block.trailblaze.util.toLowerHex
  *    (NPM artifact tree, can be huge and irrelevant).
  *  - Any file or directory whose name starts with `.` (catches `.bundle.hash`,
  *    `.session.hash`, `.git`, `.trailblaze` IDE stubs, etc.).
+ *  - Framework-generated typed-surface artifacts by reserved name
+ *    ([EXCLUDED_GENERATED_FILENAMES]: `trailblaze-client.d.ts`, `trailblaze-tool-descriptors.json`).
+ *    The daemon writes these during its own bootstrap codegen, after this hash is captured, so
+ *    counting them would make its own output read as user drift.
  *  - Symlinks: not followed, to avoid loops if a user has a symlink pointing back into
  *    the workspace.
  *
@@ -130,6 +134,7 @@ object WorkspaceContentHasher {
       .filter { file ->
         file.isFile &&
           !file.name.startsWith(".") &&
+          file.name !in EXCLUDED_GENERATED_FILENAMES &&
           // walkTopDown() follows symlinks by default; skip them to prevent loops
           // and keep hashes deterministic across clones with different symlink layouts.
           !java.nio.file.Files.isSymbolicLink(file.toPath())
@@ -170,6 +175,26 @@ object WorkspaceContentHasher {
   private data class HashResult(val hash: String, val fileCount: Int)
 
   private val SEPARATOR = byteArrayOf(0)
+
+  /**
+   * Framework-generated typed-surface artifacts written under a trailmap's `tools/` dir by the
+   * daemon's OWN per-trailmap codegen, which runs at bootstrap AFTER this drift hash is captured.
+   * They're derived output (same category as `dist/`), so hashing them would make the daemon's
+   * own first-run generation read as user "drift" (e.g. an upgrade where the sidecar didn't exist
+   * before). Excluded by their framework-reserved names so this can never hide a user's real file.
+   *
+   * Kept as string literals rather than importing the canonical constants
+   * ([WorkspaceClientDtsGenerator.GENERATED_FILE_NAME] and the validation-sidecar `FILE_NAME`)
+   * because those live in downstream modules (trailblaze-trailmap-bundler / trailblaze-host) that
+   * depend on this one — same reason `dist`/`node_modules` are literals above. Keep in sync.
+   *
+   * `tsconfig.json` is intentionally NOT excluded: its name is generic enough that a user could
+   * have an unrelated one, and it predates this change.
+   */
+  private val EXCLUDED_GENERATED_FILENAMES: Set<String> = setOf(
+    "trailblaze-client.d.ts",
+    "trailblaze-tool-descriptors.json",
+  )
 
   /**
    * Read buffer size for streaming file content into the digest. 8 KB matches the JVM's

@@ -95,7 +95,13 @@ class TrailblazeRunnerUtil(
    * For each prompt step:
    * - If [useRecordedSteps] is true and the step has a usable recording, the recorded tools
    *   are replayed one-at-a-time. On the first failure, [selfHeal] decides whether to hand
-   *   off to [trailblazeRunner]'s AI recovery ([TestAgentRunner.recover]) or to throw.
+   *   off to [trailblazeRunner]'s AI recovery ([TestAgentRunner.recover]) or to throw —
+   *   except for a [TrailblazeToolResult.Error.FatalError], which always throws.
+   *   FatalError's contract is "abort the test immediately": it marks dead infrastructure
+   *   (e.g. a wedged on-device server) or broken tooling — not the UI drift self-heal exists
+   *   for — and the AI loop already honors it by aborting without an LLM retry
+   *   (`TrailblazeKoogLlmClientHelper`), so recorded replay does the same rather than routing
+   *   a known-terminal error through AI recovery.
    * - Otherwise, the step is run with AI via [TestAgentRunner.runSuspend].
    */
   suspend fun runPromptSuspend(
@@ -140,7 +146,9 @@ class TrailblazeRunnerUtil(
           success = false,
           failureReason = failureReason,
         )
-        if (!selfHeal) {
+        // A FatalError throws even when selfHeal is requested — see the runPromptSuspend kdoc.
+        val fatal = recordingResult.failureResult is TrailblazeToolResult.Error.FatalError
+        if (!selfHeal || fatal) {
           throw TrailblazeException(
             buildString {
               appendLine("Failed to run recording for prompt step:")
@@ -150,6 +158,9 @@ class TrailblazeRunnerUtil(
               )
               appendLine("  failed tool: ${recordingResult.failedTool.name}")
               appendLine("  failure: $failureMessage")
+              if (fatal && selfHeal) {
+                appendLine("  (fatal tool error — self-heal skipped)")
+              }
             },
           )
         }

@@ -5,6 +5,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import xyz.block.trailblaze.agent.trail.toJsonArgs
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
@@ -32,6 +34,19 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  * recording is type-valid. Tools that don't exist, wrong-typed args, and missing required args all
  * surface as ordinary TypeScript diagnostics, which we remap back to `<trail>.yaml · step N`.
  *
+ * ## Arg type coercion before transpile
+ *
+ * A recorded `.trail.yaml` step's YAML→JSON decode guesses a scalar's type from its content (kaml
+ * discards the source quote style), so a recorded quoted passcode `'12345678'` or flag value
+ * `'true'` surfaces as a JSON number/boolean — and `tsc` would flag `number not assignable to
+ * string` on a faithfully-recorded, replay-passing trail. Before transpiling, each recorded call's
+ * scalar args are re-aligned to their declared types via
+ * [xyz.block.trailblaze.toolcalls.coerceArgsToDescriptorTypes] — the SAME coercion replay applies
+ * at dispatch — using the tool's parameter types loaded from the arg-type sidecar the emitter
+ * co-locates with the `.d.ts` (see [TrailValidationDescriptorSidecar]). This clears the false
+ * findings without weakening the gate: a genuinely wrong-typed arg (an object where a string is
+ * declared, a missing required arg) is untouched by the coercion and still fails `tsc`.
+ *
  * ## How the error→YAML mapping works (no YAML position API needed)
  *
  * Codegen emits **exactly one tool-call statement per line** and records, as it writes each line, a
@@ -44,15 +59,18 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrail
  *
  * The phase **fails the build by default**: a finding on a non-exempt target, or a non-exempt
  * target that couldn't be validated at all (no generated typed surface), is fatal. This keeps a
- * new uncovered target from silently slipping in. One escape hatch keeps it honest while the
- * corpus is brought to zero:
+ * new uncovered target from silently slipping in. Two outcomes are NOT fatal:
  *
+ * - **No manifest anywhere** — a trail whose `target:` resolves to no reachable trailmap manifest
+ *   at all (placeholder / package-id targets used by smoke & eval trails, and trails with no
+ *   `target:`) is a first-class permanent skip ([Report.skippedNoManifest]). There is no surface to
+ *   validate against and never will be, so this needs no exemption entry — it's classified by
+ *   membership in [validate]'s `knownManifestTargets`, not a hand-maintained allow-list.
  * - **Per-target exemption** — a target's `trail_validation.exempt: "<reason>"` in its
- *   `trailmap.yaml` (see [xyz.block.trailblaze.config.project.TrailValidationConfig]) opts that
- *   target out: its findings and its missing-surface status are reported but non-fatal. This is the
- *   durable, co-located mechanism, honored via [validate]'s `exemptTargets`. Targets whose manifest
- *   the validator can't reach yet (classpath-bundled targets, and the no-`target:` trails) are
- *   exempted through the same map from a central, explicitly-transitional allow-list in `CheckCommand`.
+ *   `trailmap.yaml` (see [xyz.block.trailblaze.config.project.TrailValidationConfig]) opts a target
+ *   that DOES have a manifest out of the gate: its findings and its missing-surface status are
+ *   reported but non-fatal. This is the durable, co-located mechanism, honored via [validate]'s
+ *   `exemptTargets`, and covers both filesystem and classpath-bundled trailmaps.
  *
  * The emitted `trailblaze-client.d.ts` is the FULL, ungated tool surface — every class-backed tool a
  * trailmap resolves is typed there, and the emitter re-injects selector args and surfaces every
@@ -148,6 +166,15 @@ object TrailTscValidator {
     val toolCallsChecked: Int,
     val findings: List<Finding>,
     val skippedNoSurface: Map<String, Int>,
+    /**
+     * Targets (by `target:` value; [NO_TARGET_KEY] for the no-`target:` case) that resolve to NO
+     * reachable trailmap manifest ANYWHERE — placeholder / package-id targets used by smoke & eval
+     * trails, and trails that declare no `target:`. These can never be validated (there is no surface
+     * to validate against and never will be), so they are a **permanent skip** and are never fatal.
+     * Distinct from [skippedNoSurface], which is for a target that DOES have a manifest but whose
+     * surface wasn't loaded in this run.
+     */
+    val skippedNoManifest: Map<String, Int> = emptyMap(),
     val skippedNoRecording: Int,
     val errors: List<String>,
     /**
@@ -315,6 +342,14 @@ object TrailTscValidator {
      */
     exemptTargets: Map<String, String> = emptyMap(),
     /**
+     * The set of `target:` values that DO have a reachable trailmap manifest somewhere — every
+     * workspace trailmap id plus every classpath-bundled manifest id. A trail whose `target:` is NOT
+     * in this set resolves to no manifest at all, so it's a permanent skip ([Report.skippedNoManifest])
+     * rather than a missing-surface skip. Defaults to empty, in which case any target with no loaded
+     * surface is treated as manifest-less.
+     */
+    knownManifestTargets: Set<String> = emptySet(),
+    /**
      * When false (a scoped run), a non-exempt target with no loaded surface is reported as skipped
      * but is NOT fatal — see [classify]. Only an all-workspace pass loads every surface and can
      * treat a missing surface as an uncovered target.
@@ -332,6 +367,7 @@ object TrailTscValidator {
 
     val errors = mutableListOf<String>()
     val skippedNoSurface = mutableMapOf<String, Int>()
+    val skippedNoManifest = mutableMapOf<String, Int>()
     var skippedNoRecording = 0
     var discovered = 0
 
@@ -340,6 +376,11 @@ object TrailTscValidator {
     // try/finally below, so an exception during discovery can never orphan a `.trail.gen.ts`.
     data class Staged(val genPath: Path, val source: String, val meta: GenFileMeta, val callCount: Int)
     val stagedByTrailmap = mutableMapOf<Path, MutableList<Staged>>()
+
+    // Per-trailmap arg-type descriptors (from the sidecar the emitter co-locates with the .d.ts),
+    // loaded once per trailmap dir and reused across its trails. Used to coerce recorded scalar
+    // args back to their declared types before transpiling — see [TrailValidationDescriptorSidecar].
+    val descriptorsByTrailmap = mutableMapOf<Path, Map<String, TrailblazeToolDescriptor>>()
 
     val trailFiles = trailsRoot.walkTopDown().filter { it.isFile && isTrailFile(it.name) }.toList()
     for (trailFile in trailFiles) {
@@ -357,10 +398,24 @@ object TrailTscValidator {
         val trailmapDir = target?.let { trailmapDirByName[it] }
         if (trailmapDir == null) {
           val key = target ?: NO_TARGET_KEY
-          skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
+          // Split a no-loaded-surface trail two ways:
+          //  - a target with a reachable manifest (in [knownManifestTargets]) whose surface just
+          //    wasn't loaded in this run → skipped-no-surface (fatal on an all-workspace pass, so an
+          //    uncovered target can't slip in silently).
+          //  - a target with NO manifest anywhere (placeholder / package-id targets, the no-target:
+          //    case) → skipped-no-manifest: it can never be validated, so it's a permanent, non-fatal
+          //    skip rather than something a hand-maintained exemption list has to carry.
+          if (key in knownManifestTargets) {
+            skippedNoSurface[key] = (skippedNoSurface[key] ?: 0) + 1
+          } else {
+            skippedNoManifest[key] = (skippedNoManifest[key] ?: 0) + 1
+          }
           continue
         }
-        val calls = extractRecordedCalls(doc)
+        val descriptors = descriptorsByTrailmap.getOrPut(trailmapDir) {
+          TrailValidationDescriptorSidecar.read(trailmapDir)
+        }
+        val calls = extractRecordedCalls(doc, descriptors)
         if (calls.isEmpty()) {
           skippedNoRecording++
           continue
@@ -411,6 +466,7 @@ object TrailTscValidator {
       toolCallsChecked = toolCalls,
       findings = findings,
       skippedNoSurface = skippedNoSurface,
+      skippedNoManifest = skippedNoManifest,
       skippedNoRecording = skippedNoRecording,
       errors = errors,
       fatalFindings = classification.fatalFindings,
@@ -480,13 +536,24 @@ object TrailTscValidator {
    *    The trailhead's per-classifier bootstrap tools are validated the same way as step 0.
    *
    * A trail with no recorded calls yields an empty list (caller treats it as skipped-no-recording).
+   *
+   * [descriptorsByName] carries the tool's declared parameter types (from the emitter's arg-type
+   * sidecar) so each recorded call's scalar args can be coerced back to their declared types before
+   * transpiling — see [toRecordedCall]. Empty (the default) means no coercion, matching the
+   * pre-sidecar behavior and keeping the pure codegen tests device- and sidecar-free.
    */
-  internal fun extractRecordedCalls(doc: TrailDocument): List<RecordedCall> = when (doc) {
-    is TrailDocument.V1 -> extractV1RecordedCalls(doc.items)
-    is TrailDocument.Unified -> extractUnifiedRecordedCalls(doc.trail)
+  internal fun extractRecordedCalls(
+    doc: TrailDocument,
+    descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
+  ): List<RecordedCall> = when (doc) {
+    is TrailDocument.V1 -> extractV1RecordedCalls(doc.items, descriptorsByName)
+    is TrailDocument.Unified -> extractUnifiedRecordedCalls(doc.trail, descriptorsByName)
   }
 
-  private fun extractV1RecordedCalls(items: List<TrailYamlItem>): List<RecordedCall> {
+  private fun extractV1RecordedCalls(
+    items: List<TrailYamlItem>,
+    descriptorsByName: Map<String, TrailblazeToolDescriptor>,
+  ): List<RecordedCall> {
     val calls = mutableListOf<RecordedCall>()
     var stepIndex = 0
     items.forEach { item ->
@@ -494,15 +561,15 @@ object TrailTscValidator {
         is TrailYamlItem.PromptsTrailItem -> item.promptSteps.forEach { step ->
           stepIndex++ // one index per step; multiple tools in a step share it (matches how a human reads "step N")
           val label = step.prompt
-          step.recording?.tools?.forEach { wrapper -> calls.add(wrapper.toRecordedCall(stepIndex, label)) }
+          step.recording?.tools?.forEach { wrapper -> calls.add(wrapper.toRecordedCall(stepIndex, label, descriptorsByName = descriptorsByName)) }
         }
         is TrailYamlItem.ToolTrailItem -> item.tools.forEach { wrapper ->
           // Top-level `tools:` blocks have no prompt step; key them to step 0 with a generic label.
-          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = "tools block"))
+          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = "tools block", descriptorsByName = descriptorsByName))
         }
         is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { wrapper ->
           // The trailhead is the deterministic step 0; type-check its bootstrap tool calls too.
-          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = item.trailhead.step ?: "trailhead"))
+          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = item.trailhead.step ?: "trailhead", descriptorsByName = descriptorsByName))
         }
         is TrailYamlItem.ConfigTrailItem -> Unit
       }
@@ -510,17 +577,20 @@ object TrailTscValidator {
     return calls
   }
 
-  private fun extractUnifiedRecordedCalls(trail: UnifiedTrail): List<RecordedCall> {
+  private fun extractUnifiedRecordedCalls(
+    trail: UnifiedTrail,
+    descriptorsByName: Map<String, TrailblazeToolDescriptor>,
+  ): List<RecordedCall> {
     val calls = mutableListOf<RecordedCall>()
     // The trailhead is the deterministic step 0; type-check each classifier's bootstrap tool.
     trail.trailhead?.let { trailhead ->
       trailhead.recordings.forEach { (classifier, tools) ->
-        tools.forEach { calls.add(it.toRecordedCall(stepIndex = 0, label = trailhead.step, classifier = classifier)) }
+        tools.forEach { calls.add(it.toRecordedCall(stepIndex = 0, label = trailhead.step, classifier = classifier, descriptorsByName = descriptorsByName)) }
       }
     }
     trail.trail.forEachIndexed { index, step ->
       step.recordings.forEach { (classifier, tools) ->
-        tools.forEach { calls.add(it.toRecordedCall(stepIndex = index + 1, label = step.step, classifier = classifier)) }
+        tools.forEach { calls.add(it.toRecordedCall(stepIndex = index + 1, label = step.step, classifier = classifier, descriptorsByName = descriptorsByName)) }
       }
     }
     return calls
@@ -530,14 +600,23 @@ object TrailTscValidator {
     stepIndex: Int,
     label: String,
     classifier: String? = null,
-  ): RecordedCall =
-    RecordedCall(
+    descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
+  ): RecordedCall {
+    val rawArgs = toJsonArgs()
+    // Re-align each scalar arg to its declared type BEFORE transpiling: a recorded quoted
+    // passcode/flag surfaces as a JSON number/boolean (kaml drops quote style), which `tsc`
+    // would otherwise flag as `number not assignable to string` on a faithfully-recorded trail.
+    // This is the same coercion replay applies at dispatch; here it clears the false findings.
+    val descriptor = descriptorsByName[name]
+    val args = if (descriptor != null) coerceArgsToDescriptorTypes(rawArgs, descriptor) else rawArgs
+    return RecordedCall(
       toolName = name,
-      argsJson = toJsonArgs().toString(),
+      argsJson = args.toString(),
       stepIndex = stepIndex,
       stepLabel = label,
       classifier = classifier,
     )
+  }
 
   /**
    * Spawn `<jsRuntime> <tscJs> --noEmit --pretty false --project <tsconfig>` and return its output.
@@ -588,6 +667,10 @@ object TrailTscValidator {
     appendLine("Trails validated:         ${report.trailsValidated}")
     appendLine("Tool calls type-checked:  ${report.toolCallsChecked}")
     if (report.skippedNoRecording > 0) appendLine("Skipped (no recording):   ${report.skippedNoRecording}")
+    if (report.skippedNoManifest.isNotEmpty()) {
+      // Permanent, non-fatal skips: no trailmap manifest exists for these target strings.
+      appendLine("Skipped (no manifest):    ${report.skippedNoManifest}")
+    }
     if (report.errors.isNotEmpty()) {
       appendLine("Load/run errors: ${report.errors.size}")
       report.errors.take(10).forEach { appendLine("    ! $it") }

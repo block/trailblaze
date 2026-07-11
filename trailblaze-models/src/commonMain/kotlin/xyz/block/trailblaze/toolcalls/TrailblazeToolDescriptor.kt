@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.toolcalls
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * [kotlin.io.Serializable] Mirror of [ai.koog.agents.core.tools.ToolParameterDescriptor]
@@ -111,4 +112,23 @@ data class TrailblazeToolDescriptor(
   val requiredParameters: List<TrailblazeToolParameterDescriptor> = emptyList(),
   val optionalParameters: List<TrailblazeToolParameterDescriptor> = emptyList(),
   val source: TrailblazeToolSourceDescriptor? = null,
-)
+) {
+  /**
+   * The tool's full JSON Schema (`{ type: object, properties: {...}, required: [...] }`), when
+   * available. Unlike [requiredParameters]/[optionalParameters] — a FLAT name→type view that can't
+   * express nested shapes — this retains array `items` and nested object `properties`, so
+   * [coerceArgsToDescriptorTypes] can re-align a scalar buried inside `overrides[].value` to its
+   * declared type, not just top-level args. Populated for scripted (`.ts`) tools whose schema is
+   * known (see [xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration]); `null` for
+   * class-backed / YAML-defined tools, where coercion falls back to the flat parameter view.
+   *
+   * Kept outside the primary constructor — like [TrailblazeToolParameterDescriptor.visibleWhen] —
+   * so adding this serialized metadata doesn't change the public JVM constructor/copy ABI for
+   * existing callers of the published `:trailblaze-models` descriptor. As a body property it is
+   * serialized (kotlinx serializes body `var`s) but, like any body property, is **excluded from the
+   * generated `copy`/`equals`/`hashCode`** — so `descriptor.copy(...)` does NOT carry it over and
+   * must re-set it explicitly (as `ToolDiscoveryToolSet` does for `visibleWhen`). Today no caller
+   * copies a schema-bearing descriptor, but a future one must not silently drop the schema.
+   */
+  var inputSchema: JsonObject? = null
+}

@@ -35,6 +35,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
@@ -205,7 +206,8 @@ class HostOnDeviceRpcTrailblazeAgent(
   }
 
   /** Circuit breaker for a wedged `system_server`: cache-clear-and-reconnect can't recover
-   *  a dead remote, so fail fast after N consecutive wedge-signature failures. */
+   *  a dead remote, so fail fast after N consecutive wedge-signature failures. Also arms the
+   *  on-device server relaunch before throwing — see the comment at the throw site. */
   private fun tripCircuitBreakerIfDeviceWedged() {
     val detail = lastCaptureFailure ?: return
     val matchesWedge = DEVICE_WEDGE_SIGNATURES.any { detail.contains(it) }
@@ -215,6 +217,13 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
     val count = consecutiveDeviceWedgeFailures.incrementAndGet()
     if (count >= MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES) {
+      // A server relaunch is the right escalation for the DEVICE_WEDGE_SIGNATURES class too:
+      // the exception below lacks the two-phrase non-recoverable signature, so neither the
+      // rpcCall string match nor the session-log scan can arm the relaunch from it — without
+      // this arm, the next trail inherits the wedge (the same poison-the-build mode the typed
+      // arming closes). If a relaunch can't clear it (system_server truly dead), the armed
+      // flag makes the next connect fail loudly instead.
+      rpcClient.armNonRecoverableWedge()
       throw TrailblazeException(
         "Device unhealthy: $count consecutive GetScreenState " +
           "failures matched a UiAutomation-wedge signature (system_server appears dead). " +
@@ -512,8 +521,10 @@ class HostOnDeviceRpcTrailblazeAgent(
             } catch (e: Exception) {
               val detail = "re-warm failed: ${e.message} | runner_pid=${rpcClient.probeRunnerPid()}"
               Console.log("[HostOnDeviceRpcAgent] $detail")
-              return@runBlocking TrailblazeToolResult.Error.ExceptionThrown(
+              return@runBlocking rpcFailureToolResult(
                 errorMessage = "RPC call failed for '$name': $firstDetail | $detail",
+                firstDetail,
+                detail,
               )
             }
             when (val retry: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
@@ -529,8 +540,10 @@ class HostOnDeviceRpcTrailblazeAgent(
                     "(${retry.errorType}): ${retry.message}" +
                     (retry.details?.let { "\n  Details: $it" } ?: ""),
                 )
-                TrailblazeToolResult.Error.ExceptionThrown(
+                rpcFailureToolResult(
                   errorMessage = "RPC call failed for '$name': $firstDetail | retry: $retryDetail",
+                  firstDetail,
+                  retryDetail,
                 )
               }
             }
@@ -610,14 +623,57 @@ class HostOnDeviceRpcTrailblazeAgent(
           structuredContent = rpcResult.data.toolStructuredContent,
         )
       }
-      false -> TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = rpcResult.data.errorMessage ?: "Tool '$name' execution failed on-device",
-      )
+      false -> {
+        val errorMessage =
+          rpcResult.data.errorMessage ?: "Tool '$name' execution failed on-device"
+        if (rpcClient.noteIfNonRecoverableWedge(rpcResult.data)) {
+          // The on-device handler tagged this failure as the non-recoverable UiAutomation
+          // wedge (its in-process reconnect retry already failed). The typed arm above
+          // schedules a server relaunch before the NEXT session — the wedge arrives as an
+          // HTTP-200 `success=false` response the string-matching breaker in
+          // `OnDeviceRpcClient.rpcCall` never sees. FatalError (not ExceptionThrown) aborts
+          // THIS trail: every subsequent dispatch is guaranteed to fail identically, so
+          // feeding the error back to the LLM (or to self-heal) just burns the call budget
+          // against a dead server. Parity with the V3 `HostAccessibilityRpcClient` path
+          // (same arm + `recoverable = false`).
+          //
+          // Console.info (this file's CI-triage convention): when the device's errorMessage
+          // lacks the wedge phrases — the exact case the typed field exists for — no other
+          // operator-visible line attributes the next trail's force-restart to this dispatch,
+          // and Console.log is suppressed in the CLI's default quiet mode.
+          Console.info(
+            "[HostOnDeviceRpcAgent] '$name' failed with the non-recoverable UiAutomation " +
+              "wedge — arming on-device server relaunch and aborting the trail.",
+          )
+          TrailblazeToolResult.Error.FatalError(errorMessage = errorMessage)
+        } else {
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = errorMessage)
+        }
+      }
       null -> TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "On-device server returned null success inline for '$name' — " +
           "contract violation for awaitCompletion=true (expected true/false, got null)",
       )
     }
+  }
+
+  /**
+   * Terminal result for an RPC-level [RpcResult.Failure]. When any of [details] carries the
+   * non-recoverable UiAutomation wedge signature, the relaunch breaker has already been armed by
+   * the string match at the [OnDeviceRpcClient.rpcCall] chokepoint — return
+   * [TrailblazeToolResult.Error.FatalError] so this trail aborts too, keeping arm-and-abort
+   * consistent with the typed HTTP-200 path in [toToolResult]. Any other failure stays
+   * LLM-retryable as a plain ExceptionThrown.
+   */
+  private fun rpcFailureToolResult(
+    errorMessage: String,
+    vararg details: String?,
+  ): TrailblazeToolResult.Error = if (
+    details.any { UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(it) }
+  ) {
+    TrailblazeToolResult.Error.FatalError(errorMessage = errorMessage)
+  } else {
+    TrailblazeToolResult.Error.ExceptionThrown(errorMessage = errorMessage)
   }
 
   /** Merges the device's post-execution snapshot into this agent's [memory] then applies explicit deletes. */

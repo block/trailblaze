@@ -1075,6 +1075,37 @@ class CheckCommandTest {
    * produces no targets (useful for argument-validation tests that don't care
    * about the compile half).
    */
+  @Test
+  fun `listAllWorkspaceTrailmapIds returns every manifest-bearing trailmap regardless of check scope`() {
+    // The known-manifest set must span the WHOLE workspace, not just the trailmap a scoped
+    // `check <id>` run happens to validate — otherwise an out-of-scope-but-real workspace target
+    // gets misclassified as a permanent "no manifest" skip instead of the intended
+    // "manifest exists, surface not loaded this run" skip. Stage several trailmaps and confirm all
+    // manifest-bearing ones are returned, while non-trailmap entries are ignored.
+    val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
+    val trailmapsDir = File(workspaceRoot, "trails/config/trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha\n")
+    File(trailmapsDir, "beta").mkdirs()
+    File(trailmapsDir, "beta/trailmap.yaml").writeText("id: beta\n")
+    // A directory with no trailmap.yaml is not a trailmap …
+    File(trailmapsDir, "not-a-trailmap").mkdirs()
+    // … and a stray file is not a directory.
+    File(trailmapsDir, "stray.txt").writeText("noise")
+
+    val ids = CheckCommand().listAllWorkspaceTrailmapIds(workspaceRoot)
+
+    assertEquals(setOf("alpha", "beta"), ids)
+  }
+
+  @Test
+  fun `listAllWorkspaceTrailmapIds is empty when the trailmaps directory is absent`() {
+    // A missing trailmaps/ dir must degrade to an empty set (targets then read as no-manifest
+    // skips) rather than throwing and taking down the whole validation phase.
+    val empty = File(workDir, "no-trailmaps").apply { mkdirs() }
+    assertEquals(emptySet(), CheckCommand().listAllWorkspaceTrailmapIds(empty))
+  }
+
   private fun newWorkspaceWithTrailmap(trailmapId: String, withTarget: Boolean = false): File {
     val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
     val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/$trailmapId").apply { mkdirs() }

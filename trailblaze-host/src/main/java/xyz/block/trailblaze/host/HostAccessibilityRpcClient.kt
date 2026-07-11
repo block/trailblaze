@@ -219,13 +219,15 @@ class HostAccessibilityRpcClient(
               // inline failure as a non-recoverable wedge. Arm server recovery from the structured
               // field — the RPC Failure-arm string matches never see this (it's an RpcResult.Success
               // carrying success=false), so this typed read is the only path that catches it here.
-              if (rpcResult.data.nonRecoverableWedge) {
-                rpcClient.armNonRecoverableWedge()
-              }
+              val wedged = rpcClient.noteIfNonRecoverableWedge(rpcResult.data)
               ExecutionResult.Failure(
                 error = rpcResult.data.errorMessage
                   ?: "Tool '$toolName' execution failed on-device",
-                recoverable = true,
+                // A wedge is terminal for THIS trail too: the planner/outer-loop retry loops key
+                // on `recoverable`, and the relaunch armed above only provisions a clean server
+                // for the NEXT trail — retrying against the known-dead server can never succeed,
+                // it only burns the LLM attempt budget.
+                recoverable = !wedged,
               )
             }
             null -> ExecutionResult.Failure(
@@ -345,9 +347,7 @@ class HostAccessibilityRpcClient(
           // Shape #3 (pre-action wedge): executePreAction returns a bare Boolean, so the typed
           // wedge kind can't propagate up to a caller that could arm later — arming MUST happen
           // here, at the site that sees the structured field, before we collapse to `false`.
-          if (rpcResult.data.nonRecoverableWedge) {
-            rpcClient.armNonRecoverableWedge()
-          }
+          rpcClient.noteIfNonRecoverableWedge(rpcResult.data)
           Console.log(
             "[HostAccessibilityRpcClient] Pre-action failed on-device: " +
               (rpcResult.data.errorMessage ?: "no error message"),

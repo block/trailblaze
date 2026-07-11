@@ -16,7 +16,8 @@
  *
  * Only properties from [DriverNodeDetail.AndroidAccessibility.MATCHABLE_PROPERTIES]
  * should be set here. All fields are optional — only non-null fields act as predicates.
- * String fields support regex patterns.
+ * String (`*Regex`) fields are regex-OR-exact-literal — see [DriverNodeMatch]; values like
+ * `$5.00` need no escaping.
  */
 export interface DriverNodeMatchAndroidAccessibility {
   classNameRegex?: string | null;
@@ -114,9 +115,11 @@ export interface DriverNodeMatchIosMaestro {
  * — `role` (AXButton/AXStaticText/…), `subrole`, `customActions`, etc. — rather than
  * the Maestro-inferred shape in [IosMaestro].
  *
- * String fields support regex patterns (with literal case-insensitive fallback when
- * the pattern is not valid regex, so selectors like `$0.00` still work). `uniqueId`
- * is exact-match because app-assigned accessibility identifiers are identity, not text.
+ * String (`*Regex`) fields are regex-OR-exact-literal (see [DriverNodeMatch]): matched as a
+ * regex, else by exact full-string equality — so selectors like `$0.00` still work without
+ * escaping (a leading `$` never regex-matches, so it resolves via the literal fallback).
+ * `uniqueId` is exact-match because app-assigned accessibility identifiers are identity,
+ * not text.
  *
  * Only properties in [DriverNodeDetail.IosAxe.MATCHABLE_PROPERTIES] are exposed here.
  */

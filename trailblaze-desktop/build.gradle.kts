@@ -48,7 +48,6 @@ configurations.all {
 
 dependencies {
   implementation(project(":trailblaze-agent"))
-  implementation(project(":trailblaze-android-world-benchmarks"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-host"))

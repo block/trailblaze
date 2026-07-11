@@ -109,6 +109,11 @@ object TrailRecordings {
    * (`C:\repo\trails\Suite\case.trail.yaml`) shortens the same way — matching the
    * `.replace('\\', '/')` convention the rest of the codebase uses for string-based
    * path handling.
+   *
+   * The CI expected-tests manifests mirror this rule in bash (`expected_test_name` in
+   * `scripts/lib/trail_discovery.sh`, pinned by `scripts/lib/trail_discovery_test.sh`) so a
+   * no-title/no-id trail's manifest line exact-matches its report title. If this rule changes
+   * shape, update the bash mirror and its test in the same change.
    */
   fun shortTrailName(trailFilePath: String): String {
     val relative = trailFilePath

@@ -18,7 +18,9 @@ import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
+import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -128,5 +130,43 @@ class OnDeviceRpcClientWedgeTest {
     val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
     client.noteIfNonRecoverableWedge(message = "Element not found", details = "Element not found")
     assertFalse(armed, "ordinary text in either field must never arm the breaker")
+  }
+
+  // ── Typed RunYamlResponse overload ──────────────────────────────────────────────────────────
+  //
+  // A wedge tagged via the structured `nonRecoverableWedge` field arrives as an
+  // RpcResult.Success carrying success=false — the string matches above never see it. The typed
+  // overload is the single reader every inline-failure call site routes through; its errorMessage
+  // deliberately carries NO wedge phrases so the field alone drives the arming.
+
+  @Test
+  fun `the typed RunYamlResponse overload arms the breaker and reports it`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("typed-wedge-overload"),
+        success = false,
+        errorMessage = "on-device failure",
+        nonRecoverableWedge = true,
+      ),
+    )
+    assertTrue(noted, "typed overload must report that it armed")
+    assertTrue(armed, "typed overload must arm the breaker on the structured field")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload does not arm on an ordinary inline failure`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("typed-wedge-overload"),
+        success = false,
+        errorMessage = "Element not found",
+      ),
+    )
+    assertFalse(noted, "an untagged inline failure must report not-armed")
+    assertFalse(armed, "an untagged inline failure must never arm the breaker")
   }
 }

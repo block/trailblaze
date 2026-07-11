@@ -716,6 +716,10 @@ class HostAccessibilityRpcClientTest {
 
     assertThat(result).isInstanceOf(ExecutionResult.Failure::class)
     assertThat(armed).isTrue()
+    // The wedge is terminal for this trail too: `recoverable = false` stops the V3
+    // planner/outer-loop retry loops from re-dispatching against the known-dead server
+    // (the relaunch armed above only provisions a clean server for the NEXT trail).
+    assertThat((result as ExecutionResult.Failure).recoverable).isFalse()
   }
 
   @Test
@@ -737,6 +741,9 @@ class HostAccessibilityRpcClientTest {
 
     assertThat(result).isInstanceOf(ExecutionResult.Failure::class)
     assertThat(armed).isFalse()
+    // Ordinary on-device failures stay recoverable so the V3 retry loops can keep working
+    // the step (element-not-found and friends are exactly what retries exist for).
+    assertThat((result as ExecutionResult.Failure).recoverable).isTrue()
   }
 
   @Test

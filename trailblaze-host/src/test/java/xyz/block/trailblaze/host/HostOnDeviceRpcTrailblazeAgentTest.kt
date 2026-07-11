@@ -55,6 +55,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import kotlin.test.Test
 
 /**
@@ -305,6 +306,144 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
     val errorMessage = (result as TrailblazeToolResult.Error).errorMessage
     assertThat(errorMessage).contains("contract violation")
+  }
+
+  // ── Typed wedge arming (per-tool RPC path) ────────────────────────────────────────────────
+  //
+  // The on-device server tags an awaitCompletion=true RunYamlResponse with
+  // `nonRecoverableWedge = true` when the tool failed because UiAutomation is in the
+  // kill-and-relaunch-only state. That wedge arrives as an RpcResult.Success carrying
+  // success=false, so the RPC Failure-arm string matches never see it — the host must read the
+  // typed field, arm the daemon's server-relaunch breaker, and return FatalError so the agent
+  // loop aborts instead of burning its LLM budget re-dispatching against a dead server.
+  // Mirrors the V3 coverage in HostAccessibilityRpcClientTest.
+
+  /** A success=false response whose typed `nonRecoverableWedge` field is set by [wedged].
+   *  The errorMessage deliberately carries NO wedge phrases — the typed field alone must
+   *  drive the arming, not string matching. */
+  private fun runYamlInlineFailureBody(wedged: Boolean): String =
+    """{"sessionId":"test-session","success":false,""" +
+      """"errorMessage":"on-device failure","nonRecoverableWedge":$wedged}"""
+
+  @Test
+  fun `wedge-tagged inline failure arms the relaunch breaker and returns FatalError`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = true)
+    }
+
+    val armed = AtomicBoolean(false)
+    rpcClient.close()
+    rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
+
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      createAgent()
+        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    assertThat((result as TrailblazeToolResult.Error.FatalError).errorMessage)
+      .contains("on-device failure")
+    assertThat(armed.get()).isEqualTo(true)
+  }
+
+  @Test
+  fun `ordinary inline failure does not arm the breaker and stays LLM-retryable`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlInlineFailureBody(wedged = false)
+    }
+
+    val armed = AtomicBoolean(false)
+    rpcClient.close()
+    rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
+
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      createAgent()
+        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    // Not fatal: an ordinary on-device failure keeps its retryable ExceptionThrown shape so
+    // the agent loop can feed it back to the LLM.
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+    assertThat(armed.get()).isEqualTo(false)
+  }
+
+  @Test
+  fun `wedge tag arriving only on the post-re-warm retry still arms and returns FatalError`() {
+    // First attempt fails at the transport level with NO wedge signature → re-warm succeeds →
+    // retry. The retry's inline response routes through the same result mapping as a
+    // first-attempt response, so a wedge tagged only there must arm + abort identically
+    // (same retry-response-field precedent as the onDeviceToolLogCount retry test below).
+    val runYamlAttempts = AtomicInteger(0)
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      if (runYamlAttempts.incrementAndGet() == 1) {
+        HttpStatusCode.InternalServerError to
+          """{"errorType":"NETWORK_ERROR","message":"Network error during RPC call","details":"Failed to connect to localhost/127.0.0.1:56166"}"""
+      } else {
+        HttpStatusCode.OK to runYamlInlineFailureBody(wedged = true)
+      }
+    }
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.OK to
+        """{"viewHierarchy":{},"screenshotBase64":null,"deviceWidth":1080,"deviceHeight":1920}"""
+    }
+
+    val armed = AtomicBoolean(false)
+    rpcClient.close()
+    rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
+
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      createAgent()
+        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    assertThat(armed.get()).isEqualTo(true)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).hasSize(2)
+  }
+
+  /** Reconstructed from the same shared phrases InstrumentationUtil throws, so these tests fail
+   *  if the emitted text and the matcher ever drift apart (same discipline as
+   *  DesktopYamlRunnerWedgeDecisionTest / OnDeviceRpcClientWedgeTest). */
+  private val nonRecoverableWedgeMessage =
+    "${UiAutomationHandleErrors.NON_RECOVERABLE_RETRY_FAILED_PHRASE}. The on-device server's " +
+      "instrumentation is in a ${UiAutomationHandleErrors.NON_RECOVERABLE_STATE_PHRASE} — kill " +
+      "the test APK process and re-launch the Trailblaze on-device server to recover."
+
+  @Test
+  fun `RPC-level failure carrying the wedge signature aborts as FatalError`() {
+    // HTTP-level RpcResult.Failure path: the string match at the rpcCall chokepoint arms the
+    // breaker, and the terminal tool result must abort the trail too — otherwise the LLM /
+    // self-heal keeps re-dispatching against the dead server (arm-and-abort were consistent
+    // only on the typed HTTP-200 path before).
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"UNKNOWN_ERROR","message":"execution failed",""" +
+        """"details":"$nonRecoverableWedgeMessage"}"""
+    }
+    // Healthy re-warm so the dispatch reaches the retry-failure terminal return (the common
+    // production shape: the server answers probes but every dispatch fails wedged).
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.OK to
+        """{"viewHierarchy":{},"screenshotBase64":null,"deviceWidth":1080,"deviceHeight":1920}"""
+    }
+
+    val armed = AtomicBoolean(false)
+    rpcClient.close()
+    rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
+
+    val commands = listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      createAgent()
+        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error.FatalError::class)
+    assertThat((result as TrailblazeToolResult.Error.FatalError).errorMessage)
+      .contains(UiAutomationHandleErrors.NON_RECOVERABLE_RETRY_FAILED_PHRASE)
+    assertThat(armed.get()).isEqualTo(true)
   }
 
   /**
@@ -617,6 +756,41 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         assertThat(agent.captureScreenState()).isNull()
       }
     }
+  }
+
+  /** The breaker's exception lacks the two-phrase non-recoverable signature, so neither the
+   *  rpcCall string match nor the session-log scan can arm the server relaunch from it — the
+   *  breaker itself must arm when it trips, or the next trail inherits the wedge (the same
+   *  poison-the-build mode the typed arming closes on the per-tool path). */
+  @Test
+  fun `tripping the GetScreenState circuit breaker arms the on-device server relaunch`() {
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"UNKNOWN_ERROR","message":"GetScreenState failed",""" +
+        """"details":"java.lang.RuntimeException: Error while connecting UiAutomation@1a3e9fe""" +
+        """ caused by android.os.DeadObjectException"}"""
+    }
+
+    val armed = AtomicBoolean(false)
+    rpcClient.close()
+    rpcClient = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed.set(true) })
+
+    val agent = createAgent()
+    runBlocking {
+      assertThat(agent.captureScreenState()).isNull()
+      assertThat(agent.captureScreenState()).isNull()
+      // The DEVICE_WEDGE_SIGNATURES details deliberately lack the two-phrase signature, so
+      // the rpcCall string match must NOT have armed during the first two failures — only
+      // the breaker trip below arms.
+      assertThat(armed.get()).isEqualTo(false)
+      try {
+        agent.captureScreenState()
+      } catch (expected: TrailblazeException) {
+        // "Device unhealthy" — asserted in the trip tests above; here we only care that
+        // the trip armed the relaunch.
+      }
+    }
+    assertThat(armed.get()).isEqualTo(true)
   }
 
   /** Regression check: the `reWarmTimeoutMs` constructor param must actually flow to

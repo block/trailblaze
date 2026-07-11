@@ -188,9 +188,9 @@ closes: it type-checks those args against each trailmap's generated `trailblaze-
     field above — placeholder / package-id targets used by smoke and eval trails, and the no-`target:`
     case. (A classpath-bundled target *does* have a manifest, so it declares its own
     `trail_validation.exempt` there instead of appearing in this list.)
-- **Where the exemptions stand.** The dashboard app validates cleanly (0
-  findings) — its findings were only selector-arg false positives, fixed by the re-injected selector
-  args. What remains is one real framework bug (the arg-boundary string coercion below), which blocks
+- **Where the exemptions stand.** The dashboard app validates cleanly (0 findings) — its findings
+  were only selector-arg false positives, fixed by the re-injected selector args. What remains is one
+  real framework bug (the arg-boundary string coercion below), which blocks
   the Square and primary-mobile exemptions, plus the manifest-less placeholder targets in
   `TRANSITIONAL_EXEMPT_TARGETS`. Everything else the corpus references is at **0 fatal findings**. The
   gate is safe — a full `check --all` sweep produces no false-fails.
@@ -213,8 +213,8 @@ closes: it type-checks those args against each trailmap's generated `trailblaze-
 - **Arg-serialization string coercion (the one real remaining framework bug).** A quoted
   numeric-string arg (`text: "5"`, `password: '12345678'`) — or a quoted boolean (`'true'`) — is
   re-coerced to a JSON number/bool at decode, so an `inputText({ text: string })` recording reads as
-  number-not-string. This is what a `check --all` sweep surfaced under Square's exemption (findings
-  across `launchAppSignedIn` / `enterEmployeePasscode` / `setFeatureFlag`), and it's the same
+  number-not-string. This is what a `check --all` sweep surfaced under Square's exemption — findings
+  in `launchAppSignedIn` / `enterEmployeePasscode` / `setFeatureFlag` — and it's the same
   root cause behind the primary-mobile exemption. Root cause: kaml's `YamlScalar` discards quote
   style, so `YamlJsonBridge.scalarToJsonPrimitive` can't tell `'12345678'` (string) from `12345678`
   (number), and its numeric round-trip guard only saves non-canonical values like `"0000"`. Closing it

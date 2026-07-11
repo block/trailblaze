@@ -345,7 +345,8 @@ class CompileCommand : Callable<Int> {
     } catch (e: Exception) {
       Console.error(
         "trailblaze $commandLabel: classpath-target validation surface emission failed " +
-          "(ignored — trail validation is report-only): ${e.message ?: e.javaClass.simpleName}",
+          "(ignored — surface emission is best-effort; a resulting missing surface is reported " +
+          "by the validation phase, fatally for a gated target on --all): ${e.message ?: e.javaClass.simpleName}",
       )
     }
     return EXIT_OK

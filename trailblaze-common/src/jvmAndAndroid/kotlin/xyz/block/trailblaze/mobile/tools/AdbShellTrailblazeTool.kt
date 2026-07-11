@@ -198,7 +198,9 @@ data class AdbShellTrailblazeTool(
       // shell-escaped string + `$?` exit sentinel; a shell-less transport (on-device
       // UiAutomation→Runtime.exec) must get raw argv tokens — escaping them turns `su` into the
       // literal program name `'su'` (→ "Cannot run program"). See AndroidDeviceCommandExecutor
-      // .usesShellInterpreter and joinCommandRawArgv.
+      // .usesShellInterpreter and joinCommandRawArgv. (This branch is specific to this tool's
+      // argv-shaped contract; Kotlin callers needing a multi-word pipeline on both transports —
+      // the thing the raw-argv path rejects — use the executor's executeShellPipelineAs.)
       if (executor.usesShellInterpreter) {
         executeViaShellInterpreter(executor, effectiveCommand)
       } else {

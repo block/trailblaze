@@ -7,6 +7,8 @@ import kotlin.test.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -372,6 +374,108 @@ class TrailTscValidatorTest {
     assertTrue(calls.all { it.classifier == null }, "v1 recordings carry no classifier slot")
   }
 
+  // ── Arg type coercion (the #4179 arg-boundary class) ───────────────────────────────────────
+
+  /**
+   * A quoted numeric/boolean recording value decodes to a JSON number/boolean (kaml drops the
+   * quote style). With the tool's descriptor declaring those params `string`, extraction re-aligns
+   * them to strings before transpiling — the same coercion replay applies — so `tsc` no longer sees
+   * `number not assignable to string` on a faithfully-recorded trail.
+   */
+  @Test
+  fun `extractRecordedCalls coerces number and boolean args to strings for string-typed params`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: demo
+      trail:
+      - step: Set the flag
+        recording:
+          android:
+          - setFeatureFlag:
+              passcode: 12345678
+              enabled: true
+      """.trimIndent(),
+    )
+    val descriptors = mapOf(
+      "setFeatureFlag" to TrailblazeToolDescriptor(
+        name = "setFeatureFlag",
+        requiredParameters = listOf(
+          TrailblazeToolParameterDescriptor(name = "passcode", type = "string"),
+          TrailblazeToolParameterDescriptor(name = "enabled", type = "string"),
+        ),
+      ),
+    )
+
+    val call = TrailTscValidator.extractRecordedCalls(doc, descriptors).single()
+
+    // Both scalars are now quoted strings in the transpiled args literal.
+    assertTrue(call.argsJson.contains("\"passcode\":\"12345678\""), "passcode coerced: ${call.argsJson}")
+    assertTrue(call.argsJson.contains("\"enabled\":\"true\""), "enabled coerced: ${call.argsJson}")
+  }
+
+  /**
+   * With no descriptor known for a tool (missing sidecar / unmodeled tool), extraction leaves the
+   * raw decoded args untouched — the pre-sidecar behavior. This is the default overload the pure
+   * codegen tests rely on.
+   */
+  @Test
+  fun `extractRecordedCalls leaves args untouched when no descriptor is known`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      config:
+        target: demo
+      trail:
+      - step: Set the flag
+        recording:
+          android:
+          - setFeatureFlag:
+              passcode: 12345678
+      """.trimIndent(),
+    )
+
+    val call = TrailTscValidator.extractRecordedCalls(doc).single()
+
+    // Unquoted number preserved — no coercion without a descriptor.
+    assertTrue(call.argsJson.contains("\"passcode\":12345678"), "raw number preserved: ${call.argsJson}")
+  }
+
+  /**
+   * The coercion must reach the v1 (`- prompts:` / `recording.tools`) recording shape, not only the
+   * unified format — extraction threads the descriptors through both paths.
+   */
+  @Test
+  fun `extractRecordedCalls coerces args for the v1 recording shape too`() {
+    val doc = yaml.decodeTrailDocument(
+      """
+      - config:
+          target: demo
+      - prompts:
+        - step: Set the flag
+          recording:
+            tools:
+            - setFeatureFlag:
+                passcode: 12345678
+                enabled: true
+      """.trimIndent(),
+    )
+    val descriptors = mapOf(
+      "setFeatureFlag" to TrailblazeToolDescriptor(
+        name = "setFeatureFlag",
+        requiredParameters = listOf(
+          TrailblazeToolParameterDescriptor(name = "passcode", type = "string"),
+          TrailblazeToolParameterDescriptor(name = "enabled", type = "string"),
+        ),
+      ),
+    )
+
+    val call = TrailTscValidator.extractRecordedCalls(doc, descriptors).single()
+
+    assertNull(call.classifier, "v1 recordings carry no classifier slot")
+    assertTrue(call.argsJson.contains("\"passcode\":\"12345678\""), "passcode coerced: ${call.argsJson}")
+    assertTrue(call.argsJson.contains("\"enabled\":\"true\""), "enabled coerced: ${call.argsJson}")
+  }
+
   @Test
   fun `validate discovers bare trail yaml files alongside per-device ones`() {
     // Tool names deliberately not registered on the classpath (they decode via the raw-args
@@ -415,6 +519,51 @@ class TrailTscValidatorTest {
 
     assertEquals(2, report.trailsDiscovered, "bare trail.yaml and *.trail.yaml discovered; notes.yaml ignored")
     assertTrue(report.errors.isEmpty(), "no load errors: ${report.errors}")
-    assertEquals(mapOf("demo" to 2), report.skippedNoSurface, "both formats' target: extracted")
+    // `demo` isn't in knownManifestTargets (none passed), so it's a permanent no-manifest skip,
+    // never a missing-surface one.
+    assertEquals(mapOf("demo" to 2), report.skippedNoManifest, "no-manifest target: extracted (both formats)")
+    assertTrue(report.skippedNoSurface.isEmpty(), "a manifest-less target must not read as missing-surface")
+  }
+
+  @Test
+  fun `validate classifies a no-surface target as missing-surface only when its manifest is known`() {
+    // Two trails, two targets. `hasManifest` is in knownManifestTargets (a manifest exists, its
+    // surface just wasn't loaded this run); `noManifest` is not, so it can never be validated.
+    val trailsRoot = tmp.newFolder("trails")
+    File(trailsRoot, "a.trail.yaml").writeText(
+      """
+      config:
+        target: hasManifest
+      trail:
+      - step: Do a thing
+        recording:
+          android:
+          - demoTap:
+              text: X
+      """.trimIndent(),
+    )
+    File(trailsRoot, "b.trail.yaml").writeText(
+      """
+      config:
+        target: noManifest
+      trail:
+      - step: Do a thing
+        recording:
+          android:
+          - demoTap:
+              text: X
+      """.trimIndent(),
+    )
+
+    val report = TrailTscValidator.validate(
+      trailsRoot = trailsRoot,
+      trailmaps = emptyList(),
+      jsRuntime = "bun",
+      tscJs = File(trailsRoot, "unused-tsc.js").toPath(),
+      knownManifestTargets = setOf("hasManifest"),
+    )
+
+    assertEquals(mapOf("hasManifest" to 1), report.skippedNoSurface, "known manifest, surface not loaded")
+    assertEquals(mapOf("noManifest" to 1), report.skippedNoManifest, "no manifest anywhere → permanent skip")
   }
 }

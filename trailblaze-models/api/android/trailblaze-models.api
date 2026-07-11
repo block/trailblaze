@@ -11699,11 +11699,13 @@ public final class xyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor {
 	public static synthetic fun copy$default (Lxyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Lxyz/block/trailblaze/toolcalls/TrailblazeToolSourceDescriptor;ILjava/lang/Object;)Lxyz/block/trailblaze/toolcalls/TrailblazeToolDescriptor;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDescription ()Ljava/lang/String;
+	public final fun getInputSchema ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getName ()Ljava/lang/String;
 	public final fun getOptionalParameters ()Ljava/util/List;
 	public final fun getRequiredParameters ()Ljava/util/List;
 	public final fun getSource ()Lxyz/block/trailblaze/toolcalls/TrailblazeToolSourceDescriptor;
 	public fun hashCode ()I
+	public final fun setInputSchema (Lkotlinx/serialization/json/JsonObject;)V
 	public fun toString ()Ljava/lang/String;
 }
 

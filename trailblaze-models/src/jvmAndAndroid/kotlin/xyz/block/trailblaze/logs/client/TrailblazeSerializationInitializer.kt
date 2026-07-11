@@ -212,7 +212,7 @@ object TrailblazeSerializationInitializer {
             "TrailblazeSerializationInitializer: no tools discovered via " +
               "trails/config/trailmaps/<id>/tools/ YAML files. Check that the module " +
               "providing your tools (trailblaze-common, trailblaze-compose, " +
-              "trailblaze-playwright, trailblaze-android-world-benchmarks, or your own " +
+              "trailblaze-playwright, or your own " +
               "tool module) is on the classpath — on Android, verify commonMain/resources " +
               "is wired as both Java resources AND Android assets in the module's " +
               "build.gradle.kts.",

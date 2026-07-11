@@ -482,24 +482,41 @@ class AccessibilityDeviceManager(
     val startTime = Clock.System.now().toEpochMilliseconds()
 
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
-      val tree = getAccessibilityTree()
-      if (tree != null) {
-        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
-        when (result) {
-          is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
-            val center = result.node.centerPoint()
-            return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
-          }
-          is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
-            val center = pickPreferredMatch(result.nodes).centerPoint()
-            return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
-          }
-          is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* scroll and retry */ }
-        }
+      resolveVisibleTarget(action.nodeSelector)?.let {
+        return it
       }
-      executeSwipeDirection(action.direction, screenWidth, screenHeight, action.scrollDurationMs)
+      // action.direction carries *scroll* semantics (what the trail author wrote and what the
+      // progress log reports); executeSwipeDirection takes *finger* semantics. Invert here,
+      // exactly where Maestro Orchestra does (scrollUntilVisible → direction.toSwipeDirection()).
+      executeSwipeDirection(
+        scrollToSwipeDirection(action.direction),
+        screenWidth,
+        screenHeight,
+        action.scrollDurationMs,
+      )
+    }
+    // Terminal check: the loop re-tests the deadline before resolving, so a target revealed by
+    // the final swipe would otherwise read as a failure.
+    resolveVisibleTarget(action.nodeSelector)?.let {
+      return it
     }
     error("Scroll until visible failed: ${action.nodeSelector.description()} not found within ${action.timeoutMs}ms")
+  }
+
+  /** One resolve pass for [executeScrollUntilVisible]: the target's center, or null if unmatched. */
+  private fun resolveVisibleTarget(nodeSelector: TrailblazeNodeSelector): ExecutionResult? {
+    val tree = getAccessibilityTree() ?: return null
+    return when (val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), nodeSelector)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
+        val center = result.node.centerPoint()
+        ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+      }
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
+        val center = pickPreferredMatch(result.nodes).centerPoint()
+        ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+      }
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
+    }
   }
 
   // --- Keyboard ---
@@ -911,6 +928,27 @@ internal data class ActionClickPlan(
   val className: String?,
   val resourceId: String?,
 )
+
+/**
+ * Maps a *scroll* direction to the *finger-swipe* direction that produces it, mirroring Maestro's
+ * `ScrollDirection.toSwipeDirection()`: scrolling DOWN (revealing content below the viewport)
+ * means the finger swipes UP. Pure function — `internal` so [ScrollToSwipeDirectionTest] can
+ * exercise it without instrumentation, mirroring [planActionClickRoute]'s testability rationale.
+ *
+ * [AccessibilityAction.ScrollUntilVisible.direction] keeps scroll semantics (its description and
+ * the [AccessibilityTrailRunner] progress log both read it as "which way the content moves"), so
+ * this bridge is applied only at the gesture dispatch point. [AccessibilityAction.Swipe] and
+ * [AccessibilityAction.Direction]-based raw swipes are unaffected — their direction is already
+ * the finger direction.
+ */
+internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): AccessibilityAction.Direction {
+  return when (direction) {
+    AccessibilityAction.Direction.UP -> AccessibilityAction.Direction.DOWN
+    AccessibilityAction.Direction.DOWN -> AccessibilityAction.Direction.UP
+    AccessibilityAction.Direction.LEFT -> AccessibilityAction.Direction.RIGHT
+    AccessibilityAction.Direction.RIGHT -> AccessibilityAction.Direction.LEFT
+  }
+}
 
 /**
  * Returns the [ActionClickPlan] for routing a tap on [node] via `ACTION_CLICK`, or `null`

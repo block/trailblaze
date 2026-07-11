@@ -140,13 +140,47 @@ object PerTrailmapClientDtsEmitter {
         analyzerOutputByTrailmapId = analyzerOutputByTrailmapId,
       )
 
-      generator.generateForTrailmapFromResolved(
+      val emittedPath = generator.generateForTrailmapFromResolved(
         trailmapDir = trailmapDir.toPath(),
         toolDescriptors = kotlinTools.descriptors,
         scriptedTools = scriptedTools,
         typedToolOverrides = typedOverrides,
         frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
         extraParamsByToolName = kotlinTools.selectorParamsByName,
+      )
+      // Emit the machine-readable arg-type sidecar next to the .d.ts so the trail-recording
+      // validator can coerce recorded args to their declared types (see
+      // [TrailValidationDescriptorSidecar]). Same resolved tool set as the .d.ts, so they can't drift.
+      writeValidationDescriptorSidecar(trailmapDir.toPath(), kotlinTools, scriptedTools, typedOverrides)
+      emittedPath
+    }
+  }
+
+  /**
+   * Best-effort write of the [TrailValidationDescriptorSidecar] for [trailmapDir]. Strictly
+   * non-fatal — a failure here must never take down typed-binding codegen, so it's logged and
+   * swallowed; the validator falls back to no-coercion for a missing sidecar.
+   */
+  private fun writeValidationDescriptorSidecar(
+    trailmapDir: Path,
+    kotlinTools: KotlinToolResolution,
+    scriptedTools: List<InlineScriptToolConfig>,
+    typedOverrides: Map<String, WorkspaceClientDtsGenerator.TypedToolOverride>,
+  ) {
+    try {
+      TrailValidationDescriptorSidecar.write(
+        trailmapDir = trailmapDir,
+        descriptors = TrailValidationDescriptorSidecar.buildValidationDescriptors(
+          kotlinDescriptors = kotlinTools.descriptors,
+          scriptedTools = scriptedTools,
+          typedOverrides = typedOverrides,
+        ),
+      )
+    } catch (e: Exception) {
+      Console.error(
+        "[PerTrailmapClientDtsEmitter] failed to write validation descriptor sidecar for " +
+          "$trailmapDir (ignored — recording validation falls back to no arg coercion): " +
+          (e.message ?: e::class.simpleName),
       )
     }
   }
@@ -187,7 +221,7 @@ object PerTrailmapClientDtsEmitter {
    * recorded trails actually call (`tapOnElementWithText`, …). **Scripted (`.ts`) tools carry the
    * baked target's schema** but are NOT re-run through the analyzer here (no on-disk `.ts` in a
    * JAR), so any residual gap between the baked schema and a precise typed shape reads as a
-   * finding to curate rather than a silent gap — acceptable for a report-only gate.
+   * finding to curate rather than a silent gap — a surfaced finding beats a silent hole.
    *
    * **Strictly non-fatal per target** — a generation failure for one target is logged under the
    * `[PerTrailmapClientDtsEmitter]` prefix and skipped, so one broken bundled target can't abort
@@ -228,7 +262,7 @@ object PerTrailmapClientDtsEmitter {
         )
         val kotlinTools = resolveKotlinToolDescriptorsForTrailmap(synthetic, catalog)
         val scriptedTools = collectTrailmapTypedScriptedTools(synthetic, mapOf(config.id to synthetic))
-        generator.generateForTrailmapFromResolved(
+        val emittedPath = generator.generateForTrailmapFromResolved(
           trailmapDir = hostDir,
           toolDescriptors = kotlinTools.descriptors,
           scriptedTools = scriptedTools,
@@ -236,6 +270,10 @@ object PerTrailmapClientDtsEmitter {
           frameworkMetadataByName = kotlinTools.frameworkMetadataByName,
           extraParamsByToolName = kotlinTools.selectorParamsByName,
         )
+        // Sidecar for the validator, same as the workspace [emit] path — here the scripted-tool
+        // arg types come from the baked target's own `inputSchema` (no analyzer override in a JAR).
+        writeValidationDescriptorSidecar(hostDir, kotlinTools, scriptedTools, typedOverrides = emptyMap())
+        emittedPath
       } catch (e: Exception) {
         Console.error(
           "[PerTrailmapClientDtsEmitter] failed to emit validation surface for classpath " +

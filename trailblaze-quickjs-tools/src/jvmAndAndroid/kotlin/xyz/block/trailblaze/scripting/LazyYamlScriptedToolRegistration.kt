@@ -397,7 +397,15 @@ class LazyYamlScriptedToolRegistration private constructor(
         description = config.description,
         requiredParameters = all.filter { it.name in requiredNames },
         optionalParameters = all.filter { it.name !in requiredNames },
-      )
+      ).apply {
+        // Retain the full schema (nested `properties`/array `items`) alongside the flat parameter
+        // split so [coerceArgsToDescriptorTypes] can re-align a scalar buried inside a nested
+        // object / array-of-objects (e.g. `overrides[].value`) — not just the top-level args — on
+        // both replay dispatch and the trail-recording validator. Non-empty schemas only; a
+        // no-arg tool keeps the flat (null-schema) path. Set on the body property (not the
+        // constructor) to keep the descriptor's public JVM ABI stable.
+        inputSchema = schema.takeIf { it.isNotEmpty() }
+      }
     }
 
     /**

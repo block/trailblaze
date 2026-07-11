@@ -222,7 +222,24 @@ data class TrailblazeNodeSelector(
  * and can match on any of that driver's matchable properties.
  *
  * Only non-null fields are used as predicates — null means "don't care about this property."
- * String fields use regex matching (with literal fallback for invalid patterns).
+ *
+ * **String fields (`*Regex`) are regex-OR-literal, not pure regex.** Each is matched as a regex
+ * against the whole property value, falling back to exact full-string equality when the regex
+ * doesn't match (`regex.matches(text) || text == pattern`). Matching is full-string (anchored),
+ * never substring. A value whose regex leg can never match — a price `$5.00`, whose leading `$` is
+ * a regex end-anchor — resolves purely through the literal fallback, so `textRegex: $5.00` needs no
+ * hand-escaping and is identical to `textRegex: \Q$5.00\E`.
+ *
+ * The `\Q…\E` form ([xyz.block.trailblaze.util.escapeForSelector]) is what the recorder/generator
+ * emits for metacharacter-bearing values. De-escaping it by hand is behavior-preserving only when
+ * the bare value isn't a valid regex or its regex leg can't match (the leading-`$` case) — a value
+ * whose metacharacters form a *valid* regex is NOT interchangeable with its escaped form (bare
+ * `v1.2` also matches `v1x2`; bare `Reward (1000)` also matches `Reward 1000`). That's why the
+ * generator only de-escapes behind a uniqueness gate (`TrailblazeNodeSelectorMinimizer`).
+ *
+ * Case-sensitivity: the regex leg follows the shape (native = case-sensitive; Maestro-authored =
+ * case-insensitive), but the exact-equality fallback is always case-sensitive. Full semantics and
+ * the locked cross-language contract live on [TrailblazeNodeSelectorResolver.matchesPattern].
  */
 @Serializable
 sealed interface DriverNodeMatch {
@@ -239,7 +256,8 @@ sealed interface DriverNodeMatch {
    *
    * Only properties from [DriverNodeDetail.AndroidAccessibility.MATCHABLE_PROPERTIES]
    * should be set here. All fields are optional — only non-null fields act as predicates.
-   * String fields support regex patterns.
+   * String (`*Regex`) fields are regex-OR-exact-literal — see [DriverNodeMatch]; values like
+   * `$5.00` need no escaping.
    */
   @Serializable
   @SerialName("androidAccessibility")
@@ -250,7 +268,7 @@ sealed interface DriverNodeMatch {
     val uniqueId: String? = null,
     val composeTestTagRegex: String? = null,
 
-    // Text (regex matching)
+    // Text (regex, falls back to exact full-string match)
     val textRegex: String? = null,
     val contentDescriptionRegex: String? = null,
     val hintTextRegex: String? = null,
@@ -427,9 +445,11 @@ sealed interface DriverNodeMatch {
    * — `role` (AXButton/AXStaticText/…), `subrole`, `customActions`, etc. — rather than
    * the Maestro-inferred shape in [IosMaestro].
    *
-   * String fields support regex patterns (with literal case-insensitive fallback when
-   * the pattern is not valid regex, so selectors like `$0.00` still work). `uniqueId`
-   * is exact-match because app-assigned accessibility identifiers are identity, not text.
+   * String (`*Regex`) fields are regex-OR-exact-literal (see [DriverNodeMatch]): matched as a
+   * regex, else by exact full-string equality — so selectors like `$0.00` still work without
+   * escaping (a leading `$` never regex-matches, so it resolves via the literal fallback).
+   * `uniqueId` is exact-match because app-assigned accessibility identifiers are identity,
+   * not text.
    *
    * Only properties in [DriverNodeDetail.IosAxe.MATCHABLE_PROPERTIES] are exposed here.
    */

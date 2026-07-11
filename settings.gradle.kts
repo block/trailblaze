@@ -67,7 +67,6 @@ include(
   ":trailblaze-agent",
   ":trailblaze-android",
   ":trailblaze-android-ondevice-mcp",
-  ":trailblaze-android-world-benchmarks",
   ":trailblaze-capture",
   ":trailblaze-common",
   ":trailblaze-compose-target",

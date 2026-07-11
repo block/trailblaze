@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.device
 
+import java.util.Base64
 import kotlinx.coroutines.CancellationException
+import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.Console
 
@@ -222,6 +224,9 @@ expect class AndroidDeviceCommandExecutor(
    * transport contract explicit: [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] reads
    * it to pick the shell-string path vs. the raw-argv path so the same tool works correctly on
    * both the daemon JVM and the on-device QuickJS dispatch.
+   *
+   * Don't hand-roll a branch on this property just to run a multi-word shell expression —
+   * [executeShellPipelineAs] / [writeFileAs] own that per-transport wrapping.
    */
   val usesShellInterpreter: Boolean
 
@@ -319,12 +324,13 @@ expect class AndroidDeviceCommandExecutor(
    * ### Example
    *
    * ```
-   * executeShellCommandAs(
-   *   appId = "com.example.app",
-   *   command = "sh -c 'mkdir -p /data/data/com.example.app/shared_prefs && " +
-   *     "cp /sdcard/seed_prefs.xml /data/data/com.example.app/shared_prefs/debug.xml'",
-   * )
+   * executeShellCommandAs(appId = "com.example.app", command = "ls shared_prefs")
    * ```
+   *
+   * For a multi-step command (pipes, `&&`, redirection, multi-word arguments), don't hand-wrap
+   * it in `sh -c '...'` — that quoting survives only the shell-backed host transport (see
+   * [usesShellInterpreter]). Use [executeShellPipelineAs], which wraps per transport; for the
+   * common seed-a-private-file case, [writeFileAs].
    *
    * @param appId the target app's package name (e.g. `"com.example.app"`).
    *   Must be a syntactically valid Android package name (letters/digits/underscores in
@@ -333,8 +339,8 @@ expect class AndroidDeviceCommandExecutor(
    * @param command the shell command to execute as the target app's UID. **Must be non-blank** —
    *   `run-as <pkg>` with no command drops into an interactive shell, which hangs
    *   non-interactive callers like the underlying [executeShellCommand] transport.
-   *   Multi-step commands should be wrapped in `sh -c '...'` (see example above) so quoting
-   *   and `&&` survive the round-trip.
+   *   Multi-step commands should go through [executeShellPipelineAs] instead of being
+   *   hand-wrapped here (see the example note above).
    * @return stdout from the executed command.
    * @throws IllegalArgumentException if [appId] is not a valid Android package name, or if
    *   [command] is blank. See [validateRunAsArgs] for the validation rationale.
@@ -456,6 +462,9 @@ expect class AndroidDeviceCommandExecutor(
    *    temp-file + `cp` for paths that need the `shell` UID (e.g. public storage on scoped-storage
    *    devices). Neither path passes the body as a shell argument, so there is no `ARG_MAX` ceiling
    *    the way a `base64 -d` argv would have.
+   *
+   * Cannot cross into another app's private `/data/data/<package>/` sandbox — neither `adb push`
+   * nor the `shell` UID can write there. For that, use the `run-as`-scoped [writeFileAs].
    *
    * Filesystem-only: this does **not** register the file with MediaStore (a plain path write isn't
    * MediaStore-indexed on scoped storage). If a consumer must find the file via a MediaStore query,
@@ -589,3 +598,141 @@ internal fun buildShellCpFallbackCommands(stagingPath: String, devicePath: Strin
     add(listOf("cp", stagingPath, devicePath))
   }
 }
+
+/**
+ * Wraps [innerCommand] — a single POSIX shell expression that may contain pipes, `&&`,
+ * redirections, and multi-word arguments — so it reaches a device-side `sh -c` as ONE argument
+ * on either adb transport. This is the transport branch callers used to hand-roll around
+ * [AndroidDeviceCommandExecutor.usesShellInterpreter]:
+ *
+ *  - **Shell-backed transport** (`usesShellInterpreter = true`; host: dadb → `adbd` runs the
+ *    command line via `sh -c`): the inner command is [shellEscape]d, so the outer device shell
+ *    hands it to the inner `sh -c` intact regardless of content. Unquoted, the outer shell would
+ *    evaluate the expression itself — one level too early — and a pipeline like
+ *    `… | base64 -d > file` silently no-ops.
+ *  - **Shell-less transport** (`usesShellInterpreter = false`; on-device: UiAutomation →
+ *    [Runtime.exec], which whitespace-splits the string and execs the tokens with NO shell):
+ *    quoting cannot help — quotes ride along as literal characters. Instead the inner command is
+ *    base64-encoded into a single whitespace-free token, spaced with `${IFS}` (the shell's field
+ *    separator) so the tokenizer keeps it whole. The device-side `sh` expands the token into a
+ *    `printf %s <base64> | base64 -d | sh` trampoline that decodes the inner command and executes
+ *    it in a fresh shell.
+ *
+ * Unlike [buildShellCpFallbackCommands] (raw argv that never sees a shell and must NOT be
+ * quoted), the output of this function is always eventually parsed by a real device-side `sh`,
+ * so single-quote escaping inside [innerCommand] is honored on both transports.
+ *
+ * No exit-code channel survives this wrapper on either transport, so callers that must know the
+ * inner command worked should verify by reading device state back (e.g. re-read a written file).
+ *
+ * Pure function so both wire shapes are pinned by unit tests without a device
+ * (`ShellPipelineCommandsTest`); the executor-bound entry points are [executeShellPipelineAs]
+ * and [writeFileAs].
+ */
+internal fun wrapShellPipelineForTransport(
+  usesShellInterpreter: Boolean,
+  innerCommand: String,
+): String {
+  require(innerCommand.isNotBlank()) {
+    "innerCommand must not be blank — `sh -c ''` succeeds silently, which is never what a caller intended"
+  }
+  return if (usesShellInterpreter) {
+    "sh -c ${innerCommand.shellEscape()}"
+  } else {
+    val innerBase64 = Base64.getEncoder().encodeToString(innerCommand.toByteArray(Charsets.UTF_8))
+    "sh -c printf\${IFS}%s\${IFS}$innerBase64|base64\${IFS}-d|sh"
+  }
+}
+
+/**
+ * Executes [innerCommand] — a full shell expression (pipes, `&&`, redirection, multi-word
+ * arguments) — as [appId]'s UID via `run-as`, on either adb transport.
+ *
+ * [AndroidDeviceCommandExecutor.executeShellCommandAs] alone carries a command this rich only on
+ * the shell-backed host transport, and only if the caller quotes it correctly; on the shell-less
+ * on-device transport the expression shatters at [Runtime.exec]'s whitespace split. This entry
+ * point owns that transport branch (see [wrapShellPipelineForTransport]) so callers no longer
+ * consult [AndroidDeviceCommandExecutor.usesShellInterpreter] themselves.
+ *
+ * Same preconditions as [AndroidDeviceCommandExecutor.executeShellCommandAs]: the target app
+ * must be debuggable and [appId] a syntactically valid package name. The returned stdout is
+ * diagnostic only — the inner shell's exit status is NOT observable on either transport — so
+ * verify effects by reading device state back.
+ */
+fun AndroidDeviceCommandExecutor.executeShellPipelineAs(appId: String, innerCommand: String): String =
+  executeShellCommandAs(
+    appId = appId,
+    command = wrapShellPipelineForTransport(usesShellInterpreter, innerCommand),
+  )
+
+/**
+ * Cap on [buildRunAsFileWriteCommand]'s decoded payload. The content travels base64-encoded inside
+ * ONE shell argument, and the shell-less transport re-encodes the whole inner command into a
+ * single token ([wrapShellPipelineForTransport]) — 64 KiB decoded stays under Linux's 128 KiB
+ * per-argument limit (`MAX_ARG_STRLEN`) even after that double encoding (64 KiB → ~85 KiB →
+ * ~114 KiB).
+ */
+internal const val MAX_RUN_AS_WRITE_CONTENT_BYTES: Int = 64 * 1024
+
+/**
+ * Command plan behind [writeFileAs]: create the destination's parent directory if the path has
+ * one, then decode a base64 payload into the destination file. The path tokens are [shellEscape]d
+ * because this string is always evaluated by a real device-side `sh` (via
+ * [wrapShellPipelineForTransport]); the base64 payload needs no quoting — its alphabet contains
+ * no shell metacharacters. Pure function so the wire shape is unit-testable without a device.
+ */
+internal fun buildRunAsFileWriteCommand(devicePath: String, content: ByteArray): String {
+  require(devicePath.isNotBlank()) { "devicePath must not be blank" }
+  require(!devicePath.endsWith("/")) {
+    "devicePath must name a file, not a directory (got '$devicePath') — with no exit-code " +
+      "channel on the run-as pipeline, a redirect onto a directory would fail silently"
+  }
+  require(content.size <= MAX_RUN_AS_WRITE_CONTENT_BYTES) {
+    "content is ${content.size} bytes, over the $MAX_RUN_AS_WRITE_CONTENT_BYTES-byte cap — the " +
+      "payload rides base64-encoded inside a single shell argument (no exit-code channel, so an " +
+      "over-limit write would fail silently). writeFileAs targets small config/preference " +
+      "files; for larger bodies outside an app sandbox use writeFileToDevice."
+  }
+  val parent = devicePath.substringBeforeLast('/', missingDelimiterValue = "")
+  val contentBase64 = Base64.getEncoder().encodeToString(content)
+  return buildString {
+    if (parent.isNotEmpty()) {
+      append("mkdir -p ")
+      append(parent.shellEscape())
+      append(" && ")
+    }
+    append("printf %s ")
+    append(contentBase64)
+    append(" | base64 -d > ")
+    append(devicePath.shellEscape())
+  }
+}
+
+/**
+ * Writes [content] to [devicePath] as [appId]'s UID via a `run-as`-scoped shell pipeline,
+ * creating parent directories and overwriting any existing file. Works on both adb transports.
+ *
+ * This is the `run-as` sibling of [AndroidDeviceCommandExecutor.writeFileToDevice]: that method
+ * moves bytes via `adb push` / direct file I/O, which cannot cross into another app's
+ * `/data/data/<package>/` sandbox (`adb push` has no `run-as`, and the `shell` UID cannot write
+ * there). This one can — the standard use is seeding a debuggable app's private files
+ * (SharedPreferences XML, small config) before launch. The cost: the payload travels
+ * base64-encoded **inside the command line**, so it is capped at [MAX_RUN_AS_WRITE_CONTENT_BYTES]
+ * (64 KiB, enforced — an over-limit write would otherwise fail silently) — right-sized for
+ * preference/config files, wrong for large bodies (use
+ * [AndroidDeviceCommandExecutor.writeFileToDevice] outside app sandboxes).
+ *
+ * Relative [devicePath]s resolve against the app's data directory (`run-as` starts there), so
+ * `writeFileAs(appId, "shared_prefs/settings.xml", bytes)` and the absolute form are equivalent.
+ *
+ * Same preconditions as [AndroidDeviceCommandExecutor.executeShellCommandAs]: the target app
+ * must be debuggable and [appId] a syntactically valid package name. No exit-code channel exists
+ * on either transport: the returned stdout is diagnostic only, so a caller that must know the
+ * write landed should read the file back (e.g. `executeShellCommandAs(appId, "cat <path>")`) and
+ * check the content.
+ */
+fun AndroidDeviceCommandExecutor.writeFileAs(
+  appId: String,
+  devicePath: String,
+  content: ByteArray,
+): String = executeShellPipelineAs(appId, buildRunAsFileWriteCommand(devicePath, content))

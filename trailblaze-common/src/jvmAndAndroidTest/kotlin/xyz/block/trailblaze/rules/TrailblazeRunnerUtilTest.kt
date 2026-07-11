@@ -195,6 +195,81 @@ class TrailblazeRunnerUtilTest {
   }
 
   @Test
+  fun `recording FatalError with selfHeal=true throws immediately without recovery`() {
+    // FatalError's contract is "abort the test immediately" — it marks dead infrastructure
+    // (e.g. a non-recoverably wedged on-device server), not the UI drift self-heal exists
+    // for. selfHeal=true must be overridden: throw, don't recover.
+    val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
+    var session = newSession("session-fatal")
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ ->
+          TrailblazeToolResult.Error.FatalError(errorMessage = "on-device server wedged")
+        },
+        trailblazeRunner = runner,
+        trailblazeLogger = TrailblazeLogger.createNoOp(),
+        sessionProvider = { session },
+        sessionUpdater = { session = it },
+      )
+
+    val ex =
+      assertThrowsTrailblazeException {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(recordedStep("Tap login", tool("tapLogin"))),
+            useRecordedSteps = true,
+            selfHeal = true,
+          )
+        }
+      }
+    // The fatal tool's error must survive into the terminal exception — downstream wedge
+    // detection reads the session's terminal failure message.
+    assertTrue((ex.message ?: "").contains("on-device server wedged"), ex.message ?: "")
+    assertTrue(runner.recoverCalls.isEmpty(), "FatalError must not hand off to self-heal recovery")
+    // No recovery ran, so the session must not be marked as having used self-heal.
+    assertFalse(session.usedSelfHeal)
+  }
+
+  @Test
+  fun `FatalError on step 1 aborts the remaining steps even with selfHeal=true`() {
+    // The containment thesis of the fatal skip: without it, selfHeal would recover() the
+    // fatal step and CONTINUE into step 2 against the same dead infrastructure. The throw
+    // must abort the whole prompt list — step 2's recorded tool never fires.
+    val attemptedTools = mutableListOf<List<TrailblazeTool>>()
+    val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
+    var session = newSession("session-fatal-multistep")
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          attemptedTools += tools
+          TrailblazeToolResult.Error.FatalError(errorMessage = "on-device server wedged")
+        },
+        trailblazeRunner = runner,
+        trailblazeLogger = TrailblazeLogger.createNoOp(),
+        sessionProvider = { session },
+        sessionUpdater = { session = it },
+      )
+
+    assertThrowsTrailblazeException {
+      runBlocking {
+        util.runPromptSuspend(
+          prompts = listOf(
+            recordedStep("Tap login", tool("tapLogin")),
+            recordedStep("Type password", tool("inputPassword")),
+          ),
+          useRecordedSteps = true,
+          selfHeal = true,
+        )
+      }
+    }
+
+    assertEquals(1, attemptedTools.size, "only step 1 may dispatch; step 2 must be aborted")
+    assertTrue(runner.recoverCalls.isEmpty(), "no self-heal hand-off for a fatal step")
+    assertTrue(runner.runSuspendCalls.isEmpty(), "step 2 must not fall through to AI either")
+    assertFalse(session.usedSelfHeal)
+  }
+
+  @Test
   fun `selfHeal=true marks session usedSelfHeal via sessionUpdater on recovery`() = runBlocking {
     val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
     var session = newSession("session-marks-fallback")

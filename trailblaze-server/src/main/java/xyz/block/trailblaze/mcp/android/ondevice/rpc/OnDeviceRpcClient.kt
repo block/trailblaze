@@ -5,6 +5,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
+import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
@@ -52,18 +53,37 @@ class OnDeviceRpcClient(
   }
 
   /**
-   * Arms the same circuit breaker [noteIfNonRecoverableWedge] fires, but from a STRUCTURED signal
-   * rather than a string match: the on-device server now tags an `awaitCompletion = true`
-   * [xyz.block.trailblaze.llm.RunYamlResponse] with `nonRecoverableWedge = true` at the source.
-   * That wedge arrives as an `RpcResult.Success` carrying `success = false` — the per-call
-   * `Failure`-arm string matches in [rpcCall] never see it (no typed body deserializes on a
-   * Failure), so `:trailblaze-host` reads the typed field and calls this to arm recovery.
+   * Arms the circuit breaker from a signal that isn't a string match on an RPC failure —
+   * e.g. `:trailblaze-host`'s GetScreenState circuit breaker, which decides the device is
+   * wedged from repeated failures rather than from any single message.
    *
    * Public (not `@PublishedApi internal` like [onNonRecoverableWedge]) so `:trailblaze-host` can
    * reach it across the module boundary — it is the bridge to the otherwise-inline-only breaker.
+   * Call sites that hold an inline [RunYamlResponse] should use the typed
+   * [noteIfNonRecoverableWedge] overload instead of reading the field and calling this by hand.
    */
   fun armNonRecoverableWedge() {
     onNonRecoverableWedge()
+  }
+
+  /**
+   * Typed twin of the string-matching [noteIfNonRecoverableWedge]: arms the breaker when an
+   * `awaitCompletion = true` [RunYamlResponse] is tagged [RunYamlResponse.nonRecoverableWedge]
+   * at the source, and returns whether it armed so the call site can shape its own terminal
+   * result (FatalError, `recoverable = false`, …).
+   *
+   * A wedge tagged this way arrives as an `RpcResult.Success` carrying `success = false` — the
+   * per-call `Failure`-arm string matches in [rpcCall] never see it (no failure body
+   * deserializes on a Success). Every call site that inspects an inline [RunYamlResponse]
+   * failure must route through this single reader rather than hand-inlining the field check:
+   * a hand-rolled site that forgets to arm is exactly how the host-agent path missed the wedge
+   * the first time (trailblaze-android-pr/2712).
+   */
+  fun noteIfNonRecoverableWedge(response: RunYamlResponse): Boolean {
+    if (response.nonRecoverableWedge) {
+      onNonRecoverableWedge()
+    }
+    return response.nonRecoverableWedge
   }
 
   /**

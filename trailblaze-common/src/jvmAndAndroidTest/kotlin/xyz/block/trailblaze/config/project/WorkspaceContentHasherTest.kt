@@ -146,6 +146,24 @@ class WorkspaceContentHasherTest {
   }
 
   @Test
+  fun `compute ignores framework-generated typed-surface artifacts`() {
+    // The daemon writes trailblaze-client.d.ts + trailblaze-tool-descriptors.json during its own
+    // bootstrap codegen, AFTER the drift hash is captured. Hashing them would make that self-write
+    // read as user drift (e.g. the first run after an upgrade that introduced the sidecar).
+    val before = WorkspaceContentHasher.compute(workspace, version = "v1")
+    File(workspace, "trailmaps/foo/tools").mkdirs()
+    File(workspace, "trailmaps/foo/tools/trailblaze-client.d.ts").writeText("export {};\n")
+    File(workspace, "trailmaps/foo/tools/trailblaze-tool-descriptors.json").writeText("[]\n")
+    val after = WorkspaceContentHasher.compute(workspace, version = "v1")
+    assertEquals(before, after, "Framework-generated typed-surface artifacts must not contribute.")
+
+    // But a genuine author-owned file in the same tools/ dir still flips the hash — the exclusion
+    // is by reserved name, not a blanket tools/ skip.
+    File(workspace, "trailmaps/foo/tools/my_tool.ts").writeText("export const x = 1;\n")
+    assertNotEquals(after, WorkspaceContentHasher.compute(workspace, version = "v1"), "author file still counts")
+  }
+
+  @Test
   fun `compute skips symlinks rather than following them`() {
     // Without symlink handling, a symlink loop would either infinite-loop the walk or
     // duplicate-hash the target depending on JVM behavior. We skip symlinks entirely.
