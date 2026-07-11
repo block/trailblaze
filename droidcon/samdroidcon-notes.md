@@ -633,7 +633,7 @@ iOS says "Invitees" — the recordings diverge, the NL never does):
     title: "Cross-app: create a contact, then invite them to the talk"
     target: contacts   # or a composed demo trailmap — open question below
 - prompts:
-    - step: Create a contact "Casey Trailblaze" with email casey.trailblaze.demo@gmail.com
+    - step: Create a contact "Casey Trailblaze" with email casey.trailblaze.demo@example.com
     - verify: The contact shows the name and email
     - step: Open the calendar app and go to July 17
     - step: Create an event "Trailblaze: Map Your App for AI" at 1:00 PM in room "W222 B"
@@ -642,20 +642,31 @@ iOS says "Invitees" — the recordings diverge, the NL never does):
     - step: Save the event
     - verify: July 17 shows the event with Casey invited and a reminder set
 ```
-**Android:** every calendar beat lands on a COMMITTED waypoint: quick_create_expanded,
-add_location, add_people + add_people_typing (guest autocomplete pulling from Contacts
-= the cross-app payoff), notification_picker, event_detail_with_attendees. Fully
-emulator-safe → **the durable committed example**, replayable zero-LLM for ASSET A,
-and ASSET C can light up BOTH graphs and trace this trail across them. Stretch beat
-(timing-fiddly): let the reminder fire and snooze from the shade —
-event_notification_fired + snooze_options waypoints exist.
+**Android — two tracks (post clean-CI probe, see subsection below):**
+- *Recorded b-roll track (Sam's own Pixel, Google Calendar):* every calendar beat lands
+  on a COMMITTED waypoint: quick_create_expanded, add_location, add_people +
+  add_people_typing (guest autocomplete pulling from Contacts = the cross-app payoff),
+  notification_picker, event_detail_with_attendees. ASSET C can light up BOTH graphs
+  and trace this trail across them. Stretch beat (timing-fiddly): let the reminder fire
+  and snooze from the shade — event_notification_fired + snooze_options waypoints exist.
+- *Committed CI track (clean AOSP image, per Sam's constraint):* the committed calendar
+  trailmap targets `com.google.android.calendar` resource-ids — NOT present on the clean
+  image, and the stock AOSP Calendar is view-only (stripped editor). CI runs on sideloaded
+  **Etar** with a trailhead-seeded local calendar (full recipe below). Etar waypoints
+  would be NEW (`ws.xsoh.etar` ids) — which is a feature, not a bug: blazing them fresh
+  is exactly what ASSET B shows.
 
 **iOS (stock Apple Contacts + Apple Calendar):** beat-for-beat mirror; Invitees
-autocomplete searches Contacts. **GATE: the Invitees row only appears on an
-invite-capable calendar (iCloud/Google/Exchange) — a bare simulator's local "On My
-iPhone" calendar likely hides it.** Verify FIRST (decides recording device): (a) real
-test iPhone + test Apple ID — cleanest, or (b) 30-min spike: add a Google account to
-simulator Calendar. Contacts half is iOS's STRONG side (typed tools + 103 waypoints).
+autocomplete searches Contacts. **GATE — now governing under the clean-CI constraint:
+the Invitees row only appears on an invite-capable calendar (iCloud/Google/Exchange);
+a bare simulator's local "On My iPhone" calendar hides it, and Sam ruled out signing
+in.** So the accountless iOS variant REPLACES the invite beat. Candidates (agent spike
+to pick): (a) give Casey a **birthday** during contact creation → the stock Birthdays
+calendar shows it — still a genuine Contacts→Calendar cross-app payoff, zero accounts
+(verify Birthdays calendar appears accountless on a fresh simulator); (b) event with
+location + 30-min reminder only, verify: on the event detail. Contacts half is iOS's
+STRONG side (typed tools + 103 waypoints) and already runs accountless in
+ios-contacts-trails.yml (macos-26 / iPhone 17 Pro).
 
 **Symmetry to narrate:** Android = calendar mapped / contacts thin; iOS = contacts
 mapped / calendar unmapped. Same trail runs on both — closest-wins recordings +
@@ -667,10 +678,74 @@ triggers a one-time permission dialog → replay non-determinism. Pre-grant in t
 trailhead: `xcrun simctl privacy booted grant contacts com.apple.mobilecal` /
 `adb shell pm grant`. A concrete trailhead story instead of generic "clear app data."
 
-**Caveat:** saving genuinely emails the invite — use a designated test address (stretch
-cut: show the invite landing in the guest's inbox).
+**Caveat, resolved by the clean-CI design:** on a LOCAL (sync-adapter-less) calendar
+with no account on the device, saving never emails anyone — the invite is a provider
+row, not an outbound message. Belt-and-suspenders: the contact uses **@example.com**
+(reserved domain, no real mailbox). The old "designated test address" worry only
+applies to the Google-Calendar b-roll track on Sam's own device.
 
-### Scenario C — share-sheet coda (optional 9th step on A)
+### Clean-CI probe results (2026-07-11, live on disposable AVD `tb-probe-clean-34`)
+
+**Sam's governing constraint (verbatim intent):** run from a **clean stock emulator or
+simulator**, **no sign-in at all**, so the demo can run in the open-source CI.
+
+Probed empirically on `system-images;android-34;default;x86_64` (the same family
+clock-trails.yml uses — reactivecircus/android-emulator-runner, api-level 34):
+
+1. **What the clean image ships:** com.android.calendar / contacts / dialer / messaging
+   all present. CalendarProvider has **ZERO calendars** out of the box.
+2. **Stock AOSP Calendar is view-only.** Its editor is stripped from the APK —
+   INSERT intent crashes internally (`ClassNotFoundException:
+   com.android.calendar.event.EditEventActivity`) and bounces to week view. Dead end
+   for any create-event demo. (Google Calendar is not on `default` images.)
+3. **Stock AOSP Contacts editor fully works accountless.** Contact "Casey Trailblaze"
+   + email created via UI, lands in ContactsProvider (raw_contacts _id=1) on the
+   device-local account.
+4. **Fix: sideload Etar** (`ws.xsoh.etar`, F-Droid, OSS fork of the *unstripped* AOSP
+   Calendar, ~8.4 MB, apk cached fine for CI). Full accountless editor: title, date
+   (Jul 17 2026 reachable), time, **Guests**, location, reminder, recurrence.
+5. **Cross-app payoff VERIFIED end-to-end:** typing "Casey" in Etar's Guests field
+   pops ContactsProvider autocomplete → "Casey Trailblaze
+   casey.trailblaze.demo@example.com" → tap → chip → DONE saves → provider shows
+   `attendees: event_id=3, attendeeName=Casey Trailblaze,
+   attendeeEmail=casey.trailblaze.demo@example.com`. That `content query` on
+   `content://com.android.calendar/attendees` is a deterministic `verify:` hook.
+
+**Trailhead recipe (all adb, all CI-safe, each line has a why):**
+```bash
+# 1. Seed a LOCAL calendar — provider ships empty; editor needs a writable calendar.
+#    URI must be single-quoted through adb shell (the & otherwise splits the command).
+adb shell 'content insert --uri "content://com.android.calendar/calendars?caller_is_syncadapter=true&account_name=local&account_type=LOCAL" --bind account_name:s:local --bind account_type:s:LOCAL --bind name:s:Local --bind calendar_displayName:s:Local --bind calendar_color:i:-16776961 --bind calendar_access_level:i:700 --bind ownerAccount:s:local --bind visible:i:1 --bind sync_events:i:1'
+# 2. Install Etar (full calendar editor).
+adb install etar.apk
+# 3. Disable the stripped stock Calendar → Etar becomes the ONLY calendar app:
+#    no app-chooser dialog ever appears, and "open the calendar app" is unambiguous.
+adb shell pm disable-user --user 0 com.android.calendar
+# 4. Pre-grant runtime permissions — kills two replay-nondeterminism landmines:
+#    without READ_CONTACTS the guest autocomplete SILENTLY shows nothing;
+#    without exact-alarm access Etar's first editor open bounces to Settings.
+adb shell pm grant ws.xsoh.etar android.permission.READ_CONTACTS
+adb shell appops set ws.xsoh.etar SCHEDULE_EXACT_ALARM allow
+```
+
+**Etar facts for the waypoint/tool authors:**
+- `EditEventActivity` is **not exported** → launch via implicit INSERT intent only
+  (`am start -a android.intent.action.INSERT -t "vnd.android.cursor.item/event"`),
+  never by explicit component. With stock Calendar disabled there's no chooser.
+- Attendees row sits below the fold → dismiss keyboard + scroll before it's visible.
+  Resource-ids: `ws.xsoh.etar:id/attendees`, `add_attendees_row`, `attendees_icon`.
+- The autocomplete suggestion popup renders in a separate window that a plain
+  uiautomator main-window dump misses (screenshot sees it) — nice concrete beat for
+  the driver/a11y-tree discussion if it comes up in Q&A.
+- Force-stop before re-firing INSERT: a foregrounded Etar swallows the intent into the
+  existing task ("intent delivered to top-most instance") without opening the editor.
+
+**NL stays unified across all three calendars.** "Open the calendar app / create an
+event / invite Casey" runs against Etar (CI), Google Calendar (Sam's Pixel b-roll),
+and Apple Calendar (iOS) — recordings and waypoints diverge per app/platform, the
+journey doesn't. (Don't over-claim on stage: recordings are keyed by platform
+classifier, so an Etar recording doesn't replay on Google Calendar — it's the NL
+source that's shared.)
 Share the finished contact card from Contacts into Messages (share sheet = OS
 connective tissue; Android intents vs iOS share sheet, same NL).
 
