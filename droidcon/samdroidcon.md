@@ -583,6 +583,44 @@ Type-safe, and the language LLMs edit best. Wrong tool name or args = compile er
 
 ---
 
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+
+# Tools return data, not just text
+
+- Structured **JSON results** — typed by `tool<In, Out>`
+- `listInstalledApps()` · `getUserProfile()`
+- One step's **result** feeds the next step
+
+<!--
+The Out type param means results are structured and consumable, not prose.
+Real uses: enumerate installed apps on a device, pull a test user's profile info.
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+
+# Where do conditionals go?
+
+- *"If a notification appears, dismiss it"*
+- *"Tablet? Close that panel first"*
+- *"Over $20 → do this · under → expect that"*
+
+<div class="pt-6">
+
+Day one rule: **trails are linear** — logic lives in **tools**
+
+</div>
+
+<!--
+The knee-jerk: NO logic in a trail. A teammate added `runIf` and people use it — fine,
+because it passes the test that governs everything here:
+COULD THE LLM CONSTRUCT IT? If yes, it's allowed in the trail vocabulary.
+Conditionals as computation belong in a TypeScript tool (do the check, branch inside).
+-->
+
+---
+
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2: how agents reach tools · 24:00–26:30</div>
 
 # The CLI pivot

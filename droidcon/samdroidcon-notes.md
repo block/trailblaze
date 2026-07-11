@@ -196,6 +196,19 @@ Continuity with past talks:
   (self-heal).
 - **Sam asked for a test-lifecycle diagram** in the deck.
 
+## Core points round 6 (2026-07-11)
+
+- **Conditionals are a real problem.** Examples: "if you're on a tablet, dismiss this
+  window"; "if there's a new notification, dismiss it"; "if the price is above $20 do X,
+  under $20 expect Y." Current answer: write a TypeScript custom tool that does the
+  computation + conditional. A teammate added a **`runIf` tool** — people use it; Sam has a
+  knee-jerk reaction against ANY logic living in a trail. His acceptance criterion:
+  **"as long as the LLM could construct it, I'm okay with it."** (Ties to day-one devlog
+  rule: recordings are strictly linear; conditionals belong in tools.)
+- **Typed tools return structured JSON, not just text.** Via the type-safe TS bindings
+  (`trailblaze.tool<In, Out>`): e.g. list installed applications on a device, grab a user's
+  profile information — results the next step can consume. Super helpful in practice.
+
 ## Answers locked in (2026-07-11)
 
 - **Talk ethos:** developer conferences are about sharing technical thought process and
