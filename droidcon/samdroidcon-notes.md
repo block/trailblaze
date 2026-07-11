@@ -492,22 +492,15 @@ Sam's constraints: no toy demos (wikipedia/calculator/contacts), no other compan
 personal-automation STORY but Google Auth + affiliation make it a bad committed demo —
 keep as a spoken anecdote.
 
-Options (Claude's ranking):
+Options (original ranking; statuses from Sam's 2026-07-12 answers):
 
-**A. The droidcon conference app itself — RECOMMENDED.** Touchlab's DroidconKotlin
-(github.com/touchlab/DroidconKotlin) — open source, Kotlin Multiplatform, Android + iOS.
-Trail: "Find <this talk> in the schedule and bookmark it" (maybe + "verify it appears in
-My Agenda"). Why it wins: the audience literally has the app on their phones during the
-talk; zero auth; OSS so no affiliation; KMP Android+iOS = demos the unified format's
-multi-platform recordings in ONE file; committable as `trailmaps/droidcon/` + example
-trails. Ultra-meta: the agent finds the very talk being given.
-Risk: need a stable build — pin an APK/simulator build, don't depend on conference wifi.
+**A. The droidcon conference app itself — ❌ REJECTED by Sam** ("we should use a real
+app"). Was: Touchlab's DroidconKotlin (github.com/touchlab/DroidconKotlin), trail =
+"find this talk and bookmark it."
 
-**B. Square POS (sandbox/demo mode) — the "real stuff" b-roll, video only.** Most
-production credibility ("this is what we actually drive, on Register hardware"). But the
-OSS scrub list treats Square POS references as sensitive → can't commit as an example;
-use as a short video segment only if cleared. Auth via a trailhead provisioning tool is
-itself a story beat.
+**B. Company-product b-roll — ❌ REJECTED by Sam** (representing the company/product;
+can't clear it — and not committable as an example anyway). Direction instead: general
+user/developer experiences for developer education.
 
 **C. Mastodon (official app, OSS).** Matches Sam's personal use case — content that lives
 only in a mobile app. Browse feed / post / verify. Messy real-world UI (infinite scroll,
@@ -518,6 +511,16 @@ Auth: compose → send → verify in sent folder against a test IMAP account. Co
 
 **E. Goose desktop (Block's own OSS agent).** Trails already exist in the repo;
 "Trailblaze testing an AI agent" is memorable — but desktop, not mobile, for a Droidcon room.
+
+**Round 2 (Sam's direction, 2026-07-12): a REAL app on a stock Android device.**
+- Gmail — ❌ privacy (people would see his email; Google Auth pain).
+- **Google Calendar — Claude's recommendation.** The public repo already ships a committed
+  Calendar fixture trailmap (`trails/config/trailmaps/calendar/`, targeting
+  `com.google.android.calendar`, waypoint JSONs + screenshots) → ASSET C's waypoint-map
+  data mostly exists; stock app everyone has; fresh test account kills privacy. Journey:
+  "Add 'Trailblaze: Map Your App for AI' — Jul 17, W222 B — to my calendar with a reminder."
+- usa.droidcon.com — "pretty awesome" as a WEB (Playwright) scenario, less impressive
+  native; candidate for a short Act 6 web-target flourish, not the anchor.
 
 Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow) still
 working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.
