@@ -620,6 +620,34 @@ Conditionals as computation belong in a TypeScript tool (do the check, branch in
 -->
 
 ---
+layout: center
+class: text-center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+
+# "Could the LLM construct it?"
+
+<div class="pt-6 text-xl opacity-80">
+
+By **driving** the app — not by handwriting YAML.
+
+</div>
+
+<div v-click class="pt-6 text-2xl">
+
+Recordings are **earned**, not written.
+
+</div>
+
+<!--
+The governing test for the trail vocabulary (runIf passes it).
+The nuance: "construct" = the LLM selecting tools out of the target's toolbox while
+actually driving. Handwritten YAML would pass validation — but it locks in a recording
+that never actually ran. Recordings come from a successful run, full stop.
+-->
+
+---
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
