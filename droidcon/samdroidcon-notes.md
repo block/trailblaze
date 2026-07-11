@@ -208,6 +208,10 @@ Continuity with past talks:
 - **Typed tools return structured JSON, not just text.** Via the type-safe TS bindings
   (`trailblaze.tool<In, Out>`): e.g. list installed applications on a device, grab a user's
   profile information — results the next step can consume. Super helpful in practice.
+- **Tools have properties — LLM visibility among them.** Underlying utility tools exist
+  purely to be called by other tools; a tool decides whether it's exposed to the LLM.
+  "An LLM needs to pick what's going on, but that doesn't mean monoliths — we still break
+  things down into smaller, reusable pieces." Only the right surface is advertised.
 
 ## Answers locked in (2026-07-11)
 

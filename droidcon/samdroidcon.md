@@ -621,6 +621,22 @@ Conditionals as computation belong in a TypeScript tool (do the check, branch in
 
 ---
 
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+
+# Not every tool is for the LLM
+
+- Tools have **properties** — LLM visibility is one
+- **Utility tools** underneath · composed by other tools
+- The LLM picks the **what** · no monoliths — small, reusable pieces
+
+<!--
+A tool decides whether it's exposed to the LLM. Only the right surface is advertised —
+keeps the LLM's menu small and decisive while the implementation stays factored.
+Same discipline as any good API: public surface vs. internals.
+-->
+
+---
+
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2: how agents reach tools · 24:00–26:30</div>
 
 # The CLI pivot
