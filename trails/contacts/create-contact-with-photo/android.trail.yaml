@@ -1,0 +1,140 @@
+- config:
+    title: 'Contacts: create a contact with a profile photo'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - crud
+    - cross-app
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - contacts_android_launchApp: {}
+      - wait:
+          # 8s (blazed at 3): covers the app's cold-start after `pm clear` on a
+          # loaded host — the notification-permission dialog can render late.
+          timeToWaitInSeconds: 8
+      - tapOnElementBySelector:
+          reason: The Contacts app is requesting notification permissions. Granting permission by tapping 'ALLOW' will remove this blocking modal, enabling progress towards opening the app and starting new contact creation.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.permissioncontroller:id/permission_allow_button
+      - tapOnElementBySelector:
+          reason: The floating action button with a plus sign and accessibility label 'Create new contact' is the standard way to start creating a new contact in the Contacts app.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/floating_action_button
+  - step: Enter first name "Casey" and last name "Trailblaze"
+    recording:
+      tools:
+      - inputText:
+          text: Casey
+          reasoning: The objective is to enter the first name 'Casey' and last name 'Trailblaze'. The 'First name' field is already focused, so the next step is to enter 'Casey'.
+      - tapOnElementBySelector:
+          reason: The 'Last name' field needs to be filled with 'Trailblaze'. Tapping the 'Last name' field to focus it before entering the last name.
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The objective requires entering the last name 'Trailblaze'. The 'Last name' field is currently focused, allowing safe input.
+  - step: Add the mobile number 555-0134
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen shows the contact editor with the 'Phone' field available and not yet filled. To add the mobile number '555-0134', I need to first tap the 'Phone' field to focus it before entering the number.
+          nodeSelector:
+            androidAccessibility:
+              inputType: 3
+      - inputText:
+          text: "5550134"
+          reasoning: The 'Phone' field is now focused and the number pad is visible. I will input the mobile number '555-0134' as 5550134, which matches the number format used for phone numbers in contacts.
+  - step: Add the email casey.trailblaze.demo@example.com
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To add the email, I need to enter the provided email address. The 'Email' field (d319) is currently empty and must be focused before text can be entered.
+          nodeSelector:
+            androidAccessibility:
+              inputType: 33
+      - inputText:
+          text: casey.trailblaze.demo@example.com
+          reasoning: The 'Email' field is already focused, so I can now enter the provided email address to fulfill the objective.
+      - tapOnElementBySelector:
+          reason: The email has been entered in the correct field. To save the new email to the contact and complete the objective, I need to tap the 'SAVE' button (a923).
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+      - assertVisibleBySelector:
+          reason: Assert the email address is visible in the contact details. (The blaze also recorded a stricter two-line variant of this assert that depended on transient text composition; pruned — this looser assert carries the same intent.)
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/content_scroller
+          expectedText: casey.trailblaze.demo@example.com
+  - step: Add a profile photo to the contact — take a new photo if there's a camera, otherwise pick the first photo in the library
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To add a profile photo, I need to enter the edit contact mode. The 'Edit' button is visible on the current contact screen, so tapping it is the correct initial step to access the option to add or change the contact's profile photo.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/menu_edit
+      - tapOnElementBySelector:
+          reason: To add a profile photo, the 'Add contact photo' button (camera icon overlay) should be tapped. This will open the menu to either take a photo or choose one from the gallery, letting me proceed with selecting or capturing the new photo as required by the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/photo_touch_intercept_overlay
+      - tapOnElementBySelector:
+          reason: Following the objective, the first step is to try taking a new photo if a camera is available. The 'Take photo' option is visible, indicating that a camera is available on this device, so I will select this option.
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Take photo
+      - tapOnElementBySelector:
+          reason: The camera app is open and ready to take a photo. Tapping the shutter button (camera icon) will capture a new photo, which is the next necessary step to add a profile photo by taking a new picture.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.camera2:id/shutter_button
+      - tapOnElementBySelector:
+          reason: The camera app has captured a photo and presents options to 'Retake', 'Done', or 'Cancel'. Selecting 'Done' will confirm the new photo and set it as the contact's profile photo, as required by the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.camera2:id/done_button
+      - tapOnElementBySelector:
+          reason: The crop screen for the profile photo is displayed, with a 'SAVE' button visible. Tapping 'SAVE' will confirm and save the cropped image as the profile photo for the contact, completing the objective of adding a profile photo.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.gallery3d:id/filtershow_done
+  - step: Save the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to save the contact. On the current screen, the 'SAVE' button is clearly visible in the top right corner. Tapping this button will fulfill the objective by saving the contact's information.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134, the email casey.trailblaze.demo@example.com, and a profile photo
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verifying the presence of the mobile number '555-0134' on the Casey Trailblaze contact card as required by the objective.
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Call Mobile 555-0134
+          expectedText: 555-0134
+      - assertVisibleBySelector:
+          reason: Verifying the presence of the email 'casey.trailblaze.demo@example.com' on the Casey Trailblaze contact card as required by the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/content_scroller
+          expectedText: casey.trailblaze.demo@example.com
+      - assertVisibleBySelector:
+          reason: Verifying the presence of a profile photo for Casey Trailblaze as required by the objective; this element is likely the profile photo overlay.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/photo_touch_intercept_overlay
+      - assertVisibleBySelector:
+          reason: Directly confirming that the mobile number section contains a visible child with the exact text '555-0134', as shown in the hierarchy, to verify it is displayed on the Casey Trailblaze contact card.
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Call Mobile 555-0134

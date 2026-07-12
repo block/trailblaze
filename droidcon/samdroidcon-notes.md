@@ -822,14 +822,85 @@ story than the calendar version:
 - No permission dialogs anywhere in the Android flow (system apps).
 - No trailhead seeding needed at all for contacts (unlike calendar).
 
+### Android recording — EARNED (2026-07-11, blaze on clean AVD, 6m 41s, Succeeded)
+
+`trails/contacts/create-contact-with-photo/android.trail.yaml`, driver
+`ANDROID_ONDEVICE_ACCESSIBILITY`. Every beat pinned to deterministic selectors —
+zero per-run LLM: `contacts_android_launchApp` (custom tool) → notification-
+permission ALLOW recovery → FAB → name/phone/email inputs → photo hop
+(`photo_touch_intercept_overlay` → "Take photo" → `camera2:id/shutter_button` →
+`done_button` → `gallery3d:id/filtershow_done`) → save → 3-assert verify (incl.
+`contentDescriptionRegex: Call Mobile 555-0134` and the photo overlay).
+The agent saved early on the email step, then RE-ENTERED edit mode for the photo
+— recorded honestly, replays consistently. "Recordings are earned, not written"
+now has a live exhibit. `session save` gotchas: requires `--title`, and it
+slugifies the title (colon included) into the output dir — move the file next
+to blaze.yaml after. Shared-machine gotcha: the user-level daemon
+(~/.trailblaze) is a singleton — a concurrent trailblaze session (a separate
+nightly-validation session was live on this machine) can stop/replace it
+mid-run: replay attempt 1 died "Daemon unreachable", attempt 3 delegated to THE
+OTHER session's daemon (wrong config dir → `contacts_android_launchApp` "not
+registered in this session's tool repo"). **Escape hatch: `trailblaze run
+--no-daemon`** — in-process, immune to daemon contention; use it for local
+replays whenever another session might be active.
+
+### iOS probe results (2026-07-11, agent, 3 fresh accountless sims) — PHOTO BEAT BLOCKED ON iOS 26.x
+
+- Contacts launches accountless fine; fresh sims are NOT empty: stock sample
+  contacts (John Appleseed et al.) AND 6 stock photos IMG_0001–0006 — so "pick
+  the FIRST photo in the library" is ambiguous there; seeded photo lands as
+  IMG_0007.
+- `simctl addmedia` seeding works (Photos.sqlite confirmed).
+- **BLOCKER: tapping "Photos" in the Add-Photo avatar sheet CRASHES Contacts**
+  — SIGABRT `AG::precondition_failure` (SwiftUI AttributeGraph/ViewGraph), 4/4
+  reproducible, on iOS 26.5 AND 26.4, via BOTH maestro XCTest taps and axe HID
+  taps → OS bug in the simulator runtime, pre-picker, not driver-related.
+  Crash reports: `~/Library/Logs/DiagnosticReports/Contacts-2026-07-11-*.ips`.
+  (These popped Sam's macOS "Contacts quit unexpectedly" dialogs — ReportCrash
+  surfaces simulator crashes like native ones.)
+- iOS 26.x avatar sheet has NO Camera option (Photos/Monogram/Memoji/Emoji) —
+  as predicted, sims have no camera. iOS 18.6 uses a different poster-based UI
+  (Camera tile present but greyed); Photos tap there didn't crash but rendered
+  black/empty — unverified further.
+- A11y vocabulary harvested for future waypoints: sheet `Choose an Avatar`, ids
+  `IdentityTypePicker`, `NewPhotoButton` (`photo.on.rectangle.angled`),
+  `NewMonogramButton`, `NewMemojiButton`, `NewEmojiButton`,
+  `OnboardingCancelButton`, `SuggestionListItemButton` (labels `,Serif`
+  `,Sans-serif` `,Rounded` `,Condensed`), containers
+  `VisualIdentityEditorNavigationStack` / `VisualIdentityView`; contacts-list
+  add button = a11y text `add`.
+
+**iOS options for the unified trail (Sam to pick):**
+1. Earn the iOS recording for everything EXCEPT the photo beat and pin the photo
+   step to the explicit per-platform no-op (`ios-iphone: []`) with a comment
+   linking the OS bug — the unified format's escape hatch demonstrated for real.
+   (Do NOT blaze the photo step on iOS — the agent would tap Photos and crash
+   Contacts again.)
+2. On iOS let the profile picture resolve to a MONOGRAM (native, no picker, no
+   crash — untested past sheet render) — requires rewording the NL to "give the
+   contact a profile picture" instead of photo-specific.
+3. Talk-level fallback: Android carries the photo journey; iOS story rides the
+   existing `trails/ios-contacts/` corpus already green in CI (create-then-delete
+   showcase). Zero new iOS work before Jul 16.
+
 ### Ship checklist
 - [x] blaze.yaml committed (NL source)
-- [ ] Android recording EARNED via `trailblaze run --device android/emulator-5590
-      trails/contacts/create-contact-with-photo/blaze.yaml` (in progress —
-      daemon must start with `TRAILBLAZE_CONFIG_DIR=$(pwd)/trails/config`;
-      a daemon started elsewhere keeps its old config dir, `trailblaze --stop` first)
-- [ ] iOS recording earned (after iOS probe agent results; seed library first)
-- [ ] `trailblaze session save` → per-platform `*.trail.yaml` next to blaze.yaml
+- [x] Android recording EARNED (blaze Succeeded, 6m 41s) + saved next to source
+- [x] Recording maintenance from replay attempts: pruned ONE dead recorded
+      assert (strict two-line email text the blaze itself had immediately
+      superseded with a looser one) + widened the launch wait 3s→8s (cold-start
+      after `pm clear` on a loaded host)
+- [~] Zero-LLM replay: steps 1–3 PROVEN replaying (attempt 4); full-pass
+      validation BLOCKED by host contention, not by the trail — the emulator
+      ANR'd ("System UI isn't responding") while a separate nightly-validation
+      session ran Gradle tests + an eval emulator + 2 iOS sims concurrently.
+      Re-run on a quiet machine or let CI be the clean room:
+      `adb shell pm clear com.android.contacts && adb shell pm clear
+      com.android.providers.contacts`, then
+      `TRAILBLAZE_CONFIG_DIR=$(pwd)/trails/config trailblaze run --no-daemon
+      --device android/<serial> trails/contacts/create-contact-with-photo/android.trail.yaml`
+      (AVD `tb-probe-clean-34` kept; camera already `virtualscene`)
+- [ ] iOS: pick option 1/2/3 above, then earn (or skip) the iOS recording
 - [ ] CI wiring: clone clock-trails.yml shape → contacts trail; only flip
       `docs/showcase-trails.yml` android slug AFTER recording is committed
       (slugs are load-bearing: report-assets bucket + artifact names)

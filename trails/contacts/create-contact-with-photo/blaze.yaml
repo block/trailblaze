@@ -8,15 +8,26 @@
 # none — there the library pick wins. Seed the simulator library first:
 #   xcrun simctl addmedia booted <photo>.jpg
 #
-# No recordings yet — recordings are earned, not written:
-#   trailblaze blaze -d android trails/contacts/create-contact-with-photo/blaze.yaml
-#   trailblaze blaze -d ios trails/contacts/create-contact-with-photo/blaze.yaml
+# Recordings are earned, not written — the committed android.trail.yaml came from:
+#   trailblaze run -d android trails/contacts/create-contact-with-photo/blaze.yaml
+#   trailblaze session save --title "Contacts: create a contact with a profile photo"
 #
 # Clean-device safe: no accounts, no sign-in. On the AOSP `default` emulator
 # image the flow crosses Contacts → Camera2 → the gallery crop screen → back,
 # and the saved contact is queryable:
 #   adb shell content query --uri content://com.android.contacts/contacts \
 #     --projection display_name:photo_uri
+#
+# The Android recording taps the one-time notification-permission dialog, so it
+# replays against FRESH app state (what CI's just-created emulator provides).
+# Re-running locally? Reset first:
+#   adb shell pm clear com.android.contacts
+#   adb shell pm clear com.android.providers.contacts
+#
+# iOS status: the photo beat is BLOCKED on iOS 26.4/26.5 Simulators — tapping
+# "Photos" in the Add-Photo avatar sheet crashes the stock Contacts app
+# (SwiftUI AttributeGraph SIGABRT, reproducible with two independent drivers;
+# OS bug, pre-picker). Don't blaze the photo step on an iOS 26.x sim.
 - config:
     title: "Contacts: create a contact with a profile photo"
     target: contacts
