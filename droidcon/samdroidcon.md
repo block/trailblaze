@@ -85,8 +85,10 @@ ASSET A pt 1 is the visual proof: side-by-side wall clocks.
 
 <!--
 This is the differentiating problem statement. "Losing the link" is the phrase to hit.
-Expand aloud: the "how" matters mainly for assertions you DELIBERATELY want mechanical
-and handwritten — that thread returns in Act 2 (verify: steps). Don't leave dangling.
+Expand aloud: the "how" matters mainly for assertions you DELIBERATELY keep mechanical —
+pinned verify: steps that replay unchanged and are never self-healed; that thread
+returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are earned;
+33 forbids from-scratch YAML.)
 -->
 
 ---
@@ -249,6 +251,9 @@ NOT the device itself (Kotlin/Java is what actually runs the code on Android).
 
 <!--
 The compiler metaphor completing itself: the NL source is still there, so we can recompile.
+SKEPTIC CLOSER (cold read): "off by default" and "% self-healed" sit next to each other —
+close it in one clause: opt-IN where you choose (typically CI); when it's on, the healed
+fraction is your staleness gauge; where it's off, failures stay loud and actionable.
 Recovery works because the LLM gets DEEP EXECUTION CONTEXT for this run — screenshots,
 hierarchy, logcat, network calls, analytics events (full list lands in Act 3).
 Self-heal is the hinge between the two threads: when determinism breaks, the NL rescues it.
@@ -267,6 +272,11 @@ A* cost model (recording=1.0, AI=5.0) lives on a BACKUP slide.
 
 <!--
 Your tools, exposed as YAML into the LLM — that's what makes it composable.
+SCOPE "edits" (cold read, vs "earned not written" in Act 4): humans freely edit the
+JOURNEY — the natural language — and do maintenance surgery on recordings when needed
+(the committed create-contact recording carries a hand-added launchMode: RESUME with
+a comment — real example). What's sacred is the ORIGIN: a recording starts life from a
+successful run, never from scratch. Edits maintain; they don't author.
 The commit means: "yes — this is how this natural-language case materializes on this platform."
 The acceptance gate: AI authors (and heals) without human interaction,
 but a human approves before commit. Agent-authored, human-approved.
@@ -437,28 +447,39 @@ HAND-OFF: "Here's what that journey looks like as one file."
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
-# The unified trail format
+# One file = the user journey
 
 ```yaml
-trailhead:
+trailhead:                          # the deterministic start — defined in a minute
   step: Sign in as the QE sender
   recording:
-    android-phone: { myapp_signInViaUI: { email: "{{account_email}}" } }
-    ios-iphone:    { myapp_ios_signInViaUI: { email: "{{account_email}}" } }
+    android-tablet:
+      - tapOn: { id: sign_in_button }
+    ios-iphone:
+      - inputText: { text: "{{account_email}}" }
+      - tapOn: { text: "Sign In" }
 
 trail:
   - step: Add a latte to the cart and open checkout
     recording:
-      android:        # broad family
+      android:          # broad family
         - tapOn: { text: Latte }
-      android-phone:  # most-specific wins
+      android-tablet:   # most-specific wins
         - tapOn: { id: menu_latte }
   - verify: The cart shows 1 item
 ```
 
-**One file = the user journey.** NL exists exactly once. Recordings per classifier, closest-wins.
+The words exist **exactly once** — the two files from the flaw slide, now two **recordings** under one step.
 
 <!--
+THE RHYME (cold-read fix): the trailhead's two recordings are THE SAME two recordings
+from the design-flaw slide — same step, same tapOns, same classifiers (android-tablet /
+ios-iphone), now keyed under ONE natural-language step. Act 2's before/after is one
+continuous artifact; say it: "those are the two files you just saw."
+Custom tools (myapp_*) deliberately NOT in this example anymore — they arrive with the
+robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
+{{account_email}} = a seeded parameter, reverse-substituted into the recording —
+parameterize slide follows; don't name the mechanism here.
 Show verify: here — closes the assertions thread from Act 0.
 Q&A hedge: this multi-platform shape = the spec + Block production; in the public repo the
 contacts parity suite (next slide) is the committed unified corpus — Android recordings
@@ -490,7 +511,18 @@ trails/contacts/
 
 <div class="pt-4 opacity-70"><b>create · find · update · delete</b> — the jobs a contacts app must never break · in the open-source repo</div>
 
+<div class="pt-2 opacity-70">not the old flaw: <b>blaze.yaml is the only source</b> — the recordings are earned artifacts · drop one, re-materialize</div>
+
 <!--
+THE OBJECTION TO PREEMPT (cold read): per-platform trail.yaml files LOOK like the v1
+layout slide 16 condemned. The difference is load-bearing — say it: in v1 each
+platform file WAS the source, natural language hand-copied into every one (that's what
+drifted). Here ONE file holds the words; the per-platform files are earned recordings —
+regenerable outputs committed for determinism, more lockfile than source. They embed
+the steps they materialized as context, but you never EDIT the words there — words
+change in blaze.yaml, recordings get re-earned. Inline-classifier shape (previous
+slide) and sibling-file shape are the SAME model; the repo materializes recordings as
+siblings.
 The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
 must always be able to do in a contacts app. REDESIGNED round 5 (the boots table read
 as confusing) — the file tree says it concretely: each job is ONE folder, ONE natural-
@@ -550,9 +582,13 @@ Most flaky tests die right here.
 </div>
 
 <!--
+SHAPE CHECK (cold read): slide 19 showed `trailhead:` as a YAML section; this slide
+says "a trailhead is a tool." Reconcile aloud: the section names the designated START;
+what runs there is a tool (clear data, launch args, sign in). Section = where, tool = what.
 HONEST BEAT after this slide: trail YAML v2 was fully designed and never shipped —
 reality overrode a finished design doc on the way to unified. (One sentence, self-deprecating.)
-HAND-OFF: "Unified files fixed drift. Duplication was next — and I'd seen that problem ten years ago."
+HAND-OFF: "Unified files fixed drift. The next tax: every trail re-teaching the app
+the same HOW — and I'd seen that problem ten years ago."
 -->
 
 ---
@@ -721,7 +757,7 @@ toolbox isn't the default toolbox with extras; it's curated.
 
 <div class="pt-6 opacity-70">
 
-*Note the name — **trailmap**. We'll come back to why it's a map.*
+*There's that word again — **trailmap**. The map part pays off in a few minutes.*
 
 </div>
 
@@ -879,7 +915,7 @@ layout: center
 
 <div class="pt-8 text-lg opacity-80 max-w-3xl mx-auto">
 
-Target = trailmap → CLI exposes its **toolbox** →
+Point the CLI at your app's **trailmap** → it exposes the **toolbox** →
 every tool call carries its **natural-language step**.
 
 The link? **Never broken.**
@@ -962,7 +998,7 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 <div class="pt-4 opacity-70">
 
-Honest: **iOS still drives through an XCTest runner** (via Maestro) · web: **Playwright, now full-fidelity**
+Honest: we started on **Maestro's** driver stack — Android is now our own · **iOS: still Maestro's XCTest runner** · web: **Playwright, now full-fidelity**
 
 </div>
 
@@ -1178,6 +1214,9 @@ The robot pattern outlived every framework it was written in.
 
 <!--
 15-second grace note, then real Q&A (~36:30–40:00).
+DELIBERATE TRADE (cold read flagged): "the robots write the tests" says "tests" after
+slide 18 banned the word. Keep it — the 2016 robot-pattern callback outweighs the
+reframe in the final ten seconds, and "tests" is the audience's word for it.
 -->
 
 ---

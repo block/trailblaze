@@ -1127,6 +1127,43 @@ runs from 4 files.**
 - [ ] Replay-verify all Android recordings on a quiet host (or let CI be the
       clean room) before any slide cell is claimed green — chip-owned
 
+## Cohesion pass #2 (2026-07-12, Claude solo + independent cold reader, merged)
+
+Same method as pass #1: my full-flow pass + an independent cold read, merged. 15
+cold-read findings; 12 applied, 3 rejected with reasons. LARGE changes:
+
+1. **Act 2 now rhymes end-to-end (the cold read's "one change").** Slide 19 redesigned:
+   headline promoted to "One file = the user journey"; the trailhead's two recordings
+   are THE SAME two recordings from the flaw slide (android-tablet `tapOn: id`,
+   ios-iphone `tapOn: "Sign In"` + `inputText: {{account_email}}`), custom tools
+   (myapp_*) moved OUT of the example (they arrive with the robot pattern, Act 3/4).
+   16 → 17 → 19 is now one continuous artifact: same journey, same two classifiers.
+2. **Slide 20's v1-echo objection preempted.** New on-slide line: "not the old flaw:
+   blaze.yaml is the only source — recordings are earned artifacts · drop one,
+   re-materialize." Note scripts the full answer (v1 files were each the SOURCE;
+   recordings are lockfile-like outputs; inline vs sibling shapes = same model).
+3. **Asset slides retitled audience-facing** (own half): "Zero-LLM trail replay" /
+   "Walking the report that replay generated" / "An agent blazing a trail" /
+   "Your app, as a map" — ASSET ids moved to corner markers.
+4. **Maestro introduced properly at the driver slide** (was a parenthetical first
+   mention): "we started on Maestro's driver stack — Android is now our own · iOS:
+   still Maestro's XCTest runner · web: Playwright, now full-fidelity."
+5. **"Target" removed from the emotional-peak slide** (device-target vs app-target
+   collision): now "Point the CLI at your app's trailmap → it exposes the toolbox."
+6. Backup CI slide cites the real public workflow (contacts-trails-android.yml).
+
+Note-level fixes: trailmap re-tease on the binary slide → callback; Act-2→3 hand-off
+no longer reuses "duplication"; self-heal off-by-default vs %-signal closer; "human
+edits" scoped vs "earned, not written" (maintenance vs authorship — launchMode: RESUME
+in the committed recording is the real example); Act-0 assertions note says "pinned,"
+not "handwritten"; trailhead section-vs-tool shape check; close's "tests" wordplay
+marked as a deliberate trade.
+
+REJECTED (with reasons): retitling "The missing link" (the link metaphor pays off at
+"The link? Never broken."); cutting the trail-runner-UI mention (Sam asked for it,
+round 5); reordering trailheads before the unified slide (ordering frozen; YAML gloss
+comment + shape-check note instead).
+
 ## Round 5: Sam's slide-by-slide pass (2026-07-12, applied same night)
 
 All 13 slide notes applied to the deck; slide numbers = Slidev numbering at time of review.
