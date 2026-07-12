@@ -113,14 +113,14 @@ Then advance, and it multiplies. (Big beat split across two slides — Sam's mov
 
 # Seven targets.
 
-<div class="grid grid-cols-7 gap-2 pt-8 text-center text-sm">
-<div>📱<br>Android<br>phone</div>
-<div>📱<br>Android<br>tablet</div>
-<div>📱<br>iPhone</div>
-<div>📱<br>iPad</div>
-<div>🖥️<br>Square<br><b>Terminal</b></div>
-<div>📟<br>Square<br><b>Handheld</b></div>
-<div>🧾<br>Square<br><b>Register</b></div>
+<div class="grid grid-cols-7 gap-3 pt-8 text-center text-sm">
+<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">Android<br>phone</div></div>
+<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">Android<br>tablet</div></div>
+<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">iPhone</div></div>
+<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">iPad</div></div>
+<div><div class="h-20 flex items-end justify-center"><img src="./public/square-terminal.png" class="max-h-20 object-contain" alt="Square Terminal" /></div><div class="pt-2">Square<br><b>Terminal</b></div></div>
+<div><div class="h-20 flex items-end justify-center"><img src="./public/square-handheld.png" class="max-h-20 object-contain" alt="Square Handheld" /></div><div class="pt-2">Square<br><b>Handheld</b></div></div>
+<div><div class="h-20 flex items-end justify-center"><img src="./public/square-register.png" class="max-h-20 object-contain" alt="Square Register" /></div><div class="pt-2">Square<br><b>Register</b></div></div>
 </div>
 
 <div class="pt-10 text-xl opacity-80">
@@ -131,7 +131,9 @@ Hundreds of trails today → projecting **thousands**.
 
 <!--
 BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one flow, seven places.
-Swap emoji for real product imagery from squareup.com/us/en/hardware.
+Square imagery = real product shots (droidcon/public/square-*.png, pulled from
+squareup.com/us/en/hardware — Block's own marketing assets). Consumer devices stay
+emoji on purpose: everyone knows an iPhone; nobody knows a Square Register.
 SEVEN targets — never say eight.
 Scale framing: keep the automatable automated; manual testing focuses on
 new features + hardware-specific work automation can't reach yet.
@@ -312,6 +314,8 @@ MATERIAL (real, in-repo): use a contacts parity trail (create-contact is the
 photogenic one). Reference number: the richer photo-trail blaze took 6m41s
 agent-driven end-to-end; its replay is ~1min — pull the parity trail's exact
 blaze/replay wall-clocks from the earning session before recording this asset.
+PLAN B (no video): paste-ready fallback slide in notes ("Plan B" section) —
+real blaze.yaml → earned recording, spoken wall-clock. Talk is DONE without video.
 -->
 
 
@@ -639,6 +643,9 @@ class: text-center
 
 <!--
 Same session as part 1 — its own report. One recording serves two acts.
+PLAN B (no video): open a real archived report live from disk (zero network) —
+command + which session in the notes "Plan B" section. Or narrate over the
+capture-granularity slide you just showed; the report exists, say so plainly.
 HAND-OFF: "Tools are the unit of reuse. Two questions decided everything:
 who gets to write them, and how do agents reach them?"
 -->
@@ -846,6 +853,8 @@ android.trail.yaml lands NEXT TO the NL source. The clip's final frame: one fold
 blaze.yaml + android.trail.yaml side by side. If the photo trail's camera hop is
 wanted as extra cinema, its blaze session already succeeded on camera (virtualscene) —
 but the parity trail keeps the asset tight.
+PLAN B (no video): paste-ready terminal-transcript slide in notes ("Plan B"
+section) — the REAL commands + session id from the night the recordings were earned.
 -->
 
 
@@ -1013,6 +1022,10 @@ required+forbidden matchers. Optional beat: flash the committed Calendar map
 Android contacts side is waypoint-thin today — if asked, that's the honest
 "maps mature independently; the journey doesn't care" line.
 Label the app honestly either way — protects the future framing.
+PLAN B (no video): the graph viewer runs LOCAL, zero network — open it live on
+the committed contacts-iOS map (command in notes "Plan B" section), 30 seconds of
+mouse-wandering beats a flythrough anyway. Worst case: speak the numbers —
+"~103 named places, 81 shortcuts, committed in the repo today."
 HAND-OFF: "The whole recipe, one slide."
 -->
 
@@ -1056,10 +1069,16 @@ grab the **skill** → tell Claude / Codex to use it on *your* app
 
 </div>
 
-<div class="pt-6 opacity-70">**github.com/block/trailblaze** · _[QR code]_ </div>
+<div class="pt-8 flex justify-center">
+  <img src="./public/trailblaze-qr.svg" class="w-44 h-44" alt="QR: github.com/block/trailblaze" />
+</div>
+
+<div class="pt-3 opacity-70"><b>github.com/block/trailblaze</b></div>
 
 <!--
 CTA: brew → skill → point your agent at your own app.
+QR = white-on-transparent SVG (droidcon/public/trailblaze-qr.svg), generated locally
+with slidev's bundled uqr — regenerate: bun -e with renderSVG if the URL ever changes.
 -->
 
 ---

@@ -30,6 +30,20 @@ structure, your headlines, and your speaker-note style — no rewrites of workin
    good and improving, parity across Android and iOS" — **no invented number**. Zero impact
    on the main flow; there so you stay calm if the reliability question comes.
 
+### Production items CLOSED overnight (were on your plate — now done)
+6. **QR code** — real, on the CTA slide: white-on-transparent SVG encoding
+   github.com/block/trailblaze (`droidcon/public/trailblaze-qr.svg`, generated locally with
+   slidev's bundled `uqr`). Render verified. **Scan it once from your phone tomorrow** —
+   10-second sanity check.
+7. **Square hardware imagery** — the 7-targets grid now shows REAL product shots for
+   Terminal / Handheld / Register (`droidcon/public/square-*.png`, pulled from
+   squareup.com/us/en/hardware — Block's own marketing assets, transparent PNGs).
+   Consumer devices stay emoji on purpose: everyone knows an iPhone; nobody knows a
+   Square Register. Render verified.
+8. **Plan B for all three 📼 assets** — see the "🎬 Plan B" section below: the talk is
+   **presentable tomorrow night with zero video production**. Videos are now optional
+   polish, not a dependency.
+
 ### Deliberately NOT changed
 - The spine, refrain bookends, unified-format YAML, "driving the device *is* constructing the
   trail," the recipe, CTA — all load-bearing, left alone.
@@ -46,6 +60,65 @@ Most expendable first. Everything here is safe to cut with no dangling reference
 6. **"Reports with no strings attached"** (Act 3) — compress to one spoken line if truly desperate.
 > Do NOT panic-cut: the thesis slide, both refrain slides, the unified YAML, the "driving the
 > device" peak, the recipe, or the CTA. That's the skeleton — cutting it breaks the arc.
+
+### 🎬 Plan B — the talk is DONE with zero videos (deadline-proof)
+Each 📼 slide already works as a spoken beat; these fallbacks make each one *visual*
+without any video production. If a quiet hour opens Jul 13–16, videos replace them 1:1.
+Every command/number below is real and verified in-repo — nothing invented.
+
+**ASSET A pt 1 (zero-LLM replay)** — paste-ready static slide:
+
+````md
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+
+# Blazed in 6m41s. Replays with zero LLM calls.
+
+```yaml
+# blaze.yaml — the journey we wrote
+- step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+
+# android.trail.yaml — the recording the agent EARNED by driving the device
+#   (paste 3–4 real lines from trails/contacts/create-contact/android.trail.yaml)
+```
+
+<div class="pt-4 opacity-70">same folder, two files: the intent · its deterministic materialization</div>
+
+<!-- 6m41s = the REAL photo-trail blaze (richest journey). Speak replay honestly:
+"replay is the same steps with the LLM out of the loop." Add the parity trail's
+exact replay wall-clock when the chip session reports it — until then, no number. -->
+````
+
+**ASSET A pt 2 (the report)** — no slide needed: launch the Trailblaze desktop app
+(`trailblaze`), open tonight's session `create_contact_b66e486e`, and walk the real
+report — per-step screenshots, hierarchy, logs. Local disk, zero network. Rehearse the
+click-path once.
+
+**ASSET B (agent blazing via CLI)** — paste-ready terminal-transcript slide, real
+lines from the night the recordings were earned (2026-07-11, paths tidied):
+
+````md
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2</div>
+
+# The night these recordings were earned
+
+```bash
+$ trailblaze run --device android trails/contacts/create-contact/blaze.yaml
+  # agent drives every step on the device …
+  ✓ completed successfully                # session: create_contact_b66e486e
+
+$ trailblaze session save --title "Contacts: create a contact"
+  Trail saved → trails/contacts/create-contact/android.trail.yaml
+```
+
+<div class="pt-4 opacity-70">the recording lands NEXT TO the natural language that earned it</div>
+````
+
+**ASSET C (waypoint graph)** — the viewer is served by the local daemon, zero network:
+start the daemon from the worktree with `TRAILBLAZE_CONFIG_DIR=$PWD/trails/config`, then
+open **http://localhost:52525/waypoints/graph** (route + default port verified in
+`WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`). 30s of live mouse-wandering on
+the contacts-iOS map beats a flythrough. Worst case, speak it: "~103 named places,
+81 shortcuts, committed in the repo today."
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener ("So why is good test coverage still hard?"): *"Quick hands — who's tried
