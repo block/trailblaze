@@ -1116,16 +1116,51 @@ a fresh CI device in any order. Slide math: **4 jobs × 2 platforms = 8 green
 runs from 4 files.**
 
 ### Recording-earning status
-- [x] Android × 4 — ALL BLAZED 2026-07-11 evening (AVD `tb-probe-clean-34`,
-      `--no-daemon`, pm-clear reset + POST_NOTIFICATIONS pre-grant per trail).
-      Sessions: create_contact_b66e486e, find_contact_d11ec5a0,
-      add_phone_to_contact_a4f4a625, delete_contact_0482dbea. Recordings moved
-      next to their blaze.yaml, android-phone dups dropped. NOT YET COMMITTED —
-      replay verification + commit owned by the background chip.
-- [ ] iOS × 4 (fresh accountless sim; safe territory — create/edit/search/delete
-      never touch the avatar sheet) — chip-owned
-- [ ] Replay-verify all Android recordings on a quiet host (or let CI be the
-      clean room) before any slide cell is claimed green — chip-owned
+- [x] Android × 4 — blazed 2026-07-11 evening (AVD `tb-probe-clean-34`,
+      `--no-daemon`, pm-clear reset + POST_NOTIFICATIONS pre-grant per trail),
+      replay-verified zero-LLM same night, committed + pushed.
+- [x] iOS × 4 — blazed 2026-07-12 morning on fresh accountless iPhone 17 Pro /
+      iOS 26.5 sim (erased between trails), replay-verified zero-LLM,
+      committed. Avatar sheet never touched.
+- [x] Replay-verify both platforms locally (quiet host) — all 8 green.
+- [x] CI: `contacts-trails-android.yml` (workflow_dispatch + PR paths-filter on
+      trails/contacts/**) replays the 4 Android recordings sequentially on the
+      api-34 default image. showcase-trails.yml untouched. Not yet exercised —
+      first run happens on a manual dispatch or the PR.
+
+### Earning results — THE SLIDE NUMBERS (blaze = agent+LLM, replay = zero-LLM)
+| trail | Android blaze | Android replay | iOS blaze | iOS replay |
+|---|---|---|---|---|
+| create-contact | 3m15s | **84s** | 2m43s* | **~90s** |
+| find-contact | 2m02s | **78s** | 5m59s | **78s** |
+| add-phone-to-contact | 12m11s | **91s** | 2m40s* | **100s** |
+| delete-contact | 1m56s | **90s** | 3m01s | **93s** |
+
+Replay times include ~30s cold-start (relaunch after full state reset) + CLI
+startup; the on-screen action portion is far shorter. Android add-phone's 12m
+blaze = the agent flailing on phone entry before recovering — an honest
+"blaze once" exhibit (its replay is still 91s).
+
+*iOS phone-entry gotcha (NEW, slide-worthy): the iOS editor shows raw digits
+(5550134); dash formatting appears only on the saved card. Both agents
+(TRAILBLAZE_RUNNER ×2, MULTI_AGENT_V3 ×1) looped asserting '555-0134' in the
+editor until the 50-call per-objective cap. Fix: blaze-time hint in a SCRATCH
+copy of the source ("type with text input; editor shows raw digits — don't
+assert dash format"), then the recording's step text restored to the canonical
+NL. Committed blaze.yaml never touched. Good acceptance-gate beat: the agent
+earned every tool; the human supplied one sentence of platform truth.
+
+Recording maintenance from replay verification (same class as the photo trail):
+- android create-contact: added launchApp RESUME after the custom launch tool
+  (custom tool returns at `am start`; blaze think-time masked the cold start);
+  moved the SAVE tap into the otherwise-unrecorded 'Save the contact' step (an
+  unrecorded step = LLM on every replay = fails in CI's sentinel-key env).
+- ios create-contact: pruned a dead recorded assert that pinned the email text
+  to the app-root element (aggregated child text at blaze time only).
+- `trailblaze run` auto-saves a classifier-named recording (android-phone /
+  ios-iphone) next to the source after every SUCCESSFUL run — including
+  replays. Use `--no-save-recording` on replays or keep deleting closest-wins
+  dups. Session-save daemon can also re-emit OTHER sessions' variants.
 
 ## Cohesion pass #2 (2026-07-12, Claude solo + independent cold reader, merged)
 
@@ -1204,6 +1239,46 @@ The load-bearing POSITIONS Sam gave (these outlive the edits):
   (waypoint graph subway+normal PNGs, report walk PNGs). Deliverables land in
   droidcon/public/; talk session embeds + commits. Slide 44 shows BOTH graph views
   (subway first). ASSET A/B/C slide notes track the chip ids.
+
+## Round 6: naming, Maestro nod, target terminology (2026-07-12)
+
+**1. Unified naming (Sam's fact, applied to sl.19+20 notes):** previously
+`contacts/android.trail.yaml` (folder + siblings); in unified, a plain "contacts" test
+is ONE file `contacts.trail.yaml` — recordings inline. Today's repo sibling layout =
+the migration in motion; the unified single file = the destination.
+
+**2. Maestro treatment (Sam's spec, applied to sl.39 note + backup 53):** nod warmly —
+**Maestro blazed the path**: readable YAML, deterministic steps; we've seen how well
+that works. We built on it: custom toolsets, LLM-first, natural language attached to
+every step. Credit then difference, one sentence, not a huge deal, never dunk.
+
+**3. "Target inside a trailmap" — terminology rationalization (Sam asked; banked for
+Q&A + his own thinking; verified against repo code):**
+- **One-liner: the trailmap is the map; the target is the territory it covers.** The
+  `target:` block is the map's title plate — a map physically contains the declaration
+  of what ground it covers ("Yosemite Valley" on the cover). So target-inside-trailmap
+  isn't a nesting accident; it's how maps work.
+- Implementation enforces the metaphor (TrailblazeTrailmapManifest.kt): `target:`
+  presence is the DISCRIMINATOR. Trailmap WITH target = a map of somewhere, runnable
+  (contacts, clock). Trailmap WITHOUT target = a **library trailmap** — shared
+  toolsets/tools, forbidden to declare waypoints. A map with no territory is a legend.
+- The target block contains exactly territory coordinates: `app_ids` per platform,
+  `base_url` for web, `min_build_version` — plus which toolsets apply there. Everything
+  journey-shaped (waypoints, trailheads, shortcuts, trails) lives OUTSIDE the block.
+- Target id defaults to the trailmap id (1:1, id-aliased) — the map is named after its
+  territory, like every real map. That's why `--target contacts` and "the contacts
+  trailmap" feel interchangeable: same name, two layers.
+- Why "target" and not a hiking word: it must generalize across an Android app id, an
+  iOS bundle, a URL, a Compose composition (TrailConfig kdoc: alias | package ID | URL)
+  — "app" breaks for web, "park" is whimsy in a CLI flag. And devs already parse it:
+  Xcode targets, Gradle targets, deployment targets. It's the one deliberately
+  engineering-flavored word, placed exactly where the metaphor touches the real world.
+- Axis check (clean in code): **target = what app is under test; device = where it
+  runs** — never conflated; `ResolvedTarget` pairs them ("what app is under test on
+  what device"). Talk caveat: slide 6's "Seven targets" uses the Square build-target
+  sense (device families) — Trailblaze's `target:` key appears nowhere on-deck, so the
+  two senses never collide on a slide; just don't say "target" for both in the same
+  breath out loud.
 
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 
