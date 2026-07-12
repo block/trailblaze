@@ -1,0 +1,91 @@
+- config:
+    title: 'Contacts: create a contact'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - crud
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - mobile_listInstalledApps: {}
+      - contacts_android_launchApp: {}
+      - launchApp:
+          # Not blazed — maintenance: the custom launch tool returns as soon as
+          # `am start` fires, and the blaze's LLM think-time masked the app's
+          # cold start after `pm clear`; on replay the FAB tap fired against a
+          # not-yet-rendered app. RESUME blocks until Contacts is foregrounded
+          # (the other three parity recordings captured this same pattern
+          # naturally). A settle-based `wait` is NOT a substitute — it returns
+          # in <1s on a stable launcher screen.
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: To start creating a new contact, I need to tap the 'Create new contact' button, which is identified in the lower right corner as a floating action button.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/floating_action_button
+  - step: Enter first name "Casey" and last name "Trailblaze"
+    recording:
+      tools:
+      - inputText:
+          text: Casey
+          reasoning: The first name field is already focused. The objective requests entering 'Casey' for the first name, so I will input this text before proceeding to the last name.
+      - tapOnElementBySelector:
+          reason: The current objective also requires entering the last name 'Trailblaze'. The 'Last name' field (ref s533) is available and needs to be focused next so the last name can be entered.
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is now focused and the objective requires entering 'Trailblaze' for the last name.
+  - step: Add the mobile number 555-0134
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to add a mobile number. The 'Phone' input field is currently empty and not focused. Tapping it will allow text input for the mobile number.
+          nodeSelector:
+            androidAccessibility:
+              inputType: 3
+      - inputText:
+          text: "5550134"
+          reasoning: The phone number field is now focused. Entering the number 5550134 without dashes, as the keypad only allows digits, and formatting is often handled automatically.
+      - hideKeyboard: {}
+  - step: Add the email casey.trailblaze.demo@example.com
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The screen is in the contact editing state. The 'Email' field (d319) is visible and currently empty. To add the email as required by the objective, I need to tap into this 'Email' input field and then enter the address.
+          nodeSelector:
+            androidAccessibility:
+              inputType: 33
+      - inputText:
+          text: casey.trailblaze.demo@example.com
+          reasoning: The 'Email' input field (q388) is focused, and the keyboard is open. The next step is to enter the specified email address as required by the objective.
+  - step: Save the contact
+    recording:
+      # Not blazed under this step — maintenance: the agent tapped SAVE eagerly
+      # at the tail of the email step, leaving this step unrecorded (an
+      # unrecorded step calls the LLM on every replay — breaks zero-LLM and
+      # fails in CI, where the API key is a sentinel). The tap is moved here,
+      # the step it semantically belongs to.
+      tools:
+      - tapOnElementBySelector:
+          reason: The email address has been entered into the correct field. To apply and save this new email to the contact, the next step is to tap the 'SAVE' button, which will finish adding the email as per the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134 and the email casey.trailblaze.demo@example.com
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The objective requires verifying that the mobile number 555-0134 is visible on Casey Trailblaze's contact card. The node n928 contains 'Call Mobile 555-0134' and '555-0134', indicating this is the phone number section.
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Call Mobile 555-0134
+      - assertVisibleBySelector:
+          reason: The objective requires verifying that the email casey.trailblaze.demo@example.com is visible on the Casey Trailblaze contact card. The node v108 shows this email address, meeting the requirement.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/content_scroller

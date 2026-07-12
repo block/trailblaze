@@ -1,0 +1,105 @@
+- config:
+    title: 'Contacts: add a phone number to an existing contact'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - crud
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - contacts_android_launchApp: {}
+      - wait:
+          timeToWaitInSeconds: 3
+      - mobile_listInstalledApps: {}
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+          reasoning: The device is currently on the home screen (launcher), so to open the Contacts app, I need to launch the corresponding app using its package name, com.android.contacts.
+      - tapOnElementBySelector:
+          reason: The objective is to start creating a new contact. The current Contacts app screen shows a 'Create new contact' button (ImageButton) which is the standard affordance to start contact creation. Tapping this should open the new contact entry form.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/floating_action_button
+  - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    recording:
+      tools:
+      - clearText: {}
+      - inputText:
+          text: Casey
+          reasoning: The first name field is currently focused as indicated by the label 'First name' [focused]. I just cleared the field and now need to enter 'Casey' as the first name. After this, I will focus the last name field and enter 'Trailblaze'.
+      - tapOnElementBySelector:
+          reason: The first name 'Casey' has already been entered. The next required step is to enter the last name 'Trailblaze'. To do this, I need to focus the 'Last name' EditText field before typing into it.
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Last name
+      - clearText: {}
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is currently focused and cleared. I need to enter 'Trailblaze' as the last name for the new contact. Once done, the last step is to tap SAVE to store the contact.
+      - tapOnElementBySelector:
+          reason: Both the first name 'Casey' and last name 'Trailblaze' have been entered. The next step needed to save the new contact is to tap the 'SAVE' button in order to store the information that has been entered.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - step: Edit the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen displays the contact 'Casey Trailblaze' and includes an 'Edit' button. To begin editing the contact, the next step is to tap the 'Edit' button.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/menu_edit
+      - inputText:
+          text: "1112223333"
+          reasoning: The edit contact screen is now displayed with editable fields for first name, last name, phone, and email. To perform an edit on the contact, I will add a phone number to the 'Phone' field, which is currently empty.
+      - tapOnElementBySelector:
+          reason: The phone field has been edited to add a phone number. The next step to complete the edit is to save the changes by tapping the 'SAVE' button.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - step: Add the mobile number 555-0134
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen shows the contact details for 'Casey Trailblaze' and displays an 'Add phone number' option, which matches the objective to add a mobile number. Tapping 'Add phone number' is the necessary first step to add the mobile number 555-0134.
+          nodeSelector:
+            containsChild:
+              androidAccessibility:
+                textRegex: Add phone number
+      - tapOnElementBySelector:
+          reason: The screen now shows a 'Phone' EditText field which is likely focused after tapping 'Add phone number.' To add the mobile number 555-0134, the next step is to focus (or confirm focus on) this field to enter the provided number.
+          nodeSelector:
+            androidAccessibility:
+              inputType: 3
+      - inputText:
+          text: 555-0134
+          reasoning: The EditText field labeled 'Phone' is currently focused, which means I can now type in the provided number 555-0134 to fulfill the objective of adding this mobile number to the contact.
+      - tapOnElementBySelector:
+          reason: The phone number 555-0134 has been entered in the 'Phone' field. To finalize adding this mobile number to the contact, the next required action is to tap the 'SAVE' button to commit the changes, which matches the user's objective to add the mobile number.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - step: Save the changes
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen shows the contact details, and since the last completed objective was to add a mobile number (edit flow), the next logical step is to save changes. However, I do not yet see a 'Save' button. Tapping the 'Edit' button is necessary to enter the editing screen where a save action will be available.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/menu_edit
+      - tapOnElementBySelector:
+          reason: The objective is to save the changes, and the current screen shows a 'SAVE' button (ref=e955) after editing the contact. Tapping this button will save the modifications made (such as the addition of the mobile number). This directly accomplishes the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+  - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: This node contains both the label 'Mobile' and the mobile number '555-0134', associated with the contact Casey Trailblaze. This is the clearest confirmation that the contact card for Casey Trailblaze shows the mobile number 555-0134.
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Call Mobile 555-0134
+          expectedText: Call Mobile 555-0134

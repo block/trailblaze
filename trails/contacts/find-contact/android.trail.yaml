@@ -1,0 +1,86 @@
+- config:
+    title: 'Contacts: find a contact by name'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - search
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - contacts_android_launchApp: {}
+      - mobile_listInstalledApps: {}
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+          reasoning: The Contacts app appears to already have been force-stopped and launched. The home screen (launcher) is showing, so we need to bring Contacts to the foreground.
+      - tapOnElementBySelector:
+          reason: The objective is to start creating a new contact. The "Create new contact" button is visible as a floating action button, so tapping it will initiate the contact creation flow.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/floating_action_button
+  - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    recording:
+      tools:
+      - clearText: {}
+      - inputText:
+          text: Casey
+          reasoning: The 'First name' field is currently focused. The next step is to input the first name ('Casey'). After that, I'll input the last name and save the contact.
+      - tapOnElementBySelector:
+          reason: The first name 'Casey' has been entered. The next step is to tap the 'Last name' field to focus it so I can enter the last name 'Trailblaze'.
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is currently focused. I will enter the last name 'Trailblaze' now, then proceed to save the contact to meet the objective.
+      - tapOnElementBySelector:
+          reason: Both the first name ('Casey') and last name ('Trailblaze') have been successfully entered. The next step to fulfill the objective is to save the contact by tapping the 'SAVE' button.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/editor_menu_save_button
+      - assertVisibleBySelector:
+          reason: After tapping SAVE, the contact should be saved and displayed on the screen. The display of the name 'Casey Trailblaze' confirms successful saving of the contact, which fulfills the objective.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/large_title
+          expectedText: Casey Trailblaze
+  - step: Go back to the contact list
+    recording:
+      tools:
+      - mobile_maestro:
+          commands:
+          - back: {}
+  - step: Search the contacts for "Casey"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen is the main contact list, and there is a button labeled 'Search contacts'. The next step is to tap this button to bring up the search field so we can enter the name 'Casey'.
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/menu_search
+      - inputText:
+          text: Casey
+          reasoning: The search field is currently focused with placeholder text 'Search contacts.' The next step is to enter 'Casey' in this field to perform the search by the desired name.
+      - assertVisibleBySelector:
+          reason: The search was performed for 'Casey' and the contact 'Casey Trailblaze' is visible in the results list. To confirm the objective is completed (that the search succeeded), I will assert that 'Casey Trailblaze' is visible on the screen.
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: android.view.ViewGroup
+            childOf:
+              androidAccessibility:
+                resourceIdRegex: android:id/list
+          expectedText: Casey Trailblaze
+  - verify: The search results show Casey Trailblaze
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The objective requires verification that 'Casey Trailblaze' appears in the search results. In the provided view hierarchy, the ListView contains a visible element with the text 'Casey Trailblaze', confirming the requirement is met. I am verifying its presence and exact text as required.
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: android.view.ViewGroup
+            childOf:
+              androidAccessibility:
+                resourceIdRegex: android:id/list
+          expectedText: Casey Trailblaze
