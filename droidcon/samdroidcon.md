@@ -339,6 +339,12 @@ round-trips). Wall clocks measured on the same basis: CLI start → "1 passed".
 Same journey, same contact card at the end — the economics slide made flesh.
 Part 2 (the report it generated) plays in Act 3.
 Videos autoplay-loop muted; speak ~20s over them, advance when ready.
+SPOKEN AMMO (parity suite, measured): EVERY parity trail replays in 78–167s with
+zero LLM calls, both platforms. The extreme: add-phone blazed in 12m11s, replays
+in 91s — ~8×. Full table in notes "Earning results".
+WALL-CLOCK BASES — don't mix on stage: this slide's 6m26s/2m20s = the recorded
+runs' full CLI invocation (incl. one-time APK install; ~3min of it trimmed from
+the video). The parity table's 3m15s create-contact = warm host, no install.
 Regenerate: droidcon/public/asset-regeneration-playbook.sh.
 PLAN B (video misbehaves): paste-ready fallback slide in notes ("Plan B" section).
 -->
