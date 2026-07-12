@@ -504,7 +504,7 @@ trails/contacts/
 ├── create-contact/
 │      blaze.yaml             ← the journey — natural language, written once
 │      android.trail.yaml     ← its Android recording, earned
-│      ios-iphone.trail.yaml  ← its iOS recording, earned
+│      ios.trail.yaml         ← its iOS recording, earned
 ├── find-contact/             · same shape
 ├── add-phone-to-contact/     · same shape
 └── delete-contact/           · same shape
@@ -536,10 +536,10 @@ language file, and per-platform recordings sitting next to it. The parity claim 
 concrete: 4 files, 8 green runs. Self-contained by design — each trail creates the
 contact it acts on, so any subset runs on a fresh CI device in any order.
 Asset hooks: ASSET B blazes one of these; ASSET A replays one.
-PRODUCTION NOTE (before talk): Android recordings committed; iOS being earned on a
-fresh simulator. VERIFY the tree on this slide matches the repo before presenting —
-if ios-iphone.trail.yaml isn't committed by then, drop that line and narrate iOS as
-landing. Never show a file that isn't real.
+PRODUCTION NOTE (before talk): Android recordings committed; iOS ×4 blazed +
+replay-verified 2026-07-12 as ios.trail.yaml (broad-family name, matches repo —
+slide tree updated), awaiting the chip's commit. VERIFY the tree on this slide
+matches the repo before presenting. Never show a file that isn't real.
 There IS a fifth trail — create-contact-WITH-PHOTO, Android-only: the photo hop
 crosses four app surfaces (Contacts → camera → crop → back). iOS sims can't run it:
 tapping "Photos" in the avatar sheet crashes stock Contacts on iOS 26.x — an OS bug
