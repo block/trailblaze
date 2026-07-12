@@ -69,6 +69,52 @@ But your style likes an agenda up front, so here it is, ready. Best placement: r
 <!-- OPTIONAL roadmap. Cut if you'd rather stay cold on the problem. -->
 ```
 
+## 🔎 Editorial read-through — per-act readout (for your dry run)
+
+**Overall:** the narrative is strong and well-signposted; the ACT markers do a lot of quiet
+work. Your main risk is **time, not content** — there's more than 40 min of good material
+here, so the skill tomorrow is *pace and cuts*, not additions. Below is only what's worth
+acting on; acts I don't flag are already solid.
+
+**Timing readout**
+- Marked content runs to ~36:30, Q&A ~3.5 min. My two added slides nudge Act 0 (+~15s) and
+  Act 2 (+~30s, and that one's optional). Not worth re-numbering the markers.
+- **Highest over-run risk: Act 4** (three beats + ASSET B, the densest stretch). If you're
+  past ~27:30 leaving Act 4, pull from the cut list immediately.
+- **Two code slides** (unified YAML, TS tool) are the classic time sinks — budget ~60–75s
+  each and resist explaining every line. The types/TSDoc slide especially reads itself.
+
+**Per-act flags**
+- **Act 0** — Open the poll (above). The split now lands scale physically; advance *briskly*
+  through the 7-grid, don't read all seven labels aloud — the picture does it.
+- **Act 1** — The compiler table and the lifecycle mermaid are dense-adjacent. The mermaid is
+  a "walk it once, don't dwell" slide (~45s). Refrain lands here — say it, don't explain it.
+- **Act 2** — Your strongest conceptual act. Slow down on the **unified YAML payoff**, not on
+  the setup. Drift slide is optional cinema before it. "Most flaky tests die right here" is a
+  keeper line.
+- **Act 3** — *"A screenshot was worth 1,000 words → now 1,000 tokens"* is a highlight; land
+  it and pause. Reports slide is a quick one-breath beat.
+- **Act 4** — Densest act, biggest over-run risk. **Protect** "Could the LLM construct it?" +
+  "Recordings are earned, not written" — that's the emotional beat. If you must trim, cut
+  "Tools return data" and "Not every tool is for the LLM" *first* (they're refinements).
+- **Act 5** — Let the driver-table numbers sit; don't narrate every row. The iOS/web honesty
+  line matters — it buys credibility, keep it.
+- **Act 6** — Map payoff; you've earned it, so keep it brisk. *"You never need a trail"* is a
+  mic-drop — let it breathe for a beat.
+- **Act 7** — recipe → refrain → CTA → "now the robots write the tests." Clean close. Don't
+  add anything; resist the urge to summarize twice.
+
+**Tightenings I did NOT make (your call — flagged, not churned)**
+- *"Not just test authoring"* (Act 6) headline reads like a topic label; a statement version
+  lands harder — e.g. **"Bigger than tests."** Left as-is; flip it if you agree.
+- *"The CLI pivot"* — the 4th bullet ("do we lose the natural language?") is a great
+  cliffhanger into the "driving the device" peak. Lean into it vocally; no edit needed.
+
+**One backup slide worth adding (optional):** a hidden **reliability** card holding your
+banked wording — *"still getting to 100%; reliability is good and improving; parity across
+Android and iOS"* — no number, just the phrasing, so if asked you stay calm. Q&A answers are
+in the gap-analysis section further down; skim them before you walk on.
+
 ## Portable session files (take these to any machine)
 
 - `samdroidcon.md` — the Slidev deck (render with `bunx slidev samdroidcon.md`; theme seriph)
