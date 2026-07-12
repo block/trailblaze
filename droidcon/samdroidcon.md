@@ -348,6 +348,12 @@ in 91s — ~8×. Full table in notes "Earning results".
 WALL-CLOCK BASES — don't mix on stage: this slide's 6m26s/2m20s = the recorded
 runs' full CLI invocation (incl. one-time APK install; ~3min of it trimmed from
 the video). The parity table's 3m15s create-contact = warm host, no install.
+REPLAY-SPEED OBJECTION (presenter sim): an Espresso mind may fixate on the 2m20s
+itself — "my tests run in seconds." Answer: the minutes are the APP and the
+emulator (real UI, animations, full app-state reset) plus ~35s one-time
+CLI/daemon startup; the framework's own tax is ~100–150ms per action (Act 5
+slide). It's an end-to-end user journey on a real device — priced against the
+6m26s blaze and $0.55→$0.00, not against a JVM unit test.
 Regenerate: droidcon/public/asset-regeneration-playbook.sh.
 PLAN B (video misbehaves): paste-ready fallback slide in notes ("Plan B" section).
 -->
@@ -1042,6 +1048,11 @@ Errors map back to `trail.yaml · step 3 [android-phone]`
 </div>
 
 <!--
+SET UP THE FIRST LINE (presenter sim — a cold listener doesn't know WHO changed
+hundreds of files): change one tool's parameter and the mechanical rewrite
+touches every recording that calls it — hundreds of YAML files; these suites
+don't run on PR checks, so a bad one used to surface late and expensively in CI.
+THAT's the diff no human reviews — then the gates.
 Gate 2 mechanics (say aloud): every recorded tool call transpiled to a
 client.tools.tapOn({...}) line, compiled against the generated typings.
 Keep the trick, narrate lightly.
@@ -1092,6 +1103,9 @@ Maestro was the right first call — "not a permanent coupling" from day one.
 SAY THE BASIS (cold read): the headline ~3x = end-to-end replay, deliberately
 conservative; the table's 500–700ms → 100–150ms is per-ACTION overhead (~5x).
 One clause kills the mismatch: "per action it's ~5x; end to end, about 3."
+COUNT GUARD (presenter sim): web debuts HERE in the main deck — the Act 0 grid
+was seven DEVICE targets. Phrase it "seven device targets, plus web via
+Playwright" — never "eight targets."
 Numbers live on the slide; don't over-narrate.
 HAND-OFF: "We'd protected the language; now the determinism underneath it is fast. So — the map."
 -->
@@ -1273,6 +1287,11 @@ grab the **skill** → tell Claude / Codex to use it on *your* app
 
 <!--
 CTA: brew → skill → point your agent at your own app.
+THE SKILL IS REAL — skills/trailblaze/SKILL.md in the repo (proper trigger
+description, covers CLI + trailmaps + authoring). If asked where: "skills/trailblaze
+in the repo." KNOWN GAP: the README doesn't point to it yet — QR scanners won't
+find "the skill" by skimming; Sam's call whether to add a README line on main
+before the talk.
 QR = white-on-transparent SVG (droidcon/public/trailblaze-qr.svg), generated locally
 with slidev's bundled uqr — regenerate: bun -e with renderSVG if the URL ever changes.
 -->

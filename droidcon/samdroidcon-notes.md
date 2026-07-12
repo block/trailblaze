@@ -670,6 +670,11 @@ title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grac
 
 ### Q&A preempts (backup slides)
 - LLM token cost of authoring/blazing a run; replay = $0.
+- "Why does replay still take 2 minutes?" (presenter sim round 8 — verbal, no backup
+  slide): the minutes are the app + emulator (real UI, animations, full app-state
+  reset) plus ~35s one-time CLI/daemon startup; the framework tax is ~100–150ms/action
+  (Act 5). End-to-end user journey on a real device — price it against the blaze
+  ($0.55 → $0.00), not a JVM unit test.
 - "We already have Espresso/Compose tests — why this?" (positioning: complements; robot
   pattern lineage; NL layer = exit strategy).
 - "Did you abandon MCP?" (no — proxy remains; CLI is primary).
@@ -1410,3 +1415,28 @@ workflow on main.
 
 **Cold reader's do-not-touch list (it's right):** Act 0 seven-targets build, Act 1
 spine, Act 2 rhyme, Act 3 arc, the 35–37 peak, the close, the backup bank.
+
+## Round 8: presenter-simulation pass (2026-07-12, Sam asked "present it to me")
+
+Full listener walk of all 55 slides in their post-pass-3 state. The arc holds: every
+hand-off chains, no undefined term survives (the two forward teases are armed), and
+the act timings sum to ~36:30 + Q&A. Four NEW gaps found and filled (all note-level,
+nothing projected changed):
+
+1. **Sl.14 replay-speed objection** — an Espresso mind may fixate on "2m20s is slow."
+   Ammo added to the slide note + Q&A preempts: minutes = app + emulator + one-time
+   ~35s startup; framework tax = 100–150ms/action; price vs the blaze, not a unit test.
+2. **Sl.38 missing setup** — a cold listener doesn't know WHO rewrote hundreds of YAML
+   files. Spoken setup clause added (tool param change → mechanical rewrite of every
+   recording that calls it; suites don't run on PR checks → used to surface late in CI).
+3. **Sl.46 CTA "grab the skill" grounded** — the skill is REAL: `skills/trailblaze/
+   SKILL.md` in the repo. OPEN QUESTION FOR SAM: the repo README never mentions it, so
+   QR scanners won't find "the skill" by skimming — add a README pointer on main before
+   the talk, or leave for the post-talk docs task?
+4. **Sl.39 count guard** — web debuts in the main deck here; the Act 0 grid was seven
+   DEVICE targets. Phrase: "seven device targets, plus web via Playwright" — never
+   "eight targets."
+
+Deliberately NOT flagged (checked and fine): "Most flaky tests die right here" (sl.22 —
+ambiguous on paper, lands when spoken); Act 5 = one slide / 2.5 min (correct breather
+after the peak, note carries the content); videos autoplay-loop on sl.14 (verified).
