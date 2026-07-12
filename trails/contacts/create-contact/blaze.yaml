@@ -1,0 +1,20 @@
+# Critical job #1: create a contact. One NL source, full platform parity —
+# the same trail blazes and replays on Android (clean AOSP image) and iOS
+# (clean accountless Simulator). Steps name the JOB, never a platform's UI
+# vocabulary; the per-platform recordings diverge, the journey doesn't.
+#
+# Recordings are earned, not written:
+#   trailblaze run -d android trails/contacts/create-contact/blaze.yaml
+#   trailblaze run -d ios trails/contacts/create-contact/blaze.yaml
+#   trailblaze session save --title "Contacts: create a contact"
+- config:
+    title: "Contacts: create a contact"
+    target: contacts
+    tags: [crud]
+- prompts:
+    - step: Open the Contacts app and start creating a new contact
+    - step: Enter first name "Casey" and last name "Trailblaze"
+    - step: Add the mobile number 555-0134
+    - step: Add the email casey.trailblaze.demo@example.com
+    - step: Save the contact
+    - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134 and the email casey.trailblaze.demo@example.com

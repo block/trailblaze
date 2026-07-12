@@ -900,10 +900,40 @@ replays whenever another session might be active.
       `TRAILBLAZE_CONFIG_DIR=$(pwd)/trails/config trailblaze run --no-daemon
       --device android/<serial> trails/contacts/create-contact-with-photo/android.trail.yaml`
       (AVD `tb-probe-clean-34` kept; camera already `virtualscene`)
-- [ ] iOS: pick option 1/2/3 above, then earn (or skip) the iOS recording
+- [x] iOS decision (round 4, Sam): "It's a bug, so let's simplify and do
+      something that has parity" → see Round 4 below
 - [ ] CI wiring: clone clock-trails.yml shape → contacts trail; only flip
       `docs/showcase-trails.yml` android slug AFTER recording is committed
       (slugs are load-bearing: report-assets bucket + artifact names)
+
+## Round 4: the parity suite (2026-07-11) — CRITICAL JOBS × 2 PLATFORMS
+
+**Sam's framing:** "The goal is to say 'here are X amount of tests that are
+critical jobs to do' and we have trails for iOS and Android effectively."
+The photo trail STAYS committed as the Android depth-extra (platforms can go
+deeper where the OS allows); the HEADLINE becomes the suite.
+
+**The suite — 4 unified NL sources in `trails/contacts/`, zero platform
+vocabulary, every beat parity-safe (no photo picker, no accounts):**
+1. `create-contact/` — name + phone + email → verify card (photo trail minus photo)
+2. `find-contact/` — create, back to list, search "Casey" → verify result
+   (fresh iOS sims ship stock sample contacts — unique name keeps it unambiguous)
+3. `add-phone-to-contact/` — create name-only, edit, add number → verify
+4. `delete-contact/` — create, delete w/ confirmation → verify GONE
+   (mirrors the already-CI-green iOS create-then-delete flow)
+
+Self-containment rule: every trail creates what it needs — any subset runs on
+a fresh CI device in any order. Slide math: **4 jobs × 2 platforms = 8 green
+runs from 4 files.**
+
+### Recording-earning status
+- [ ] Android × 4 (AVD `tb-probe-clean-34`; reset between trails:
+      `pm clear com.android.contacts && pm clear com.android.providers.contacts`)
+- [ ] iOS × 4 (fresh accountless sim; safe territory — create/edit/search/delete
+      never touch the avatar sheet)
+- [ ] Move each saved recording from the slugified session-save dir next to its
+      blaze.yaml; delete `android-phone.trail.yaml` duplicates (closest-wins
+      hazard — same lesson as the photo trail)
 
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 

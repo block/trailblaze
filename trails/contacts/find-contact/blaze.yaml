@@ -1,0 +1,20 @@
+# Critical job #2: find a contact by name. Self-contained — creates the
+# contact it searches for, so it runs on a fresh CI device in any order.
+# Parity note: a fresh iOS Simulator ships stock sample contacts (John
+# Appleseed et al.); searching for our unique name keeps the result
+# unambiguous on both platforms.
+#
+# Recordings are earned, not written:
+#   trailblaze run -d android trails/contacts/find-contact/blaze.yaml
+#   trailblaze run -d ios trails/contacts/find-contact/blaze.yaml
+#   trailblaze session save --title "Contacts: find a contact by name"
+- config:
+    title: "Contacts: find a contact by name"
+    target: contacts
+    tags: [search]
+- prompts:
+    - step: Open the Contacts app and start creating a new contact
+    - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    - step: Go back to the contact list
+    - step: Search the contacts for "Casey"
+    - verify: The search results show Casey Trailblaze

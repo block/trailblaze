@@ -1,0 +1,19 @@
+# Critical job #3: update an existing contact (add a phone number).
+# Self-contained — creates the contact it edits. Exercises the edit
+# entry point + field addition + re-save on both platforms.
+#
+# Recordings are earned, not written:
+#   trailblaze run -d android trails/contacts/add-phone-to-contact/blaze.yaml
+#   trailblaze run -d ios trails/contacts/add-phone-to-contact/blaze.yaml
+#   trailblaze session save --title "Contacts: add a phone number to an existing contact"
+- config:
+    title: "Contacts: add a phone number to an existing contact"
+    target: contacts
+    tags: [crud]
+- prompts:
+    - step: Open the Contacts app and start creating a new contact
+    - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    - step: Edit the contact
+    - step: Add the mobile number 555-0134
+    - step: Save the changes
+    - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134

@@ -1,0 +1,17 @@
+# Critical job #4: delete a contact and prove it's gone. Self-contained —
+# creates the contact it deletes. The destructive-action confirmation dialog
+# differs per platform; the NL never mentions it, the recordings absorb it.
+#
+# Recordings are earned, not written:
+#   trailblaze run -d android trails/contacts/delete-contact/blaze.yaml
+#   trailblaze run -d ios trails/contacts/delete-contact/blaze.yaml
+#   trailblaze session save --title "Contacts: delete a contact"
+- config:
+    title: "Contacts: delete a contact"
+    target: contacts
+    tags: [crud]
+- prompts:
+    - step: Open the Contacts app and start creating a new contact
+    - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    - step: Delete this contact, confirming if asked
+    - verify: Casey Trailblaze no longer appears in the contact list
