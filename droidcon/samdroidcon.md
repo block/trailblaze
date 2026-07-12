@@ -507,10 +507,14 @@ robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
 {{account_email}} = a seeded parameter, reverse-substituted into the recording —
 parameterize slide follows; don't name the mechanism here.
 Show verify: here — closes the assertions thread from Act 0.
-Q&A hedge: this multi-platform shape = the spec + Block production; in the public repo the
-contacts parity suite (next slide) is the committed unified corpus — Android + iOS
-recordings both earned and committed. Unified naming: one journey = one
-<name>.trail.yaml (e.g. create-contact.trail.yaml) once recordings fold inline.
+Q&A UPGRADE (upstream #209 landed on main Jul 12): this shape is now PUBLICLY DOCUMENTED —
+docs/project_layout.md defines the unified trail.yaml (NL steps + per-device recording:
+slots keyed by classifier; a device with a slot replays deterministically, one without
+runs the prose through the agent) and officially labels blaze.yaml + classifier-named
+files LEGACY. Canonical naming: one journey = one <journey>/trail.yaml (a standalone
+<name>.trail.yaml also works, zero-config); sample-app examples already renamed. The
+contacts parity suite (next slide) = the committed corpus, Android + iOS recordings
+both earned — in the legacy materialization, still replayable everywhere.
 verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
 assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
 and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
@@ -550,13 +554,16 @@ the steps they materialized as context, but you never EDIT the words there — w
 change in blaze.yaml, recordings get re-earned. Inline-classifier shape (previous
 slide) and sibling-file shape are the SAME model; the repo materializes recordings as
 siblings.
-NAMING TRAJECTORY (Sam round 6): today's materialization = folder + blaze.yaml +
-sibling recordings (contacts/android.trail.yaml-style). In the unified format the
-folder collapses to ONE file — create-contact.trail.yaml, recordings inline.
+NAMING TRAJECTORY (Sam round 6; ground truth updated by upstream #209, Jul 12): this
+tree = the LEGACY materialization — folder + blaze.yaml + sibling recordings — and
+main's docs now say so explicitly (project_layout.md). Destination (documented, and
+sample-app examples already renamed): the folder keeps its journey name, the files
+inside collapse to ONE unified trail.yaml — create-contact/trail.yaml, recordings
+inline per classifier.
 SAY IT AT THE SEAM, unprompted (cold read: a cold audience can't tell whether the
-inline shape on the previous slide is shipping or vapor): "the inline shape is the
-spec — and Block production; this sibling layout is the migration in motion, folding
-into one create-contact.trail.yaml."
+inline shape on the previous slide is shipping or vapor): "the inline shape shipped
+to main's docs and examples THIS WEEK; this sibling layout is the migration in
+motion, folding into one create-contact/trail.yaml."
 CAPTION MAPPING: the bold line says "update"; the folder says add-phone-to-contact —
 narrate it once: "update, here, is adding a phone number."
 The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
@@ -600,6 +607,10 @@ to sell it." So DON'T sell it from the slide. The {{account_email}} in the unifi
 example is that mechanism — narrate it lightly, don't name memory.
 If asked how trail-level values work: "today they're seeded through memory; a
 first-class parameter design is the next step — exactly where this is heading."
+UPGRADE (Sam, Jul 12): it's being built NOW, naming settled — `args` (trail run
+args) · `params` (tool call params) · `memory` (session-based memory). Lands in an
+upcoming upstream; CHECK MAIN before naming these on stage — if landed, the Q&A
+answer becomes "shipped this week," the strongest possible version.
 Mechanism (only if useful): reverse-substitution — recordings swap captured
 literals back to {{key}} using a per-step snapshot.
 Guaranteed Q&A topic otherwise (test accounts in CI).

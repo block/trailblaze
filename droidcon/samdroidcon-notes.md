@@ -1443,3 +1443,35 @@ nothing projected changed):
 Deliberately NOT flagged (checked and fine): "Most flaky tests die right here" (sl.22 —
 ambiguous on paper, lands when spoken); Act 5 = one slide / 2.5 min (correct breather
 after the peak, note carries the content); videos autoplay-loop on sl.14 (verified).
+
+## Round 9: synced to main upstream #209 (2026-07-12 evening)
+
+Sam: "keep on top of block/trailblaze main." Fetched — one new commit, `ce44af30`
+"Upstream 2026.07.12 (#209)" (+5,508/−1,016 across 80 files). What matters for the talk:
+
+- **Unified format LANDED in public docs.** docs/project_layout.md now defines the
+  canonical shape: one journey = one `<journey>/trail.yaml` (NL steps + per-device
+  `recording:` slots keyed by classifier; device with a slot replays deterministically,
+  device without runs the prose through the agent; optional `trailhead:`). A standalone
+  `<name>.trail.yaml` works zero-config. **blaze.yaml and classifier-named
+  `*.trail.yaml` files are officially labeled LEGACY** (still replayable). Sample-app
+  examples renamed to the unified shape. → Slides 19/20 notes updated: the seam line is
+  now "shipped to main's docs and examples this week."
+- **Healed-run save-back:** new `HealedRunUnifiedSaveBackTest` (+186) — healed runs
+  save back into the unified file. Strengthens the self-heal story if asked how heals
+  persist.
+- **README fully rewritten** (~272 lines) — new framing: "Natural-language device
+  control for your coding agent — across iOS, Android, and web"; leads with pointing
+  Claude Code/Cursor/Codex/Goose at the CLI; "twenty selector strategies per element
+  only works because an agent is driving." Very aligned with the talk's Act 4/5 framing.
+  Still NO mention of skills/trailblaze/SKILL.md → issue #191's acceptance criterion
+  stands.
+- **MCP server expanded** (+753 in TrailblazeMcpServer, descriptor/target-scoped tool
+  tests). `trailblaze mcp` proxy still exists (STDIO default, HTTP option) — the CLI-pivot
+  slide's disarming line still true.
+- **Parameterization naming settled (Sam, verbal):** `args` = trail run args ·
+  `params` = tool call params · `memory` = session-based memory. NOT in #209 — lands
+  in a FUTURE upstream. Parameterize-slide note carries the check-main-before-stage rule.
+- Deck/branch mechanics: talk branch stays where it is (based off #208's main) — do NOT
+  rebase before the talk; the parity corpus + committed assets are the stage truth.
+  Post-talk, a rebase picks up the unified docs cleanly.
