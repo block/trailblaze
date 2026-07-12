@@ -290,7 +290,12 @@ class: text-center
 Pre-recorded. The side-by-side IS the thesis: same journey, LLM-driven on the left,
 zero-LLM replay on the right, clocks visible — the economics slide made flesh.
 Part 2 (the report it generated) plays in Act 3.
+MATERIAL (real, in-repo): use a contacts parity trail (create-contact is the
+photogenic one). Reference number: the richer photo-trail blaze took 6m41s
+agent-driven end-to-end; its replay is ~1min — pull the parity trail's exact
+blaze/replay wall-clocks from the earning session before recording this asset.
 -->
+
 
 ---
 layout: center
@@ -376,13 +381,48 @@ trail:
 
 <!--
 Show verify: here — closes the assertions thread from Act 0.
-Q&A hedge: this multi-platform shape = the spec + Block production; the public repo's
-committed unified trails are single-platform so far.
+Q&A hedge: this multi-platform shape = the spec + Block production; in the public repo the
+contacts parity suite (next slide) is the committed unified corpus — Android recordings
+earned, iOS recordings landing before the talk.
 verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
 assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
 and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
 kept the LLM judging that assertion every run. Zero-LLM replay is true for recorded steps;
 NL-only steps are a per-step choice, not a leak.
+HAND-OFF: "So what do you actually write these for? The jobs your users must always be able to do."
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+
+# Four critical jobs. One file each.
+
+| the job | Android | iOS |
+|---|:---:|:---:|
+| **Create** a contact | 🥾 | 🥾 |
+| **Find** a contact by name | 🥾 | 🥾 |
+| **Update** a contact | 🥾 | 🥾 |
+| **Delete** a contact | 🥾 | 🥾 |
+
+<div class="pt-4 opacity-70"><code>trails/contacts/</code> — in the open-source repo · same NL source per row · recordings per platform</div>
+
+<!--
+The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
+must always be able to do in a contacts app. Each row = ONE blaze.yaml; each cell =
+that journey materialized for that platform. The parity claim made concrete:
+4 files, 8 green runs. Self-contained by design — each trail creates the contact it
+acts on, so any subset runs on a fresh CI device in any order.
+Asset hooks: ASSET B blazes one of these; ASSET A replays one.
+PRODUCTION NOTE (before talk): recordings are being earned now — Android first, iOS
+on a fresh simulator. Verify every cell is green, then consider swapping the boots
+for real wall-clock times. If iOS isn't done in time, show the Android column green
+and narrate iOS as landing — never claim a green cell that isn't.
+There IS a fifth trail — create-contact-WITH-PHOTO, Android-only: the photo hop
+crosses four app surfaces (Contacts → camera → crop → back). iOS sims can't run it:
+tapping "Photos" in the avatar sheet crashes stock Contacts on iOS 26.x — an OS bug
+we found while building this. Great aside if timing allows: parity where the OS
+allows, honesty where it doesn't.
 -->
 
 ---
@@ -756,10 +796,15 @@ class: text-center
 Pre-recorded. The verbs on screen are real: `trailblaze step --save` while driving,
 then `trailblaze run` to replay what was just saved. First time the audience sees the
 actual CLI — the "blaze" metaphor gets its concrete commands here.
-Candidate (Sam deciding): blaze the ANDROID half of the unified Contacts trail — the
-iOS recording already exists in-repo (contacts_ios_createContact), so the clip ends on
-one file with two recording blocks. Slide 17 made real.
+RESOLVED: blaze one of the four parity trails on Android — the exact commands that
+earned the committed recordings: `trailblaze run -d android trails/contacts/<job>/blaze.yaml`
+(agent drives every step), then `trailblaze session save --title "..."` → the
+android.trail.yaml lands NEXT TO the NL source. The clip's final frame: one folder,
+blaze.yaml + android.trail.yaml side by side. If the photo trail's camera hop is
+wanted as extra cinema, its blaze session already succeeded on camera (virtualscene) —
+but the parity trail keeps the asset tight.
 -->
+
 
 ---
 
@@ -918,14 +963,16 @@ class: text-center
 <div class="pt-4 opacity-60">the demo app's waypoint map — every named place, every shortcut between them</div>
 
 <!--
-Sam's call: this shows the waypoint map OF THE DEMO APP we pick.
-VERIFIED 2026-07-12: the committed Calendar trailmap has EXACTLY 100 waypoints +
-64 shortcuts (trails/config/trailmaps/calendar/) — required+forbidden matchers,
-~70 with screenshots. Contacts-iOS is a second committed map: ~103 waypoints +
-81 shortcuts. Optional beat: flash the second map — "a pattern, not a one-off."
+Demo app = CONTACTS (round-4 decision). PRIMARY map: the committed contacts-iOS
+trailmap — ~103 waypoints + 81 shortcuts (trails/config/trailmaps/contacts/),
+required+forbidden matchers. Optional beat: flash the committed Calendar map
+(100 waypoints + 64 shortcuts) as the second map — "a pattern, not a one-off."
+Android contacts side is waypoint-thin today — if asked, that's the honest
+"maps mature independently; the journey doesn't care" line.
 Label the app honestly either way — protects the future framing.
 HAND-OFF: "The whole recipe, one slide."
 -->
+
 
 ---
 

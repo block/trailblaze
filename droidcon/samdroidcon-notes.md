@@ -927,13 +927,16 @@ a fresh CI device in any order. Slide math: **4 jobs × 2 platforms = 8 green
 runs from 4 files.**
 
 ### Recording-earning status
-- [ ] Android × 4 (AVD `tb-probe-clean-34`; reset between trails:
-      `pm clear com.android.contacts && pm clear com.android.providers.contacts`)
+- [x] Android × 4 — ALL BLAZED 2026-07-11 evening (AVD `tb-probe-clean-34`,
+      `--no-daemon`, pm-clear reset + POST_NOTIFICATIONS pre-grant per trail).
+      Sessions: create_contact_b66e486e, find_contact_d11ec5a0,
+      add_phone_to_contact_a4f4a625, delete_contact_0482dbea. Recordings moved
+      next to their blaze.yaml, android-phone dups dropped. NOT YET COMMITTED —
+      replay verification + commit owned by the background chip.
 - [ ] iOS × 4 (fresh accountless sim; safe territory — create/edit/search/delete
-      never touch the avatar sheet)
-- [ ] Move each saved recording from the slugified session-save dir next to its
-      blaze.yaml; delete `android-phone.trail.yaml` duplicates (closest-wins
-      hazard — same lesson as the photo trail)
+      never touch the avatar sheet) — chip-owned
+- [ ] Replay-verify all Android recordings on a quiet host (or let CI be the
+      clean room) before any slide cell is claimed green — chip-owned
 
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 
