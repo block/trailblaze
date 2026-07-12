@@ -28,6 +28,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.NoOpElementComparator
@@ -126,18 +127,24 @@ class ComposeRpcTrailblazeAgent(
     toolsExecuted: MutableList<TrailblazeTool>,
   ): TrailblazeToolResult {
     val resolvedTraceId = context.traceId ?: TraceId.generate(TraceOrigin.TOOL)
-    return when (tool) {
+    // Memory-interpolation boundary for the Compose RPC driver, applied HOST-side before the
+    // send: unlike the Android on-device RPC path, the remote ComposeRpcServer receives no
+    // memory snapshot and runs no dispatch loop of its own, so tokens must resolve before the
+    // tool crosses the wire. `toolsExecuted` keeps the authored instance (base-loop convention).
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val rawTool = tool.takeIf { it !== memoryResolvedTool }
+    return when (memoryResolvedTool) {
       // compose_request_details is applied CLIENT-SIDE — it is NOT sent over RPC. Instead it arms
       // pendingDetailRequests so the NEXT getScreenState() carries the requested detail. Checked
       // before ComposeExecutableTool because it is one (and would otherwise round-trip needlessly).
       is ComposeRequestDetailsTool -> {
         val toolStartTime = Clock.System.now()
         toolsExecuted.add(tool)
-        pendingDetailRequests.set(tool.include.toSet())
+        pendingDetailRequests.set(memoryResolvedTool.include.toSet())
         val result = TrailblazeToolResult.Success(
-          message = "Requested details: ${tool.include.joinToString()}",
+          message = "Requested details: ${memoryResolvedTool.include.joinToString()}",
         )
-        logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+        logToolExecution(memoryResolvedTool, toolStartTime, resolvedTraceId, result, rawTool = rawTool)
         result
       }
 
@@ -147,11 +154,11 @@ class ComposeRpcTrailblazeAgent(
         val toolStartTime = Clock.System.now()
         toolsExecuted.add(tool)
         val rpcResult: RpcResult<ExecuteToolsResponse> =
-          runBlocking { rpcClient.executeTools(ExecuteToolsRequest(tools = listOf(tool))) }
+          runBlocking { rpcClient.executeTools(ExecuteToolsRequest(tools = listOf(memoryResolvedTool))) }
         when (rpcResult) {
           is RpcResult.Success -> {
             val result = rpcResult.data.results.firstOrNull() ?: TrailblazeToolResult.Success()
-            logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+            logToolExecution(memoryResolvedTool, toolStartTime, resolvedTraceId, result, rawTool = rawTool)
             result
           }
 
@@ -162,7 +169,7 @@ class ComposeRpcTrailblazeAgent(
             val result = TrailblazeToolResult.Error.ExceptionThrown(errorMessage)
             // Log the transport-failure dispatch too (parity with the success path and the
             // other driver agents) so KOOG/runner reports can correlate a failed RPC tool call.
-            logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+            logToolExecution(memoryResolvedTool, toolStartTime, resolvedTraceId, result, rawTool = rawTool)
             result
           }
         }
@@ -173,8 +180,8 @@ class ComposeRpcTrailblazeAgent(
       is ExecutableTrailblazeTool -> {
         val toolStartTime = Clock.System.now()
         toolsExecuted.add(tool)
-        val result = runBlocking { tool.execute(context) }
-        logToolExecution(tool, toolStartTime, resolvedTraceId, result)
+        val result = runBlocking { memoryResolvedTool.execute(context) }
+        logToolExecution(memoryResolvedTool, toolStartTime, resolvedTraceId, result, rawTool = rawTool)
         result
       }
 

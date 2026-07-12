@@ -409,12 +409,15 @@ class QuickJsToolHost internal constructor(
           val host = QuickJsToolHost(quickJs, engineDispatcher)
           try {
             if (hostBinding != null) {
-              // Synchronous binding, NOT asyncFunction -- quickjs-kt 1.0.5's asyncFunction
-              // invoke path has a native JNI bug that crashes the JVM regardless of thread
-              // confinement (block/trailblaze#194). Full incident writeup, the reentrancy
-              // tripwire (`host.hostCallThread`/`checkNotReentrant`), and the known
-              // no-cancellation-propagation limitation (tracked in #4551) are all in
-              // docs/internal/devlog/2026-07-07-quickjs-async-host-binding-fix.md.
+              // Synchronous binding, NOT asyncFunction. The JVM crash once blamed on asyncFunction
+              // (block/trailblaze#194) was later root-caused to a ProGuard shrink stripping the
+              // com.dokar.quickjs classes out of the release JAR -- NOT the async path: both
+              // bindings crash under the shrunk JAR (closed dokar3/quickjs-kt#199). We keep the
+              // synchronous binding on its own merits -- our host calls are sequential (async
+              // concurrency unused) and it avoids the async path's per-call growth on long-lived
+              // engines. The reentrancy tripwire (`host.hostCallThread`/`checkNotReentrant`) guards
+              // against a host call re-entering this dispatch while one is already in flight; there
+              // is a known no-cancellation-propagation limitation on this synchronous path.
               quickJs.function(HOST_CALL_BINDING) { args ->
                 val name = args.getOrNull(0) as? String
                   ?: error("$HOST_CALL_BINDING called without a tool name string")
@@ -548,14 +551,16 @@ fun interface HostBinding {
  * uses for `__trailblazeCall` and `console`. The reference implementation is `OkHttpFetchExtension`
  * in `:trailblaze-scripting-fetch`.
  *
- * **Do not use `asyncFunction` for the native binding**, even though quickjs-kt's API makes it
- * look like the natural fit for a suspend host call. quickjs-kt 1.0.5's `asyncFunction` invoke
- * path has a native JNI reference-lifecycle bug that crashes the JVM independent of thread
- * confinement (block/trailblaze#194) — `__trailblazeCall` and `OkHttpFetchExtension`'s `fetch()`
- * binding both hit this crash in production before being switched to a synchronous `function`
- * binding + `runBlocking` (see the `__trailblazeCall` install site above, and the devlog entry
- * `2026-07-07-quickjs-async-host-binding-fix.md`). Any new extension bridging a suspend host call
- * must use that same synchronous-binding-plus-runBlocking pattern, not `asyncFunction`.
+ * **Use a synchronous `function` binding + `runBlocking` for a suspend host call, not
+ * `asyncFunction`** — even though quickjs-kt's API makes `asyncFunction` look like the natural fit.
+ * The JVM crash once attributed to `asyncFunction` (block/trailblaze#194) was later root-caused to a
+ * ProGuard shrink stripping the `com.dokar.quickjs` classes out of the release JAR, not the async
+ * path itself — both bindings crash under the shrunk JAR (see the closed upstream report
+ * `dokar3/quickjs-kt#199`). We still standardize on the synchronous binding on its merits: the
+ * host-call workload is sequential (the concurrency `asyncFunction` would add is unused) and it
+ * sidesteps the async path's per-call growth flagged for long-lived engines in #199. `__trailblazeCall`
+ * and `OkHttpFetchExtension`'s `fetch()` both use this pattern; any new extension bridging a suspend
+ * host call should too.
  *
  * Author-only by posture: an extension surfaces capabilities to scripted-tool authors, never to
  * the LLM (same as [HostBinding] and `ctx.tools.exec`). Install is [suspend] because engine

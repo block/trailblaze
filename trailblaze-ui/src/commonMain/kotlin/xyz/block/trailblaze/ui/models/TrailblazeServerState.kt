@@ -38,15 +38,18 @@ data class TrailblazeServerState(
     val llmModel: String = TrailblazeLlmProvider.NONE.id,
     val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
     /**
-     * Rollout gate for unified-format recording save-back. While false (default), a successful
-     * run saves recordings exactly as before the unified recorder work: a legacy
-     * `<classifier>.trail.yaml` sibling, and never anything next to a unified `trail.yaml`.
-     * Opt in (`trailblaze config unified-recordings true`, `--unified-recordings`, or
-     * `TRAILBLAZE_UNIFIED_RECORDINGS=1`) to have new recordings merge into the unified
-     * `trail.yaml` instead. The default flips to true once the surrounding tooling
-     * (validation, CI discovery, verify steps, MCP/desktop writers) fully supports unified.
+     * Persisted user preference for unified-format recording save-back. Tri-state on purpose:
+     * `null` (default) means "no preference recorded" and inherits the current framework default
+     * (on — see [xyz.block.trailblaze.recordings.UnifiedRecordingWriter.resolveGate], the single
+     * place that default lives). An explicit `true`/`false` from
+     * `trailblaze config unified-recordings <value>` is a non-default value, so it survives
+     * serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what the user
+     * said even if the framework default ever changes. When enabled, a successful run merges the
+     * device's recording slot into the unified `trail.yaml` (directories that still hold legacy
+     * `<classifier>.trail.yaml` files keep using them); when disabled, the legacy per-classifier
+     * save-back is restored.
      */
-    val unifiedRecordingsEnabled: Boolean = false,
+    val unifiedRecordingsEnabled: Boolean? = null,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """

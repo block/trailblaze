@@ -24,8 +24,9 @@ data class RememberWithAiTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
-    val interpolatedPrompt = memory.interpolateVariables(prompt)
-    val evaluation = elementComparator.evaluateString(interpolatedPrompt)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so the prompt arrives resolved here.
+    val evaluation = elementComparator.evaluateString(prompt)
     Console.log("UI Evaluation result: ${evaluation.result}, reason: ${evaluation.reason}")
 
     memory.remember(variable, evaluation.result)

@@ -39,9 +39,10 @@ class ComposeTypeTool(
     target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val interpolatedText = context.memory.interpolateVariables(text)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execution, so `text` arrives resolved here.
     val description = element.ifBlank { elementId ?: testTag ?: existingText ?: "unknown" }
-    Console.log("### Typing into $description: $interpolatedText")
+    Console.log("### Typing into $description: $text")
     return try {
       val matcher =
         ComposeExecutableTool.resolveElement(elementId, testTag, existingText, context)
@@ -54,10 +55,10 @@ class ComposeTypeTool(
         if (clearFirst) {
           target.clearText(node)
         }
-        target.typeText(node, interpolatedText)
+        target.typeText(node, text)
       }
       val action = if (clearFirst) "Filled" else "Typed"
-      TrailblazeToolResult.Success(message = "$action '$interpolatedText' into '$description'.")
+      TrailblazeToolResult.Success(message = "$action '$text' into '$description'.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Type failed on '$description': ${e.message}")
     }

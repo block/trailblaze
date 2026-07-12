@@ -229,7 +229,13 @@ class RunYamlRequestHandler(
     // so on-device tools see the host's memory state at dispatch time (reads work). The
     // callback threads this same instance into the constructed agent, so writes performed
     // by on-device tools land here and are returned to the host in `response.memorySnapshot`.
-    val agentMemory = AgentMemory().apply { variables.putAll(request.memorySnapshot) }
+    // Sensitivity marking doesn't survive the plain string-map snapshot, so host secrets are
+    // re-marked from the sibling `sensitiveMemoryKeys` list — keeping device-side logging and
+    // scripting envelopes redacting them.
+    val agentMemory = AgentMemory().apply {
+      variables.putAll(request.memorySnapshot)
+      request.sensitiveMemoryKeys.forEach { markSensitive(it) }
+    }
 
     return try {
       // Cancel any currently running job before starting a new session.
@@ -510,6 +516,7 @@ class RunYamlRequestHandler(
               memorySnapshot = agentMemory.variables.toMap(),
               memoryDeletions = agentMemory.deletedKeys.toList(),
               nonRecoverableWedge = timedOutWhileWedged,
+              sensitiveMemoryKeys = agentMemory.sensitiveKeys.toList(),
             ),
           )
         }
@@ -530,6 +537,7 @@ class RunYamlRequestHandler(
             // mid-trail/pre-action failure resolved inline on the awaitCompletion=true path.
             // Carry the typed wedge tag through so the host arms recovery without string-matching.
             nonRecoverableWedge = (resolved as? Outcome.Failure)?.nonRecoverableWedge == true,
+            sensitiveMemoryKeys = agentMemory.sensitiveKeys.toList(),
           ),
         )
       }

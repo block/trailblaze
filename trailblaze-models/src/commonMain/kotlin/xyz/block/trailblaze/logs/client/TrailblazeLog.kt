@@ -264,6 +264,18 @@ sealed interface TrailblazeLog {
      * "unknown / not host-side."
      */
     val dispatchedHostSide: Boolean = false,
+    /**
+     * The tool AS AUTHORED — before the dispatch boundary resolved `{{var}}` / `${var}` memory
+     * tokens — when that resolution actually changed something. `null` means [trailblazeTool] is
+     * already the authored form (no tokens, empty memory, boundary interpolation disabled, or a
+     * log written before this field existed).
+     *
+     * [trailblazeTool] stays "the tool as dispatched" (resolved values — what the driver actually
+     * executed); this field preserves the token-bearing original so recording regeneration keeps a
+     * trail's parameterization instead of baking in the run's concrete values.
+     * `TrailblazeRecordingGenerator` emits `rawTrailblazeTool ?: trailblazeTool`.
+     */
+    val rawTrailblazeTool: OtherTrailblazeTool? = null,
   ) : TrailblazeLog,
     HasTrailblazeTool,
     HasTraceId,

@@ -384,7 +384,7 @@ class AssertVisibleTextMatchModeTest {
       expectedText = expectedText,
       textMatchMode = mode,
     )
-    val commands: List<Command> = tool.toMaestroCommands(AgentMemory())
+    val commands: List<Command> = tool.toMaestroCommands()
     val assertCommand = assertIs<AssertConditionCommand>(commands.single())
     return assertCommand.condition.visible?.textRegex
       ?: error("expected a visible textRegex on the lowered Maestro selector")

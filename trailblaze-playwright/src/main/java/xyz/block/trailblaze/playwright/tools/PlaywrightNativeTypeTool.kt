@@ -40,21 +40,22 @@ class PlaywrightNativeTypeTool(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val interpolatedText = context.memory.interpolateVariables(text)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execution, so `text` arrives resolved here.
     val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
-    Console.log("### Typing into $description: $interpolatedText")
+    Console.log("### Typing into $description: $text")
     return try {
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
       if (clearFirst) {
-        locator!!.fill(interpolatedText)
+        locator!!.fill(text)
       } else {
-        locator!!.pressSequentially(interpolatedText)
+        locator!!.pressSequentially(text)
       }
       val action = if (clearFirst) "Filled" else "Typed"
-      TrailblazeToolResult.Success(message = "$action '$interpolatedText' into '$description'.")
+      TrailblazeToolResult.Success(message = "$action '$text' into '$description'.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Type failed on '$description': ${e.message}")
     }

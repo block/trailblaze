@@ -40,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
@@ -169,7 +170,10 @@ class PlaywrightTrailblazeAgent(
     tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
-    val toolName = tool::class.simpleName ?: "unknown"
+    // Memory-interpolation boundary for the Playwright driver — the tool executes with
+    // resolved args; the log carries resolved + authored so recordings keep their tokens.
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
+    val toolName = memoryResolvedTool::class.simpleName ?: "unknown"
     TrailblazeTracer.traceSuspend("executePlaywrightTool", "tool", mapOf("tool" to toolName)) {
       // Pre-action screenshot for the agent-driver overlay. captureScreenStateForLogging
       // does NOT trigger settling — that's the job of the previous tool's dispatchAndAwaitSettle.
@@ -177,10 +181,12 @@ class PlaywrightTrailblazeAgent(
 
       // Resolve element coordinates BEFORE execution for logging. Clicks may navigate
       // away, after which the element no longer exists on the page.
-      val preResolvedCenter = resolveToolCenter(tool, context)
+      val preResolvedCenter = resolveToolCenter(memoryResolvedTool, context)
 
       // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
-      // timeline shows the tap coordinates on the pre-click screenshot.
+      // timeline shows the tap coordinates on the pre-click screenshot. Deliberately the
+      // authored instance: the driver-action label has always shown the args as written
+      // (tokens included), which also keeps remembered secrets out of the driver-log label.
       val timeBeforeExecution = Clock.System.now()
       logAgentDriverAction(tool, preScreenState, timeBeforeExecution, preResolvedCenter, context.traceId)
 
@@ -190,7 +196,7 @@ class PlaywrightTrailblazeAgent(
       // — see PlaywrightPageManager.dispatchAndAwaitSettle for the strategy.
       val result = browserManager.dispatchAndAwaitSettle {
         TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
-          tool.executeWithPlaywright(browserManager.currentPage, context)
+          memoryResolvedTool.executeWithPlaywright(browserManager.currentPage, context)
         }
       }
 
@@ -207,24 +213,40 @@ class PlaywrightTrailblazeAgent(
       // `web_wait`, `web_snapshot`, and other no-element tools shouldn't pay the ARIA-snapshot
       // cost twice per execution.
       val enrichedTool = if (result.isSuccess()) {
-        val needsEnrichment = tool.targetRef != null || tool.targetNodeSelector != null
+        val needsEnrichment = memoryResolvedTool.targetRef != null || memoryResolvedTool.targetNodeSelector != null
         if (needsEnrichment) {
           val postScreenState = try { browserManager.captureScreenStateForLogging() } catch (_: Exception) { null }
-          val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(tool, context, it) }
-          if (postEnriched != null && postEnriched !== tool) postEnriched
-          else enrichToolWithNodeSelector(tool, context, null)
+          val postEnriched = postScreenState?.let { enrichToolWithNodeSelector(memoryResolvedTool, context, it) }
+          if (postEnriched != null && postEnriched !== memoryResolvedTool) postEnriched
+          else enrichToolWithNodeSelector(memoryResolvedTool, context, null)
+        } else {
+          memoryResolvedTool
+        }
+      } else {
+        memoryResolvedTool
+      }
+      // When memory interpolation rewrote the tool, log the authored form alongside — and graft
+      // the enrichment's selector onto it, so a token-bearing recording still gains the rich
+      // selector the enrichment exists to capture (recordings emit the raw form when present).
+      val rawToolForLog = if (tool !== memoryResolvedTool) {
+        val enrichedSelector = enrichedTool.targetNodeSelector
+        if (enrichedSelector != null && tool.targetNodeSelector == null) {
+          tool.withNodeSelector(enrichedSelector)
         } else {
           tool
         }
       } else {
-        tool
+        null
       }
       // Playwright tools drive a browser owned by the host JVM — flag the dispatch as
       // host-side so session viewers can distinguish it from RPC-routed-to-device dispatches.
-      logToolExecution(enrichedTool, timeBeforeExecution, context, result, dispatchedHostSide = true)
+      logToolExecution(
+        enrichedTool, timeBeforeExecution, context, result, dispatchedHostSide = true,
+        rawTool = rawToolForLog,
+      )
 
-      if (tool is PlaywrightNativeRequestDetailsTool && result.isSuccess()) {
-        browserManager.requestDetails(tool.include.toSet())
+      if (memoryResolvedTool is PlaywrightNativeRequestDetailsTool && result.isSuccess()) {
+        browserManager.requestDetails(memoryResolvedTool.include.toSet())
       }
 
       result
@@ -289,10 +311,15 @@ class PlaywrightTrailblazeAgent(
     tool: ExecutableTrailblazeTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
+    // Same memory boundary as executePlaywrightToolBlocking, for generic host-JVM executables.
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
     val timeBeforeExecution = Clock.System.now()
-    val result = tool.execute(context)
+    val result = memoryResolvedTool.execute(context)
     // Same rationale as the executeWithPlaywright path — host JVM, in-process browser.
-    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
+    logToolExecution(
+      memoryResolvedTool, timeBeforeExecution, context, result, dispatchedHostSide = true,
+      rawTool = tool.takeIf { it !== memoryResolvedTool },
+    )
     result
   }
 

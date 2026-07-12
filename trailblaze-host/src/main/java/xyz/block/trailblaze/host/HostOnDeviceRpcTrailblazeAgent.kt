@@ -33,6 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
@@ -279,9 +280,12 @@ class HostOnDeviceRpcTrailblazeAgent(
     // (or grep) can tell them apart:
     //  - `repoResolvedTool` (this binding) = `OtherTrailblazeTool` → concrete tool, via the
     //    session's `trailblazeToolRepo.toolCallToTrailblazeTool(...)` (dynamic-tool dispatch).
-    //  - `memoryResolvedTool` (below, inside the `when` branch) = string-interpolated args via
-    //    `interpolateMemoryInTool(...)` (replaces `{{var}}`/`${var}` in scalar fields).
-    // The two operations are independent; both fire per dispatch on this path.
+    //  - `memoryResolvedTool` / `memoryResolvedExpanded` (below) = string-interpolated args via
+    //    `interpolateMemoryInTool(...)` — applied ONLY on the host-local branches. RPC-routed
+    //    tools are deliberately sent AS AUTHORED: the request carries a memory snapshot, the
+    //    device seeds its per-request AgentMemory from it, and the device's own dispatch loop
+    //    is the memory boundary there — so the device's tool log gets the raw + resolved pair
+    //    and recordings regenerated from it keep their `{{var}}` tokens.
     val repoResolvedTool: TrailblazeTool = if (tool is OtherTrailblazeTool) {
       val repo = trailblazeToolRepo
       if (repo == null) {
@@ -316,36 +320,40 @@ class HostOnDeviceRpcTrailblazeAgent(
     return when (repoResolvedTool) {
       is ExecutableTrailblazeTool -> {
         toolsExecuted.add(repoResolvedTool)
-        // Pre-resolve memory tokens once, before deciding host-only vs RPC, so both branches
-        // see the same resolved args — same pattern as HostAccessibilityRpcClient.execute.
-        // Cast is safe: interpolation only mutates string scalars, not the concrete tool type.
-        val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory) as ExecutableTrailblazeTool
-        if (memoryResolvedTool is HostLocalExecutableTrailblazeTool) {
-          executeHostLocalWithLogging(memoryResolvedTool, context)
-        } else if (memoryResolvedTool.requiresHostInstance()) {
-          // Host-only tools (cbot, dip-slot) run locally — they need ADB/USB on the Mac.
-          // Instance-level so YAML-defined tools can opt in via `requires_host: true`.
-          executeHostLocalWithLogging(memoryResolvedTool, context)
+        if (repoResolvedTool is HostLocalExecutableTrailblazeTool || repoResolvedTool.requiresHostInstance()) {
+          // Host-local tools (subprocess MCP, QuickJS scripted, cbot / dip-slot ADB tools,
+          // YAML-defined `requires_host: true`) run on the host JVM — so the host IS their
+          // memory boundary: resolve here, dispatch resolved, log raw + resolved.
+          val memoryResolvedTool = interpolateMemoryInTool(repoResolvedTool, memory)
+          executeHostLocalWithLogging(
+            memoryResolvedTool,
+            context,
+            rawTool = repoResolvedTool.takeIf { it !== memoryResolvedTool },
+          )
         } else {
-          executeToolViaRpc(memoryResolvedTool, context.traceId)
+          // RPC-routed: send AS AUTHORED — the device's dispatch loop resolves against the
+          // seeded memory snapshot (see the "two senses of resolved" note above).
+          executeToolViaRpc(repoResolvedTool, context.traceId)
         }
       }
       is DelegatingTrailblazeTool -> {
         executeDelegatingTool(repoResolvedTool, context, toolsExecuted) { expandedTool ->
-          // Same boundary contract for the DelegatingTrailblazeTool path — pre-resolve once
-          // before the host-local vs RPC fork, so subtools that don't self-interpolate (e.g.
-          // RunCommandTrailblazeTool) still see resolved args on the host-local branch.
-          // Expanded subtools inherit any `OtherTrailblazeTool` → repo resolution from the
-          // parent delegating tool — the base's `runTrailblazeTools` loop resolved the
-          // parent before dispatching here, so we don't re-run repo resolution on each
-          // expanded subtool. Only memory interpolation runs per-subtool.
-          val memoryResolvedExpanded = interpolateMemoryInTool(expandedTool, memory)
-          if (memoryResolvedExpanded is HostLocalExecutableTrailblazeTool) {
+          // Same host-local vs RPC fork per expanded subtool. Expanded subtools inherit any
+          // `OtherTrailblazeTool` → repo resolution from the parent delegating tool — the
+          // base's `runTrailblazeTools` loop resolved the parent before dispatching here, so
+          // we don't re-run repo resolution on each expanded subtool.
+          if (expandedTool is HostLocalExecutableTrailblazeTool || expandedTool.requiresHostInstance()) {
             // Host-local subtools must not be RPCed to the device — they read/write
             // host-side files and credentials that have no meaning on the device JVM.
-            executeHostLocalWithLogging(memoryResolvedExpanded, context)
+            // Memory boundary is here (host) for them.
+            val memoryResolvedExpanded = interpolateMemoryInTool(expandedTool, memory)
+            executeHostLocalWithLogging(
+              memoryResolvedExpanded,
+              context,
+              rawTool = expandedTool.takeIf { it !== memoryResolvedExpanded },
+            )
           } else {
-            executeToolViaRpc(memoryResolvedExpanded, context.traceId)
+            executeToolViaRpc(expandedTool, context.traceId)
           }
         }
       }
@@ -378,9 +386,10 @@ class HostOnDeviceRpcTrailblazeAgent(
     val maestroTool = MaestroTrailblazeTool(
       yaml = MaestroYamlSerializer.toYaml(commands, includeConfiguration = false),
     )
-    // Pre-resolve before RPC dispatch — `executeToolViaRpc` no longer does its own pass
-    // since `executeTool` is now the canonical resolution point for the dispatch entry.
-    return executeToolViaRpc(interpolateMemoryInTool(maestroTool, memory), traceId)
+    // Sent as-is: the commands were built by a tool that already passed a memory boundary, and
+    // any residual token resolves on the device (its dispatch loop interpolates the yaml string
+    // against the seeded memory snapshot).
+    return executeToolViaRpc(maestroTool, traceId)
   }
 
   override suspend fun executeNodeSelectorTap(
@@ -429,6 +438,8 @@ class HostOnDeviceRpcTrailblazeAgent(
   private fun executeHostLocalWithLogging(
     tool: ExecutableTrailblazeTool,
     context: TrailblazeToolExecutionContext,
+    /** The authored form when the host-side memory boundary rewrote [tool] — see [logToolExecution]. */
+    rawTool: TrailblazeTool? = null,
   ): TrailblazeToolResult {
     val timeBeforeExecution = Clock.System.now()
     // Same exception-bypass guard as the base agent's host-local branch (#2924 review):
@@ -452,6 +463,7 @@ class HostOnDeviceRpcTrailblazeAgent(
       // dispatch ran on the host JVM (subprocess MCP, `requires_host`, host-preferred
       // composition primitive) or got routed to the device over RPC.
       dispatchedHostSide = true,
+      rawTool = rawTool,
     )
     return result
   }
@@ -467,8 +479,9 @@ class HostOnDeviceRpcTrailblazeAgent(
     val onDeviceToolLogCount = AtomicInteger(0)
     val result: TrailblazeToolResult = runBlocking {
       try {
-        // Memory tokens are pre-resolved by callers (`executeTool`'s outer dispatch and
-        // `executeMaestroCommands`); no second pass needed here.
+        // The tool is encoded AS AUTHORED (memory tokens intact) — the device's dispatch loop
+        // resolves them against the memory snapshot below, so the device-side tool log carries
+        // the raw + resolved pair and recordings keep their tokens.
         val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(tool))))
         val yaml = trailblazeYaml.encodeToString(toolItems)
 
@@ -489,9 +502,12 @@ class HostOnDeviceRpcTrailblazeAgent(
             sendSessionStartLog = false,
             sendSessionEndLog = false,
           ),
-          // Snapshot host memory so on-device tools can read keys directly. Boundary
-          // pre-resolution above already handles {{var}}/${var} interpolation in tool args.
+          // Snapshot host memory so the device's dispatch boundary can resolve {{var}}/${var}
+          // tokens in the (raw) tool args, and on-device tools can read keys directly. The
+          // sensitive-key set rides along so the device's per-request AgentMemory keeps those
+          // values redacted in its own logs (they'd otherwise arrive unmarked and log cleartext).
           memorySnapshot = memory.variables.toMap(),
+          sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
         )
 
         val name = tool::class.simpleName ?: "unknown"
@@ -500,7 +516,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             // Apply the on-device agent's post-execution memory back into the host's shared
             // instance so writes from on-device tools (including TS handlers) are visible to
             // subsequent host-side or RPC dispatches.
-            applyMemorySnapshot(first.data.memorySnapshot, first.data.memoryDeletions)
+            applyMemorySnapshot(first.data.memorySnapshot, first.data.memoryDeletions, first.data.sensitiveMemoryKeys)
             onDeviceToolLogCount.set(first.data.onDeviceToolLogCount)
             toToolResult(name, first, timeBeforeExecution)
           }
@@ -529,7 +545,7 @@ class HostOnDeviceRpcTrailblazeAgent(
             }
             when (val retry: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
               is RpcResult.Success -> {
-                applyMemorySnapshot(retry.data.memorySnapshot, retry.data.memoryDeletions)
+                applyMemorySnapshot(retry.data.memorySnapshot, retry.data.memoryDeletions, retry.data.sensitiveMemoryKeys)
                 onDeviceToolLogCount.set(retry.data.onDeviceToolLogCount)
                 toToolResult(name, retry, timeBeforeExecution)
               }
@@ -677,7 +693,11 @@ class HostOnDeviceRpcTrailblazeAgent(
   }
 
   /** Merges the device's post-execution snapshot into this agent's [memory] then applies explicit deletes. */
-  private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>, deletions: List<String>) {
+  private fun applyMemorySnapshot(
+    deviceSnapshot: Map<String, String>,
+    deletions: List<String>,
+    sensitiveKeys: List<String>,
+  ) {
     // Merge (device wins on conflict) rather than replace. An on-device tool's per-request
     // AgentMemory is seeded from the host push at request start, so its returned snapshot SHOULD
     // carry back every host key — but some dispatch paths (e.g. a scripted tool whose request
@@ -686,6 +706,12 @@ class HostOnDeviceRpcTrailblazeAgent(
     // empty-input false green). Preserving host-only keys keeps cross-step remembers alive;
     // device-written keys still overwrite on conflict. [deletions] then removes keys an on-device
     // tool EXPLICITLY deleted — merge alone can't distinguish those from a merely-omitted key.
+    // [sensitiveKeys] re-marks device-side `rememberSensitive` keys so host-side logging keeps
+    // redacting them after the merge (the snapshot map itself carries no sensitivity marking).
+    // Mark BEFORE storing the values (mirroring `AgentMemory.storeSensitive`): a reader that
+    // snapshots `variables` and filters against `sensitiveKeys` must never observe a returned
+    // secret in the window before its marker lands.
+    sensitiveKeys.forEach { memory.markSensitive(it) }
     memory.variables.putAll(deviceSnapshot)
     deletions.forEach { memory.variables.remove(it) }
   }

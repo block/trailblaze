@@ -159,8 +159,15 @@ class ToolDiscoveryToolSet(
     val excludedToolNames = getExcludedToolNames(currentTarget, effectiveDriverType)
     val platformToolsets = buildPlatformToolsets(detail, excludedToolNames, effectiveDriverType)
     val targetToolsets = if (suppressTargetTools) null else buildTargetToolsets(currentTarget, effectiveDriverType, detail)
-    // Only show "other targets" hint when no device is connected (target tools not listed)
-    val otherTargets = if (targetToolsets == null) buildOtherTargets(currentTarget, allTargets) else null
+    // Other-targets hint: when the target listing is scoped to the current target
+    // (!includeAllTargetsInIndex), the rest of the catalogue IS this name list — always emit it.
+    // Detail mode lists every target's tools inline, so the hint is only needed when that
+    // listing came back empty (legacy behavior).
+    val otherTargets = if (targetToolsets == null || !includeAllTargetsInIndex(detail)) {
+      buildOtherTargets(currentTarget, allTargets)
+    } else {
+      null
+    }
 
     // Enrich the response with role-grouped slim views (trailheads / shortcuts). Trailheads come
     // from two sources — see computeRoleNames: YAML-side `*.trailhead.yaml` metadata, and scripted
@@ -359,7 +366,7 @@ class ToolDiscoveryToolSet(
           name = group.id,
           description = group.description,
           tools = if (detail) null else descriptors.map { it.name },
-          toolDetails = descriptors,
+          toolDetails = toolDetailsFor(detail, descriptors),
         )
       }
       val toolGroups = classGroups + buildInlineScriptToolsetsForDriver(targetApp, effectiveDriverType, detail)
@@ -398,7 +405,7 @@ class ToolDiscoveryToolSet(
       if (tools.isEmpty()) return@mapNotNull null
       ToolDiscoveryTargetPlatformTools(
         platform = platform.displayName,
-        tools = if (detail) tools else tools.map { it.copy(requiredParameters = emptyList(), optionalParameters = emptyList()) },
+        tools = toolDetailsFor(detail, tools),
       )
     }
 
@@ -522,6 +529,36 @@ class ToolDiscoveryToolSet(
   // ─────────────────────────────────────────────────────────────────────────────
 
   /**
+   * Descriptor list for a toolset's `toolDetails` field, sized to the requested mode.
+   *
+   * `detail=false` (the index / compact modes) keeps name + description — the CLI's compact
+   * listing and the role views render description peeks from `toolDetails` even without
+   * `--detail`, so it can't be nulled out — but strips the parameter descriptors (and, via
+   * `copy`, the body-property `inputSchema`). Without the strip, a no-args `toolbox()` call
+   * serialized the FULL parameter surface of every tool across every loaded target despite
+   * promising an index (measured at hundreds of thousands of characters on a heavily-loaded
+   * daemon), overwhelming MCP agents whose first discovery call it is. `detail=true` returns
+   * the descriptors untouched.
+   */
+  private fun toolDetailsFor(
+    detail: Boolean,
+    descriptors: List<TrailblazeToolDescriptor>,
+  ): List<TrailblazeToolDescriptor> = if (detail) {
+    descriptors
+  } else {
+    descriptors.map { it.copy(requiredParameters = emptyList(), optionalParameters = emptyList()) }
+  }
+
+  /**
+   * Single source of the compact-index scoping decision. The invariant it guards: whenever the
+   * target listing is scoped to the current target (this returns false), `handleIndexMode` must
+   * emit `otherTargets` so the rest of the catalogue stays discoverable. Both the
+   * [buildTargetToolsets] filter and the `otherTargets` derivation consult this predicate —
+   * change it here, never inline at one site.
+   */
+  private fun includeAllTargetsInIndex(detail: Boolean): Boolean = detail
+
+  /**
    * Resolves the system prompt content the daemon ships back for [target] in target-mode.
    *
    * Returns null for the `default` sentinel — that target models "platform tools only" and has
@@ -625,7 +662,7 @@ class ToolDiscoveryToolSet(
             name = group.id,
             description = group.description,
             tools = if (detail) null else descriptors.map { it.name },
-            toolDetails = descriptors,
+            toolDetails = toolDetailsFor(detail, descriptors),
           )
         }
       }
@@ -640,7 +677,7 @@ class ToolDiscoveryToolSet(
         name = category.name.lowercase(),
         description = category.description,
         tools = if (detail) null else descriptors.map { it.name },
-        toolDetails = descriptors,
+        toolDetails = toolDetailsFor(detail, descriptors),
       )
     }
   }
@@ -650,9 +687,19 @@ class ToolDiscoveryToolSet(
     currentDriverType: TrailblazeDriverType?,
     detail: Boolean,
   ): List<ToolDiscoveryToolsetInfo>? {
-    // Show tool groups from ALL targets so toolbox reflects every custom
-    // tool that is actually executable (the daemon loads all targets' tools).
-    val targets = allTargetAppsProvider().filter { it.id != DefaultTrailblazeHostAppTarget.id }.toList()
+    // detail=true lists tool groups from ALL targets — the explicit full-catalogue view for
+    // discovery. MCP registration is scoped to the current target, so this deliberately exceeds
+    // the callable surface; another target's tools become callable after switching to it.
+    //
+    // detail=false (the no-args index) mirrors the callable surface: the CURRENT target only. A
+    // daemon with many targets loaded serialized every tool's name and description across all of
+    // them into what the tool description promises is an "index" — useless as an MCP agent's
+    // first discovery call and unreadable in a terminal. The other targets still surface by name
+    // via `otherTargets` (see handleIndexMode); drill in with `toolbox(target=...)` / `--target`.
+    val targets = allTargetAppsProvider()
+      .filter { it.id != DefaultTrailblazeHostAppTarget.id }
+      .filter { includeAllTargetsInIndex(detail) || it.id == currentTarget?.id }
+      .toList()
     if (targets.isEmpty()) return null
 
     if (currentDriverType != null) {
@@ -670,7 +717,7 @@ class ToolDiscoveryToolSet(
             name = "${target.id}/${group.id}",
             description = group.description,
             tools = if (detail) null else descriptors.map { it.name },
-            toolDetails = descriptors,
+            toolDetails = toolDetailsFor(detail, descriptors),
           )
         }
         classGroups + buildInlineScriptToolsetsForDriver(target, currentDriverType, detail)
@@ -693,7 +740,7 @@ class ToolDiscoveryToolSet(
           name = "${target.id} (${platform.displayName})",
           description = "${target.displayName} tools for ${platform.displayName}",
           tools = if (detail) null else descriptors.map { it.name },
-          toolDetails = descriptors,
+          toolDetails = toolDetailsFor(detail, descriptors),
         )
       }
     }
@@ -870,7 +917,7 @@ class ToolDiscoveryToolSet(
         name = "${target.id}/$toolsetId",
         description = "${target.displayName} scripted tools",
         tools = if (detail) null else sorted.map { it.name },
-        toolDetails = sorted,
+        toolDetails = toolDetailsFor(detail, sorted),
       )
     }.sortedBy { it.name }
   }

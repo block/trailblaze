@@ -24,8 +24,9 @@ data class RememberTextTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
-    val interpolatedPrompt = memory.interpolateVariables(prompt)
-    val extractedValue = elementComparator.getElementValue(interpolatedPrompt)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so the prompt arrives resolved here.
+    val extractedValue = elementComparator.getElementValue(prompt)
       ?: throw TrailblazeToolExecutionException(
         message = "Failed to find element for prompt: $prompt",
         tool = this,

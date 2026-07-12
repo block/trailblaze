@@ -22,7 +22,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 
 /**
  * Headless generator for the interactive Trailblaze run report — the CLI/CI counterpart to the
@@ -115,8 +115,12 @@ class RunReportGenerator(
     val status = logs.getSessionStatus()
     val sessionDir = logsRepo.getSessionDir(sessionId)
 
+    // Render the recording in the unified `trail.yaml` shape (`config:`/`trailhead:`/`trail:` with
+    // per-classifier `recordings:`) — the format the save path writes to disk — so the report
+    // preview matches the saved artifact rather than the legacy v1 list. Falls back to v1 for a
+    // session with no resolvable device classifier.
     val recordingYaml = runCatching {
-      logs.generateRecordedYaml(createTrailblazeYaml())
+      logs.generateUnifiedRecordedYaml(createTrailblazeYaml())
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
     return buildJsonObject {

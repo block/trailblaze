@@ -3,7 +3,6 @@ package xyz.block.trailblaze.toolcalls.commands
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import kotlin.test.assertContains
@@ -25,7 +24,6 @@ import kotlin.test.assertNotNull
  */
 class SelectorToMaestroFallbackTest {
 
-  private val emptyMemory = AgentMemory()
 
   // --- TapOnByElementSelector ---------------------------------------------------------
 
@@ -39,7 +37,7 @@ class SelectorToMaestroFallbackTest {
         ),
       ),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals("Login", command.selector.textRegex)
     assertEquals("com.app:id/btn", command.selector.idRegex)
@@ -52,7 +50,7 @@ class SelectorToMaestroFallbackTest {
         iosMaestro = DriverNodeMatch.IosMaestro(textRegex = "Save"),
       ),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals("Save", command.selector.textRegex)
   }
@@ -66,7 +64,7 @@ class SelectorToMaestroFallbackTest {
         ),
       ),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     val inner = command.selector.containsChild
     assertNotNull(inner, "expected containsChild on the Maestro command")
@@ -76,7 +74,7 @@ class SelectorToMaestroFallbackTest {
   @Test
   fun `tap with no nodeSelector emits empty command list (caller's contract)`() {
     val tap = TapOnByElementSelector()
-    assertEquals(emptyList(), tap.toMaestroCommands(emptyMemory))
+    assertEquals(emptyList(), tap.toMaestroCommands())
   }
 
   // --- AssertVisibleBySelectorTrailblazeTool ------------------------------------------
@@ -88,7 +86,7 @@ class SelectorToMaestroFallbackTest {
         androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Home"),
       ),
     )
-    val command = assert.toMaestroCommands(emptyMemory).single()
+    val command = assert.toMaestroCommands().single()
     assertIs<AssertConditionCommand>(command)
     assertEquals("Home", command.condition.visible?.textRegex)
   }
@@ -97,7 +95,7 @@ class SelectorToMaestroFallbackTest {
   fun `assert with no nodeSelector throws (malformed recording)`() {
     val assert = AssertVisibleBySelectorTrailblazeTool()
     assertFailsWith<IllegalStateException> {
-      assert.toMaestroCommands(emptyMemory)
+      assert.toMaestroCommands()
     }
   }
 
@@ -114,7 +112,7 @@ class SelectorToMaestroFallbackTest {
       ),
     )
     val ex = assertFailsWith<IllegalStateException> {
-      tap.toMaestroCommands(emptyMemory)
+      tap.toMaestroCommands()
     }
     assertContains(ex.message ?: "", "no matchable predicates")
   }
@@ -127,7 +125,7 @@ class SelectorToMaestroFallbackTest {
       ),
     )
     val ex = assertFailsWith<IllegalStateException> {
-      assert.toMaestroCommands(emptyMemory)
+      assert.toMaestroCommands()
     }
     assertContains(ex.message ?: "", "no matchable predicates")
   }
@@ -146,7 +144,7 @@ class SelectorToMaestroFallbackTest {
         ),
       ),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single() as TapOnElementCommand
+    val command = tap.toMaestroCommands().single() as TapOnElementCommand
     val inner = command.selector.containsChild
     assertNotNull(inner)
     assertEquals("Submit", inner.textRegex)
@@ -167,7 +165,7 @@ class SelectorToMaestroFallbackTest {
       ),
     )
     val ex = assertFailsWith<IllegalStateException> {
-      tap.toMaestroCommands(emptyMemory)
+      tap.toMaestroCommands()
     }
     assertContains(ex.message ?: "", "no matchable predicates")
   }
@@ -178,7 +176,7 @@ class SelectorToMaestroFallbackTest {
     // TrailblazeElementSelector(). Guard must catch this.
     val tap = TapOnByElementSelector(nodeSelector = TrailblazeNodeSelector())
     val ex = assertFailsWith<IllegalStateException> {
-      tap.toMaestroCommands(emptyMemory)
+      tap.toMaestroCommands()
     }
     assertContains(ex.message ?: "", "no matchable predicates")
   }

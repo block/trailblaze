@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotEmpty
 import assertk.assertions.doesNotContain
 import assertk.assertions.startsWith
 import kotlinx.datetime.Clock
@@ -18,11 +19,18 @@ import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.toolcalls.toLogPayloads
@@ -66,6 +74,37 @@ class TrailblazeRecordingGeneratorTest {
     session = testSession,
     timestamp = now,
     durationMs = 50,
+  )
+
+  /**
+   * A session-started log carrying [rawYaml] — the full YAML the run was launched with — and the
+   * device [classifiers] the preview derives the recording slot from. The unified preview reads
+   * rawYaml to seed the merge so other platforms' recordings survive a single-device re-record.
+   */
+  private fun startedLog(
+    rawYaml: String? = null,
+    classifiers: List<String> = emptyList(),
+  ) = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+    sessionStatus = SessionStatus.Started(
+      trailConfig = null,
+      trailFilePath = null,
+      hasRecordedSteps = false,
+      testMethodName = "test",
+      testClassName = "Test",
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = "pixel-7",
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+        ),
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        widthPixels = 1080,
+        heightPixels = 1920,
+        classifiers = classifiers.map { xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(it) },
+      ),
+      rawYaml = rawYaml,
+    ),
+    session = testSession,
+    timestamp = now,
   )
 
   private fun objectiveStart(prompt: PromptStep) = TrailblazeLog.ObjectiveStartLog(
@@ -116,11 +155,15 @@ class TrailblazeRecordingGeneratorTest {
     timestamp: kotlinx.datetime.Instant = now,
     durationMs: Long = 100,
     successful: Boolean = true,
+    /** The authored token-bearing form, when the dispatch boundary rewrote [tool] before execution. */
+    rawTool: xyz.block.trailblaze.toolcalls.TrailblazeTool? = null,
+    traceId: xyz.block.trailblaze.logs.model.TraceId? = null,
   ) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = tool.toLogPayload(),
+    rawTrailblazeTool = rawTool?.toLogPayload(),
     toolName = toolName,
     successful = successful,
-    traceId = null,
+    traceId = traceId,
     durationMs = durationMs,
     session = testSession,
     timestamp = timestamp,
@@ -1646,5 +1689,308 @@ class TrailblazeRecordingGeneratorTest {
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     assertThat(recorded).isEqualTo(listOf("myapp_launchAppSignedIn"))
+  }
+
+  @Test
+  fun recordingEmitsTheAuthoredTokenBearingFormFromTheRawPayload() {
+    // The dispatch boundary resolved `{{account_email}}` before execution, so the log's
+    // `trailblazeTool` is the resolved form and `rawTrailblazeTool` the authored form. The
+    // recording must serialize the AUTHORED form — emitting the resolved value would bake one
+    // run's memory into the saved trail (the recording-fidelity defect the split exists to fix).
+    val step = DirectionStep(step = "Enter the merchant email")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(
+        InputTextTrailblazeTool(text = "owner@example.com"),
+        "inputText",
+        rawTool = InputTextTrailblazeTool(text = "{{account_email}}"),
+      ),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    assertThat(yaml).contains("{{account_email}}")
+    assertThat(yaml).doesNotContain("owner@example.com")
+    // And the emitted YAML round-trips as a valid trail.
+    val recorded = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.single()
+    assertThat((recorded.trailblazeTool as InputTextTrailblazeTool).text)
+      .isEqualTo("{{account_email}}")
+  }
+
+  @Test
+  fun layerDuplicateDedupGroupsOnTheAuthoredForm() {
+    // One physical execution, logged by two pipeline layers: the LLM-dispatch layer logs the
+    // token-bearing form (no raw split — it never interpolated), the executor layer logs
+    // resolved + raw. Their args fingerprints differ on the DISPATCHED payload but match on the
+    // AUTHORED payload — dedup must group on the latter, drop the `llm-…` entry, and emit the
+    // executor entry's authored (token-bearing) form exactly once.
+    val step = DirectionStep(step = "Enter the merchant email")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(
+        InputTextTrailblazeTool(text = "{{account_email}}"),
+        "inputText",
+        isTopLevelToolCall = true,
+        traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
+      ),
+      toolLog(
+        InputTextTrailblazeTool(text = "owner@example.com"),
+        "inputText",
+        isTopLevelToolCall = true,
+        traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+        rawTool = InputTextTrailblazeTool(text = "{{account_email}}"),
+      ),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val recordedTools = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools
+    assertThat(recordedTools.map { it.name }).isEqualTo(listOf("inputText"))
+    assertThat((recordedTools.single().trailblazeTool as InputTextTrailblazeTool).text)
+      .isEqualTo("{{account_email}}")
+  }
+
+  // -- Unified-format preview (generateUnifiedRecordedYaml) --
+
+  @Test
+  fun unifiedPreviewRendersMapShapeWithClassifierKeyedRecording() {
+    // The preview shown in reports / the desktop Recording tab must match the unified document the
+    // save path writes to disk: top-level `trail:` (a map key), each step's tools under
+    // `recordings.<classifier>` — NOT the legacy v1 `- prompts:` list. Asserting it decodes as a
+    // unified document with the tool in this device's slot is the real contract.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone")
+
+    // Structural: map-shaped top level (`trail:`) with a classifier-keyed slot, not a v1
+    // `- prompts:` list. (`trailhead:` never contains the substring `trail:`.)
+    assertThat(yaml).contains("trail:")
+    assertThat(yaml).contains("android-phone:")
+    assertThat(yaml).doesNotContain("- prompts:")
+    // Behavioral: it's a valid unified doc, and this device's slot carries the recorded tool.
+    val unified = trailblazeYaml.decodeUnifiedTrail(yaml)
+    val recorded = unified.trail.single().recordings.getValue("android-phone").map { it.name }
+    assertThat(recorded).isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun unifiedPreviewWithBlankClassifierFallsBackToV1() {
+    // No classifier means no slot to key a `recordings:` map on — a classifier-less session still
+    // renders something rather than an empty/invalid unified doc. Falls back to the v1 list shape.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "")
+
+    assertThat(yaml).startsWith("- prompts:")
+  }
+
+  @Test
+  fun unifiedPreviewContentMatchesV1Recording() {
+    // Both renderers derive from the same built items, so the unified preview must carry exactly the
+    // tools the v1 recording does for this device — the preview can never drift from what's saved.
+    val step = DirectionStep(step = "Tap the button")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val v1Tools = trailblazeYaml.decodeTrail(logs.generateRecordedYaml(trailblazeYaml))
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.map { it.name }
+    val unifiedTools = trailblazeYaml
+      .decodeUnifiedTrail(logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"))
+      .trail.single().recordings.getValue("android-phone").map { it.name }
+
+    assertThat(unifiedTools).isEqualTo(v1Tools)
+  }
+
+  @Test
+  fun unifiedPreviewPreservesOtherPlatformsFromTheOriginalRunYaml() {
+    // A run only re-records the device it ran on, but the unified trail it ran against can already
+    // hold other platforms' recordings. The preview must keep them — seeded from the original run's
+    // rawYaml — not collapse to just the classifier that ran.
+    val step = DirectionStep(step = "Enter search text")
+
+    // An existing unified trail with only the iOS slot recorded (stands in for the on-disk file the
+    // run was launched against). Built through the same renderer so the fixture stays self-consistent.
+    val iosUnifiedYaml = listOf(
+      objectiveStart(step),
+      toolLog(WaitForIdleSyncTrailblazeTool(), "waitForIdleSync"),
+      objectiveComplete(step),
+    ).generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "ios-iphone-sim")
+
+    // Now record the SAME step on Android, launched against that iOS trail (rawYaml).
+    val androidLogs = listOf(
+      startedLog(rawYaml = iosUnifiedYaml),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val merged = trailblazeYaml.decodeUnifiedTrail(
+      androidLogs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"),
+    )
+
+    // Both slots survive on the single shared step: iOS preserved, Android freshly recorded.
+    val recordings = merged.trail.single().recordings
+    assertThat(recordings.getValue("ios-iphone-sim").map { it.name }).isEqualTo(listOf("waitForIdleSync"))
+    assertThat(recordings.getValue("android-phone").map { it.name }).isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun rerecordingOnePlatformOfAMultiPlatformTrailUpdatesOnlyThatSlot() {
+    // The self-heal / re-record case: the trail ALREADY covers multiple platforms, and a run
+    // re-records exactly one of them. The other platforms must survive unchanged, and the
+    // re-recorded platform must be REPLACED (not duplicated/appended) in place. The multi-platform
+    // starting trail is assembled purely through the function under test — each stage merges its
+    // slot in by seeding from the prior stage's rawYaml.
+    val step = DirectionStep(step = "Enter search text")
+    fun slot(classifier: String, priorRawYaml: String?, tool: TrailblazeTool, name: String): String =
+      buildList {
+        priorRawYaml?.let { add(startedLog(rawYaml = it)) }
+        add(objectiveStart(step))
+        add(toolLog(tool, name))
+        add(objectiveComplete(step))
+      }.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = classifier)
+
+    val ios = slot("ios-iphone-sim", null, WaitForIdleSyncTrailblazeTool(), "waitForIdleSync")
+    val iosPlusWeb = slot("web", ios, SwipeTrailblazeTool(), "swipe")
+    // A STALE android recording that the re-run will refresh.
+    val startingTrail = slot("android-phone", iosPlusWeb, WaitForIdleSyncTrailblazeTool(), "waitForIdleSync")
+
+    // Re-record ONLY Android with a different tool, launched against that three-platform trail.
+    val androidRerun = listOf(
+      startedLog(rawYaml = startingTrail),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+    val merged = trailblazeYaml.decodeUnifiedTrail(
+      androidRerun.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"),
+    )
+
+    val recordings = merged.trail.single().recordings
+    // Untouched platforms survive unchanged.
+    assertThat(recordings.getValue("ios-iphone-sim").map { it.name }).isEqualTo(listOf("waitForIdleSync"))
+    assertThat(recordings.getValue("web").map { it.name }).isEqualTo(listOf("swipe"))
+    // The re-recorded platform is REPLACED in place — the stale recording is gone, not appended to.
+    assertThat(recordings.getValue("android-phone").map { it.name }).isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun unifiedPreviewDerivesClassifierFromTheStartedLogWhenNoOverride() {
+    // Production callers pass no override — the slot key comes from the session's device
+    // classifiers. Prove that derivation path renders the tools under the joined-classifier slot.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(classifiers = listOf("android", "phone")),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(logs.generateUnifiedRecordedYaml(trailblazeYaml))
+
+    assertThat(unified.trail.single().recordings.getValue("android-phone").map { it.name })
+      .isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun unifiedPreviewWithLegacyV1RawYamlRendersThisClassifierAlone() {
+    // A run launched from a legacy v1 trail has nothing unified to preserve — the preview shows just
+    // this device's slot (same as a first unified write), not an error.
+    val step = DirectionStep(step = "Enter search text")
+    val v1RawYaml = listOf(
+      objectiveStart(step),
+      toolLog(WaitForIdleSyncTrailblazeTool(), "waitForIdleSync"),
+      objectiveComplete(step),
+    ).generateRecordedYaml(trailblazeYaml) // v1 list shape
+    val logs = listOf(
+      startedLog(rawYaml = v1RawYaml),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(
+      logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"),
+    )
+
+    val recordings = unified.trail.single().recordings
+    assertThat(recordings.keys).isEqualTo(setOf("android-phone"))
+    assertThat(recordings.getValue("android-phone").map { it.name }).isEqualTo(listOf("inputText"))
+  }
+
+  @Test
+  fun unifiedPreviewWithUndecodableRawYamlDegradesToThisClassifierWithoutThrowing() {
+    // A garbage rawYaml must not crash the preview — it degrades to this classifier's slot alone.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(rawYaml = "this: is: not: valid: trail: yaml: [[["),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone")
+
+    // Non-empty and decodes to just this classifier (the catch degraded the seed to empty).
+    val unified = trailblazeYaml.decodeUnifiedTrail(yaml)
+    assertThat(unified.trail.single().recordings.keys).isEqualTo(setOf("android-phone"))
+  }
+
+  @Test
+  fun unifiedPreviewWithNonBlankClassifierButNoRecordableStepsFallsBackToV1() {
+    // A non-blank classifier whose recording lowers to zero steps can't produce a parseable unified
+    // `trail:` — it falls back to the v1 encoding rather than emitting an empty unified doc.
+    val logs = listOf(
+      toolLog(WaitForIdleSyncTrailblazeTool(), "waitForIdleSync", isRecordable = false),
+    )
+
+    val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone")
+
+    // No steps → not the unified map shape. (A bare non-recordable tool yields no prompts/tools.)
+    assertThat(yaml).doesNotContain("android-phone:")
+  }
+
+  @Test
+  fun unifiedPreviewWithMultiToolTrailheadFallsBackToV1WithoutReturningBlank() {
+    // A self-healed/retried trailhead can record more than one tool for a platform. The unified
+    // emitter rejects that (a trailhead is at most one tool per classifier), so the preview must
+    // degrade to the v1 recording rather than returning "" (empty Recording tab, empty Copy).
+    val trailhead = DirectionStep(step = "Sign in", isTrailhead = true)
+    val logs = listOf(
+      objectiveStart(trailhead),
+      toolLog(InputTextTrailblazeTool(text = "user"), "inputText"),
+      toolLog(WaitForIdleSyncTrailblazeTool(), "waitForIdleSync"),
+      objectiveComplete(trailhead),
+    )
+
+    val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone")
+
+    // Non-blank v1 fallback — the two trailhead tools survive in the legacy list shape.
+    assertThat(yaml).isNotEmpty()
+    assertThat(yaml).contains("- trailhead:")
+    assertThat(yaml).contains("inputText")
+    assertThat(yaml).contains("waitForIdleSync")
+    // Not the unified map shape (no per-classifier slot key).
+    assertThat(yaml).doesNotContain("android-phone:")
   }
 }

@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
@@ -51,7 +50,7 @@ data class AssertNotVisibleBySelectorTrailblazeTool(
    */
   val timeoutMs: Long? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector)
       ?: error(
         "AssertNotVisibleBySelectorTrailblazeTool.toMaestroCommands called with `nodeSelector` " +

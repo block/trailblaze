@@ -6,7 +6,6 @@ import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.ElementSelector
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -72,11 +71,13 @@ data class AssertNotVisibleWithTextTrailblazeTool(
     }
   }
 
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
+  override fun toMaestroCommands(): List<Command> = listOf(
     AssertConditionCommand(
       condition = Condition(
         notVisible = ElementSelector(
-          textRegex = toLenientPattern(memory.interpolateVariables(text)),
+          // {{var}}/${var} tokens are resolved by the dispatch boundary
+          // (interpolateMemoryInTool) before execution, so `text` arrives resolved here.
+          textRegex = toLenientPattern(text),
           idRegex = id,
           index = if (index == 0) null else index.toString(),
           enabled = enabled,
@@ -96,7 +97,7 @@ data class AssertNotVisibleWithTextTrailblazeTool(
 
     val agent = toolExecutionContext.maestroTrailblazeAgent
     if (agent != null) {
-      val interpolatedText = toLenientPattern(toolExecutionContext.memory.interpolateVariables(text))
+      val interpolatedText = toLenientPattern(text)
       val convertedIndex = if (index == 0) null else index
       val platform = toolExecutionContext.trailblazeDeviceInfo.platform
       val driverMatch: DriverNodeMatch = when (platform) {

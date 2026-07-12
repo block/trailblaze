@@ -87,6 +87,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `app` | Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service) |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
+| `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
 
 ---
 
@@ -310,7 +311,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 50 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. See --unified-recordings for the on-disk format. | - |
-| `--unified-recordings` | Save new recordings in the unified format: the device's slot is merged into the unified trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using them). Default: off while unified support rolls out — recordings save as legacy <classifier>.trail.yaml siblings, and nothing is written next to an existing unified trail.yaml. Also enabled via TRAILBLAZE_UNIFIED_RECORDINGS=1 or 'trailblaze config unified-recordings true'. | - |
+| `--unified-recordings` | Save new recordings in the unified format: the device's slot is merged into the unified trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using them). Default: on. Opt out with --no-unified-recordings, TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze config unified-recordings false' to save legacy <classifier>.trail.yaml siblings instead — nothing is ever written next to an existing unified trail.yaml. | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
@@ -1101,7 +1102,7 @@ trailblaze config reset
 | `android-driver` | Android driver type | accessibility, instrumentation |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
-| `unified-recordings` | Save new recordings in the unified trail.yaml format instead of legacy <classifier>.trail.yaml siblings | true, false |
+| `unified-recordings` | Save new recordings in the unified trail.yaml format (default: on); set false to save legacy <classifier>.trail.yaml siblings | true, false, or 'unset' to inherit the default |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
 | `max-llm-calls` | Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent | positive integer, or 'unset' to clear |
 | `annotated-screenshots` | Save set-of-mark annotated screenshots to logs (LLM always receives annotated) | true, false |
@@ -1455,6 +1456,95 @@ trailblaze check [OPTIONS] [<<trailmap-id>>]
 | `--workspace` | Pin the workspace root explicitly (the directory containing `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
 | `--no-typecheck` | Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
 | `--show-typed-tools` | Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by default because the per-trailmap subprocess spawn it requires adds noticeable latency to `check`. Has no effect when node, the SDK shim, or the SDK's `ts-json-schema-generator` install are missing — the analyzer skips cleanly with an explanatory log line. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze skill`
+
+Print or install the bundled agent skill that teaches a coding agent this CLI
+
+**Synopsis:**
+
+```
+trailblaze skill [OPTIONS]
+trailblaze skill show
+trailblaze skill install
+trailblaze skill status
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze skill show`
+
+Print a bundled skill file to stdout (defaults to SKILL.md)
+
+**Synopsis:**
+
+```
+trailblaze skill show [OPTIONS] [<<file>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<file>>` | Bundled file to print, e.g. references/drive-device.md. Run `trailblaze skill` for the list. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze skill install`
+
+Write the bundled skill into an agent's skill directory (defaults to Claude Code's)
+
+**Synopsis:**
+
+```
+trailblaze skill install [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--agent` | Target agent: claude (.claude/skills) or agents (.agents/skills, shared by Codex, Cursor, Gemini CLI, Goose, ...). codex/cursor/gemini/goose are aliases for agents. Defaults to claude. | - |
+| `--all` | Install into both locations (.claude/skills and .agents/skills) in one go. | - |
+| `--global` | Install under your home directory instead of the current project. | - |
+| `--dir` | Explicit destination directory. Mutually exclusive with --agent/--all/--global. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze skill status`
+
+Report installed skill copies and whether they match this CLI
+
+**Synopsis:**
+
+```
+trailblaze skill status [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

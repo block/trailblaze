@@ -96,6 +96,17 @@ class AgentMemory {
   }
 
   /**
+   * Marks [key] sensitive without touching its value (which may already be in [variables], or
+   * arrive later). Used when sensitivity marking crosses a process boundary separately from the
+   * value itself — the RPC memory snapshot is a plain string map, so the host/device re-marks
+   * keys from the sibling `sensitiveMemoryKeys` list after merging the snapshot. Quiet on
+   * purpose: this runs per RPC round-trip, where [rememberSensitive]'s console line would spam.
+   */
+  fun markSensitive(key: String) {
+    _sensitiveKeys.add(key)
+  }
+
+  /**
    * Seed this memory from the (YAML defaults → CLI seeds → CLI sensitive seeds) composition
    * used at trail start.
    *
@@ -156,8 +167,16 @@ class AgentMemory {
   /**
    * [interpolateVariables] with the unknown-token behavior injected — the env read stays out
    * of this core so tests can pin both modes without process-global env manipulation.
+   *
+   * [warnUnknownTokens] gates the once-per-token diagnostic. Callers that re-interpolate an
+   * already-processed payload purely to remap values (e.g. the log-safe scrub) pass `false` so
+   * the diagnostic fires exactly once — from the real dispatch pass — instead of once per re-scrub.
    */
-  internal fun interpolateVariables(input: String, blankUnknownTokens: Boolean): String {
+  internal fun interpolateVariables(
+    input: String,
+    blankUnknownTokens: Boolean,
+    warnUnknownTokens: Boolean = true,
+  ): String {
     var result = input
     // Support both ${varName} and {{varName}}
     val patterns = listOf(
@@ -171,7 +190,9 @@ class AgentMemory {
         if (variableValue != null) {
           result = result.replace(matchResult.value, variableValue)
         } else {
-          warnUnknownTokenOnce(matchResult.value, variableName, blankUnknownTokens)
+          if (warnUnknownTokens) {
+            warnUnknownTokenOnce(matchResult.value, variableName, blankUnknownTokens)
+          }
           if (blankUnknownTokens) {
             result = result.replace(matchResult.value, "")
           }
@@ -223,13 +244,16 @@ class AgentMemory {
    * leave-literal behavior (every token would be unknown and survive unchanged; only the
    * per-token diagnostic is skipped). Idempotent on a tree with no remaining tokens, so it is
    * safe to call on args already resolved upstream (the AI path interpolates before the tool
-   * is built). Non-string scalars pass through unchanged.
+   * is built). Non-string scalars pass through unchanged. Pass [warnUnknownTokens] = false to
+   * suppress the once-per-token diagnostic when re-interpolating an already-processed payload
+   * (the log-safe scrub does this so the diagnostic isn't re-emitted per dispatch).
    */
-  fun interpolateVariablesInJson(element: JsonElement): JsonElement = when {
+  fun interpolateVariablesInJson(element: JsonElement, warnUnknownTokens: Boolean = true): JsonElement = when {
     variables.isEmpty() -> element
-    element is JsonPrimitive && element.isString -> JsonPrimitive(interpolateVariables(element.content))
-    element is JsonObject -> JsonObject(element.mapValues { interpolateVariablesInJson(it.value) })
-    element is JsonArray -> JsonArray(element.map { interpolateVariablesInJson(it) })
+    element is JsonPrimitive && element.isString ->
+      JsonPrimitive(interpolateVariables(element.content, blankUnknownTokensRequestedViaEnv(), warnUnknownTokens))
+    element is JsonObject -> JsonObject(element.mapValues { interpolateVariablesInJson(it.value, warnUnknownTokens) })
+    element is JsonArray -> JsonArray(element.map { interpolateVariablesInJson(it, warnUnknownTokens) })
     else -> element
   }
 }

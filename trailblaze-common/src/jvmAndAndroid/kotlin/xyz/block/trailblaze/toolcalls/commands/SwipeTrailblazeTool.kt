@@ -6,7 +6,6 @@ import maestro.SwipeDirection
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.SwipeCommand
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
@@ -95,7 +94,7 @@ data class SwipeWithRelativeCoordinatesTool(
    */
   val durationMs: Long? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     val command = if (durationMs != null) {
       SwipeCommand(
         startRelative = startRelative,

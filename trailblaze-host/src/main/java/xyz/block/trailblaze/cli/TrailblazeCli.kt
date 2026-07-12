@@ -421,6 +421,10 @@ class TrailblazeVersionProvider : IVersionProvider {
   mixinStandardHelpOptions = true,
   versionProvider = TrailblazeVersionProvider::class,
   description = ["Trailblaze - AI-powered device automation"],
+  footer = [
+    "Docs: https://block.github.io/trailblaze",
+    "Driving Trailblaze from a coding agent? `trailblaze skill` prints or installs the bundled agent skill.",
+  ],
   commandListHeading = "%n", // Suppress default "Commands:" — GroupedCommandListRenderer handles it
   subcommands = [
     StepCommand::class,
@@ -440,6 +444,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     AppCommand::class,
     McpCommand::class,
     CheckCommand::class,
+    SkillCommand::class,
     MigrateTrailsCommand::class,
     // (No standalone `test` subcommand — bun unit tests run as part of `trailblaze
     // check`'s third phase. `trailblaze test` collided with "Trailblaze runs trails"
@@ -603,7 +608,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "show", "app", "mcp", "check", "test"),
+      listOf("config", "device", "show", "app", "mcp", "check", "test", "skill"),
     ),
     Group(
       BUILT_IN_AGENT_GROUP_NAME,

@@ -224,6 +224,18 @@ is_daemon_running() {
     curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
 }
 
+# Daemon auto-start kill-switch. Accepted values mirror the Kotlin side
+# (isDaemonAutoStartDisabled in McpProxy.kt): "1" or "true", case-insensitive.
+# Both spawn sites in this script honor it, so setting the variable guarantees
+# no daemon JVM is launched from any layer.
+daemon_autostart_disabled() {
+    # tr instead of ${var,,}: macOS ships bash 3.2, which lacks case conversion.
+    case "$(printf '%s' "${TRAILBLAZE_DISABLE_DAEMON_AUTOSTART:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Path to a per-port pidfile recording the JVM PID we spawn for this script.
 # Used to detect "JVM is alive but the port is unbound" — i.e. a previous
 # auto-start that hung in init before binding HTTP. is_daemon_running() only
@@ -531,30 +543,36 @@ elif [ "$STDIO_MODE" = true ]; then
 
     # Auto-start daemon if not running (proxy needs it)
     if ! is_daemon_running; then
-        abort_if_stuck_daemon
-        echo "[mcp] Starting Trailblaze daemon..." >&2
-        # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
-        tb_run_background_quiet app --foreground --headless
-        record_daemon_pid "$!"
-        echo "[mcp] Daemon starting (PID $!)..." >&2
+        if daemon_autostart_disabled; then
+            # The proxy itself honors the same kill-switch (McpProxy.kt), so
+            # requests will fail fast with a clear envelope instead of hanging.
+            echo "[mcp] Daemon not running and TRAILBLAZE_DISABLE_DAEMON_AUTOSTART is set — not starting one." >&2
+        else
+            abort_if_stuck_daemon
+            echo "[mcp] Starting Trailblaze daemon..." >&2
+            # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+            tb_run_background_quiet app --foreground --headless
+            record_daemon_pid "$!"
+            echo "[mcp] Daemon starting (PID $!)..." >&2
 
-        attempts=0
-        while [ $attempts -lt 60 ]; do
-            if is_daemon_running; then
-                echo "[mcp] Daemon ready." >&2
-                break
+            attempts=0
+            while [ $attempts -lt 60 ]; do
+                if is_daemon_running; then
+                    echo "[mcp] Daemon ready." >&2
+                    break
+                fi
+                sleep 1
+                attempts=$((attempts + 1))
+            done
+
+            if ! is_daemon_running; then
+                echo "[mcp] Warning: daemon did not start in time." >&2
             fi
-            sleep 1
-            attempts=$((attempts + 1))
-        done
-
-        if ! is_daemon_running; then
-            echo "[mcp] Warning: daemon did not start in time." >&2
         fi
     fi
 
     tb_run_exec_quiet "${ARGS_ARRAY[@]}"
-elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running; then
+elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running && ! daemon_autostart_disabled; then
     abort_if_stuck_daemon
     # Auto-start daemon for commands that need it so subsequent calls reuse it.
     # Use stderr so --json output on stdout stays clean.

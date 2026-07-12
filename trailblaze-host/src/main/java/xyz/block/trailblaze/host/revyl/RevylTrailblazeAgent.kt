@@ -18,6 +18,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -77,19 +78,22 @@ class RevylTrailblazeAgent(
     Console.log("RevylAgent: executing tool '$toolName'")
     toolsExecuted.add(tool)
 
+    // Memory-interpolation boundary for the Revyl cloud driver, applied host-side: the Revyl
+    // CLI receives fully-resolved args (memory never crosses to the cloud device).
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
     val timeBeforeExecution = Clock.System.now()
     val result = try {
-      when (tool) {
+      when (memoryResolvedTool) {
         is RevylExecutableTool -> {
-          runBlocking { tool.executeWithRevyl(cliClient, context) }
+          runBlocking { memoryResolvedTool.executeWithRevyl(cliClient, context) }
         }
         is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
         else -> {
-          val unsupportedToolName = tool::class.simpleName ?: toolName
+          val unsupportedToolName = memoryResolvedTool::class.simpleName ?: toolName
           Console.log("RevylAgent: unsupported tool $unsupportedToolName")
           TrailblazeToolResult.Error.ExceptionThrown(
             errorMessage = "Unsupported tool '$unsupportedToolName' for RevylTrailblazeAgent",
-            command = tool,
+            command = memoryResolvedTool,
             stackTrace = "",
           )
         }
@@ -98,12 +102,15 @@ class RevylTrailblazeAgent(
       Console.error("RevylAgent: tool '$toolName' failed: ${e.message}")
       TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = "CLI execution failed for '$toolName': ${e.message}",
-        command = tool,
+        command = memoryResolvedTool,
         stackTrace = e.stackTraceToString(),
       )
     }
-    if (tool is RevylExecutableTool) {
-      logToolExecution(tool, timeBeforeExecution, context, result)
+    if (memoryResolvedTool is RevylExecutableTool) {
+      logToolExecution(
+        memoryResolvedTool, timeBeforeExecution, context, result,
+        rawTool = tool.takeIf { it !== memoryResolvedTool },
+      )
     }
     return result
   }

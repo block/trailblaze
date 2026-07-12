@@ -7,6 +7,7 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
@@ -184,26 +185,153 @@ class YamlDefinedTrailblazeToolTest {
     assertThat(defaultValue.content).isEqualTo("00123")
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Interpolation-token PREFIX CONTRACT for `.tool.yaml` bodies.
+  //
+  // A tool body's `{{...}}` token MUST carry a dotted scope prefix, and today only `params.` is
+  // wired up. Each rejection below asserts (a) that expansion FAILS and (b) that the message names
+  // enough to be actionable (the offending token/prefix and how to fix it) — never the full exact
+  // wording. `params.` is the only accepted prefix; `memory.`/`device.` are recognized-but-future;
+  // anything else is an unknown prefix; a bare token with no dot is malformed. Both the
+  // whole-value token path (`WHOLE_TOKEN_REGEX`) and the embedded path (`EMBEDDED_TOKEN_REGEX`) in
+  // `substitutePrimitive` route through `parseToken`, so the prefix rules hold in both positions.
+  // The gap this closes: bare / unknown-prefix / undeclared-name / device had no coverage, and the
+  // one prior test claimed "memory and device" but only exercised `memory`.
+  // ---------------------------------------------------------------------------------------------
+
   @Test
-  fun `memory and device prefixes are rejected in this build`() {
-    val config = parse(
-      """
-      id: usesMemory
-      description: References memory — not yet supported.
-      parameters: []
-      tools:
-        - mobile_maestro:
-            commands:
-              - inputText:
-                  text: "{{memory.foo}}"
-      """.trimIndent(),
-    )
+  fun `ACCEPTED - params prefix resolves, whole-value and embedded`() {
+    // Whole-value token → native-typed substitution; embedded token → inline string rendering.
+    val whole = tokenTool(""""{{params.who}}"""", declaresRequired = "who")
+    val wholeYaml = (YamlDefinedTrailblazeTool(whole, mapOf("who" to JsonPrimitive("world")))
+      .toExecutableTrailblazeTools(createContext()).single() as MaestroTrailblazeTool).yaml
+    assertThat(wholeYaml).contains("world")
 
-    val tool = YamlDefinedTrailblazeTool(config = config, params = emptyMap())
-
-    assertFailure { tool.toExecutableTrailblazeTools(createContext()) }
-      .transform { it.message ?: "" }.contains("memory/device interpolation is not yet")
+    val embedded = tokenTool(""""Hi {{params.who}}"""", declaresRequired = "who")
+    val embeddedYaml = (YamlDefinedTrailblazeTool(embedded, mapOf("who" to JsonPrimitive("world")))
+      .toExecutableTrailblazeTools(createContext()).single() as MaestroTrailblazeTool).yaml
+    assertThat(embeddedYaml).contains("Hi world")
   }
+
+  @Test
+  fun `REJECTED - bare token with no namespace prefix (embedded position)`() {
+    val msg = expandFailureMessage(tokenTool(""""Hi {{who}}""""))
+    msg.contains("malformed interpolation token")
+    // Names the valid shapes so the author knows the fix is a scope prefix.
+    msg.contains("{{params.name}}")
+  }
+
+  @Test
+  fun `REJECTED - bare token with no namespace prefix (whole-value position)`() {
+    val msg = expandFailureMessage(tokenTool(""""{{who}}""""))
+    msg.contains("malformed interpolation token")
+    msg.contains("{{params.name}}")
+  }
+
+  @Test
+  fun `REJECTED - memory prefix is recognized but not yet wired up`() {
+    expandFailureMessage(tokenTool(""""{{memory.foo}}""""))
+      .contains("memory/device interpolation is not yet")
+  }
+
+  @Test
+  fun `REJECTED - device prefix is recognized but not yet wired up`() {
+    expandFailureMessage(tokenTool(""""{{device.foo}}""""))
+      .contains("memory/device interpolation is not yet")
+  }
+
+  @Test
+  fun `REJECTED - an unknown prefix is called out with the supported set`() {
+    // `args.` is a planned-but-unshipped scope — today it's just an unknown prefix.
+    val msg = expandFailureMessage(tokenTool(""""{{args.foo}}""""))
+    msg.contains("unknown interpolation prefix")
+    msg.contains("params")
+  }
+
+  @Test
+  fun `REJECTED - a params prefix naming an undeclared parameter`() {
+    // Correct prefix, wrong name: declares `who`, references `{{params.typo}}`.
+    val msg = expandFailureMessage(
+      tokenTool(""""{{params.typo}}"""", declaresRequired = "who"),
+      params = mapOf("who" to JsonPrimitive("world")),
+    )
+    msg.contains("unknown parameter")
+    msg.contains("typo")
+  }
+
+  // The name-shape guard (`parseToken`'s second `require`, name matches
+  // `[a-zA-Z_][a-zA-Z0-9_]*`) and the two edge positions of a dot (leading / trailing) are
+  // distinct branches from the prefix guards above — a correctly-scoped token can still be
+  // malformed. These lock those branches so a name-validation regression is caught too.
+
+  @Test
+  fun `REJECTED - a params prefix with a hyphenated (invalid) parameter name`() {
+    val msg = expandFailureMessage(tokenTool(""""{{params.bad-name}}""""))
+    msg.contains("invalid name")
+    msg.contains("bad-name")
+  }
+
+  @Test
+  fun `REJECTED - a params prefix with a digit-leading (invalid) parameter name`() {
+    val msg = expandFailureMessage(tokenTool(""""{{params.9abc}}""""))
+    msg.contains("invalid name")
+    msg.contains("9abc")
+  }
+
+  @Test
+  fun `REJECTED - a nested dotted name is invalid (no dot-path access today)`() {
+    // First `.` splits scope from name, so `{{params.reply.email}}` has name `reply.email`,
+    // which the name regex rejects. Pins "no nested paths yet" (a future grammar item).
+    val msg = expandFailureMessage(tokenTool(""""{{params.reply.email}}""""))
+    msg.contains("invalid name")
+    msg.contains("reply.email")
+  }
+
+  @Test
+  fun `REJECTED - a leading dot is malformed (no scope before the dot)`() {
+    val msg = expandFailureMessage(tokenTool(""""{{.foo}}""""))
+    msg.contains("malformed interpolation token")
+    msg.contains("{{params.name}}")
+  }
+
+  @Test
+  fun `REJECTED - a trailing dot is malformed (no name after the dot)`() {
+    val msg = expandFailureMessage(tokenTool(""""{{foo.}}""""))
+    msg.contains("malformed interpolation token")
+    msg.contains("{{params.name}}")
+  }
+
+  /**
+   * Builds a one-command tool whose `inputText.text` is [tokenTextLiteral] (pass it already
+   * quoted, e.g. `"\"{{params.who}}\""`). When [declaresRequired] is non-null it declares that one
+   * required string parameter; otherwise the tool declares no parameters. Built with explicit
+   * indentation (not `trimIndent` interpolation) so the injected multi-line params block can't
+   * disturb the common-indent computation.
+   */
+  private fun tokenTool(tokenTextLiteral: String, declaresRequired: String? = null): ToolYamlConfig {
+    val paramsYaml = if (declaresRequired == null) {
+      "parameters: []"
+    } else {
+      "parameters:\n  - name: $declaresRequired\n    type: string\n    required: true"
+    }
+    val yaml = buildString {
+      appendLine("id: greeter")
+      appendLine("description: Prefix-contract fixture.")
+      appendLine(paramsYaml)
+      appendLine("tools:")
+      appendLine("  - mobile_maestro:")
+      appendLine("      commands:")
+      appendLine("        - inputText:")
+      appendLine("            text: $tokenTextLiteral")
+    }
+    return parse(yaml)
+  }
+
+  /** Expands [config] and returns an assertk assertion over the resulting failure message. */
+  private fun expandFailureMessage(config: ToolYamlConfig, params: Map<String, JsonElement> = emptyMap()) =
+    assertFailure {
+      YamlDefinedTrailblazeTool(config, params).toExecutableTrailblazeTools(createContext())
+    }.transform { it.message ?: "" }
 
   private fun parse(yaml: String): ToolYamlConfig =
     TrailblazeConfigYaml.instance.decodeFromString(ToolYamlConfig.serializer(), yaml)

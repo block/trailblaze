@@ -70,32 +70,30 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val memory = toolExecutionContext.trailblazeAgent.memory
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
     val scrollDuration = scrollDurationFor(trailblazeDriverType)
 
-    val interpolatedText = memory.interpolateVariables(text)
-    val interpolatedTextRegex = textRegex?.let { memory.interpolateVariables(it) }
     // Require an actual target. `text` defaults to "" (so `textRegex` can be used instead), but a
     // call that supplies none of text/textRegex/id would otherwise build `.*\Q\E.*` — a match-all
     // that stops on the first text-bearing element and reports a false "scrolled to it" success.
-    // Fail loudly instead. (Validated on the INTERPOLATED values so a variable that resolves to
-    // blank is also caught.)
-    require(hasScrollTarget(interpolatedText, interpolatedTextRegex, id)) {
+    // Fail loudly instead. ({{var}}/${var} tokens are resolved by the dispatch boundary —
+    // interpolateMemoryInTool — before execute() runs, so a variable that resolves to blank is
+    // also caught here.)
+    require(hasScrollTarget(text, textRegex, id)) {
       "scrollUntilTextIsVisible requires a target: provide 'text' (substring match), " +
         "'textRegex' (anchored full-match), or 'id'."
     }
 
     val trailblazeElementSelector = TrailblazeElementSelector(
       textRegex = buildTargetTextRegex(
-        text = interpolatedText,
-        textRegex = interpolatedTextRegex,
+        text = text,
+        textRegex = textRegex,
       ),
       idRegex = id,
       index = if (index == 0) null else index.toString(),
     )
     // Label used only for human-readable success messages. Prefer the anchored regex when set.
-    val targetLabel = interpolatedTextRegex?.takeIf { it.isNotBlank() } ?: interpolatedText
+    val targetLabel = textRegex?.takeIf { it.isNotBlank() } ?: text
     val scrollCommand = ScrollUntilVisibleCommand(
       selector = trailblazeElementSelector.toMaestroElementSelector(),
       /** Maestro's default was 40ms which caused a "fling" behavior and scrolled past elements. */
@@ -259,7 +257,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
     /**
      * Resolves the effective full-match regex the scroll loop searches for. Extracted as a pure
      * function so the substring-vs-anchored contract is unit-testable without a Maestro driver or
-     * agent memory (callers interpolate memory variables BEFORE calling this).
+     * agent memory (memory tokens are resolved at the dispatch boundary before execution).
      *
      * - [textRegex] (non-blank): used verbatim, giving the same full (anchored) match that selector
      *   tools like `tapOnElementBySelector` get from Maestro — `Loyalty` matches only "Loyalty", not
@@ -278,8 +276,8 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
      * True when the call carries a real scroll target — at least one of [text] (substring),
      * [textRegex] (anchored), or [id] is non-blank. Extracted as a pure predicate so the
      * "reject match-all / empty-target calls" guard is unit-testable without a device (mirrors
-     * [buildTargetTextRegex] / [pollForConsecutiveStable]). Callers should pass INTERPOLATED
-     * values so a `{{var}}` that resolves to blank is also rejected.
+     * [buildTargetTextRegex] / [pollForConsecutiveStable]). Memory tokens are resolved at the
+     * dispatch boundary before execution, so a `{{var}}` that resolves to blank is also rejected.
      */
     internal fun hasScrollTarget(text: String, textRegex: String?, id: String?): Boolean =
       text.isNotBlank() || !textRegex.isNullOrBlank() || !id.isNullOrBlank()

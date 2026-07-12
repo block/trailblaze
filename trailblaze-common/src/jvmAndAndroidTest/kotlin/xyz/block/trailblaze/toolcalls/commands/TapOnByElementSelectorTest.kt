@@ -2,7 +2,6 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import kotlin.test.assertEquals
@@ -16,14 +15,13 @@ import kotlin.test.assertIs
  */
 class TapOnByElementSelectorTest {
 
-  private val emptyMemory = AgentMemory()
 
   @Test
   fun `basic textRegex selector lowers to a single TapOnElementCommand`() {
     val tap = TapOnByElementSelector(
       nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Login")),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals("Login", command.selector.textRegex)
     assertEquals(false, command.longPress)
@@ -35,7 +33,7 @@ class TapOnByElementSelectorTest {
       nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Edit")),
       longPress = true,
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals(true, command.longPress)
   }
@@ -53,7 +51,7 @@ class TapOnByElementSelectorTest {
     val tap = TapOnByElementSelector(
       nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Allow")),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals(false, command.optional)
   }
@@ -71,7 +69,7 @@ class TapOnByElementSelectorTest {
         DriverNodeMatch.AndroidAccessibility(resourceIdRegex = "login_button"),
       ),
     )
-    val command = tap.toMaestroCommands(emptyMemory).single()
+    val command = tap.toMaestroCommands().single()
     assertIs<TapOnElementCommand>(command)
     assertEquals("login_button", command.selector.idRegex)
     assertEquals(null, command.selector.textRegex)

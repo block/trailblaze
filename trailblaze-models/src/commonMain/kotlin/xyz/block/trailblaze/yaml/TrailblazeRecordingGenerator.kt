@@ -3,7 +3,11 @@ package xyz.block.trailblaze.yaml
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveCompleteLog
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
 /**
  * Generates a recording YAML string from a list of [TrailblazeLog] entries.
@@ -32,8 +36,136 @@ fun SessionStatus.Started.toRecordingTrailConfig(titleOverride: String? = null):
 fun List<TrailblazeLog>.generateRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
+): String = try {
+  trailblazeYaml.encodeToString(buildRecordedTrailItems(trailblazeYaml, sessionTrailConfig))
+} catch (e: Exception) {
+  Console.error("Failed to generate recording: ${e.stackTraceToString()}")
+  ""
+}
+
+/**
+ * The classifier slot key a unified recording preview/save uses for this session — the device's
+ * classifier segments joined with `-` (e.g. `ios-iphone-sim`), read from the session's
+ * [SessionStatus.Started] log, matching how the save path keys the on-disk `recordings:` slot.
+ * Blank when the session logged no device classifiers, in which case [generateUnifiedRecordedYaml]
+ * falls back to the v1 shape.
+ *
+ * Blank segments are dropped before joining, mirroring
+ * [xyz.block.trailblaze.devices.TrailblazeClassifierLineage.resolutionChain] — otherwise a stray
+ * empty segment (`["ios", ""]`) would produce a compound key (`"ios-"`) that resolution never
+ * reconstructs, stranding a `recordings:` slot that can't be matched at replay time.
+ */
+private fun List<TrailblazeLog>.recordingClassifier(): String =
+  getSessionStartedInfo()?.trailblazeDeviceInfo?.classifiers.orEmpty()
+    .filter { it.classifier.isNotBlank() }
+    .joinToString("-") { it.classifier }
+
+/**
+ * Unified-format sibling of [generateRecordedYaml]: renders the same recording as the unified
+ * `trail.yaml` document (`config:` / `trailhead:` / `trail:`, each step carrying per-classifier
+ * `recordings:`) that the save path writes to disk — so the recording PREVIEW shown in reports and
+ * the desktop Recording tab matches the unified artifact the save path produces, instead of the
+ * legacy v1 list shape. The classifier slot is derived from the session's device classifiers (the
+ * same key the save path uses via [UnifiedTrailAdapter.mergeRecordedClassifier]); pass
+ * [classifierOverride] only to force a specific slot (tests).
+ *
+ * **Preserves the other platforms.** A run only re-records the one device it ran on, but the
+ * unified `trail.yaml` it ran against can already hold recordings for other classifiers. The merge
+ * is seeded with the original run's full document — recovered from the session's
+ * [SessionStatus.Started.rawYaml] (the exact YAML submitted to the run) — so those other slots
+ * survive into the preview and only this classifier's slot is replaced. When the run started from
+ * scratch (no source YAML) or from a legacy v1 trail, there is no existing unified document to seed
+ * from and the preview shows this classifier alone — the same as the first write of a brand-new
+ * unified trail.
+ *
+ * **This is a best-effort preview, not a byte-guarantee of the saved file.** Two windows where the
+ * rendered doc can differ from what the save path ultimately writes: (1) it seeds from `rawYaml`
+ * (the file as of run launch) whereas the save path seeds from the file on disk *at save time*, so
+ * a concurrent re-record of another device between launch and save won't show here — commonMain has
+ * no filesystem to read the live file; (2) it always renders the unified shape regardless of the
+ * transitional save-gate (`TRAILBLAZE_UNIFIED_RECORDINGS` / `unifiedRecordingsEnabled`), so with the
+ * gate reverted to legacy the preview still shows the go-forward unified form. Both are intentional.
+ *
+ * Falls back to the v1 encoding whenever the unified shape can't be produced — the classifier is
+ * blank (no slot to key on), the recording lowers to no steps (an empty `trail:` is unparseable), or
+ * the unified render itself throws. The last case is the one the save path also handles: a
+ * self-healed/retried trailhead that recorded more than one tool is rejected by the unified emitter
+ * (`MultiToolTrailheadUnsupported`, since a trailhead allows at most one tool per classifier), so the
+ * preview must degrade to the v1 recording rather than showing an empty box and copying nothing.
+ */
+fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
+  trailblazeYaml: TrailblazeYaml,
+  sessionTrailConfig: TrailConfig? = null,
+  classifierOverride: String? = null,
 ): String {
+  val items = try {
+    buildRecordedTrailItems(trailblazeYaml, sessionTrailConfig)
+  } catch (e: Exception) {
+    Console.error("Failed to build recording items: ${e.stackTraceToString()}")
+    return ""
+  }
+  val v1 = try {
+    trailblazeYaml.encodeToString(items)
+  } catch (e: Exception) {
+    Console.error("Failed to encode v1 recording: ${e.stackTraceToString()}")
+    return ""
+  }
+  val classifier = classifierOverride ?: recordingClassifier()
+  if (classifier.isBlank()) return v1
   return try {
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing = existingUnifiedTrailFromRawYaml(trailblazeYaml),
+      recordedItems = items,
+      classifier = classifier,
+    )
+    if (merged.trail.isEmpty()) v1 else trailblazeYaml.encodeUnifiedTrailToString(merged)
+  } catch (e: Exception) {
+    // The unified shape couldn't be produced (e.g. multi-tool trailhead). Fall back to the v1
+    // preview instead of returning empty — the save path preserves v1 for the same case.
+    Console.error(
+      "Failed to render unified recording; falling back to v1 preview: ${e.stackTraceToString()}",
+    )
+    v1
+  }
+}
+
+/**
+ * The unified trail the session ran against, recovered from [SessionStatus.Started.rawYaml] so a
+ * single-device re-record can merge into it without dropping the other platforms' recordings.
+ * Null when the session logged no source YAML (a from-scratch run) or the source was a legacy v1
+ * trail (nothing unified to preserve) — both cases correctly seed the merge empty.
+ *
+ * A decode failure on a *present* `rawYaml` also degrades to null rather than throwing, but is
+ * logged: silently seeding empty here would drop every other platform's recording from the preview
+ * with no trace, indistinguishable from a real from-scratch run.
+ */
+private fun List<TrailblazeLog>.existingUnifiedTrailFromRawYaml(
+  trailblazeYaml: TrailblazeYaml,
+): UnifiedTrail? {
+  val rawYaml = getSessionStartedInfo()?.rawYaml?.takeIf { it.isNotBlank() } ?: return null
+  return try {
+    when (val doc = trailblazeYaml.decodeTrailDocument(rawYaml)) {
+      is TrailDocument.Unified -> doc.trail
+      is TrailDocument.V1 -> null
+    }
+  } catch (e: Exception) {
+    Console.error(
+      "Unified preview: source rawYaml present but failed to decode; other platforms' " +
+        "recordings will be absent from this preview. ${e.message}",
+    )
+    null
+  }
+}
+
+/**
+ * Builds the v1 [TrailYamlItem] list for this session's logs (config, optional trailhead, prompts).
+ * Shared source of truth for both [generateRecordedYaml] (v1 encode) and [generateUnifiedRecordedYaml]
+ * (unified merge + encode), so the two rendered formats can never diverge in content.
+ */
+private fun List<TrailblazeLog>.buildRecordedTrailItems(
+  trailblazeYaml: TrailblazeYaml,
+  sessionTrailConfig: TrailConfig? = null,
+): List<TrailYamlItem> {
     val logs = this
     val items = mutableListOf<TrailYamlItem>()
 
@@ -106,7 +238,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             .ifEmpty { dropNestedToolCalls(toolLogsInWindow) }
             .let { dedupeLayerDuplicates(it) }
           val rawWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
-            .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
+            .map { log -> wrapTrailblazeTool(log.authoredTrailblazeTool, log.toolName) }
           val toolWrappers = dedupeVerificationRepeats(rawWrappers, selectedToolLogs, trailblazeYaml)
 
           // Zero recordable tools in this objective window → emit no recording at all (null).
@@ -168,7 +300,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           // path where tool logs may be emitted asynchronously and land outside
           // the objective window in the sorted log list.
           if (currentLog.isRecordable) {
-            val wrapper = wrapTrailblazeTool(currentLog.trailblazeTool, currentLog.toolName)
+            val wrapper = wrapTrailblazeTool(currentLog.authoredTrailblazeTool, currentLog.toolName)
             val candidateFingerprint = if (currentLog.isVerification) {
               fingerprintForDedup(wrapper, trailblazeYaml)
             } else {
@@ -222,11 +354,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
       currentLogIndex++
     }
 
-    trailblazeYaml.encodeToString(items)
-  } catch (e: Exception) {
-    Console.error("Failed to generate recording: ${e.stackTraceToString()}")
-    ""
-  }
+  return items
 }
 
 /**
@@ -375,7 +503,10 @@ private fun dedupeLayerDuplicates(
 ): List<TrailblazeLog.TrailblazeToolLog> {
   if (logs.size < 2) return logs
   val groups = logs.groupBy {
-    Triple(it.toolName, it.trailblazeTool.argsFingerprint(), it.successful)
+    // Group on the AUTHORED payload: the two layers of one physical execution may interpolate
+    // at different points (the LLM-dispatch log can carry the token-bearing form while the
+    // executor log carries resolved + raw), but their authored form is always identical.
+    Triple(it.toolName, it.authoredTrailblazeTool.argsFingerprint(), it.successful)
   }
   val dropped = mutableSetOf<TrailblazeLog.TrailblazeToolLog>()
   for ((_, group) in groups) {
@@ -404,3 +535,13 @@ private fun tracePrefix(traceId: String?): String? {
  *  to identical strings. Used by [dedupeLayerDuplicates] to identify same-args entries. */
 private fun xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool.argsFingerprint(): String =
   this.raw.toString()
+
+/**
+ * The payload a recording must serialize: the tool AS AUTHORED (memory tokens intact) when the
+ * dispatch boundary resolved `{{var}}` / `${var}` tokens, else the dispatched form (which IS the
+ * authored form for token-free calls and for logs written before [TrailblazeLog.TrailblazeToolLog.rawTrailblazeTool]
+ * existed). Emitting the resolved form here would bake one run's memory values into the saved
+ * trail — the recording-fidelity defect the raw/resolved split exists to fix.
+ */
+private val TrailblazeLog.TrailblazeToolLog.authoredTrailblazeTool: xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+  get() = rawTrailblazeTool ?: trailblazeTool

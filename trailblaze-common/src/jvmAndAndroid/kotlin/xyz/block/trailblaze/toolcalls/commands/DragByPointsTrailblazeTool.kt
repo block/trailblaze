@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.Point
 import maestro.orchestra.Command
 import maestro.orchestra.SwipeCommand
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.util.Console
@@ -35,7 +34,7 @@ data class DragByPointsTrailblazeTool(
   val endY: Int,
   val durationMs: Long = 1000L,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     Console.log(
       "DragByPointsTrailblazeTool creating Maestro SwipeCommand: " +
         "($startX, $startY) → ($endX, $endY) over ${durationMs}ms",

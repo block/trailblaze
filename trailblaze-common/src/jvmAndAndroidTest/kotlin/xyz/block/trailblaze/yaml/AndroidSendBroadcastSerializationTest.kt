@@ -3,6 +3,7 @@ package xyz.block.trailblaze.yaml
 import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import kotlin.test.assertIs
@@ -234,7 +235,10 @@ class AndroidSendBroadcastSerializationTest {
 
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
     assertThat(result.errorMessage).contains("blank key")
-    assertThat(result.errorMessage).contains("oops")
+    // Identified by position, never by value: extras arrive with memory tokens already
+    // resolved (dispatch boundary), so echoing a value could put a credential in the message.
+    assertThat(result.errorMessage).contains("index 0")
+    assertThat(result.errorMessage).doesNotContain("oops")
   }
 
   @Test

@@ -10,7 +10,6 @@ import kotlinx.datetime.Clock
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import org.junit.Test
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -26,6 +25,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 
 /**
  * Tests that assertion tools correctly dispatch to the agent's nodeSelector-based
@@ -83,14 +83,18 @@ class AssertToolNodeSelectorTest {
   }
 
   @Test
-  fun `AssertNotVisible interpolates memory variables in text`() = runBlocking {
+  fun `AssertNotVisible memory variables in text resolve via the dispatch boundary`() = runBlocking {
     val agent = CapturingAgent()
     val context = createContext(agent)
     context.memory.remember("amount", "$5.00")
 
-    val tool = AssertNotVisibleWithTextTrailblazeTool(
+    // Tools no longer self-interpolate — the dispatch loop resolves tokens right before
+    // execution. Drive the same boundary step here, then assert the tool dispatched the
+    // resolved value.
+    val authored = AssertNotVisibleWithTextTrailblazeTool(
       text = "\${amount}",
     )
+    val tool = interpolateMemoryInTool(authored, context.memory)
 
     tool.execute(context)
 
@@ -247,7 +251,7 @@ class AssertToolNodeSelectorTest {
     )
     val tool = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
 
-    val command = assertIs<AssertConditionCommand>(tool.toMaestroCommands(context.memory).single())
+    val command = assertIs<AssertConditionCommand>(tool.toMaestroCommands().single())
     assertNotNull(command.condition.notVisible, "Maestro path must assert notVisible")
     assertNull(command.condition.visible, "Maestro path must NOT assert visible")
   }

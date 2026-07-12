@@ -24,12 +24,14 @@ data class AssertWithAiTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
-    val interpolatedPrompt = memory.interpolateVariables(prompt)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so the AI evaluates the resolved prompt. (The old self-interpolation
+    // only rewrote the error message — the evaluation itself saw the raw token.)
     val evaluation = elementComparator.evaluateBoolean(prompt)
     Console.log("UI Assertion result: ${evaluation.result}, reason: ${evaluation.reason}")
 
     if (!evaluation.result) {
-      throw TrailblazeToolExecutionException(message = "AI assertion failed: $interpolatedPrompt", tool = this)
+      throw TrailblazeToolExecutionException(message = "AI assertion failed: $prompt", tool = this)
     }
     return TrailblazeToolResult.Success()
   }

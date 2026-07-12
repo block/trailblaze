@@ -4,7 +4,6 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
@@ -29,7 +28,7 @@ data class TapOnPointTrailblazeTool(
   ReasoningTrailblazeTool,
   xyz.block.trailblaze.toolcalls.RawCoordinateTapTool {
 
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
+  override fun toMaestroCommands(): List<Command> = listOf(
     TapOnPointV2Command(
       point = "$x,$y",
       longPress = longPress,

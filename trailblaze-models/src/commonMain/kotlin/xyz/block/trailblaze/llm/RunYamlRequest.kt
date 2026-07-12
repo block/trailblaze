@@ -99,12 +99,13 @@ data class RunYamlRequest(
    * memory state the host had — including values written by earlier tools in the same
    * trail.
    *
-   * The host's pre-resolution of `{{var}}` / `${var}` tokens still happens at the RPC
-   * boundary (see `RpcToolMemoryInterpolation`), so already-resolved string scalars reach
-   * the device. This snapshot covers the OTHER access path: tools that read memory keys
-   * directly via `context.memory.variables[...]` or that write via
-   * `context.memory.remember(...)` — most relevant to user-contributed TypeScript tools
-   * running in the on-device runtime.
+   * This snapshot is what makes raw-tool RPC dispatch work: the host sends tool args AS
+   * AUTHORED (memory tokens intact) and the device's dispatch boundary resolves
+   * `{{var}}` / `${var}` against this map (see `interpolateMemoryInTool`) — which is how
+   * the device-side tool log keeps both the raw and resolved forms. It also covers the
+   * direct access path: tools that read memory keys via `context.memory.variables[...]`
+   * or write via `context.memory.remember(...)` — most relevant to user-contributed
+   * TypeScript tools running in the on-device runtime.
    *
    * Must be `emptyMap()` when [awaitCompletion] is `false`: memory sync requires a
    * round-trip, and fire-and-forget has no completion event to attach a return snapshot
@@ -161,6 +162,17 @@ data class RunYamlRequest(
    * replay knows to expect them.
    */
   val initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
+
+  /**
+   * Keys in [memorySnapshot] whose values are sensitive (`rememberSensitive` on the host —
+   * passwords, PINs, card numbers). The snapshot itself is a plain string map with no
+   * sensitivity marking, so without this list a host secret arrives on the device unmarked
+   * and the device's own logging would emit it in cleartext. The on-device
+   * `RunYamlRequestHandler` re-marks these keys (`AgentMemory.markSensitive`) right after
+   * seeding, restoring redaction for the device-side dispatch boundary and scripting
+   * envelope. Trailing field for positional/binary-compat stability, same as the seeds above.
+   */
+  val sensitiveMemoryKeys: List<String> = emptyList(),
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

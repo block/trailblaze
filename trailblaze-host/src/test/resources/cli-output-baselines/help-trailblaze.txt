@@ -58,3 +58,8 @@ Trailblaze - AI-powered device automation
                  at the workspace root if absent so `bun install` can be used
                  as the canonical bootstrap (its `postinstall` hook re-runs
                  `trailblaze check`).
+  skill        Print or install the bundled agent skill that teaches a coding
+                 agent this CLI
+Docs: https://block.github.io/trailblaze
+Driving Trailblaze from a coding agent? `trailblaze skill` prints or installs
+the bundled agent skill.

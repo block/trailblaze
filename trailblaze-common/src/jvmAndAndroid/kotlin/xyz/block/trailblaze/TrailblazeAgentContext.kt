@@ -11,6 +11,8 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
+import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
@@ -41,6 +43,14 @@ fun TrailblazeAgentContext.logToolExecution(
   context: TrailblazeToolExecutionContext,
   result: TrailblazeToolResult,
   dispatchedHostSide: Boolean = false,
+  /**
+   * The tool AS AUTHORED, when the dispatch boundary's memory interpolation rewrote it before
+   * execution ([tool] is then the resolved instance). Callers pass it only on an actual rewrite
+   * (`rawTool.takeIf { it !== memoryResolvedTool }`), and it is always the same concrete class
+   * as [tool]. Drives the raw/resolved split on the emitted log — see
+   * [TrailblazeLog.TrailblazeToolLog.rawTrailblazeTool].
+   */
+  rawTool: TrailblazeTool? = null,
 ) {
   // If the tool stamped an override (e.g. TapOnPointTrailblazeTool upgrading to
   // TapOnTrailblazeTool), take the recorded instance AND toolName from the override together:
@@ -48,7 +58,8 @@ fun TrailblazeAgentContext.logToolExecution(
   // mixing an override's instance with the original's toolName produces a type/serializer
   // mismatch. `isRecordable` is NOT read from the override here — it's computed separately just
   // below (from the override's annotation, unless a nested dispatch forces it false).
-  val recordedTool: TrailblazeTool = context.recordedToolOverride ?: tool
+  val recordedToolOverride = context.recordedToolOverride
+  val recordedTool: TrailblazeTool = recordedToolOverride ?: tool
   // A nested `ctx.tools.X()` sub-call is never recordable on its own — only the outermost parent
   // call is the replayable step. See `TrailblazeToolExecutionContext.nestedDispatchDepth` for the
   // full rationale (scope, N-deep counter, parallel-callback safety). The log is still emitted; only
@@ -59,11 +70,29 @@ fun TrailblazeAgentContext.logToolExecution(
   } else {
     recordedTool.getIsRecordableFromAnnotation()
   }
+  // Raw/resolved split. An override suppresses the raw payload: the override is a deliberate
+  // whole-tool replacement (possibly a different class), and a log whose `toolName` comes from
+  // the override but whose raw payload is the pre-override class would hand the recording
+  // generator a name/args mismatch. Without an override, `trailblazeTool` is the log-safe
+  // RESOLVED form (sensitive tokens kept literal — see [buildLogSafeResolvedPayload]) and
+  // `rawTrailblazeTool` the authored form, elided when scrubbing left them identical.
+  val rawPayload = if (recordedToolOverride == null) rawTool?.toLogPayload() else null
+  val resolvedPayload = if (rawPayload != null) {
+    buildLogSafeResolvedPayload(rawPayload, memory)
+  } else {
+    recordedTool.toLogPayload()
+  }
   val toolLog =
     TrailblazeLog.TrailblazeToolLog(
-      trailblazeTool = recordedTool.toLogPayload(),
+      trailblazeTool = resolvedPayload,
+      rawTrailblazeTool = rawPayload?.takeIf { it != resolvedPayload },
       toolName = recordedTool.getToolNameFromAnnotation(),
-      exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
+      // Scrub here, not only on the returned result: the dispatch loop applies
+      // `withAuthoredFailureContent` to the value it RETURNS toward the LLM, but the raw result is
+      // logged before that (each driver's `executeTool` logs then returns), so a resolved
+      // rememberSensitive value a tool spliced into its error message would otherwise land in the
+      // persisted session log. The args payload is already scrubbed via `buildLogSafeResolvedPayload`.
+      exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage?.let { scrubSensitiveValues(it, memory) },
       successful = result.isSuccess(),
       durationMs =
         Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),
@@ -138,12 +167,23 @@ fun TrailblazeAgentContext.logToolExecution(
   traceId: TraceId,
   result: TrailblazeToolResult,
   dispatchedHostSide: Boolean = false,
+  /** Same contract as the context-carrying overload's `rawTool` (no override interplay here). */
+  rawTool: TrailblazeTool? = null,
 ) {
   val session = sessionProvider.invoke()
+  val rawPayload = rawTool?.toLogPayload()
+  val resolvedPayload = if (rawPayload != null) {
+    buildLogSafeResolvedPayload(rawPayload, memory)
+  } else {
+    tool.toLogPayload()
+  }
   val toolLog = TrailblazeLog.TrailblazeToolLog(
-    trailblazeTool = tool.toLogPayload(),
+    trailblazeTool = resolvedPayload,
+    rawTrailblazeTool = rawPayload?.takeIf { it != resolvedPayload },
     toolName = tool.getToolNameFromAnnotation(),
-    exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
+    // Same rationale as the context-carrying overload: scrub the logged message so a resolved
+    // rememberSensitive value spliced into an error can't reach the persisted log.
+    exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage?.let { scrubSensitiveValues(it, memory) },
     successful = result.isSuccess(),
     durationMs =
       Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),

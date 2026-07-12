@@ -498,6 +498,46 @@ val copyScriptedToolWrapperTemplate by tasks.registering(Copy::class) {
   into(layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper/xyz/block/trailblaze/scripting"))
 }
 
+// Stage the agent skill (`SKILL.md` + `SETUP.md` + `references/` + any `scripts/`/assets) as JAR
+// resources so `trailblaze skill` can print/install it from any installed CLI (Homebrew,
+// install.sh) without a repo checkout. `Sync` (not `Copy`) so a file deleted from the skill can't
+// linger as a stale resource. The generated `manifest.txt` (one relative path per line, sorted) is
+// how the runtime enumerates the files — JAR classpath "directories" can't be listed. Consumed by
+// `BundledAgentSkill`.
+//
+// Which skill ships is variant-gated: the Internal build bundles the *superset* skill maintained at
+// the repo root (extra internal-only references + scripts, with the shared references symlinked back
+// to the OSS copy — `Sync` dereferences those symlinks so their content lands in the jar). The OSS
+// build bundles the public skill that lives alongside this module. The Internal path resolves
+// against `rootDir`, which is the internal repo root only in the internal Gradle build; in the OSS
+// mirror `trailblaze.variant` is unset, so that branch is never taken.
+val agentSkillSourceDir: File =
+  if (providers.gradleProperty("trailblaze.variant").orNull == "Internal") {
+    rootDir.resolve(".claude/skills/trailblaze")
+  } else {
+    layout.projectDirectory.dir("../skills/trailblaze").asFile
+  }
+val copyAgentSkillResources by tasks.registering(Sync::class) {
+  group = "trailblaze"
+  description = "Stages the trailblaze agent skill into this module's JAR resources."
+  from(agentSkillSourceDir) {
+    // Ship every file in the curated skill dir (markdown, scripts, assets) — not just markdown, so a
+    // reference that points at a helper script installs a working copy. `.DS_Store` and editor swap
+    // files are the only things excluded.
+    exclude("**/.DS_Store", "**/*.swp")
+  }
+  into(layout.buildDirectory.dir("generated-resources/agent-skill/xyz/block/trailblaze/skill"))
+  doLast {
+    val root = destinationDir
+    val entries = root.walkTopDown()
+      .filter { it.isFile }
+      .map { it.relativeTo(root).invariantSeparatorsPath }
+      .sorted()
+      .toList()
+    root.resolve("manifest.txt").writeText(entries.joinToString("\n") + "\n")
+  }
+}
+
 // Add generated resources to source sets
 sourceSets {
   main {
@@ -508,6 +548,9 @@ sourceSets {
     resources.srcDir(
       copyScriptedToolWrapperTemplate.map { layout.buildDirectory.dir("generated-resources/scripted-tool-wrapper").get() },
     )
+    resources.srcDir(
+      copyAgentSkillResources.map { layout.buildDirectory.dir("generated-resources/agent-skill").get() },
+    )
   }
 }
 
@@ -515,6 +558,7 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   dependsOn(generateVersionProperties)
   dependsOn(copyTypescriptCompilerResources)
   dependsOn(copyScriptedToolWrapperTemplate)
+  dependsOn(copyAgentSkillResources)
 }
 
 dependencyGuard {

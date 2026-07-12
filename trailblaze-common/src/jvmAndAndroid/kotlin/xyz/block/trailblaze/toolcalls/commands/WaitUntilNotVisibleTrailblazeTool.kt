@@ -6,7 +6,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -82,7 +81,7 @@ data class WaitUntilNotVisibleTrailblazeTool(
   val timeoutMs: Long? = null,
 ) : MapsToMaestroCommands() {
 
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector = nodeSelector)
       ?: error(
         "waitUntilNotVisible: nodeSelector is required and must lower to a Maestro selector for " +

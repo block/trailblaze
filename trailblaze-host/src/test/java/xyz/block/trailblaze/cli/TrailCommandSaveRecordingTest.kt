@@ -262,7 +262,7 @@ class TrailCommandSaveRecordingTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Unified-recordings rollout gate (off by default)
+  // Unified-recordings gate (on by default; --no-unified-recordings is the opt-out)
   // ---------------------------------------------------------------------------
 
   @Test

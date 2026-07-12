@@ -27,13 +27,15 @@ import java.io.File
  */
 object UnifiedRecordingWriter {
 
-  /** Env var that opts the rollout gate on (`1`/`true`) or off (`0`/`false`) for every surface. */
+  /** Env var that opts the gate on (`1`/`true`) or off (`0`/`false`) for every surface. */
   const val ENV_UNIFIED_RECORDINGS: String = "TRAILBLAZE_UNIFIED_RECORDINGS"
 
   /**
-   * Resolve the unified-recordings rollout gate. Tier order: an explicit [flagOverride] (the CLI's
+   * Resolve the unified-recordings gate. Tier order: an explicit [flagOverride] (the CLI's
    * `--[no-]unified-recordings`) wins, then the [ENV_UNIFIED_RECORDINGS] env var, then the caller's
-   * [persistedConfig] (`trailblaze config unified-recordings`), then off.
+   * [persistedConfig] (`trailblaze config unified-recordings`), then on — unified is the default
+   * save format; any tier set to false is the opt-out back to legacy `<classifier>.trail.yaml`
+   * saving.
    *
    * MCP/desktop pass `flagOverride = null` (no CLI flag to honor); the CLI passes its parsed flag.
    * The env-var name and its parsing live here so the three surfaces can never disagree on them.
@@ -42,7 +44,7 @@ object UnifiedRecordingWriter {
     flagOverride
       ?: parseBooleanGate(System.getenv(ENV_UNIFIED_RECORDINGS))
       ?: persistedConfig
-      ?: false
+      ?: true
 
   /**
    * Parse an on/off gate string, accepting the documented `1`/`true` (and `0`/`false`) forms

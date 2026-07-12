@@ -4,7 +4,6 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnElementCommand
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
@@ -45,7 +44,7 @@ data class TapOnByElementSelector(
    */
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector) ?: return emptyList()
     return listOf(
       TapOnElementCommand(

@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -71,7 +70,7 @@ data class AssertVisibleBySelectorTrailblazeTool(
    */
   val textMatchMode: TextMatchMode = TextMatchMode.EXACT,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+  override fun toMaestroCommands(): List<Command> {
     val maestroSelector = lowerToMaestroSelector(nodeSelector)
       ?: error(
         "AssertVisibleBySelectorTrailblazeTool.toMaestroCommands called with `nodeSelector` " +
@@ -83,11 +82,11 @@ data class AssertVisibleBySelectorTrailblazeTool(
     // (accessibility, etc.) hit the richer post-pass check in execute() below.
     //
     // textMatchMode controls how that text becomes the Maestro textRegex: EXACT pins the full
-    // interpolated value (byte-identical to the original behavior); PREFIX escapes only the
+    // resolved value (byte-identical to the original behavior); PREFIX escapes only the
     // stable head so a volatile tail (e.g. live item count) can't fail the match; REGEX passes
     // the value through as the regex pattern directly.
     val maestroElement = maestroSelector.toMaestroElementSelector().let { base ->
-      if (expectedText != null) base.copy(textRegex = maestroTextRegexFor(memory)) else base
+      if (expectedText != null) base.copy(textRegex = maestroTextRegexFor()) else base
     }
     return listOf(AssertConditionCommand(condition = Condition(visible = maestroElement)))
   }
@@ -185,7 +184,9 @@ data class AssertVisibleBySelectorTrailblazeTool(
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> return visibilityResult
     }
 
-    val expected = toolExecutionContext.memory.interpolateVariables(expectedText!!).trim()
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so `expectedText` arrives resolved here.
+    val expected = expectedText!!.trim()
     // Pick the candidate set whose text we compare against `expected`. The candidate
     // depends on the structural predicates on the selector:
     //
@@ -230,19 +231,20 @@ data class AssertVisibleBySelectorTrailblazeTool(
 
   /**
    * Builds the Maestro `textRegex` for the legacy fallback path from [expectedText] under
-   * [textMatchMode]. EXACT pins the full interpolated value (unchanged from the original
+   * [textMatchMode]. Memory tokens in [expectedText] are already resolved by the dispatch
+   * boundary. EXACT pins the full resolved value (unchanged from the original
    * behavior); PREFIX escapes the stable head and allows any volatile tail (incl. newlines)
    * so the count etc. can't fail the match regardless of Maestro's anchoring; REGEX forwards
    * the value as the pattern, escaping it to a literal if it doesn't compile so Maestro never
    * receives a malformed pattern (which would surface as an execution error, not a clean miss).
    */
-  private fun maestroTextRegexFor(memory: AgentMemory): String {
-    val interpolated = memory.interpolateVariables(expectedText!!)
+  private fun maestroTextRegexFor(): String {
+    val resolved = expectedText!!
     return when (textMatchMode) {
-      TextMatchMode.EXACT -> interpolated
-      TextMatchMode.PREFIX -> Regex.escape(interpolated) + "[\\s\\S]*"
+      TextMatchMode.EXACT -> resolved
+      TextMatchMode.PREFIX -> Regex.escape(resolved) + "[\\s\\S]*"
       TextMatchMode.REGEX ->
-        if (runCatching { Regex(interpolated) }.isSuccess) interpolated else Regex.escape(interpolated)
+        if (runCatching { Regex(resolved) }.isSuccess) resolved else Regex.escape(resolved)
     }
   }
 

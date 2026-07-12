@@ -6,7 +6,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import org.junit.Rule
 import org.junit.rules.RuleChain
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.DefaultProgressReporter
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
@@ -363,7 +362,6 @@ abstract class BaseHostTrailblazeTest(
       screenStateProvider = hostRunner.screenStateProvider,
       toolRepo = toolRepo,
       elementComparator = elementComparator,
-      agentMemory = (trailblazeAgent as? xyz.block.trailblaze.BaseTrailblazeAgent)?.memory ?: AgentMemory(),
     )
 
     val session = loggingRule.session ?: error("Session not available - ensure test is running")

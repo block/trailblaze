@@ -36,6 +36,14 @@ fun FormsScreen() {
   var submissionResult by remember { mutableStateOf("") }
   val focusManager = LocalFocusManager.current
 
+  // Both the Submit button and pressing Enter on the Email field (its IME "Done" action) run this,
+  // so the two paths render an identical submission result by construction — a recorded eval can
+  // assert the Enter path sees exactly what Submit produces.
+  val submit = {
+    submissionResult = "Name: $name\nEmail: $email"
+    focusManager.clearFocus()
+  }
+
   Column(
     modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -56,20 +64,12 @@ fun FormsScreen() {
       modifier = Modifier.fillMaxWidth().testTag("field_email"),
       keyboardOptions =
         KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
-      keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+      keyboardActions = KeyboardActions(onDone = { submit() }),
       singleLine = true,
     )
 
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      Button(
-        onClick = {
-          submissionResult = "Name: $name\nEmail: $email"
-          focusManager.clearFocus()
-        },
-        modifier = Modifier.weight(1f),
-      ) {
-        Text("Submit")
-      }
+      Button(onClick = { submit() }, modifier = Modifier.weight(1f)) { Text("Submit") }
       OutlinedButton(
         onClick = {
           name = ""

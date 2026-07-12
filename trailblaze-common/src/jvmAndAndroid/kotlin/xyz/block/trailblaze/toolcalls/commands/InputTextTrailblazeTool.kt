@@ -49,21 +49,22 @@ data class InputTextTrailblazeTool(
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val interpolated = toolExecutionContext.memory.interpolateVariables(text)
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so `text` arrives resolved here.
     val maestroCommands = if (hideKeyboardAfter) {
-      listOf(InputTextCommand(interpolated)) +
+      listOf(InputTextCommand(text)) +
         HideKeyboardTrailblazeTool.hideKeyboardCommands(
           platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
           orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
         )
     } else {
-      listOf(InputTextCommand(interpolated))
+      listOf(InputTextCommand(text))
     }
     val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,
     )
-    if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Typed '$interpolated'")
+    if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Typed '$text'")
     return result
   }
 }

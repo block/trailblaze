@@ -2,12 +2,6 @@ package xyz.block.trailblaze.agent
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.model.TraceId
@@ -37,7 +31,6 @@ class AgentUiActionExecutor(
   private val screenStateProvider: () -> ScreenState,
   private val toolRepo: TrailblazeToolRepo,
   private val elementComparator: TrailblazeElementComparator,
-  private val agentMemory: AgentMemory = AgentMemory(),
 ) : UiActionExecutor {
 
   override suspend fun execute(
@@ -134,8 +127,10 @@ class AgentUiActionExecutor(
    */
   private fun mapToTrailblazeTool(toolName: String, args: JsonObject): Pair<TrailblazeTool?, String?> {
     return try {
-      val memoryInterpolatedArgs = interpolateMemoryInArgs(agentMemory, args) as? JsonObject ?: args
-      val normalizedArgs = normalizeArgs(toolName, memoryInterpolatedArgs)
+      // Args are kept AS AUTHORED here — {{var}}/${var} tokens resolve at the agent's dispatch
+      // boundary (see `interpolateMemoryInTool`), which is what lets tool logs carry both the
+      // raw and resolved forms.
+      val normalizedArgs = normalizeArgs(toolName, args)
       Pair(toolRepo.toolCallToTrailblazeTool(toolName, normalizedArgs.toString()), null)
     } catch (e: Exception) {
       Console.log("[AgentUiActionExecutor] Failed to deserialize tool '$toolName' via toolRepo: ${e.message}")
@@ -177,29 +172,5 @@ class AgentUiActionExecutor(
     }
 
     return JsonObject(normalized)
-  }
-
-  /**
-   * Recursively interpolates session memory values into JSON args at any nesting depth.
-   * Resolves `${key}` and `{{key}}` templates via [AgentMemory.interpolateVariables].
-   * Requires explicit template syntax — bare key names are NOT auto-resolved to avoid
-   * false-positive substitutions on legitimate literal strings.
-   */
-  private fun interpolateMemoryInArgs(memory: AgentMemory, element: JsonElement): JsonElement {
-    if (memory.variables.isEmpty()) return element
-    return when {
-      element is JsonPrimitive && element.isString -> {
-        JsonPrimitive(memory.interpolateVariables(element.content))
-      }
-      element is JsonObject -> buildJsonObject {
-        element.entries.forEach { (key, value) ->
-          put(key, interpolateMemoryInArgs(memory, value))
-        }
-      }
-      element is JsonArray -> buildJsonArray {
-        element.forEach { item -> add(interpolateMemoryInArgs(memory, item)) }
-      }
-      else -> element
-    }
   }
 }

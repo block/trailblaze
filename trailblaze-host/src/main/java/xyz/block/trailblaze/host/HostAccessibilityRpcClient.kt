@@ -22,6 +22,7 @@ import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -110,12 +111,6 @@ class HostAccessibilityRpcClient(
         OtherTrailblazeTool(toolName, args)
       }
 
-      // Resolve memory tokens once, up front, so both branches (host-only and RPC) see the
-      // same resolved args. Host-only tools like RunCommandTrailblazeTool don't all
-      // self-interpolate; RPC tools must be resolved here because the device's per-request
-      // memory is empty. See [interpolateMemoryInTool].
-      val resolvedTool = interpolateMemoryInTool(tool, memory)
-
       // Host-only tools must execute locally rather than RPC to the device. Two ways a tool
       // can declare itself host-only:
       //
@@ -132,9 +127,9 @@ class HostAccessibilityRpcClient(
       //
       // Both routes go through the same in-process `execute(context)` dispatch below.
       val isHostLocal =
-        resolvedTool is HostLocalExecutableTrailblazeTool ||
-          (resolvedTool is ExecutableTrailblazeTool && resolvedTool.requiresHostInstance())
-      if (isHostLocal && resolvedTool is ExecutableTrailblazeTool) {
+        tool is HostLocalExecutableTrailblazeTool ||
+          (tool is ExecutableTrailblazeTool && tool.requiresHostInstance())
+      if (isHostLocal && tool is ExecutableTrailblazeTool) {
         val context = toolExecutionContextProvider?.invoke(traceId)
           ?: return ExecutionResult.Failure(
             error = "Host-only tool '$toolName' requires a tool execution context",
@@ -150,8 +145,13 @@ class HostAccessibilityRpcClient(
         // wouldn't survive the dispatcher hop. `withInstalledContext` rides the value on
         // the coroutine context via `asContextElement` so the binding sees the right
         // context regardless of resumption thread.
+        // Memory-interpolation boundary for the host-local branch: this dispatch never
+        // reaches an agent seam, so resolve {{var}}/${var} here. QuickJS/subprocess scripted
+        // tools pass through unchanged (RawArgumentTrailblazeTool) — they self-resolve at
+        // the engine boundary and their instances hold live runtime handles.
+        val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
         val result = ToolExecutionContextThreadLocal.withInstalledContext(context) {
-          resolvedTool.execute(context)
+          memoryResolvedTool.execute(context)
         }
         val durationMs = System.currentTimeMillis() - startTime
         return when (result) {
@@ -164,7 +164,11 @@ class HostAccessibilityRpcClient(
             ExecutionResult.Failure(error = "Host-only tool '$toolName' failed: $result", recoverable = true)
         }
       }
-      val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(resolvedTool))))
+      // RPC branch: encode the tool AS AUTHORED (memory tokens intact). The device's own
+      // dispatch boundary resolves {{var}}/${var} against the memorySnapshot below, so the
+      // device-side tool log carries both the raw and resolved forms and a recording
+      // regenerated from it keeps its tokens.
+      val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(tool))))
       val yaml = trailblazeYaml.encodeToString(toolItems)
 
       // Reuse the host's top-level session ID so every per-tool RunYamlRequest writes
@@ -185,9 +189,12 @@ class HostAccessibilityRpcClient(
           sendSessionStartLog = false,
           sendSessionEndLog = false,
         ),
-        // Snapshot host memory so on-device tools can read keys directly (the boundary
-        // pre-resolution above only handles {{var}}/${var} interpolation in tool args).
+        // Snapshot host memory: the device's dispatch boundary resolves the raw tool's
+        // {{var}}/${var} tokens against it, and on-device tools can read keys directly.
+        // The sensitive-key list restores redaction on the device — the snapshot itself is
+        // a plain string map that carries no sensitivity marking.
         memorySnapshot = memory.variables.toMap(),
+        sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
       )
 
       when (val rpcResult = rpcClient.rpcCall(singleToolRequest)) {
@@ -204,7 +211,11 @@ class HostAccessibilityRpcClient(
           // instance so writes from on-device tools (including TS handlers) are visible to
           // subsequent host-side or RPC dispatches. Merged (device wins) rather than replaced so
           // a snapshot that drops host-set keys can't wipe a value a later ${var} step needs.
-          applyMemorySnapshot(rpcResult.data.memorySnapshot, rpcResult.data.memoryDeletions)
+          applyMemorySnapshot(
+            rpcResult.data.memorySnapshot,
+            rpcResult.data.memoryDeletions,
+            rpcResult.data.sensitiveMemoryKeys,
+          )
           // `success == true` means the on-device handler ran the tool and its post-action
           // settle completed. `false` carries the on-device errorMessage; `null` should not
           // occur on this path because we set `awaitCompletion = true`, but we treat it
@@ -321,8 +332,13 @@ class HostAccessibilityRpcClient(
       // tools via `client.callTool(...)`; without this install, the nested call returns
       // a `CALL_NO_CONTEXT` envelope that users typically don't check, leaving the trail
       // running against state the launch step never actually produced.
+      //
+      // Memory-interpolation boundary for the host-local pre-action branch — same rationale
+      // as in `execute(...)`: this dispatch never reaches an agent seam, so resolve
+      // {{var}}/${var} here (pre-action memory is the seeded trail-start composition).
+      val memoryResolvedTool = interpolateMemoryInTool(resolvedTool, memory)
       val result = ToolExecutionContextThreadLocal.withInstalledContext(context) {
-        resolvedTool.execute(context)
+        memoryResolvedTool.execute(context)
       }
       return when (result) {
         is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success -> true
@@ -335,7 +351,15 @@ class HostAccessibilityRpcClient(
         }
       }
     }
-    val syncRequest = if (request.awaitCompletion) request else request.copy(awaitCompletion = true)
+    // The pre-action's YAML rides the request AS AUTHORED (the caller encodes the trail's tool
+    // item verbatim), so the device boundary needs the host's seeded memory to resolve any
+    // {{var}}/${var} tokens — including the trail's `config.memory:` defaults, which the
+    // single-tool YAML doesn't carry. Same snapshot semantics as the hot path above.
+    val syncRequest = request.copy(
+      awaitCompletion = true,
+      memorySnapshot = memory.variables.toMap(),
+      sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
+    )
     return when (val rpcResult = rpcClient.rpcCall(syncRequest)) {
       is RpcResult.Failure -> {
         Console.log("[HostAccessibilityRpcClient] Pre-action RPC failed: ${rpcResult.message}")
@@ -415,15 +439,25 @@ class HostAccessibilityRpcClient(
   }
 
   /** Merges the device's post-execution snapshot into the host's [memory] then applies explicit deletes. */
-  private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>, deletions: List<String>) {
+  private fun applyMemorySnapshot(
+    deviceSnapshot: Map<String, String>,
+    deletions: List<String>,
+    sensitiveKeys: List<String>,
+  ) {
     // Merge (device wins on conflict) rather than replace. An on-device tool's per-request
     // AgentMemory is seeded from the host push at request start, so its returned snapshot SHOULD
     // carry back every host key — but some dispatch paths (e.g. a scripted tool whose request
     // resets the on-device session) return a snapshot that drops host-set keys, and a plain
     // clear()+putAll() then WIPED them, losing a value a later ${var} step needed (the "typed ''"
     // empty-input false green). Preserving host-only keys keeps cross-step remembers alive;
-    // device-written keys still overwrite on conflict. [deletions] then removes keys an on-device
-    // tool EXPLICITLY deleted — merge alone can't distinguish those from a merely-omitted key.
+    // device-written keys still overwrite on conflict. [sensitiveKeys] re-marks device-side
+    // `rememberSensitive` writes so host-side logging keeps redacting them. [deletions] then
+    // removes keys an on-device tool EXPLICITLY deleted — merge alone can't distinguish those
+    // from a merely-omitted key.
+    // Mark BEFORE storing the values (mirroring `AgentMemory.storeSensitive`): a reader that
+    // snapshots `variables` and filters against `sensitiveKeys` must never observe a returned
+    // secret in the window before its marker lands.
+    sensitiveKeys.forEach { memory.markSensitive(it) }
     memory.variables.putAll(deviceSnapshot)
     deletions.forEach { memory.variables.remove(it) }
   }

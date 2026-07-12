@@ -23,12 +23,11 @@ data class AssertEqualsTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
-    val interpolatedActual = memory.interpolateVariables(actual)
-    val interpolatedExpected = memory.interpolateVariables(expected)
-
-    if (interpolatedActual != interpolatedExpected) {
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execute() runs, so the fields arrive resolved here.
+    if (actual != expected) {
       throw TrailblazeToolExecutionException(
-        message = "Assertion failed: Expected '$interpolatedExpected', but got '$interpolatedActual'",
+        message = "Assertion failed: Expected '$expected', but got '$actual'",
         tool = this,
       )
     }

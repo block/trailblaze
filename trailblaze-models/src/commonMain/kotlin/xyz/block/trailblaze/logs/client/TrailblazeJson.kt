@@ -45,6 +45,12 @@ object TrailblazeJson {
     isLenient = true // Allows unquoted strings & other relaxed parsing
     prettyPrint = true
     allowStructuredMapKeys = true
+    // Deliberate, load-bearing for persisted files (e.g. ~/.trailblaze config via
+    // TrailblazeSettingsRepo/CliConfigHelper): default values are NOT written, so an absent field
+    // means "no explicit choice" and inherits whatever the CURRENT default is when read back.
+    // User-preference fields that must survive a default change are nullable with a null default
+    // (tri-state), so any explicit choice is non-default and always persists.
+    encodeDefaults = false
     @OptIn(InternalSerializationApi::class)
     serializersModule = SerializersModule {
       polymorphicDefaultSerializer(TrailblazeLog::class) { value ->

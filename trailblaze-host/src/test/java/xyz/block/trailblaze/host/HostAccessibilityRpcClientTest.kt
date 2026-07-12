@@ -14,6 +14,7 @@ import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -34,7 +35,6 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.RunCommandTrailblazeTool
 import kotlin.test.Test
 
 /**
@@ -341,15 +341,16 @@ class HostAccessibilityRpcClientTest {
   }
 
   /**
-   * Regression for the host→device memory interpolation gap: a value remembered on the host
-   * (typically by a host-local tool that wrote `context.memory.remember(...)` — or, in the
-   * legacy on-device-RPC path, by a `MemoryTrailblazeTool`) lives only in the host's
-   * [AgentMemory]. The on-device runner spins up a fresh, empty `AgentMemory` per
-   * `RunYamlRequest`, so without host-side resolution, `{{var}}` / `${var}` tokens in the
-   * tool args reach the device and substitute as empty strings.
+   * Raw-send contract for the RPC branch: the tool's args ride the wire AS AUTHORED
+   * ({{var}}/${var} tokens intact) and the remembered value travels in
+   * `RunYamlRequest.memorySnapshot` instead. The DEVICE's dispatch boundary resolves the
+   * tokens against that snapshot — which is what lets the device-side tool log carry both
+   * the raw and resolved forms, so a recording regenerated from an RPC-path run keeps its
+   * tokens. Host-side pre-resolution here would bake the value into the wire YAML and the
+   * device log's "raw" form would already be resolved.
    */
   @Test
-  fun `string args are interpolated against host AgentMemory before RPC dispatch`() {
+  fun `string args ride the RPC as authored and the memory snapshot carries the value`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to runYamlSuccessBody()
     }
@@ -364,22 +365,26 @@ class HostAccessibilityRpcClientTest {
       assertThat(result).isInstanceOf(ExecutionResult.Success::class)
     }
 
-    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    // The resolved literal must reach the device YAML; the unresolved token must not.
-    assertThat(yaml).contains("Cinque")
-    assertThat(yaml).doesNotContain("{{memberPreferredName}}")
+    val request = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject
+    val yaml = request["yaml"]!!.jsonPrimitive.content
+    // The authored token must reach the device YAML; the resolved literal must not.
+    assertThat(yaml).contains("{{memberPreferredName}}")
+    assertThat(yaml).doesNotContain("Cinque")
+    // The value the device boundary resolves against rides the snapshot.
+    val snapshot = request["memorySnapshot"]!!.jsonObject
+    assertThat(snapshot["memberPreferredName"]!!.jsonPrimitive.content).isEqualTo("Cinque")
   }
 
   /**
-   * The substitution must operate on the typed JSON tree of the tool — not on the
-   * already-encoded YAML string — so the YAML encoder can escape any YAML-sensitive
-   * characters (`"`, `\n`, `:`, `#`) in the resolved value. Otherwise a remembered value
-   * containing a colon or a quote could splice into the wire payload as raw text and
-   * corrupt subsequent tool-arg parsing on the device.
+   * The remembered value never touches the wire YAML (it rides the JSON `memorySnapshot`
+   * field), so YAML-significant characters (`"`, `\n`, `:`, `#`) in a remembered value can't
+   * splice into the encoded trail and corrupt tool-arg parsing on the device. The YAML
+   * round-trip below proves the authored token survives encode/decode intact.
    */
   @Test
-  fun `interpolation preserves YAML escaping for sensitive characters in remembered values`() {
+  fun `YAML-sensitive characters in remembered values never touch the wire YAML`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to runYamlSuccessBody()
     }
@@ -396,17 +401,20 @@ class HostAccessibilityRpcClientTest {
       assertThat(result).isInstanceOf(ExecutionResult.Success::class)
     }
 
-    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    // Round-trip through the YAML decoder to verify the on-device parser would recover the
-    // exact remembered string. If interpolation had spliced raw YAML, the decode would
-    // either fail or produce a different string.
+    val request = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject
+    val yaml = request["yaml"]!!.jsonPrimitive.content
+    // Round-trip through the YAML decoder: the on-device parser recovers the authored token,
+    // and the tricky value arrives verbatim through the JSON snapshot field.
     val toolItems = xyz.block.trailblaze.yaml.createTrailblazeYaml().decodeTrail(yaml)
     val toolItem =
       toolItems.single() as xyz.block.trailblaze.yaml.TrailYamlItem.ToolTrailItem
     val recovered = toolItem.tools.single().trailblazeTool as
       xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-    assertThat(recovered.text).isEqualTo(tricky)
+    assertThat(recovered.text).isEqualTo("{{greeting}}")
+    val snapshot = request["memorySnapshot"]!!.jsonObject
+    assertThat(snapshot["greeting"]!!.jsonPrimitive.content).isEqualTo(tricky)
   }
 
   /**
@@ -414,8 +422,9 @@ class HostAccessibilityRpcClientTest {
    * the runner constructs one [AgentMemory], hands it to both the executor and to every
    * [TrailblazeToolExecutionContext], then host-local tools write into it via
    * `context.memory.remember(...)` — after the client has been constructed. Subsequent RPC
-   * tool dispatches must see those writes. A future refactor that copied the memory at
-   * construction would silently re-break the V3 fix without any other test failing.
+   * tool dispatches must see those writes (now via the memorySnapshot the device boundary
+   * resolves against). A future refactor that copied the memory at construction would
+   * silently re-break the V3 fix without any other test failing.
    */
   @Test
   fun `value remembered after client construction is visible to subsequent RPC dispatch`() {
@@ -437,104 +446,17 @@ class HostAccessibilityRpcClientTest {
       assertThat(result).isInstanceOf(ExecutionResult.Success::class)
     }
 
-    val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    assertThat(yaml).contains("Cinque")
-    assertThat(yaml).doesNotContain("{{memberPreferredName}}")
+    val snapshot = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject["memorySnapshot"]!!.jsonObject
+    assertThat(snapshot["memberPreferredName"]!!.jsonPrimitive.content).isEqualTo("Cinque")
   }
 
-  /**
-   * Pins the host-only interpolation contract: `RunCommandTrailblazeTool` is `requiresHost = true`
-   * and does NOT self-interpolate its `command` field. Without the host-side resolution step,
-   * a `{{var}}` token in `command` would reach `sh -c` verbatim. The fact that
-   * `interpolateMemoryInTool` rewrites the typed tool's string field is what makes the host-only
-   * branch in `execute` honor memory tokens — same as the RPC branch.
-   */
-  @Test
-  fun `host-only tool string fields are interpolated by interpolateMemoryInTool`() {
-    val memory = AgentMemory().apply { remember("name", "world") }
-    val original = RunCommandTrailblazeTool(command = "echo {{name}}")
-    val resolved = interpolateMemoryInTool(original, memory) as RunCommandTrailblazeTool
-    assertThat(resolved.command).isEqualTo("echo world")
-  }
-
-  @Test
-  fun `interpolateMemoryInTool resolves multiple tokens in a single string`() {
-    val memory = AgentMemory().apply {
-      remember("first", "Hello")
-      remember("second", "World")
-    }
-    val resolved = interpolateMemoryInTool(
-      InputTextTrailblazeTool(text = "{{first}}, {{second}}!"),
-      memory,
-    ) as InputTextTrailblazeTool
-    assertThat(resolved.text).isEqualTo("Hello, World!")
-  }
-
-  @Test
-  fun `interpolateMemoryInTool supports the dollar-brace syntax`() {
-    val memory = AgentMemory().apply { remember("name", "Cinque") }
-    val resolved = interpolateMemoryInTool(
-      InputTextTrailblazeTool(text = "\${name}"),
-      memory,
-    ) as InputTextTrailblazeTool
-    assertThat(resolved.text).isEqualTo("Cinque")
-  }
-
-  /**
-   * AgentMemory.interpolateVariables leaves unknown tokens in place as literals (with a
-   * diagnostic) rather than silently blanking. Pin that behavior for the boundary path so a
-   * regression back to empty-string substitution surfaces as a test diff rather than silent
-   * data drift.
-   */
-  @Test
-  fun `interpolateMemoryInTool leaves unknown tokens as literals`() {
-    val memory = AgentMemory().apply { remember("known", "value") }
-    val resolved = interpolateMemoryInTool(
-      InputTextTrailblazeTool(text = "[{{unknown}}]"),
-      memory,
-    ) as InputTextTrailblazeTool
-    assertThat(resolved.text).isEqualTo("[{{unknown}}]")
-  }
-
-  /**
-   * `OtherTrailblazeTool` has a `raw: JsonObject` field that holds opaque tool-specific args.
-   * Interpolation must walk into the nested JSON tree and resolve string scalars there too —
-   * otherwise yaml-recorded tools (e.g. `tapOnElementBySelector`) that go through the
-   * polymorphic-fallback path would skip interpolation entirely.
-   */
-  // Note: a full host-only e2e through `client.execute(...)` would require a tool that is
-  // both `surfaceToLlm = true` (so the toolRepo's class-name lookup can find it — see
-  // [TrailblazeKoogToolExt.toKoogToolDescriptor]'s null-return on surfaceToLlm=false) AND
-  // `requiresHost = true`. No such tool exists in the codebase today, and inventing a
-  // test-only one would require @Serializable plumbing. The host-only branch correctness is
-  // covered by:
-  //   1. `host-only tool string fields are interpolated by interpolateMemoryInTool` —
-  //      proves the resolution step rewrites the typed tool's string fields.
-  //   2. The code structure of `HostAccessibilityRpcClient.execute`, which captures
-  //      `val resolvedTool = interpolateMemoryInTool(...)` ABOVE the host-only branch and
-  //      passes the same variable to `resolvedTool.execute(context)` on that branch.
-  // If those two ever drift, the unit test catches the drift in interpolation; the code
-  // structure ensures the host-only branch sees the resolved value.
-  @Test
-  fun `interpolateMemoryInTool walks into OtherTrailblazeTool raw json tree`() {
-    val memory = AgentMemory().apply { remember("label", "Catalog") }
-    val raw = Json.parseToJsonElement(
-      """{"selector":{"textRegex":"{{label}}","keep":42}}""",
-    ).jsonObject
-    val original = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
-      toolName = "tapOnElementBySelector",
-      raw = raw,
-    )
-
-    val resolved = interpolateMemoryInTool(original, memory) as
-      xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
-    val textRegex = resolved.raw["selector"]!!.jsonObject["textRegex"]!!.jsonPrimitive.content
-    assertThat(textRegex).isEqualTo("Catalog")
-    // Non-string scalars in nested objects must be left alone.
-    val keep = resolved.raw["selector"]!!.jsonObject["keep"]!!.jsonPrimitive.content
-    assertThat(keep).isEqualTo("42")
-  }
+  // Unit coverage for `interpolateMemoryInTool` itself (typed-tool field rewrite, token
+  // syntaxes, per-type pass-throughs, kill-switch) lives with the helper in
+  // :trailblaze-common — see ToolMemoryInterpolationTest. The tests here pin THIS client's
+  // routing contract around it: raw args + snapshot on the RPC branch, host-local resolution
+  // on the host-only branch.
 
   /**
    * Empty memory is the typical case (most trails don't use `rememberWithAi`/`rememberText`/
@@ -563,8 +485,8 @@ class HostAccessibilityRpcClientTest {
 
   /**
    * Bidirectional memory sync — outbound half: the host's `AgentMemory` is serialized into the
-   * `RunYamlRequest.memorySnapshot` field so on-device tools can read keys directly (the
-   * boundary pre-resolution above only covers `{{var}}` interpolation in tool args).
+   * `RunYamlRequest.memorySnapshot` field. It's what the device's dispatch boundary resolves
+   * the raw tool args against, and what on-device tools read keys from directly.
    */
   @Test
   fun `dispatched RunYamlRequest carries the host memory snapshot`() {
@@ -590,6 +512,67 @@ class HostAccessibilityRpcClientTest {
       .jsonObject["memorySnapshot"]!!.jsonObject
     assertThat(sentSnapshot["merchantToken"]!!.jsonPrimitive.content).isEqualTo("tok_abc123")
     assertThat(sentSnapshot["personToken"]!!.jsonPrimitive.content).isEqualTo("ptok_xyz")
+  }
+
+  /**
+   * Sensitivity transport — outbound half: the snapshot is a plain string map, so a
+   * `rememberSensitive` value would arrive on the device unmarked (and the device's logging
+   * would emit it in cleartext) unless the sibling `sensitiveMemoryKeys` list carries the
+   * marking across. Only the KEYS ride the list — the value stays in the snapshot.
+   */
+  @Test
+  fun `dispatched RunYamlRequest marks sensitive keys alongside the snapshot`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlSuccessBody()
+    }
+
+    val sharedMemory = AgentMemory().apply {
+      remember("username", "sam")
+      rememberSensitive("passcode", "1234")
+    }
+    runBlocking {
+      createClient(sharedMemory).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+
+    val request = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject
+    val sentKeys = request["sensitiveMemoryKeys"]!!.jsonArray.map { it.jsonPrimitive.content }
+    assertThat(sentKeys).isEqualTo(listOf("passcode"))
+    // The sensitive VALUE still travels in the snapshot — redaction is a logging concern,
+    // not a transport one; the device needs the real value to resolve {{passcode}}.
+    val sentSnapshot = request["memorySnapshot"]!!.jsonObject
+    assertThat(sentSnapshot["passcode"]!!.jsonPrimitive.content).isEqualTo("1234")
+  }
+
+  /**
+   * Sensitivity transport — inbound half: a device-side `rememberSensitive` write comes back
+   * as a plain snapshot entry plus its key in `sensitiveMemoryKeys`; the host must re-mark it
+   * so host-side logging and scripting envelopes keep redacting the value.
+   */
+  @Test
+  fun `device response sensitiveMemoryKeys re-marks keys in host memory`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to
+        """{"sessionId":"host-top-level-session","success":true,""" +
+        """"memorySnapshot":{"devicePin":"9876"},"sensitiveMemoryKeys":["devicePin"]}"""
+    }
+
+    val sharedMemory = AgentMemory()
+    runBlocking {
+      createClient(sharedMemory).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+
+    assertThat(sharedMemory.variables["devicePin"]).isEqualTo("9876")
+    assertThat(sharedMemory.sensitiveKeys).isEqualTo(setOf("devicePin"))
   }
 
   /**

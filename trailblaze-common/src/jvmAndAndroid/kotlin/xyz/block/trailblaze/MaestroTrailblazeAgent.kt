@@ -20,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 
 /**
@@ -270,13 +271,13 @@ abstract class MaestroTrailblazeAgent(
     // resolve through `TrailblazeToolRepo` before driver dispatch." Direct callers of
     // `executeTool` (and subclass overrides that bypass `runTrailblazeTools`) need the same
     // resolution to honor the contract.
-    // Two senses of "resolved" appear in this method — disambiguated by name so a reader
+    // Two senses of "resolved" appear on this dispatch path — disambiguated by name so a reader
     // (or grep) can tell them apart:
     //  - `repoResolvedTool` (this binding) = `OtherTrailblazeTool` → concrete tool, via the
     //    session's `trailblazeToolRepo.toolCallToTrailblazeTool(...)` (dynamic-tool dispatch).
-    //  - Future memory-interpolation locals in the dispatch branches should be named
-    //    `memoryResolvedTool` / `memoryResolvedExpanded` if added — see the parallel naming in
-    //    `HostOnDeviceRpcTrailblazeAgent.executeTool`.
+    //  - `memoryResolvedTool` (in `handleExecutableTool`) = string-interpolated args via
+    //    `interpolateMemoryInTool(...)` — the memory boundary lives THERE, not here, so both
+    //    directly-dispatched and delegating-expanded tools pass through it exactly once.
     val repoResolvedTool: TrailblazeTool = if (tool is OtherTrailblazeTool) {
       val repo = trailblazeToolRepo
       if (repo == null) {
@@ -359,15 +360,23 @@ abstract class MaestroTrailblazeAgent(
     trailblazeTool: ExecutableTrailblazeTool,
     trailblazeExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    // THE memory-interpolation boundary for every Maestro-family driver (host Maestro, Android
+    // instrumentation, on-device accessibility, iOS AXe): each concrete executable — whether
+    // dispatched directly or expanded from a DelegatingTrailblazeTool — passes through here
+    // exactly once, right before `execute()`. The tool executes with resolved args; the log
+    // carries the resolved form plus the authored (token-bearing) form when they differ, which
+    // is what lets recordings keep their `{{var}}` tokens.
+    val memoryResolvedTool = interpolateMemoryInTool(trailblazeTool, memory)
     val timeBeforeToolExecution = Clock.System.now()
-    val trailblazeToolResult = trailblazeTool.execute(
+    val trailblazeToolResult = memoryResolvedTool.execute(
       toolExecutionContext = trailblazeExecutionContext,
     )
     logToolExecution(
-      tool = trailblazeTool,
+      tool = memoryResolvedTool,
       timeBeforeExecution = timeBeforeToolExecution,
       context = trailblazeExecutionContext,
       result = trailblazeToolResult,
+      rawTool = trailblazeTool.takeIf { it !== memoryResolvedTool },
     )
     return trailblazeToolResult
   }

@@ -80,19 +80,26 @@ fi
 # ---------------------------------------------------------------------------
 
 if [ "$BLAZE_JAR" != "1" ]; then
+  # All gradle invocations run from $DEV_JAR_REPO_ROOT (set by dev-jar-cache.sh,
+  # sourced above): MCP clients and IDE integrations spawn this launcher with an
+  # arbitrary cwd where `./gradlew` doesn't exist. The forked app JVM's working
+  # directory is set by Gradle, not by this cd, so argument resolution for the
+  # launched CLI is unchanged.
   tb_run() {
     if [ -n "$1" ]; then
-      ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1"
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1")
     else
-      ./gradlew ${TRAILBLAZE_MODULE}:run
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew ${TRAILBLAZE_MODULE}:run)
     fi
   }
 
   tb_run_background() {
+    # Repo root is passed positionally (like the args) rather than interpolated into the
+    # command string, so a path containing quotes can't break the spawned command.
     if [ -n "$1" ]; then
-      nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
+      nohup bash -c "cd \"\$1\" && ./gradlew ${TRAILBLAZE_MODULE}:run --args=\"\$2\"" _ "$DEV_JAR_REPO_ROOT" "$1" > /dev/null 2>&1 &
     else
-      nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
+      nohup bash -c "cd \"\$1\" && ./gradlew ${TRAILBLAZE_MODULE}:run" _ "$DEV_JAR_REPO_ROOT" > /dev/null 2>&1 &
     fi
   }
 
@@ -111,9 +118,9 @@ if [ "$BLAZE_JAR" != "1" ]; then
           quoted_args="$quoted_args $arg"
         fi
       done
-      ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$quoted_args"
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$quoted_args")
     else
-      ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
+      (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1")
     fi
     _exit=$?
     # Rebuild the uber JAR so the next default run (JAR mode) starts instantly.
@@ -124,11 +131,15 @@ if [ "$BLAZE_JAR" != "1" ]; then
   }
 
   tb_run_exec_quiet() {
+    # exec replaces this process, so a plain cd (no subshell) is safe here. Fail loudly if the
+    # root is missing — otherwise the exec is silently skipped and the caller sees nothing.
+    cd "$DEV_JAR_REPO_ROOT" || { echo "Error: cannot cd to repo root '$DEV_JAR_REPO_ROOT' — not starting Trailblaze." >&2; exit 1; }
     exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
   }
 
   tb_run_background_quiet() {
-    nohup ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
+    # Repo root passed positionally — see tb_run_background.
+    nohup bash -c "cd \"\$1\" && ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args=\"\$2\"" _ "$DEV_JAR_REPO_ROOT" "$1" > /dev/null 2>&1 &
   }
 fi
 

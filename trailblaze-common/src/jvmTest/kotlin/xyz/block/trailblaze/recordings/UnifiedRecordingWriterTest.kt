@@ -56,9 +56,9 @@ class UnifiedRecordingWriterTest {
   }
 
   @Test
-  fun `resolveGate defaults to off when nothing is set`() {
+  fun `resolveGate defaults to on when nothing is set`() {
     if (envGate != null) return // env tier decides when set; skip in an env that sets it
-    assertFalse(UnifiedRecordingWriter.resolveGate(flagOverride = null, persistedConfig = null))
+    assertTrue(UnifiedRecordingWriter.resolveGate(flagOverride = null, persistedConfig = null))
   }
 
   @Test

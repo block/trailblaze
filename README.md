@@ -82,6 +82,37 @@ trailblaze session save -t "Login"    # saves one unified trail file: trails/log
 trailblaze run trails/login           # deterministic replay — no LLM, CI-ready
 ```
 
+## Teach your coding agent Trailblaze
+
+Trailblaze ships an **agent skill** — [`skills/trailblaze/SKILL.md`](skills/trailblaze/SKILL.md)
+plus deep-dive references — that teaches a coding agent the CLI's conventions: driving a
+device, saving and replaying trails, and composing custom tools. It's written in the portable
+[`SKILL.md`](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)
+format that Claude Code, Codex, Cursor, Gemini CLI, Goose, and other agents all read. The skill
+is bundled into the CLI and **versioned with the binary**, so an installed binary (Homebrew or
+install.sh) hands your agent the exact instructions that match it — no repo checkout, no drift:
+
+```bash
+trailblaze skill show                   # print SKILL.md to stdout — always matches your CLI
+trailblaze skill install                # Claude Code:        .claude/skills/trailblaze/
+trailblaze skill install --agent agents # Codex/Cursor/Gemini CLI/Goose/…: .agents/skills/trailblaze/
+trailblaze skill install --all          # both locations
+trailblaze skill install --dir <path>   # any other layout
+```
+
+Two locations cover the field: Claude Code reads `.claude/skills/`, and every other
+standard-compliant agent (Codex, Cursor, Gemini CLI, Goose, OpenCode, …) reads the shared
+`.agents/skills/`. `--agent` also accepts `codex`/`cursor`/`gemini`/`goose` as aliases for
+that shared location.
+
+For an agent, the zero-setup path is `trailblaze skill show` at the start of a task — it
+always reflects the CLI you're running, so upgrading the CLI (`brew upgrade trailblaze`)
+upgrades the skill. An installed copy is a committed snapshot instead; `trailblaze skill
+status` reports whether yours still matches the CLI, and re-running `install` refreshes it.
+
+Working from a checkout instead? Copy `skills/trailblaze/` into your project's skill
+directory (`.claude/skills/`, `.agents/skills/`, or wherever your agent discovers skills).
+
 ## What you get
 
 - **Device control any agent can drive.** `snapshot` to read, `tool` to act, on iOS,

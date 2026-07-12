@@ -77,6 +77,11 @@ fun SessionDetailComposable(
   sessionDetail: SessionDetail,
   toMaestroYaml: (JsonObject) -> String = { it.toString() },
   generateRecordingYaml: () -> String,
+  // Renders the recording in the unified `trail.yaml` shape for DISPLAY + Copy, so the preview
+  // matches what the save path writes to disk. `generateRecordingYaml` (v1 list shape) is still
+  // what the Save button feeds — the save path decodes that v1 then re-merges it into the unified
+  // doc. Null falls back to showing the v1 string (legacy behavior).
+  generateUnifiedRecordingYaml: (() -> String)? = null,
   onBackClick: () -> Unit = {},
   imageLoader: ImageLoader = NetworkImageLoader(),
   // Modal callbacks
@@ -158,6 +163,8 @@ fun SessionDetailComposable(
     // Pre-compute heavy operations in background threads and cache results
     var llmUsageSummary by remember { mutableStateOf<LlmSessionUsageAndCost?>(null) }
     var recordingYamlCache by remember { mutableStateOf<String?>(null) }
+    // Unified-shape rendering for display + Copy (null until computed / when no unified renderer).
+    var unifiedRecordingYamlCache by remember { mutableStateOf<String?>(null) }
     var isLoadingRecordingYaml by remember { mutableStateOf(true) }
 
     // Background computation for LLM usage summary (used in LlmUsage view)
@@ -172,11 +179,14 @@ fun SessionDetailComposable(
     // Refresh if logs change or session status changes
     LaunchedEffect(sessionDetail.logs, sessionDetail.session.latestStatus.isInProgress) {
       isLoadingRecordingYaml = true
-      withContext(Dispatchers.Default) {
-        val computedYaml = generateRecordingYaml()
-        recordingYamlCache = computedYaml
-        isLoadingRecordingYaml = false
+      // Compute off-main, then assign Compose state on the effect's (main-dispatched) coroutine —
+      // writing snapshot state from Dispatchers.Default risks partial/torn UI updates.
+      val computed = withContext(Dispatchers.Default) {
+        generateRecordingYaml() to generateUnifiedRecordingYaml?.invoke()
       }
+      recordingYamlCache = computed.first
+      unifiedRecordingYamlCache = computed.second
+      isLoadingRecordingYaml = false
     }
 
     LaunchedEffect(alwaysAtBottom, sessionDetail.logs, viewMode) {
@@ -397,7 +407,12 @@ fun SessionDetailComposable(
                             ) {
                               Button(
                                 onClick = {
-                                  clipboardManager.setText(AnnotatedString(recordingYamlCache ?: ""))
+                                  clipboardManager.setText(
+                                    AnnotatedString(
+                                      unifiedRecordingYamlCache?.ifBlank { null }
+                                        ?: recordingYamlCache ?: "",
+                                    )
+                                  )
                                 }
                               ) {
                                 Text("Copy Yaml")
@@ -525,7 +540,10 @@ fun SessionDetailComposable(
                             }
                           }
                           CodeBlock(
-                            text = recordingYamlCache ?: "",
+                            // Blank (not just null) means unified rendering failed — fall back to
+                            // the v1 string so the tab never shows an empty recording.
+                            text = unifiedRecordingYamlCache?.ifBlank { null }
+                              ?: recordingYamlCache ?: "",
                             textStyle = MaterialTheme.typography.labelSmall.copy(
                               fontSize = MaterialTheme.typography.labelSmall.fontSize * fontSizeScale
                             )

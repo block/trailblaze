@@ -26,17 +26,18 @@ class ComposeVerifyTextVisibleTool(
     target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val interpolatedText = context.memory.interpolateVariables(text)
-    Console.log("### Verifying text visible: $interpolatedText")
+    // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+    // before execution, so `text` arrives resolved here.
+    Console.log("### Verifying text visible: $text")
     return try {
-      val matcher = hasText(interpolatedText, substring = false)
+      val matcher = hasText(text, substring = false)
       val nodes = ComposeExecutableTool.findNodes(target, matcher)
       if (nodes.isEmpty()) {
         TrailblazeToolResult.Error.ExceptionThrown(
-          "Assertion failed: text '$interpolatedText' is not visible in the Compose UI."
+          "Assertion failed: text '$text' is not visible in the Compose UI."
         )
       } else {
-        TrailblazeToolResult.Success(message = "Verified text '$interpolatedText' is visible.")
+        TrailblazeToolResult.Success(message = "Verified text '$text' is visible.")
       }
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Verify text failed: ${e.message}")

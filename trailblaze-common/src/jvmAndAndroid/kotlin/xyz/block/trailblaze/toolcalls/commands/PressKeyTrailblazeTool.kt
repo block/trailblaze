@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.KeyCode
 import maestro.orchestra.Command
 import maestro.orchestra.PressKeyCommand
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -48,7 +47,7 @@ data class PressKeyTrailblazeTool(
     object Serializer : CaseInsensitiveEnumSerializer<PressKeyCode>(PressKeyCode::class)
   }
 
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
+  override fun toMaestroCommands(): List<Command> = listOf(
     PressKeyCommand(
       code = keyCode.let { code ->
         when (code) {

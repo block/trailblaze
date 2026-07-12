@@ -6,6 +6,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
@@ -21,7 +22,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.withAuthoredFailureContent
 import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
@@ -185,9 +188,32 @@ abstract class BaseTrailblazeAgent(
       val resolved = resolveDynamicTool(tool)
       val result =
         when (resolved) {
+          // Memory tools execute in-process wherever this loop runs (host loop for host agents,
+          // device loop for on-device agents) — so this loop IS their memory-interpolation
+          // boundary. `toolsExecuted` keeps the AUTHORED instance (here and on every other
+          // branch): it feeds the LLM chat history and the verify ledger, which must see the
+          // token-bearing form — both for fidelity and so `rememberSensitive` values never
+          // reach the LLM context.
           is MemoryTrailblazeTool -> {
             toolsExecuted.add(resolved)
-            resolved.execute(memory = memory, elementComparator = elementComparator)
+            val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
+            try {
+              memoryResolvedTool.execute(memory = memory, elementComparator = elementComparator)
+            } catch (e: TrailblazeToolExecutionException) {
+              // Same authored-identity rule as `withAuthoredFailureContent` below: memory tools
+              // throw with `tool = this`, which is now the RESOLVED instance, and both the
+              // exception's tool and its message (built from the embedded result) render into
+              // LLM-facing error content. Rebuild with the authored instance AND scrub any
+              // rememberSensitive value the resolved prompt spliced into the error message
+              // (e.g. a `rememberText` miss embeds the resolved prompt) so neither the args nor
+              // the message ride the failure metadata.
+              if (e.tool !== memoryResolvedTool || memoryResolvedTool === resolved) throw e
+              throw TrailblazeToolExecutionException(
+                tool = resolved,
+                trailblazeToolResult = e.trailblazeToolResult.withAuthoredFailureContent(resolved, memory),
+                cause = e,
+              )
+            }
           }
           // Host-local executables (e.g. subprocess MCP tools) bypass driver-specific dispatch
           // — they round-trip through host-side transport and don't belong to any device /
@@ -204,6 +230,12 @@ abstract class BaseTrailblazeAgent(
           // auto-save silently swap them for unrelated fallbacks.
           is HostLocalExecutableTrailblazeTool -> {
             toolsExecuted.add(resolved)
+            // Host-locals execute right here, so this loop is their memory boundary too. For
+            // the common concrete types (QuickJS / subprocess scripted tools, both
+            // `RawArgumentTrailblazeTool`) this is a pass-through — they resolve their args
+            // JSON at the engine boundary themselves — but a custom class-backed HostLocal
+            // gets its string fields resolved like every other tool.
+            val memoryResolvedTool = interpolateMemoryInTool(resolved, memory)
             val timeBeforeExecution = Clock.System.now()
             // Catch throws so the log emit still fires on the exception path. The contract
             // is "every dispatch logs" — if `execute` lets an exception escape (custom
@@ -213,14 +245,16 @@ abstract class BaseTrailblazeAgent(
             // treats it the same as a returned error. `CancellationException` re-throws so
             // structured concurrency for session teardown / agent abort stays intact.
             val hostResult: TrailblazeToolResult = try {
-              runBlocking { resolved.execute(context) }
+              runBlocking { memoryResolvedTool.execute(context) }
             } catch (e: CancellationException) {
               throw e
             } catch (e: Throwable) {
+              // `resolved` (authored), not `memoryResolvedTool`: the embedded command renders
+              // into LLM-facing error content and must keep the token-bearing form.
               TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, resolved)
             }
             logToolExecution(
-              tool = resolved,
+              tool = memoryResolvedTool,
               timeBeforeExecution = timeBeforeExecution,
               context = context,
               result = hostResult,
@@ -228,11 +262,17 @@ abstract class BaseTrailblazeAgent(
               // such, since the log payload is otherwise indistinguishable from an RPC-routed
               // tool's device-emitted log.
               dispatchedHostSide = true,
+              rawTool = resolved.takeIf { it !== memoryResolvedTool },
             )
             hostResult
           }
           else -> executeTool(resolved, context, toolsExecuted)
-        }
+          // Failure metadata carries the AUTHORED instance, mirroring `toolsExecuted`: a tool
+          // that failed after boundary interpolation stamps `command = this` with the RESOLVED
+          // instance, which would surface resolved memory values (incl. rememberSensitive
+          // secrets) in LLM-facing error content — both in the command and in any resolved value
+          // the tool spliced into its error message, so scrub both.
+        }.withAuthoredFailureContent(resolved, memory)
       if (!result.isSuccess()) {
         return RunTrailblazeToolsResult(
           inputTools = tools,

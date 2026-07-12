@@ -33,6 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
 
@@ -148,21 +149,29 @@ class ComposeTrailblazeAgent(
     tool: ComposeExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
+    // Memory-interpolation boundary for the in-process Compose driver — the tool executes with
+    // resolved args; the log carries resolved + authored so recordings keep their tokens.
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
     // Capture screen state BEFORE execution for the screenshot overlay.
     // Catch Throwable because ComposeUiTest throws AssertionError (not Exception) when
     // there are multiple root nodes (e.g., dialog overlays).
     val preScreenState = try { screenStateProvider() } catch (_: Throwable) { null }
 
     val timeBeforeExecution = Clock.System.now()
-    val result = tool.executeWithCompose(target, context)
+    val result = memoryResolvedTool.executeWithCompose(target, context)
     val executionTimeMs =
       Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
     // Compose tools run in-process on the host JVM (Compose Desktop / Compose Multiplatform
     // test surface) — flag the dispatch as host-side so session viewers can distinguish it
     // from RPC-routed-to-device dispatches.
-    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
+    logToolExecution(
+      memoryResolvedTool, timeBeforeExecution, context, result, dispatchedHostSide = true,
+      rawTool = tool.takeIf { it !== memoryResolvedTool },
+    )
 
-    // Log AgentDriverLog with pre-action screenshot for visualization
+    // Log AgentDriverLog with pre-action screenshot for visualization. Deliberately the authored
+    // instance: the driver-action label has always shown the args as written (tokens included),
+    // and keeping that here means a remembered secret never lands in the driver-log label either.
     logAgentDriverAction(
       tool, result, preScreenState, executionTimeMs, timeBeforeExecution, context.traceId
     )
@@ -174,12 +183,17 @@ class ComposeTrailblazeAgent(
     tool: ExecutableTrailblazeTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {
+    // Same memory boundary as executeComposeToolBlocking, for generic host-JVM executables.
+    val memoryResolvedTool = interpolateMemoryInTool(tool, memory)
     val timeBeforeExecution = Clock.System.now()
-    val result = tool.execute(context)
+    val result = memoryResolvedTool.execute(context)
     // Compose tools run in-process on the host JVM (Compose Desktop / Compose Multiplatform
     // test surface) — flag the dispatch as host-side so session viewers can distinguish it
     // from RPC-routed-to-device dispatches.
-    logToolExecution(tool, timeBeforeExecution, context, result, dispatchedHostSide = true)
+    logToolExecution(
+      memoryResolvedTool, timeBeforeExecution, context, result, dispatchedHostSide = true,
+      rawTool = tool.takeIf { it !== memoryResolvedTool },
+    )
     result
   }
 

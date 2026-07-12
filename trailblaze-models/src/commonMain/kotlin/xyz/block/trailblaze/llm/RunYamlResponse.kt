@@ -136,6 +136,20 @@ data class RunYamlResponse(
    * is returned) and for ordinary failures (assertion, element-not-found, transport).
    */
   val nonRecoverableWedge: Boolean = false,
+
+  /**
+   * Keys in [memorySnapshot] whose values are sensitive on the device (`rememberSensitive`
+   * writes by on-device tools, plus host-sent [RunYamlRequest.sensitiveMemoryKeys] echoed
+   * back). The snapshot is a plain string map with no sensitivity marking, so without this
+   * list a device-side secret would arrive on the host unmarked and host-side logging /
+   * scripting envelopes would emit it in cleartext. The host re-marks these keys
+   * (`AgentMemory.markSensitive`) after merging the snapshot.
+   *
+   * Defaults to `emptyList()` for back-compat: an older device omits the field and the host
+   * marks nothing new. Trailing field for positional/binary-compat stability. Can only be
+   * non-empty when [memorySnapshot] can be — see the init-block require.
+   */
+  val sensitiveMemoryKeys: List<String> = emptyList(),
 ) {
   init {
     require(success != null || memorySnapshot.isEmpty()) {
@@ -153,6 +167,10 @@ data class RunYamlResponse(
     require(success != null || onDeviceToolLogCount == 0) {
       "RunYamlResponse for fire-and-forget dispatch (success=null) cannot report a non-zero " +
         "onDeviceToolLogCount — no tool has executed yet."
+    }
+    require(success != null || sensitiveMemoryKeys.isEmpty()) {
+      "RunYamlResponse for fire-and-forget dispatch (success=null) cannot carry " +
+        "sensitiveMemoryKeys — memory sync requires a completion event."
     }
   }
 }

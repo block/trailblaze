@@ -26,6 +26,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -128,6 +129,15 @@ class McpProxy(
   // initial injection happens after the client's first `notifications/initialized`;
   // subsequent reconnects rely on the replay path (lastDeviceToolCall) instead.
   private val hasInjectedInitialDeviceBind = AtomicBoolean(false)
+
+  // How many autodetect probes the startup injection has burned. Each probe is
+  // a full one-shot MCP session against the daemon (device LIST, ~2s wall time),
+  // and an unresolved probe (0 or 2+ devices) deliberately does NOT set
+  // [hasInjectedInitialDeviceBind] — so without a separate bound, EVERY
+  // subsequent tools/call would re-pay the probe for the whole session
+  // (measured: 17 probes across 15 tool calls in a no-device environment).
+  // Capped at [MAX_INITIAL_AUTODETECT_ATTEMPTS]; see [tryConsumeAutodetectAttempt].
+  private val initialAutodetectAttempts = AtomicInteger(0)
 
   // The client's requested protocol version -- used to bridge version mismatches between
   // the client and the MCP SDK (e.g., client wants 2025-11-25 but SDK only supports 2025-06-18)
@@ -631,6 +641,12 @@ class McpProxy(
    * across reconnects. Subsequent daemon restarts replay the same calls via the
    * existing `lastDeviceToolCall` / `lastTargetToolCall` track-and-replay path
    * inside [reInitializeSession], not by re-firing this injection.
+   *
+   * Bounded: when autodetect doesn't resolve (0 or 2+ devices), the injection
+   * window stays open but the daemon probe itself is capped at
+   * [MAX_INITIAL_AUTODETECT_ATTEMPTS] attempts per proxy lifetime (see
+   * [tryConsumeAutodetectAttempt]) — otherwise every tools/call for the rest
+   * of the session would re-pay the ~2s probe.
    */
   private fun maybeInjectInitialDeviceBind(clientLine: String, log: (String) -> Unit) {
     // Cheap atomic read before the JSON parse: once the one-shot injection has
@@ -638,6 +654,17 @@ class McpProxy(
     // just to confirm it isn't `notifications/initialized`. Short-circuiting
     // here keeps the steady-state path a single atomic .get().
     if (hasInjectedInitialDeviceBind.get()) return
+    // Autodetect exhausted and nothing explicit to inject: the injection can
+    // never fire again, so skip the per-line JSON parse below entirely. The
+    // threshold is deliberately MAX + 1, not MAX: the first post-cap trigger
+    // must still reach [tryConsumeAutodetectAttempt] so its one-time
+    // "skipping further probes" log line fires; only after that does this
+    // short-circuit kick in.
+    if (initialDeviceSpec.isNullOrBlank() &&
+      initialAutodetectAttempts.get() > MAX_INITIAL_AUTODETECT_ATTEMPTS
+    ) {
+      return
+    }
     if (!isInitialInjectionTrigger(clientLine)) return
 
     // Resolve the device spec via the three-tier chain that mirrors the CLI's
@@ -657,10 +684,19 @@ class McpProxy(
     // Important: do not flip the CAS until we actually have a spec to inject.
     // Otherwise an autodetect that resolves to "0 or 2+ devices" on the
     // notifications/initialized trigger would burn the one-shot guard, and the
-    // followup `tools/call` trigger (which could in principle reach a state
-    // where the device set changes — though rare in practice) would silently
-    // skip its second chance. Resolving first then CASing keeps the
-    // "fire at most once" semantics without prematurely closing the window.
+    // followup `tools/call` trigger would silently skip its second chance —
+    // a device booted between the client's handshake and its first real tool
+    // call would never be picked up. Resolving first then CASing keeps the
+    // "inject at most once" semantics without prematurely closing that window.
+    //
+    // The flip side: because an unresolved probe leaves the CAS open, the
+    // probe itself must be bounded separately or every subsequent tools/call
+    // in a 0/2+-device environment re-pays the ~2s daemon LIST probe.
+    // [tryConsumeAutodetectAttempt] caps it at
+    // [MAX_INITIAL_AUTODETECT_ATTEMPTS] probes — enough for one attempt per
+    // trigger kind (notifications/initialized + first tools/call) — after
+    // which the agent binds explicitly via the `device` tool (the documented
+    // fallback).
     val explicitSpec = initialDeviceSpec?.takeIf { it.isNotBlank() }
     val resolvedSpec: String
     val sourceLabel: String
@@ -668,6 +704,7 @@ class McpProxy(
       resolvedSpec = explicitSpec
       sourceLabel = "from --device / TRAILBLAZE_DEVICE"
     } else {
+      if (!tryConsumeAutodetectAttempt(log)) return
       resolvedSpec = autodetectSingleConnectedDevice(log) ?: return
       // [resolveAutodetectFromDeviceList] already logged the "Auto-using only
       // connected device: <id>" line at the resolve site, so this label is
@@ -710,6 +747,31 @@ class McpProxy(
     // agent's cached tool descriptors could be stale until the first daemon
     // notification arrives.
     notificationQueue.put("""{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}""")
+  }
+
+  /**
+   * Consume one bounded autodetect attempt. Returns true while attempts
+   * remain; false once [MAX_INITIAL_AUTODETECT_ATTEMPTS] probes have been
+   * spent (logging the giving-up line exactly once, on the first refusal).
+   *
+   * Exists because an unresolved probe deliberately leaves
+   * [hasInjectedInitialDeviceBind] open (see the comment at the call site in
+   * [maybeInjectInitialDeviceBind]) — this counter is what turns "window stays
+   * open" into "window stays open, but we stop paying a ~2s daemon probe on
+   * every tools/call to peek through it."
+   */
+  internal fun tryConsumeAutodetectAttempt(log: (String) -> Unit): Boolean {
+    val attempt = initialAutodetectAttempts.incrementAndGet()
+    if (attempt > MAX_INITIAL_AUTODETECT_ATTEMPTS) {
+      if (attempt == MAX_INITIAL_AUTODETECT_ATTEMPTS + 1) {
+        log(
+          "Device autodetect unresolved after $MAX_INITIAL_AUTODETECT_ATTEMPTS attempts — " +
+            "skipping further probes. Bind a device explicitly with the `device` tool.",
+        )
+      }
+      return false
+    }
+    return true
   }
 
   /**
@@ -1138,6 +1200,17 @@ class McpProxy(
      * probe via [kotlinx.coroutines.withTimeout].
      */
     internal const val AUTODETECT_PROBE_TIMEOUT_MS: Long = 5_000L
+
+    /**
+     * Max startup autodetect probes per proxy lifetime. Two = one attempt per
+     * trigger kind ([isInitialInjectionTrigger] fires on
+     * `notifications/initialized` and on `tools/call`), which keeps the useful
+     * window — a device booted between the client's handshake and its first
+     * real tool call is still auto-bound — while guaranteeing a 0/2+-device
+     * environment pays the ~2s daemon probe at most twice per session instead
+     * of on every tool call.
+     */
+    internal const val MAX_INITIAL_AUTODETECT_ATTEMPTS = 2
   }
 }
 

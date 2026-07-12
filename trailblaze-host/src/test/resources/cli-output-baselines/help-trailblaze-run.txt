@@ -173,12 +173,13 @@ removed in a future release.
                                device's slot is merged into the unified trail.
                                yaml (a directory that still has legacy
                                <classifier>.trail.yaml files keeps using them).
-                               Default: off while unified support rolls out —
-                               recordings save as legacy <classifier>.trail.
-                               yaml siblings, and nothing is written next to an
-                               existing unified trail.yaml. Also enabled via
-                               TRAILBLAZE_UNIFIED_RECORDINGS=1 or 'trailblaze
-                               config unified-recordings true'.
+                               Default: on. Opt out with
+                               --no-unified-recordings,
+                               TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze
+                               config unified-recordings false' to save legacy
+                               <classifier>.trail.yaml siblings instead —
+                               nothing is ever written next to an existing
+                               unified trail.yaml.
       --[no-]use-recorded-steps
                              Three-way switch for replay vs. AI-driven
                                execution:

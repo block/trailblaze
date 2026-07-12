@@ -490,6 +490,50 @@ class McpProxyInjectionTest {
     assertNull(spec)
   }
 
+  // ---------------------------------------------------------------------------
+  // tryConsumeAutodetectAttempt — bounded startup autodetect probes
+  // ---------------------------------------------------------------------------
+  //
+  // An unresolved autodetect (0 or 2+ devices) deliberately leaves the one-shot
+  // injection CAS open so a device booted between `notifications/initialized`
+  // and the first `tools/call` is still picked up. The cost of that open window
+  // must be bounded: each probe is a ~2s one-shot daemon session, and before
+  // this counter existed a no-device environment re-paid it on EVERY tools/call
+  // (measured 17 probes across 15 calls). These tests pin the cap.
+
+  @Test
+  fun `tryConsumeAutodetectAttempt allows exactly MAX attempts then refuses`() {
+    val proxy = McpProxy()
+    repeat(McpProxy.MAX_INITIAL_AUTODETECT_ATTEMPTS) { i ->
+      assertTrue(proxy.tryConsumeAutodetectAttempt {}, "attempt ${i + 1} should be allowed")
+    }
+    assertEquals(false, proxy.tryConsumeAutodetectAttempt {})
+    assertEquals(false, proxy.tryConsumeAutodetectAttempt {})
+  }
+
+  @Test
+  fun `tryConsumeAutodetectAttempt logs the giving-up line exactly once`() {
+    // The log line is the user's only signal for "why did auto-bind stop
+    // trying" — it must appear on the first refusal and must not spam the log
+    // on every subsequent tool call.
+    val proxy = McpProxy()
+    val logs = mutableListOf<String>()
+    repeat(McpProxy.MAX_INITIAL_AUTODETECT_ATTEMPTS + 3) {
+      proxy.tryConsumeAutodetectAttempt { logs += it }
+    }
+    assertEquals(1, logs.count { it.contains("skipping further probes") }, "got logs: $logs")
+  }
+
+  @Test
+  fun `tryConsumeAutodetectAttempt allows the second-chance probe`() {
+    // The window the cap must NOT close: probe 1 (on notifications/initialized)
+    // finds nothing, a device boots, probe 2 (on the first tools/call) must
+    // still be allowed to resolve it.
+    val proxy = McpProxy()
+    assertTrue(proxy.tryConsumeAutodetectAttempt {})
+    assertTrue(proxy.tryConsumeAutodetectAttempt {})
+  }
+
   @Test
   fun `synthesizeDeviceBindCall round-trips the autodetect-resolved spec`() {
     // Glue test: the spec produced by the autodetect resolver

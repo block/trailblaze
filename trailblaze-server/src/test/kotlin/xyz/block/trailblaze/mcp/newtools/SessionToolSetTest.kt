@@ -357,6 +357,9 @@ class SessionToolSetTest {
         logsRepo = logsRepo,
         sessionIdProvider = { iosSessionId },
         trailsDirectory = trailsDir.absolutePath,
+        // Pin the gate off: this guard is about the LEGACY filename's platform, which only
+        // exists on the legacy save path (unified saves route to trail.yaml).
+        unifiedRecordingsEnabled = { false },
       )
 
       val result = toolSet.session(

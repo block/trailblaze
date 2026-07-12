@@ -27,8 +27,10 @@ data class AssertMathTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
-    // Process any dynamic extraction patterns like [[prompt]] in the expression
-    val interpolatedExpression = processDynamicExtractions(expression, memory, elementComparator)
+    // Process any dynamic extraction patterns like [[prompt]] in the expression.
+    // ({{var}}/${var} tokens are resolved by the dispatch boundary — interpolateMemoryInTool —
+    // before execute() runs, so `expression` arrives with only [[prompt]] extractions left.)
+    val interpolatedExpression = processDynamicExtractions(expression, elementComparator)
 
     try {
       val result = ExpressionBuilder(interpolatedExpression).build().evaluate()
@@ -60,7 +62,6 @@ data class AssertMathTrailblazeTool(
    */
   private fun processDynamicExtractions(
     expression: String,
-    memory: AgentMemory,
     elementComparator: ElementComparator,
   ): String {
     Console.log("Processing dynamic extractions in: $expression")
@@ -106,10 +107,8 @@ data class AssertMathTrailblazeTool(
       }
     }
 
-    // Also process regular variable interpolation after dynamic extractions
-    val finalExpression = memory.interpolateVariables(interpolatedExpression)
-    Console.log("Final interpolated expression: $finalExpression")
+    Console.log("Final interpolated expression: $interpolatedExpression")
 
-    return finalExpression
+    return interpolatedExpression
   }
 }

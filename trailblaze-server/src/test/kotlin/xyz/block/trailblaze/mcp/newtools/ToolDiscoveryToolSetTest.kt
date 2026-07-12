@@ -410,6 +410,125 @@ class ToolDiscoveryToolSetTest {
     assertTrue(toolDetails.isNotEmpty(), "toolDetails should not be empty for core_interaction")
   }
 
+  @Test
+  fun `INDEX mode without detail scopes target toolsets to the current target`() = runTest {
+    // The no-args index used to list every loaded target's tools (600+ on an internal daemon,
+    // ~580K chars). Compact mode now shows only the current target's tools; the rest surface
+    // as names in otherTargets for drill-in via toolbox(target=...).
+    val toolSet = createToolSet(
+      allTargets = setOf(testTarget, inlineToolTarget),
+      currentTarget = testTarget,
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(detail = false)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val targetToolsetNames = obj["targetToolsets"]?.jsonArray
+      ?.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+      .orEmpty()
+    assertTrue(
+      targetToolsetNames.none { it.startsWith("inlineapp") },
+      "non-current target's tools must not appear in the compact index; got $targetToolsetNames",
+    )
+
+    val otherNames = obj["otherTargets"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(otherNames, "inlineapp")
+  }
+
+  @Test
+  fun `INDEX mode with detail keeps every target's toolsets`() = runTest {
+    // --detail is the explicit firehose: it must keep reflecting every executable custom tool,
+    // including targets other than the current one.
+    val toolSet = createToolSet(
+      allTargets = setOf(testTarget, inlineToolTarget),
+      currentTarget = testTarget,
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(detail = true)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val targetToolsetNames = obj["targetToolsets"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertTrue(
+      targetToolsetNames.any { it.startsWith("inlineapp") },
+      "detail mode must keep listing other targets' tools; got $targetToolsetNames",
+    )
+  }
+
+  @Test
+  fun `INDEX mode without detail strips parameter descriptors from toolDetails`() = runTest {
+    // toolbox() with no args promises an index. Serializing every tool's full parameter
+    // surface anyway made the no-args response ~189K chars on a fully-loaded daemon —
+    // useless as a first discovery call for an MCP agent. Compact mode keeps name +
+    // description (the CLI peek needs those) and nothing else; parameter exploration is
+    // detail=true or toolbox(name=...).
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(detail = false)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val allToolsetDetails = obj["platformToolsets"]!!.jsonArray
+      .mapNotNull { it.jsonObject["toolDetails"]?.jsonArray }
+      .flatten()
+    assertTrue(allToolsetDetails.isNotEmpty(), "expected some toolDetails entries to inspect")
+    for (tool in allToolsetDetails) {
+      val toolObj = tool.jsonObject
+      assertNull(
+        toolObj["requiredParameters"],
+        "compact toolDetails must not carry requiredParameters (tool ${toolObj["name"]})",
+      )
+      assertNull(
+        toolObj["optionalParameters"],
+        "compact toolDetails must not carry optionalParameters (tool ${toolObj["name"]})",
+      )
+    }
+  }
+
+  @Test
+  fun `INDEX mode with detail preserves parameter descriptors in toolDetails`() = runTest {
+    // The other half of the toolDetailsFor contract: detail=true is the parameter-exploration
+    // mode, so descriptors must come through untouched.
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(detail = true)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val allToolsetDetails = obj["platformToolsets"]!!.jsonArray
+      .mapNotNull { it.jsonObject["toolDetails"]?.jsonArray }
+      .flatten()
+    assertTrue(
+      allToolsetDetails.any { it.jsonObject["requiredParameters"] != null },
+      "detail=true toolDetails must keep parameter descriptors (none found across ${allToolsetDetails.size} tools)",
+    )
+  }
+
+  @Test
+  fun `INDEX mode without detail lists current target tools AND otherTargets`() = runTest {
+    // When the current target has tools of its own, the compact index shows them — and must
+    // STILL emit otherTargets, since the compact target listing is scoped to the current target
+    // (the rest of the catalogue is only discoverable through the name list).
+    val toolSet = createToolSet(
+      allTargets = setOf(testTarget, inlineToolTarget),
+      currentTarget = inlineToolTarget,
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(detail = false)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val targetToolsetNames = obj["targetToolsets"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertTrue(
+      targetToolsetNames.any { it.startsWith("inlineapp") },
+      "current target's tools should appear in the compact index; got $targetToolsetNames",
+    )
+
+    val otherNames = obj["otherTargets"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(otherNames, "testapp")
+  }
+
   // -- 4. Name mode -- tool found in platform category ------------------------
 
   @Scenario(

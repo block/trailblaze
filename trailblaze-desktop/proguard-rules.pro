@@ -64,6 +64,23 @@
 -keep class androidx.compose.ui.platform.** { *; }
 
 # ===========================================================================
+# quickjs-kt (JNI-heavy — native code calls back into Java)
+# ===========================================================================
+# The scripted-tool QuickJS engine (com.dokar.quickjs, io.github.dokar3:quickjs-kt)
+# ships a native libquickjs.{dylib,so,dll} that reaches back into these Kotlin
+# classes by name via JNI FindClass/GetMethodID/GetFieldID — the binding
+# callbacks (binding/JsFunction, binding/JsObjectHandle, …) and QuickJs's own
+# native-method declarations (invokeJsFunction, defineObject, …) are invoked
+# ONLY from the native side, so ProGuard's shrinker sees them as unreachable and
+# strips them (68 of 90 classes in a real release build). The native lib then
+# dereferences a class graph that no longer has what it expects, and the
+# func_data callback path segfaults the JVM (SIGABRT/EXC_BAD_ACCESS on a
+# quickjs-tool-engine-N thread) — the exact same failure the Skiko/Netty/JNA
+# keeps elsewhere in this file exist to prevent. This is installed-JAR-only because source/dev
+# builds don't run ProGuard. See block/trailblaze#194.
+-keep class com.dokar.quickjs.** { *; }
+
+# ===========================================================================
 # Kotlin
 # ===========================================================================
 # ProGuard corrupts Kotlin metadata when processing stdlib classes, causing

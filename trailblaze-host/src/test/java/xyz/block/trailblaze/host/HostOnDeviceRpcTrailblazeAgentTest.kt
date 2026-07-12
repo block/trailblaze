@@ -447,16 +447,15 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   /**
-   * Regression for the host→device memory interpolation gap: a value remembered
-   * on the host (here via a `MemoryTrailblazeTool` short-circuited in `BaseTrailblazeAgent`)
-   * lives in the host's `AgentMemory`. The on-device runner spins up a fresh, empty
-   * `AgentMemory` per `RunYamlRequest`, so a subsequent `inputText { text: "{{var}}" }`
-   * arrives at the device with empty memory and reaches Maestro as the empty string. Without
-   * this fix the test would observe the `inputText` YAML carry the raw `{{name}}` token to
-   * the device.
+   * The host does NOT pre-resolve `{{var}}` tokens before RPC dispatch: the raw, token-bearing
+   * tool travels to the device, and the ON-DEVICE dispatch boundary resolves it against the
+   * memory snapshot sent alongside (`RunYamlRequest.memorySnapshot`, seeded into the device's
+   * `AgentMemory` by `RunYamlRequestHandler`). Pre-resolving on the host — the old behavior —
+   * meant the device-side tool logs (and every recording regenerated from them) carried one
+   * run's resolved values instead of the authored tokens.
    */
   @Test
-  fun `tool args are interpolated against host memory before RPC dispatch`() {
+  fun `tool args dispatch raw with the memory snapshot for the on-device boundary`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
     }
@@ -479,20 +478,25 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
 
     val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    // Resolved literal must reach the device YAML; the raw token must not.
-    assertThat(yaml).contains("Cinque")
-    assertThat(yaml).doesNotContain("{{memberPreferredName}}")
+    val request = Json.parseToJsonElement(body).jsonObject
+    val yaml = request["yaml"]!!.jsonPrimitive.content
+    // The token rides raw; the resolved literal must NOT be baked into the dispatched YAML.
+    assertThat(yaml).contains("{{memberPreferredName}}")
+    assertThat(yaml).doesNotContain("Cinque")
+    // The value the device boundary will resolve against travels in the snapshot.
+    assertThat(request["memorySnapshot"]!!.jsonObject["memberPreferredName"]!!.jsonPrimitive.content)
+      .isEqualTo("Cinque")
   }
 
   /**
    * The `MemoryTrailblazeTool` short-circuit in `BaseTrailblazeAgent` and the per-tool RPC
-   * path must share the same `AgentMemory` instance. If they don't, a `rememberText` populates
-   * one map but the next RPC tool reads from a different (empty) map and the interpolation
-   * is a no-op.
+   * path must share the same `AgentMemory` instance: a `rememberText` writes into the same map
+   * the next RPC dispatch serializes as `RunYamlRequest.memorySnapshot`. If they diverged, the
+   * device would receive a snapshot without the remembered value and the on-device boundary
+   * would leave the token as an unresolved literal.
    */
   @Test
-  fun `value remembered by MemoryTrailblazeTool is available to subsequent RPC tool`() {
+  fun `value remembered by MemoryTrailblazeTool travels in the next RPC dispatch snapshot`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
     }
@@ -514,20 +518,24 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
     // Only the `inputText` tool dispatches over RPC — `rememberText` is short-circuited on
-    // the host. Verify the dispatched YAML carries the resolved literal.
+    // the host. The dispatched YAML keeps the raw token; the remembered value rides the
+    // snapshot for the on-device boundary to resolve.
     val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    assertThat(yaml).contains("Cinque")
+    val request = Json.parseToJsonElement(body).jsonObject
+    assertThat(request["yaml"]!!.jsonPrimitive.content).contains("{{memberPreferredName}}")
+    assertThat(request["memorySnapshot"]!!.jsonObject["memberPreferredName"]!!.jsonPrimitive.content)
+      .isEqualTo("Cinque")
   }
 
   /**
    * `executeMaestroCommands` wraps raw maestro YAML into a `MaestroTrailblazeTool(yaml = ...)`
-   * and pipes it through the same `executeToolViaRpc` interpolation path. If `MaestroTrailblazeTool.yaml`
-   * is ever renamed or retyped, this test fails — protecting trails whose maestro fallback path
-   * carries `{{var}}` tokens.
+   * and dispatches it like any other tool: RAW. A `{{var}}` inside the maestro YAML (e.g. in a
+   * `textRegex`) reaches the device still token-bearing, with the memory snapshot alongside —
+   * the on-device dispatch boundary interpolates `MaestroTrailblazeTool.yaml` as an ordinary
+   * string field, exactly once. Protects trails whose maestro fallback path carries tokens.
    */
   @Test
-  fun `maestro YAML carrying memory tokens is interpolated before RPC dispatch`() {
+  fun `maestro YAML carrying memory tokens dispatches raw with the snapshot`() {
     mockServer.onPost("/rpc/RunYamlRequest") {
       HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
     }
@@ -546,11 +554,13 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     val body = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single()
-    val yaml = Json.parseToJsonElement(body).jsonObject["yaml"]!!.jsonPrimitive.content
-    // The token-bearing maestro yaml is the `yaml: String` field on MaestroTrailblazeTool;
-    // interpolation must rewrite it before the outer trail YAML is produced.
-    assertThat(yaml).contains("hello-world")
-    assertThat(yaml).doesNotContain("{{greeting}}")
+    val request = Json.parseToJsonElement(body).jsonObject
+    val yaml = request["yaml"]!!.jsonPrimitive.content
+    // Raw token in the dispatched YAML; no host-side pre-resolve.
+    assertThat(yaml).contains("{{greeting}}")
+    assertThat(yaml).doesNotContain("hello-world")
+    assertThat(request["memorySnapshot"]!!.jsonObject["greeting"]!!.jsonPrimitive.content)
+      .isEqualTo("hello-world")
   }
 
   /**

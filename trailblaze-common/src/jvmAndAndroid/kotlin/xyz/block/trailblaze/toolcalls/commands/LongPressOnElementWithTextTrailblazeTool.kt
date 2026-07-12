@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
-import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
@@ -31,10 +30,12 @@ data class LongPressOnElementWithTextTrailblazeTool(
   val enabled: Boolean? = null,
   val selected: Boolean? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
+  override fun toMaestroCommands(): List<Command> = listOf(
     TapOnElementCommand(
       selector = ElementSelector(
-        textRegex = memory.interpolateVariables(text),
+        // {{var}}/${var} tokens are resolved by the dispatch boundary (interpolateMemoryInTool)
+        // before execution, so `text` arrives resolved here.
+        textRegex = text,
         idRegex = id,
         index = index,
         enabled = enabled,

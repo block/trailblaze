@@ -163,15 +163,19 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    // Rollout gate for the unified-format recorder. Off (default) keeps the legacy
-    // per-classifier save-back byte-identical; on, new recordings merge into the unified
-    // trail.yaml. The default flips once the surrounding tooling fully supports unified.
+    // Gate for the unified-format recorder. Tri-state: an explicit true/false is persisted as
+    // the user's choice (even when it matches the current default, so it survives default
+    // changes); 'unset' clears the preference back to inheriting the framework default (on).
     name = "unified-recordings",
-    description = "Save new recordings in the unified trail.yaml format instead of legacy <classifier>.trail.yaml siblings",
-    validValues = "true, false",
-    get = { config -> config.unifiedRecordingsEnabled.toString() },
+    description = "Save new recordings in the unified trail.yaml format (default: on); set false to save legacy <classifier>.trail.yaml siblings",
+    validValues = "true, false, or 'unset' to inherit the default",
+    get = { config -> config.unifiedRecordingsEnabled?.toString() ?: "(not set)" },
     set = { config, value ->
-      value.toBooleanStrictOrNull()?.let { config.copy(unifiedRecordingsEnabled = it) }
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(unifiedRecordingsEnabled = null)
+      } else {
+        value.toBooleanStrictOrNull()?.let { config.copy(unifiedRecordingsEnabled = it) }
+      }
     },
   ),
   ConfigKey(

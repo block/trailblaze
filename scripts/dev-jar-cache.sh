@@ -10,6 +10,23 @@
 #     echo "JAR ready at $DEV_JAR_PATH"
 #   fi
 
+# Repo root that owns the launcher — every git / gradle / JAR-path operation in
+# this file is anchored here, never the caller's cwd. MCP clients (Claude Code,
+# Cursor, etc.) spawn `trailblaze mcp` with the *client project's* cwd; before
+# this anchor existed, the git calls below silently failed there, the source
+# hash came out wrong, and the launcher declared the JAR stale — stopping a
+# healthy running daemon and then dying on a `./gradlew` that doesn't exist in
+# that cwd. The launcher wrapper (`$TRAILBLAZE_LAUNCHER`) always sits at the
+# repo root the user invokes builds from, in both the standalone layout and a
+# monorepo that nests this tree, so its directory is the correct gradle root.
+# Fallback (launcher env unset): this file lives at `<root>/scripts/`, so walk
+# up one level from the sourced file's own location.
+if [ -n "${TRAILBLAZE_LAUNCHER:-}" ] && [ -f "$TRAILBLAZE_LAUNCHER" ]; then
+  DEV_JAR_REPO_ROOT="$(cd "$(dirname "$TRAILBLAZE_LAUNCHER")" && pwd)"
+else
+  DEV_JAR_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
 # Source fingerprint: HEAD commit + content hash of modified/new build-relevant
 # files (`git diff` for tracked, file stat for untracked). ~0.2s.
 #
@@ -39,8 +56,14 @@
 # `examples/**`) — inputs to the running daemon, not the JAR build; rebuilding
 # on every author save killed the edit-test loop (60s → sub-second). Also
 # excluded: generated `.trailblaze/**` artifacts.
+# Prints nothing (instead of a hash of empty input) when the repo root isn't a
+# usable git checkout — callers treat an empty hash as "unknown", which must
+# never be conflated with "changed" (see dev_ensure_jar).
 dev_source_hash() {
-  {
+  git -C "$DEV_JAR_REPO_ROOT" rev-parse HEAD >/dev/null 2>&1 || return 0
+  (
+    cd "$DEV_JAR_REPO_ROOT" || exit 0
+    {
     git rev-parse HEAD
     # Content diff of tracked files (catches edits to already-dirty files).
     git diff HEAD -- \
@@ -60,14 +83,16 @@ dev_source_hash() {
       | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|js|mjs|cjs)$|(^|/)sdks/typescript/(src|tools)/|(^|/)sdks/typescript/(package\.json|bun\.lock|runtime-globals\.d\.ts)$' \
       | grep -vE '(^|/)\.trailblaze/' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
-  } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
+    } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
+  )
 }
 
-# Map TRAILBLAZE_MODULE to the filesystem JAR directory.
+# Map TRAILBLAZE_MODULE to the filesystem JAR directory (absolute, so JAR
+# lookup works regardless of the caller's cwd).
 dev_jar_dir() {
   local module_dir="${TRAILBLAZE_MODULE#:}"
   module_dir="${module_dir//://}"
-  echo "$module_dir/build/compose/jars"
+  echo "$DEV_JAR_REPO_ROOT/$module_dir/build/compose/jars"
 }
 
 # Find the most recent JAR in the given directory.
@@ -90,6 +115,11 @@ dev_ensure_jar() {
   if [ -z "$jar_path" ]; then
     echo "Building uber JAR (first time, this may take a minute)..." >&2
     need_build=true
+  elif [ -z "$current_hash" ]; then
+    # Hash unavailable (repo root not a usable git checkout). Unknown is NOT
+    # stale: a false "stale" here stops a healthy daemon and forces a rebuild
+    # that may not even be possible in this environment. Trust the existing JAR.
+    echo "Warning: cannot fingerprint sources at $DEV_JAR_REPO_ROOT — using existing JAR without staleness check." >&2
   elif [ "$current_hash" != "$stored_hash" ]; then
     echo "Source changes detected, rebuilding uber JAR (this may take a minute)..." >&2
     need_build=true
@@ -129,7 +159,7 @@ dev_ensure_jar() {
         echo "Warning: daemon still alive on port $http_port after kill" >&2
       fi
     fi
-    ./gradlew -q --console=plain "${TRAILBLAZE_MODULE}:packageUberJarForCurrentOS"
+    (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain "${TRAILBLAZE_MODULE}:packageUberJarForCurrentOS")
     local build_exit=$?
     if [ $build_exit -ne 0 ]; then
       echo "JAR build failed (exit $build_exit). Falling back to Gradle mode." >&2
@@ -142,7 +172,9 @@ dev_ensure_jar() {
       DEV_JAR_PATH=""
       return 1
     fi
-    echo "$current_hash" > "$hash_file"
+    # An empty (unknown) hash is never written: writing it would make the next
+    # git-visible invocation always read as "changed".
+    [ -n "$current_hash" ] && echo "$current_hash" > "$hash_file"
     dev_prune_stale_siblings "$jar_dir" "$jar_path"
   fi
 
@@ -169,10 +201,10 @@ dev_prune_stale_siblings() {
 # The Gradle daemon is already warm, so this is just incremental packaging.
 dev_update_jar_cache() {
   local jar_dir="$1"
-  ./gradlew -q --console=plain "${TRAILBLAZE_MODULE}:packageUberJarForCurrentOS"
+  (cd "$DEV_JAR_REPO_ROOT" && ./gradlew -q --console=plain "${TRAILBLAZE_MODULE}:packageUberJarForCurrentOS")
   if [ $? -eq 0 ]; then
     local hash=$(dev_source_hash)
-    echo "$hash" > "$jar_dir/.blaze-source-hash"
+    [ -n "$hash" ] && echo "$hash" > "$jar_dir/.blaze-source-hash"
     local jar_path
     jar_path=$(dev_find_jar "$jar_dir")
     [ -n "$jar_path" ] && dev_prune_stale_siblings "$jar_dir" "$jar_path"

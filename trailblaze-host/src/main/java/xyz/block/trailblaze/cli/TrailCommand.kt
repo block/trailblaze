@@ -309,19 +309,19 @@ open class TrailCommand : Callable<Int> {
   )
   var saveRecording: Boolean? = null
 
-  // Rollout gate for the unified-format recorder (tri-state like --save-recording): flag >
+  // Gate for the unified-format recorder (tri-state like --save-recording): flag >
   // TRAILBLAZE_UNIFIED_RECORDINGS env var > persisted `trailblaze config unified-recordings` >
-  // off. Resolved via [resolveEffectiveUnifiedRecordings]; while off, save-back behavior is
+  // on. Resolved via [resolveEffectiveUnifiedRecordings]; when opted out, save-back behavior is
   // byte-identical to the pre-unified recorder.
   @Option(
     names = ["--unified-recordings"],
     description = [
       "Save new recordings in the unified format: the device's slot is merged into the unified " +
         "trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using " +
-        "them). Default: off while unified support rolls out — recordings save as legacy " +
-        "<classifier>.trail.yaml siblings, and nothing is written next to an existing unified " +
-        "trail.yaml. Also enabled via TRAILBLAZE_UNIFIED_RECORDINGS=1 or " +
-        "'trailblaze config unified-recordings true'."
+        "them). Default: on. Opt out with --no-unified-recordings, " +
+        "TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze config unified-recordings false' to " +
+        "save legacy <classifier>.trail.yaml siblings instead — nothing is ever written next to " +
+        "an existing unified trail.yaml."
     ],
     negatable = true,
   )
@@ -2123,13 +2123,12 @@ open class TrailCommand : Callable<Int> {
   internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
 
   /**
-   * Resolves the unified-recordings rollout gate, same precedence as self-heal:
+   * Resolves the unified-recordings gate, same precedence as self-heal:
    *   1. `--[no-]unified-recordings` CLI flag (explicit per-run intent)
-   *   2. `TRAILBLAZE_UNIFIED_RECORDINGS` env var (CI / pipeline opt-in)
+   *   2. `TRAILBLAZE_UNIFIED_RECORDINGS` env var (CI / pipeline override)
    *   3. Persisted `trailblaze config unified-recordings` setting (user's local default)
-   *   4. Off — save-back stays byte-identical to the pre-unified recorder until the
-   *      surrounding tooling (validation, CI discovery, verify steps, MCP/desktop writers)
-   *      fully supports the unified format, at which point the default flips.
+   *   4. On — unified is the default save format. Setting any tier to false is the opt-out
+   *      that restores the byte-identical pre-unified legacy save-back.
    */
   internal fun resolveEffectiveUnifiedRecordings(): Boolean =
     // The CLI is the only surface with a flag tier; the shared host helper layers it over
