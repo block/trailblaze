@@ -23,10 +23,10 @@ Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
 <!--
-SKELETON DECK v3 — built from outline v3 in samdroidcon-notes.md.
-Outline-level on purpose: judge the ORDERING first, then we go deep per slide.
-Act + timing markers appear top-left of each slide.
+DECK v5 — content-complete; 📼 slides get real media when the asset chips deliver.
+Act + timing markers (and ASSET ids) appear top-left of each slide.
 Spine: natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
+samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&A bank.
 -->
 
 ---
@@ -42,7 +42,6 @@ layout: center
 <!--
 Open on the question, not the tool. Let it sit for a beat.
 Sam's framing: AI is prevalent and at our disposal — how do we get GOOD coverage with it?
-(Phrasing still open to iteration.)
 -->
 
 ---
@@ -306,11 +305,9 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1 · 📼 ASSET A · part 1</div>
 
-# 📼 ASSET A · part 1
-
-## Zero-LLM trail replay
+# Zero-LLM trail replay
 
 <div class="pt-4 opacity-60">side-by-side: agent blaze vs. recorded replay · wall clocks running</div>
 
@@ -388,8 +385,8 @@ across 7 targets, and the copied natural language DRIFTED (next slide shows it).
 The "one business case" promise quietly broke.
 Real production drift: credentials diverged, steps added to one file and not others.
 The recording pipeline couldn't fix it — each device recorded in isolation.
-HAND-OFF: two slides from here the same two recordings reappear UNDER one NL source —
-the unified format slide is the resolution of this exact picture.
+HAND-OFF: two beats ahead the same two recordings reappear UNDER one NL source —
+the unified-format slide resolves this exact picture.
 -->
 
 ---
@@ -399,7 +396,7 @@ the unified format slide is the resolution of this exact picture.
 # The natural language drifted
 
 ```yaml
-# android-phone.trail.yaml
+# android-tablet.trail.yaml
 - step: Sign in as the QE sender
 
 # ios-iphone.trail.yaml
@@ -684,11 +681,9 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3 · 📼 ASSET A · part 2</div>
 
-# 📼 ASSET A · part 2
-
-## Walking the report that replay generated
+# Walking the report that replay generated
 
 <div class="pt-4 opacity-60">screenshots · hierarchy · logs · served static, zipped for agents</div>
 
@@ -785,6 +780,9 @@ type-awareness. The types aren't just for the compiler; they're the editing expe
 <!--
 The Out type param means results are structured and consumable, not prose.
 Real uses: enumerate installed apps on a device, pull a test user's profile info.
+LIVE AMMO: the committed create-contact recording literally OPENS with
+mobile_listInstalledApps — the agent enumerated apps to resolve which Contacts
+build was on the device before launching. In the repo, first step of the blaze.
 -->
 
 ---
@@ -898,18 +896,18 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2 · 📼 ASSET B</div>
 
-# 📼 ASSET B
+# An agent blazing a trail
 
-## An agent blazing a trail through the CLI toolbox
-
-<div class="pt-4 opacity-60">every tool call carries its NL step · ends on <code>trailblaze step --save</code> → the trail file</div>
+<div class="pt-4 opacity-60">through the CLI toolbox · every tool call carries its NL step · ends with the recording saved <b>next to the journey</b></div>
 
 <!--
-Pre-recorded. The verbs on screen are real: `trailblaze step --save` while driving,
-then `trailblaze run` to replay what was just saved. First time the audience sees the
-actual CLI — the "blaze" metaphor gets its concrete commands here.
+Pre-recorded. First time the audience sees the actual CLI — the "blaze" metaphor gets
+its concrete commands here. Subtitle is deliberately COMMAND-AGNOSTIC: both paths are
+real (`trailblaze step --save` incremental while driving — StepCommand.kt — and
+`trailblaze run` + `trailblaze session save --title` post-hoc, which is what the
+produced clip shows). The slide can't contradict whichever the clip uses.
 RESOLVED: blaze one of the four parity trails on Android — the exact commands that
 earned the committed recordings: `trailblaze run -d android trails/contacts/<job>/blaze.yaml`
 (agent drives every step), then `trailblaze session save --title "..."` → the
@@ -930,7 +928,7 @@ droidcon/public/ — embed here on arrival.
 
 # Trust, but compile
 
-One param change → **hundreds of YAML files** · no PR checks
+One param change → **hundreds of YAML files** — no human reviews that diff
 
 - **Gate 1:** strict parsing — unknown fields are **errors**
 - **Gate 2:** the **tsc trick** — recordings compiled as TypeScript
@@ -1084,13 +1082,11 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
 
-# 📼 ASSET C
+# Your app, as a map
 
-## Waypoint graph viewer flythrough
-
-<div class="pt-4 opacity-60">the demo app's waypoint map — <b>subway view</b> and full graph · every named place, every shortcut between them</div>
+<div class="pt-4 opacity-60">the Contacts waypoint map — <b>subway view</b> and full graph · every named place, every shortcut between them</div>
 
 <!--
 Demo app = CONTACTS (round-4 decision). PRIMARY map: the committed contacts-iOS
@@ -1254,6 +1250,8 @@ driver-native projection.
 
 - **On-demand pipeline**: trigger any set of trails, filtered by **device type**
 - Latest build by default · pin an **exact build** for regressions
+- **Public proof in the repo**: `contacts-trails-android.yml` — `workflow_dispatch`
+  replays the whole parity suite on a stock emulator
 
 ---
 
