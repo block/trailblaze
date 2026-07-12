@@ -303,12 +303,20 @@ import os, re, html
 DROP = ("Starting Trailblaze daemon","Waiting for Trailblaze daemon","Trailblaze daemon ready",
         "Shutting down existing daemon","Execution stopped by user.","kotlin-logging: initializing",
         "[HostAndroidEchoCapture]","Daemon doesn't recognize the saved session")
+def sanitize(line):
+    # Public-artifact scrub (this PNG is committed to the OSS repo). Keep every
+    # word verbatim EXCEPT: (1) on the "Using LLM:" line, drop the "<provider>/"
+    # prefix so only the model id remains; (2) collapse any absolute home path to
+    # tilde-relative ("/Users/<user>/..." -> "~/...").
+    line = re.sub(r"/Users/[^/\s]+/", "~/", line)
+    line = re.sub(r"(Using LLM:\s*)[\w.-]+/", r"\1", line)
+    return line
 def curate(path):
     out=[]
     for line in open(path).read().splitlines():
         if any(d in line for d in DROP): continue
         if re.match(r"^(REPLAY_RC|BLAZE_RC|SAVE_RC)=", line): continue
-        out.append(line.rstrip())
+        out.append(sanitize(line.rstrip()))
     res=[]
     for l in out:
         if l=="" and res and res[-1]=="": continue
