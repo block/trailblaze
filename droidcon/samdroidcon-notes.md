@@ -1131,7 +1131,7 @@ runs from 4 files.**
 ### Earning results — THE SLIDE NUMBERS (blaze = agent+LLM, replay = zero-LLM)
 | trail | Android blaze | Android replay | iOS blaze | iOS replay |
 |---|---|---|---|---|
-| create-contact | 3m15s | **84s** | 2m43s* | **~90s** |
+| create-contact | 3m15s | **84s** | 2m43s* | **167s** |
 | find-contact | 2m02s | **78s** | 5m59s | **78s** |
 | add-phone-to-contact | 12m11s | **91s** | 2m40s* | **100s** |
 | delete-contact | 1m56s | **90s** | 3m01s | **93s** |
@@ -1155,8 +1155,12 @@ Recording maintenance from replay verification (same class as the photo trail):
   (custom tool returns at `am start`; blaze think-time masked the cold start);
   moved the SAVE tap into the otherwise-unrecorded 'Save the contact' step (an
   unrecorded step = LLM on every replay = fails in CI's sentinel-key env).
-- ios create-contact: pruned a dead recorded assert that pinned the email text
-  to the app-root element (aggregated child text at blaze time only).
+- ios create-contact: pruned four dead recorded asserts — one pinned the email
+  text to the app-root element (aggregated child text at blaze time only),
+  two used strict multi-line expectedText ('mobile\n555-0134'), one expected
+  'home,'-prefixed email text. All were superseded during the blaze itself by
+  the looser single-line asserts that survive; the row's aggregated a11y text
+  differs between blaze and replay, so only exact single-element text re-matches.
 - `trailblaze run` auto-saves a classifier-named recording (android-phone /
   ios-iphone) next to the source after every SUCCESSFUL run — including
   replays. Use `--no-save-recording` on replays or keep deleting closest-wins
