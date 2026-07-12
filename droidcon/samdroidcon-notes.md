@@ -586,6 +586,11 @@ read: web is less impressive for this room.
 
 ## Cross-app demo scenarios (2026-07-12, Sam + Claude design session)
 
+> **STATUS 2026-07-11 (round 3): calendar half PARKED.** Sam: "Let's just do
+> contacts then. Let's just ship an example. Time's running out." Scenario B and
+> the Etar work below stay as reference/backup narrative; the shipping demo is
+> the contacts-with-photo trail — see "Round 3: contacts-only pivot" below.
+
 **Decision: focus = Calendar + Contacts.** Sam wants COMPLEX, CROSS-APP use cases
 ("that usually works out pretty well") showing multiple layers. His sketch: start from
 a message → create contact → add picture → save number → back to the message → send to
@@ -768,6 +773,66 @@ interruptions · unified NL + divergent per-platform recordings · trailmap comp
 Format note: the side-by-side IS the thesis — left (blaze, LLM thinking, slow) still
 working while right (replay, zero LLM) finishes. Let the speed gap be the punchline.
 Could show a wall-clock/step counter on each side.
+
+## Round 3: contacts-only pivot (2026-07-11) — THE SHIPPING DEMO
+
+**Sam's call:** drop the calendar half, contacts only, ship an example now, and
+make it richer than create-basic — "maybe one that takes a photo of the contact."
+
+**Shipped trail: `trails/contacts/create-contact-with-photo/blaze.yaml`** — one
+unified NL source, both platforms, no `driver:`/`platform:` pinned (CLI `-d`
+decides; config driver is optional — TrailblazeDesktopApp.kt resolves request
+driver first). Target `contacts` already declares BOTH `com.android.contacts`
+(clean AOSP image) and `com.google.android.contacts`, plus iOS — no trailmap
+changes needed. The photo step is the one-line cross-platform philosophy:
+
+```yaml
+- step: Add a profile photo to the contact — take a new photo if there's a
+        camera, otherwise pick the first photo in the library
+```
+
+Android emulators have a camera; iOS Simulators don't (library-pick wins there,
+after `xcrun simctl addmedia booted <photo>.jpg` seeds it). Same NL, honestly
+divergent recordings.
+
+### Android photo flow — probed end-to-end on clean AOSP api-34 (`default`)
+
+**FOUR app surfaces, zero accounts, provider-verifiable** — richer cross-app
+story than the calendar version:
+1. Contacts editor ("Saving to **Device**" — accountless local save); camera icon
+   on the avatar → "Change photo" dialog: **Take photo / Choose photo / CANCEL**
+2. Take photo → `com.android.camera2` CaptureActivity, live **virtualscene**
+   feed (the low-poly-cat living room) → shutter → review with
+   `com.android.camera2:id/{done_button,retake_button,cancel_button}`
+3. done → `com.android.gallery3d` filtershow **CropActivity** → SAVE
+   (`com.android.gallery3d:id/filtershow_done`)
+4. back in the editor with the photo as header → SAVE →
+   `content query --uri content://com.android.contacts/contacts --projection
+   display_name:photo_uri` → `photo_uri=content://com.android.contacts/display_photo/1`
+   = the deterministic verify hook.
+
+**Device/CI facts:**
+- AVD camera: `hw.camera.back=virtualscene` (pretty) or `emulated` (avdmanager
+  default, test-pattern) — BOTH capture fine. CLI flag `-camera-back virtualscene`
+  works too. reactivecircus runner: supplying `emulator-options` REPLACES its
+  defaults (`-no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+  -no-boot-anim`) — repeat them and append `-camera-back virtualscene`.
+- "Choose photo" on a clean image = EMPTY gallery → the NL conditional
+  naturally resolves to camera-on-Android, library-on-iOS.
+- No permission dialogs anywhere in the Android flow (system apps).
+- No trailhead seeding needed at all for contacts (unlike calendar).
+
+### Ship checklist
+- [x] blaze.yaml committed (NL source)
+- [ ] Android recording EARNED via `trailblaze run --device android/emulator-5590
+      trails/contacts/create-contact-with-photo/blaze.yaml` (in progress —
+      daemon must start with `TRAILBLAZE_CONFIG_DIR=$(pwd)/trails/config`;
+      a daemon started elsewhere keeps its old config dir, `trailblaze --stop` first)
+- [ ] iOS recording earned (after iOS probe agent results; seed library first)
+- [ ] `trailblaze session save` → per-platform `*.trail.yaml` next to blaze.yaml
+- [ ] CI wiring: clone clock-trails.yml shape → contacts trail; only flip
+      `docs/showcase-trails.yml` android slug AFTER recording is committed
+      (slugs are load-bearing: report-assets bucket + artifact names)
 
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 
