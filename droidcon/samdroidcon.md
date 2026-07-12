@@ -353,7 +353,10 @@ itself — "my tests run in seconds." Answer: the minutes are the APP and the
 emulator (real UI, animations, full app-state reset) plus ~35s one-time
 CLI/daemon startup; the framework's own tax is ~100–150ms per action (Act 5
 slide). It's an end-to-end user journey on a real device — priced against the
-6m26s blaze and $0.55→$0.00, not against a JVM unit test.
+6m26s blaze and $0.55→$0.00, not against a JVM unit test. AND: we agree it
+should be faster — tracked publicly as issue #210 (itemize invocation phases,
+cut the overhead; the recorded actions are ~2s of the 84s). Best possible
+answer shape: "yes, and here's the issue number."
 Regenerate: droidcon/public/asset-regeneration-playbook.sh.
 PLAN B (video misbehaves): paste-ready fallback slide in notes ("Plan B" section).
 -->

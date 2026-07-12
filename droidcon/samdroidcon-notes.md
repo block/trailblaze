@@ -674,7 +674,10 @@ title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grac
   slide): the minutes are the app + emulator (real UI, animations, full app-state
   reset) plus ~35s one-time CLI/daemon startup; the framework tax is ~100–150ms/action
   (Act 5). End-to-end user journey on a real device — price it against the blaze
-  ($0.55 → $0.00), not a JVM unit test.
+  ($0.55 → $0.00), not a JVM unit test. Sam's verdict on seeing the number: "REALLY
+  bad" — now tracked publicly as github.com/block/trailblaze/issues/210 (itemize
+  invocation phases: startup/app-launch/act/settle/capture; 15 recorded actions ≈ 2s
+  of the 84s). If asked on stage, the strongest answer is agreement + the issue number.
 - "We already have Espresso/Compose tests — why this?" (positioning: complements; robot
   pattern lineage; NL layer = exit strategy).
 - "Did you abandon MCP?" (no — proxy remains; CLI is primary).
