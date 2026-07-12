@@ -1,0 +1,106 @@
+- config:
+    title: 'Contacts iOS: create a contact'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+    tags:
+    - crud
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - tapOn:
+          selector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+          relativePoint: 50%,45.6%
+      - tapOnElementBySelector:
+          reason: The current screen displays the Contacts app with a visible 'Add' button (f430) near the bottom right. Tapping this will start creating a new contact, which is required to fulfill the objective.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add
+  - step: Enter first name "Casey" and last name "Trailblaze"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective requires entering the first name 'Casey' and last name 'Trailblaze'. The 'First name' and 'Last name' fields are both visible. I will first focus the 'First name' field so I can enter 'Casey'.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: First name
+      - inputText:
+          text: Casey
+          reasoning: The 'First name' field is currently focused. I will now enter 'Casey' as required by the objective.
+      - tapOnElementBySelector:
+          reason: The 'Last name' input field ('Last name') is visible and unfocused, and needs to be populated as part of the objective. Tapping it will allow text entry.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is now focused following the previous tap. Enter 'Trailblaze' to complete the objective of entering both first and last names.
+  - step: Add the mobile number 555-0134
+    # Earned with a blaze-time hint (in a scratch copy of the source; this
+    # file's step text restored to the canonical NL): the iOS editor shows the
+    # raw digits 5550134 — dash formatting only appears on the saved card —
+    # and without the hint the agent loops asserting '555-0134' in the editor
+    # until the per-objective LLM cap (reproduced twice, with both agents).
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective instructs to tap the 'add phone' row to begin entering a mobile number. This step has not yet been completed, so I will do this first.
+          nodeSelector:
+            iosMaestro:
+              textRegex: add phone
+            rightOf:
+              iosMaestro:
+                textRegex: Insert add phone
+      - inputText:
+          text: "5550134"
+          reasoning: The objective requires typing the raw digits 5550134 after tapping the 'add phone' row, using the text-input tool (not keypad keys). The field should now be focused, so I will enter the number as instructed.
+  - step: Add the email casey.trailblaze.demo@example.com
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The screen is at the contact creation page. To add an email address, I need to first tap the 'add email' row, which will create a text field for email input.
+          nodeSelector:
+            iosMaestro:
+              textRegex: add email
+            rightOf:
+              iosMaestro:
+                textRegex: Insert add email
+      - inputText:
+          text: casey.trailblaze.demo@example.com
+          reasoning: The email input field is now present and focused after tapping 'add email'. I will enter the provided email address into this field to complete the objective.
+      # Maintenance: pruned a dead recorded assert here — it pinned the email
+      # text to the app-root element (selector 'Contacts'), which happened to
+      # aggregate child text at blaze time but matches only 'Contacts' on
+      # replay. The trailing verify step asserts the email on the saved card.
+  - step: Save the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen shows a new contact form with a 'Done' button (ref u412) at the top right. Tapping this button is the standard way to save a new contact after entering their information.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Done
+  - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134 and the email casey.trailblaze.demo@example.com
+    recording:
+      # Maintenance: the blaze recorded five asserts while converging on this
+      # verify; only the two below re-match on replay (the a11y text a card
+      # row aggregates differs between blaze and replay — 'home, <email>' vs
+      # just '<email>'). Pruned the three superseded variants: two strict
+      # multi-line expectedText ('mobile\n555-0134') and one 'home,'-prefixed
+      # email form.
+      tools:
+      - assertVisibleBySelector:
+          reason: The element m582 renders the text 'mobile, 555-0134', matching the required appearance of the mobile number (accepting either formatted or unformatted as per instructions).
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: mobile, 555-0134
+          expectedText: mobile, 555-0134
+      - assertVisibleBySelector:
+          reason: Element m221 contains the required email address exactly as required by the objective.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: casey.trailblaze.demo@example.com
+          expectedText: casey.trailblaze.demo@example.com

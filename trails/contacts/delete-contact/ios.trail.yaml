@@ -1,0 +1,85 @@
+- config:
+    title: 'Contacts iOS: delete a contact'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+    tags:
+    - crud
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - tapOn:
+          selector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+          relativePoint: 50%,45.6%
+      - tapOnElementBySelector:
+          reason: The 'Add' button is visible at the bottom right of the screen. Tapping this button will start the process of creating a new contact, which is the next step in the objective.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add
+  - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The screen shows the new contact form with input fields for 'First name' and 'Last name.' To begin, I need to focus the 'First name' field in order to enter 'Casey.' This is the first required step before entering the desired names.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: First name
+      - inputText:
+          text: Casey
+          reasoning: The 'First name' field is currently focused. Entering 'Casey' into this field is the first required step for creating the contact. After this, I will proceed to enter the last name.
+      - tapOnElementBySelector:
+          reason: The next step to complete the objective is to focus the 'Last name' field. This field is now visible directly beneath the already filled 'First name' field. Once focused, I will enter 'Trailblaze' as the last name.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Last name
+      - tapOnElementBySelector:
+          reason: The 'Last name' field (p341) needs to be focused so 'Trailblaze' can be entered. The user has completed entering the first name. Next, I will tap on the 'Last name' field to focus it.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is now focused. I will enter 'Trailblaze' to complete the name entry for the contact.
+      - tapOnElementBySelector:
+          reason: Both the first name ('Casey') and last name ('Trailblaze') have been entered. The next step is to save the new contact by tapping the 'Done' button, which is visible in the top right corner.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Done
+      - assertVisibleBySelector:
+          reason: The contact details screen now displays the name 'Casey Trailblaze,' showing the save was successful. I will verify that this element is visible with the correct name to confirm the objective is complete.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: ContactCardHeaderView
+          expectedText: Casey Trailblaze
+  - step: Delete this contact, confirming if asked
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: 'To delete the contact, I first need to enter the edit mode. The ''Edit'' button (ref: m8) at the top right is the standard entry point for deleting a contact in the iOS Contacts app. After tapping Edit, I can look for a delete option.'
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Edit
+      - swipe:
+          direction: UP
+          reasoning: After entering edit mode, the Delete Contact option in iOS is typically found at the bottom of the screen. Since it is not visible, a swipe up is needed to reveal the option.
+      - tapOnElementBySelector:
+          reason: The 'Delete Contact' option is now visible at the bottom after swiping up. Tapping this should begin the deletion process. If a confirmation prompt appears, I will confirm the deletion in the next step.
+          nodeSelector:
+            iosMaestro:
+              textRegex: Delete Contact
+            index: 1
+      - tapOnElementBySelector:
+          reason: The 'Delete Contact' option is visible and needs to be tapped to proceed with deletion. This may trigger a confirmation dialog which I need to confirm in the next step.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Delete Contact
+      - assertNotVisibleWithText:
+          text: Casey Trailblaze
+  - verify: Casey Trailblaze no longer appears in the contact list
+    recording:
+      tools:
+      - assertNotVisibleWithText:
+          text: Casey Trailblaze

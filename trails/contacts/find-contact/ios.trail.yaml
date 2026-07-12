@@ -1,0 +1,81 @@
+- config:
+    title: 'Contacts iOS: find a contact by name'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+    tags:
+    - search
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - tapOn:
+          selector:
+            iosMaestro:
+              resourceIdRegex: Contacts
+          relativePoint: 50%,45.6%
+      - tapOnElementBySelector:
+          reason: The objective asks to start creating a new contact. On the Contacts app screen, there is an 'Add' button (plus icon) at the bottom right, which is commonly used to create a new contact. I will tap this button to proceed.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add
+  - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen displays the new contact form with text fields for 'First name' and 'Last name'. The first step is to focus the 'First name' text field ('u108') before entering the value 'Casey'.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: First name
+      - inputText:
+          text: Casey
+          reasoning: The 'First name' field is now focused. I will enter 'Casey' as the first name to proceed with the contact creation.
+      - tapOnElementBySelector:
+          reason: The 'Last name' text field ('u342') is visible and needs to be filled. Tapping this field will focus it for input.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field ('p341') is now focused. I will enter 'Trailblaze' as the last name for the contact before saving it.
+      - tapOnElementBySelector:
+          reason: First name 'Casey' and last name 'Trailblaze' have been entered. The next step is to save the contact by tapping the 'Done' button ('u412') in the top right corner.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Done
+      - assertVisibleBySelector:
+          reason: To verify that the contact has been saved with the correct first and last name, I will assert that 'Casey Trailblaze' is visible as the contact's header.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: ContactCardHeaderView
+          expectedText: Casey Trailblaze
+  - step: Go back to the contact list
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The current screen shows the contact details page with a visible back button (ref y477) at the top left. Tapping this will return to the contact list, fulfilling the objective.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: BackButton
+  - step: Search the contacts for "Casey"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To search for 'Casey', I need to interact with the Search field. The Search field is currently visible at the bottom of the screen and should be tapped to gain focus before entering the search query.
+          nodeSelector:
+            iosMaestro:
+              textRegex: 0%
+            index: 0
+      - inputText:
+          text: Casey
+          reasoning: The Search field is now focused after my previous tap. To search for 'Casey', I need to input the text 'Casey' into the search field.
+  - verify: The search results show Casey Trailblaze
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The objective requires verifying that 'Casey Trailblaze' is visible in the search results. The view hierarchy confirms that an element with the text 'Casey Trailblaze' is present. I will assert its visibility to confirm the objective.
+          nodeSelector:
+            iosMaestro:
+              textRegex: Casey Trailblaze
+            index: 1
+          expectedText: Casey Trailblaze

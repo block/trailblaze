@@ -1,0 +1,91 @@
+- config:
+    title: 'Contacts iOS: add a phone number to an existing contact'
+    target: contacts
+    platform: ios
+    driver: IOS_HOST
+    tags:
+    - crud
+- prompts:
+  - step: Open the Contacts app and start creating a new contact
+    recording:
+      tools:
+      - contacts_ios_launchApp: {}
+      - tapOnElementBySelector:
+          reason: The task is to start creating a new contact. On the Contacts app main screen, the '+' (Add) button is typically used to initiate the process of adding a new contact. This button is present and accessible in the current UI.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Add
+  - step: Enter first name "Casey" and last name "Trailblaze", then save the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective requires entering the first name "Casey". The "First name" field is visible and needs to be tapped to focus before entering text.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: First name
+      - inputText:
+          text: Casey
+          reasoning: The 'First name' field is now focused. Entering 'Casey' as required by the objective.
+      - tapOnElementBySelector:
+          reason: The 'Last name' field is present and needs to be tapped to focus so I can enter the last name 'Trailblaze' as required by the objective.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: The 'Last name' field is now focused. Entering 'Trailblaze' as required by the objective.
+      - tapOnElementBySelector:
+          reason: Both required text fields ('First name' and 'Last name') have been filled as specified. The next required step is to save the contact, which is done by tapping the 'Done' button at the top right.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Done
+      - assertVisibleBySelector:
+          reason: To confirm that the new contact with first name 'Casey' and last name 'Trailblaze' was saved successfully, I will assert that the full name 'Casey Trailblaze' is visible in the contact's header.
+          nodeSelector:
+            iosMaestro:
+              resourceIdRegex: ContactCardHeaderView
+          expectedText: Casey Trailblaze
+  - step: Edit the contact
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to edit the contact. The current screen is displaying the contact details for 'Casey Trailblaze.' To edit this contact, the user should tap the 'Edit' button visible at the top right of the screen.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Edit
+  - step: Add the mobile number 555-0134
+    # Earned with a blaze-time hint (in a scratch copy of the source; this
+    # file's step text restored to the canonical NL): the iOS editor shows the
+    # raw digits 5550134 — dash formatting only appears on the saved card —
+    # and without the hint the agent loops asserting '555-0134' in the editor
+    # until the per-objective LLM cap (reproduced twice, with both agents).
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The first step is to tap the 'add phone' row ('add phone') as instructed, so that the phone number input field can be activated for entry.
+          nodeSelector:
+            iosMaestro:
+              textRegex: add phone
+            rightOf:
+              iosMaestro:
+                textRegex: Insert add phone
+      - inputText:
+          text: "5550134"
+          reasoning: After tapping 'add phone', the next step is to type the raw digits '5550134' into the phone number input field using the text-input tool, as specified by the instructions.
+  - step: Save the changes
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: 'The current screen shows a contact editor with a ''Done'' button (ref: r785) that is commonly used to save changes on iOS. Tapping this should save the modifications, thus fulfilling the objective to save changes.'
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: Done
+  - verify: The contact card for Casey Trailblaze shows the mobile number 555-0134
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The current objective requires verification that Casey Trailblaze's contact card displays the mobile number 555-0134 (formatted or unformatted as 5550134). The view hierarchy shows that node [m582] contains both 'mobile' and '555-0134'. Verifying this directly ensures the objective is met.
+          nodeSelector:
+            iosMaestro:
+              accessibilityTextRegex: mobile, 555-0134
+          expectedText: mobile, 555-0134
