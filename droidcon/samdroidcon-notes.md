@@ -62,6 +62,11 @@ Most expendable first. Everything here is safe to cut with no dangling reference
 > device" peak, the recipe, or the CTA. That's the skeleton — cutting it breaks the arc.
 
 ### 🎬 Plan B — the talk is DONE with zero videos (deadline-proof)
+**STATUS 2026-07-12: SUPERSEDED — both asset chips delivered; all four 📼 slides now
+embed REAL media (videos on 14, report walk on 28, terminal on 37, graph build on 44).
+Keep this section as the emergency fallback if playback/rendering misbehaves on the
+podium machine. Regeneration: asset-regeneration-playbook.sh + asset-scripts/ +
+asset-recipe-regenerate.txt, all in/next to droidcon/public/.**
 Each 📼 slide already works as a spoken beat; these fallbacks make each one *visual*
 without any video production. If a quiet hour opens Jul 13–16, videos replace them 1:1.
 Every command/number below is real and verified in-repo — nothing invented.
@@ -117,8 +122,9 @@ $ trailblaze session save --title "Contacts: create a contact"
 start the daemon from the worktree with `TRAILBLAZE_CONFIG_DIR=$PWD/trails/config`, then
 open **http://localhost:52525/waypoints/graph** (route + default port verified in
 `WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`). 30s of live mouse-wandering on
-the contacts-iOS map beats a flythrough. Worst case, speak it: "~103 named places,
-81 shortcuts, committed in the repo today."
+the contacts-iOS map beats a flythrough. Worst case, speak it: "100 named places,
+81 shortcuts, committed in the repo today" (numbers from the viewer header, captured
+in asset-c-graph-*.png).
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener ("So why is good test coverage still hard?"): *"Quick hands — who's tried
@@ -1337,9 +1343,10 @@ _Round-1 statuses applied 2026-07-12 after Sam's answers. Deck is now **51 slide
 15. ✅ Positioning backup added (slide 49) with Sam's framing + lossy-tree ammo.
 
 ### Production checklist (by Jul 16)
-- Record ASSET A pt1 (side-by-side + wall clocks), A pt2 (report walk), B (CLI toolbox
-  authoring w/ NL steps), C (demo-app waypoint map flythrough) — all blocked on demo-app
-  decision; durations unbudgeted.
+- ✅ ALL FOUR ASSETS DONE + EMBEDDED (2026-07-12, chips): A pt1 = blaze/replay videos
+  w/ real wall clocks 6m26s vs 2m20s (sl.14) · A pt2 = 3-click report walk ending on
+  the $0.55/91%-cached LLM bill (sl.28) · B = real terminal transcript PNG (sl.37) ·
+  C = subway→map graph build, 100 waypoints/81 shortcuts (sl.44).
 - Square hardware imagery for slide 5 (currently emoji) — squareup.com/us/en/hardware.
 - QR code for slide 43.
 - Timing pinch points: Act 1 (8 slides + video in 5 min), Act 4 (now 10 slides + peak +

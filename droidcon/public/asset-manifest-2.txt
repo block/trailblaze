@@ -1,0 +1,13 @@
+# Asset manifest 2 — slides 28 (ASSET A part 2: session report) and 44 (ASSET C: waypoint graph)
+# All PNGs 3840x2160 (2x retina of 1920x1080), dark theme.
+# Session for report shots: create_contact_b66e486e — "Contacts: create a contact",
+# android · phone · PASSED · 1m 50s · 39 steps · ran 2026-07-11 20:46.
+
+asset-c-graph-normal.png      Slide 44. Waypoint map view (contacts trailmap: 100 waypoints, 81 shortcuts), zoomed to the contacts/ios/list hub — ~7 legible waypoint cards with live screenshots and labeled shortcut edges, hub highlighted.
+asset-c-graph-subway.png      Slide 44. Subway view of the same trailmap, focal contacts/ios/list at depth 3 — 47-node concentric ring, detail panel closed.
+asset-c-graph.mp4             Slide 44 (optional). 28s 1080p screen capture: full-map establishing shot -> glide/zoom into the hub -> lateral pan along the row -> switch to subway ring. H.264, plays anywhere.
+
+asset-a2-report-1.png         Slide 28. Run overview from the self-contained HTML report (trailblaze report create_contact_b66e486e): PASSED header, 39-step timeline with per-action AI reasoning, device pane with step transport.
+asset-a2-report-2.png         Slide 28. TrailRunner step detail at Step 9/39: timeline on the left, device screenshot on the right with the view-hierarchy bounding-box overlay toggled ON ("Hide hierarchy" button + overlay filter visible).
+asset-a2-report-3.png         Slide 28. LLM tab / call log: session totals — 20 calls, 494,405 input / 1,077 output tokens, $0.548914 total cost, 91% cached input, 2.5s avg response — with the per-call list (per-call tokens + latency).
+asset-a2-report-extra-grid.png  Slide 28 (alternate/extra). Grid storyboard tab: every step's device screenshot in order, ending at the created "Casey Trailblaze" contact card.

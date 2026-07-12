@@ -1,0 +1,83 @@
+# Regeneration playbook — slide 28 (session report) + slide 44 (waypoint graph) assets
+#
+# Scripts live in droidcon/asset-scripts/ (kept out of public/ so Slidev doesn't ship them).
+# Every capture is headless system Chrome via playwright-core at 1920x1080 with
+# deviceScaleFactor 2 → all PNGs come out 3840x2160 retina, dark theme.
+
+## 0. Prereqs (one-time per machine)
+- trailblaze CLI on PATH (/opt/homebrew/bin/trailblaze), bun, ffmpeg, system Google Chrome.
+- Working dir for deps (any dir, e.g. /tmp/asset-work):
+    bun add playwright-core
+  GOTCHA (corp networks): if the public registry is blocked, point .npmrc at your
+  private npm mirror (registry=<mirror-url>/ plus cafile= if it uses a corp CA).
+  The trailing slash on the registry URL is load-bearing (bun 404s without it).
+- Run all bun scripts FROM that dir (or copy .npmrc + node_modules next to the scripts).
+- Set: WT=<absolute path to your trailblaze checkout/worktree>
+       OUT=$WT/droidcon/public   (or a staging dir, then rename/copy)
+
+## 1. Source data
+- Waypoint graph renders the committed trailmap at $WT/trails/config/trailmaps/contacts/
+  (100 iOS waypoints, 81 shortcuts) — nothing to earn, it's in git.
+- Report shots use session create_contact_b66e486e ("Contacts: create a contact",
+  android · phone · PASSED · 1m 50s · 39 steps, ran 2026-07-11 20:46). Session logs live in
+  the daemon logs root (Trailblaze settings), NOT the worktree. If that session is ever
+  purged, re-run the contacts parity trail to earn a fresh one, then substitute the new
+  session id below and the ROW_TOKENS duration in §5.
+
+## 2. Waypoint graph HTML (self-contained, no daemon needed)
+    cd $WT && TRAILBLAZE_CONFIG_DIR="$PWD/trails/config" \
+      trailblaze waypoint graph -o /tmp/asset-work/waypoint-graph.html --target contacts
+  Expect: "100 waypoint(s), 81 shortcut(s), 0 trailhead(s)". Graph HTML loads React Flow +
+  dagre from esm.sh at RUNTIME — capture machine needs network.
+
+## 3. Graph stills → asset-c-graph-normal.png / asset-c-graph-subway.png
+    GRAPH_HTML=/tmp/asset-work/waypoint-graph.html OUT_DIR=$OUT \
+      bun $WT/droidcon/asset-scripts/capture-graph-stills.mjs
+  How it frames (encoded in the script):
+  - Map: 0 trailheads → dagre lays all 100 nodes in ONE flat row; the fitted view is a thin
+    strip. Script pans by dragging EMPTY canvas above the row and wheel-zooms 8 ticks onto
+    the hub node ("top-level Contacts list" = contacts/ios/list) → ~7 legible cards + edge labels.
+  - NEVER click a node: selection triggers a focus-dim that Escape/pane-clicks don't clear.
+  - Subway: focal comes from the hash deep-link #focal=contacts%2Fios%2Flist&depth=3
+    (URL-encoded slash; read once when SubwayView mounts) → 47-node concentric ring.
+    Default focal would be a sparse 2-node alphabetical pick.
+
+## 4. Graph video → asset-c-graph.mp4 (optional)
+    GRAPH_HTML=... OUT_DIR=/tmp/asset-work bun $WT/droidcon/asset-scripts/capture-graph-video.mjs
+  Then run the ffmpeg line it prints (uses READY_AT_SECONDS to trim the load screen), e.g.
+    ffmpeg -y -ss 4.30 -i /tmp/asset-work/video/*.webm -c:v libx264 -pix_fmt yuv420p \
+      -movflags +faststart -crf 20 $OUT/asset-c-graph.mp4
+  Sequence: full-map hold → glide/zoom to hub → lateral pan → subway ring. ~28s.
+
+## 5. Report HTML + tab stills → asset-a2-report-1.png / -3.png / -extra-grid.png
+    cd $WT && TRAILBLAZE_CONFIG_DIR="$PWD/trails/config" \
+      trailblaze report create_contact_b66e486e --output-dir /tmp/asset-work/report-out
+    REPORT_HTML=/tmp/asset-work/report-out/report-interactive.html OUT_DIR=$OUT \
+      bun $WT/droidcon/asset-scripts/capture-report-tabs.mjs
+  Notes: plain `trailblaze report` is HTML-only (do NOT pass --no-gif --no-webp together —
+  rejected). Any `trailblaze <session-subcommand>` (even --help) auto-starts/replaces a
+  stale daemon on 52525 via ensure-daemon — harmless but be aware other sessions share it.
+
+## 6. TrailRunner hierarchy shot → asset-a2-report-2.png
+  /trailrunner is only registered by the desktop-app process (`trailblaze app`), headless OK.
+  Start a PRIVATE instance on a free port — do not fight the shared 52525 daemon:
+    cd $WT && TRAILBLAZE_PORT=55155 TRAILBLAZE_CONFIG_DIR="$PWD/trails/config" \
+      nohup trailblaze app --foreground --headless > /tmp/asset-work/daemon.log 2>&1 &
+    # wait until: curl -s http://localhost:55155/trailrunner/ returns 200 (~30-60s)
+    TR_URL=http://localhost:55155/trailrunner/ OUT_DIR=$OUT \
+      ROW_TOKENS='create a contact,1m 50s,Passed' \
+      bun $WT/droidcon/asset-scripts/capture-trailrunner-hier.mjs
+  Script knowledge baked in: runs filter matches TITLES not session ids; visited screens stay
+  mounted+hidden (visible-filter everything); step transport = button[title="Next step"]
+  (the seedling "1 ›" badges are delegation expanders, not hierarchy); hierarchy button
+  ([data-testid=view-hierarchy-btn]) enables only on moments whose log carries viewHierarchy
+  (~36 of 75 for this session; first hits around Step 6 and Step 9 of 39).
+  CLEANUP — kill by PID, NEVER `trailblaze --stop` (would kill the shared daemon):
+    lsof -nP -iTCP:55155 -sTCP:LISTEN   # the java pid actually holding the port
+    kill <wrapper-pid> <java-pid>       # the java child SURVIVES killing the bash wrapper
+    lsof -nP -iTCP:55155 -sTCP:LISTEN   # verify freed
+
+## 7. Deliverable names (already in droidcon/public/, documented in asset-manifest-2.txt)
+  asset-c-graph-normal.png  asset-c-graph-subway.png  asset-c-graph.mp4
+  asset-a2-report-1.png     asset-a2-report-2.png     asset-a2-report-3.png
+  asset-a2-report-extra-grid.png

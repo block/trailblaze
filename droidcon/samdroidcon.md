@@ -319,20 +319,28 @@ class: text-center
 
 # Zero-LLM trail replay
 
-<div class="pt-4 opacity-60">side-by-side: agent blaze vs. recorded replay · wall clocks running</div>
+<div class="flex justify-center gap-16 pt-4">
+  <div>
+    <video src="./public/asset-a-blaze.mp4" class="h-[330px] rounded-lg shadow-lg" autoplay muted loop playsinline></video>
+    <div class="pt-2 text-sm opacity-70">the agent <b>blazing</b> — LLM on every step · <b>6m26s</b></div>
+  </div>
+  <div>
+    <video src="./public/asset-a-replay.mp4" class="h-[330px] rounded-lg shadow-lg" autoplay muted loop playsinline></video>
+    <div class="pt-2 text-sm opacity-70">the recording <b>replaying</b> — zero LLM calls · <b>2m20s</b></div>
+  </div>
+</div>
 
 <!--
-Pre-recorded. The side-by-side IS the thesis: same journey, LLM-driven on the left,
-zero-LLM replay on the right, clocks visible — the economics slide made flesh.
+EMBEDDED 2026-07-12 (chip delivered): REAL runs of create-contact on a clean api-34
+emulator — left = the agent blaze (video trimmed to the active journey; full
+invocation 6m26s including a one-time test-APK install), right = replay of the
+committed android.trail.yaml after full app-state reset (2m20s, zero LLM
+round-trips). Wall clocks measured on the same basis: CLI start → "1 passed".
+Same journey, same contact card at the end — the economics slide made flesh.
 Part 2 (the report it generated) plays in Act 3.
-MATERIAL (real, in-repo): use a contacts parity trail (create-contact is the
-photogenic one). Reference number: the richer photo-trail blaze took 6m41s
-agent-driven end-to-end; its replay is ~1min — pull the parity trail's exact
-blaze/replay wall-clocks from the earning session before recording this asset.
-PLAN B (no video): paste-ready fallback slide in notes ("Plan B" section) —
-real blaze.yaml → earned recording, spoken wall-clock. Talk is DONE without video.
-ASSET CHIP RUNNING (task_e23beb14): delivers asset-a-blaze.mp4 + asset-a-replay.mp4
-+ real wall-clocks into droidcon/public/ — embed side-by-side <video> here on arrival.
+Videos autoplay-loop muted; speak ~20s over them, advance when ready.
+Regenerate: droidcon/public/asset-regeneration-playbook.sh.
+PLAN B (video misbehaves): paste-ready fallback slide in notes ("Plan B" section).
 -->
 
 
@@ -727,15 +735,25 @@ class: text-center
 
 # Walking the report that replay generated
 
-<div class="pt-4 opacity-60">screenshots · hierarchy · logs · served static, zipped for agents</div>
+<div class="pt-2 text-sm opacity-60">screenshots · hierarchy · logs · served static, zipped for agents</div>
+
+<div class="relative h-[370px] mt-3">
+  <img src="./public/asset-a2-report-1.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
+  <img v-click src="./public/asset-a2-report-2.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
+  <img v-click src="./public/asset-a2-report-3.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
+</div>
 
 <!--
+EMBEDDED 2026-07-12 (chip delivered) — a 3-click walk through the REAL report of
+parity run create_contact_b66e486e (android · phone · PASSED · 1m50s · 39 steps):
+  1. run overview — PASSED header, step timeline with per-action AI reasoning
+  2. CLICK: TrailRunner at step 9/39, view-hierarchy bounding-box overlay ON
+  3. CLICK: the LLM bill — SAY THE NUMBERS: 20 calls, 494k in / 1k out tokens,
+     $0.55 total, 91% cached, 2.5s avg response. That's the whole blaze cost —
+     and replay pays $0.00.
 Same session as part 1 — its own report. One recording serves two acts.
-PLAN B (no video): open a real archived report live from disk (zero network) —
-command + which session in the notes "Plan B" section. Or narrate over the
-capture-granularity slide you just showed; the report exists, say so plainly.
-ASSET CHIP RUNNING (task_23ea1e62): delivers asset-a2-report-1..3.png (overview,
-step detail, timeline) into droidcon/public/ — embed as a build sequence on arrival.
+PLAN B: open the real report live from disk (zero network) — command + session id
+in the notes "Plan B" section. Bonus storyboard grid: asset-a2-report-extra-grid.png.
 HAND-OFF: "Tools are the unit of reuse. Two questions decided everything:
 who gets to write them, and how do agents reach them?"
 -->
@@ -942,25 +960,27 @@ class: text-center
 
 # An agent blazing a trail
 
-<div class="pt-4 opacity-60">through the CLI toolbox · every tool call carries its NL step · ends with the recording saved <b>next to the journey</b></div>
+<div class="pt-2 text-sm opacity-60">every tool call carries its NL step · ends with the recording saved <b>next to the journey</b></div>
+
+<img src="./public/asset-b-terminal.png" class="h-[390px] mx-auto mt-3 rounded-lg shadow-lg" />
 
 <!--
-Pre-recorded. First time the audience sees the actual CLI — the "blaze" metaphor gets
-its concrete commands here. Subtitle is deliberately COMMAND-AGNOSTIC: both paths are
-real (`trailblaze step --save` incremental while driving — StepCommand.kt — and
-`trailblaze run` + `trailblaze session save --title` post-hoc, which is what the
-produced clip shows). The slide can't contradict whichever the clip uses.
-RESOLVED: blaze one of the four parity trails on Android — the exact commands that
-earned the committed recordings: `trailblaze run -d android trails/contacts/<job>/blaze.yaml`
-(agent drives every step), then `trailblaze session save --title "..."` → the
-android.trail.yaml lands NEXT TO the NL source. The clip's final frame: one folder,
-blaze.yaml + android.trail.yaml side by side. If the photo trail's camera hop is
-wanted as extra cinema, its blaze session already succeeded on camera (virtualscene) —
-but the parity trail keeps the asset tight.
-PLAN B (no video): paste-ready terminal-transcript slide in notes ("Plan B"
-section) — the REAL commands + session id from the night the recordings were earned.
-ASSET CHIP RUNNING (task_e23beb14): delivers asset-b-terminal.(mp4|gif|png) into
-droidcon/public/ — embed here on arrival.
+EMBEDDED 2026-07-12 (chip delivered): the REAL transcript, rendered as a styled
+terminal — `trailblaze run --no-daemon --device android/emulator-5596
+trails/contacts/create-contact/blaze.yaml`, 22 LLM step lines (each latency + the
+tool it chose), "Trail completed successfully!", "Results: 1 passed", then
+`trailblaze session save --title "Contacts: create a contact"` → "Trail saved: …".
+Every line verbatim from the real run (daemon-lifecycle noise removed for legibility).
+HONESTY WRINKLE (too small to read on screen, but know it): the final Trail-saved
+path is session-save's title-derived default (trails/contacts:-create-a-contact/),
+not the journey folder — the corpus recordings were then moved next to blaze.yaml.
+If it ever bugs you, re-render via asset-regeneration-playbook.sh.
+Text is small on screen BY DESIGN — it's the artifact, not a reading exercise.
+WALK IT top to bottom: the command · the LLM choosing a tool per step · the save
+landing NEXT TO blaze.yaml. First time the audience sees the actual CLI.
+Both authoring paths are real (`trailblaze step --save` incremental — StepCommand.kt
+— and this post-hoc run + session save); the slide shows the one the transcript used.
+PLAN B (image trouble): paste-ready typed-transcript slide in notes ("Plan B" section).
 -->
 
 
@@ -1132,24 +1152,27 @@ class: text-center
 
 # Your app, as a map
 
-<div class="pt-4 opacity-60">the Contacts waypoint map — <b>subway view</b> and full graph · every named place, every shortcut between them</div>
+<div class="pt-2 text-sm opacity-60">the Contacts waypoint map — <b>100 waypoints · 81 shortcuts</b> · the subway view, then the full graph</div>
+
+<div class="relative h-[370px] mt-3">
+  <img src="./public/asset-c-graph-subway.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
+  <img v-click src="./public/asset-c-graph-normal.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
+</div>
 
 <!--
-Demo app = CONTACTS (round-4 decision). PRIMARY map: the committed contacts-iOS
-trailmap — ~103 waypoints + 81 shortcuts (trails/config/trailmaps/contacts/),
-required+forbidden matchers. Optional beat: flash the committed Calendar map
-(100 waypoints + 64 shortcuts) as the second map — "a pattern, not a one-off."
-Android contacts side is waypoint-thin today — if asked, that's the honest
-"maps mature independently; the journey doesn't care" line.
-Label the app honestly either way — protects the future framing.
-PLAN B (no video): the graph viewer runs LOCAL, zero network — open it live on
-the committed contacts-iOS map (command in notes "Plan B" section), 30 seconds of
-mouse-wandering beats a flythrough anyway. Worst case: speak the numbers —
-"~103 named places, 81 shortcuts, committed in the repo today."
-Sam round 5: show BOTH renderings — the subway-map view and the normal graph view.
-ASSET CHIP RUNNING (task_23ea1e62): delivers asset-c-graph-subway.png +
-asset-c-graph-normal.png (+ optional pan mp4) into droidcon/public/ — embed both
-(subway first, it's the visual hook) on arrival.
+EMBEDDED 2026-07-12 (chip delivered) — the committed contacts trailmap, REAL numbers
+from the viewer header: 100 waypoints (authored + discovered), 81 shortcuts.
+  1. opens on the SUBWAY view (the hook): contacts/ios/list focal, depth 3 —
+     the 47-node ring is the adjacency we hand the agent in its prompt
+  2. CLICK: the map view zoomed to the list hub — real screenshots on every
+     waypoint card, labeled shortcut edges between them
+Demo app = CONTACTS (round-4 decision). Optional beat: the Calendar map exists too
+(100 waypoints + 64 shortcuts) — "a pattern, not a one-off." Android contacts side
+is waypoint-thin today — if asked: "maps mature independently; the journey doesn't
+care." A 28s tour video also exists (asset-c-graph.mp4 in public/) if you'd rather
+run cinema than click stills — swap the <div> block for a <video> line.
+PLAN B (live > canned): the viewer runs LOCAL, zero network — command in notes
+"Plan B" section; 30 seconds of mouse-wandering beats a flythrough.
 HAND-OFF: "The whole recipe, one slide."
 -->
 

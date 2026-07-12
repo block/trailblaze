@@ -1,0 +1,55 @@
+Droidcon 2026 demo video assets — generated 2026-07-12 (background agent session)
+All runs are real: clean AOSP api-34 emulator (AVD tb-asset-34, serial emulator-5596),
+trailblaze v20260711.125509.9c30cb7a08, LLM goose-gpt-4-1, app state
+(pm clear contacts + provider) reset before each run.
+
+Regenerate any/all of these with: asset-regeneration-playbook.sh (same dir).
+
+NOTE: this manifest and its asset-* files (asset-a-*, asset-b-terminal.png) are
+this session's. Files named asset-a2-*, asset-c-*, and asset-manifest-2.txt in
+this directory belong to a DIFFERENT concurrent session — not covered here.
+
+asset-a-blaze.mp4     [slide 14, ASSET A pt 1]
+  Device screen capture of the REAL agent blaze of
+  trails/contacts/create-contact/blaze.yaml. 720x1280 H.264 30fps, 2m58s, 1.1 MB.
+  Shows the full on-screen journey: launcher -> Contacts -> create form -> Casey /
+  Trailblaze / 555-0134 / casey.trailblaze.demo@example.com -> save -> verified
+  contact card. Trimmed to the active journey; the preceding ~3 min of static
+  launcher (CLI startup + one-time 52 MB test-APK install + first LLM think) is
+  cut. Full run wall-clock is in asset-a-wallclock.txt.
+
+asset-a-replay.mp4    [slide 14, ASSET A pt 1]
+  Replay of the committed recording trails/contacts/create-contact/android.trail.yaml
+  on the same device after full app-state reset (no LLM round-trips).
+  Untrimmed -- includes ~35 s of static launcher during CLI/daemon startup, then
+  the journey to the same verified contact card. 720x1280 H.264 30fps, 2m16s, 0.9 MB.
+
+asset-a-blaze-timeline.gif   [slide 14 or 37 -- annotated alternative]
+  trailblaze report's timeline autoplay of the SAME blaze session
+  (create_contact_3958): step list with per-step LLM/tool timings on the left,
+  device playback with element-selector overlays on the right, "Succeeded 245.49s"
+  header. Idle gaps between steps are collapsed, so length tracks step count, not
+  wall-clock. 2560x1600, 62s, 6.7 MB. This is the report view, NOT the raw device
+  recording -- richer for explaining HOW the agent drove the app.
+asset-a-blaze-timeline.webp  same frames as the GIF, 5fps, 4.0 MB (smaller, for web/PR).
+
+asset-a-wallclock.txt [slide 14]
+  Real measured wall-clocks, same basis for both lines: full CLI invocation
+  (command start -> "Results: 1 passed" printed).
+  blaze 6m26s -- framework-internal trail duration was 4m6s; invocation includes
+  one-time APK install the replay didn't pay. replay 2m20s (internal ~1m30s).
+
+asset-b-terminal.png  [slide 37, ASSET B]
+  Real CLI transcript rendered as a styled terminal (2240x3006 PNG @2x): the
+  `trailblaze run --no-daemon ... blaze.yaml` output (22 LLM step lines ->
+  "Trail completed successfully!" -> "Results: 1 passed"), then
+  `trailblaze session save --id create_contact_3958 --title "Contacts: create a
+  contact"` -> "Trail saved: ...". Daemon-lifecycle noise removed for legibility;
+  every remaining line is verbatim from the real runs.
+
+asset-regeneration-playbook.sh   runnable end-to-end regenerator for all of the
+  above (creates/boots the AVD, records, runs, encodes, renders the terminal PNG,
+  builds the timeline GIF/webp, writes wall-clocks + this manifest, cleans up).
+  Self-contained; embeds the terminal renderer. Read the header before running.
+
+asset-manifest.txt    this file.
