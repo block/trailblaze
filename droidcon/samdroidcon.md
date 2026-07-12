@@ -483,7 +483,8 @@ parameterize slide follows; don't name the mechanism here.
 Show verify: here — closes the assertions thread from Act 0.
 Q&A hedge: this multi-platform shape = the spec + Block production; in the public repo the
 contacts parity suite (next slide) is the committed unified corpus — Android recordings
-earned, iOS recordings landing before the talk.
+earned, iOS recordings landing before the talk. Unified naming: one journey = one
+<name>.trail.yaml (e.g. create-contact.trail.yaml) once recordings fold inline.
 verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
 assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
 and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
@@ -523,6 +524,11 @@ the steps they materialized as context, but you never EDIT the words there — w
 change in blaze.yaml, recordings get re-earned. Inline-classifier shape (previous
 slide) and sibling-file shape are the SAME model; the repo materializes recordings as
 siblings.
+NAMING TRAJECTORY (Sam round 6): today's materialization = folder + blaze.yaml +
+sibling recordings (contacts/android.trail.yaml-style). In the unified format the
+folder collapses to ONE file — create-contact.trail.yaml, recordings inline. If asked
+why the repo shows siblings: "that's the migration in motion; the format on the
+previous slide is the destination."
 The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
 must always be able to do in a contacts app. REDESIGNED round 5 (the boots table read
 as confusing) — the file tree says it concretely: each job is ONE folder, ONE natural-
@@ -1003,6 +1009,10 @@ Honest: we started on **Maestro's** driver stack — Android is now our own · *
 </div>
 
 <!--
+THE NOD (Sam round 6): Maestro BLAZED THE PATH — readable YAML, deterministic steps;
+we've seen how well that works. We built on it: custom toolsets in TypeScript,
+LLM-first, the natural language attached to every step. Credit warmly in ONE
+sentence, then the difference — don't make it a huge deal, and don't dunk.
 WEB (Sam round 5 — the real story): web used Playwright from the start, but early on
 it was Playwright SHOVED INTO Maestro's model — Sam was always hesitant about our web
 support. The turning point: going full fidelity for the target — letting the driver
@@ -1269,7 +1279,7 @@ The determinism/trailhead line answers "but isn't replay flaky?" without reachin
 
 # Backup · "How is this different from Maestro / Appium / AI recorders?"
 
-- Deterministic replay is **table stakes** — Maestro has it too
+- **Maestro blazed the path** — readable YAML, deterministic steps · we built on it
 - **Natural language first** — the objective never leaves the artifact
 - **Custom tools in TypeScript** — your app's verbs, composable, contributable
 - **Full per-platform fidelity** — driver-native trees, no lossy conversion
