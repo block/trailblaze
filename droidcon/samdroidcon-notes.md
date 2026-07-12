@@ -1464,7 +1464,7 @@ Sam: "keep on top of block/trailblaze main." Fetched — one new commit, `ce44af
   control for your coding agent — across iOS, Android, and web"; leads with pointing
   Claude Code/Cursor/Codex/Goose at the CLI; "twenty selector strategies per element
   only works because an agent is driving." Very aligned with the talk's Act 4/5 framing.
-  Still NO mention of skills/trailblaze/SKILL.md → issue #191's acceptance criterion
+  Still NO mention of skills/trailblaze/SKILL.md → block/trailblaze#191's acceptance criterion
   stands.
 - **MCP server expanded** (+753 in TrailblazeMcpServer, descriptor/target-scoped tool
   tests). `trailblaze mcp` proxy still exists (STDIO default, HTTP option) — the CLI-pivot
