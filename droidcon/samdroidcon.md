@@ -23,7 +23,7 @@ Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
 <!--
-DECK v5 — content-complete; 📼 slides get real media when the asset chips deliver.
+DECK v6 — content-complete; all four 📼 asset slides carry REAL embedded media (real runs, real numbers).
 Act + timing markers (and ASSET ids) appear top-left of each slide.
 Spine: natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
 samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&A bank.
@@ -69,7 +69,7 @@ The economic hook from the abstract — land it before the seven targets multipl
 Deterministic replay answers this, and replay alone is table stakes (Maestro has it too).
 Our leg up: natural language FIRST + custom tools in TypeScript + full per-platform
 fidelity — that's the positioning (backup slide has the head-to-head).
-ASSET A pt 1 is the visual proof: side-by-side wall clocks.
+ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m20s in the captions.
 -->
 
 ---
@@ -272,6 +272,9 @@ A* cost model (recording=1.0, AI=5.0) lives on a BACKUP slide.
 
 <!--
 Your tools, exposed as YAML into the LLM — that's what makes it composable.
+FORWARD TEASE (cold read): "custom tools" is undefined at minute ~6 — attach the
+clause "your app's own verbs; we build them in a few minutes" so nobody stalls
+on the term (Act 4 pays it off; same convention as the trailmap teases).
 SCOPE "edits" (cold read, vs "earned not written" in Act 4): humans freely edit the
 JOURNEY — the natural language — and do maintenance surgery on recordings when needed
 (the committed create-contact recording carries a hand-added launchMode: RESUME with
@@ -496,8 +499,8 @@ robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
 parameterize slide follows; don't name the mechanism here.
 Show verify: here — closes the assertions thread from Act 0.
 Q&A hedge: this multi-platform shape = the spec + Block production; in the public repo the
-contacts parity suite (next slide) is the committed unified corpus — Android recordings
-earned, iOS recordings landing before the talk. Unified naming: one journey = one
+contacts parity suite (next slide) is the committed unified corpus — Android + iOS
+recordings both earned and committed. Unified naming: one journey = one
 <name>.trail.yaml (e.g. create-contact.trail.yaml) once recordings fold inline.
 verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
 assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
@@ -540,9 +543,13 @@ slide) and sibling-file shape are the SAME model; the repo materializes recordin
 siblings.
 NAMING TRAJECTORY (Sam round 6): today's materialization = folder + blaze.yaml +
 sibling recordings (contacts/android.trail.yaml-style). In the unified format the
-folder collapses to ONE file — create-contact.trail.yaml, recordings inline. If asked
-why the repo shows siblings: "that's the migration in motion; the format on the
-previous slide is the destination."
+folder collapses to ONE file — create-contact.trail.yaml, recordings inline.
+SAY IT AT THE SEAM, unprompted (cold read: a cold audience can't tell whether the
+inline shape on the previous slide is shipping or vapor): "the inline shape is the
+spec — and Block production; this sibling layout is the migration in motion, folding
+into one create-contact.trail.yaml."
+CAPTION MAPPING: the bold line says "update"; the folder says add-phone-to-contact —
+narrate it once: "update, here, is adding a phone number."
 The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
 must always be able to do in a contacts app. REDESIGNED round 5 (the boots table read
 as confusing) — the file tree says it concretely: each job is ONE folder, ONE natural-
@@ -550,10 +557,12 @@ language file, and per-platform recordings sitting next to it. The parity claim 
 concrete: 4 files, 8 green runs. Self-contained by design — each trail creates the
 contact it acts on, so any subset runs on a fresh CI device in any order.
 Asset hooks: ASSET B blazes one of these; ASSET A replays one.
-PRODUCTION NOTE (before talk): Android recordings committed; iOS ×4 blazed +
-replay-verified 2026-07-12 as ios.trail.yaml (broad-family name, matches repo —
-slide tree updated), awaiting the chip's commit. VERIFY the tree on this slide
-matches the repo before presenting. Never show a file that isn't real.
+PRODUCTION NOTE: full parity corpus COMMITTED — all 4 jobs have blaze.yaml +
+android.trail.yaml + ios.trail.yaml; tree VERIFIED against the repo 2026-07-12.
+Every file shown is real. The repo folder also holds a few extras the tree omits:
+create-contact-with-photo (the fifth trail, below), three small segment trails
+(open-contacts-app, open-create-contact-form, enter-name-in-create-form), and
+regen/ scripts — if someone opens the repo, that's expected, not drift.
 There IS a fifth trail — create-contact-WITH-PHOTO, Android-only: the photo hop
 crosses four app surfaces (Contacts → camera → crop → back). iOS sims can't run it:
 tapping "Photos" in the avatar sheet crashes stock Contacts on iOS 26.x — an OS bug
@@ -573,6 +582,8 @@ allows, honesty where it doesn't.
 
 <!--
 60-second beat. Closes the loop on "credentials diverged" from the drift story.
+`--secret` floats 14 minutes before the CLI debuts (cold read) — attach two words
+when you say it: "a CLI flag."
 REFRAMED round 5 — lead with TOOL parameterization (typed args, rock solid; ties to
 the TypeScript slide). Sam on trail-level parameterization: it exists via memory
 seeding today but "the implementation is pretty gross… I don't know how much I want
@@ -640,10 +651,6 @@ The 10-year callback — a beat, not the spine. One slide of nostalgia, then the
 - An LLM decides **what** to do next
 - Force it to figure out **how** → its context explodes
 
-<!--
-"How" = raw taps, "just explore" — many decisions that should have been ONE decision.
--->
-
 <div class="pt-8">
 
 **Custom tools = robot methods.** &nbsp; `login` · `addItemToCart`
@@ -653,8 +660,11 @@ The 10-year callback — a beat, not the spine. One slide of nostalgia, then the
 </div>
 
 <!--
+"How" = raw taps, "just explore" — many decisions that should have been ONE decision.
 Implementation changes → fix the tool once; the trails on disk never change.
 At hundreds → thousands of trails, this is what makes maintenance survivable.
+(Comments merged 2026-07-12 — Slidev presenter mode only shows a slide's LAST
+comment block; the first block was invisible on stage.)
 -->
 
 ---
@@ -739,7 +749,7 @@ class: text-center
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 3 · 📼 ASSET A · part 2</div>
 
-# Walking the report that replay generated
+# Walking a real run's report
 
 <div class="pt-2 text-sm opacity-60">screenshots · hierarchy · logs · served static, zipped for agents</div>
 
@@ -755,9 +765,13 @@ parity run create_contact_b66e486e (android · phone · PASSED · 1m50s · 39 st
   1. run overview — PASSED header, step timeline with per-action AI reasoning
   2. CLICK: TrailRunner at step 9/39, view-hierarchy bounding-box overlay ON
   3. CLICK: the LLM bill — SAY THE NUMBERS: 20 calls, 494k in / 1k out tokens,
-     $0.55 total, 91% cached, 2.5s avg response. That's the whole blaze cost —
-     and replay pays $0.00.
-Same session as part 1 — its own report. One recording serves two acts.
+     $0.55 total, 91% cached, 2.5s avg response. That's the whole cost of BLAZING
+     this journey — and replay pays $0.00.
+ACCURACY GUARD: this run HAS an LLM bill, so it's a BLAZE's report (2026-07-11),
+NOT the replay from the slide-14 videos and NOT the same session (videos =
+create_contact_3958, 2026-07-12). Say "here's the report a run leaves behind" —
+don't tie it to the specific run you just watched. Retitled 2026-07-12 (was
+"the report that replay generated" — a skeptic would catch the $0.55 bill).
 PLAN B: open the real report live from disk (zero network) — command + session id
 in the notes "Plan B" section. Bonus storyboard grid: asset-a2-report-extra-grid.png.
 HAND-OFF: "Tools are the unit of reuse. Two questions decided everything:
@@ -774,6 +788,12 @@ who gets to write them, and how do agents reach them?"
 2. Ship a **binary** → nobody can extend
 3. **The inversion:** tools on the filesystem — the **trailmap**
 
+<div class="pt-6 opacity-70">
+
+*There's that word again — **trailmap**. The map part pays off in a few minutes.*
+
+</div>
+
 <!--
 1: a wall for external teams, too slow for agents iterating.
 3: trailmap = your target + tools + toolsets + trails, distributed as plain npm packages.
@@ -783,18 +803,11 @@ Square: the default swipe kept hitting the bottom navigation bar, so the target
 removes the default swipe from its toolset and ships a square-specific swipe that
 swipes through the middle of the screen — a whole class of issues gone. Your app's
 toolbox isn't the default toolbox with extras; it's curated.
--->
-
-<div class="pt-6 opacity-70">
-
-*There's that word again — **trailmap**. The map part pays off in a few minutes.*
-
-</div>
-
-<!--
 Title seed #2.
 Runtime internals = ONE LINE if asked: "runs in an embedded JS engine, identical
 on host and device." QuickJS/Bun/codegen details → backup slides.
+(Comments merged 2026-07-12 — Slidev only shows the LAST comment block in presenter
+mode; the Square composition story was in the invisible first block.)
 -->
 
 ---
@@ -904,7 +917,7 @@ that never actually ran. Recordings come from a successful run, full stop.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1 · optional</div>
 
 # Not every tool is for the LLM
 
@@ -916,6 +929,9 @@ that never actually ran. Recordings come from a successful run, full stop.
 A tool decides whether it's exposed to the LLM. Only the right surface is advertised —
 keeps the LLM's menu small and decisive while the implementation stays factored.
 Same discipline as any good API: public surface vs. internals.
+OPTIONAL (cut-priority #3 in notes) — Act 4 is the tightest stretch (10 slides,
+6.5 min, incl. the peak + ASSET B). If cut, fold one line into "The LLM twist":
+"only the right surface is advertised to the LLM."
 -->
 
 ---
@@ -998,9 +1014,13 @@ First time the audience sees the actual CLI. WALK IT: the command · the agent
 choosing a tool per step · the save landing NEXT TO blaze.yaml.
 Both authoring paths are real (`trailblaze step --save` incremental — StepCommand.kt
 — and this post-hoc run + session save); the slide shows the post-hoc one.
-FULL ARTIFACT (backup, not projected): asset-b-terminal.png — full 22-step transcript;
-sanitized re-render + commit delegated to the video-asset session. Shorter Plan B
-variant still in notes.
+FULL ARTIFACT (backup, not projected): asset-b-terminal.png — full 22-step transcript,
+sanitized + committed. Shorter Plan B variant still in notes.
+NUMBER AMMO (cold read): a numerate skeptic may connect slide 28's "39 steps" to
+this 22 — different sessions AND different units: report "steps" count recorded
+ACTIONS; these 22 are NL steps, one LLM decision each. And `tap` here vs `tapOn`
+in the YAML examples: BOTH are real tools — tap = coordinate primitive, tapOn =
+selector-based; the transcript lines are verbatim.
 -->
 
 
@@ -1025,6 +1045,9 @@ Errors map back to `trail.yaml · step 3 [android-phone]`
 Gate 2 mechanics (say aloud): every recorded tool call transpiled to a
 client.tools.tapOn({...}) line, compiled against the generated typings.
 Keep the trick, narrate lightly.
+If someone quotes slide 12's "human edits & accepts" against "no human reviews
+that diff": humans approved the JOURNEYS once; the gates review the mechanical
+rewrites.
 HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 -->
 
@@ -1066,6 +1089,9 @@ APK). iOS: Maestro installs an XCTest runner app on the device and talks gRPC to
 our own XCTest-based runner with event-based settle is designed (devlog: driver dispatch
 & the iOS settle gap), not landed.
 Maestro was the right first call — "not a permanent coupling" from day one.
+SAY THE BASIS (cold read): the headline ~3x = end-to-end replay, deliberately
+conservative; the table's 500–700ms → 100–150ms is per-ACTION overhead (~5x).
+One clause kills the mismatch: "per action it's ~5x; end to end, about 3."
 Numbers live on the slide; don't over-narrate.
 HAND-OFF: "We'd protected the language; now the determinism underneath it is fast. So — the map."
 -->
@@ -1157,9 +1183,6 @@ proven yet — and I'm bullish."
 <!--
 Vision details: pathfinding over the graph, semantic recordings (record
 (shortcut, params) instead of raw taps).
--->
-
-<!--
 Framed as the future step, not shipped fact. This is the "philosophy of where we're going."
 -->
 
@@ -1180,6 +1203,9 @@ class: text-center
 </div>
 
 <!--
+BRIDGE FROM the waypoints slide (cold read): "the mapping scaffolding already draws
+this — what's unproven is navigating OVER it: goTo, pathfinding." Kills the
+unproven→polished whiplash.
 EMBEDDED 2026-07-12 (chip delivered) — the committed contacts trailmap, REAL numbers
 from the viewer header: 100 waypoints (authored + discovered), 81 shortcuts.
   1. opens on the SUBWAY view (the hook): contacts/ios/list focal, depth 3 —
@@ -1187,7 +1213,10 @@ from the viewer header: 100 waypoints (authored + discovered), 81 shortcuts.
   2. CLICK: the map view zoomed to the list hub — real screenshots on every
      waypoint card, labeled shortcut edges between them
 Demo app = CONTACTS (round-4 decision). Optional beat: the Calendar map exists too
-(100 waypoints + 64 shortcuts) — "a pattern, not a one-off." Android contacts side
+— "a pattern, not a one-off." NUMBER GUARD: Calendar was reported as 100 waypoints
++ 64 shortcuts — BOTH maps at exactly 100 smells like a display cap. Verify in the
+live viewer before quoting the Calendar count, or just say "another hundred-odd
+waypoints"; the Contacts 100/81 is confirmed from the embedded screenshots. Android contacts side
 is waypoint-thin today — if asked: "maps mature independently; the journey doesn't
 care." A 28s tour video also exists (asset-c-graph.mp4 in public/) if you'd rather
 run cinema than click stills — swap the <div> block for a <video> line.
@@ -1302,6 +1331,16 @@ The determinism/trailhead line answers "but isn't replay flaky?" without reachin
 - **Replay: $0** — zero LLM calls
 - LLM spend happens once, at authoring/blazing time (and on opt-in self-heal)
 - A\* cost model: recording = **1.0**, self-heal = **5.0** — recordings always win
+- **Bring your own LLM** — `trailblaze config llm` · openai / anthropic / google /
+  ollama / openrouter · enterprise endpoints & self-hosted via YAML
+
+<!--
+BYOK is a guaranteed question at an AI talk (cold read #7). True answer, verified
+in docs/llm_configuration.md + docs/CLI.md: provider/model set via
+`trailblaze config llm` or --llm provider/model; keys via env vars
+(OPENAI_API_KEY etc.); YAML config supports enterprise gateways, Azure,
+self-hosted. Koog underneath.
+-->
 
 ---
 
@@ -1343,7 +1382,14 @@ driver-native projection.
 - **On-demand pipeline**: trigger any set of trails, filtered by **device type**
 - Latest build by default · pin an **exact build** for regressions
 - **Public proof in the repo**: `contacts-trails-android.yml` — `workflow_dispatch`
-  replays the whole parity suite on a stock emulator
+  replays the Android side of the parity suite on a stock emulator
+
+<!--
+HONESTY GUARD: the workflow is committed but has never been TRIGGERED — if asked
+"does it pass in CI?", the true answer is "it replays on demand; the 8 green runs
+were on real hardware/sims, and the workflow is there for anyone to dispatch."
+iOS has its own pre-existing workflow (ios-contacts-trails.yml, on main).
+-->
 
 ---
 

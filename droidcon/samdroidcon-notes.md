@@ -1367,3 +1367,46 @@ _(brainstorm below — promote the keepers into the deck)_
 ## Parked / rejected
 
 _(keep the trail of what we decided against and why)_
+
+## Round 7: whole-deck cohesion pass #3 (2026-07-12, post-assets)
+
+Full re-read + independent cold-read agent after all four assets embedded. 14 findings,
+all applied to the deck (note-level unless marked). What changed:
+
+**Accuracy (the two that could bite on stage):**
+- Slide 28 RETITLED "Walking a real run's report" (was "…that replay generated") —
+  the walked report is a BLAZE's (session create_contact_b66e486e has the 20-call/$0.55
+  LLM bill; a replay report would bill $0.00). Note now pins the session lineage:
+  NOT the same session as the slide-14 videos (create_contact_3958). Don't tie them.
+- Slidev presenter mode only shows a slide's LAST comment block — three slides had
+  spoken content in an invisible FIRST block (The LLM twist; Tools wanted out of the
+  binary, incl. the Square swipe composition story; Next: waypoints). Merged. Deck-wide
+  check: no slide has split blocks anymore.
+
+**Staleness purged:** cover note (assets are embedded, v6), slide 19/20 notes
+(iOS recordings committed, tree VERIFIED vs repo 2026-07-12 — extras in the folder
+are expected: with-photo, 3 segment trails, regen/), slide 37 backup-PNG marker.
+
+**Number defenses added to notes:** 39-vs-22-vs-20 (report actions vs NL steps vs
+LLM calls, different sessions); `tap` vs `tapOn` both real (coordinate primitive vs
+selector — transcript verbatim); ~3x headline vs ~5x table (end-to-end vs per-action);
+Calendar map count NEEDS VERIFY before quoting (both maps at exactly 100 waypoints
+smells like a display cap — Contacts 100/81 confirmed from screenshots).
+
+**Clarity/flow:** slide 12 tease clause for "custom tools" (undefined until Act 4);
+19→20 seam line now ALWAYS-SPOKEN (inline shape = spec + Block production, siblings =
+migration in motion); "update = add-phone" caption mapping; `--secret` = "a CLI flag";
+waypoints→map bridge ("scaffolding draws it; navigating over it is what's unproven");
+slide 34 marked `optional` on-slide (matches cut-priority #3) — Act 4 is the pacing
+pinch: 10 slides / 6.5 min incl. the peak + ASSET B; watch it in the dry run.
+
+**New content:** BYOK bullet on the cost backup slide — verified from docs:
+`trailblaze config llm`, openai/anthropic/google/ollama/openrouter, enterprise
+endpoints + self-hosted via YAML config, keys via env vars.
+
+**Backup CI slide:** now says "Android side of the parity suite" + honesty note:
+the workflow is committed but has never been TRIGGERED; iOS has its own pre-existing
+workflow on main.
+
+**Cold reader's do-not-touch list (it's right):** Act 0 seven-targets build, Act 1
+spine, Act 2 rhyme, Act 3 arc, the 35–37 peak, the close, the backup bank.
