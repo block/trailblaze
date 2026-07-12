@@ -102,9 +102,21 @@ You write it **once**.
 
 </div>
 
+<div class="pt-6 text-base opacity-50">
+
+*(fine — login **flows**. MFA, first-run setup… each written once.)*
+
+</div>
+
 <!--
 BUILD 1 of 2 — the setup. Say it and let it hang: "One login flow. You write it once."
 Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
+HONESTY (Sam round 5): "one login flow" is kind-of-but-not-really — there are all
+sorts of login flows: multi-factor auth, first-time account setup, etc. Each is its
+own journey, each written once. What you actually get is a TRAILHEAD, and within it
+you can skip the normal noise — onboarding screens, "select a default" — so replay
+starts from known state. (Trailheads get their formal slide in Act 2 — don't unpack
+here, just don't overclaim.)
 -->
 
 ---
@@ -114,10 +126,10 @@ Then advance, and it multiplies. (Big beat split across two slides — Sam's mov
 # Seven targets.
 
 <div class="grid grid-cols-7 gap-3 pt-8 text-center text-sm">
-<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">Android<br>phone</div></div>
-<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">Android<br>tablet</div></div>
-<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">iPhone</div></div>
-<div><div class="h-20 flex items-end justify-center text-5xl">📱</div><div class="pt-2">iPad</div></div>
+<div><div class="h-20 flex items-end justify-center"><ph-device-mobile-speaker class="text-7xl opacity-90" /></div><div class="pt-2">Android<br>phone</div></div>
+<div><div class="h-20 flex items-end justify-center"><ph-device-tablet-speaker class="text-7xl opacity-90" /></div><div class="pt-2">Android<br>tablet</div></div>
+<div><div class="h-20 flex items-end justify-center"><ph-device-mobile-camera class="text-7xl opacity-90" /></div><div class="pt-2">iPhone</div></div>
+<div><div class="h-20 flex items-end justify-center"><ph-device-tablet-camera class="text-7xl opacity-90" /></div><div class="pt-2">iPad</div></div>
 <div><div class="h-20 flex items-end justify-center"><img src="./public/square-terminal.png" class="max-h-20 object-contain" alt="Square Terminal" /></div><div class="pt-2">Square<br><b>Terminal</b></div></div>
 <div><div class="h-20 flex items-end justify-center"><img src="./public/square-handheld.png" class="max-h-20 object-contain" alt="Square Handheld" /></div><div class="pt-2">Square<br><b>Handheld</b></div></div>
 <div><div class="h-20 flex items-end justify-center"><img src="./public/square-register.png" class="max-h-20 object-contain" alt="Square Register" /></div><div class="pt-2">Square<br><b>Register</b></div></div>
@@ -132,8 +144,9 @@ Hundreds of trails today → projecting **thousands**.
 <!--
 BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one flow, seven places.
 Square imagery = real product shots (droidcon/public/square-*.png, pulled from
-squareup.com/us/en/hardware — Block's own marketing assets). Consumer devices stay
-emoji on purpose: everyone knows an iPhone; nobody knows a Square Register.
+squareup.com/us/en/hardware — Block's own marketing assets). Consumer devices =
+Phosphor line icons (speaker-variant = Android, camera-variant = Apple) — cleaner
+than emoji next to the real product shots (Sam round 5).
 SEVEN targets — never say eight.
 Scale framing: keep the automatable automated; manual testing focuses on
 new features + hardware-specific work automation can't reach yet.
@@ -190,7 +203,7 @@ layout: center
 
 # We're blazing a lot of trails…
 
-## …so we have a **trailmap** 🧭
+## …so we have a **trailmap** 🗺️
 
 <div class="pt-6 opacity-70">
 
@@ -316,6 +329,8 @@ agent-driven end-to-end; its replay is ~1min — pull the parity trail's exact
 blaze/replay wall-clocks from the earning session before recording this asset.
 PLAN B (no video): paste-ready fallback slide in notes ("Plan B" section) —
 real blaze.yaml → earned recording, spoken wall-clock. Talk is DONE without video.
+ASSET CHIP RUNNING (task_e23beb14): delivers asset-a-blaze.mp4 + asset-a-replay.mp4
++ real wall-clocks into droidcon/public/ — embed side-by-side <video> here on arrival.
 -->
 
 
@@ -345,16 +360,37 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 
 # Scale found our design flaw
 
-- v1: one trail file **per platform**
-- It worked. Then:
-  - **file explosion**
-  - the natural language **drifted** between copies
-- The "one business case" promise quietly broke
+<div class="grid grid-cols-2 gap-4 pt-2">
+
+```yaml
+# android-tablet.trail.yaml
+- step: Sign in as the QE sender
+- tapOn: { id: sign_in_button }
+```
+
+```yaml
+# ios-iphone.trail.yaml
+- step: Sign in as the QE sender
+- tapOn: { text: "Sign In" }
+```
+
+</div>
+
+<div class="pt-6">
+
+**One journey. A file per platform.** The natural language — copied into every copy.
+
+</div>
 
 <!--
-Filenames to say aloud: android-phone.trail.yaml, ios-iphone.trail.yaml, ...
+v1 visualized with two real-shaped files: same NL duplicated, per-platform recordings.
+Say the consequences aloud (don't bullet them): it worked, then — file EXPLOSION
+across 7 targets, and the copied natural language DRIFTED (next slide shows it).
+The "one business case" promise quietly broke.
 Real production drift: credentials diverged, steps added to one file and not others.
 The recording pipeline couldn't fix it — each device recorded in isolation.
+HAND-OFF: two slides from here the same two recordings reappear UNDER one NL source —
+the unified format slide is the resolution of this exact picture.
 -->
 
 ---
@@ -411,8 +447,8 @@ HAND-OFF: "Here's what that journey looks like as one file."
 trailhead:
   step: Sign in as the QE sender
   recording:
-    android-phone: { myapp_signInViaUI: { email: "{{memory.account_email}}" } }
-    ios-iphone:    { myapp_ios_signInViaUI: { email: "{{memory.account_email}}" } }
+    android-phone: { myapp_signInViaUI: { email: "{{account_email}}" } }
+    ios-iphone:    { myapp_ios_signInViaUI: { email: "{{account_email}}" } }
 
 trail:
   - step: Add a latte to the cart and open checkout
@@ -445,26 +481,31 @@ HAND-OFF: "So what do you actually write these for? The jobs your users must alw
 
 # Four critical jobs. One file each.
 
-| the job | Android | iOS |
-|---|:---:|:---:|
-| **Create** a contact | 🥾 | 🥾 |
-| **Find** a contact by name | 🥾 | 🥾 |
-| **Update** a contact | 🥾 | 🥾 |
-| **Delete** a contact | 🥾 | 🥾 |
+```text
+trails/contacts/
+├── create-contact/
+│      blaze.yaml             ← the journey — natural language, written once
+│      android.trail.yaml     ← its Android recording, earned
+│      ios-iphone.trail.yaml  ← its iOS recording, earned
+├── find-contact/             · same shape
+├── add-phone-to-contact/     · same shape
+└── delete-contact/           · same shape
+```
 
-<div class="pt-4 opacity-70"><code>trails/contacts/</code> — in the open-source repo · same NL source per row · recordings per platform</div>
+<div class="pt-4 opacity-70"><b>create · find · update · delete</b> — the jobs a contacts app must never break · in the open-source repo</div>
 
 <!--
 The demo corpus, framed as jobs-to-be-done, NOT "tests": the critical things a user
-must always be able to do in a contacts app. Each row = ONE blaze.yaml; each cell =
-that journey materialized for that platform. The parity claim made concrete:
-4 files, 8 green runs. Self-contained by design — each trail creates the contact it
-acts on, so any subset runs on a fresh CI device in any order.
+must always be able to do in a contacts app. REDESIGNED round 5 (the boots table read
+as confusing) — the file tree says it concretely: each job is ONE folder, ONE natural-
+language file, and per-platform recordings sitting next to it. The parity claim made
+concrete: 4 files, 8 green runs. Self-contained by design — each trail creates the
+contact it acts on, so any subset runs on a fresh CI device in any order.
 Asset hooks: ASSET B blazes one of these; ASSET A replays one.
-PRODUCTION NOTE (before talk): recordings are being earned now — Android first, iOS
-on a fresh simulator. Verify every cell is green, then consider swapping the boots
-for real wall-clock times. If iOS isn't done in time, show the Android column green
-and narrate iOS as landing — never claim a green cell that isn't.
+PRODUCTION NOTE (before talk): Android recordings committed; iOS being earned on a
+fresh simulator. VERIFY the tree on this slide matches the repo before presenting —
+if ios-iphone.trail.yaml isn't committed by then, drop that line and narrate iOS as
+landing. Never show a file that isn't real.
 There IS a fifth trail — create-contact-WITH-PHOTO, Android-only: the photo hop
 crosses four app surfaces (Contacts → camera → crop → back). iOS sims can't run it:
 tapping "Photos" in the avatar sheet crashes stock Contacts on iOS 26.x — an OS bug
@@ -478,14 +519,21 @@ allows, honesty where it doesn't.
 
 # Parameterize, don't hardcode
 
-- `{{memory.var}}` — seeded at the trail level
-- `--secret` — redacted, only the key recorded
+- Tools take **typed, well-defined parameters** — parameterize the *verbs*
+- `--secret` — redacted · only the **key** is recorded
 - A recording **never hardcodes** a stale credential
 
 <!--
 60-second beat. Closes the loop on "credentials diverged" from the drift story.
-Mechanism (say aloud if useful): reverse-substitution — recordings swap captured
-literals back to {{key}} using a per-step memory snapshot.
+REFRAMED round 5 — lead with TOOL parameterization (typed args, rock solid; ties to
+the TypeScript slide). Sam on trail-level parameterization: it exists via memory
+seeding today but "the implementation is pretty gross… I don't know how much I want
+to sell it." So DON'T sell it from the slide. The {{account_email}} in the unified
+example is that mechanism — narrate it lightly, don't name memory.
+If asked how trail-level values work: "today they're seeded through memory; a
+first-class parameter design is the next step — exactly where this is heading."
+Mechanism (only if useful): reverse-substitution — recordings swap captured
+literals back to {{key}} using a per-step snapshot.
 Guaranteed Q&A topic otherwise (test accounts in CI).
 -->
 
@@ -597,11 +645,15 @@ today the same context is what lets the agent solve failures.
 
 - **Standalone** report — servable from any CDN
 - Viewable in CI · downloadable as a **zip**
+- **Same artifact structure on every platform** — one report, seven targets
 - Analyzable by you… **or by an agent**
 - **No SaaS backend required**
 
 <!--
 Kept tight — one slide.
+Round 5 (Sam): every supported platform generates the SAME session artifact
+structure — zippable — and reporting has a single output. Huge benefit: one place
+to see how things are doing ACROSS all the platforms. Worth a spoken beat here.
 -->
 
 ---
@@ -646,6 +698,8 @@ Same session as part 1 — its own report. One recording serves two acts.
 PLAN B (no video): open a real archived report live from disk (zero network) —
 command + which session in the notes "Plan B" section. Or narrate over the
 capture-granularity slide you just showed; the report exists, say so plainly.
+ASSET CHIP RUNNING (task_23ea1e62): delivers asset-a2-report-1..3.png (overview,
+step detail, timeline) into droidcon/public/ — embed as a build sequence on arrival.
 HAND-OFF: "Tools are the unit of reuse. Two questions decided everything:
 who gets to write them, and how do agents reach them?"
 -->
@@ -663,6 +717,12 @@ who gets to write them, and how do agents reach them?"
 <!--
 1: a wall for external teams, too slow for agents iterating.
 3: trailmap = your target + tools + toolsets + trails, distributed as plain npm packages.
+COMPOSITION story (Sam round 5, say with the Square example): an app target in a
+trailmap composes the EXACT toolset — include what fits, EXCLUDE what doesn't.
+Square: the default swipe kept hitting the bottom navigation bar, so the target
+removes the default swipe from its toolset and ships a square-specific swipe that
+swipes through the middle of the screen — a whole class of issues gone. Your app's
+toolbox isn't the default toolbox with extras; it's curated.
 -->
 
 <div class="pt-6 opacity-70">
@@ -704,8 +764,13 @@ export const myapp_addItemToCart = trailblaze.tool<AddItemArgs>(
 
 One `.ts` file = one tool · types → schema · TSDoc → the LLM-facing description
 
+<div class="pt-2 opacity-70">Type safety in <b>VS Code</b> & your IDE — and in the newer <b>trail runner UI</b></div>
+
 <!--
 Type-safe, and the language LLMs edit best. Wrong tool name or args = compile error.
+Round 5 (Sam): say the type-safety payoff WHERE PEOPLE LIVE — Visual Studio Code and
+other IDEs light up on these types, and the newer trail runner UI gets the same
+type-awareness. The types aren't just for the compiler; they're the editing experience.
 -->
 
 ---
@@ -855,6 +920,8 @@ wanted as extra cinema, its blaze session already succeeded on camera (virtualsc
 but the parity trail keeps the asset tight.
 PLAN B (no video): paste-ready terminal-transcript slide in notes ("Plan B"
 section) — the REAL commands + session id from the night the recordings were earned.
+ASSET CHIP RUNNING (task_e23beb14): delivers asset-b-terminal.(mp4|gif|png) into
+droidcon/public/ — embed here on arrival.
 -->
 
 
@@ -898,11 +965,17 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 <div class="pt-4 opacity-70">
 
-Honest: **iOS still drives through an XCTest runner** (via Maestro) · web was always Playwright
+Honest: **iOS still drives through an XCTest runner** (via Maestro) · web: **Playwright, now full-fidelity**
 
 </div>
 
 <!--
+WEB (Sam round 5 — the real story): web used Playwright from the start, but early on
+it was Playwright SHOVED INTO Maestro's model — Sam was always hesitant about our web
+support. The turning point: going full fidelity for the target — letting the driver
+express things the way Playwright and the browser express them, not translated through
+a mobile abstraction. Same lesson as owning the Android driver: fidelity to the target,
+no lossy conversion. Say it as the second proof of the pattern, not an aside.
 Setup line answers "what was slow?" — Act 4 fixed authoring; this is the replay half.
 TERMINOLOGY: name the underlying tech, not the wrapper. We drove Android through
 Maestro's stack, and Maestro drives Android WITH UiAutomator (gRPC to an instrumentation
@@ -954,6 +1027,12 @@ Title payoff = a NAMING, not a reveal.
 <!--
 Trailblaze = device control for agents, full stop. The trailmap makes any agent
 more effective at navigating YOUR app — testing is one (great) use of that.
+FUTURE-PROBLEM beat (Sam round 5, good Q&A ammo or spoken aside): before this,
+QA had natural-language-managed tests and tools; developers had tests inside the
+code repo — two disconnected worlds. Trails now make the user journey visible
+across apps, but there's still a gap: no metadata linking a journey to WHERE it's
+unit-tested in the codebase. Out of scope today — but it's a problem we want to
+have fixed, and naming it shows the roadmap is honest.
 -->
 
 ---
@@ -1012,7 +1091,7 @@ class: text-center
 
 ## Waypoint graph viewer flythrough
 
-<div class="pt-4 opacity-60">the demo app's waypoint map — every named place, every shortcut between them</div>
+<div class="pt-4 opacity-60">the demo app's waypoint map — <b>subway view</b> and full graph · every named place, every shortcut between them</div>
 
 <!--
 Demo app = CONTACTS (round-4 decision). PRIMARY map: the committed contacts-iOS
@@ -1026,6 +1105,10 @@ PLAN B (no video): the graph viewer runs LOCAL, zero network — open it live on
 the committed contacts-iOS map (command in notes "Plan B" section), 30 seconds of
 mouse-wandering beats a flythrough anyway. Worst case: speak the numbers —
 "~103 named places, 81 shortcuts, committed in the repo today."
+Sam round 5: show BOTH renderings — the subway-map view and the normal graph view.
+ASSET CHIP RUNNING (task_23ea1e62): delivers asset-c-graph-subway.png +
+asset-c-graph-normal.png (+ optional pan mp4) into droidcon/public/ — embed both
+(subway first, it's the visual hook) on arrival.
 HAND-OFF: "The whole recipe, one slide."
 -->
 

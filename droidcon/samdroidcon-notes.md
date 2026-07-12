@@ -1127,6 +1127,47 @@ runs from 4 files.**
 - [ ] Replay-verify all Android recordings on a quiet host (or let CI be the
       clean room) before any slide cell is claimed green — chip-owned
 
+## Round 5: Sam's slide-by-slide pass (2026-07-12, applied same night)
+
+All 13 slide notes applied to the deck; slide numbers = Slidev numbering at time of review.
+The load-bearing POSITIONS Sam gave (these outlive the edits):
+
+- **Login flows (sl.5):** "one login flow" is kind-of-but-not-really — MFA, first-time
+  account setup, etc. are their own journeys. What you get is a **trailhead**, and within
+  it you skip the normal noise (onboarding screens, select-a-default). Slide keeps the
+  beat + a wink line; note carries the honesty.
+- **Iconography rule (sl.9, global):** 🥾 boot is the working icon; **question every
+  compass 🧭** and prefer the boot — EXCEPT trail-map contexts, which get 🗺️. Deck's
+  only compass (trailmap slide) → 🗺️. Applies to all future edits.
+- **Parameterization (sl.19/21):** Sam is NOT comfortable selling trail-level
+  parameterization — it works through memory seeding today and "the implementation is
+  pretty gross." Tool parameterization (typed, well-defined args) is the strong story;
+  lead with it. `memory.` prefix REMOVED from the unified example. Next step (if asked):
+  first-class trail params — "exactly where this is heading."
+- **Parity visualization (sl.20):** boots-in-columns table read as confusing → replaced
+  with the trails/contacts/ FILE TREE (one folder per job: blaze.yaml + per-platform
+  recordings). Same honesty rule: tree must match the repo on talk day.
+- **Web driver history (sl.39):** web used Playwright from day one but early on it was
+  Playwright shoved into Maestro's model — Sam was always hesitant about web support.
+  Turning point = full fidelity for the browser target (expressing things the way
+  Playwright/the browser does). Second proof of the fidelity lesson, not an aside.
+- **Same artifacts everywhere (sl.26):** every platform generates the same session
+  artifact structure (zippable) + single reporting output — now a bullet on the slide.
+- **Toolset composition (sl.29 note):** app targets compose exact include/exclude
+  toolsets. Square example: default swipe hit the bottom nav → removed from the toolset,
+  replaced with a square-specific mid-screen swipe.
+- **Type safety where people live (sl.30):** VS Code & other IDEs + the newer trail
+  runner UI — added as a line.
+- **QA↔codebase gap (sl.41 note, future problem):** pre-Trailblaze: QA's NL-managed
+  tests vs developers' in-repo tests. Journeys now visible across apps, but NO metadata
+  links a journey to where it's unit-tested in the codebase. Out of scope; "a problem we
+  want to have fixed."
+- **Assets (sl.14/28/37/44):** production DELEGATED to chips — task_e23beb14 (blaze +
+  replay videos + CLI terminal capture, own emulator on port 5596) and task_23ea1e62
+  (waypoint graph subway+normal PNGs, report walk PNGs). Deliverables land in
+  droidcon/public/; talk session embeds + commits. Slide 44 shows BOTH graph views
+  (subway first). ASSET A/B/C slide notes track the chip ids.
+
 ## Gap analysis (2026-07-12, Claude + independent reviewer, merged & ranked)
 
 _Round-1 statuses applied 2026-07-12 after Sam's answers. Deck is now **51 slides**
