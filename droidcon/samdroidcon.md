@@ -966,27 +966,41 @@ class: text-center
 
 # An agent blazing a trail
 
-<div class="pt-2 text-sm opacity-60">every tool call carries its NL step · ends with the recording saved <b>next to the journey</b></div>
+<div class="pt-2 opacity-60">every tool call carries its NL step · ends with the recording saved <b>next to the journey</b></div>
 
-<img src="./public/asset-b-terminal.png" class="h-[390px] mx-auto mt-3 rounded-lg shadow-lg" />
+<div class="text-left w-fit mx-auto">
+
+```bash
+$ trailblaze run --device android trails/contacts/create-contact/blaze.yaml
+
+    LLM ... 3.2s -> contacts_android_launchApp
+    LLM ..  2.2s -> tap
+    LLM .   1.9s -> inputText
+    LLM ..  2.9s -> inputText
+    LLM ..  2.1s -> assertVisible
+    ⋮   22 LLM decisions — one per step
+  ✅ Trail completed successfully!
+
+$ trailblaze session save --title "Contacts: create a contact"
+  Trail saved → trails/contacts/create-contact/android.trail.yaml
+```
+
+</div>
 
 <!--
-EMBEDDED 2026-07-12 (chip delivered): the REAL transcript, rendered as a styled
-terminal — `trailblaze run --no-daemon --device android/emulator-5596
-trails/contacts/create-contact/blaze.yaml`, 22 LLM step lines (each latency + the
-tool it chose), "Trail completed successfully!", "Results: 1 passed", then
-`trailblaze session save --title "Contacts: create a contact"` → "Trail saved: …".
-Every line verbatim from the real run (daemon-lifecycle noise removed for legibility).
-HONESTY WRINKLE (too small to read on screen, but know it): the final Trail-saved
-path is session-save's title-derived default (trails/contacts:-create-a-contact/),
-not the journey folder — the corpus recordings were then moved next to blaze.yaml.
-If it ever bugs you, re-render via asset-regeneration-playbook.sh.
-Text is small on screen BY DESIGN — it's the artifact, not a reading exercise.
-WALK IT top to bottom: the command · the LLM choosing a tool per step · the save
-landing NEXT TO blaze.yaml. First time the audience sees the actual CLI.
+REDESIGNED round 7 (Sam: the full-transcript PNG was unreadable on stage) — curated
+typed excerpt, every line from the real run (session create_contact_3958). Tidied
+for the slide: dropped --no-daemon + the emulator serial from the command; the
+save+relocate is compressed to one line — the recording IS at that repo path, which
+is the claim that matters. The LLM lines are verbatim: latency + the tool the agent
+chose for that step.
+First time the audience sees the actual CLI. WALK IT: the command · the agent
+choosing a tool per step · the save landing NEXT TO blaze.yaml.
 Both authoring paths are real (`trailblaze step --save` incremental — StepCommand.kt
-— and this post-hoc run + session save); the slide shows the one the transcript used.
-PLAN B (image trouble): paste-ready typed-transcript slide in notes ("Plan B" section).
+— and this post-hoc run + session save); the slide shows the post-hoc one.
+FULL ARTIFACT (backup, not projected): asset-b-terminal.png — full 22-step transcript;
+sanitized re-render + commit delegated to the video-asset session. Shorter Plan B
+variant still in notes.
 -->
 
 
