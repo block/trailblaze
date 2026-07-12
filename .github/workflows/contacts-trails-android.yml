@@ -1,0 +1,157 @@
+name: Contacts Trails (Android)
+
+# Android half of the contacts parity suite: replays the 4 recorded critical-job
+# trails (create / find / add-phone / delete) sequentially on a clean api-34
+# `default` emulator image — the same family the recordings were earned on.
+# Zero-LLM: every trail is a recording, so no inference keys are needed.
+#
+# Runs on workflow_dispatch (validate a runner-image bump or a re-earned
+# recording on any branch) and on pull_request when the suite itself changes.
+# Deliberately does NOT publish docs report-gallery assets — the gallery is fed
+# by the showcase workflows via docs/showcase-trails.yml; this workflow is pure
+# validation.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "trails/contacts/**"
+      - ".github/workflows/contacts-trails-android.yml"
+      - ".github/pr_run_contacts_trails_android.sh"
+
+# One run per ref; cancel a superseded queued run (mirrors the other trail workflows).
+concurrency:
+  group: contacts-trails-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pre-build the trailblaze uber JAR (with WASM report template embedded) once
+  # and publish it as an artifact for the downstream trails job — identical to
+  # the build-uber-jar job in clock-trails.yml / wikipedia-trails.yml.
+  build-uber-jar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Build trailblaze uber JAR (with WASM template embedded)
+        env:
+          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
+        run: ./scripts/install-trailblaze-source.sh
+
+      - name: Stage artifact contents
+        run: |
+          mkdir -p trailblaze-uber-jar
+          cp trailblaze-desktop/build/release/trailblaze.jar trailblaze-uber-jar/
+          cp trailblaze-desktop/build/release/trailblaze trailblaze-uber-jar/
+          ls -lh trailblaze-uber-jar/
+
+      - name: Upload uber JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Boots an Android emulator and replays the 4 recorded contacts trails via
+  # `trailblaze run --no-daemon` (in-process host agent loop, device tools over
+  # RPC to the bundled on-device APK). Emulator setup mirrors clock-trails.yml —
+  # api-level 34 on the `default` (AOSP) system image, which ships the
+  # accountless com.android.contacts the recordings drive. No `emulator-options`
+  # are set, so the action's defaults apply unchanged (these 4 flows never touch
+  # the camera; if options are ever added, the action REPLACES its defaults —
+  # repeat `-no-window -gpu swiftshader_indirect -no-snapshot -noaudio
+  # -no-boot-anim` before appending).
+  contacts-trails-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: build-uber-jar
+    env:
+      # Recordings-only — every step replays recorded tool sequences, so LLM
+      # inference is never invoked. A non-empty sentinel satisfies the
+      # provider/client wiring (same pattern as the other trail workflows).
+      OPENAI_API_KEY: no-key-set
+
+    steps:
+      - name: Enable KVM group perms
+        if: runner.os == 'Linux'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls /dev/kvm
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Download prebuilt uber JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: trailblaze-uber-jar
+          path: trailblaze-uber-jar/
+
+      - name: Install trailblaze from prebuilt artifact
+        env:
+          TRAILBLAZE_ARTIFACT_DIR: ${{ github.workspace }}/trailblaze-uber-jar
+        run: ./scripts/install-trailblaze-from-artifact.sh
+
+      - name: Create and start emulator and run the contacts trails (Linux)
+        if: runner.os == 'Linux'
+        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
+        id: run-trails
+        continue-on-error: true
+        with:
+          api-level: 34
+          arch: x86_64
+          disable-animations: true
+          disk-size: 6000M
+          heap-size: 600M
+          profile: Nexus 6
+          # Resets ContactsProvider + pre-grants POST_NOTIFICATIONS before each
+          # trail (the recordings were earned without the one-time notification
+          # dialog), then replays the 4 recordings sequentially.
+          script: ./.github/pr_run_contacts_trails_android.sh
+
+      - name: Upload trail logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contacts-trails-android-logs
+          path: |
+            trailblaze-logs/
+            logcat.log
+          if-no-files-found: warn
+
+      - name: Fail if the contacts trails failed
+        if: steps.run-trails.outcome == 'failure'
+        run: |
+          echo "Contacts trails failed — failing the workflow"
+          exit 1
