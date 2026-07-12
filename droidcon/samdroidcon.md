@@ -1095,6 +1095,19 @@ Q&A preempts live behind this divider.
 
 ---
 
+# Backup · How reliable is it?
+
+- We're **still getting to 100%** — reliability is **good and improving**
+- **Parity across Android and iOS** — the same journey validates on both
+- Replay is deterministic; flakiness lives at **setup** — which trailheads exist to kill
+
+<!--
+Sam's banked wording — NEVER invent a number. "Good and improving, parity across platforms."
+The determinism/trailhead line answers "but isn't replay flaky?" without reaching for a stat.
+-->
+
+---
+
 # Backup · What does authoring cost?
 
 - **Replay: $0** — zero LLM calls

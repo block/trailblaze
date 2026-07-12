@@ -5,7 +5,7 @@ Deck lives in `samdroidcon.md` — this file is scratch space so ideas don't tai
 
 ## ⏰ Overnight review — 2026-07-11 → 07-12 (skim this first)
 
-Light, voice-preserving tighten/expand pass done while you slept. Deck is **54 slides**
+Light, voice-preserving tighten/expand pass done while you slept. Deck is **55 slides**
 (was 52). Everything below is revertable; each item says what changed and why. I kept your
 structure, your headlines, and your speaker-note style — no rewrites of working slides.
 
@@ -20,11 +20,15 @@ structure, your headlines, and your speaker-note style — no rewrites of workin
    hundreds→thousands. Same content; the one→many multiplication now happens *physically*
    when you advance. No new imagery needed (grid unchanged). Your signature big-beat split.
 
-### Added (1 slide, OPTIONAL — flagged on-slide, cut in 5 sec)
+### Added (2 slides)
 4. **"The natural language drifted"** (slide 17, marked `ACT 2 · optional`) — two tiny YAML
    snippets showing the *same* step drift ("QE sender" vs "test sender") with nothing catching
    it. Makes "drift" concrete before the unified format fixes it. **To cut:** delete the slide
    block (--- to ---); the story survives without it. Renders verified.
+5. **"Backup · How reliable is it?"** — a Q&A safety card *behind the backup divider* (never
+   shown unless you navigate to it), holding your banked wording: "still getting to 100%,
+   good and improving, parity across Android and iOS" — **no invented number**. Zero impact
+   on the main flow; there so you stay calm if the reliability question comes.
 
 ### Deliberately NOT changed
 - The spine, refrain bookends, unified-format YAML, "driving the device *is* constructing the
