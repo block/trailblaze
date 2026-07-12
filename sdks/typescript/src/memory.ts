@@ -49,9 +49,17 @@ export interface TrailblazeMemory {
 
   /**
    * Replaces `{{var}}` and `${var}` tokens in [template] with their current values.
-   * Mirrors the Kotlin `AgentMemory.interpolateVariables` semantics: single-pass per
-   * pattern, unknown tokens resolve to empty string, the resolved string is NOT
-   * re-scanned for tokens that interpolate.
+   *
+   * `{{memory.var}}` / `${memory.var}` are the scope-qualified spelling of the same
+   * lookup — the `memory.` prefix strips at lookup, so they resolve identically to the
+   * bare forms (a key literally named `memory.var` is consulted only when `var` is
+   * absent). Mirrors the Kotlin `AgentMemory.interpolateVariables` semantics: single-pass
+   * per pattern, the resolved string is NOT re-scanned for tokens that interpolate, and an
+   * unknown token is left in place as a literal (with a console diagnostic, once per
+   * distinct token per memory instance) so a typo'd token surfaces visibly instead of
+   * silently blanking. Set `TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS=1` (read per call;
+   * no effect on the on-device QuickJS runtime, which has no `process`) to restore the
+   * legacy resolve-to-empty-string behavior.
    */
   interpolate(template: string): string;
 
@@ -127,6 +135,31 @@ const INTERPOLATE_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * Kill-switch (read per call): restore the silent resolve-to-empty-string behavior for unknown
+ * `{{var}}`/`${var}` tokens in `interpolate`. Value `1` or `true` (case-insensitive) enables.
+ * Mirrors the Kotlin `AgentMemory` read of the same variable.
+ */
+const BLANK_UNKNOWN_TOKENS_ENV_VAR = "TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS";
+
+// Reached via `globalThis` (the run.ts defensive-global idiom) rather than the `process`
+// identifier: the SDK's sources compile without Node type definitions, and the on-device
+// QuickJS runtime has no `process` global at all — there the switch reads as unset and
+// leave-literal always applies.
+function blankUnknownTokensRequestedViaEnv(): boolean {
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const value = proc?.env?.[BLANK_UNKNOWN_TOKENS_ENV_VAR];
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+/**
+ * Scope prefix that qualifies a token as a memory lookup: `{{memory.x}}` resolves the key `x`.
+ * The prefix exists only in token syntax — stored keys stay unprefixed, shared with bare
+ * `{{x}}` tokens. Mirrors the Kotlin `AgentMemory` constant of the same name; both sides must
+ * change together.
+ */
+const MEMORY_TOKEN_PREFIX = "memory.";
+
+/**
  * Build a [TrailblazeMemory] backed by an inbound snapshot. The snapshot is captured by
  * value — subsequent mutations to the source object don't affect this memory instance.
  *
@@ -183,14 +216,61 @@ export function createMemory(snapshot: Record<string, string> | undefined): Trai
     return [...visible];
   };
 
+  // Unknown tokens already warned about — one diagnostic per distinct token per memory
+  // instance, so a template resolved repeatedly in one invocation doesn't flood the log.
+  const warnedUnknownTokens = new Set<string>();
+
+  const warnUnknownTokenOnce = (token: string, name: string, blanked: boolean): void => {
+    if (warnedUnknownTokens.has(token)) return;
+    warnedUnknownTokens.add(token);
+    const resolution = blanked
+      ? `resolving to "" (${BLANK_UNKNOWN_TOKENS_ENV_VAR} is set)`
+      : `leaving the literal in place — set ${BLANK_UNKNOWN_TOKENS_ENV_VAR}=1 to restore the legacy blank substitution`;
+    // console.warn is stderr-bound on Node/bun (stdout is reserved for MCP frames) and the
+    // on-device QuickJS host installs a console shim before the bundle runs.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[trailblaze.memory] ⚠️ Unknown memory token ${token} — no value for '${name}'; ` +
+        `${resolution}. Known keys: ${[...keys()].sort().join(", ")}`,
+    );
+  };
+
+  // Token-body lookup honoring the `memory.` scope prefix: the stripped key wins; the literal
+  // dotted key is the fallback (nothing stops `set("memory.foo", …)`). A both-exist collision is
+  // logged so the shadowed literal key doesn't fail silently. Mirrors the Kotlin
+  // `AgentMemory.lookupVariable`.
+  const lookupToken = (name: string): string | undefined => {
+    if (!name.startsWith(MEMORY_TOKEN_PREFIX)) return get(name);
+    const strippedKey = name.slice(MEMORY_TOKEN_PREFIX.length);
+    const strippedValue = get(strippedKey);
+    const literalValue = get(name);
+    if (strippedValue !== undefined && literalValue !== undefined) {
+      // console.warn is stderr-bound on Node/bun (stdout is reserved for MCP frames) and the
+      // on-device QuickJS host installs a console shim before the bundle runs.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[trailblaze.memory] Token '${name}' matches both key '${strippedKey}' (via the memory. ` +
+          `prefix) and a key literally named '${name}'; using '${strippedKey}' — the ` +
+          `prefix-stripped lookup wins.`,
+      );
+    }
+    return strippedValue ?? literalValue;
+  };
+
   const interpolate = (template: string): string => {
+    const blankUnknown = blankUnknownTokensRequestedViaEnv();
     let result = template;
     for (const pattern of INTERPOLATE_PATTERNS) {
       // Fresh regex per use — the `g` flag means the regex object carries `lastIndex`
       // state that would leak across calls. Cheap to recreate; cheaper than the bugs
       // a forgotten `lastIndex = 0` produces.
       const re = new RegExp(pattern.source, "g");
-      result = result.replace(re, (_match, name: string) => get(name) ?? "");
+      result = result.replace(re, (match, name: string) => {
+        const value = lookupToken(name);
+        if (value !== undefined) return value;
+        warnUnknownTokenOnce(match, name, blankUnknown);
+        return blankUnknown ? "" : match;
+      });
     }
     return result;
   };

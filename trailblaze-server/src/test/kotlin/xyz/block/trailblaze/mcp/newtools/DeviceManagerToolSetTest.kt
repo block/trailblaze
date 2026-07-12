@@ -107,6 +107,24 @@ class DeviceManagerToolSetTest {
   }
 
   @Test
+  fun `device ANDROID fires onDeviceConnected so scripted tools register for the session`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    var deviceConnectedCallbacks = 0
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+      onDeviceConnected = { deviceConnectedCallbacks++ },
+    )
+
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    // The unified device() connect must fire the same post-connect hook as the legacy
+    // connectToDevice tool — it's what builds the scripted-tool runtime and re-registers
+    // MCP tools so descriptor-backed (scripted/YAML) tools appear for the session.
+    assertEquals(1, deviceConnectedCallbacks)
+  }
+
+  @Test
   fun `device ANDROID returns error when no Android devices`() = runTest {
     val bridge = DeviceTestBridge(devices = setOf(iosDevice))
     val toolSet = DeviceManagerToolSet(

@@ -1424,7 +1424,6 @@ trailblaze mcp [OPTIONS]
 |--------|-------------|---------|
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
 | `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
-| `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
 | `-d`, `--device` | Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). Defaults to whatever the launching terminal pinned via `trailblaze device connect`, or `$TRAILBLAZE_DEVICE` if set. | - |
 | `-t`, `--target` | Pin this MCP session to a target app on startup (e.g. default, sampleapp). Only meaningful with --device or $TRAILBLAZE_DEVICE. Defaults to $TRAILBLAZE_TARGET. | - |
 | `-h`, `--help` | Show this help message and exit. | - |

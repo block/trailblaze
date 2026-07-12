@@ -24,8 +24,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
  *   `RunCommandTrailblazeTool`).
  * - **Tool-internal `memory.interpolateVariables(text)`** — kept for non-RPC paths (host-only
  *   Maestro driver, Compose driver, etc.) where boundary interpolation doesn't run. Idempotent
- *   on the RPC path: by the time a tool re-interpolates against an empty device memory, no
- *   tokens remain.
+ *   on the RPC path: known tokens are already resolved by the time a tool re-interpolates, and
+ *   an unknown token is left as its literal by both layers, so the second pass changes nothing.
  */
 @OptIn(InternalSerializationApi::class)
 internal fun interpolateMemoryInTool(tool: TrailblazeTool, memory: AgentMemory): TrailblazeTool {

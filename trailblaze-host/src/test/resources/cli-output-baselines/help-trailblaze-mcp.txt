@@ -6,7 +6,6 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze mcp [-hV] [--direct] [--http] [-d=<device>] [-t=<target>]
-                      [--tool-profile=<toolProfile>]
 Start a Model Context Protocol (MCP) server for AI agent integration
 
 Exposes Trailblaze tools via the Model Context Protocol (MCP) so that AI
@@ -34,8 +33,4 @@ Quick setup:
                             default, sampleapp). Only meaningful with --device
                             or $TRAILBLAZE_DEVICE. Defaults to
                             $TRAILBLAZE_TARGET.
-      --tool-profile=<toolProfile>
-                          Tool profile: FULL or MINIMAL (only
-                            device/blaze/verify/ask/trail). Defaults to MINIMAL
-                            for STDIO, FULL for HTTP.
   -V, --version           Print version information and exit.

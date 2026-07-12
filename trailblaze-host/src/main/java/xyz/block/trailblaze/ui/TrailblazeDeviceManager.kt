@@ -372,6 +372,11 @@ class TrailblazeDeviceManager(
     captureNetworkTrafficOverride: Boolean? = null,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
+    // Load-time {{VAR}} template resolution — same contract as the daemon's /cli/run handler
+    // (see [resolveSubmittedTrailYaml]). Desktop editor content and MCP runYaml submissions
+    // carry no file path, so they are bare submissions resolving against the daemon's
+    // environment; without this they'd skip load-time resolution entirely.
+    val resolvedYamlToRun = resolveSubmittedTrailYaml(yamlToRun, trailFilePath = null)
     val settingsState = settingsRepo.serverStateFlow.value
     // Honor `config.driver` from the trail YAML on the desktop UI's "Run trail" path —
     // mirrors what [TrailCommand] does for the CLI direct path and what
@@ -382,7 +387,7 @@ class TrailblazeDeviceManager(
     // [AndroidStandaloneServerTest.handleRunRequest], which sets `driverTypeOverride` and
     // makes the rule resolve to the matching agent.
     val trailConfig = try {
-      createTrailblazeYaml().extractTrailConfig(yamlToRun)
+      createTrailblazeYaml().extractTrailConfig(resolvedYamlToRun)
     } catch (_: Exception) {
       null
     }
@@ -410,7 +415,7 @@ class TrailblazeDeviceManager(
       captureNetworkTraffic = captureNetworkTrafficOverride ?: settingsState.appConfig.captureNetworkTraffic,
     )
     val runYamlRequest = RunYamlRequest(
-      yaml = yamlToRun,
+      yaml = resolvedYamlToRun,
       // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
       // The class name will be auto-derived from testSectionName metadata
       testName = "test",

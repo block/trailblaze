@@ -73,7 +73,7 @@ Three rungs. You can stop at any of them.
 1. **Drive a device.** Point your coding agent at the `trailblaze` CLI. Natural-language
    device control across iOS, Android, and web — through built-in primitives
    (`snapshot`, `tool`, `toolbox`) plus any custom tools your team has shipped.
-2. **Save and replay.** Any session becomes a `.trail.yaml` via `trailblaze session
+2. **Save and replay.** Any session becomes a replayable trail file via `trailblaze session
    save`. Replay ad-hoc with `trailblaze run`, commit it to your repo as a CI regression
    test, or open it in the [Trace Viewer](#trace-viewer) — same artifact, three uses,
    no LLM at replay.
@@ -91,8 +91,8 @@ abstraction. Each driver speaks its host platform's native vocabulary:
 
 | Platform | Driver | Hierarchy |
 |---|---|---|
-| Android | UiAutomator / Compose / on-device instrumentation | `Button`, `EditText`, `RecyclerView`, `Switch` |
-| iOS | Native Accessibility / XCUITest | `UIButton`, `UITextField`, `UITableView` |
+| Android | On-device Accessibility (default) / Compose / legacy instrumentation | `Button`, `EditText`, `RecyclerView`, `Switch` |
+| iOS | Maestro-backed host driver (default) / Axe accessibility driver | `UIButton`, `UITextField`, `UITableView` |
 | Web | Playwright | ARIA roles, full DOM, network, console |
 
 The agent picks elements semantically — "the Sign in button" — from the native
@@ -208,7 +208,7 @@ flag.
 Two worked target trailmaps live in the OSS tree as full-shape references to copy —
 [`examples/ios-contacts`](https://github.com/block/trailblaze/tree/main/examples/ios-contacts) (iOS, host driver) and
 [`examples/wikipedia`](https://github.com/block/trailblaze/tree/main/examples/wikipedia) (web, Playwright Native). Each ships
-~9 scripted tools, a target-scoped system prompt, and ~20 trails exercising them.
+roughly a dozen scripted tools and a target-scoped system prompt — a complete trailmap, ready for you to add your own trails.
 
 The older `export async function` + full-YAML-descriptor authoring shape stays
 documented as a [Legacy Reference](scripted_tools.md); existing legacy tools keep
@@ -223,7 +223,9 @@ structurally (element identity, stable labels), never by content. Waypoints powe
 agent's mental map of an app: it can ask "am I on the Inbox?", land on a waypoint after
 a step, or use waypoints as trail checkpoints. The `matchWaypoint` tool runs against
 captured session state and returns clean matches plus near-misses (off by one
-assertion), so authors iterate without staged pipelines.
+assertion), so authors iterate without staged pipelines. A `trailblaze waypoint`
+CLI subcommand family has shipped for authoring and matching waypoints — see the
+[CLI reference](CLI.md).
 
 See: [Waypoints and App Navigation Graphs](devlog/2026-03-11-waypoints-and-app-navigation-graphs.md),
 [Waypoint Discovery via matchWaypoint](devlog/2026-04-21-waypoint-discovery-and-matching.md).

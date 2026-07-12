@@ -4,7 +4,6 @@ import kotlinx.coroutines.runBlocking
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
-import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.canRunDesktopGui
@@ -61,12 +60,6 @@ class McpCommand : Callable<Int> {
   var direct: Boolean = false
 
   @Option(
-    names = ["--tool-profile"],
-    description = ["Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP."],
-  )
-  var toolProfile: String? = null
-
-  @Option(
     names = ["-d", "--device"],
     description = [
       "Pin this MCP session to a device on startup (e.g. android, android/emulator-5554). " +
@@ -101,22 +94,6 @@ class McpCommand : Callable<Int> {
       return TrailblazeExitCode.SUCCESS.code
     }
 
-    // Resolve tool profile: env var > CLI flag > transport-based default
-    // STDIO defaults to MINIMAL (external MCP clients), HTTP defaults to FULL (internal use)
-    val transportDefault = if (http) McpToolProfile.FULL else McpToolProfile.MINIMAL
-    val allowedProfiles = McpToolProfile.entries.joinToString(", ") { it.name }
-    val resolvedProfile = System.getenv("TRAILBLAZE_TOOL_PROFILE")?.let { env ->
-      try { McpToolProfile.valueOf(env.uppercase()) } catch (_: IllegalArgumentException) {
-        Console.error("Invalid TRAILBLAZE_TOOL_PROFILE '$env'. Allowed: $allowedProfiles")
-        return TrailblazeExitCode.MISUSE.code
-      }
-    } ?: toolProfile?.let { flag ->
-      try { McpToolProfile.valueOf(flag.uppercase()) } catch (_: IllegalArgumentException) {
-        Console.error("Invalid --tool-profile '$flag'. Allowed: $allowedProfiles")
-        return TrailblazeExitCode.MISUSE.code
-      }
-    } ?: transportDefault
-
     // OSS CLI always starts in MCP_CLIENT_AS_AGENT — the external client is the agent.
     // TRAILBLAZE_AS_AGENT is the server default for deployments with a configured LLM.
     val resolvedMode = TrailblazeMcpMode.MCP_CLIENT_AS_AGENT
@@ -126,11 +103,10 @@ class McpCommand : Callable<Int> {
       System.setProperty("java.awt.headless", "true")
 
       val app = parent.appProvider()
-      app.trailblazeMcpServer.defaultToolProfile = resolvedProfile
       app.trailblazeMcpServer.defaultMode = resolvedMode
       val port = parent.getEffectivePort()
       val httpsPort = parent.getEffectiveHttpsPort()
-      Console.log("Trailblaze MCP server starting with HTTP transport on port $port (profile=${resolvedProfile.name})...")
+      Console.log("Trailblaze MCP server starting with HTTP transport on port $port...")
 
       // Apply port overrides so the server knows the effective ports
       if (parent.hasPortOverride()) {
@@ -166,7 +142,7 @@ class McpCommand : Callable<Int> {
       // is now stderr, so DesktopLogFileWriter tees stderr→file (not the STDIO pipe).
       DesktopLogFileWriter.install(httpPort = parent.getEffectivePort())
 
-      Console.log("Trailblaze MCP server starting with direct STDIO transport (profile=${resolvedProfile.name})...")
+      Console.log("Trailblaze MCP server starting with direct STDIO transport...")
 
       val app = parent.appProvider()
       app.trailblazeMcpServer.defaultMode = resolvedMode
@@ -190,7 +166,6 @@ class McpCommand : Callable<Int> {
           runBlocking {
             app.trailblazeMcpServer.startStdioMcpServer(
               stdout = stdoutForTransport,
-              toolProfile = resolvedProfile,
             )
           }
           // Client disconnected — request graceful shutdown via the Compose event loop.
@@ -226,7 +201,6 @@ class McpCommand : Callable<Int> {
         runBlocking {
           app.trailblazeMcpServer.startStdioMcpServer(
             stdout = stdoutForTransport,
-            toolProfile = resolvedProfile,
           )
         }
       }

@@ -12,7 +12,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
@@ -103,7 +103,7 @@ class SessionToolSet(
     flags or the desktop app's settings.
     """
   )
-  @Tool(McpToolProfile.TOOL_SESSION)
+  @Tool(McpToolNames.TOOL_SESSION)
   suspend fun session(
     @LLMDescription("Action: START, STOP, SAVE, INFO, LIST, ARTIFACTS, RECORDING, DELETE, or DEVICE_LOGS")
     action: SessionAction,

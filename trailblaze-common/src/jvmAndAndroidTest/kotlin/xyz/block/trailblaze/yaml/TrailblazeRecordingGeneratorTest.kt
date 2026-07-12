@@ -90,6 +90,23 @@ class TrailblazeRecordingGeneratorTest {
     timestamp = now,
   )
 
+  private fun objectiveCompleteFailed(prompt: PromptStep, failureReason: String) =
+    TrailblazeLog.ObjectiveCompleteLog(
+      promptStep = prompt,
+      objectiveResult = AgentTaskStatus.Failure.ObjectiveFailed(
+        llmExplanation = failureReason,
+        statusData = AgentTaskStatusData(
+          taskId = TaskId.generate(),
+          prompt = prompt.prompt,
+          callCount = 1,
+          taskStartTime = now,
+          totalDurationMs = 100,
+        ),
+      ),
+      session = testSession,
+      timestamp = now,
+    )
+
   private fun toolLog(
     tool: xyz.block.trailblaze.toolcalls.TrailblazeTool,
     toolName: String,
@@ -98,10 +115,11 @@ class TrailblazeRecordingGeneratorTest {
     isVerification: Boolean = false,
     timestamp: kotlinx.datetime.Instant = now,
     durationMs: Long = 100,
+    successful: Boolean = true,
   ) = TrailblazeLog.TrailblazeToolLog(
     trailblazeTool = tool.toLogPayload(),
     toolName = toolName,
-    successful = true,
+    successful = successful,
     traceId = null,
     durationMs = durationMs,
     session = testSession,
@@ -1321,6 +1339,197 @@ class TrailblazeRecordingGeneratorTest {
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
     assertThat(th.tools!!.single().name).isEqualTo("launchApp")
+  }
+
+  /**
+   * Regression: a `--self-heal` run whose trailhead recording fails mid-flight produces TWO
+   * trailhead-marked objective windows in the session logs — the recorded attempt closes its
+   * window with a failed complete before AI recovery (`TestAgentRunner.recover`) opens its own
+   * start/complete pair for the SAME step-0 prompt. The generator used to append one
+   * `- trailhead:` item per window, emitting YAML the repo's own strict parser rejects with
+   * "Only one trailhead item is allowed in a trail." The windows must fold into ONE trailhead
+   * item whose tools are both windows' tools in execution order.
+   */
+  @Test
+  fun healedTrailheadRunEmitsOneTrailheadItemThatRoundTripsStrictParse() {
+    val trailheadStep = TrailheadDefinition(
+      step = "Launch the app signed in",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+      maxRetries = 2,
+    ).toPromptStep()
+    val followUpStep = DirectionStep(step = "Open the settings tab")
+    val logs = listOf(
+      // Window 1: the recorded trailhead attempt — its tool fails mid-flight.
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      // Window 2: AI recovery re-opens the same trailhead objective and heals it.
+      objectiveStart(trailheadStep),
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText"),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap sign in",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Sign in")),
+        ),
+        "tapOnElementBySelector",
+      ),
+      objectiveComplete(trailheadStep),
+      // A normal step after the healed trailhead — the merged trailhead must stay ahead of it.
+      objectiveStart(followUpStep),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
+      objectiveComplete(followUpStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    // Round-trips through the strict parser (this decode threw before the merge fix).
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo("Launch the app signed in")
+    assertThat(th.maxRetries).isEqualTo(2)
+    // Both windows' tools survive, in execution order: the failed recorded attempt, then the heal.
+    assertThat(th.tools!!.map { it.name })
+      .isEqualTo(listOf("launchApp", "inputText", "tapOnElementBySelector"))
+    // The follow-up step is untouched and sits after the trailhead.
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().prompt).isEqualTo("Open the settings tab")
+    assertThat(decoded.indexOf(decoded.first { it is TrailYamlItem.TrailheadTrailItem }))
+      .isEqualTo(decoded.indexOf(prompts) - 1)
+  }
+
+  @Test
+  fun healedShorthandTrailheadKeepsNullStepAcrossTheMerge() {
+    // Bare-string-shorthand trailheads carry no authored step text (DEFAULT_STEP stands in at
+    // runtime) — the merged item must keep `step: null`, not resurrect the sentinel, while the
+    // windows' tools still concatenate.
+    val trailheadStep = TrailheadDefinition(
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      objectiveStart(trailheadStep),
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText"),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    assertThat(yaml).doesNotContain(TrailheadDefinition.DEFAULT_STEP)
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo(null)
+    assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp", "inputText"))
+  }
+
+  @Test
+  fun healWindowWithZeroRecordedToolsLeavesTheTrailheadItemUnchanged() {
+    // A heal window can capture zero recordable tools (e.g. the AI verified the device already
+    // reached the trailhead state and just declared the objective complete). The merged trailhead
+    // keeps the first window's tools and must not manufacture a declared-empty list.
+    val trailheadStep = TrailheadDefinition(
+      step = "Launch the app signed in",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      objectiveStart(trailheadStep),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo("Launch the app signed in")
+    assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+  }
+
+  @Test
+  fun healOfAFailedAttemptThatRecordedZeroToolsAdoptsTheRecoveryTools() {
+    // The mirror of the zero-tool-heal case: the recorded attempt dies before any tool completes
+    // (zero recordable logs in window 1, so the trailhead item is created step-only, tools null),
+    // then the recovery window supplies the tools. The merge must adopt them — not stay null.
+    val trailheadStep = TrailheadDefinition(
+      step = "Launch the app signed in",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      objectiveCompleteFailed(trailheadStep, "Recording failed before the first tool completed"),
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val th = trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.step).isEqualTo("Launch the app signed in")
+    assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+  }
+
+  @Test
+  fun threeTrailheadWindowsFoldIntoOneItemInExecutionOrder() {
+    // Retry-shaped streams can produce more than two windows (fail, heal fails, heal again).
+    // The fold must accumulate across every window, not just the first pair.
+    val trailheadStep = TrailheadDefinition(
+      step = "Launch the app signed in",
+      tools = listOf(
+        TrailblazeToolYamlWrapper(
+          name = "launchApp",
+          trailblazeTool = LaunchAppTrailblazeTool("com.example"),
+        ),
+      ),
+    ).toPromptStep()
+    val logs = listOf(
+      objectiveStart(trailheadStep),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp", successful = false),
+      objectiveCompleteFailed(trailheadStep, "Recording failed at launchApp: app crashed"),
+      objectiveStart(trailheadStep),
+      toolLog(InputTextTrailblazeTool(text = "user@example.com"), "inputText", successful = false),
+      objectiveCompleteFailed(trailheadStep, "First heal attempt gave up"),
+      objectiveStart(trailheadStep),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap sign in",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Sign in")),
+        ),
+        "tapOnElementBySelector",
+      ),
+      objectiveComplete(trailheadStep),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+    assertThat(th.tools!!.map { it.name })
+      .isEqualTo(listOf("launchApp", "inputText", "tapOnElementBySelector"))
   }
 
   @Test

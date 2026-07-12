@@ -61,7 +61,7 @@ UI code lives primarily in `trailblaze-ui` (shared components) and `trailblaze-d
 
 ### Build Structure
 
-The project uses Gradle with Kotlin DSL and a multi-module structure:
+The project uses Gradle with Kotlin DSL and a multi-module structure (selected modules):
 
 ```
 .
@@ -73,6 +73,7 @@ The project uses Gradle with Kotlin DSL and a multi-module structure:
 ├── trailblaze-desktop/           # Desktop application
 ├── trailblaze-host/              # Host-mode driver
 ├── trailblaze-models/            # Data models (Kotlin Multiplatform)
+├── trailblaze-playwright/        # Web driver (Playwright)
 ├── trailblaze-report/            # Reporting utilities
 ├── trailblaze-server/            # Log server
 └── trailblaze-ui/                # Shared UI components
@@ -90,9 +91,9 @@ flowchart TB
         TC["Tool Calling"]
     end
     subgraph syntax["Test Syntax Layer"]
-        YAML[".trail.yaml Parser"]
-        PROMPT["Prompt Steps"]
-        ACTION["Action Steps"]
+        YAML["Trail YAML Parser"]
+        PROMPT["Natural-language Steps"]
+        ACTION["Per-device Recordings"]
     end
     subgraph tools["Tool Layer"]
         ET["Executable Tools"]
@@ -102,6 +103,7 @@ flowchart TB
     subgraph drivers["Platform Driver Layer"]
         AD["Android Driver"]
         ID["iOS Driver"]
+        WD["Web Driver (Playwright)"]
     end
     agent --> syntax
     syntax --> tools
@@ -264,42 +266,70 @@ class WebTrailblazeAgent : MaestroTrailblazeAgent() {
 
 ### LLM Providers
 
-The agent communicates with LLMs through an abstraction that can be swapped:
+The agent communicates with LLMs through the [koog.ai](https://koog.ai) `LLMClient`
+abstraction. Built-in provider clients: OpenAI, Anthropic, Google, OpenRouter, and
+Ollama (local models). See [LLM Support](llms.md).
 
-- Default: OpenAI-compatible API
-- Extensible to other providers (Anthropic, local models, etc.)
+### Test Syntax (trail YAML)
 
-### Test Syntax (.trail.yaml)
+Tests are authored as trail YAML — one unified `trail.yaml` per trail, holding each
+step's natural language exactly once with optional per-device recordings nested
+underneath:
 
-Tests are authored in `.trail.yaml` format, which supports:
-
-#### Prompt Steps (AI-driven)
+#### Natural-language steps (AI-driven)
 
 ```yaml
-- prompts:
-    - step: Navigate to the Settings screen and enable notifications
+trail:
+  - step: Navigate to the Settings screen and enable notifications
+  - verify: Notifications are enabled
 ```
 
-#### Action Steps (Deterministic)
+A bare `step:` is resolved by the agent against the live device; `verify:` is an
+LLM-judged assertion on the resulting screen.
+
+#### Per-device recordings (deterministic replay)
 
 ```yaml
-- mobile_maestro:
-    - tapOn: "Settings"
-    - assertVisible: "Notifications"
-```
-
-#### Recording Hints
-
-```yaml
-- prompts:
-    - step: Tap the login button
-      recording:
-        tools:
+trail:
+  - step: Tap the login button
+    recording:
+      android:
         - tapOnElementWithText:
             text: "Login"
 ```
 
-Recording hints guide the agent toward specific tool calls while still allowing adaptation.
+The `recording:` block is keyed by device classifier (`android`, `ios-iphone`, `web`,
+…). A device with a matching slot replays the recorded tool calls with no LLM in the
+loop; a device without one runs the step's prose through the agent — so a single file
+covers every platform. The full spec is in the
+[unified trail syntax devlog](devlog/2026-05-22-trail-yaml-unified-syntax.md); the
+legacy formats (per-device `<classifier>.trail.yaml` recordings written as a YAML list
+of `- prompts:` / `- tools:` blocks, plus the NL-only `blaze.yaml`) remain replayable.
+
+#### Trailhead — the deterministic step 0
+
+A trail can open with an optional `trailhead:` block: the starting state established
+before any `trail:` step runs. It's a **specialized bootstrap tool** — one per platform,
+not an enumerated tap/type sequence:
+
+```yaml
+trailhead:
+  step: Launch the app already signed in
+  recording:
+    android:
+      myapp_launchAppSignedIn:
+        email: test@example.com
+        password: Password123!
+
+trail:
+  - verify: The signed-in home screen is shown
+```
+
+Structurally it's a step (one NL `step:` plus per-classifier recordings), but it's a
+bootstrap rather than an assertion, so it can never be a `verify:`. Trailheads are
+authored as their own tool type (`*.trailhead.yaml`) — one deterministic tool that reaches
+a known starting state from any point — see
+[Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
 
 ## Execution Modes
 
@@ -365,9 +395,10 @@ Primary platform drivers:
 
 | Platform | Driver | Status | Notes |
 | --- | --- | --- | --- |
-| iOS | Maestro | Current | Primary iOS driver |
-| Android | Accessibility | Current | Preferred Android driver |
-| Android | Maestro | Deprecated | Legacy Android driver |
+| iOS | Host (Maestro-backed) | Current | Default iOS driver |
+| iOS | Axe | Current | Newer accessibility-based iOS driver |
+| Android | Accessibility (on-device) | Current | Default Android driver |
+| Android | Instrumentation (on-device) | Deprecated | Legacy Android driver |
 | Web | Playwright | Current | Primary web driver |
 | Electron Desktop | Custom + Playwright | Current | Custom implementation built on Playwright |
 | Compose Desktop | Custom Compose RPC | Current | Uses a custom Compose RPC implementation |

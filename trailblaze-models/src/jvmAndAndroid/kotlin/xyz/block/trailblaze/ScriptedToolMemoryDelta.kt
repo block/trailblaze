@@ -42,10 +42,10 @@ import xyz.block.trailblaze.util.Console
  * deletion key) are skipped individually rather than failing the whole apply — a producer-side bug
  * that emits one bad entry must not sabotage the other writes in the same delta.
  *
- * Sensitivity is host-owned and preserved across the apply: a key already marked sensitive
- * (`rememberSensitive`) stays redacted on overwrite (routed through [AgentMemory.rememberSensitive]),
- * and a deletion of a sensitive key drops the value but keeps the marker, so a future write to that
- * key still redacts logs. A scripted tool — which never sees sensitive values in its snapshot — thus
+ * Sensitivity is host-owned and enforced by [AgentMemory] itself, so sets and deletions are
+ * applied uniformly here: [AgentMemory.remember] self-routes a marked key through
+ * [AgentMemory.rememberSensitive] (overwrites stay redacted), and [AgentMemory.delete] keeps the
+ * sensitivity marker. A scripted tool — which never sees sensitive values in its snapshot — thus
  * can neither leak a sensitive value into logs nor unmark a sensitive key.
  *
  * **Same key in both `memoryDelta` and `memoryDeletions`.** The well-behaved TS SDK can never
@@ -73,13 +73,8 @@ fun applyScriptedToolMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): 
       )
       return@forEach
     }
-    // Preserve redaction on overwrites: if the host already marked this key sensitive, route the
-    // apply through `rememberSensitive` so the `remember` log stays `[REDACTED]`.
-    if (k in memory.sensitiveKeys) {
-      memory.rememberSensitive(k, prim.content)
-    } else {
-      memory.remember(k, prim.content)
-    }
+    // remember() itself keeps a sensitive key's overwrite redacted (the marker is sticky).
+    memory.remember(k, prim.content)
     applied = true
   }
   (trailblaze[META_KEY_MEMORY_DELETIONS] as? JsonArray)?.forEach { entry ->
@@ -91,13 +86,9 @@ fun applyScriptedToolMemoryDelta(memory: AgentMemory, resultMeta: JsonObject?): 
       )
       return@forEach
     }
-    val k = prim.content
-    if (k in memory.sensitiveKeys) {
-      // Drop the value but keep the sensitive marker — the host owns the sensitivity lifecycle.
-      memory.variables.remove(k)
-    } else {
-      memory.delete(k)
-    }
+    // delete() itself keeps the sensitivity marker (the host owns that lifecycle) and records
+    // the explicit-deletion signal in deletedKeys uniformly for sensitive and plain keys.
+    memory.delete(prim.content)
     applied = true
   }
   return applied

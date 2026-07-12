@@ -27,14 +27,24 @@ import org.gradle.api.tasks.TaskProvider
  *
  * 1. **JUnit shell codegen** — generates Android JUnit shell classes from `.trail.yaml` files
  *    staged under the consumer's `androidTest` assets tree. The shell is the pure-boilerplate
- *    Kotlin class whose only job is to make a trail YAML discoverable by `AndroidJUnitRunner` —
- *    for every `<methodName>.trail.yaml` under `src/androidTest/assets/trails/<ClassName>/`, the
- *    generator emits a `class <ClassName> : <BaseClass>() { @Test fun <methodName>() =
- *    runFromAsset() }` Kotlin source file. The runtime resolver
+ *    Kotlin class whose only job is to make a trail YAML discoverable by `AndroidJUnitRunner`.
+ *    Under `src/androidTest/assets/trails/<ClassName>/`, two trail layouts each produce one
+ *    `@Test` method:
+ *    - `<methodName>.trail.yaml` — a named trail file; the filename is the method name.
+ *    - `<methodName>/trail.yaml` — a directory-per-test unified recording (the default
+ *      new-recording output, and what automated recording pipelines produce); the directory name is
+ *      the method name. The emitted shell passes the DIRECTORY path, which the runtime resolves to
+ *      the best file inside (device-classifier-specific recording → `trail.yaml` → `blaze.yaml`)
+ *      via `TrailRecordings.findBestTrailResourcePath` — the same contract hand-written shells
+ *      that pass a recording-directory path already rely on.
+ *    The generator emits `class <ClassName> : <BaseClass>() { @Test fun <methodName>() =
+ *    runFromAsset() }`. The runtime resolver
  *    (`TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace`) finds the YAML by
  *    stack-trace-derived simple-class + method name, so the directory name must equal the desired
  *    generated class's simple name — same convention humans already follow when authoring shells
- *    by hand.
+ *    by hand. A bare unified `trail.yaml` anywhere the generated shells can't reach it (assets
+ *    root, directly in a class dir, or nested deeper than one directory) fails the build — see
+ *    [GenerateAndroidTrailJUnitShellsTask.failOnUnreachableBareUnifiedTrailFiles].
  * 2. **Scripted-tool bundling** (opt-in, via the nested [TrailblazeAndroidGradleExtension.trailmap]
  *    block) — pre-compiles a trailmap's TypeScript scripted tools into QuickJS bundles staged as
  *    `androidTest` assets, so an on-device test APK can dispatch them by name.
@@ -97,7 +107,8 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
       ) { task ->
         task.group = "trailblaze"
         task.description =
-          "Generates Android JUnit shells (one @Test method per *.trail.yaml) from " +
+          "Generates Android JUnit shells (one @Test method per <method>.trail.yaml file or " +
+            "<method>/trail.yaml recording directory) from " +
             "src/androidTest/assets/trails/<ClassName>/ directories. Wired into the androidTest " +
             "source set by the consumer; emits to build/generated/source/trailblazeTrails/androidTest."
       }
@@ -473,14 +484,14 @@ constructor(
 
 /**
  * The codegen task. Walks [trailsAssetsDir], emits one Kotlin source file per direct subdirectory
- * that contains at least one `*.trail.yaml`. Plain text output (no KotlinPoet) — the generated
- * source is a fixed, simple shape, so the cost of pulling KotlinPoet onto build-logic's classpath
- * would dwarf the value.
+ * that contains at least one trail — a named `*.trail.yaml` file or a `<method>/trail.yaml`
+ * recording directory. Plain text output (no KotlinPoet) — the generated source is a fixed, simple
+ * shape, so the cost of pulling KotlinPoet onto build-logic's classpath would dwarf the value.
  *
  * Marked `@CacheableTask` because output is a pure function of `(packageName, baseClassFqn,
- * onlyClassNames, every <ClassName>/<methodName>.trail.yaml filename under trailsAssetsDir)` —
- * inputs Gradle already tracks via the annotated properties. The actual YAML *contents* don't enter
- * the rendered shell (only filenames do), so PathSensitivity.RELATIVE on the assets dir lets the
+ * onlyClassNames, every trail filename/directory-name under trailsAssetsDir)` — inputs Gradle
+ * already tracks via the annotated properties. The actual YAML *contents* don't enter the rendered
+ * shell (only file/directory names do), so PathSensitivity.RELATIVE on the assets dir lets the
  * cache match across worktrees / CI agents.
  */
 @org.gradle.api.tasks.CacheableTask
@@ -514,9 +525,18 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
    * directory doesn't exist (early rollout) or contains no trails — the task action handles that
    * case with a "no shells generated" lifecycle log instead of failing validation.
    *
-   * Path-sensitivity is `RELATIVE` because the renderer reads only filenames, not absolute paths
-   * — same as the original `@InputDirectory` had. `@IgnoreEmptyDirectories` matches the original
-   * behavior of skipping intermediate empty dirs.
+   * Also tracks bare `trail.yaml` files (which `*.trail.yaml` does NOT match — no `.` before
+   * `trail`): a `<ClassName>/<method>/trail.yaml` recording directory produces a `@Test` method,
+   * and misplaced bare files hard-error (see [failOnUnreachableBareUnifiedTrailFiles]) — either
+   * way, a bare file appearing or disappearing after a successful build must re-run the task, not
+   * leave it UP-TO-DATE. Tracked at ALL depths because the misplacement gate walks owned class
+   * dirs recursively. The only over-track is the exempt top-level `config/` tree — accepted: a
+   * bare `trail.yaml` there is vanishingly rare (that tree holds trailmap/target YAML and tool
+   * bundles), and the cost is one spurious re-run, not a wrong result.
+   *
+   * Path-sensitivity is `RELATIVE` because the renderer reads only file/directory names, not
+   * absolute paths — same as the original `@InputDirectory` had. `@IgnoreEmptyDirectories` matches
+   * the original behavior of skipping intermediate empty dirs.
    */
   @get:InputFiles
   @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -524,7 +544,12 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
   val trailsAssetFiles: org.gradle.api.file.FileTree
     get() =
       trailsAssetsDir
-        .map { dir -> dir.asFileTree.matching { it.include("**/*.trail.yaml") } }
+        .map { dir ->
+          dir.asFileTree.matching {
+            it.include("**/*.trail.yaml")
+            it.include("**/$BARE_UNIFIED_TRAIL_FILENAME")
+          }
+        }
         .getOrElse(objectFactoryForTrails.fileCollection().asFileTree)
 
   // @Optional at the TASK level too — Gradle's input-validation rejects an unset non-optional
@@ -576,15 +601,46 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         .filter { it.isDirectory }
         .sortedBy { it.name }
         .toList()
+
+    // Ownership: with an empty allow-list the generator owns every direct subdirectory EXCEPT the
+    // top-level `config/` dir — that's the documented non-codegen tree (trailmap/target YAML,
+    // mirroring the on-device `trails/config/**` asset convention). With a non-empty allow-list it
+    // owns exactly the listed dirs (an explicit entry named `config` is honored as a class dir
+    // like any other); non-listed dirs back hand-written shells and are left untouched.
+    val allowList = onlyClassNames.get()
+    val ownedClassDirs =
+      if (allowList.isEmpty()) classDirs.filterNot { it.name == NON_CODEGEN_CONFIG_DIR_NAME }
+      else classDirs.filter { it.name in allowList }
+
+    if (allowList.isNotEmpty()) {
+      val unknown = allowList - ownedClassDirs.map { it.name }.toSet()
+      if (unknown.isNotEmpty()) {
+        // Hard error rather than warning — a typo in `onlyClassNames` would silently produce no
+        // output and the developer would see "method not found" at test runtime, not at build
+        // time. Checked before the "no trails" early return below so an allow-list made entirely
+        // of typos still errors instead of no-op'ing.
+        throw GradleException(
+          "trailblazeAndroid.onlyClassNames references directories that do not " +
+            "exist under $assetsDir: $unknown. Available directories: ${classDirs.map { it.name }}."
+        )
+      }
+    }
+
+    // Reject misplaced bare unified `trail.yaml` files BEFORE the no-op early returns below — a
+    // class dir holding only a misplaced bare file would otherwise fall into the "no trails" soft
+    // log and the recording would silently never get a @Test.
+    failOnUnreachableBareUnifiedTrailFiles(assetsDir = assetsDir, ownedClassDirs = ownedClassDirs)
+
     // A subdirectory alone doesn't mean there's a shell to generate — e.g. a trailmap-only
     // consumer's `assets/trails/config/**` (trailmap/target YAML, unrelated to codegen) would
     // otherwise count as "work to do" and wrongly demand `packageName`. Require at least one
-    // `<ClassName>/*.trail.yaml` before treating this as real codegen work.
-    val hasAnyTrailYaml =
-      classDirs.any { dir -> dir.listFiles()?.any { it.isFile && it.name.endsWith(".trail.yaml") } == true }
-    if (classDirs.isEmpty() || !hasAnyTrailYaml) {
+    // trail (named file or recording directory) in an owned class dir before treating this as
+    // real codegen work.
+    val methodsByClassDir = ownedClassDirs.associateWith { discoverTrailMethods(it) }
+    if (methodsByClassDir.values.all { it.isEmpty() }) {
       logger.lifecycle(
-        "xyz.block.trailblaze.android-gradle: $assetsDir has no <ClassName>/*.trail.yaml files " +
+        "xyz.block.trailblaze.android-gradle: $assetsDir has no <ClassName>/<method>.trail.yaml " +
+          "files or <ClassName>/<method>/$BARE_UNIFIED_TRAIL_FILENAME recording directories " +
           "— no shells generated."
       )
       outRoot.mkdirs()
@@ -638,48 +694,29 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
     val pkgDir = outRoot.resolve(pkg.replace('.', '/'))
     pkgDir.mkdirs()
 
-    val allowList = onlyClassNames.get()
-    val candidates = if (allowList.isEmpty()) classDirs else classDirs.filter { it.name in allowList }
-
-    if (allowList.isNotEmpty()) {
-      val unknown = allowList - candidates.map { it.name }.toSet()
-      if (unknown.isNotEmpty()) {
-        // Hard error rather than warning — a typo in `onlyClassNames` would silently produce no
-        // output and the developer would see "method not found" at test runtime, not at build time.
-        throw GradleException(
-          "trailblazeAndroid.onlyClassNames references directories that do not " +
-            "exist under $assetsDir: $unknown. Available directories: ${classDirs.map { it.name }}."
-        )
-      }
-    }
-
     val methodAllowLists = onlyMethodNames.get()
     var generatedCount = 0
     val generatedClassNames = mutableListOf<String>()
-    candidates.forEach { classDir ->
+    ownedClassDirs.forEach { classDir ->
       val className = classDir.name
       validateSimpleName(className, source = "directory name under $assetsDir")
-      val allMethodNames =
-        (classDir.listFiles() ?: emptyArray())
-          .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-          .map { it.name.removeSuffix(".trail.yaml") }
-          .sorted()
-      if (allMethodNames.isEmpty()) {
+      val allMethods = methodsByClassDir.getValue(classDir)
+      if (allMethods.isEmpty()) {
         logger.lifecycle(
-          "xyz.block.trailblaze.android-gradle: $className has no .trail.yaml files " +
-            "— skipping."
+          "xyz.block.trailblaze.android-gradle: $className has no <method>.trail.yaml files or " +
+            "<method>/$BARE_UNIFIED_TRAIL_FILENAME recording directories — skipping."
         )
         return@forEach
       }
+      val allMethodNames = allMethods.map { it.methodName }
       // Per-class method allow-list: class not in the map → keep all trails (default). Class with
       // a non-empty allow-list → keep only the named methods, hard-error on names that don't match
-      // an actual <method>.trail.yaml (typo guard, same shape as the onlyClassNames typo guard
-      // above — silently emitting zero methods would mean "method not found" at test runtime,
-      // not build time).
+      // an actual trail (typo guard, same shape as the onlyClassNames typo guard above — silently
+      // emitting zero methods would mean "method not found" at test runtime, not build time).
       val perClassAllow = methodAllowLists[className]
-      val methodNames =
+      val methods =
         if (perClassAllow.isNullOrEmpty()) {
-          allMethodNames
+          allMethods
         } else {
           val unknown = perClassAllow - allMethodNames.toSet()
           if (unknown.isNotEmpty()) {
@@ -688,19 +725,27 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
                 "exist under $classDir: $unknown. Available trails: $allMethodNames."
             )
           }
-          allMethodNames.filter { it in perClassAllow }
+          allMethods.filter { it.methodName in perClassAllow }
         }
-      methodNames.forEach { validateMethodName(it, className = className) }
+      methods.forEach { validateMethodName(it.methodName, source = it.source) }
       // Duplicate + case-insensitive collision checks run against the on-disk truth
-      // (`allMethodNames`), not the filtered subset, so a class-dir invariant violation can't be
+      // (`allMethods`), not the filtered subset, so a class-dir invariant violation can't be
       // masked by an `onlyMethodNames` filter that happens to drop one side of the collision.
-      val duplicates = allMethodNames.groupingBy { it }.eachCount().filter { it.value > 1 }.keys
-      require(duplicates.isEmpty()) {
-        "Duplicate trail names under $classDir: $duplicates. Every <methodName>.trail.yaml must " +
-          "be unique within its class directory."
+      // Exact-name duplicates are now genuinely reachable: `foo.trail.yaml` and `foo/trail.yaml`
+      // in the same class dir both derive the method name `foo`.
+      val duplicateGroups = allMethods.groupBy { it.methodName }.filterValues { it.size > 1 }
+      require(duplicateGroups.isEmpty()) {
+        val listing =
+          duplicateGroups.entries.joinToString("\n") { (name, collided) ->
+            "  - `$name` from: ${collided.map { it.source }}"
+          }
+        "Duplicate trail method names under $classDir:\n$listing\n" +
+          "Each @Test method name must be unique within its class directory — a named " +
+          "`<methodName>.trail.yaml` file and a `<methodName>/$BARE_UNIFIED_TRAIL_FILENAME` " +
+          "recording directory collide when they share the same <methodName>."
       }
       // Case-insensitive collision check — APFS/HFS+ (macOS default) and NTFS surface
-      // `foo.trail.yaml` and `FOO.trail.yaml` as two distinct files, but `pkgDir.resolve(name)`
+      // `foo.trail.yaml` and `FOO.trail.yaml` as two distinct entries, but `pkgDir.resolve(name)`
       // collides on those filesystems so one method would silently disappear from the emitted
       // class. Fail loudly with both original names so the developer can pick which to keep.
       val caseInsensitiveDups =
@@ -711,7 +756,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
           "generated file — rename one of each colliding pair."
       }
 
-      val source = renderShell(pkg, className, mode, methodNames)
+      val source = renderShell(pkg, className, mode, methods)
       pkgDir.resolve("$className.kt").writeText(source, Charsets.UTF_8)
       generatedClassNames += className
       generatedCount += 1
@@ -722,6 +767,119 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         "(${generatedClassNames.sorted()}) under ${outRoot.path}."
     )
   }
+
+  /**
+   * Discovers the `@Test` methods a class directory produces. Two layouts, each one method:
+   * - `<methodName>.trail.yaml` — a named trail file directly in the class dir; the filename is
+   *   the method name.
+   * - `<methodName>/trail.yaml` — a directory-per-test unified recording (the default
+   *   new-recording output and what automated recording pipelines produce); the directory name is
+   *   the method name. Detected by the bare [BARE_UNIFIED_TRAIL_FILENAME] as a direct child —
+   *   sibling files inside the recording dir (classifier-specific recordings, `blaze.yaml`) don't
+   *   add methods; the runtime picks the best one at execution time.
+   *
+   * The bare [BARE_UNIFIED_TRAIL_FILENAME] is the ONLY recording-directory sentinel, relying on
+   * the invariant that the unified recorder always emits one. A directory holding only
+   * classifier-specific files (`<methodName>/android-phone.trail.yaml`, no bare file) is out of
+   * contract and gets no method — device-classifier names aren't knowable here, so such a dir is
+   * structurally indistinguishable from a class dir of named trail files.
+   *
+   * Returned sorted by method name so the emitted shell is deterministic across filesystems.
+   */
+  private fun discoverTrailMethods(classDir: java.io.File): List<TrailMethod> {
+    val children = classDir.listFiles() ?: return emptyList()
+    val namedTrails =
+      children
+        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
+        .map {
+          TrailMethod(
+            methodName = it.name.removeSuffix(".trail.yaml"),
+            isRecordingDir = false,
+            source = "${classDir.name}/${it.name}",
+          )
+        }
+    val recordingDirs =
+      children
+        .filter { it.isDirectory && java.io.File(it, BARE_UNIFIED_TRAIL_FILENAME).isFile }
+        .map {
+          TrailMethod(
+            methodName = it.name,
+            isRecordingDir = true,
+            source = "${classDir.name}/${it.name}/$BARE_UNIFIED_TRAIL_FILENAME",
+          )
+        }
+    return (namedTrails + recordingDirs).sortedBy { it.methodName }
+  }
+
+  /**
+   * Fails the build when a bare unified `trail.yaml` sits somewhere no generated shell can reach:
+   * - directly under [assetsDir] (`trails/trail.yaml`) — no class directory, no method name;
+   * - directly under an owned class dir (`trails/<ClassName>/trail.yaml`) — no method name to
+   *   derive (supported recordings live one level down: `<ClassName>/<methodName>/trail.yaml`);
+   * - nested deeper than one directory under an owned class dir
+   *   (`trails/<ClassName>/<a>/<b>/trail.yaml`) — only direct subdirectories of a class dir map
+   *   to methods, matching the one-directory-deep probing of the runtime resolvers.
+   *
+   * A bare file at exactly `<ClassName>/<methodName>/trail.yaml` is the supported
+   * directory-per-test layout and generates a method instead — see [discoverTrailMethods]. The
+   * walk matches the filename exactly (case-sensitive), keeping the gate consistent with the
+   * case-sensitive input includes in [trailsAssetFiles] even on case-insensitive filesystems.
+   *
+   * Scoped to generator-owned dirs only: with a non-empty `onlyClassNames`, non-listed dirs back
+   * hand-written shells and are documented as "left untouched" — the same boundary applies here.
+   * The caller also exempts the top-level `config/` dir from implicit ownership (see the call
+   * site) — that tree is documented non-codegen content.
+   */
+  private fun failOnUnreachableBareUnifiedTrailFiles(
+    assetsDir: java.io.File,
+    ownedClassDirs: List<java.io.File>,
+  ) {
+    val unreachableFiles =
+      (assetsDir.listFiles()?.filter { it.isFile && it.name == BARE_UNIFIED_TRAIL_FILENAME }.orEmpty() +
+        ownedClassDirs.flatMap { classDir ->
+          classDir.walkTopDown().filter {
+            // `<classDir>/<methodName>/trail.yaml` (grandparent == classDir) is the supported
+            // directory-per-test layout; every other depth is unreachable.
+            it.isFile && it.name == BARE_UNIFIED_TRAIL_FILENAME && it.parentFile?.parentFile != classDir
+          }
+        })
+        .sortedBy { it.path }
+    if (unreachableFiles.isEmpty()) return
+    val listing =
+      unreachableFiles.joinToString("\n") { "  - ${it.relativeTo(assetsDir.parentFile ?: assetsDir).path}" }
+    throw GradleException(
+      "xyz.block.trailblaze.android-gradle: found bare unified `$BARE_UNIFIED_TRAIL_FILENAME` " +
+        "file(s) at locations no generated @Test could reach, under $assetsDir:\n" +
+        listing + "\n" +
+        "Supported layouts under trails/<ClassName>/ (each produces one @Test method):\n" +
+        "  - <methodName>.trail.yaml (named trail file)\n" +
+        "  - <methodName>/$BARE_UNIFIED_TRAIL_FILENAME (directory-per-test unified recording — " +
+        "the directory name becomes the method name)\n" +
+        "A bare `$BARE_UNIFIED_TRAIL_FILENAME` anywhere else has no derivable method name, so no " +
+        "test would ever run it (silent coverage loss). Move each listed file into one of the " +
+        "supported layouts."
+    )
+  }
+
+  /**
+   * One `@Test` method the generator will emit, discovered from either trail layout — see
+   * [discoverTrailMethods].
+   */
+  internal data class TrailMethod(
+    val methodName: String,
+    /**
+     * `true` when the trail is a `<methodName>/trail.yaml` recording directory rather than a
+     * named `<methodName>.trail.yaml` file. Drives the inline-rule emit shape: recording
+     * directories pass the DIRECTORY asset path to `runFromAsset`, which the runtime resolves to
+     * the best file inside (device-classifier-specific recording → `trail.yaml` → `blaze.yaml`)
+     * via `TrailRecordings.findBestTrailResourcePath` — the same contract hand-written shells
+     * that pass a recording-directory path already rely on. Named trails pass the file path
+     * directly.
+     */
+    val isRecordingDir: Boolean,
+    /** On-disk source relative to the assets dir, for validation / collision error messages. */
+    val source: String,
+  )
 
   /**
    * Active emit mode resolved from the extension's `baseClassFqn` / `ruleClassFqn` properties.
@@ -749,6 +907,25 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
      * consumer who follows the OSS norm gets a working default out of the box.
      */
     internal const val DEFAULT_RULE_FQN = "xyz.block.trailblaze.android.AndroidTrailblazeRule"
+
+    /**
+     * Filename of the unified per-test trail format (the default new-recording output), whose
+     * identity comes from its enclosing directory rather than its filename. Mirrors
+     * `TrailRecordings.UNIFIED_TRAIL_FILENAME` in `trailblaze-models` (not a dependency of this
+     * included build). At `<ClassName>/<methodName>/trail.yaml` it produces a `@Test` method (see
+     * [discoverTrailMethods]); at any other depth it fails the build (see
+     * [failOnUnreachableBareUnifiedTrailFiles]).
+     */
+    internal const val BARE_UNIFIED_TRAIL_FILENAME = "trail.yaml"
+
+    /**
+     * Name of the top-level assets subdirectory that holds non-codegen content — trailmap/target
+     * YAML and staged tool bundles, mirroring the on-device `trails/config/` asset convention
+     * (see [TrailblazeAndroidGradlePlugin]'s staging root). Exempt from the bare-`trail.yaml`
+     * gate under implicit ownership; an explicit `onlyClassNames` entry with this name is still
+     * honored as a class dir.
+     */
+    internal const val NON_CODEGEN_CONFIG_DIR_NAME = "config"
 
     private val SIMPLE_NAME_REGEX = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -824,18 +1001,20 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       }
     }
 
-    internal fun validateMethodName(name: String, className: String) {
+    internal fun validateMethodName(name: String, source: String) {
       require(SIMPLE_NAME_REGEX.matches(name)) {
-        "Invalid Kotlin method identifier `$name` (from $className/$name.trail.yaml). Each " +
-          "<methodName>.trail.yaml filename must produce a valid Kotlin simple identifier."
+        "Invalid Kotlin method identifier `$name` (from $source). Each <methodName>.trail.yaml " +
+          "filename and <methodName>/ recording-directory name must produce a valid Kotlin " +
+          "simple identifier."
       }
       require(name !in KOTLIN_HARD_KEYWORDS) {
-        "Invalid Kotlin method identifier `$name` (from $className/$name.trail.yaml). `$name` is " +
-          "a Kotlin hard keyword and cannot be used as a method name. Rename the file."
+        "Invalid Kotlin method identifier `$name` (from $source). `$name` is " +
+          "a Kotlin hard keyword and cannot be used as a method name. Rename the file or directory."
       }
       require(name != "_") {
-        "Invalid Kotlin method identifier `$name` (from $className/$name.trail.yaml). `_` is " +
-          "reserved in Kotlin for anonymous bindings — rename the file to a meaningful test-method name."
+        "Invalid Kotlin method identifier `$name` (from $source). `_` is " +
+          "reserved in Kotlin for anonymous bindings — rename the file or directory to a " +
+          "meaningful test-method name."
       }
     }
 
@@ -882,21 +1061,26 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       packageName: String,
       className: String,
       mode: TestHostMode,
-      methodNames: List<String>,
+      methods: List<TrailMethod>,
     ): String =
       when (mode) {
         is TestHostMode.BaseClass ->
-          renderBaseClassShell(packageName, className, mode.fqn, methodNames)
+          renderBaseClassShell(packageName, className, mode.fqn, methods)
         is TestHostMode.InlineRule ->
-          renderInlineRuleShell(packageName, className, mode.fqn, methodNames)
+          renderInlineRuleShell(packageName, className, mode.fqn, methods)
       }
 
-    /** Pattern A: `class X : <BaseClass>() { @Test fun y() = runFromAsset() }`. */
+    /**
+     * Pattern A: `class X : <BaseClass>() { @Test fun y() = runFromAsset() }`. Same no-arg emit
+     * for both trail layouts — the runtime stack-trace resolver
+     * (`TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace`) probes the named-file
+     * paths first, then the `<ClassName>/<methodName>/trail.yaml` recording-directory shape.
+     */
     internal fun renderBaseClassShell(
       packageName: String,
       className: String,
       baseClassFqn: String,
-      methodNames: List<String>,
+      methods: List<TrailMethod>,
     ): String = buildString {
       val baseSimpleName = baseClassFqn.substringAfterLast('.')
       appendHeader(this, className)
@@ -906,10 +1090,10 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       appendLine("import $baseClassFqn")
       appendLine()
       append("class $className : $baseSimpleName() {")
-      methodNames.forEach { methodName ->
+      methods.forEach { method ->
         appendLine()
         appendLine()
-        append("  @Test fun $methodName() = runFromAsset()")
+        append("  @Test fun ${method.methodName}() = runFromAsset()")
       }
       appendLine()
       appendLine("}")
@@ -925,7 +1109,7 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       packageName: String,
       className: String,
       ruleClassFqn: String,
-      methodNames: List<String>,
+      methods: List<TrailMethod>,
     ): String = buildString {
       val ruleSimpleName = ruleClassFqn.substringAfterLast('.')
       appendHeader(this, className)
@@ -938,20 +1122,24 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
       appendLine("class $className {")
       appendLine()
       appendLine("  @get:Rule val rule = $ruleSimpleName()")
-      methodNames.forEach { methodName ->
+      methods.forEach { method ->
         appendLine()
-        // Asset path matches the on-disk layout (`trails/<ClassName>/<methodName>.trail.yaml`);
-        // emitted as an explicit string so the inline-rule `runFromAsset(path)` overload picks it
-        // up. Splits across multiple lines if the single-line form would push past 95 chars to
-        // stay inside ktfmt's preferred line width.
-        val singleLine =
-          "  @Test fun $methodName() = rule.runFromAsset(\"trails/$className/$methodName.trail.yaml\")"
+        // Asset path matches the on-disk layout; emitted as an explicit string so the inline-rule
+        // `runFromAsset(path)` overload picks it up. Named trails pass the file path; recording
+        // directories pass the DIRECTORY path, which the runtime resolves to the best file inside
+        // (classifier-specific recording → trail.yaml → blaze.yaml). Splits across multiple lines
+        // if the single-line form would push past 95 chars to stay inside ktfmt's preferred width.
+        val methodName = method.methodName
+        val assetPath =
+          if (method.isRecordingDir) "trails/$className/$methodName"
+          else "trails/$className/$methodName.trail.yaml"
+        val singleLine = "  @Test fun $methodName() = rule.runFromAsset(\"$assetPath\")"
         if (singleLine.length <= 95) {
           appendLine(singleLine)
         } else {
           appendLine("  @Test")
           appendLine("  fun $methodName() =")
-          appendLine("    rule.runFromAsset(\"trails/$className/$methodName.trail.yaml\")")
+          appendLine("    rule.runFromAsset(\"$assetPath\")")
         }
       }
       appendLine("}")
@@ -962,11 +1150,12 @@ abstract class GenerateAndroidTrailJUnitShellsTask : DefaultTask() {
         "// *** DO NOT EDIT — this file is generated by xyz.block.trailblaze.android-gradle. ***"
       )
       sb.appendLine(
-        "// Source: src/androidTest/assets/trails/$className/*.trail.yaml — to change the test surface,"
+        "// Source: src/androidTest/assets/trails/$className/ — to change the test surface, add /"
       )
       sb.appendLine(
-        "// add / rename / remove the matching <methodName>.trail.yaml files under that directory."
+        "// rename / remove the matching <methodName>.trail.yaml files or <methodName>/trail.yaml"
       )
+      sb.appendLine("// recording directories under that directory.")
       sb.appendLine()
     }
   }

@@ -11,7 +11,7 @@ Trailblaze gives your coding agent — Claude Code, Cursor, Codex, Goose, Aider,
 that can run a shell command — a single, typed way to drive any device. The agent reads
 the screen, picks elements semantically, and acts through Trailblaze primitives plus
 whatever custom commands your team has shipped. Every action records its natural-language
-objective. The resulting `.trail.yaml` is both the source of truth — *what* the flow
+objective. The resulting trail YAML is both the source of truth — *what* the flow
 does — and the deterministic execution artifact — *how* it runs. CI replays the trail
 with no LLM in the loop.
 
@@ -23,7 +23,7 @@ reading; Trailblaze handles the device.
 1. Install Trailblaze and point it at a device.
 2. Drive the device through primitives (`snapshot`, `tool`) from a shell — or from your
    coding agent shelling out to the same commands.
-3. Save what you just did as a `.trail.yaml`.
+3. Save what you just did as a trail file.
 4. Replay it deterministically with `trailblaze run`.
 5. Inspect any session in the Trace Viewer.
 
@@ -54,7 +54,8 @@ Or install from the GitHub release:
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
-Or clone and run from source:
+Or clone and run from source (`./trailblaze` is the repo-root wrapper that rebuilds and
+dispatches to the source-built CLI):
 
 ```bash
 git clone https://github.com/block/trailblaze.git
@@ -171,7 +172,7 @@ pin this terminal to a device + target so subsequent calls don't have to repeat 
   - `trailblaze snapshot` — see what's on screen (UI tree with refs)
   - `trailblaze tool <name> <args> -s "<why>"` — take an action
   - `trailblaze toolbox` — list available tools (uses the pinned device automatically)
-  - When done, `trailblaze session save` to write the recording out as a `.trail.yaml`,
+  - When done, `trailblaze session save` to write the recording out as a trail file,
     then `trailblaze session stop` to end the session. Optionally
     `trailblaze device disconnect` to release the device.
 ```
@@ -182,33 +183,43 @@ protocol to negotiate, no provider keys to wire on the agent's side.
 ## Save the Session as a Trail
 
 While the session was running, Trailblaze recorded every step. Persist the recording
-as a `.trail.yaml` and end the session:
+as a trail file and end the session:
 
 ```bash
 trailblaze session save                    # uses the title from `session start`
 trailblaze session stop
 ```
 
-The resulting file is a list of natural-language steps with recorded tool sequences for
-deterministic replay. Drop it anywhere in your project (a `trails/` directory is
-conventional but not required — see [Project Layout](project_layout.md) for discovery
-rules).
+> Unified saves are still rolling out as the default. Until the flip lands, turn them
+> on once with `trailblaze config unified-recordings true` (or set
+> `TRAILBLAZE_UNIFIED_RECORDINGS=1`); without it, saves write the legacy per-device
+> `<classifier>.trail.yaml` format instead. Replay accepts both.
+
+The resulting trail holds the natural-language steps, with each step's recorded tool
+sequence nested under a `recording:` block keyed by device classifier — so one file
+carries the recordings for every platform you've run it on. Drop it anywhere in your
+project (a `trails/` directory is conventional but not required — see
+[Project Layout](project_layout.md) for discovery rules and file naming).
 
 A minimal example:
 
 ```yaml
-- prompts:
-    - verify: the "Sign in" screen is visible
-    - step: Sign in as the demo user
-    - verify: the home tab is selected
+# flows/login/trail.yaml
+config:
+  title: login
+
+trail:
+  - verify: the "Sign in" screen is visible
+  - step: Sign in as the demo user
+  - verify: the home tab is selected
 ```
 
 ## Replay Deterministically
 
 ```bash
-trailblaze run flows/login.trail.yaml -d android
-trailblaze run "flows/**/*.trail.yaml" -d android        # batch via shell glob
-trailblaze run flows/login.trail.yaml -d android --self-heal
+trailblaze run flows/login/trail.yaml -d android
+trailblaze run flows/ -d android                         # batch: every trail under flows/
+trailblaze run flows/login/trail.yaml -d android --self-heal
 ```
 
 By default `trailblaze run` replays the recorded tool sequence with **no LLM in the

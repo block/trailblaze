@@ -340,6 +340,453 @@ class TrailblazeAndroidGradlePluginFunctionalTest {
   }
 
   @Test
+  fun `a bare unified trail yaml directly in a class directory fails with a layout hint`() {
+    // A bare `trail.yaml` DIRECTLY in a class dir has no method name to derive (supported
+    // recordings live one level down: `<ClassName>/<methodName>/trail.yaml`) — it would silently
+    // never get a @Test. Must fail loudly with the supported layouts spelled out.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    File(projectDir, "trails/FooLongTest/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the offending file to be named: ${result.output}") {
+      result.output.contains("FooLongTest/trail.yaml")
+    }
+    assertTrue("expected both supported layouts in the error: ${result.output}") {
+      result.output.contains("<methodName>.trail.yaml") &&
+        result.output.contains("<methodName>/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a class directory containing only a bare unified trail yaml fails instead of soft-skipping`() {
+    // Without the gate this case hits the "no <ClassName>/*.trail.yaml files" lifecycle log — a
+    // soft no-op that reads as success while the trail never runs.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    File(projectDir, "trails/FooLongTest").mkdirs()
+    File(projectDir, "trails/FooLongTest/trail.yaml").writeText("")
+
+    // buildAndFail is the load-bearing assertion — the pre-gate behavior for this layout was a
+    // SUCCESSFUL no-op ("has no <ClassName>/*.trail.yaml files").
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the offending file to be named: ${result.output}") {
+      result.output.contains("FooLongTest/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a bare unified trail yaml at the assets root fails too`() {
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    File(projectDir, "trails").mkdirs()
+    File(projectDir, "trails/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the root-level bare file to be named: ${result.output}") {
+      result.output.contains("trails/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a recording directory generates a @Test method named after the directory`() {
+    // The directory-per-test unified layout (`<ClassName>/<methodName>/trail.yaml`) is the
+    // default new-recording output and what automated recording pipelines produce — it must
+    // generate a method, mixed freely with named trails in the same class dir. The emitted
+    // inline-rule call passes the DIRECTORY path so the runtime picks the best file inside
+    // (classifier-specific recording → trail.yaml → blaze.yaml).
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "checkout_happy_path")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":generateAndroidTrailJUnitShells")?.outcome)
+    val source =
+      File(
+          projectDir,
+          "build/generated/source/trailblazeTrails/androidTest/xyz/fixture/app/FooLongTest.kt",
+        )
+        .readText()
+    assertTrue("expected the named trail's method: $source") {
+      source.contains(
+        "@Test fun alpha() = rule.runFromAsset(\"trails/FooLongTest/alpha.trail.yaml\")"
+      )
+    }
+    assertTrue("expected the recording dir's method with a DIRECTORY asset path: $source") {
+      source.contains(
+        "@Test fun checkout_happy_path() = rule.runFromAsset(\"trails/FooLongTest/checkout_happy_path\")"
+      )
+    }
+  }
+
+  @Test
+  fun `a class directory containing only recording directories still generates a shell`() {
+    // A fully-unified class dir (no named trails at all) is the steady-state CI-pipeline shape —
+    // it must not fall into the "no trails — skipping" soft path.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "checkout_happy_path")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":generateAndroidTrailJUnitShells")?.outcome)
+    val source =
+      File(
+          projectDir,
+          "build/generated/source/trailblazeTrails/androidTest/xyz/fixture/app/FooLongTest.kt",
+        )
+        .readText()
+    assertTrue("expected the recording dir's method: $source") {
+      source.contains(
+        "@Test fun checkout_happy_path() = rule.runFromAsset(\"trails/FooLongTest/checkout_happy_path\")"
+      )
+    }
+  }
+
+  @Test
+  fun `sibling files inside a recording directory do not add methods`() {
+    // A unified recording dir routinely carries more than the bare trail.yaml — a
+    // classifier-specific recording, a blaze.yaml. Exactly ONE method (named after the directory)
+    // must come out; the siblings are the runtime's business, not the generator's.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "checkout_happy_path")
+    File(projectDir, "trails/FooLongTest/checkout_happy_path/android-phone.trail.yaml")
+      .writeText("")
+    File(projectDir, "trails/FooLongTest/checkout_happy_path/blaze.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":generateAndroidTrailJUnitShells")?.outcome)
+    val source =
+      File(
+          projectDir,
+          "build/generated/source/trailblazeTrails/androidTest/xyz/fixture/app/FooLongTest.kt",
+        )
+        .readText()
+    assertTrue("expected exactly the recording dir's method: $source") {
+      source.contains(
+        "@Test fun checkout_happy_path() = rule.runFromAsset(\"trails/FooLongTest/checkout_happy_path\")"
+      )
+    }
+    assertEquals(
+      1,
+      Regex("@Test fun ").findAll(source).count(),
+      "expected exactly one @Test method (no method for the classifier sibling): $source",
+    )
+  }
+
+  @Test
+  fun `a recording directory and a named trail differing only in case collide loudly`() {
+    // `Alpha/trail.yaml` and `alpha.trail.yaml` derive distinct method names that write to the
+    // same generated file on case-insensitive filesystems (APFS / NTFS) — one method would
+    // silently vanish. The case-insensitive gate must fail naming both.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "Alpha")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected a case-insensitive collision error naming both: ${result.output}") {
+      result.output.contains("Case-insensitive trail-name collision") &&
+        result.output.contains("Alpha") &&
+        result.output.contains("alpha")
+    }
+  }
+
+  @Test
+  fun `a bare unified trail yaml nested deeper than one directory fails`() {
+    // Only DIRECT subdirectories of a class dir map to methods (matching the one-level probing of
+    // the runtime resolvers) — a deeper bare file (e.g. a copied suite/section/case tree) would
+    // silently never run, so it fails loudly instead.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    File(projectDir, "trails/FooLongTest/suite_123/case_456").mkdirs()
+    File(projectDir, "trails/FooLongTest/suite_123/case_456/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the deep bare file to be named: ${result.output}") {
+      result.output.contains("FooLongTest/suite_123/case_456/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a named trail and a recording directory with the same method name collide loudly`() {
+    // `foo.trail.yaml` and `foo/trail.yaml` both derive the method name `foo` — emitting both
+    // would be a Kotlin compile error in the generated file; failing at generate time keeps the
+    // error next to the offending files.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "alpha")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected a duplicate-method error naming both sources: ${result.output}") {
+      result.output.contains("Duplicate trail method names") &&
+        result.output.contains("FooLongTest/alpha.trail.yaml") &&
+        result.output.contains("FooLongTest/alpha/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a recording directory whose name is not a valid Kotlin identifier fails at generate time`() {
+    // Directory names become method names, so they go through the same identifier validation as
+    // named trail filenames — a kebab-case recording dir fails with a directed error instead of a
+    // Kotlin compile error in the generated file.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "checkout-happy-path")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the identifier validation to name the dir: ${result.output}") {
+      result.output.contains("Invalid Kotlin method identifier `checkout-happy-path`") &&
+        result.output.contains("FooLongTest/checkout-happy-path/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a bare unified trail yaml under the top-level config tree is exempt`() {
+    // `trails/config/**` is the documented non-codegen tree (trailmap/target YAML, staged tool
+    // bundles) — the gate must not reach into it under implicit ownership.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    File(projectDir, "trails/config/trailmaps/sample").mkdirs()
+    File(projectDir, "trails/config/trailmaps/sample/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":generateAndroidTrailJUnitShells")?.outcome)
+  }
+
+  @Test
+  fun `a bare unified trail yaml in an allow-listed directory still fails`() {
+    // The positive half of the onlyClassNames boundary: the sibling exemption test alone can't
+    // tell "gate scoped correctly" from "gate disabled under a non-empty allow-list".
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+          onlyClassNames = setOf("FooLongTest")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    File(projectDir, "trails/FooLongTest/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the bare file in the listed dir to be named: ${result.output}") {
+      result.output.contains("FooLongTest/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `a bare unified trail yaml in a non-allow-listed directory is left alone`() {
+    // With a non-empty onlyClassNames, non-listed dirs back hand-written shells and are
+    // documented as "left untouched" — the bare-file gate must respect the same boundary.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+          onlyClassNames = setOf("FooLongTest")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+    File(projectDir, "trails/HandWrittenTest").mkdirs()
+    File(projectDir, "trails/HandWrittenTest/trail.yaml").writeText("")
+
+    val result = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, result.task(":generateAndroidTrailJUnitShells")?.outcome)
+  }
+
+  @Test
+  fun `adding a misplaced bare unified trail yaml after a successful build re-runs the task and fails`() {
+    // Pins the input tracking: `*.trail.yaml` does not match `trail.yaml`, so without the extra
+    // include the second invocation would report UP-TO-DATE and the misplacement gate would
+    // never fire.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+
+    val first = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":generateAndroidTrailJUnitShells")?.outcome)
+
+    File(projectDir, "trails/FooLongTest/trail.yaml").writeText("")
+    val second = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").buildAndFail()
+    assertTrue("expected the new bare file to fail the re-run: ${second.output}") {
+      second.output.contains("FooLongTest/trail.yaml")
+    }
+  }
+
+  @Test
+  fun `adding a recording directory after a successful build re-runs the task and emits its method`() {
+    // The same `**/trail.yaml` input include drives the positive path: a recording dir dropped in
+    // after a green build must re-run codegen and grow the shell, not report UP-TO-DATE.
+    val projectDir =
+      newFixtureProject(
+        androidFixtureBuildScript(
+          """
+        trailblazeAndroid {
+          packageName = "xyz.fixture.app"
+          trailsAssetsDir = layout.projectDirectory.dir("trails")
+        }
+        """
+        ),
+        tempDirs,
+      )
+    writeTrail(projectDir, className = "FooLongTest", method = "alpha")
+
+    val first = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, first.task(":generateAndroidTrailJUnitShells")?.outcome)
+
+    writeRecordingDirTrail(projectDir, className = "FooLongTest", method = "checkout_happy_path")
+    val second = gradleRunner(projectDir, "generateAndroidTrailJUnitShells").build()
+    assertEquals(TaskOutcome.SUCCESS, second.task(":generateAndroidTrailJUnitShells")?.outcome)
+    val source =
+      File(
+          projectDir,
+          "build/generated/source/trailblazeTrails/androidTest/xyz/fixture/app/FooLongTest.kt",
+        )
+        .readText()
+    assertTrue("expected the new recording dir's method after the re-run: $source") {
+      source.contains(
+        "@Test fun checkout_happy_path() = rule.runFromAsset(\"trails/FooLongTest/checkout_happy_path\")"
+      )
+    }
+  }
+
+  @Test
   fun `a directory whose name is a Kotlin hard keyword fails at generate time`() {
     val projectDir =
       newFixtureProject(
@@ -523,5 +970,11 @@ class TrailblazeAndroidGradlePluginFunctionalTest {
     // The generator reads filenames only, not contents — an empty file is enough to exercise the
     // discovery + emission path. Real consumers ship real YAML, of course.
     File(dir, "$method.trail.yaml").writeText("")
+  }
+
+  /** The directory-per-test unified layout: `trails/<ClassName>/<method>/trail.yaml`. */
+  private fun writeRecordingDirTrail(projectDir: File, className: String, method: String) {
+    val dir = File(projectDir, "trails/$className/$method").apply { mkdirs() }
+    File(dir, "trail.yaml").writeText("")
   }
 }

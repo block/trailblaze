@@ -31,6 +31,20 @@ object UiAutomationHandleErrors {
   const val NON_RECOVERABLE_RETRY_FAILED_PHRASE = "UiAutomation reconnect retry also failed"
   const val NON_RECOVERABLE_STATE_PHRASE = "non-recoverable state"
 
+  // Matches both the platform's own "UiAutomation not connected!" error and our
+  // [silentShellWedgeMessage], which starts with it on purpose so one check covers both.
+  const val STALE_HANDLE_NOT_CONNECTED_PHRASE = "UiAutomation not connected"
+
+  /**
+   * Error for the silent-shell wedge: a dead UiAutomation connection makes every shell command
+   * return `""` while appearing to succeed. Detected by a liveness probe in
+   * `AdbCommandUtil.execShellCommand`. Starts with [STALE_HANDLE_NOT_CONNECTED_PHRASE] so
+   * [isStaleHandleSignature] treats it as recoverable and the normal reconnect-and-retry runs.
+   */
+  fun silentShellWedgeMessage(command: String): String =
+    "$STALE_HANDLE_NOT_CONNECTED_PHRASE (silent-shell wedge): the shell liveness probe returned " +
+      "no output after '$command' — every shell command is silently returning nothing."
+
   /**
    * @return true if [message] is the terminal NON-recoverable signature that surfaces only after
    *   the in-process [isStaleHandleSignature] retry has already failed (see
@@ -40,9 +54,9 @@ object UiAutomationHandleErrors {
    *   signature (already absorbed in-process) or an unrelated failure does not match.
    */
   fun isNonRecoverableStaleHandleSignature(message: String?): Boolean {
-    val msg = message.orEmpty().lowercase()
-    return msg.contains(NON_RECOVERABLE_RETRY_FAILED_PHRASE.lowercase()) &&
-      msg.contains(NON_RECOVERABLE_STATE_PHRASE.lowercase())
+    val msg = message.orEmpty()
+    return msg.contains(NON_RECOVERABLE_RETRY_FAILED_PHRASE, ignoreCase = true) &&
+      msg.contains(NON_RECOVERABLE_STATE_PHRASE, ignoreCase = true)
   }
 
   /**
@@ -63,10 +77,10 @@ object UiAutomationHandleErrors {
    * to recognize a recoverable signature — re-introduces the flake, so when in doubt we match.
    */
   fun isStaleHandleSignature(message: String?): Boolean {
-    val msg = message.orEmpty().lowercase()
-    return msg.contains("uiautomation not connected") ||
-      msg.contains("cannot call disconnect()") ||
-      msg.contains("already connected") ||
-      msg.contains("error while disconnecting uiautomation")
+    val msg = message.orEmpty()
+    return msg.contains(STALE_HANDLE_NOT_CONNECTED_PHRASE, ignoreCase = true) ||
+      msg.contains("cannot call disconnect()", ignoreCase = true) ||
+      msg.contains("already connected", ignoreCase = true) ||
+      msg.contains("error while disconnecting UiAutomation", ignoreCase = true)
   }
 }

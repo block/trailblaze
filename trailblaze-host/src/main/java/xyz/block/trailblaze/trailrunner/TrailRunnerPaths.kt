@@ -2,6 +2,7 @@ package xyz.block.trailblaze.trailrunner
 
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.Console
 import java.io.File
 
@@ -97,7 +98,11 @@ internal fun containsTrails(dir: File): Boolean {
     val (current, depth) = stack.removeLast()
     val children = current.listFiles() ?: continue
     for (child in children) {
-      if (child.isFile && child.name.endsWith(".trail.yaml")) return true
+      // isTrailFile covers all trail shapes — notably the bare unified `trail.yaml`, which a
+      // `.trail.yaml` suffix check can't see (the bare name has no leading classifier). It also
+      // counts NL-only definitions (blaze.yaml / trailblaze.yaml) on purpose: a folder holding
+      // only NL trails is still a trails workspace the runner can execute.
+      if (child.isFile && TrailRecordings.isTrailFile(child.name)) return true
       if (child.isDirectory && depth < 4 && !child.name.startsWith(".")) {
         stack.add(child to depth + 1)
       }

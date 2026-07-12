@@ -13,7 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -133,7 +133,7 @@ class DeviceManagerToolSet(
     Save it anytime as a reusable test: trail(action=SAVE, name="my_test")
     """
   )
-  @Tool(McpToolProfile.TOOL_DEVICE)
+  @Tool(McpToolNames.TOOL_DEVICE)
   suspend fun device(
     @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, INFO, or CREATE_WEB")
     action: DeviceAction,
@@ -426,6 +426,9 @@ class DeviceManagerToolSet(
     // after the first objective. Start implicit recording now (it just sets a flag).
     // Start implicit recording - user can save later with trail(action=SAVE, name="...")
     sessionContext?.startImplicitRecording()
+    // The driver type is only known once a device is bound — this hook lets the MCP
+    // server re-register the session's target-scoped tool surface for the new driver.
+    onDeviceConnected?.invoke()
 
     // For WEB: browser may still be initializing (downloading Playwright/Chromium).
     // Surface the status so the MCP client knows to call device(action=WEB) again.
@@ -623,6 +626,17 @@ class DeviceManagerToolSet(
     )
     steps: List<String>,
   ): String {
+    // Advertisement gating already hides runPrompt when no daemon LLM is configured, but
+    // that's list-time only — a client with a cached descriptor (or one that raced a
+    // tools/list_changed) could still dispatch it, starting the daemon-side agent loop
+    // with no model. Guard the dispatch too, returning a clean error instead.
+    val llmProvider = mcpBridge.getLlmConfig()?.first
+    if (llmProvider.isNullOrBlank() || llmProvider.equals("none", ignoreCase = true)) {
+      return "runPrompt requires a daemon LLM, but none is configured. " +
+        "Configure one with config(action=SET, key=\"llmProvider\", value=\"...\") and a model, " +
+        "or drive the device directly with step(tools=[...]) / the primitive device tools."
+    }
+
     val yaml = createTrailblazeYaml().encodeToString(
       TrailblazeYamlBuilder()
         .apply {

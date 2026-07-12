@@ -106,9 +106,19 @@ The full grammar — spatial relationships (`above` / `below` / `leftOf` /
 `index`-based disambiguation — mirrors the same shape that recorded YAML uses.
 See `TrailblazeNodeSelector.kt` for the canonical definition.
 
-> A factory namespace (e.g. `selectors.androidAccessibility({...})`) is on the
-> roadmap — the literal `{ androidAccessibility: {...} }` shape is the
-> hand-authored escape hatch until the selector grammar codegen lands.
+The SDK also ships a `selectors` factory namespace — pure sugar over the literal
+shape, but it scopes IDE autocomplete to one driver at a time:
+
+```ts
+import { selectors } from "@trailblaze/scripting";
+
+// Equivalent to { androidAccessibility: { textRegex: "Submit" } }
+const submit = selectors.androidAccessibility({ textRegex: "Submit" });
+```
+
+Both forms are interchangeable; the literal form stays copy-paste compatible with
+the YAML serialization. The factory (and the selector types) are code-generated
+from the Kotlin source of truth via `:trailblaze-models:generateSelectorsTs`.
 
 ## Snapshot reuse
 

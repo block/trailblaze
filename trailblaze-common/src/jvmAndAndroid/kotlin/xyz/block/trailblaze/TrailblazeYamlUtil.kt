@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.TestStackTraceUtil
 
 object TrailblazeYamlUtil {
@@ -20,18 +21,67 @@ object TrailblazeYamlUtil {
 
   fun calculateTrailblazeYamlAssetPathFromStackTrace(doesFileExistAtPath: (String) -> Boolean): String {
     val testMethod = TestStackTraceUtil.getJUnit4TestMethodFromCurrentStacktrace()
-    val possibleAssetPaths = listOf(
-      testMethod.calculateTrailblazeYamlAssetWithPackagePathFromStackTrace(),
-      testMethod.calculateTrailblazeYamlAssetPathFromStackTrace(),
-      testMethod.calculateTrailblazeYamlAssetPathWithNestedStructure(),
+    return calculateTrailblazeYamlAssetPath(
+      namedFilePaths = listOf(
+        testMethod.calculateTrailblazeYamlAssetWithPackagePathFromStackTrace(),
+        testMethod.calculateTrailblazeYamlAssetPathFromStackTrace(),
+        testMethod.calculateTrailblazeYamlAssetPathWithNestedStructure(),
+      ),
+      doesFileExistAtPath = doesFileExistAtPath,
     )
-    possibleAssetPaths.forEach { assetPath ->
-      if (doesFileExistAtPath(assetPath)) {
-        return assetPath
-      }
-    }
-    error("Could not locate asset at any of the following paths: $possibleAssetPaths")
   }
+
+  /**
+   * The one probing order for resolving a test method's trail asset: every named-file candidate
+   * as-is first, then each candidate's directory-per-test unified variant (the candidate with its
+   * `.trail.yaml` suffix stripped — the default new-recording layout, where the test's identity is
+   * the enclosing directory name). Named files always win over recording directories.
+   *
+   * The resolvers return non-null on a hit; what they return is caller-defined —
+   * [calculateTrailblazeYamlAssetPath] returns the probed path itself (the DIRECTORY path on a
+   * recording-dir hit, so `TrailRecordings.findBestTrailResourcePath` can pick the best file
+   * within), while the on-device per-trail driver peek (an internal caller) returns the best
+   * playable file INSIDE the directory. Both share this function so the candidate order can't
+   * drift between the runners and the peek.
+   */
+  fun <T : Any> resolveTrailAsset(
+    namedFilePaths: List<String>,
+    resolveNamedFile: (String) -> T?,
+    resolveRecordingDir: (String) -> T?,
+  ): T? {
+    namedFilePaths.forEach { assetPath -> resolveNamedFile(assetPath)?.let { return it } }
+    namedFilePaths.forEach { namedPath ->
+      resolveRecordingDir(namedPath.removeSuffix(".trail.yaml"))?.let { return it }
+    }
+    return null
+  }
+
+  /**
+   * Resolves the trail asset path for a test method via [resolveTrailAsset]: a named-file hit
+   * returns that path; a directory-per-test hit (`…/<Class>/<method>/trail.yaml`) returns the
+   * DIRECTORY path, not the `trail.yaml` inside it.
+   *
+   * Pulled out of [calculateTrailblazeYamlAssetPathFromStackTrace] so the probing order is
+   * unit-testable without a JUnit stack frame.
+   */
+  internal fun calculateTrailblazeYamlAssetPath(
+    namedFilePaths: List<String>,
+    doesFileExistAtPath: (String) -> Boolean,
+  ): String = resolveTrailAsset(
+    namedFilePaths = namedFilePaths,
+    resolveNamedFile = { assetPath -> assetPath.takeIf(doesFileExistAtPath) },
+    resolveRecordingDir = { dirPath ->
+      dirPath.takeIf { doesFileExistAtPath("$it/${TrailRecordings.UNIFIED_TRAIL_FILENAME}") }
+    },
+  ) ?: error(
+    "Could not locate asset at any of the following paths: " +
+      (
+        namedFilePaths +
+          namedFilePaths.map {
+            "${it.removeSuffix(".trail.yaml")}/${TrailRecordings.UNIFIED_TRAIL_FILENAME}"
+          }
+        ),
+  )
 
   fun calculateTrailblazeYamlAssetWithPackagePathFromStackTrace() = TestStackTraceUtil.getJUnit4TestMethodFromCurrentStacktrace()
     .calculateTrailblazeYamlAssetWithPackagePathFromStackTrace()

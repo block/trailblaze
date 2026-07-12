@@ -50,7 +50,6 @@ import java.util.concurrent.atomic.AtomicInteger
 class CliMcpClient(
   private val serverUrl: String = "http://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT}/mcp",
   private val requestTimeoutMs: Long = resolveRequestTimeoutMs(),
-  private val toolProfile: String = "MINIMAL",
   /**
    * Optional value for the `X-Trailblaze-Origin` header sent on initialize.
    * Defaults to the CLI argv captured by [captureOrigin]; null means no
@@ -377,11 +376,7 @@ class CliMcpClient(
       headers {
         append("Accept", "application/json, text/event-stream")
         sessionId?.let { append("mcp-session-id", it) }
-        // Set tool profile on initialization: trail mode → MINIMAL, blaze mode → FULL
-        // (cliMode value `"blaze"` is the persisted user-config key — out of scope for
-        // the wire-tool rename; kept for back-compat with on-disk settings.)
         if (sessionId == null) {
-          append("X-Tool-Profile", toolProfile)
           // X-Trailblaze-Origin: tells the daemon what command opened this
           // session ("snapshot -d android", "step", …). Surfaced in the
           // device-busy error so users know which CLI command is currently
@@ -1117,11 +1112,9 @@ class CliMcpClient(
      */
     suspend fun connectOneShot(
       port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
-      toolProfile: String = "MINIMAL",
     ): CliMcpClient {
       val client = CliMcpClient(
         serverUrl = "http://localhost:$port/mcp",
-        toolProfile = toolProfile,
       )
       try {
         client.terminateSessionOnClose = true
@@ -1167,13 +1160,11 @@ class CliMcpClient(
      */
     suspend fun connectReusable(
       port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
-      toolProfile: String = "MINIMAL",
       targetAppId: String? = null,
       sessionScope: String? = null,
     ): CliMcpClient {
       val client = CliMcpClient(
         serverUrl = "http://localhost:$port/mcp",
-        toolProfile = toolProfile,
       )
 
       // Treat blank as missing so callers can pass a config value without

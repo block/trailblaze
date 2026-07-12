@@ -9,7 +9,7 @@ import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
@@ -92,7 +92,7 @@ class TrailMcpTool(
     Tip: Sessions are always recorded. Save anytime to create a reusable test!
     """
   )
-  @Tool(McpToolProfile.TOOL_TRAIL)
+  @Tool(McpToolNames.TOOL_TRAIL)
   suspend fun trail(
     @LLMDescription("Action: START, SAVE, RUN, LIST, or END")
     action: TrailAction,
@@ -490,7 +490,7 @@ class TrailMcpTool(
     - trailEdit(operation=CLEAR_RECORDING, name="login_flow") → clears ALL recordings
     """
   )
-  @Tool(McpToolProfile.TOOL_TRAIL_EDIT)
+  @Tool(McpToolNames.TOOL_TRAIL_EDIT)
   suspend fun trailEdit(
     @LLMDescription("Edit operation: GET, INSERT, REPLACE, DELETE, MOVE, or CLEAR_RECORDING")
     operation: TrailEditOperation,

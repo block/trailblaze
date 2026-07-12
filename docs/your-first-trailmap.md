@@ -48,10 +48,11 @@ my-workspace/trails/config/
             └── myapp_login.ts               # typed tool source — the only file you write per tool
 ```
 
-Plus a smoke trail somewhere under your workspace:
+Plus a smoke trail somewhere under your workspace — one directory per trail, holding a
+single unified `trail.yaml`:
 
 ```text
-my-workspace/trails/myapp/login/android.trail.yaml
+my-workspace/trails/myapp/login/trail.yaml
 ```
 
 That's the whole footprint. `trailblaze check` materializes the workspace SDK, the
@@ -214,29 +215,32 @@ TSDoc wrote.
 Write a one-step trail that calls the new tool:
 
 ```yaml
-# trails/myapp/login/android.trail.yaml
-- config:
-    id: myapp/login
-    target: myapp
-    platform: android
+# trails/myapp/login/trail.yaml
+config:
+  id: myapp/login
+  target: myapp
 
-- prompts:
-    - step: Sign in to MyApp
-      recording:
-        tools:
-          - myapp_login:
-              email: test@example.com
-              password: Password123!
-    - verify: The home screen is visible
+trail:
+  - step: Sign in to MyApp
+    recording:
+      android:
+        - myapp_login:
+            email: test@example.com
+            password: Password123!
+
+  - verify: The home screen is visible
 ```
 
 Three things to know about the trail format:
 
-- The **`recording:` block** under a step pins which tool to dispatch (and with what
-  args) when the trail runs in replay mode. With a `recording:` block, replay is
-  deterministic — no LLM in the loop. The step's prose (`Sign in to MyApp`) is
-  preserved so a future repair flow can re-derive the recording if the UI drifts.
-- A bare **`step:`** (without `recording:`) means "ask the agent to figure this out
+- One `trail.yaml` per trail directory. Each step's natural language appears exactly
+  once; per-device tool recordings nest under the step's **`recording:` block**, keyed
+  by device classifier (`android`, `ios-iphone`, `web`, …). On a device with a matching
+  slot, replay dispatches the recorded tools deterministically — no LLM in the loop. A
+  device with no slot runs the step's prose through the agent instead, so the same file
+  covers every platform. The prose is also what a future repair flow re-derives the
+  recording from if the UI drifts.
+- A bare **`step:`** (no `recording:`) means "ask the agent to figure this out
   against the live device" — the LLM picks tools and resolves selectors at runtime.
   Use bare steps when authoring, recordings when you want CI determinism.
 - The **`verify:`** entry is Trailblaze's vision-based assertion — an LLM judges a
@@ -247,13 +251,20 @@ Three things to know about the trail format:
 Run it:
 
 ```bash
-trailblaze run trails/myapp/login/android.trail.yaml -d android
+trailblaze run trails/myapp/login/trail.yaml -d android
 ```
 
 That's the loop: edit `.ts` → `trailblaze check` → `trailblaze run`. Repeat until the
 tool's behavior matches what your agent should see at the top of `toolbox`.
 
 ## Where to go next
+
+- **Bootstrap to a known starting state with a trailhead.** When a step just needs the
+  app *in* a starting state (launched, signed in) rather than exercising behavior, model
+  it as a **trailhead** — the trail's deterministic step 0, backed by a single specialized
+  launch tool per platform instead of an enumerated tap sequence. Author it as its own
+  tool type (`*.trailhead.yaml`) and reference it from a trail's top-level `trailhead:`
+  block. See [Trailmaps — Tool YAML file suffixes](trailmaps.md#tool-yaml-file-suffixes-toolyaml-shortcutyaml-trailheadyaml).
 
 - **Compose multiple tools.** Sibling tools call each other through
   `ctx.tools.<name>(args)` — see the

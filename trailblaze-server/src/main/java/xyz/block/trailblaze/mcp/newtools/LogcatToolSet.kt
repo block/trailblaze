@@ -6,7 +6,7 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
@@ -78,7 +78,7 @@ class LogcatToolSet(
     Supports regex patterns. Use tag parameter to filter by Android log tag.
     """
   )
-  @Tool(McpToolProfile.TOOL_LOGCAT)
+  @Tool(McpToolNames.TOOL_LOGCAT)
   suspend fun logcat(
     @LLMDescription("Action: QUERY to search, ASSERT to check pass/fail") action: LogcatAction,
     @LLMDescription("Regex pattern to search for (required)") pattern: String? = null,

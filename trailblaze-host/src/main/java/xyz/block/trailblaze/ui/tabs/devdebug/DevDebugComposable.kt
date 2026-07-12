@@ -521,11 +521,6 @@ private fun McpSessionCard(session: McpSessionSnapshot) {
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.primary,
             )
-            Text(
-              text = session.toolProfile.name,
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.secondary,
-            )
             session.associatedDeviceId?.let { deviceId ->
               Text(
                 text = deviceId.instanceId,
@@ -559,7 +554,6 @@ private fun McpSessionCard(session: McpSessionSnapshot) {
         ) {
           McpSessionDetailRow("Session ID", session.sessionId)
           McpSessionDetailRow("Mode", session.mode.name)
-          McpSessionDetailRow("Tool Profile", session.toolProfile.name)
           McpSessionDetailRow("Agent", session.agentImplementation.name)
           McpSessionDetailRow(
             "Device",

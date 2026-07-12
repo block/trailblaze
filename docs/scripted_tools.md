@@ -93,7 +93,7 @@ Hard rules the runtime enforces:
 
 | Rule | Why |
 |---|---|
-| File extension is `.ts`, not `.js` / `.mjs` / `.cjs` | The bundler hard-errors on non-`.ts` files under `tools/`. TypeScript is the only authoring language. |
+| Typed `trailblaze.tool<I, O>` tools must be `.ts` | The typed-tool definition analyzer and the build-time trailmap bundler both reject other extensions. A plain `.js` script is still valid for a host-side `runtime: subprocess` tool (see `examples/android-sample-app/.../tools/sampleapp_writeArtifact.js`), but `.ts` is the recommended authoring language everywhere. |
 | **Use JSDoc-only types**, never `:` parameter annotations or `import type` | Per-file scripted tools are evaluated as raw ECMAScript — no transpile step strips TS syntax. JSDoc annotations give types in your editor without breaking the runtime. |
 | The exported function name must match the descriptor's `name:` exactly | A mismatch surfaces a `must export a function with that exact name` error at first dispatch. |
 | Return a string, an object, or `undefined` | String returns are normalized into the `{content: [{type:"text",...}]}` envelope. Returning a function, BigInt, or circular structure throws a non-JSON-serializable error. |
@@ -161,19 +161,23 @@ See [Trailmaps](trailmaps.md) for the full manifest schema.
 ## Calling your tool from a trail
 
 ```yaml
-# trails/myapp/login/android.trail.yaml
-- config:
-    id: "myapp/login"
-    target: myapp
+# trails/myapp/login/trail.yaml
+config:
+  id: "myapp/login"
+  target: myapp
 
-- prompts:
-    - step: Sign in to MyApp
-      recording:
-        tools:
-          - myapp_login:
-              email: test@example.com
-              password: Password123!
+trail:
+  - step: Sign in to MyApp
+    recording:
+      android:
+        - myapp_login:
+            email: test@example.com
+            password: Password123!
 ```
+
+The `recording:` block is keyed by device classifier (`android`, `ios-iphone`, `web`,
+…): a device with a matching slot replays the recorded tools deterministically; any
+other device runs the step's prose through the agent.
 
 Or invoke it from the CLI:
 

@@ -56,6 +56,19 @@ class UiAutomationHandleErrorsTest {
     ).forEach { message ->
       assertTrue("expected case-insensitive match for: $message", UiAutomationHandleErrors.isStaleHandleSignature(message))
     }
+    assertTrue(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        "UIAUTOMATION RECONNECT RETRY ALSO FAILED — non-RECOVERABLE state"
+      )
+    )
+  }
+
+  @Test
+  fun `silent-shell wedge message is a recoverable signature but not the non-recoverable one`() {
+    // Recoverable → retry runs first; the non-recoverable signature is reserved for retry failure.
+    val message = UiAutomationHandleErrors.silentShellWedgeMessage("pm clear com.example.app")
+    assertTrue(UiAutomationHandleErrors.isStaleHandleSignature(message))
+    assertFalse(UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(message))
   }
 
   @Test

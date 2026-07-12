@@ -8,6 +8,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ProgressNotification
 import io.modelcontextprotocol.kotlin.sdk.types.ProgressNotificationParams
 import io.modelcontextprotocol.kotlin.sdk.types.ProgressToken
 import io.modelcontextprotocol.kotlin.sdk.types.RequestId
+import io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,60 +41,37 @@ import xyz.block.trailblaze.util.Console
 const val TRAILBLAZE_CLI_CLIENT_NAME: String = "TrailblazeCLI"
 
 /**
- * Controls which tools are exposed to MCP clients.
+ * Wire names of the MCP session tools, referenced by the @Tool annotations in
+ * their respective ToolSets and by the registration logic in
+ * `TrailblazeMcpServer.registerTools`.
  *
- * - [FULL]: All tools registered (device management, primitive tools, host integrations, etc.)
- * - [MINIMAL]: Only high-level tools: device, blaze, verify, ask, trail.
- *   Designed for external MCP clients (Claude Code, Goose) that should use
- *   Trailblaze as a black-box automation engine.
+ * Every MCP session gets one uniform tool surface: these session tools plus the
+ * current target's driver-filtered TrailblazeTools (re-registered with a
+ * `tools/list_changed` notification whenever the device or target changes).
+ * There is no per-session tool profile — the former FULL/MINIMAL
+ * `McpToolProfile` split was removed in favor of target-scoped registration.
  */
-enum class McpToolProfile {
-  /** All tools — internal use, test authoring, full access. */
-  FULL,
-
-  /** Only device, step, verify, ask, trail, trailEdit — for external MCP clients. */
-  MINIMAL;
-
-  companion object {
-    // Tool name constants — referenced by @Tool annotations in their respective ToolSets.
-    const val TOOL_DEVICE = "device"
-    const val TOOL_STEP = "step"
-    const val TOOL_ASK = "ask"
-    const val TOOL_TRAIL = "trail"
-    const val TOOL_TRAIL_EDIT = "trailEdit"
-    const val TOOL_CONFIG = "config"
-    const val TOOL_SESSION = "session"
-    const val TOOL_TOOLS = "toolbox"
-    const val TOOL_LOGCAT = "logcat"
-    // Per-device target override — paired with TOOL_DEVICE in the device-binding
-    // flow. The CLI's `device connect --target` / `device rebind --target` paths
-    // call this tool to scope a target to the bound device. The CLI defaults to
-    // MINIMAL, so excluding it here breaks those commands with
-    // "Tool setSessionTargetForBoundDevice not found".
-    const val TOOL_SET_SESSION_TARGET = "setSessionTargetForBoundDevice"
-    // Paired with TOOL_DEVICE in the device-binding flow. The CLI's
-    // `device connect` calls this tool right after binding so a co-resident
-    // real-MCP-client session (Claude Desktop / Cursor / etc.) gets pinned
-    // to the same device. CLI defaults to MINIMAL — excluding here would
-    // break that call with "Tool pinMostRecentUnboundMcpSession not found".
-    const val TOOL_PIN_MCP_SESSION = "pinMostRecentUnboundMcpSession"
-
-    /** Tool names exposed in MINIMAL mode. */
-    val MINIMAL_TOOL_NAMES =
-      setOf(
-        TOOL_DEVICE,
-        TOOL_STEP,
-        TOOL_ASK,
-        TOOL_TRAIL,
-        TOOL_TRAIL_EDIT,
-        TOOL_CONFIG,
-        TOOL_SESSION,
-        TOOL_TOOLS,
-        TOOL_LOGCAT,
-        TOOL_SET_SESSION_TARGET,
-        TOOL_PIN_MCP_SESSION,
-      )
-  }
+object McpToolNames {
+  const val TOOL_DEVICE = "device"
+  const val TOOL_STEP = "step"
+  const val TOOL_ASK = "ask"
+  const val TOOL_TRAIL = "trail"
+  const val TOOL_TRAIL_EDIT = "trailEdit"
+  const val TOOL_CONFIG = "config"
+  const val TOOL_SESSION = "session"
+  const val TOOL_TOOLS = "toolbox"
+  const val TOOL_LOGCAT = "logcat"
+  // Per-device target override — paired with TOOL_DEVICE in the device-binding
+  // flow. The CLI's `device connect --target` / `device rebind --target` paths
+  // call this tool to scope a target to the bound device. Removing it breaks
+  // those commands with "Tool setSessionTargetForBoundDevice not found".
+  const val TOOL_SET_SESSION_TARGET = "setSessionTargetForBoundDevice"
+  // Paired with TOOL_DEVICE in the device-binding flow. The CLI's
+  // `device connect` calls this tool right after binding so a co-resident
+  // real-MCP-client session (Claude Desktop / Cursor / etc.) gets pinned
+  // to the same device. Removing it breaks that call with
+  // "Tool pinMostRecentUnboundMcpSession not found".
+  const val TOOL_PIN_MCP_SESSION = "pinMostRecentUnboundMcpSession"
 }
 
 /**
@@ -171,14 +149,6 @@ class TrailblazeMcpSessionContext(
    * abstracting away UI state management.
    */
   @Volatile var includePrimitiveTools: Boolean = false,
-
-  /**
-   * Tool profile controlling which tools are exposed to the MCP client.
-   *
-   * - `FULL` (default): All tools registered (device management, primitive tools, host integrations, etc.)
-   * - `MINIMAL`: Only device, blaze, verify, ask, trail. For external MCP clients.
-   */
-  var toolProfile: McpToolProfile = McpToolProfile.FULL,
 
   /**
    * Transport mode for internal agent tool execution.
@@ -527,7 +497,6 @@ class TrailblazeMcpSessionContext(
     appendLine("Agent tool transport: ${agentToolTransport.name}")
     appendLine("Agent implementation: ${agentImplementation.name}")
     appendLine("Include primitive tools: $includePrimitiveTools")
-    appendLine("Tool profile: ${toolProfile.name}")
     twoTierAgentConfig?.let { config ->
       appendLine("Two-tier agent: ${if (config.enabled) "ENABLED" else "disabled"}")
       if (config.enabled) {
@@ -565,6 +534,45 @@ class TrailblazeMcpSessionContext(
     sendProgressInternal(message, progress = null, total = null)
   }
   
+  /**
+   * Sends `notifications/tools/list_changed` on both notification channels, mirroring
+   * [sendProgressInternal]:
+   *
+   *  - Custom SSE channel (the daemon's `sse("/mcp")` endpoint) — the path that reaches
+   *    StreamableHttp clients. The SDK's own dispatch is unreachable there: with
+   *    `enableJsonResponse = true` the transport routes server-initiated notifications to
+   *    its standalone GET stream, which the daemon never registers (the custom SSE endpoint
+   *    replaces the SDK's `handleGetRequest`).
+   *  - SDK session notification — the path that reaches direct-STDIO clients
+   *    (`trailblaze mcp --direct`), whose transport is the stdout pipe and who never open
+   *    the custom SSE stream. Without this leg a spec-compliant STDIO client that caches
+   *    `tools/list` never learns the surface changed after a device connect / target switch.
+   *
+   * No-ops when neither channel is available — such a client sees the new surface on its
+   * next `tools/list` instead.
+   */
+  fun sendToolListChangedNotification() {
+    customSseNotificationSender?.let { sender ->
+      try {
+        sender("""{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}""")
+        Console.log("[MCP SESSION] Sent tools/list_changed via custom SSE channel")
+      } catch (e: Exception) {
+        Console.error("[MCP SESSION] Failed to send tools/list_changed via custom SSE: ${e.message}")
+      }
+    }
+    mcpServerSession?.let { session ->
+      sendProgressNotificationsScope.launch {
+        try {
+          session.notification(ToolListChangedNotification())
+          Console.log("[MCP SESSION] Sent tools/list_changed via SDK session")
+        } catch (e: Exception) {
+          // Tolerated: on StreamableHttp the SDK leg has no reachable stream (custom SSE
+          // above is the real delivery); only direct-STDIO clients depend on this leg.
+        }
+      }
+    }
+  }
+
   private fun sendProgressInternal(message: String, progress: Int?, total: Int?) {
     val token = mcpProgressToken
     val session = mcpServerSession

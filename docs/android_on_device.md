@@ -28,7 +28,7 @@ android {
 ```kotlin
 class MyTrailblazeTest {
   @get:Rule
-  val trailblazeRule = TrailblazeRule()
+  val trailblazeRule = AndroidTrailblazeRule()
   @Test
   fun testLoginFlow() {
     trailblazeRule.run(
@@ -39,7 +39,7 @@ class MyTrailblazeTest {
             Click the login button
             Verify we reach the home screen
         """.trimIndent()
-    ).execute()
+    )
   }
 }
 ```

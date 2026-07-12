@@ -8,7 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.ScreenshotFormat
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
@@ -27,6 +27,14 @@ import xyz.block.trailblaze.util.Console
 class ConfigToolSet(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val mcpBridge: TrailblazeMcpBridge,
+  /**
+   * Fired after a successful SET of a key that changes which tools sessions
+   * should expose (daemon-wide target app, LLM provider/model). The server
+   * wires this to re-register tools + fire `tools/list_changed` so connected
+   * MCP clients refetch — e.g. configuring an LLM makes `ask` appear, and a
+   * target switch swaps the advertised target-scoped TrailblazeTools.
+   */
+  private val onToolSurfaceConfigChanged: (() -> Unit)? = null,
 ) : ToolSet {
 
   enum class ConfigAction {
@@ -51,7 +59,7 @@ class ConfigToolSet(
     Settings include device drivers, LLM model, agent implementation, and more.
     """
   )
-  @Tool(McpToolProfile.TOOL_CONFIG)
+  @Tool(McpToolNames.TOOL_CONFIG)
   suspend fun config(
     @LLMDescription("Action: GET, SET, or LIST")
     action: ConfigAction,
@@ -130,6 +138,12 @@ class ConfigToolSet(
       return ConfigSetResult(success = false, error = error).toJson()
     }
 
+    // These keys change which tools sessions should advertise (target-scoped
+    // TrailblazeTools follow the daemon-wide target; ask requires an LLM).
+    if (configKey.key in setOf(KEY_TARGET_APP, KEY_LLM_PROVIDER, KEY_LLM_MODEL)) {
+      onToolSurfaceConfigChanged?.invoke()
+    }
+
     val isLlmNone = value.equals("none", ignoreCase = true) &&
       configKey.key in setOf(KEY_LLM_PROVIDER, KEY_LLM_MODEL)
     val displayMessage = if (isLlmNone) {
@@ -145,7 +159,7 @@ class ConfigToolSet(
       if (target != null && driverType != null) {
         val toolCount = try { target.getCustomToolsForDriver(driverType).size } catch (_: Exception) { 0 }
         if (toolCount > 0) {
-          "$toolCount custom tools available for ${target.displayName} on ${driverType.platform.displayName}. Use tools(target=\"${target.id}\") to see them, or blaze(objective=\"...\") to use them automatically."
+          "$toolCount custom tools available for ${target.displayName} on ${driverType.platform.displayName}. Use toolbox(target=\"${target.id}\") to see them, or step(objective=\"...\") to use them automatically."
         } else null
       } else if (target != null) {
         "Connect a device to see available custom tools for ${target.displayName}."
@@ -229,12 +243,6 @@ class ConfigToolSet(
         sessionContext?.viewHierarchyVerbosity = verbosity
         null
       }
-      KEY_TOOL_PROFILE -> {
-        val profile = McpToolProfile.entries.find { it.name.equals(value, ignoreCase = true) }
-          ?: return "Invalid tool profile: $value"
-        sessionContext?.toolProfile = profile
-        null
-      }
       KEY_MODE -> {
         val modeValue = TrailblazeMcpMode.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid mode: $value"
@@ -263,7 +271,6 @@ class ConfigToolSet(
     const val KEY_SCREENSHOT_FORMAT = "screenshotFormat"
     const val KEY_VIEW_HIERARCHY_VERBOSITY = "viewHierarchyVerbosity"
     const val KEY_MODE = "mode"
-    const val KEY_TOOL_PROFILE = "toolProfile"
 
     internal fun getAllConfigValues(
       sessionContext: TrailblazeMcpSessionContext?,
@@ -299,7 +306,6 @@ class ConfigToolSet(
         values[KEY_MODE] = ctx.mode.name
         values[KEY_SCREENSHOT_FORMAT] = ctx.screenshotFormat.name
         values[KEY_VIEW_HIERARCHY_VERBOSITY] = ctx.viewHierarchyVerbosity.name
-        values[KEY_TOOL_PROFILE] = ctx.toolProfile.name
       }
 
       return values
@@ -361,11 +367,6 @@ class ConfigToolSet(
         key = KEY_VIEW_HIERARCHY_VERBOSITY,
         description = "Detail level for view hierarchy data",
         validValues = ViewHierarchyVerbosity.entries.map { it.name },
-      ),
-      ConfigKeyDef(
-        key = KEY_TOOL_PROFILE,
-        description = "Which tools are exposed (FULL or MINIMAL)",
-        validValues = McpToolProfile.entries.map { it.name },
       ),
     )
   }

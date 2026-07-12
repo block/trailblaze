@@ -106,10 +106,24 @@ abstract class CheckTrailRunnerTypesTask @Inject constructor(objects: ObjectFact
   @get:Internal
   abstract val logFile: RegularFileProperty
 
+  @get:Internal
+  abstract val bunCacheDir: DirectoryProperty
+
   private fun run(log: java.io.File, vararg cmd: String) {
     val proc = try {
       ProcessBuilder(*cmd)
         .directory(webDir.get().asFile)
+        .apply {
+          // bun resolves its install cache as $BUN_INSTALL/install/cache; a set-but-EMPTY
+          // BUN_INSTALL (seen in some app-spawned environments) turns that into a CWD-relative
+          // `install/cache` — i.e. a cache directory dropped INSIDE src/main/resources, whose
+          // entry names embed the resolving registry host. Pin the cache into the build dir so
+          // the location never depends on the inherited environment; an explicitly set
+          // BUN_INSTALL_CACHE_DIR is a deliberate operator choice and is respected.
+          if (environment()["BUN_INSTALL_CACHE_DIR"].isNullOrBlank()) {
+            environment()["BUN_INSTALL_CACHE_DIR"] = bunCacheDir.get().asFile.absolutePath
+          }
+        }
         .redirectErrorStream(true)
         .redirectOutput(ProcessBuilder.Redirect.appendTo(log))
         .start()
@@ -581,6 +595,10 @@ tasks.matching { t ->
   if (this is AbstractCopyTask) {
     exclude(
       "**/trailrunner/web/node_modules/**",
+      // bun's local install-cache fallback (a broken environment can drop `install/cache` in the
+      // web dir — see CheckTrailRunnerTypesTask); its entry names embed the resolving registry
+      // host, so it must never be packaged.
+      "**/trailrunner/web/install/**",
       "**/trailrunner/web/package.json",
       "**/trailrunner/web/bun.lock",
       "**/trailrunner/web/tsconfig*.json",
@@ -626,6 +644,7 @@ val checkTrailRunnerTypes by tasks.registering(CheckTrailRunnerTypesTask::class)
   webDir.set(trailRunnerWebDir)
   marker.set(layout.buildDirectory.file("tmp/check-trailrunner-types.marker"))
   logFile.set(layout.buildDirectory.file("tmp/check-trailrunner-types.log"))
+  bunCacheDir.set(layout.buildDirectory.dir("tmp/bun-install-cache"))
 }
 
 tasks.named("check") { dependsOn(checkTrailRunnerTypes) }

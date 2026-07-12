@@ -295,6 +295,13 @@ open class BasePlaywrightNativeTest(
      * [TrailblazeRunner]; tool / config items are unaffected.
      */
     agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    /**
+     * CLI `--memory` / `--secret` seeds, composed with the trail's `config.memory:` block via
+     * [xyz.block.trailblaze.AgentMemory.seedFrom] before any tool runs (later tiers win on a
+     * same-key collision; sensitive values are redacted from logs and the Started snapshot).
+     */
+    initialMemorySeeds: Map<String, String> = emptyMap(),
+    initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     // Run the entire agent loop on the Playwright thread to maintain thread affinity.
@@ -336,6 +343,16 @@ open class BasePlaywrightNativeTest(
       return@withContext loggingRule.session?.sessionId ?: SessionId("unknown")
     }
 
+    // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition
+    // as every other host runner path. The agent threads this memory into every tool execution
+    // context, so `{{var}}` interpolation and scripted tools' `ctx.memory` both see the seeds.
+    val resolvedInitialMemory = playwrightAgent.memory.seedFrom(
+      yamlDefaults = trailConfig?.memory,
+      cliSeeds = initialMemorySeeds,
+      cliSensitiveSeeds = initialMemorySensitiveSeeds,
+    )
+    val sensitiveMemoryKeys: Set<String> = playwrightAgent.memory.sensitiveKeys.toSet()
+
     if (sendSessionStartLog) {
       val session = loggingRule.session
       if (session != null) {
@@ -354,6 +371,8 @@ open class BasePlaywrightNativeTest(
               rawYaml = yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              resolvedInitialMemory = resolvedInitialMemory,
+              sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),

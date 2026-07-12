@@ -16,7 +16,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
@@ -76,10 +76,10 @@ class ToolDiscoveryToolSet(
     toolbox(name="tap") → single tool with full descriptor
     toolbox(target="sampleapp") → tools for a specific target app
 
-    Use this to understand what actions are possible before calling blaze().
+    Use this to understand what actions are possible before calling step().
     """
   )
-  @Tool(McpToolProfile.TOOL_TOOLS)
+  @Tool(McpToolNames.TOOL_TOOLS)
   suspend fun toolbox(
     @LLMDescription("Filter to a single tool by name") name: String? = null,
     @LLMDescription("Filter to a specific target app's tools") target: String? = null,

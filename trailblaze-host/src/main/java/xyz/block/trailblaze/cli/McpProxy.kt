@@ -39,7 +39,6 @@ import picocli.CommandLine
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
-import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 
 /**
@@ -479,7 +478,6 @@ class McpProxy(
         contentType(ContentType.Application.Json)
         headers {
           append("Accept", "application/json, text/event-stream")
-          append("X-Tool-Profile", McpToolProfile.MINIMAL.name)
           daemonSessionId.get()?.let { append("mcp-session-id", it) }
         }
         setBody(body)

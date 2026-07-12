@@ -254,10 +254,6 @@ private fun McpSessionCard(session: McpSessionSnapshot, onClick: () -> Unit) {
             text = session.mode.name.replace("_", " "),
             color = MaterialTheme.colorScheme.primary,
           )
-          SessionTag(
-            text = session.toolProfile.name,
-            color = MaterialTheme.colorScheme.secondary,
-          )
           session.associatedDeviceId?.let { deviceId ->
             SessionTag(
               text = deviceId.instanceId,

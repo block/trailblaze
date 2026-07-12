@@ -62,7 +62,7 @@ trailmap-myapp/
 │   └── myapp-home-screen.waypoint.yaml
 └── trails/
     └── smoke/
-        └── android.trail.yaml           # smoke trail for downstream validation
+        └── trail.yaml                   # smoke trail for downstream validation
 ```
 
 New scripted tools are `.ts`-only — schema, description, and metadata are derived from

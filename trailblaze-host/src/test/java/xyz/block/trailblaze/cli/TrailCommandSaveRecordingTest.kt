@@ -502,6 +502,29 @@ class TrailCommandSaveRecordingTest {
     assertEquals(listOf("clearBootstrap", "openBootstrap"), savedTrailhead.tools?.map { it.name })
   }
 
+  @Test
+  fun `saveRecordingAsUnified skips the legacy fallback when a unified trail is already present`() {
+    // A legacy <classifier>.trail.yaml sibling would shadow an existing unified trail at run time,
+    // so when one is present the multi-tool fallback refuses instead: nothing is written, the
+    // unified trail stays canonical, and the session recording stays available for hand migration.
+    // This is where a healed unified run lands — the heal concatenates the failed attempt's
+    // trailhead tool with the recovery tools, so the recorded trailhead arrives multi-tool.
+    val cmd = TrailCommand()
+    val dir = tempFolder.newFolder()
+    writeUnifiedWithAndroidSlot(dir)
+    val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    val before = unifiedFile.readText()
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(v1RecordingYamlWithMultiToolTrailhead(toolNames = listOf("clearBootstrap", "openBootstrap")))
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+
+    assertEquals(before, unifiedFile.readText(), "the unified trail must be left untouched")
+    assertFalse(File(dir, "android.trail.yaml").exists(), "no legacy sibling — it would shadow the unified trail")
+    assertTrue(recording.isFile, "the session recording is preserved for hand migration")
+  }
+
   // ---------------------------------------------------------------------------
   // Named unified files — content-aware routing (the shared-directory corpus)
   // ---------------------------------------------------------------------------

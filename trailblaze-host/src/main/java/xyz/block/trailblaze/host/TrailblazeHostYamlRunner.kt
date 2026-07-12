@@ -351,18 +351,6 @@ object TrailblazeHostYamlRunner {
     val onProgressMessage = runOnHostParams.onProgressMessage
     val runYamlRequest = runOnHostParams.runYamlRequest
 
-    // Mirror the V1/Compose-RPC/Revyl runners — Playwright Native doesn't apply memory
-    // seeding either, so loudly warn rather than silently dropping `config.memory:` /
-    // `--memory` / `--secret`. Parses the YAML to extract `config.memory:` for an accurate
-    // count; cheap one-off parse, same call the other runners make.
-    val playwrightTrailConfig =
-      runCatching { createTrailblazeYaml().extractTrailConfig(runYamlRequest.yaml) }.getOrNull()
-    warnIfMemorySeedsDropped(
-      runnerName = "Playwright Native runner",
-      trailConfig = playwrightTrailConfig,
-      runYamlRequest = runYamlRequest,
-    )
-
     val requestDeviceId = runYamlRequest.trailblazeDeviceId
     val keepBrowserAlive = !runYamlRequest.config.sendSessionEndLog
 
@@ -498,6 +486,8 @@ object TrailblazeHostYamlRunner {
         // Routes prompt steps through the in-process Koog strategy-graph agent when the run
         // opted in (AgentImplementation.KOOG_STRATEGY_GRAPH); otherwise the legacy runner.
         agentImplementation = runYamlRequest.agentImplementation,
+        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
+        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -536,15 +526,6 @@ object TrailblazeHostYamlRunner {
   ): SessionId? {
     val onProgressMessage = runOnHostParams.onProgressMessage
     val runYamlRequest = runOnHostParams.runYamlRequest
-
-    // See parallel comment in runPlaywrightNativeYaml.
-    val electronTrailConfig =
-      runCatching { createTrailblazeYaml().extractTrailConfig(runYamlRequest.yaml) }.getOrNull()
-    warnIfMemorySeedsDropped(
-      runnerName = "Playwright Electron runner",
-      trailConfig = electronTrailConfig,
-      runYamlRequest = runYamlRequest,
-    )
 
     val requestDeviceId = runYamlRequest.trailblazeDeviceId
     val keepAlive = !runYamlRequest.config.sendSessionEndLog
@@ -635,6 +616,8 @@ object TrailblazeHostYamlRunner {
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         agentImplementation = runYamlRequest.agentImplementation,
+        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
+        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -891,7 +874,6 @@ object TrailblazeHostYamlRunner {
         deviceClassifiers = trailblazeDeviceInfo.classifiers,
       )
       val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-      warnIfMemorySeedsDropped("ComposeRpc runner", trailConfig, runYamlRequest)
 
       // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
       // `planTrailExecution` planner. Short-circuit here so the runner never opens a session,
@@ -904,6 +886,18 @@ object TrailblazeHostYamlRunner {
         return@executeTrailSession session.sessionId
       }
 
+      // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom]
+      // composition as the V3 site: YAML `config.memory:` defaults, then CLI `--memory`
+      // overrides, then CLI `--secret` (sensitive; excluded from the returned snapshot).
+      // The agent threads this memory into every tool execution context, so `{{var}}`
+      // interpolation and scripted tools' `ctx.memory` both see the seeds.
+      val resolvedInitialMemory = agent.memory.seedFrom(
+        yamlDefaults = trailConfig?.memory,
+        cliSeeds = runYamlRequest.initialMemorySeeds,
+        cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+      )
+      val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
+
       if (runYamlRequest.config.sendSessionStartLog) {
         // CLI / daemon runs have no JUnit Description, so derive a readable Suite::test
         // identity from the trail path instead of a bare "ComposeRpc::run" (see
@@ -915,12 +909,7 @@ object TrailblazeHostYamlRunner {
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
             sessionStatus = SessionStatus.Started(
-              // Strip trailConfig.memory: this runner does NOT apply it (see the
-              // warnIfMemorySeedsDropped call above), so persisting it into the session
-              // log would produce a false-presence artifact for replay tools that read
-              // SessionStarted.trailConfig and assume the values were seeded. The
-              // separate resolvedInitialMemory field stays empty for the same reason.
-              trailConfig = trailConfig?.copy(memory = null),
+              trailConfig = trailConfig,
               trailFilePath = runYamlRequest.trailFilePath,
               testClassName = derivedTestIdentity?.className ?: "ComposeRpc",
               testMethodName = derivedTestIdentity?.methodName ?: "run",
@@ -928,6 +917,8 @@ object TrailblazeHostYamlRunner {
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              resolvedInitialMemory = resolvedInitialMemory,
+              sensitiveMemoryKeys = sensitiveMemoryKeys,
             ),
             session = session.sessionId,
             timestamp = Clock.System.now(),
@@ -1216,7 +1207,6 @@ object TrailblazeHostYamlRunner {
           deviceClassifiers = trailblazeDeviceInfo.classifiers,
         )
         val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-        warnIfMemorySeedsDropped("Revyl runner", trailConfig, runYamlRequest)
 
         // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
         // `planTrailExecution` planner. See parallel comment at the ComposeRpc site.
@@ -1228,6 +1218,16 @@ object TrailblazeHostYamlRunner {
           return@executeTrailSession session.sessionId
         }
 
+        // Seed the agent's memory before any tool runs — see parallel comment at the
+        // ComposeRpc site for the composition and why this covers both `{{var}}`
+        // interpolation and scripted tools' `ctx.memory`.
+        val resolvedInitialMemory = agent.memory.seedFrom(
+          yamlDefaults = trailConfig?.memory,
+          cliSeeds = runYamlRequest.initialMemorySeeds,
+          cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+        )
+        val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
+
         if (runYamlRequest.config.sendSessionStartLog) {
           // See ComposeRpc site — derive a readable Suite::test identity from the path.
           val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
@@ -1237,10 +1237,7 @@ object TrailblazeHostYamlRunner {
             session,
             TrailblazeLog.TrailblazeSessionStatusChangeLog(
               sessionStatus = SessionStatus.Started(
-                // See parallel comment at the ComposeRpc site — strip trailConfig.memory
-                // because Revyl doesn't apply it. Replay would otherwise read a
-                // false-presence signal off this snapshot.
-                trailConfig = trailConfig?.copy(memory = null),
+                trailConfig = trailConfig,
                 trailFilePath = runYamlRequest.trailFilePath,
                 testClassName = derivedTestIdentity?.className ?: "Revyl",
                 testMethodName = derivedTestIdentity?.methodName ?: "run",
@@ -1248,6 +1245,8 @@ object TrailblazeHostYamlRunner {
                 rawYaml = runYamlRequest.yaml,
                 hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
                 trailblazeDeviceId = trailblazeDeviceId,
+                resolvedInitialMemory = resolvedInitialMemory,
+                sensitiveMemoryKeys = sensitiveMemoryKeys,
               ),
               session = session.sessionId,
               timestamp = Clock.System.now(),
@@ -1339,17 +1338,6 @@ object TrailblazeHostYamlRunner {
 
     val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
     val onProgressMessage = runOnHostParams.onProgressMessage
-
-    // See parallel comment in runPlaywrightNativeYaml — Maestro host path also doesn't
-    // apply memory seeding today, so warn loudly rather than silently dropping seeds.
-    val maestroTrailConfig =
-      runCatching { createTrailblazeYaml().extractTrailConfig(runOnHostParams.runYamlRequest.yaml) }
-        .getOrNull()
-    warnIfMemorySeedsDropped(
-      runnerName = "Maestro host runner",
-      trailConfig = maestroTrailConfig,
-      runYamlRequest = runOnHostParams.runYamlRequest,
-    )
 
     // Skip force-stop for MCP requests - MCP maintains persistent connections
     // between tool calls and we don't want to kill the driver each time.
@@ -1486,6 +1474,8 @@ object TrailblazeHostYamlRunner {
         trailblazeDeviceId = trailblazeDeviceId,
         traceId = runYamlRequest.traceId,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
+        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
+        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
       )
       // Surface the last successful tool's payload back out through HostYamlRunResult.
       lastToolResult = yamlRun.lastToolResult
@@ -1945,7 +1935,6 @@ object TrailblazeHostYamlRunner {
       throw e
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-    warnIfMemorySeedsDropped("V1 runHostTrailblazeRunnerWithOnDeviceRpc", trailConfig, runYamlRequest)
 
     // Honor `config.skip:` before opening any session — matches the CLI's pre-flight
     // `planTrailExecution` planner. This site short-circuits even earlier than the
@@ -2055,6 +2044,17 @@ object TrailblazeHostYamlRunner {
       resolvedTarget = resolvedTargetForSession,
       appId = appIdForSession,
     )
+
+    // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition
+    // as the V3 site. The agent interpolates `{{var}}` tokens against this memory at the RPC
+    // boundary AND pushes it to the device as each dispatch's `memorySnapshot`, so on-device
+    // tools' `ctx.memory` reads the same seeded state.
+    val resolvedInitialMemory = agent.memory.seedFrom(
+      yamlDefaults = trailConfig?.memory,
+      cliSeeds = runYamlRequest.initialMemorySeeds,
+      cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+    )
+    val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
 
     val elementComparator = TrailblazeElementComparator(
       screenStateProvider = agent.screenStateProvider,
@@ -2233,11 +2233,7 @@ object TrailblazeHostYamlRunner {
           session,
           TrailblazeLog.TrailblazeSessionStatusChangeLog(
             sessionStatus = SessionStatus.Started(
-              // See parallel comment at the ComposeRpc site — strip trailConfig.memory
-              // because the V1 RpcRunner path doesn't apply it (it constructs its own
-              // AgentMemory inside the per-tool agent rather than going through
-              // AgentMemory.seedFrom). Replay would otherwise read a false-presence signal.
-              trailConfig = trailConfig?.copy(memory = null),
+              trailConfig = trailConfig,
               trailFilePath = runYamlRequest.trailFilePath,
               testClassName = derivedTestIdentity?.className ?: "HostOnDeviceRpcRunner",
               testMethodName = derivedTestIdentity?.methodName ?: "run",
@@ -2245,6 +2241,8 @@ object TrailblazeHostYamlRunner {
               rawYaml = runYamlRequest.yaml,
               hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
               trailblazeDeviceId = trailblazeDeviceId,
+              resolvedInitialMemory = resolvedInitialMemory,
+              sensitiveMemoryKeys = sensitiveMemoryKeys,
               targetAppInfo = MobileDeviceUtils.resolveTargetAppInfo(
                 target = targetTestApp,
                 trailblazeDeviceId = trailblazeDeviceId,
@@ -2414,33 +2412,6 @@ object TrailblazeHostYamlRunner {
       Console.log("[Golden] Comparison error (non-fatal): ${e.message}")
       null
     }
-  }
-
-  /**
-   * Emits a loud warning when the runner path can't apply memory seeding but the request
-   * carries seeds anyway (from `config.memory:` YAML, `--memory KEY=VAL`, or `--secret
-   * KEY=VAL`). Only the V3 accessibility runner wires composition through
-   * [xyz.block.trailblaze.AgentMemory.seedFrom] today; V1 and Compose-RPC runners build
-   * their `AgentMemory` inside the per-tool agent and would silently drop the seeds.
-   * Surfacing a warning rather than failing means a YAML that uses `config.memory:` for
-   * the V3 path still runs through CI's V1/Compose paths (with degraded behavior) instead
-   * of bricking the whole pipeline; once V1/Compose are wired this warning goes away.
-   */
-  private fun warnIfMemorySeedsDropped(
-    runnerName: String,
-    trailConfig: xyz.block.trailblaze.yaml.TrailConfig?,
-    runYamlRequest: RunYamlRequest,
-  ) {
-    val yamlCount = trailConfig?.memory?.size ?: 0
-    val cliCount = runYamlRequest.initialMemorySeeds.size
-    val secretCount = runYamlRequest.initialMemorySensitiveSeeds.size
-    if (yamlCount == 0 && cliCount == 0 && secretCount == 0) return
-    Console.error(
-      "[memory] $runnerName received memory seeds ($yamlCount from config.memory:, " +
-        "$cliCount from --memory, $secretCount from --secret) but this runner path " +
-        "does not currently wire AgentMemory.seedFrom — seeds will be silently dropped. " +
-        "Only the V3 accessibility runner (runHostV3WithAccessibilityYaml) applies them.",
-    )
   }
 
   private fun requireActionableSteps(

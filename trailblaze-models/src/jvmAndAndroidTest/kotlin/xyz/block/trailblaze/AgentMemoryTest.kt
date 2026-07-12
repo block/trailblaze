@@ -104,9 +104,142 @@ class AgentMemoryTest {
   }
 
   @Test
-  fun `interpolateVariables maps unknown tokens to empty string`() {
+  fun `interpolateVariables leaves unknown tokens in place as literals`() {
+    // A typo'd token must arrive at the device/assertion as the visible literal (plus a
+    // diagnostic log), not silently blank the string. Known tokens resolve as before.
     val memory = AgentMemory()
-    assertEquals("hi  world", memory.interpolateVariables("hi {{nope}} world"))
+    memory.remember("known", "V")
+    assertEquals("V {{nope}} \${also_nope}", memory.interpolateVariables("{{known}} {{nope}} \${also_nope}"))
+  }
+
+  @Test
+  fun `interpolateVariables leaves unknown tokens in place when memory is empty`() {
+    val memory = AgentMemory()
+    assertEquals("hi {{nope}} world", memory.interpolateVariables("hi {{nope}} world"))
+  }
+
+  @Test
+  fun `interpolateVariables blank-unknown mode resolves unknown tokens to empty string`() {
+    // The TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS=1 kill-switch path. The env read sits
+    // outside this overload so both modes are pinnable without process-global env mutation.
+    val memory = AgentMemory()
+    memory.remember("known", "V")
+    assertEquals("V  world", memory.interpolateVariables("{{known}} {{nope}} world", blankUnknownTokens = true))
+  }
+
+  @Test
+  fun `interpolateVariables is single-pass — a resolved value containing a token is not re-resolved`() {
+    val memory = AgentMemory()
+    memory.remember("a", "{{b}}")
+    memory.remember("b", "x")
+    assertEquals("{{b}}", memory.interpolateVariables("{{a}}"))
+  }
+
+  @Test
+  fun `interpolateVariablesInJson leaves unknown tokens as literals when memory is non-empty`() {
+    // The recorded-replay path: with non-empty memory the tree IS walked, and an unknown
+    // token nested anywhere in the args must survive as its literal.
+    val memory = AgentMemory()
+    memory.remember("known", "V")
+    val input = buildJsonObject {
+      put("resolved", "\${known}")
+      put("typo", "{{knwon}}")
+      put("nested", buildJsonObject { put("inner", "id=\${missing}") })
+    }
+    val out = memory.interpolateVariablesInJson(input).jsonObject
+    assertEquals("V", out["resolved"]!!.jsonPrimitive.content)
+    assertEquals("{{knwon}}", out["typo"]!!.jsonPrimitive.content)
+    assertEquals("id=\${missing}", out["nested"]!!.jsonObject["inner"]!!.jsonPrimitive.content)
+  }
+
+  // ---------- the `memory.` token prefix: {{memory.x}} / ${memory.x} alias bare {{x}} / ${x} ----------
+  // The qualified spelling is the canonical trail-file grammar going forward (#4737 phase 1);
+  // bare tokens remain fully supported (existing recordings + LLM-authored tokens). These tests
+  // assert alias-EQUIVALENCE — `memory.x` behaves exactly like bare `x` — rather than pinning the
+  // unknown-token outcome, so they hold across a change to unknown-token handling (#4731).
+
+  @Test
+  fun `memory-prefixed tokens resolve identically to bare tokens for known keys`() {
+    val memory = AgentMemory()
+    memory.remember("first", "Ada")
+    memory.remember("last", "Lovelace")
+    assertEquals(
+      memory.interpolateVariables("{{first}} \${last}"),
+      memory.interpolateVariables("{{memory.first}} \${memory.last}"),
+    )
+    assertEquals("Ada Lovelace", memory.interpolateVariables("{{memory.first}} \${memory.last}"))
+  }
+
+  @Test
+  fun `memory-prefixed unknown token behaves exactly like a bare unknown token`() {
+    // Equivalence is computed against the engine's own bare-token behavior (modulo the token's
+    // spelling), so this holds whether unknown tokens blank or are left as literals.
+    val memory = AgentMemory()
+    memory.remember("known", "V")
+    val bare = memory.interpolateVariables("[{{nope}}]")
+    val prefixed = memory.interpolateVariables("[{{memory.nope}}]")
+    assertEquals(bare.replace("{{nope}}", "{{memory.nope}}"), prefixed)
+  }
+
+  @Test
+  fun `memory-prefixed unknown token behaves like a bare unknown token when memory is empty`() {
+    val memory = AgentMemory()
+    val bare = memory.interpolateVariables("[\${nope}]")
+    val prefixed = memory.interpolateVariables("[\${memory.nope}]")
+    assertEquals(bare.replace("\${nope}", "\${memory.nope}"), prefixed)
+  }
+
+  @Test
+  fun `memory-prefixed token resolves a sensitive key with redaction semantics unchanged`() {
+    // Interpolation is where a --secret value is injected into tool args — the qualified
+    // spelling must inject the same value, and must not perturb the sensitivity marker.
+    val memory = AgentMemory()
+    memory.rememberSensitive("pin", "1234")
+    assertEquals(memory.interpolateVariables("{{pin}}"), memory.interpolateVariables("{{memory.pin}}"))
+    assertEquals("1234", memory.interpolateVariables("{{memory.pin}}"))
+    assertContains(memory.sensitiveKeys, "pin")
+  }
+
+  @Test
+  fun `memory-prefixed token falls back to a key literally named with the prefix when the bare key is absent`() {
+    // Nothing stops remember("memory.foo", …). With no bare `foo`, the literal dotted key is
+    // the only candidate and must keep resolving.
+    val memory = AgentMemory()
+    memory.remember("memory.foo", "literal-value")
+    assertEquals("literal-value", memory.interpolateVariables("{{memory.foo}}"))
+  }
+
+  @Test
+  fun `memory-prefixed token prefers the stripped key when both it and the literal dotted key exist`() {
+    // The documented collision rule: prefix-strip wins; the shadowed literal key is reported
+    // via a diagnostic log (not asserted here — log output isn't part of the contract).
+    val memory = AgentMemory()
+    memory.remember("foo", "stripped-value")
+    memory.remember("memory.foo", "literal-value")
+    assertEquals("stripped-value", memory.interpolateVariables("{{memory.foo}}"))
+    // The bare spelling is unaffected by the collision.
+    assertEquals("stripped-value", memory.interpolateVariables("{{foo}}"))
+  }
+
+  @Test
+  fun `single-pass property holds for memory-prefixed tokens — a resolved value containing one is not re-resolved`() {
+    val memory = AgentMemory()
+    memory.remember("a", "{{memory.b}}")
+    memory.remember("b", "x")
+    assertEquals("{{memory.b}}", memory.interpolateVariables("{{memory.a}}"))
+  }
+
+  @Test
+  fun `interpolateVariablesInJson resolves memory-prefixed tokens in nested structures`() {
+    val memory = AgentMemory()
+    memory.remember("email", "merchant@example.com")
+    val input = buildJsonObject {
+      put("dollar", "\${memory.email}")
+      put("nested", buildJsonObject { put("curly", "{{memory.email}}") })
+    }
+    val out = memory.interpolateVariablesInJson(input).jsonObject
+    assertEquals("merchant@example.com", out["dollar"]!!.jsonPrimitive.content)
+    assertEquals("merchant@example.com", out["nested"]!!.jsonObject["curly"]!!.jsonPrimitive.content)
   }
 
   @Test
@@ -127,13 +260,46 @@ class AgentMemoryTest {
   }
 
   @Test
-  fun `delete on a sensitive key also drops the sensitive marker`() {
-    // Without this, a future remember(k) would inherit a stale sensitive marker — confusing
-    // for callers that expected a non-sensitive value to flow through envelopes.
+  fun `delete on a sensitive key drops the value but keeps the sensitive marker`() {
+    // The marker is a session-lifetime redaction promise (--secret / rememberSensitive):
+    // host-side delete must not become an implicit unmark, or a later remember of the same key
+    // would re-log the value in cleartext and re-expose it to scripting envelopes. Same rule
+    // applyScriptedToolMemoryDelta enforces for scripted tools.
     val memory = AgentMemory()
     memory.rememberSensitive("pin", "1234")
     memory.delete("pin")
-    assertFalse("pin" in memory.sensitiveKeys)
+    assertFalse(memory.has("pin"))
+    assertContains(memory.sensitiveKeys, "pin")
+    // Still an explicit deletion — sensitivity doesn't fork the deletedKeys signal.
+    assertContains(memory.deletedKeys, "pin")
+  }
+
+  @Test
+  fun `remember on a key marked sensitive keeps the marker and stores the value`() {
+    val memory = AgentMemory()
+    memory.rememberSensitive("pin", "1234")
+    memory.remember("pin", "5678")
+    assertEquals("5678", memory.variables["pin"])
+    assertContains(memory.sensitiveKeys, "pin")
+  }
+
+  @Test
+  fun `sensitive marker survives host-side delete-then-remember`() {
+    // The --secret lifecycle contract: once seedFrom marks a key sensitive, no sequence of
+    // host-side remember/delete can unmark it, so the envelope/LLM/dumpMemory filters (which
+    // read sensitiveKeys live) keep excluding the value for the rest of the session.
+    val memory = AgentMemory()
+    memory.seedFrom(
+      yamlDefaults = null,
+      cliSeeds = emptyMap(),
+      cliSensitiveSeeds = mapOf("apiToken" to "s3cret"),
+    )
+    memory.delete("apiToken")
+    memory.remember("apiToken", "s3cret-rotated")
+    assertEquals("s3cret-rotated", memory.variables["apiToken"])
+    assertContains(memory.sensitiveKeys, "apiToken")
+    // The re-remember also un-tracks the deletion, exactly like a non-sensitive key.
+    assertFalse("apiToken" in memory.deletedKeys)
   }
 
   @Test
@@ -292,6 +458,59 @@ class AgentMemoryTest {
     assertFalse("token" in resolved)
   }
 
+  @Test
+  fun `seeded values — including sensitive ones — resolve through token interpolation`() {
+    // The end-to-end promise every runner path makes: a value seeded from
+    // `config.memory:` / `--memory` / `--secret` is usable as a `{{var}}` token in
+    // trail steps. Sensitive seeds are redacted from logs/snapshots but must still
+    // interpolate — that's the whole point of `--secret password=…`.
+    val memory = AgentMemory()
+    memory.seedFrom(
+      yamlDefaults = mapOf("user" to "ci-default"),
+      cliSeeds = mapOf("user" to "sam"),
+      cliSensitiveSeeds = mapOf("password" to "hunter2"),
+    )
+    assertEquals("sam signs in with hunter2", memory.interpolateVariables("{{user}} signs in with {{password}}"))
+  }
+
+  @Test
+  fun `seeding activates JSON interpolation — an unknown token still survives as a literal once seeds are present`() {
+    // Pins the interplay that wiring seeding into the V1 / ComposeRpc / Playwright / Revyl
+    // runner paths activates. `interpolateVariablesInJson` short-circuits on EMPTY memory
+    // (pinned by `…is a no-op when memory is empty` above), and on those paths memory was
+    // effectively always empty — so token-like text in recorded tool args passed through
+    // raw. Seeding flips them to non-empty memory, which activates interpolation; the
+    // leave-literal semantics (#4731) must then hold on these newly-activated paths too —
+    // an unknown token passes through unchanged rather than blanking to empty string.
+    val memory = AgentMemory()
+    memory.seedFrom(
+      yamlDefaults = null,
+      cliSeeds = mapOf("user" to "sam"),
+      cliSensitiveSeeds = emptyMap(),
+    )
+    val input = buildJsonObject { put("url", "https://example.com/{{not-a-var}}") }
+    val out = memory.interpolateVariablesInJson(input).jsonObject["url"]!!.jsonPrimitive.content
+    assertEquals("https://example.com/{{not-a-var}}", out)
+  }
+
+  @Test
+  fun `seedFrom — key already marked sensitive is excluded from the returned snapshot`() {
+    // The sticky marker outlives seeding tiers: a key marked sensitive earlier in the session
+    // that arrives again via a NON-sensitive tier is stored with sensitive semantics and must
+    // not ride the returned snapshot into the persisted session log
+    // (SessionStarted.resolvedInitialMemory).
+    val memory = AgentMemory()
+    memory.rememberSensitive("apiToken", "s3cret-original")
+    val resolved = memory.seedFrom(
+      yamlDefaults = null,
+      cliSeeds = mapOf("apiToken" to "s3cret-reseeded", "user" to "sam"),
+      cliSensitiveSeeds = emptyMap(),
+    )
+    assertEquals("s3cret-reseeded", memory.variables["apiToken"])
+    assertContains(memory.sensitiveKeys, "apiToken")
+    assertEquals(mapOf("user" to "sam"), resolved)
+  }
+
   // ---- applyScriptedToolMemoryDelta -------------------------------------------------------------
   // The models-level entry point both scripted-tool runtimes apply through: the subprocess/MCP path
   // (via TrailblazeContextEnvelope.applyResultMemoryDelta, which delegates here) and the
@@ -347,6 +566,8 @@ class AgentMemoryTest {
     applyScriptedToolMemoryDelta(memory, resultMetaWith { put("memoryDeletions", buildJsonArray { add(JsonPrimitive("pin")) }) })
     assertFalse(memory.has("pin"))
     assertContains(memory.sensitiveKeys, "pin")
+    // Uniform with host delete(): the explicit-deletion signal is recorded for sensitive keys too.
+    assertContains(memory.deletedKeys, "pin")
   }
 
   @Test

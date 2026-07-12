@@ -82,8 +82,8 @@ for a given target — there are two ways to inspect the live tool catalog the a
 sees:
 
 - **From the CLI:** `trailblaze toolbox -d <platform> --target <trailmap-id>` lists
-  every tool the agent sees for that target, with descriptions. Add `--search <prefix>`
-  to filter.
+  every tool the agent sees for that target, with descriptions. Add `--search <substring>`
+  to filter (substring match on tool name and description).
 - **In your IDE:** open any `.ts` file under `<trailmap>/tools/` and start typing
   `ctx.tools.` — autocomplete pulls from the per-trailmap declaration rollup at
   `<trailmap>/tools/trailblaze-client.d.ts`. That file is emitted by

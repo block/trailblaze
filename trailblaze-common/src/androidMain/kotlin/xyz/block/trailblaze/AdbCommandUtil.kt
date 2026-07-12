@@ -9,6 +9,7 @@ import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
+import xyz.block.trailblaze.util.UiAutomationHandleErrors
 
 /**
  * Utility for executing ADB shell commands via UiAutomation.
@@ -16,10 +17,21 @@ import xyz.block.trailblaze.util.PollingUtils
  */
 object AdbCommandUtil {
 
+  private const val SHELL_LIVENESS_TOKEN = "trailblaze-shell-liveness"
+
   fun execShellCommand(shellCommand: String): String {
     Console.log("adb shell $shellCommand")
     return withUiDevice {
-      executeShellCommand(shellCommand)
+      val output = executeShellCommand(shellCommand)
+      // A dead UiAutomation connection makes executeShellCommand return "" instead of throwing,
+      // so every command looks successful while doing nothing. Empty output is also normal for
+      // many commands (`cp`, `input keyevent`), so double-check with a probe that always prints:
+      // if even that comes back empty, the connection is wedged — throw so the standard
+      // reconnect-and-retry runs.
+      if (output.isEmpty() && !executeShellCommand("echo $SHELL_LIVENESS_TOKEN").contains(SHELL_LIVENESS_TOKEN)) {
+        throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(shellCommand))
+      }
+      output
     }
   }
 

@@ -29,7 +29,6 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
@@ -180,11 +179,10 @@ abstract class TrailblazeDesktopApp(
       ?: request.runYamlRequest?.yaml
       ?: return@withContext CliRunResponse(success = false, error = "No YAML content provided")
 
-    // Resolve templates up front (no-op when the caller already resolved them, as the CLI does)
-    // so device selection and execution read the same trail content.
-    val resolvedYaml = request.trailFilePath?.let { path ->
-      TrailYamlTemplateResolver.resolve(yamlContent, File(path))
-    } ?: yamlContent
+    // Resolve templates up front so device selection and execution read the same trail content.
+    // Unconditional: bare submissions (no trailFilePath) resolve against the daemon's environment;
+    // CLI-delegated ones arrive pre-resolved so this is a no-op — see [resolveSubmittedTrailYaml].
+    val resolvedYaml = resolveSubmittedTrailYaml(yamlContent, request.trailFilePath)
 
     // Resolve driver type from request or trail config
     val trailConfig = try {
@@ -196,7 +194,13 @@ abstract class TrailblazeDesktopApp(
     val trailDriverType = driverString?.let { TrailblazeDriverType.fromString(it) }
 
     // Resolve device
-    val resolvedRunRequest = request.runYamlRequest
+    // Fully-resolved mode hands this request object straight to the runner, so the resolved
+    // YAML must be copied in — otherwise execution would read the original unresolved text
+    // while config parsing above read the resolved one. Fully-resolved submissions are bare
+    // submissions too (DaemonClient's RunYamlRequest overload — the CLI's file-run delegate
+    // uses raw yamlContent mode instead and pre-resolves); for a caller that did pre-resolve,
+    // the copy is byte-identical.
+    val resolvedRunRequest = request.runYamlRequest?.copy(yaml = resolvedYaml)
     val targetDevice = if (resolvedRunRequest != null) {
       // Fully resolved mode — find the device matching the request's device ID
       val devices = deviceManager.loadDevicesSuspend(applyDriverFilter = false)

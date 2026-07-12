@@ -110,9 +110,40 @@ describe("createMemory: interpolate", () => {
     expect(m.interpolate("{{first}} ${last}")).toBe("Ada Lovelace");
   });
 
-  test("unknown tokens resolve to empty string", () => {
+  test("unknown tokens are left in place as literals", () => {
+    // A typo'd token must arrive at the device/assertion as the visible literal (plus a
+    // console diagnostic), not silently blank the string. Known tokens resolve as before.
+    const m = createMemory({ known: "V" });
+    expect(m.interpolate("{{known}} {{missing}} ${also_missing}")).toBe("V {{missing}} ${also_missing}");
+  });
+
+  test("unknown tokens are left in place when memory is empty", () => {
     const m = createMemory({});
-    expect(m.interpolate("hi {{missing}} world")).toBe("hi  world");
+    expect(m.interpolate("hi {{missing}} world")).toBe("hi {{missing}} world");
+  });
+
+  test("a deleted key's token is left as a literal (deleted = unknown)", () => {
+    const m = createMemory({ k: "v" });
+    m.delete("k");
+    expect(m.interpolate("{{k}}")).toBe("{{k}}");
+  });
+
+  test("TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS restores blank substitution, read per call", () => {
+    const ENV_VAR = "TRAILBLAZE_MEMORY_BLANK_UNKNOWN_TOKENS";
+    const prior = process.env[ENV_VAR];
+    const m = createMemory({ known: "V" });
+    try {
+      process.env[ENV_VAR] = "1";
+      expect(m.interpolate("{{known}} {{missing}} world")).toBe("V  world");
+      process.env[ENV_VAR] = "TRUE"; // case-insensitive
+      expect(m.interpolate("{{missing}}")).toBe("");
+      // Read per call — flipping it off mid-instance takes effect on the next interpolate.
+      delete process.env[ENV_VAR];
+      expect(m.interpolate("{{missing}}")).toBe("{{missing}}");
+    } finally {
+      if (prior === undefined) delete process.env[ENV_VAR];
+      else process.env[ENV_VAR] = prior;
+    }
   });
 
   test("respects writes made in this invocation (read-your-own-writes)", () => {
@@ -126,6 +157,63 @@ describe("createMemory: interpolate", () => {
     // Mirrors `AgentMemory.interpolateVariables` semantics on the Kotlin side.
     const m = createMemory({ a: "{{b}}", b: "literal" });
     expect(m.interpolate("{{a}}")).toBe("{{b}}");
+  });
+});
+
+describe("createMemory: interpolate — the memory. token prefix", () => {
+  // {{memory.x}} / ${memory.x} are the scope-qualified spelling of bare {{x}} / ${x}
+  // (#4737 phase 1) — same store, prefix stripped at lookup; bare tokens remain fully
+  // supported. Tests assert alias-EQUIVALENCE (memory.x behaves exactly like bare x)
+  // rather than pinning the unknown-token outcome, so they hold across a change to
+  // unknown-token handling (#4731). Mirrors the Kotlin AgentMemoryTest section.
+
+  test("memory-prefixed tokens resolve identically to bare tokens for known keys", () => {
+    const m = createMemory({ first: "Ada", last: "Lovelace" });
+    expect(m.interpolate("{{memory.first}} ${memory.last}")).toBe(m.interpolate("{{first}} ${last}"));
+    expect(m.interpolate("{{memory.first}} ${memory.last}")).toBe("Ada Lovelace");
+  });
+
+  test("memory-prefixed unknown token behaves exactly like a bare unknown token", () => {
+    // Equivalence is computed against the engine's own bare-token behavior (modulo the
+    // token's spelling), so this holds whether unknown tokens blank or are left as literals.
+    const m = createMemory({ known: "V" });
+    const bare = m.interpolate("[{{nope}}]");
+    const prefixed = m.interpolate("[{{memory.nope}}]");
+    expect(prefixed).toBe(bare.replace("{{nope}}", "{{memory.nope}}"));
+  });
+
+  test("memory-prefixed unknown token behaves like a bare unknown token when memory is empty", () => {
+    const m = createMemory({});
+    const bare = m.interpolate("[${nope}]");
+    const prefixed = m.interpolate("[${memory.nope}]");
+    expect(prefixed).toBe(bare.replace("${nope}", "${memory.nope}"));
+  });
+
+  test("memory-prefixed lookup respects read-your-own-writes", () => {
+    const m = createMemory({});
+    m.set("greeting", "hello");
+    expect(m.interpolate("{{memory.greeting}}")).toBe("hello");
+  });
+
+  test("falls back to a key literally named with the prefix when the bare key is absent", () => {
+    // Nothing stops set("memory.foo", …). With no bare `foo`, the literal dotted key is the
+    // only candidate and must keep resolving.
+    const m = createMemory({ "memory.foo": "literal-value" });
+    expect(m.interpolate("{{memory.foo}}")).toBe("literal-value");
+  });
+
+  test("prefers the stripped key when both it and the literal dotted key exist", () => {
+    // The documented collision rule: prefix-strip wins; the shadowed literal key is reported
+    // via a console diagnostic (not asserted — log output isn't part of the contract).
+    const m = createMemory({ foo: "stripped-value", "memory.foo": "literal-value" });
+    expect(m.interpolate("{{memory.foo}}")).toBe("stripped-value");
+    // The bare spelling is unaffected by the collision.
+    expect(m.interpolate("{{foo}}")).toBe("stripped-value");
+  });
+
+  test("single-pass property holds for memory-prefixed tokens (no re-resolve of resolved values)", () => {
+    const m = createMemory({ a: "{{memory.b}}", b: "x" });
+    expect(m.interpolate("{{memory.a}}")).toBe("{{memory.b}}");
   });
 });
 

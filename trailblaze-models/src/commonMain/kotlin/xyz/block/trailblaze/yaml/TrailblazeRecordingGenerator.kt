@@ -130,15 +130,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             // "not recorded," not a declared no-op (same reasoning as `recording` above).
             val trailheadTools = recording?.tools
             if (trailheadStep != null || !trailheadTools.isNullOrEmpty()) {
-              items.add(
-                TrailYamlItem.TrailheadTrailItem(
-                  TrailheadDefinition(
-                    step = trailheadStep,
-                    tools = trailheadTools,
-                    maxRetries = promptStep.maxRetries,
-                  ),
-                ),
-              )
+              upsertTrailheadItem(items, trailheadStep, trailheadTools, promptStep.maxRetries)
             }
           } else {
             val newStep = when (promptStep) {
@@ -235,6 +227,55 @@ fun List<TrailblazeLog>.generateRecordedYaml(
     Console.error("Failed to generate recording: ${e.stackTraceToString()}")
     ""
   }
+}
+
+/**
+ * Adds the trailhead item for a trailhead-marked objective window, merging into the existing
+ * `- trailhead:` item when one is already present. A self-healed (or retried) trailhead produces
+ * multiple windows for the same step 0 — the failed recorded attempt closes its window before AI
+ * recovery opens its own start/complete pair — and the strict parser allows exactly one trailhead
+ * item per trail. Merge semantics: first window's step text/maxRetries (identical across windows),
+ * tools concatenated in execution order (the same information-preserving choice as keeping failed
+ * tools in recordings), null-preserving so "not recorded" (null) is never manufactured into a
+ * declared-empty list. Assumes trailhead windows precede all prompt windows (step 0 runs — and
+ * heals — before step 1), so the merged item keeps its parser-legal position before any prompts.
+ */
+private fun upsertTrailheadItem(
+  items: MutableList<TrailYamlItem>,
+  trailheadStep: String?,
+  trailheadTools: List<TrailblazeToolYamlWrapper>?,
+  maxRetries: Int?,
+) {
+  val existingIndex = items.indexOfFirst { it is TrailYamlItem.TrailheadTrailItem }
+  if (existingIndex < 0) {
+    items.add(
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(
+          step = trailheadStep,
+          tools = trailheadTools,
+          maxRetries = maxRetries,
+        ),
+      ),
+    )
+    return
+  }
+  val existing = (items[existingIndex] as TrailYamlItem.TrailheadTrailItem).trailhead
+  val mergedTools = when {
+    existing.tools == null -> trailheadTools
+    trailheadTools == null -> existing.tools
+    else -> existing.tools + trailheadTools
+  }
+  Console.log(
+    "[recording-merge] folded a repeated trailhead objective window (self-heal/retry) into the " +
+      "existing trailhead item — ${mergedTools?.size ?: 0} tools kept in execution order.",
+  )
+  items[existingIndex] = TrailYamlItem.TrailheadTrailItem(
+    TrailheadDefinition(
+      step = existing.step ?: trailheadStep,
+      tools = mergedTools,
+      maxRetries = existing.maxRetries ?: maxRetries,
+    ),
+  )
 }
 
 /**

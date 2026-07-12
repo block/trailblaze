@@ -16,7 +16,7 @@ A trailmap lives in a directory and is anchored by a `trailmap.yaml` manifest:
 
 ```text
 my-workspace/trails/config/
-├── trailblaze.yaml                # workspace anchor — declares which trailmaps to load
+├── trailblaze.yaml                # workspace anchor — trailmaps below auto-discover
 └── trailmaps/
     └── myapp/
         ├── trailmap.yaml              # the manifest
@@ -30,12 +30,18 @@ my-workspace/trails/config/
             └── myapp-home-screen.waypoint.yaml
 ```
 
-`trailblaze.yaml` references the trailmap:
+`trailblaze.yaml` doesn't need to list the trailmap — every
+`trailmaps/<id>/trailmap.yaml` under the workspace's config directory is auto-discovered.
+The optional `targets:` field (a list of trailmap **ids**, not paths) opts the workspace
+into a subset when you have many on-disk trailmaps and only want some to load:
 
 ```yaml
-trailmaps:
-  - trailmaps/myapp/trailmap.yaml
+targets:
+  - myapp
 ```
+
+> The old `trailmaps:` field (a list of filesystem paths to manifests) was removed in
+> favour of this id-based form.
 
 ## The `trailmap.yaml` manifest
 
@@ -58,18 +64,18 @@ target:
 toolsets:                                     # trailmap-level file refs
   - toolsets/myapp_extras.yaml
 
-waypoints:
-  - waypoints/myapp-home-screen.waypoint.yaml
+# waypoints need no manifest entry — every *.waypoint.yaml under waypoints/ auto-discovers
 ```
 
 ### Field reference
 
-> **Heads up on the two `tools` fields.** Top-level `tools:` (row below) lists
-> trailmap-relative *paths* to class-backed or pure-YAML composed tools.
-> `target.tools:` (a sub-field of `target:`) lists scripted TypeScript tools by their
-> **bare export name**. Same word, different shape — pick by which flavor you're
-> registering. See [Tool flavors](#tool-flavors-which-kind-do-i-write) below for the
-> rubric.
+> **Heads up on how tools register.** Only scripted TypeScript tools are listed in the
+> manifest — by **bare export name** under `target.tools:` (or `platforms.<p>.tools:`).
+> There is no top-level `tools:` field: class-backed and pure-YAML composed tools
+> (`*.tool.yaml`, plus `*.shortcut.yaml` / `*.trailhead.yaml`) **auto-discover** from the
+> trailmap's `tools/` / `shortcuts/` / `trailheads/` directories, and waypoints
+> auto-discover from `waypoints/`. See
+> [Tool flavors](#tool-flavors-which-kind-do-i-write) below for the rubric.
 
 | Field | Status | Purpose |
 | --- | --- | --- |
@@ -80,8 +86,10 @@ waypoints:
 | `dependencies` | optional | Trailmap ids this trailmap depends on. Transitive — depending on a trailmap pulls in its dependencies too. Resolves via closest-to-root-wins inheritance from each dep's `defaults:` (see below). |
 | `defaults` | optional | Per-platform defaults this trailmap contributes to consumers via dependency resolution. Same shape as `target.platforms`. Consumers with `dependencies: [<this trailmap>]` inherit any field they leave null. |
 | `toolsets` | optional | List of trailmap-relative paths to `ToolSetYamlConfig` files. |
-| `tools` | optional | List of trailmap-relative paths to `ToolYamlConfig` files (class-backed or YAML-composed). Distinct from `target.tools:`, which holds scripted-tool refs (`TrailmapScriptedToolFile`). |
-| `waypoints` | optional | List of trailmap-relative paths to `WaypointDefinition` files. Wired through `loadResolvedRuntime()` and surfaced to the `trailblaze waypoint` CLI. |
+| `platforms` | optional (library trailmaps only) | Top-level per-platform config declaring the library's own runtime-registry needs — the toolsets its internal scripted tools dispatch against. Same shape as `target.platforms`. Setting it on a target trailmap is a load-time error (a target's platform config belongs under `target.platforms:`). |
+| `exports` | optional | Tool **names** (not paths) this trailmap publishes to consumers via the dependency resolver. Tools in `tools/` not listed here are internal helpers — callable inside the trailmap, invisible to consumers. |
+| `waypoints` | deprecated / ignored | Waypoints auto-discover from any `*.waypoint.yaml` under `<trailmap>/waypoints/` (any depth). The field survives in the schema only so legacy manifests still parse — leave it absent. |
+| `trail_validation` | optional | `trail_validation.exempt: "<reason>"` opts this target's `.trail.yaml` recordings out of the default-fatal trail-recording type-validation phase of `trailblaze check` — findings are reported but never fail the build. Blank reason = not exempt. |
 | `trails` | reserved | First-class artifact loading deferred. |
 
 > The `routes:` field was removed in 2026-04-28 — routes were dropped as a separate
@@ -101,7 +109,7 @@ id: contacts
 dependencies:
   - trailblaze
 target:
-  display_name: Google Contacts
+  display_name: Contacts
   platforms:
     android:
       app_ids: [com.google.android.contacts]
@@ -129,8 +137,9 @@ rules:
   writes `ios: {}` — the empty map is the explicit signal "this platform exists, fill
   in everything from defaults."
 
-The migrated `contacts` trailmap (39 lines → 18 lines) is a worked example — see
-`trailblaze-models/src/commonMain/resources/trails/config/trailmaps/contacts/trailmap.yaml`.
+The repo's `contacts` demo trailmap is a worked example — see
+`trails/config/trailmaps/contacts/trailmap.yaml` in the OSS repo (a workspace trailmap
+loaded from the repo's own `trails/config/`, not bundled into the framework JAR).
 
 ## Tool flavors: which kind do I write?
 
@@ -357,10 +366,12 @@ form can't express.
 
 Trailmaps come from two sources at runtime:
 
-1. **Workspace trailmaps** declared by the workspace's `trailblaze.yaml` (`trailmaps:` list).
+1. **Workspace trailmaps** auto-discovered from `<workspace>/trails/config/trailmaps/<id>/trailmap.yaml`
+   on disk. The workspace's `trailblaze.yaml` may narrow the set with `targets:` (a list of
+   trailmap ids); empty/omitted loads every target trailmap found.
 2. **Classpath trailmaps** discovered automatically from any `trails/config/trailmaps/<id>/trailmap.yaml`
-   resource shipped on the JVM classpath (framework-bundled examples like `clock`,
-   `wikipedia`, plus any dependency that ships its own trailmaps).
+   resource shipped on the JVM classpath (the framework bundles `trailblaze`, `mobile`, and
+   `android`; any dependency jar can ship its own).
 
 When a workspace trailmap and a classpath trailmap share an id, **the workspace trailmap wholesale shadows
 the classpath one** — none of the classpath trailmap's target / toolsets / tools / waypoints leak
@@ -427,7 +438,7 @@ When in doubt, look at the working examples:
 
 - `examples/ios-contacts/trails/config/trailmaps/contacts/`
 - `examples/playwright-native/trails/config/trailmaps/playwrightSample/`
-- `trailblaze-models/src/commonMain/resources/trails/config/trailmaps/clock/`
+- `trails/config/trailmaps/clock/` (the OSS repo's own workspace)
 
 ## Migration notes
 
@@ -436,8 +447,10 @@ When in doubt, look at the working examples:
 The iOS Contacts example workspace trailmap was renamed from `ioscontacts` to `contacts` so the
 same trailmap can later host Android / web tools alongside the iOS ones (the trailmap is the
 *Contacts app* trailmap, not just the iOS subset). CLI users who pinned `--target ioscontacts`
-should update to `--target contacts`. Within this example workspace, the new id shadows the
-bundled framework `contacts` trailmap (Google Contacts) per the precedence rule above.
+should update to `--target contacts`. The id happens to match the main repo workspace's own
+`contacts` demo trailmap (Google Contacts) — no conflict arises because each workspace only
+loads its own trailmaps; the precedence rule above applies only when a workspace trailmap
+shares an id with a classpath-bundled one.
 
 ### From a flat `targets/<id>.yaml` to a trailmap
 
@@ -465,9 +478,9 @@ trailmaps/myapp/
     └── myapp_login.ts                  # typed `trailblaze.tool<I, O>(spec, handler)` export
 ```
 
-with the workspace's `trailblaze.yaml` adding `trailmaps: [trailmaps/myapp/trailmap.yaml]`.
-See [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md) for the per-tool
-authoring shape.
+The new trailmap auto-discovers — no `trailblaze.yaml` entry needed (optionally pin it with
+`targets: [myapp]`). See [Scripted Tools (TypeScript)](scripted-tools-typed-authoring.md)
+for the per-tool authoring shape.
 
 The `targets/myapp.yaml` flat form is still supported for now (legacy-only); new authoring
 should use trailmaps. The flat-target tools list (`tools: [...]` with inline `InlineScriptToolConfig`

@@ -13,21 +13,30 @@ Trailblaze's Android Gradle plugin, both driven by AGP integration:
 Apply one plugin id and both are auto-wired into AGP's `androidTest` source
 set — no manual `android { sourceSets... }` block required.
 
-For every `<methodName>.trail.yaml` you drop under
-`src/androidTest/assets/trails/<ClassName>/`, the plugin emits a matching
-Kotlin shell:
+Under `src/androidTest/assets/trails/<ClassName>/`, two trail layouts each
+produce one `@Test` method:
+
+- `<methodName>.trail.yaml` — a named trail file; the filename is the method
+  name.
+- `<methodName>/trail.yaml` — a directory-per-test unified recording (the
+  default new-recording output); the directory name is the method name. The
+  shell passes the *directory* path, and the runtime picks the best file
+  inside it (device-classifier-specific recording → `trail.yaml` →
+  `blaze.yaml`).
 
 ```kotlin
 class <ClassName> {
   @get:Rule val rule = AndroidTrailblazeRule()
   @Test fun <methodName>() = rule.runFromAsset("trails/<ClassName>/<methodName>.trail.yaml")
+  @Test fun <testName>() = rule.runFromAsset("trails/<ClassName>/<testName>")
 }
 ```
 
-Add or rename a trail file and the matching `@Test` appears on the next
-`androidTest` build — no Kotlin edit, no class to maintain. Shells that need
-real Kotlin (a `TestWatcher`, `@Before`, helper functions) keep working as
-before; this plugin only retires the pure-boilerplate ones.
+Add or rename a trail file or recording directory and the matching `@Test`
+appears on the next `androidTest` build — no Kotlin edit, no class to
+maintain. Shells that need real Kotlin (a `TestWatcher`, `@Before`, helper
+functions) keep working as before; this plugin only retires the
+pure-boilerplate ones.
 
 ## Apply
 
@@ -84,11 +93,32 @@ src/androidTest/assets/trails/
   LoginFlowTest/
     happyPath.trail.yaml
     invalidCredentials.trail.yaml
+    resetPassword/          # directory-per-test unified recording
+      trail.yaml
 ```
 
 Build the test APK — the plugin emits
 `build/generated/source/trailblazeTrails/androidTest/com/example/app/LoginFlowTest.kt`
-containing one `@Test` per YAML.
+containing one `@Test` per trail (`happyPath`, `invalidCredentials`,
+`resetPassword`).
+
+### Trails that don't already match the layout: stage them first
+
+The plugin's contract is strict: `<ClassName>/<methodName>` where both names are
+valid Kotlin identifiers. Trail recordings usually don't arrive that way — the
+recorder's default output is `<category>/<scenario>/trail.yaml` with kebab-case
+scenario names (`taps/tap-interactions/trail.yaml`). Point the plugin at a tree
+like that and it fails loudly (misplaced bare `trail.yaml`, invalid identifier)
+rather than guessing.
+
+The supported pattern is a small staging `Copy` task that normalizes your
+source-of-truth layout into the plugin's contract (rename kebab-case to
+camelCase, collapse categories into one class directory, relocate recording
+directories wholesale), then set `trailsAssetsDir` to the staged directory and
+wire the `Copy` as a dependency of `generateAndroidTrailJUnitShells`. See
+`stageSampleAppTrailsForGenerator` in the repo's
+`examples/android-sample-app-uitests/build.gradle.kts` for a complete working
+example, including loud-failure handling for layouts that can't be normalized.
 
 ## Two emit modes
 
@@ -282,9 +312,20 @@ without pinning `runtime: "subprocess"`. `.test.ts`, `.d.ts`, and helper modules
 
 ## What it does not do
 
-This plugin scans **filenames only** — it never opens the `.trail.yaml`
-contents. The shells it emits are the minimum AGP needs to discover each
-trail as its own JUnit method; the real test logic lives in the trail YAML.
+This plugin scans **file and directory names only** — it never opens the
+`.trail.yaml` contents. The shells it emits are the minimum AGP needs to
+discover each trail as its own JUnit method; the real test logic lives in the
+trail YAML.
+
+The JUnit method name comes from the filename (`<methodName>.trail.yaml`) or
+the recording-directory name (`<methodName>/trail.yaml`). A bare `trail.yaml`
+anywhere *else* — at the `assets/trails/` root, directly in a `<ClassName>/`
+directory the generator owns, or nested deeper than one directory
+(`<ClassName>/<a>/<b>/trail.yaml`) — **fails the build**: there is no
+reachable method name, so it would otherwise silently never run. Move it into
+one of the two supported layouts. The top-level `config/` tree
+(trailmap/target YAML, not trails) is exempt, as are directories excluded by
+a non-empty `onlyClassNames`.
 
 Shells that need any of the following stay hand-written:
 

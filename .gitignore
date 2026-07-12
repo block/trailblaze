@@ -54,6 +54,16 @@ local.settings.gradle
 # Node
 node_modules/
 
+# bun's local install-cache fallback. bun resolves its install cache as
+# $BUN_INSTALL/install/cache; an environment with BUN_INSTALL set-but-empty (some
+# app-spawned shells) turns that into a CWD-relative `install/cache`, dropped next to
+# node_modules by any `bun install` run in these trees. The cache entry names embed the
+# resolving registry host, so the directory must never be committed. The Gradle tasks pin
+# BUN_INSTALL_CACHE_DIR out of the source tree; these anchors are the backstop for a
+# hand-run `bun install` under such an environment.
+trailblaze-host/src/main/resources/xyz/block/trailblaze/trailrunner/web/install/
+sdks/typescript/install/
+
 # Trailblaze trailmap bundle — generated per-trailmap `.d.ts` files emitted by the
 # `trailblaze.bundle` Gradle plugin and by `trailblaze check`. Derived from the trailmap
 # manifest, regenerated on build, not source-of-truth. Anchored to the per-trailmap tools

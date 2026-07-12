@@ -482,18 +482,19 @@ class HostAccessibilityRpcClientTest {
   }
 
   /**
-   * AgentMemory.interpolateVariables resolves unknown tokens to the empty string. Pin that
-   * behavior for the boundary path so a future change to "leave the raw token in place"
-   * surfaces as a test diff rather than silent data drift.
+   * AgentMemory.interpolateVariables leaves unknown tokens in place as literals (with a
+   * diagnostic) rather than silently blanking. Pin that behavior for the boundary path so a
+   * regression back to empty-string substitution surfaces as a test diff rather than silent
+   * data drift.
    */
   @Test
-  fun `interpolateMemoryInTool resolves unknown tokens to empty string`() {
+  fun `interpolateMemoryInTool leaves unknown tokens as literals`() {
     val memory = AgentMemory().apply { remember("known", "value") }
     val resolved = interpolateMemoryInTool(
       InputTextTrailblazeTool(text = "[{{unknown}}]"),
       memory,
     ) as InputTextTrailblazeTool
-    assertThat(resolved.text).isEqualTo("[]")
+    assertThat(resolved.text).isEqualTo("[{{unknown}}]")
   }
 
   /**

@@ -52,13 +52,15 @@ class AndroidSendBroadcastInterpolationTest {
     assertThat(extras.single().value).isEqualTo("s3cret-pw")
   }
 
-  @Test fun `unknown token resolves to empty string`() {
+  @Test fun `unknown token is left in place as a literal`() {
+    // A typo'd credential key must surface as the visible literal (plus a diagnostic) rather
+    // than silently broadcasting an empty extra.
     val (_, extras) = interpolateBroadcastArgs(
       action = "com.example.LOGIN",
       extras = listOf(BroadcastExtra(key = "password", value = "{{missing}}")),
       memory = AgentMemory(),
     )
 
-    assertThat(extras.single().value).isEqualTo("")
+    assertThat(extras.single().value).isEqualTo("{{missing}}")
   }
 }

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.trailrunner
 
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
@@ -57,7 +58,10 @@ internal object DraftStore {
     val variants = variantFiles(dir).map { f ->
       val platform = runCatching {
         createTrailblazeYaml().extractTrailConfig(f.readText())?.platform
-      }.getOrNull() ?: f.name.removeSuffix(".trail.yaml")
+      }.getOrNull()
+        // A bare unified trail.yaml has no classifier in its name to fall back on — label it
+        // "unified" rather than echoing the raw filename as a platform.
+        ?: if (TrailRecordings.isUnifiedTrailFile(f.name)) "unified" else f.name.removeSuffix(".trail.yaml")
       DraftVariant(name = f.name, platform = platform)
     }
     return DraftDetailResponse(
@@ -176,8 +180,15 @@ internal object DraftStore {
     }
   }
 
+  // Recorded variants are per-platform recordings (`<classifier>.trail.yaml`) or the bare unified
+  // `trail.yaml` (which a `.trail.yaml` suffix check can't see). NOT isTrailFile: that would also
+  // match the draft's own blaze.yaml and every draft would read as having recordings.
   private fun variantFiles(dir: File): List<File> =
-    (dir.listFiles { f -> f.isFile && f.name.endsWith(".trail.yaml") } ?: emptyArray()).sortedBy { it.name }
+    (
+      dir.listFiles { f ->
+        f.isFile && (TrailRecordings.isRecordingFile(f.name) || TrailRecordings.isUnifiedTrailFile(f.name))
+      } ?: emptyArray()
+      ).sortedBy { it.name }
 
   private fun readTitle(dir: File): String? = runCatching {
     createTrailblazeYaml().extractTrailConfig(File(dir, BLAZE_FILE).readText())?.title?.takeIf { it.isNotBlank() }

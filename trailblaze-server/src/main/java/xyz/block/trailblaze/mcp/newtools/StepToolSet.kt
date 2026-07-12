@@ -6,7 +6,7 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.agent.Confidence
@@ -250,7 +250,7 @@ class StepToolSet(
     With hint="VERIFY", checks an assertion using read-only tools and returns passed (true/false).
     """
   )
-  @Tool(McpToolProfile.TOOL_STEP)
+  @Tool(McpToolNames.TOOL_STEP)
   suspend fun step(
     @LLMDescription("A complete user-facing action with all relevant details (e.g., 'Login with test@example.com', 'Search flights Paris to London Oct 4'). Include credentials, search terms, and parameters — the inner agent needs this context to select specialized tools.")
     objective: String,
@@ -863,7 +863,7 @@ class StepToolSet(
     Unlike step(hint="VERIFY"), this returns information — not pass/fail.
     """
   )
-  @Tool(McpToolProfile.TOOL_ASK)
+  @Tool(McpToolNames.TOOL_ASK)
   suspend fun ask(
     @LLMDescription("Your question (e.g., 'What's the current balance?')")
     question: String,

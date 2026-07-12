@@ -513,7 +513,7 @@ describe("tool() overload — typed authoring surface", () => {
     // No memory on the envelope (older daemon / unit fixture) → empty, never throws.
     await definition({ x: "hi" }, {} as never, fakeClient);
     expect(observedMemory?.get("anything")).toBeUndefined();
-    expect(observedMemory?.interpolate("{{missingToken}}")).toBe("");
+    expect(observedMemory?.interpolate("{{missingToken}}")).toBe("{{missingToken}}");
   });
 
   test("typed handler flushes ctx.memory writes to _meta.trailblaze.memoryDelta on the in-process (raw snapshot) path", async () => {
