@@ -1056,6 +1056,10 @@ hundreds of files): change one tool's parameter and the mechanical rewrite
 touches every recording that calls it — hundreds of YAML files; these suites
 don't run on PR checks, so a bad one used to surface late and expensively in CI.
 THAT's the diff no human reviews — then the gates.
+SAM'S RESOLUTION (round 8): "isn't this what git history is for?" — say it as the
+answer to the tension: nobody hand-reviews hundreds of mechanical lines, and nobody
+needs to. The rewrite is a commit — diffable, blame-able, revertible. The gates do
+the reviewing; git does the remembering.
 Gate 2 mechanics (say aloud): every recorded tool call transpiled to a
 client.tools.tapOn({...}) line, compiled against the generated typings.
 Keep the trick, narrate lightly.
@@ -1106,9 +1110,9 @@ Maestro was the right first call — "not a permanent coupling" from day one.
 SAY THE BASIS (cold read): the headline ~3x = end-to-end replay, deliberately
 conservative; the table's 500–700ms → 100–150ms is per-ACTION overhead (~5x).
 One clause kills the mismatch: "per action it's ~5x; end to end, about 3."
-COUNT GUARD (presenter sim): web debuts HERE in the main deck — the Act 0 grid
-was seven DEVICE targets. Phrase it "seven device targets, plus web via
-Playwright" — never "eight targets."
+COUNT (Sam round 8: "let go of the 8, 7 is fine"): the count is SEVEN, period.
+Web debuts here as another platform the driver stack covers — mention it freely,
+don't renumber, don't hedge.
 Numbers live on the slide; don't over-narrate.
 HAND-OFF: "We'd protected the language; now the determinism underneath it is fast. So — the map."
 -->
