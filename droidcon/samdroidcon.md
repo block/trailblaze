@@ -37,11 +37,13 @@ layout: center
 
 # AI can drive your app
 
-## So why is good test coverage still hard?
+## So why are test coverage *and* device control still hard?
 
 <!--
 Open on the question, not the tool. Let it sit for a beat.
-Sam's framing: AI is prevalent and at our disposal — how do we get GOOD coverage with it?
+Sam's framing (round 9): AI is prevalent and at our disposal — how do we get GOOD
+coverage with it, and how do agents get GOOD device control? Both halves get answered:
+coverage = trails/CI, device control = the CLI agents drive (Act 4).
 -->
 
 ---
@@ -60,12 +62,15 @@ layout: center
 
 <div class="pt-8 text-lg opacity-70">
 
-Great for exploring. Brutal for CI.
+Great for exploring — and for **agents driving devices**. Brutal for CI.
 
 </div>
 
 <!--
 The economic hook from the abstract — land it before the seven targets multiply it.
+Round 9 (Sam): honor the upside before the brutal — LLM-per-run is GOOD for device
+control for agents (that's the second half of the opening question). The problem is
+CI economics, not the capability.
 Deterministic replay answers this, and replay alone is table stakes (Maestro has it too).
 Our leg up: natural language FIRST + custom tools in TypeScript + full per-platform
 fidelity — that's the positioning (backup slide has the head-to-head).
@@ -78,13 +83,17 @@ ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m
 
 # The missing link
 
-- AI + mobile: **no canonical, natural-language way** to interact
-- Existing solutions are **platform-specific** — or…
-- …they **lose the link** between the objective and the actions
-- The objective is the **what**. Most tools throw it away.
+- No **canonical, natural-language** way in
+- Existing tools: **platform-specific**…
+- …or they **lose the link** — objective ↔ actions
+- The objective is the **what** · most throw it away
 
 <!--
 This is the differentiating problem statement. "Losing the link" is the phrase to hit.
+Round 9 (Sam): bullets are CUE FRAGMENTS, not prose — the sentences are spoken.
+Expansions: (1) AI + mobile has no canonical way to interact; (2) what exists is
+per-platform; (3) or it records actions but drops the objective that produced them;
+(4) the objective is the what — the most valuable artifact — and most tools discard it.
 Expand aloud: the "how" matters mainly for assertions you DELIBERATELY keep mechanical —
 pinned verify: steps that replay unchanged and are never self-healed; that thread
 returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are earned;
@@ -95,7 +104,7 @@ returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are ea
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
-# One login flow.
+# One user journey.
 
 <div class="pt-8 text-2xl opacity-70">
 
@@ -104,15 +113,18 @@ You write it **once**.
 </div>
 
 <!--
-BUILD 1 of 2 — the setup. Say it and let it hang: "One login flow. You write it once."
+BUILD 1 of 2 — the setup. Say it and let it hang: "One user journey. You write it once."
 Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
+Round 9 (Sam): was "One login flow" — don't dwell on login. "User journey" is the
+canonical UX term (industry: "critical user journey"/CUJ — the experiences a user must
+always be able to complete). Login is now just the spoken EXAMPLE ("say, logging in"),
+and this seeds Act 2's "Not a test — a user journey" + "Four critical jobs" slides.
 NO WINK LINE (Sam round 5.1): slide stays clean — the nuance is SPOKEN, not shown.
-HONESTY (Sam round 5): "one login flow" is kind-of-but-not-really — there are all
-sorts of login flows: multi-factor auth, first-time account setup, etc. Each is its
-own journey, each written once. What you actually get is a TRAILHEAD, and within it
-you can skip the normal noise — onboarding screens, "select a default" — so replay
-starts from known state. (Trailheads get their formal slide in Act 2 — don't unpack
-here, just don't overclaim.)
+HONESTY (Sam round 5, still true): each journey is written once — multi-factor auth,
+first-time setup are their own journeys. What you actually get is a TRAILHEAD, and
+within it you can skip the normal noise — onboarding screens, "select a default" — so
+replay starts from known state. (Trailheads get their formal slide in Act 2 — don't
+unpack here, just don't overclaim.)
 -->
 
 ---
@@ -133,12 +145,14 @@ here, just don't overclaim.)
 
 <div class="pt-10 text-xl opacity-80">
 
-Hundreds of trails today → projecting **thousands**.
+**Hundreds of trails** today.
 
 </div>
 
 <!--
-BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one flow, seven places.
+BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one journey, seven places.
+Round 9 (Sam): "projecting thousands" cut from the slide — speak it only if you want
+("and we're projecting thousands").
 Square imagery = real product shots (droidcon/public/square-*.png, pulled from
 squareup.com/us/en/hardware — Block's own marketing assets). Consumer devices =
 Phosphor line icons (speaker-variant = Android, camera-variant = Apple) — cleaner

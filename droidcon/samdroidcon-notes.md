@@ -19,6 +19,8 @@ structure, your headlines, and your speaker-note style — no rewrites of workin
    *"One login flow. / You write it once."* then *"Seven targets."* + the 7-grid +
    hundreds→thousands. Same content; the one→many multiplication now happens *physically*
    when you advance. No new imagery needed (grid unchanged). Your signature big-beat split.
+   (Round 9: slide 5 is now **"One user journey."** — login demoted to spoken example;
+   "projecting thousands" cut from slide 6, spoken-optional.)
 
 ### Added (2 slides)
 4. **"The natural language drifted"** (slide 17, marked `ACT 2 · optional`) — two tiny YAML
@@ -546,7 +548,8 @@ title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grac
   in Act 2 with `verify:` steps — don't leave it dangling.)
 - Our scale makes it concrete: the 7-target matrix with product imagery — Android
   phone/tablet, iPhone, iPad, **Square Terminal, Square Handheld, Square Register**.
-  One login flow, seven targets, hundreds of trails (projecting thousands). Say SEVEN, not 8.
+  One user journey, seven targets, hundreds of trails (thousands = spoken-optional,
+  round 9). Say SEVEN.
 - Who I am: 10+ years in UI testing; Droidcon NYC 2016 (robot pattern + screenshots);
   Droidcon NYC 2025 with Brian (agent loop internals).
 - Title seed: "by the end you'll see what the map is — spoiler: you're already building it."
@@ -1222,10 +1225,13 @@ comment + shape-check note instead).
 All 13 slide notes applied to the deck; slide numbers = Slidev numbering at time of review.
 The load-bearing POSITIONS Sam gave (these outlive the edits):
 
-- **Login flows (sl.5):** "one login flow" is kind-of-but-not-really — MFA, first-time
-  account setup, etc. are their own journeys. What you get is a **trailhead**, and within
-  it you skip the normal noise (onboarding screens, select-a-default). Slide stays
-  clean (wink line tried, Sam cut it round 5.1); speaker note carries the honesty.
+- **User journeys (sl.5, retitled round 9 — was "one login flow"):** don't dwell on
+  login; it's the spoken example only. "User journey" = the canonical UX term (industry:
+  critical user journey / CUJ) for what a user must always be able to complete. The
+  round-5 honesty still applies: MFA, first-time account setup, etc. are their own
+  journeys, each written once. What you get is a **trailhead**, and within it you skip
+  the normal noise (onboarding screens, select-a-default). Slide stays clean (wink line
+  tried, Sam cut it round 5.1); speaker note carries the honesty.
 - **Iconography rule (sl.9, global):** 🥾 boot is the working icon; **question every
   compass 🧭** and prefer the boot — EXCEPT trail-map contexts, which get 🗺️. Deck's
   only compass (trailmap slide) → 🗺️. Applies to all future edits.
