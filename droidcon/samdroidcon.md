@@ -102,15 +102,10 @@ You write it **once**.
 
 </div>
 
-<div class="pt-6 text-base opacity-50">
-
-*(fine — login **flows**. MFA, first-run setup… each written once.)*
-
-</div>
-
 <!--
 BUILD 1 of 2 — the setup. Say it and let it hang: "One login flow. You write it once."
 Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
+NO WINK LINE (Sam round 5.1): slide stays clean — the nuance is SPOKEN, not shown.
 HONESTY (Sam round 5): "one login flow" is kind-of-but-not-really — there are all
 sorts of login flows: multi-factor auth, first-time account setup, etc. Each is its
 own journey, each written once. What you actually get is a TRAILHEAD, and within it
@@ -365,13 +360,15 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 ```yaml
 # android-tablet.trail.yaml
 - step: Sign in as the QE sender
-- tapOn: { id: sign_in_button }
+  recording:
+    - tapOn: { id: sign_in_button }
 ```
 
 ```yaml
 # ios-iphone.trail.yaml
 - step: Sign in as the QE sender
-- tapOn: { text: "Sign In" }
+  recording:
+    - tapOn: { text: "Sign In" }
 ```
 
 </div>
@@ -384,6 +381,8 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 
 <!--
 v1 visualized with two real-shaped files: same NL duplicated, per-platform recordings.
+FORMAT ACCURACY (Sam round 5.1): in the old format a tool call is NEVER bare at the
+top level — it always sits under a recording: (or tools:) block beneath its step.
 Say the consequences aloud (don't bullet them): it worked, then — file EXPLOSION
 across 7 targets, and the copied natural language DRIFTED (next slide shows it).
 The "one business case" promise quietly broke.

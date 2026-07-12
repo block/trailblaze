@@ -1134,8 +1134,8 @@ The load-bearing POSITIONS Sam gave (these outlive the edits):
 
 - **Login flows (sl.5):** "one login flow" is kind-of-but-not-really — MFA, first-time
   account setup, etc. are their own journeys. What you get is a **trailhead**, and within
-  it you skip the normal noise (onboarding screens, select-a-default). Slide keeps the
-  beat + a wink line; note carries the honesty.
+  it you skip the normal noise (onboarding screens, select-a-default). Slide stays
+  clean (wink line tried, Sam cut it round 5.1); speaker note carries the honesty.
 - **Iconography rule (sl.9, global):** 🥾 boot is the working icon; **question every
   compass 🧭** and prefer the boot — EXCEPT trail-map contexts, which get 🗺️. Deck's
   only compass (trailmap slide) → 🗺️. Applies to all future edits.
