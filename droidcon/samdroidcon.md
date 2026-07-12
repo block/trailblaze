@@ -3,7 +3,7 @@ theme: seriph
 title: 'Trailblaze: Map Your App for AI'
 info: |
   Droidcon USA 2026 · Jul 17 · W222 B · Sam Edwards
-  Block's open-source CLI for driving real apps with AI. Explore once, replay forever.
+  Block's open-source CLI for driving real apps with AI. Blaze once, trail forever.
 colorSchema: dark
 highlighter: shiki
 transition: slide-left
@@ -80,9 +80,9 @@ ASSET A pt 1 is the visual proof: side-by-side wall clocks.
 # The missing link
 
 - AI + mobile: **no canonical, natural-language way** to interact
-- Existing AI solutions: **platform-specific**, or…
-- …they **lose the link** between objective and actions
-- The test case is the **what**
+- Existing solutions are **platform-specific** — or…
+- …they **lose the link** between the objective and the actions
+- The objective is the **what**. Most tools throw it away.
 
 <!--
 This is the differentiating problem statement. "Losing the link" is the phrase to hit.
@@ -94,7 +94,24 @@ and handwritten — that thread returns in Act 2 (verify: steps). Don't leave da
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
-# One login flow. Seven targets.
+# One login flow.
+
+<div class="pt-8 text-2xl opacity-70">
+
+You write it **once**.
+
+</div>
+
+<!--
+BUILD 1 of 2 — the setup. Say it and let it hang: "One login flow. You write it once."
+Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+
+# Seven targets.
 
 <div class="grid grid-cols-7 gap-2 pt-8 text-center text-sm">
 <div>📱<br>Android<br>phone</div>
@@ -113,6 +130,7 @@ Hundreds of trails today → projecting **thousands**.
 </div>
 
 <!--
+BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one flow, seven places.
 Swap emoji for real product imagery from squareup.com/us/en/hardware.
 SEVEN targets — never say eight.
 Scale framing: keep the automatable automated; manual testing focuses on
@@ -333,6 +351,31 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 Filenames to say aloud: android-phone.trail.yaml, ios-iphone.trail.yaml, ...
 Real production drift: credentials diverged, steps added to one file and not others.
 The recording pipeline couldn't fix it — each device recorded in isolation.
+-->
+
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2 · optional</div>
+
+# The natural language drifted
+
+```yaml
+# android-phone.trail.yaml
+- step: Sign in as the QE sender
+
+# ios-iphone.trail.yaml
+- step: Log in as the test sender      # ← drifted — and nothing caught it
+```
+
+**Same journey. Two files. The words pulled apart.**
+
+<!--
+OPTIONAL — first to cut if the dry run runs long; the story survives without it.
+Makes "drift" concrete before the fix lands. Real failure mode: the NL diverged
+copy-to-copy ("QE sender" vs "test sender"), each device recorded in isolation, so
+nothing flagged it. This is the picture under the Act 2 opener's "drifted" bullet —
+and the gut-punch that earns the unified format two slides on.
+To cut: delete this whole slide block (--- to ---).
 -->
 
 ---

@@ -3,6 +3,72 @@
 Working notes for the Droidcon 2026 talk (Jul 17, 40 min, W222 B).
 Deck lives in `samdroidcon.md` — this file is scratch space so ideas don't taint the slides.
 
+## ⏰ Overnight review — 2026-07-11 → 07-12 (skim this first)
+
+Light, voice-preserving tighten/expand pass done while you slept. Deck is **54 slides**
+(was 52). Everything below is revertable; each item says what changed and why. I kept your
+structure, your headlines, and your speaker-note style — no rewrites of working slides.
+
+### Changed (4 edits)
+1. **`info:` metadata** — refrain aligned to "Blaze once, trail forever." (was the older
+   "Explore once, replay forever"). Off-slide only; consistency nit.
+2. **"The missing link"** (slide 4) — last two bullets tightened so "lose the link" pays off
+   in the next line: *"The objective is the **what**. Most tools throw it away."* Was the
+   cryptic "The test case is the what."
+3. **"One login flow. Seven targets."** → split into a **two-slide build** (5 + 6):
+   *"One login flow. / You write it once."* then *"Seven targets."* + the 7-grid +
+   hundreds→thousands. Same content; the one→many multiplication now happens *physically*
+   when you advance. No new imagery needed (grid unchanged). Your signature big-beat split.
+
+### Added (1 slide, OPTIONAL — flagged on-slide, cut in 5 sec)
+4. **"The natural language drifted"** (slide 17, marked `ACT 2 · optional`) — two tiny YAML
+   snippets showing the *same* step drift ("QE sender" vs "test sender") with nothing catching
+   it. Makes "drift" concrete before the unified format fixes it. **To cut:** delete the slide
+   block (--- to ---); the story survives without it. Renders verified.
+
+### Deliberately NOT changed
+- The spine, refrain bookends, unified-format YAML, "driving the device *is* constructing the
+  trail," the recipe, CTA — all load-bearing, left alone.
+- No new numbers anywhere (reliability has none; wall-clocks still pending from the chip).
+- No agenda slide forced in — see the ready-to-paste option below.
+
+### 🔪 Cut-priority list — if a dry run runs long, drop in THIS order
+Most expendable first. Everything here is safe to cut with no dangling references unless noted.
+1. **"The natural language drifted"** (17, optional) — built to be first out.
+2. **"Tools return data, not just text"** (Act 4) — nice refinement, not load-bearing.
+3. **"Not every tool is for the LLM"** (Act 4) — API-hygiene aside; fold one line into the prior slide.
+4. **"Parameterize, don't hardcode"** (Act 2) — 60s beat; Q&A will cover credentials anyway.
+5. ASSET C **second-map flash** (Calendar) — keep the primary contacts map, drop the "pattern, not a one-off" beat.
+6. **"Reports with no strings attached"** (Act 3) — compress to one spoken line if truly desperate.
+> Do NOT panic-cut: the thesis slide, both refrain slides, the unified YAML, the "driving the
+> device" peak, the recipe, or the CTA. That's the skeleton — cutting it breaks the arc.
+
+### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
+Right on the opener ("So why is good test coverage still hard?"): *"Quick hands — who's tried
+getting an LLM to drive your real app? … Keep your hand up if you'd trust it to run in CI
+every night."* The hands drop, and that IS your "slow / expensive / non-deterministic" slide.
+
+### 📋 Ready-to-paste: agenda / roadmap slide (only if a dry run feels disorienting)
+I did **not** insert this — your cold open on the problem is strong and an agenda can blunt it.
+But your style likes an agenda up front, so here it is, ready. Best placement: right after
+"Ten years on this problem," as the Act 0→1 bridge. Paste between two `---` fences:
+
+```md
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+
+# The trail we'll walk
+
+- The **problem** — why good coverage is still hard
+- The **thesis** — blaze once, trail forever
+- **One file, every platform** — the unified trail
+- **What the LLM sees** — reports as context
+- **Who writes the tools** — and how agents reach them
+- **Owning the speed** — the driver
+- **The map** — and what's next
+
+<!-- OPTIONAL roadmap. Cut if you'd rather stay cold on the problem. -->
+```
+
 ## Portable session files (take these to any machine)
 
 - `samdroidcon.md` — the Slidev deck (render with `bunx slidev samdroidcon.md`; theme seriph)
