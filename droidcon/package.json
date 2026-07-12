@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@slidev/cli": "^52.16.0",
-    "@slidev/theme-seriph": "^0.25.0"
+    "@slidev/theme-seriph": "^0.25.0",
+    "playwright-core": "^1.61.1"
   }
 }
