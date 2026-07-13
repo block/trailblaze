@@ -15,15 +15,17 @@ layout: cover
 class: cover text-center
 ---
 
-# Trailblaze
-## Map Your App for AI
+# Trailblaze 🥾
+## Map Your App for AI 🗺️
 
 <div class="pt-10 text-lg opacity-70 tracking-wide">
 Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
 <!--
-DECK v6 — content-complete; all four 📼 asset slides carry REAL embedded media (real runs, real numbers).
+DECK v7 — Act 0 rethreaded (round 10): hype → the dream works → falls short ×2
+(CI economics, missing link) → user journeys → seven targets → ten years.
+Content-complete; all four 📼 asset slides carry REAL embedded media (real runs, real numbers).
 Act + timing markers (and ASSET ids) appear top-left of each slide.
 Spine: natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
 samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&A bank.
@@ -35,15 +37,35 @@ layout: center
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 0:00–4:00</div>
 
-# AI can drive your app
+# AI is supposed to do *everything*
 
-## So why are test coverage *and* device control still hard?
+<div v-click class="pt-8 text-xl">
+
+*"Create a contact for Casey."* — an agent **drives a real phone**: taps, types, saves.
+It just… **does it**.
+
+</div>
+
+<div v-click class="pt-8 text-xl opacity-80">
+
+On mobile it still **falls short** where it counts:
+**controlling devices** &nbsp;·&nbsp; **testing what matters**
+
+</div>
 
 <!--
-Open on the question, not the tool. Let it sit for a beat.
-Sam's framing (round 9): AI is prevalent and at our disposal — how do we get GOOD
-coverage with it, and how do agents get GOOD device control? Both halves get answered:
-coverage = trails/CI, device control = the CLI agents drive (Act 4).
+REWRITTEN round 10 (Sam): open on the HYPE, make the dream concrete, then the gap.
+Beat 1 (say it flat): AI is supposed to do everything — write our code, run our apps.
+Beat 2 (CLICK — the dream is real): hand an agent a sentence and it DRIVES A REAL
+PHONE. True today, and genuinely magic the first time you watch it.
+Beat 3 (CLICK — the turn): but on mobile it falls short in exactly the two ways this
+talk attacks — DEVICE CONTROL (how does an agent reliably drive real devices at all?)
+and TESTING (how do we trust, repeat, and afford what it did?).
+Promise-tracking: slide 3 = re-running the agent every time fails CI economics;
+slide 4 = you can't trust or rerun what it did (the missing link); slide 5 = the
+quality unit (user journeys); Act 4 = the CLI/tools agents use for device control.
+"Create a contact for Casey" is deliberate — it's THE demo journey (slide 14 videos,
+Act 2 corpus). The example on slide one of the argument is the one they'll watch run.
 -->
 
 ---
@@ -67,10 +89,12 @@ Great for exploring — and for **agents driving devices**. Brutal for CI.
 </div>
 
 <!--
+Round 10 thread: FALLS-SHORT REASON #1. The naive fix for slide 2's gap is "just have
+the agent do it every run" — this slide kills that: the economics fail at CI scale.
 The economic hook from the abstract — land it before the seven targets multiply it.
 Round 9 (Sam): honor the upside before the brutal — LLM-per-run is GOOD for device
-control for agents (that's the second half of the opening question). The problem is
-CI economics, not the capability.
+control for agents (that's one of the two hard problems from the opening). The problem
+is CI economics, not the capability.
 Deterministic replay answers this, and replay alone is table stakes (Maestro has it too).
 Our leg up: natural language FIRST + custom tools in TypeScript + full per-platform
 fidelity — that's the positioning (backup slide has the head-to-head).
@@ -83,17 +107,23 @@ ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m
 
 # The missing link
 
-- No **canonical, natural-language** way in
-- Existing tools: **platform-specific**…
-- …or they **lose the link** — objective ↔ actions
-- The objective is the **what** · most throw it away
+- It **did it** — but what *exactly* did it do?
+- How do you run *that* again — **deterministically**?
+- The objective ↔ actions **link is lost**
+- The objective is the **what** · thrown away
 
 <!--
-This is the differentiating problem statement. "Losing the link" is the phrase to hit.
-Round 9 (Sam): bullets are CUE FRAGMENTS, not prose — the sentences are spoken.
-Expansions: (1) AI + mobile has no canonical way to interact; (2) what exists is
-per-platform; (3) or it records actions but drops the objective that produced them;
+REWRITTEN round 10 — FALLS-SHORT REASON #2, answering slide 2's dream directly: the
+agent did the thing… and left you nothing you can trust or rerun. No jump into
+"natural-language tests" anymore; the NL idea was seeded on slide 2.
+"Losing the link" is the phrase to hit. Bullets stay CUE FRAGMENTS (round 9).
+Expansions: (1) it worked — but which taps, which fields, which assertions? (2) the
+only way to run it again is asking the LLM again — slide 3 told you what that costs,
+and it may choose differently; (3) recorders capture actions with no objective, agents
+have objectives with no durable actions — the LINK between them is what's missing;
 (4) the objective is the what — the most valuable artifact — and most tools discard it.
+MOVED TO SPOKEN (round 10): "and what does exist is per-platform" — say it as the
+bridge into Seven Targets, two slides ahead.
 Expand aloud: the "how" matters mainly for assertions you DELIBERATELY keep mechanical —
 pinned verify: steps that replay unchanged and are never self-healed; that thread
 returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are earned;
@@ -106,13 +136,23 @@ returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are ea
 
 # One user journey.
 
-<div class="pt-8 text-2xl opacity-70">
+<div class="pt-4 text-lg opacity-60">
+
+what a user must **always** be able to do — the unit of quality
+
+</div>
+
+<div class="pt-6 text-2xl opacity-70">
 
 You write it **once**.
 
 </div>
 
 <!--
+Round 10 (Sam): this slide names the TESTING/QUALITY half of the two hard problems —
+from a quality perspective, user journeys are the thing we care about protecting.
+Device control is the other half (slides 2–3; machinery in Act 4). Trailblaze helps
+with BOTH — that claim lands at the Act 1 hand-off, next slide's close.
 BUILD 1 of 2 — the setup. Say it and let it hang: "One user journey. You write it once."
 Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
 Round 9 (Sam): was "One login flow" — don't dwell on login. "User journey" is the
@@ -172,7 +212,12 @@ new features + hardware-specific work automation can't reach yet.
 - **2025** — *"AI Driven Mobile Testing"* (with Brian Gardner)
 - **2026** — 1.5 years in production, and where it's going
 
-<div class="pt-8 opacity-70">
+<div class="flex gap-8 justify-center pt-4">
+  <div class="text-center"><img src="./public/talk-2016.jpg" class="h-36 rounded-lg shadow-lg mx-auto" /><div class="pt-1 text-xs opacity-50">Droidcon NYC 2016</div></div>
+  <div class="text-center"><img src="./public/talk-2025.jpg" class="h-36 rounded-lg shadow-lg mx-auto" /><div class="pt-1 text-xs opacity-50">Droidcon NYC 2025</div></div>
+</div>
+
+<div class="pt-3 opacity-70">
 
 *By the end you'll see what the map is — you're already building it.*
 
@@ -180,9 +225,13 @@ new features + hardware-specific work automation can't reach yet.
 
 <!--
 Both prior talks were Droidcon NYC. Title seed #1. Credentials in one slide, no dwelling.
+Images (round 10): 2016 = the actual title slide (from Sam's own Speaker Deck);
+2025 = the droidcon NYC title card with Sam + Brian (from the session video).
 2025's future-work slide is a checklist this talk ticks off: "reuse the same prompts
 across platforms" → unified format; "custom app interactions" → custom tools/TS.
-HAND-OFF: "Our answer is a thesis about natural language and determinism."
+HAND-OFF (round 10): two hard problems are now on the table — device control, and
+protecting user journeys. "Our answer to BOTH is a thesis about natural language
+and determinism."
 -->
 
 ---
@@ -202,6 +251,9 @@ saved as a **trail** → replayed with **zero LLM calls**
 
 <!--
 THE REFRAIN. Introduce here, echo at the close.
+Round 10: introduce it as the answer to BOTH Act 0 problems in one move — natural
+language on top (agents can drive devices: control), determinism underneath (journeys
+replay forever: quality). One thesis, both hard problems.
 Quick refresher for anyone who missed last year — 90 seconds max.
 -->
 

@@ -129,9 +129,10 @@ the contacts-iOS map beats a flythrough. Worst case, speak it: "100 named places
 in asset-c-graph-*.png).
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
-Right on the opener ("So why is good test coverage still hard?"): *"Quick hands — who's tried
-getting an LLM to drive your real app? … Keep your hand up if you'd trust it to run in CI
-every night."* The hands drop, and that IS your "slow / expensive / non-deterministic" slide.
+Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
+tried getting an LLM to drive your real app? … Keep your hand up if you'd trust it to run
+in CI every night."* The hands drop, and that IS your "slow / expensive / non-deterministic"
+slide. Works even better now — the poll lands between the dream beat and the falls-short turn.
 
 ### 📋 Ready-to-paste: agenda / roadmap slide (only if a dry run feels disorienting)
 I did **not** insert this — your cold open on the problem is strong and an agenda can blunt it.
@@ -538,14 +539,21 @@ backup slide; assets 1+2 merged into one video; memory/`--secret` beat added to 
 title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grace note added.
 
 ### Act 0 — The problem: coverage in the AI era · 0:00–4:00
-- Open on the question: **AI is at our disposal — so how do we get good test coverage
-  with it?**
-- AI + mobile has **no canonical, natural-language way of interacting.** Existing AI
-  solutions: platform-specific, or they **lose the link between the NL objective and the
-  actions actually performed.**
-- Why the link matters: **the test case is WHAT should happen.** The "how" matters mainly
-  for assertions you deliberately want mechanical/handwritten. (Assertions thread returns
-  in Act 2 with `verify:` steps — don't leave it dangling.)
+(RETHREADED round 10 — Sam: "this is a messaging request." The arc:)
+- Open on the HYPE: **AI is supposed to do everything.** Then the dream, concrete:
+  say *"create a contact for Casey"* and an agent **drives a real phone** — it just
+  does it. Then the turn: on mobile it **falls short** at **device control** and
+  **testing what matters** — the TWO hard problems this talk answers.
+- Falls-short #1 (economics): an LLM on every run — slow · expensive ·
+  non-deterministic; great for exploring and for agents driving devices, brutal for CI.
+- Falls-short #2 (the missing link): it did it — but what exactly did it do, and how
+  do you run *that* again deterministically? The **objective ↔ actions link is lost**;
+  the objective is the *what* and most tools throw it away. ("Per-platform" is now
+  SPOKEN here as the bridge to Seven Targets.) The "how" matters mainly for assertions
+  you deliberately want mechanical (verify: thread returns in Act 2 — don't leave it
+  dangling).
+- User journeys = the **unit of quality** — what a user must always be able to do;
+  you write it once.
 - Our scale makes it concrete: the 7-target matrix with product imagery — Android
   phone/tablet, iPhone, iPad, **Square Terminal, Square Handheld, Square Register**.
   One user journey, seven targets, hundreds of trails (thousands = spoken-optional,
@@ -553,7 +561,8 @@ title seeded; Act 5 compressed; real Q&A time recovered (~3.5 min); closing grac
 - Who I am: 10+ years in UI testing; Droidcon NYC 2016 (robot pattern + screenshots);
   Droidcon NYC 2025 with Brian (agent loop internals).
 - Title seed: "by the end you'll see what the map is — spoiler: you're already building it."
-- Hand-off: "Our answer is a thesis about natural language and determinism."
+- Hand-off (round 10): two hard problems on the table — device control, and protecting
+  user journeys. "Our answer to BOTH is a thesis about natural language and determinism."
 
 ### Act 1 — The thesis: blaze once, trail forever · 4:00–9:00
 - Refresher in one slide: agent drives the real app from NL → saved as a **trail** (YAML) →
@@ -1481,3 +1490,39 @@ Sam: "keep on top of block/trailblaze main." Fetched — one new commit, `ce44af
 - Deck/branch mechanics: talk branch stays where it is (based off #208's main) — do NOT
   rebase before the talk; the parity corpus + committed assets are the stage truth.
   Post-talk, a rebase picks up the unified docs cleanly.
+
+## Round 10: Act 0 rethread — messaging, not nitpicks (2026-07-13)
+
+Sam (practicing): "This isn't a bunch of small nitpicks… more of a messaging request."
+The new Act 0 arc, inside the SAME seven slots (no renumbering anywhere):
+
+**HYPE → DREAM → GAP(×2) → QUALITY UNIT → SCALE → CREDENTIALS**
+
+1. Cover — 🥾 on "Trailblaze", 🗺️ on "Map Your App for AI" (Sam: icons on lines 1+2).
+2. WAS "AI can drive your app / why still hard" → NOW "AI is supposed to do
+   *everything*" + two clicks: the dream made concrete (*"create a contact for
+   Casey"* → agent drives a real phone → it just… does it), then the turn (falls
+   short on mobile: controlling devices · testing what matters). NL now enters HERE
+   (Sam: "start with that around 2 — say 'do xyz' and it just does it"), so slide 4
+   no longer jumps. The example string = THE demo journey (slide 14 videos, Act 2).
+3. UNCHANGED slide, new role: falls-short #1 — the naive fix ("agent on every run")
+   fails CI economics.
+4. "The missing link" REWRITTEN as the catch: it did it — but what exactly did it
+   do? · run *that* again, deterministically? · objective ↔ actions link lost · the
+   what, thrown away. "Per-platform" moved to SPOKEN (bridge to Seven Targets).
+5. "One user journey." + new sub-line: *what a user must always be able to do — the
+   unit of quality* (Sam: journeys are what we care about from a testing/quality
+   perspective). Note: this names hard-problem #2's unit; Trailblaze-helps-BOTH
+   lands at the Act 1 hand-off.
+6. Unchanged (round 9 already: "Hundreds of trails today.").
+7. "Ten years" + REAL title-slide images: talk-2016.jpg (actual 2016 title slide,
+   from Sam's own Speaker Deck — files.speakerdeck.com slide_0) and talk-2025.jpg
+   (droidcon NYC 2025 branded card w/ Sam + Brian, from the session video thumbnail).
+   Hand-off upgraded: answer to BOTH problems.
+
+Also: Act 1 thesis note (slide 8) now frames "Blaze once, trail forever" as the
+one-move answer to both problems; audience-poll paste re-anchored to the new opener;
+Act 0 editorial summary rewritten to the new arc.
+Provenance for the images (public sources, Sam's own talks):
+- 2016: speakerdeck.com/handstandsam/espresso-a-screenshot-is-worth-1-000-words
+- 2025: youtube.com/watch?v=DReniYeZe5o (hqdefault thumbnail)
