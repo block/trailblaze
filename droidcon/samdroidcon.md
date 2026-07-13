@@ -15,10 +15,12 @@ layout: cover
 class: cover text-center
 ---
 
-# Trailblaze 🥾
-## Map Your App for AI 🗺️
+# Trailblaze
+## Map Your App for AI
 
-<div class="pt-10 text-lg opacity-70 tracking-wide">
+<div class="pt-8 text-2xl opacity-70" style="letter-spacing:0.6em; text-indent:0.6em;">🥾🗺️</div>
+
+<div class="pt-8 text-lg opacity-70 tracking-wide">
 Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
@@ -41,7 +43,8 @@ layout: center
 
 <div v-click class="pt-8 text-xl">
 
-*"Create a contact for Casey."* — an agent **drives a real phone**: taps, types, saves.
+*"Validate the new real-time cart updates — and make it a test."*
+An agent **drives a real phone**: taps, edits the cart, watches the totals.
 It just… **does it**.
 
 </div>
@@ -55,17 +58,20 @@ On mobile it still **falls short** where it counts:
 
 <!--
 REWRITTEN round 10 (Sam): open on the HYPE, make the dream concrete, then the gap.
+ROUND 11 (Sam): the example is now REAL-WORLD — this audience builds world-class apps
+with exactly these problems ("create a contact" was too simple). REGISTER for the whole
+act: dev-to-dev — talk through the problem we had and how we tried to solve it, not a
+product pitch. (The DEMO corpus stays contacts — that's the public-repo reproducibility
+story, hedged on the Four-Jobs slide.)
 Beat 1 (say it flat): AI is supposed to do everything — write our code, run our apps.
-Beat 2 (CLICK — the dream is real): hand an agent a sentence and it DRIVES A REAL
-PHONE. True today, and genuinely magic the first time you watch it.
+Beat 2 (CLICK — the dream is real): hand an agent a real ask from a real backlog and it
+DRIVES A REAL PHONE. True today, and genuinely magic the first time you watch it.
 Beat 3 (CLICK — the turn): but on mobile it falls short in exactly the two ways this
 talk attacks — DEVICE CONTROL (how does an agent reliably drive real devices at all?)
 and TESTING (how do we trust, repeat, and afford what it did?).
 Promise-tracking: slide 3 = re-running the agent every time fails CI economics;
 slide 4 = you can't trust or rerun what it did (the missing link); slide 5 = the
 quality unit (user journeys); Act 4 = the CLI/tools agents use for device control.
-"Create a contact for Casey" is deliberate — it's THE demo journey (slide 14 videos,
-Act 2 corpus). The example on slide one of the argument is the one they'll watch run.
 -->
 
 ---
@@ -116,6 +122,11 @@ ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m
 REWRITTEN round 10 — FALLS-SHORT REASON #2, answering slide 2's dream directly: the
 agent did the thing… and left you nothing you can trust or rerun. No jump into
 "natural-language tests" anymore; the NL idea was seeded on slide 2.
+ROUND 11 (Sam): "what exactly did it do?" TEES UP THE REPORTS — plant it as a promise
+and pay it off TWICE: recordings answer "what do I replay" (Acts 1–2), session reports
+answer "what happened and why" — per-step screenshots, hierarchy, LLM transcript —
+context for humans AND for the LLM (Act 3). Say something like: "hold that question;
+the answer became one of my favorite parts of this system."
 "Losing the link" is the phrase to hit. Bullets stay CUE FRAGMENTS (round 9).
 Expansions: (1) it worked — but which taps, which fields, which assertions? (2) the
 only way to run it again is asking the LLM again — slide 3 told you what that costs,
@@ -208,16 +219,19 @@ new features + hardware-specific work automation can't reach yet.
 
 # Ten years on this problem
 
-- **2016** — *"Espresso: A Screenshot is Worth 1,000 Words"*
-- **2025** — *"AI Driven Mobile Testing"* (with Brian Gardner)
-- **2026** — 1.5 years in production, and where it's going
-
-<div class="flex gap-8 justify-center pt-4">
-  <div class="text-center"><img src="./public/talk-2016.jpg" class="h-36 rounded-lg shadow-lg mx-auto" /><div class="pt-1 text-xs opacity-50">Droidcon NYC 2016</div></div>
-  <div class="text-center"><img src="./public/talk-2025.jpg" class="h-36 rounded-lg shadow-lg mx-auto" /><div class="pt-1 text-xs opacity-50">Droidcon NYC 2025</div></div>
+<div class="pt-2 space-y-4">
+  <div class="flex items-center gap-8">
+    <div class="flex-1"><b>2016</b> — <i>"Espresso: A Screenshot is Worth 1,000 Words"</i></div>
+    <img src="./public/talk-2016.jpg" class="h-40 rounded-lg shadow-lg" />
+  </div>
+  <div class="flex items-center gap-8">
+    <div class="flex-1"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> (with Brian Gardner)</div>
+    <img src="./public/talk-2025.jpg" class="h-40 rounded-lg shadow-lg" />
+  </div>
+  <div><b>2026</b> — 1.5 years in production, and where it's going</div>
 </div>
 
-<div class="pt-3 opacity-70">
+<div class="pt-4 opacity-70">
 
 *By the end you'll see what the map is — you're already building it.*
 
@@ -225,8 +239,9 @@ new features + hardware-specific work automation can't reach yet.
 
 <!--
 Both prior talks were Droidcon NYC. Title seed #1. Credentials in one slide, no dwelling.
-Images (round 10): 2016 = the actual title slide (from Sam's own Speaker Deck);
-2025 = the droidcon NYC title card with Sam + Brian (from the session video).
+Images (round 11 layout): title cards inline on their own rows, matched h-40, both true
+16:9 (2025's YouTube letterbox cropped off). 2016 = the actual title slide (from Sam's
+own Speaker Deck); 2025 = the droidcon NYC title card with Sam + Brian (session video).
 2025's future-work slide is a checklist this talk ticks off: "reuse the same prompts
 across platforms" → unified format; "custom app interactions" → custom tools/TS.
 HAND-OFF (round 10): two hard problems are now on the table — device control, and
@@ -267,14 +282,43 @@ layout: center
 
 ## …so we have a **trailmap** 🗺️
 
-<div class="pt-6 opacity-70">
+<div class="pt-4 opacity-70">
 
 your tools · your trails · your app's map
 
 </div>
 
+<div v-click class="text-left w-fit mx-auto pt-4 text-sm">
+
+```yaml
+# trails/config/trailmaps/contacts/trailmap.yaml — in the repo today
+id: contacts
+dependencies:
+  - trailblaze
+target:
+  display_name: Contacts
+  platforms:
+    android:
+      app_ids:
+        - com.google.android.contacts
+        - com.android.contacts
+      tools:
+        - contacts_android_launchApp
+    # …ios, web, compose: same shape
+waypoints:
+  # …100 named places in this app — that map arrives in a few minutes
+```
+
+</div>
+
 <!--
 Introduce the trailmap BY NAME right here (Sam: "we're doing it, so we have a trailmap").
+ROUND 11 (Sam): "you tee-ed it up, now crush it" — CLICK reveals the REAL trailmap of a
+real app, verbatim from the repo (comments + ios/web/compose platforms + the 100
+waypoint lines elided as comments — every visible line is real). Walk it in one breath:
+an id, a dependency that brings default toolsets/drivers, and a TARGET — the app under
+test, its app ids per platform, its own launch tool. Don't unpack tool_sets/drivers
+here (Act 4); the waypoints comment plants Act 6's payoff.
 Unpacked in Act 4 (tools live on the filesystem, in the trailmap);
 payoff in Act 6 (you've watched this map assemble).
 -->
@@ -690,6 +734,7 @@ Guaranteed Q&A topic otherwise (test accounts in CI).
 
 - A **trailhead is a tool** — the designated start
 - Clear app data · launch args · **known state**
+- **Test accounts & setup are real** — AI can't invent state
 - Deterministic setup → deterministic replay
 
 <div class="pt-6 text-xl opacity-80">
@@ -699,6 +744,12 @@ Most flaky tests die right here.
 </div>
 
 <!--
+ROUND 11 (Sam) — THE BALANCE, a load-bearing position; land it on this slide:
+test accounts and setup are REAL — AI can't do anything without them, and trailheads
+exist to hand the AI that reality. You can't have EVERYTHING-AI: people who've run
+NL-only systems end up wanting to code things again — and so do we. The balance
+Trailblaze strikes: AI calls YOUR CODE — the tools and trailheads you contribute.
+(This line reopens Act 4 and shields the "why not pure prompts?" Q&A.)
 SHAPE CHECK (cold read): slide 19 showed `trailhead:` as a YAML section; this slide
 says "a trailhead is a tool." Reconcile aloud: the section names the designated START;
 what runs there is a tool (clear data, launch args, sign in). Section = where, tool = what.
@@ -769,6 +820,8 @@ Now it's worth 1,000 **tokens** — the LLM has everything it needs to iterate.
 </div>
 
 <!--
+CALLBACK (round 11): this pays off Act 0's "what exactly did it do?" — say it
+explicitly: "remember the question from the first minutes? Here's the answer."
 Granularity is deliberate: screenshot/hierarchy/transcript are captured per STEP;
 video + device logs (logcat on Android, scoped log stream on iOS) are per-RUN streams,
 on by default (--no-capture-* to disable). At Block we layer more onto the same reports —
@@ -881,6 +934,10 @@ who gets to write them, and how do agents reach them?"
 </div>
 
 <!--
+OPEN THE ACT with the BALANCE line (round 11, trailheads note): you can't have
+everything-AI — people want to code things, and AI needs your code. Trailblaze lets
+AI call YOUR code: tools and trailheads you contribute. These two beats answer "who
+gets to write them" with "you do."
 1: a wall for external teams, too slow for agents iterating.
 3: trailmap = your target + tools + toolsets + trails, distributed as plain npm packages.
 COMPOSITION story (Sam round 5, say with the Square example): an app target in a

@@ -1526,3 +1526,35 @@ Act 0 editorial summary rewritten to the new arc.
 Provenance for the images (public sources, Sam's own talks):
 - 2016: speakerdeck.com/handstandsam/espresso-a-screenshot-is-worth-1-000-words
 - 2025: youtube.com/watch?v=DReniYeZe5o (hqdefault thumbnail)
+
+## Round 11: cover fix, real-world ask, trailmap reveal, the BALANCE (2026-07-13)
+
+- **Cover:** trailing emoji on the title lines "sucked" (Sam; confirmed on screenshot —
+  broke optical centering, boot clashed with the wordmark). Now: clean title, small
+  spaced 🥾🗺️ motif line between subtitle and byline. If it still reads wrong, KILL the
+  icons entirely — Sam already authorized that.
+- **Slide 2 example is real-world now:** "Validate the new real-time cart updates — and
+  make it a test." (Sam: "create a contact" too simple for an audience building
+  world-class apps; register = dev-to-dev, problem→how-we-tried-to-solve.) Demo corpus
+  stays contacts (public reproducibility) — hedge unchanged on Four Jobs.
+- **Slide 4 tees the reports:** "what exactly did it do?" is a planted promise, paid
+  twice — recordings (what to replay, Acts 1–2) and session reports (what happened +
+  full context for humans AND the LLM, Act 3). Act 3 capture slide now says the
+  callback explicitly.
+- **Slide 7:** title cards inline on their own rows (2016 next to its line, 2025 next
+  to its), both h-40, 2025's YouTube letterbox cropped to true 16:9 (sips -c 270 480).
+- **Slide 9 crushes the tee-up:** click reveals the REAL contacts trailmap.yaml from
+  the repo (id / dependencies / target / platforms / android app_ids + launch tool;
+  ios/web/compose + 100 waypoint lines elided as honest comments). Waypoints comment
+  plants Act 6.
+- **THE BALANCE (load-bearing, Sam verbatim-ish):** test accounts & setup are REAL —
+  AI can't do without that; trailheads exist to hand AI that reality. You can't have
+  EVERYTHING-AI — people who've done NL-only want to code things (so do we). Trailblaze
+  strikes the balance by letting AI call YOUR code via tools + trailheads you
+  contribute. Landed: trailheads slide (new bullet + note), Act 4 opener note, Q&A
+  shield for "why not pure prompts?".
+- **ASSET A regen is GO (Sam: "embarrassingly slow"):** old videos show pre-#212 code.
+  Video session tasked with re-earning blaze+replay on the rebased branch (fast code),
+  producing new mp4s + wallclock, keeping BEFORE/AFTER — delta gets commented on
+  block/trailblaze#210. Deck numbers sweep on delivery (captions, both spoken-ammo
+  notes, parity table, Q&A answer, Act 5 per-action figure).
