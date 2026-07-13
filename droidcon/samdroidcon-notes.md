@@ -120,13 +120,27 @@ $ trailblaze session save --title "Contacts: create a contact"
 <div class="pt-4 opacity-70">the recording lands NEXT TO the natural language that earned it</div>
 ````
 
-**ASSET C (waypoint graph)** — the viewer is served by the local daemon, zero network:
-start the daemon from the worktree with `TRAILBLAZE_CONFIG_DIR=$PWD/trails/config`, then
-open **http://localhost:52525/waypoints/graph** (route + default port verified in
-`WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`). 30s of live mouse-wandering on
-the contacts-iOS map beats a flythrough. Worst case, speak it: "100 named places,
-81 shortcuts, committed in the repo today" (numbers from the viewer header, captured
-in asset-c-graph-*.png).
+**ASSET C / LIVE TRAIL MAP BROWSER** — the viewer is served by the local daemon, zero
+network. **VERIFIED LIVE 2026-07-13 from this worktree.** Launch (dedicated port so it
+does NOT clobber the shared :52525 daemon other concurrent sessions use):
+
+```
+TRAILBLAZE_PORT=52620 TRAILBLAZE_CONFIG_DIR="$PWD/trails/config" trailblaze app --headless
+# then open  http://localhost:52620/waypoints/graph   (stop later: trailblaze --stop)
+```
+
+THE MONEY SHOT (drive it live, ~30s): Target → **contacts** (header snaps to **100
+SCREENS · 81 SHORTCUTS** — the deck's numbers, live) → **SUBWAY** tab → FOCAL =
+`contacts/ios/list` → Fit View. You get the whole contacts app map radiating from the
+list screen, real screenshots as nodes. The panel says it out loud: "every waypoint
+reachable in ≤ 3 forward hops — the SAME adjacency we hand the agent in its prompt."
+MAP tab = filmstrip of every screen; SCREENS = grid; REPORT = sessions.
+HEADS-UP on stage: the workspace also shows **calendar (100)** and **clock (3)** target
+chips — filter to contacts BEFORE presenting, or be ready to call calendar a
+Google-Calendar-like fixture app (see the ASSET-C production note below). Route + port
+verified in `WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`.
+Fallback if the daemon won't start live: the captured asset-c-graph-*.png stills, or
+speak it — "100 named places, 81 shortcuts, committed in the repo today."
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
