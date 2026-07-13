@@ -810,8 +810,8 @@ comment block; the first block was invisible on stage.)
 
 # A screenshot was worth 1,000 words
 
-- Every **step**: 📸 **screenshot** · 🌲 **view hierarchy** · 🤖 **LLM transcript**
-- Every **run**: 🎞️ **video** · 📜 **device logs** — on by default
+- Every **step**: <ph-image class="inline-block align-middle opacity-80 mr-1" /> **screenshot** · <ph-tree-structure class="inline-block align-middle opacity-80 mr-1" /> **view hierarchy** · <ph-robot class="inline-block align-middle opacity-80 mr-1" /> **LLM transcript**
+- Every **run**: <ph-film-strip class="inline-block align-middle opacity-80 mr-1" /> **video** · <ph-terminal-window class="inline-block align-middle opacity-80 mr-1" /> **device logs** — on by default
 
 <div class="pt-6 text-xl opacity-80">
 
