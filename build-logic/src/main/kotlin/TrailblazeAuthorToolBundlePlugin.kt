@@ -3,7 +3,6 @@ import org.gradle.api.Project
 
 /**
  * Bundles author `tools.ts` files via esbuild for the `:trailblaze-quickjs-tools` runtime.
- * See devlog `2026-04-30-scripted-tools-not-mcp` for architectural rationale.
  *
  * ### Usage
  *

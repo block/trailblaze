@@ -6,6 +6,7 @@ import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
+import xyz.block.trailblaze.device.AndroidForegroundParser
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
@@ -173,7 +174,12 @@ object AdbCommandUtil {
     intervalMs = checkIntervalMs,
     conditionDescription = "App $appId should be in foreground",
   ) {
-    withUiDevice { currentPackageName == appId }
+    // Reliable resumed-activity signal (see [getForegroundPackage]), matched against EVERY
+    // resumed task so split-screen / multi-display can't hide the target app. The previous
+    // `UiDevice.currentPackageName` check polled the flaky UiAutomation window list, which on
+    // some images never reports the launching app on a cold start — so the poll ran out the full
+    // 30s timeout on every fresh launch even after the app was on screen.
+    getForegroundComponents().any { AndroidForegroundParser.packageFromComponent(it) == appId }
   }
 
   /**
@@ -252,7 +258,7 @@ object AdbCommandUtil {
     intervalMs = checkIntervalMs,
     "App $appId should not be in foreground",
   ) {
-    withUiDevice { currentPackageName != appId }
+    getForegroundComponents().none { AndroidForegroundParser.packageFromComponent(it) == appId }
   }
 
   /**
@@ -316,24 +322,42 @@ object AdbCommandUtil {
   }
 
   /**
+   * Returns the `package/activity` components of every resumed task (one per visible task in
+   * split-screen / multi-display, usually exactly one), or empty if they can't be read.
+   *
+   * Reads the resumed (top) activities from `dumpsys activity activities`. The parsing lives in
+   * [AndroidForegroundParser] so it is unit-tested without a device; the rationale for the
+   * resumed-activity signal over window focus is documented there.
+   */
+  private fun getForegroundComponents(): List<String> = try {
+    // No shell pipe: [execShellCommand] runs via UiAutomation, which does NOT go through `sh -c`,
+    // so a `| grep …` would be passed to `dumpsys` as literal args (a package filter) and return
+    // nothing. Fetch the full dump and let [AndroidForegroundParser] filter the lines in Kotlin.
+    AndroidForegroundParser.parseResumedActivityComponents(
+      execShellCommand("dumpsys activity activities"),
+    )
+  } catch (_: Exception) {
+    emptyList()
+  }
+
+  /** Single-answer view of [getForegroundComponents]: the first resumed component, or null. */
+  private fun getForegroundComponent(): String? = getForegroundComponents().firstOrNull()
+
+  /**
+   * Returns the package name of the current foreground app (e.g. "com.example.app"), or null if it
+   * cannot be determined.
+   *
+   * Reads the reliable resumed-activity signal (via [getForegroundComponent]) so it stays correct
+   * during cold starts — unlike [UiDevice.currentPackageName], which polls the flaky UiAutomation
+   * window list and often reports the launcher (or nothing) while an app is still warming up.
+   */
+  fun getForegroundPackage(): String? =
+    AndroidForegroundParser.packageFromComponent(getForegroundComponent())
+
+  /**
    * Returns the short class name of the current foreground Activity (e.g. "HomeActivity"),
    * or null if it cannot be determined.
-   *
-   * Parses the output of `dumpsys window | grep mCurrentFocus`, which looks like:
-   * `  mCurrentFocus=Window{abc u0 com.example.app/com.example.app.HomeActivity}`
-   *
-   * The command is fast — the window manager state is in-memory — so the overhead is
-   * negligible relative to a view hierarchy dump.
    */
-  fun getForegroundActivity(): String? = try {
-    val output = execShellCommand("dumpsys window | grep mCurrentFocus")
-    val line = output.lines().firstOrNull { it.contains("mCurrentFocus=") } ?: return null
-    val braceContent = line.substringAfter("{", "").substringBefore("}", "")
-    val component = braceContent.trim().split(" ").lastOrNull()?.takeIf { it.contains("/") }
-      ?: return null
-    val activityClass = component.substringAfter("/").trimStart('.')
-    activityClass.substringAfterLast('.').takeIf { it.isNotBlank() && it != "null" }
-  } catch (_: Exception) {
-    null
-  }
+  fun getForegroundActivity(): String? =
+    AndroidForegroundParser.shortActivityFromComponent(getForegroundComponent())
 }

@@ -39,10 +39,10 @@ import xyz.block.trailblaze.util.Console
  */
 class AccessibilityDeviceManager(
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  // Settle primitive — `UiDevice.waitForIdle()` in production. Exposed as an injectable lambda
+  // Settle primitive — [defaultAwaitSettle] in production. Exposed as an injectable lambda
   // so unit tests can substitute a counting stub without standing up an instrumentation context.
   // Lambda invocation cost is negligible compared to the settle itself.
-  private val awaitSettle: () -> Unit = { withUiDevice { waitForIdle() } },
+  private val awaitSettle: () -> Unit = { defaultAwaitSettle() },
   // Per-session template context surfaced to every internal resolve() call so selectors
   // carrying `{{target.appId}}` placeholders expand correctly. Null when the agent
   // wasn't constructed with a target (target-agnostic rules / unit-test fixtures);
@@ -60,6 +60,67 @@ class AccessibilityDeviceManager(
      * ceiling that still fails fast on a genuinely-stuck keyboard.
      */
     private const val HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS = 1500L
+
+    /**
+     * Post-action settle: quiet window required on the service's UI-event stream before the
+     * action is considered settled. Matches the capture-time gates' quiet window — the
+     * platform's `waitForIdle()` hardcodes 500ms, which was the single largest per-action cost
+     * in recorded replay (https://github.com/block/trailblaze/issues/210 — ~400–900ms of every gesture/inputText/pressKey).
+     */
+    private const val SETTLE_QUIET_WINDOW_MS = 100L
+
+    /**
+     * Post-action settle: how long to wait for the action's FIRST UI event before concluding the
+     * action produced no reaction. Longer than [waitForSettled]'s 50ms default so a slow-starting
+     * transition (activity launch, heavyweight recompose) has room to emit its first event — a
+     * grace the legacy `waitForIdle()` never offered.
+     */
+    private const val SETTLE_GRACE_PERIOD_MS = 150L
+
+    /** Hard cap on the post-action settle (same bound the legacy path used in spirit; the
+     *  platform's `waitForIdle()` global timeout is 10s). */
+    private const val SETTLE_TIMEOUT_MS = 5_000L
+
+    /**
+     * Production settle primitive run after every dispatched action (see
+     * [dispatchAndAwaitSettleBlocking]): waits for the accessibility event stream to go quiet via
+     * [TrailblazeAccessibilityService.waitForSettled] — the same signal the capture-time gates
+     * use — instead of `UiDevice.waitForIdle()`, whose hardcoded 500ms quiet window made every
+     * action pay ~½s+ after its last UI event (https://github.com/block/trailblaze/issues/210).
+     * Late-arriving UI reactions stay covered: [SETTLE_GRACE_PERIOD_MS] waits for the reaction to
+     * *start*, and every subsequent capture re-gates on event-quiet + `awaitTreeStable` before a
+     * snapshot is trusted.
+     *
+     * Kill-switch: `TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE=1` (read per call, flippable on a running
+     * daemon) restores the legacy `UiDevice.waitForIdle()` primitive. Also falls back to it when
+     * the accessibility service isn't bound — without the service there is no event stream to
+     * observe, and [TrailblazeAccessibilityService.waitForSettled] would see a stale
+     * `lastUiEventTimestampMs` and return "settled" instantly.
+     */
+    internal fun defaultAwaitSettle() {
+      val useLegacy = envFlagEnabled("TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE")
+      if (useLegacy || !TrailblazeAccessibilityService.isServiceRunning()) {
+        // Log which primitive ran so a triage can tell the branches apart — the event-quiet path
+        // emits its own "UI settled after …" line; without this the fallback is silent.
+        Console.log(
+          "[settle] via UiDevice.waitForIdle() — " +
+            if (useLegacy) "TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE set" else "accessibility service not bound",
+        )
+        withUiDevice { waitForIdle() }
+        return
+      }
+      TrailblazeAccessibilityService.waitForSettled(
+        quietWindowMs = SETTLE_QUIET_WINDOW_MS,
+        maxGracePeriodMs = SETTLE_GRACE_PERIOD_MS,
+        timeoutMs = SETTLE_TIMEOUT_MS,
+      )
+    }
+
+    /** True when env flag [name] is set to `1`/`true` (case-insensitive). Read per call, never cached. */
+    internal fun envFlagEnabled(name: String): Boolean {
+      val raw = System.getenv(name)?.lowercase()
+      return raw == "1" || raw == "true"
+    }
   }
 
   // --- Screen state ---
@@ -272,18 +333,10 @@ class AccessibilityDeviceManager(
    * exception-safe shape (`try { action() } finally { awaitSettle() }`) with a non-suspend
    * signature so `tap()` / `swipe()` / etc. and their callers stay outside any coroutine context.
    *
-   * Uses `UiDevice.waitForIdle()` (via [awaitSettle]) — the platform's own idle detection.
-   * UiAutomation waits for no accessibility events within its internal idle window (currently
-   * 500ms in the SDK). This is the same signal `UiAutomator.dumpWindowHierarchy` waits on
-   * internally — before PR #2843 moved screen-state capture off the UiAutomator path, gesture
-   * playback was getting this wait by side effect of every subsequent dump. Switching to
-   * `AccessibilityServiceScreenState` silently dropped that wait, exposing a Compose-recomposition
-   * race where the next gesture would fire before the previous transition's late content-changed
-   * event had propagated to the accessibility tree. Calling `waitForIdle()` here restores the
-   * signal we always had, just explicitly.
-   *
-   * `waitForIdle()` is not a blind sleep — it returns immediately once the event stream has
-   * been quiet for the platform's idle window. No content events fire → no extra wait.
+   * Settles via [defaultAwaitSettle] — event-quiet detection on the accessibility service's own
+   * stream with a 100ms quiet window, not a blind sleep. See its kdoc for why this replaced the
+   * platform `UiDevice.waitForIdle()` (500ms hardcoded quiet window — the largest per-action cost
+   * in recorded replay) and for the `TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE=1` kill-switch.
    */
   private inline fun <R> dispatchAndAwaitSettleBlocking(action: () -> R): R {
     // If a prior hideKeyboard() left the soft IME in SHOW_MODE_HIDDEN, restore SHOW_MODE_AUTO
@@ -835,15 +888,11 @@ class AccessibilityDeviceManager(
     }
   }
 
-  private fun actionClickRouteDisabled(): Boolean {
-    // Kill-switch for the ACTION_CLICK route. Set
-    // `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE=1` to force every selector-resolved tap back to
-    // the gesture path — same shape as `TRAILBLAZE_ADB_TIMEOUT_MS` /
-    // `TRAILBLAZE_CLI_PRINT_STACK_TRACES`. Read on every dispatch (not cached) so an oncall
-    // can flip it via env on a running daemon without a restart.
-    val raw = System.getenv("TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE")?.lowercase()
-    return raw == "1" || raw == "true"
-  }
+  private fun actionClickRouteDisabled(): Boolean =
+    // Kill-switch for the ACTION_CLICK route: forces every selector-resolved tap back to the
+    // gesture path. Read on every dispatch (not cached) so an oncall can flip it via env on a
+    // running daemon without a restart.
+    envFlagEnabled("TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE")
 
   /** Asserts an element matching the selector is visible, polling until timeout. */
   private fun executeAssertVisible(action: AccessibilityAction.AssertVisible): ExecutionResult {

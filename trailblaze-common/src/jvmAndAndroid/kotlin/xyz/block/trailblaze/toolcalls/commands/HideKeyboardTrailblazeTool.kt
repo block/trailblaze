@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.SwipeCommand
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
@@ -23,10 +24,7 @@ Hide the keyboard on the screen. Use after entering text into an input field.
 data object HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val maestroCommands = hideKeyboardCommands(
-      platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
-      orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
-    )
+    val maestroCommands = hideKeyboardCommands(toolExecutionContext.trailblazeDeviceInfo)
 
     val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
@@ -35,6 +33,15 @@ data object HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
     if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Keyboard hidden")
     return result
   }
+
+  /**
+   * Platform and orientation are static device properties — answer them from
+   * [TrailblazeDeviceInfo], NOT `context.screenState`: with lazy screen-state capture, a
+   * `screenState` read triggers a full capture (settle + tree walk + screenshot) per call
+   * (https://github.com/block/trailblaze/issues/210).
+   */
+  fun hideKeyboardCommands(deviceInfo: TrailblazeDeviceInfo): List<Command> =
+    hideKeyboardCommands(deviceInfo.platform, deviceInfo.orientation)
 
   fun hideKeyboardCommands(
     platform: TrailblazeDevicePlatform?,

@@ -58,10 +58,7 @@ data class InputTextRandomTrailblazeTool(
 
     val maestroCommands = if (hideKeyboardAfter) {
       listOf(InputTextCommand(value)) +
-        HideKeyboardTrailblazeTool.hideKeyboardCommands(
-          platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
-          orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
-        )
+        HideKeyboardTrailblazeTool.hideKeyboardCommands(toolExecutionContext.trailblazeDeviceInfo)
     } else {
       listOf(InputTextCommand(value))
     }

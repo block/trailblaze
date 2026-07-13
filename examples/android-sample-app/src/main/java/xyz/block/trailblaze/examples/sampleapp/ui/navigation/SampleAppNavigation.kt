@@ -3,7 +3,9 @@ package xyz.block.trailblaze.examples.sampleapp.ui.navigation
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SwipeLeft
@@ -25,10 +27,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.catalog.CatalogScreen
+import xyz.block.trailblaze.examples.sampleapp.ui.screens.drag.DragScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.forms.FormsScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.lists.ListDetailScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.lists.ListsScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.loading.LoadingScreen
+import xyz.block.trailblaze.examples.sampleapp.ui.screens.numberpad.NumberPadScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.settings.SettingsScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.swipe.SwipeScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.taps.TapsScreen
@@ -40,10 +44,13 @@ enum class Tab(val route: String, val label: String, val icon: ImageVector) {
   SWIPE("swipe", "Swipe", Icons.Default.SwipeLeft),
   CATALOG("catalog", "Catalog", Icons.Default.ShoppingCart),
   SETTINGS("settings", "Settings", Icons.Default.Settings),
-  // LOADING is placed AFTER SETTINGS so the existing tabs keep their bottom-nav index — the
-  // recorded settings trail taps the Settings tab by `collectionItemColumnIndex: 5`, so inserting
-  // a tab before it would silently retarget that trail at the wrong tab.
+  // LOADING (and the two tabs below it) are placed AFTER SETTINGS so the existing tabs keep their
+  // bottom-nav index — the recorded settings trail taps the Settings tab by
+  // `collectionItemColumnIndex: 5`, so inserting a tab before it would silently retarget that
+  // trail at the wrong tab. New tabs must keep appending here, never inserting earlier (#4764).
   LOADING("loading", "Loading", Icons.Default.HourglassEmpty),
+  NUMBER_PAD("number_pad", "Number Pad", Icons.Default.Dialpad),
+  DRAG("drag", "Drag", Icons.Default.OpenWith),
 }
 
 @Composable
@@ -89,6 +96,8 @@ fun SampleAppNavigation() {
       composable(Tab.CATALOG.route) { CatalogScreen() }
       composable(Tab.LOADING.route) { LoadingScreen() }
       composable(Tab.SETTINGS.route) { SettingsScreen() }
+      composable(Tab.NUMBER_PAD.route) { NumberPadScreen() }
+      composable(Tab.DRAG.route) { DragScreen() }
     }
   }
 }

@@ -23,8 +23,6 @@ import kotlinx.serialization.json.put
  * Evaluates a `@trailblaze/scripting` JS bundle in a QuickJS engine and exposes the registered
  * tools through [listTools] / [callTool]. No MCP, no transport — direct same-process dispatch.
  * One host = one engine = one bundle; [shutdown] tears it down.
- *
- * Architectural rationale lives in the `2026-04-30-scripted-tools-not-mcp` devlog.
  */
 class QuickJsToolHost internal constructor(
   /**

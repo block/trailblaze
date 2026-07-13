@@ -36,9 +36,8 @@ import kotlinx.serialization.json.put
  * the author bundle is self-contained, registers handlers in a global, and the runtime
  * dispatches against that global.
  *
- * If these tests pass, the load-bearing claim of devlog
- * `2026-04-30-scripted-tools-not-mcp.md` is demonstrable: tools can be authored, bundled, and
- * dispatched in QuickJS without any MCP framing.
+ * If these tests pass, the load-bearing claim is demonstrable: tools can be authored, bundled,
+ * and dispatched in QuickJS without any MCP framing.
  */
 class QuickJsToolHostTest {
 

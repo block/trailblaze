@@ -132,14 +132,15 @@ abstract class BaseTrailblazeAgent(
     // re-capturing via `screenStateProvider`, e.g. `TapOnTrailblazeTool`, `ClearTextTrailblazeTool`)
     // would otherwise act on the batch's first-tool snapshot for the rest of the recording. Only the
     // context/executor IDENTITY is shared; the screen capture itself stays per-tool, matching what
-    // per-tool recorded replay did before this change.
+    // per-tool recorded replay did before this change. The assignment is unconditional: a null
+    // incoming `screenState` clears the previous dispatch's cached value, re-arming the context's
+    // lazy capture-on-read (see [TrailblazeToolExecutionContext.screenState]) so a tool that reads
+    // the field still sees CURRENT UI — dispatchers that skip the eager capture stay correct.
     if (ToolBatchScope.isActive()) {
       val context = ToolBatchScope.contextOrBuild {
         buildExecutionContext(resolvedTraceId, screenState, screenStateProvider)
       }
-      if (screenState != null) {
-        context.screenState = screenState
-      }
+      context.screenState = screenState
       return dispatchTools(tools, context, elementComparator)
     }
 

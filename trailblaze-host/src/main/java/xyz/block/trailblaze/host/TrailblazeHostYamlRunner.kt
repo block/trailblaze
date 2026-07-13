@@ -2174,7 +2174,13 @@ object TrailblazeHostYamlRunner {
         agent.runTrailblazeTools(
           tools = tools,
           traceId = runYamlRequest.traceId,
-          screenState = agent.screenStateProvider(),
+          // No eager capture: tools on this path execute ON DEVICE against the device's own
+          // live tree, so a host-side screen state is only ever read by host-local dispatches
+          // (subprocess MCP / `requires_host` scripted tools). Passing null defers to the
+          // context's lazy capture-on-read — an eager `screenStateProvider()` here was a full
+          // screenshot RPC (~0.5-1s) per recorded tool that recorded replay never consumed,
+          // the single largest per-action cost in https://github.com/block/trailblaze/issues/210.
+          screenState = null,
           elementComparator = elementComparator,
           screenStateProvider = agent.screenStateProvider,
         ).result

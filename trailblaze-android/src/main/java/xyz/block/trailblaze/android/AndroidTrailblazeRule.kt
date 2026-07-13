@@ -15,6 +15,7 @@ import xyz.block.trailblaze.AndroidAssetsUtil
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
+import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
@@ -732,6 +733,13 @@ open class AndroidTrailblazeRule(
       withContext(NonCancellable) {
         launchedQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
         toolsetQuickjsRuntime?.let { runCatching { it.shutdownAll() } }
+        // Join the accessibility driver's async log uploads before this run returns.
+        // `runActions` no longer flushes per action (https://github.com/block/trailblaze/issues/210) — the upload of
+        // action N's screenshot + hierarchy overlaps action N+1 — so this boundary is what
+        // keeps the guarantee that a completed run (an RPC response on the per-tool dispatch
+        // path, or a finished JUnit trail) has all of its driver logs landed before the host
+        // acts on the completion (session end → report generation).
+        runCatching { AccessibilityTrailRunner.flushLogsSuspend() }
       }
     }
     return lastToolSuccess
@@ -775,12 +783,15 @@ open class AndroidTrailblazeRule(
   private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult =
     trailblazeAgent.runTrailblazeTools(
       tools = trailblazeTools,
-      // Always capture fresh, per dispatch — matches what per-tool recorded replay did before
-      // shared tool-batch scopes existed. Inside a batch, `BaseTrailblazeAgent.runTrailblazeTools`
-      // reuses the shared context/executor IDENTITY but still reassigns this fresh capture onto it
-      // before each tool runs, so tools reading `context.screenState` directly (not via
-      // `screenStateProvider`) see current UI rather than the batch's first-tool snapshot.
-      screenState = screenStateProvider(),
+      // null + provider = capture lazily on first `context.screenState` read (see the lazy
+      // getter on TrailblazeToolExecutionContext). Most recorded tools (inputText, pressKey,
+      // swipe, launchApp) never read it — the accessibility driver resolves against the live
+      // tree — so the eager full capture (settle + tree walk + screenshot encode, ~250-900ms)
+      // was pure per-dispatch tax (https://github.com/block/trailblaze/issues/210). Selector-reading tools (tapOn,
+      // clearText) trigger the capture on read and pay the same cost as before. Inside a batch,
+      // `BaseTrailblazeAgent.runTrailblazeTools` reassigns null before each tool, which re-arms
+      // lazy capture so a reading tool still sees CURRENT UI, not the batch's first snapshot.
+      screenState = null,
       elementComparator = elementComparator,
       screenStateProvider = screenStateProvider,
     ).result
@@ -835,11 +846,19 @@ open class AndroidTrailblazeRule(
    * Run natural language instructions with the agent.
    */
   override fun prompt(objective: String): Boolean {
-    val runnerResult = trailblazeRunner.run(DirectionStep(objective))
-    return if (runnerResult is AgentTaskStatus.Success) {
-      true
-    } else {
-      throw TrailblazeException(runnerResult.toString())
+    // This and the other direct entry points ([tool], [maestroCommands]) don't pass through
+    // [runSuspend]'s completion boundary, so join the accessibility driver's async log uploads
+    // here — callers must return with their logs landed (JUnit teardown may end the session
+    // immediately after). See [AccessibilityTrailRunner.flushLogs].
+    try {
+      val runnerResult = trailblazeRunner.run(DirectionStep(objective))
+      return if (runnerResult is AgentTaskStatus.Success) {
+        true
+      } else {
+        throw TrailblazeException(runnerResult.toString())
+      }
+    } finally {
+      AccessibilityTrailRunner.flushLogs()
     }
   }
 
@@ -847,15 +866,20 @@ open class AndroidTrailblazeRule(
    * Run a Trailblaze tool with the agent.
    */
   override fun tool(vararg trailblazeTool: TrailblazeTool): TrailblazeToolResult {
-    val result = trailblazeAgent.runTrailblazeTools(
-      tools = trailblazeTool.toList(),
-      elementComparator = elementComparator,
-      screenStateProvider = screenStateProvider,
-    ).result
-    return if (result is TrailblazeToolResult.Success) {
-      result
-    } else {
-      throw TrailblazeException(result.toString())
+    try {
+      val result = trailblazeAgent.runTrailblazeTools(
+        tools = trailblazeTool.toList(),
+        elementComparator = elementComparator,
+        screenStateProvider = screenStateProvider,
+      ).result
+      return if (result is TrailblazeToolResult.Success) {
+        result
+      } else {
+        throw TrailblazeException(result.toString())
+      }
+    } finally {
+      // Same log-upload join as [prompt] — see the comment there.
+      AccessibilityTrailRunner.flushLogs()
     }
   }
 
@@ -863,14 +887,19 @@ open class AndroidTrailblazeRule(
    * Run a Trailblaze tool with the agent.
    */
   override suspend fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult {
-    val runCommandsResult = trailblazeAgent.runMaestroCommands(
-      maestroCommand.toList(),
-      null,
-    )
-    return if (runCommandsResult is TrailblazeToolResult.Success) {
-      runCommandsResult
-    } else {
-      throw TrailblazeException(runCommandsResult.toString())
+    try {
+      val runCommandsResult = trailblazeAgent.runMaestroCommands(
+        maestroCommand.toList(),
+        null,
+      )
+      return if (runCommandsResult is TrailblazeToolResult.Success) {
+        runCommandsResult
+      } else {
+        throw TrailblazeException(runCommandsResult.toString())
+      }
+    } finally {
+      // Same log-upload join as [prompt] — see the comment there.
+      AccessibilityTrailRunner.flushLogsSuspend()
     }
   }
 

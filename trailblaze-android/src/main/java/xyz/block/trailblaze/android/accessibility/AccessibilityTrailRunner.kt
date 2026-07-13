@@ -42,13 +42,24 @@ object AccessibilityTrailRunner {
   private val loggingScope = CoroutineScope(loggingJob + Dispatchers.IO.limitedParallelism(1))
 
   /**
-   * Waits for all pending async log writes to complete. Call this at the end of test execution
-   * to ensure final logs and screenshots are flushed before the process exits.
+   * Waits for all pending async log writes to complete.
+   *
+   * [runActions] deliberately does NOT flush on its success path — the upload of action N's
+   * screenshot + hierarchy (a few hundred ms over the RPC log channel) overlaps action N+1's
+   * capture and dispatch instead of serializing ahead of it (https://github.com/block/trailblaze/issues/210). The
+   * run-completion boundary (`AndroidTrailblazeRule.runSuspend`'s `finally`) calls this so a
+   * completed run — an RPC per-tool response, or a finished JUnit trail — never returns with
+   * driver logs still in flight. Error paths still flush inline so a failure report is complete
+   * at the moment the error propagates.
    */
   fun flushLogs() {
-    runBlocking {
-      loggingJob.children.forEach { it.join() }
-    }
+    runBlocking { flushLogsSuspend() }
+  }
+
+  /** Suspending form of [flushLogs] for callers already in a coroutine (the run-completion
+   *  boundary in `AndroidTrailblazeRule.runSuspend`) — joins without parking a thread. */
+  suspend fun flushLogsSuspend() {
+    loggingJob.children.forEach { it.join() }
   }
 
   /**
@@ -103,7 +114,8 @@ object AccessibilityTrailRunner {
         return result
       }
     }
-    flushLogs()
+    // No flush on success — see [flushLogs]: uploads overlap subsequent actions, and the
+    // run-completion boundary joins them before the run's result is acted on.
     return TrailblazeToolResult.Success()
   }
 

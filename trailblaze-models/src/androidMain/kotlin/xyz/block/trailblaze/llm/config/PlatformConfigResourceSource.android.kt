@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.llm.config
 
+import java.util.concurrent.ConcurrentHashMap
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -19,39 +20,55 @@ import xyz.block.trailblaze.util.Console
  */
 actual fun bundledConfigResourceSource(): ConfigResourceSource = platformConfigResourceSource()
 
+/**
+ * Process-wide memo of discovery results. APK assets and the classpath are immutable for the
+ * life of the process, so a (directory, suffix) listing can never change once computed. The
+ * recursive trailmap scan costs hundreds of ms per call on-device, and the
+ * host→on-device RPC path used to re-run it per dispatched tool via each request's fresh
+ * tool-repo build — a large slice of the per-action tax in https://github.com/block/trailblaze/issues/210.
+ */
+private val discoveryCache = ConcurrentHashMap<String, Map<String, String>>()
+
+private fun discoverMerged(
+  key: String,
+  fromAssetsSource: () -> Map<String, String>,
+  fromClasspathSource: () -> Map<String, String>,
+): Map<String, String> {
+  discoveryCache[key]?.let { return it }
+  val fromAssets =
+    try {
+      fromAssetsSource()
+    } catch (_: IllegalStateException) {
+      // InstrumentationRegistry not registered — non-instrumentation test context.
+      null
+    }
+  // Merge: classpath first so instrumentation-asset keys can override.
+  val classpath = fromClasspathSource()
+  val merged = classpath + (fromAssets ?: emptyMap())
+  // Logged on cache miss only — one line per distinct discovery, not per request.
+  Console.log(
+    "[platformConfigResourceSource/android] $key assets=" +
+      "${fromAssets?.size ?: "unavailable"} classpath=${classpath.size} merged=${merged.size}",
+  )
+  // Memoize only the healthy shape: a degraded (assets-unavailable) result must not pin the
+  // process to classpath-only when a later call CAN see assets.
+  if (fromAssets != null) discoveryCache[key] = merged
+  return merged
+}
+
 actual fun platformConfigResourceSource(): ConfigResourceSource =
   object : ConfigResourceSource {
-    override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> {
-      val fromAssets =
-        try {
-          AssetManagerConfigResourceSource.discoverAndLoad(directoryPath, suffix)
-        } catch (_: IllegalStateException) {
-          // InstrumentationRegistry not registered — non-instrumentation test context.
-          null
-        }
-      val classpath = ClasspathConfigResourceSource.discoverAndLoad(directoryPath, suffix)
-      // Merge: classpath first so instrumentation-asset keys can override.
-      val merged = classpath + (fromAssets ?: emptyMap())
-      Console.log(
-        "[platformConfigResourceSource/android] dir=$directoryPath assets=" +
-          "${fromAssets?.size ?: "unavailable"} classpath=${classpath.size} merged=${merged.size}",
+    override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> =
+      discoverMerged(
+        key = "flat|$directoryPath|$suffix",
+        fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
+        fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoad(directoryPath, suffix) },
       )
-      return merged
-    }
 
-    override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> {
-      val fromAssets =
-        try {
-          AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix)
-        } catch (_: IllegalStateException) {
-          null
-        }
-      val classpath = ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix)
-      val merged = classpath + (fromAssets ?: emptyMap())
-      Console.log(
-        "[platformConfigResourceSource/android] recursive dir=$directoryPath assets=" +
-          "${fromAssets?.size ?: "unavailable"} classpath=${classpath.size} merged=${merged.size}",
+    override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
+      discoverMerged(
+        key = "recursive|$directoryPath|$suffix",
+        fromAssetsSource = { AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
+        fromClasspathSource = { ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix) },
       )
-      return merged
-    }
   }

@@ -53,10 +53,7 @@ data class InputTextTrailblazeTool(
     // before execute() runs, so `text` arrives resolved here.
     val maestroCommands = if (hideKeyboardAfter) {
       listOf(InputTextCommand(text)) +
-        HideKeyboardTrailblazeTool.hideKeyboardCommands(
-          platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
-          orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
-        )
+        HideKeyboardTrailblazeTool.hideKeyboardCommands(toolExecutionContext.trailblazeDeviceInfo)
     } else {
       listOf(InputTextCommand(text))
     }

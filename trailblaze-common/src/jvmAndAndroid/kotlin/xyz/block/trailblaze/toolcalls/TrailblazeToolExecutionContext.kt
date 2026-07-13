@@ -26,19 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * shared context would race on that field and mis-record tools.
  */
 class TrailblazeToolExecutionContext(
-  /**
-   * `var`, not `val`: a shared tool-batch context (see
-   * [xyz.block.trailblaze.toolcalls.ToolBatchScope]) is built once for a whole recording but
-   * must still hand each dispatched tool a *current* screen state — tools like
-   * [xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool] and
-   * [xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool] read this field directly
-   * rather than re-capturing via [screenStateProvider], so a frozen-at-first-tool value would
-   * make every later tool in the batch act on stale (pre-action) UI.
-   * [xyz.block.trailblaze.BaseTrailblazeAgent.runTrailblazeTools] reassigns this before each
-   * dispatch into a shared batch, while reusing the same context instance (and therefore the
-   * same [androidDeviceCommandExecutor]) for the rest of the batch's lifetime.
-   */
-  var screenState: ScreenState?,
+  screenState: ScreenState?,
   val traceId: TraceId?,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo,
   val sessionProvider: TrailblazeSessionProvider,
@@ -162,6 +150,40 @@ class TrailblazeToolExecutionContext(
    */
   val toolRepo: TrailblazeToolRepo? = null,
 ) {
+  /**
+   * The screen state tools act against. Reading this always yields a *current* state:
+   *
+   * - `var`, not `val`: a shared tool-batch context (see
+   *   [xyz.block.trailblaze.toolcalls.ToolBatchScope]) is built once for a whole recording but
+   *   must still hand each dispatched tool a *current* screen state — tools like
+   *   [xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool] and
+   *   [xyz.block.trailblaze.toolcalls.commands.ClearTextTrailblazeTool] read this field directly
+   *   rather than re-capturing via [screenStateProvider], so a frozen-at-first-tool value would
+   *   make every later tool in the batch act on stale (pre-action) UI.
+   *   [xyz.block.trailblaze.BaseTrailblazeAgent.runTrailblazeTools] reassigns this before each
+   *   dispatch into a shared batch, while reusing the same context instance (and therefore the
+   *   same [androidDeviceCommandExecutor]) for the rest of the batch's lifetime.
+   * - **Lazy when unset**: when the field is null and a [screenStateProvider] is wired, the
+   *   getter captures on first read and caches until the next reassignment. This lets
+   *   dispatchers skip the up-front capture for tools that never read the field (`launchApp`,
+   *   `pressKey`, `inputText`, every RPC-dispatched tool that resolves against the device's own
+   *   live tree) — on the host→on-device RPC path that capture was a full screenshot RPC per
+   *   recorded tool (https://github.com/block/trailblaze/issues/210). Assigning null re-arms lazy capture, so "refresh
+   *   for the next dispatch" and "don't capture unless consumed" compose.
+   * - **With a [screenStateProvider] wired, reads never observe null** — a null read captures
+   *   instead. A consumer that treats a null `screenState` as "no state available" keeps that
+   *   meaning only on contexts constructed without a provider.
+   * - The capture is single-flight (synchronized): parallel nested callbacks share one context
+   *   (see [nestedDispatchDepth]), so an unguarded first read would let two of them race into
+   *   duplicate device captures.
+   */
+  var screenState: ScreenState? = screenState
+    get() = field ?: synchronized(screenStateCaptureLock) {
+      field ?: screenStateProvider?.invoke()?.also { field = it }
+    }
+
+  private val screenStateCaptureLock = Any()
+
   /**
    * Set by a tool during [ExecutableTrailblazeTool.execute] to replace the invoked tool
    * with a different representation in the recorded trail based on what was discovered at

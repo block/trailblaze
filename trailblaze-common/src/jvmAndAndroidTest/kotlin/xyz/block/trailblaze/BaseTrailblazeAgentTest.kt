@@ -271,6 +271,37 @@ class BaseTrailblazeAgentTest {
   }
 
   @Test
+  fun `null screenState mid-batch clears the previous dispatch's state and re-arms lazy capture`() = runBlocking {
+    // Dispatch-side contract of lazy screen-state capture
+    // (https://github.com/block/trailblaze/issues/210): the batch loop's reassignment is
+    // UNCONDITIONAL — a null incoming screenState clears the previous dispatch's value so a
+    // reading tool lazily captures CURRENT UI via the provider. If an
+    // `if (screenState != null)` guard sneaks back in, tool 2 here sees tool 1's stale "first".
+    val agent = ScreenStateThreadingTestAgent()
+    val seenScreenStates = mutableListOf<ScreenState?>()
+    val recordingTool = RecordingStubTool(onExecute = { ctx -> seenScreenStates += ctx.screenState })
+    val provider: () -> ScreenState = { LabeledScreenState("fresh-capture") }
+
+    agent.runInSharedToolBatch {
+      agent.runTrailblazeTools(
+        tools = listOf(recordingTool),
+        screenState = LabeledScreenState("first"),
+        elementComparator = noOpComparator,
+        screenStateProvider = provider,
+      )
+      agent.runTrailblazeTools(
+        tools = listOf(recordingTool),
+        screenState = null,
+        elementComparator = noOpComparator,
+        screenStateProvider = provider,
+      )
+    }
+
+    assertThat((seenScreenStates[0] as LabeledScreenState).label).isEqualTo("first")
+    assertThat((seenScreenStates[1] as LabeledScreenState).label).isEqualTo("fresh-capture")
+  }
+
+  @Test
   fun `nested runInSharedToolBatch reuses the outer scope instead of re-entering`() = runBlocking {
     val agent = TestAgent()
     var innerRanWithActiveScope = false
