@@ -1,0 +1,18 @@
+id: "contacts/android/link-picker"
+description: >
+  "Link contacts" picker — choose-a-contact list with the link blurb naming
+  the source contact, search in the toolbar.
+android:
+  required:
+    - description: "Link contacts title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Link contacts$"
+    - description: "Link blurb"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/join_contact_blurb"
+    - description: "Search button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_search"

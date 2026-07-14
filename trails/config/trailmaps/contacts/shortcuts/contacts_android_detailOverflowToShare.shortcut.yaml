@@ -1,0 +1,9 @@
+id: contacts_android_detailOverflowToShare
+description: Choose Share from the contact card overflow, opening the system share sheet.
+shortcut:
+  from: contacts/android/detail-overflow-menu
+  to: contacts/android/share-sheet
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Share

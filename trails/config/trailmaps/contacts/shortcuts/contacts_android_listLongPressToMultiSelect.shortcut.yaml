@@ -1,0 +1,16 @@
+id: contacts_android_listLongPressToMultiSelect
+description: Long-press (press-and-hold) a contact row to enter multi-select mode.
+shortcut:
+  from: contacts/android/list-populated
+  to: contacts/android/multi-select
+parameters: []
+tools:
+  - dragTo:
+      ref: a286
+      toX: 886
+      toY: 788
+      durationMs: 1500
+      reasoning: >
+        Press-and-hold the contact row (zero-distance drag) to enter
+        multi-select. tapOnPoint's longPress flag degrades to a plain tap on
+        the on-device accessibility driver, so a held drag is used instead.

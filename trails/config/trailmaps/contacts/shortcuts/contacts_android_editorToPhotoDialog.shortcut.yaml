@@ -1,0 +1,12 @@
+id: contacts_android_editorToPhotoDialog
+description: Tap the avatar area in the editor, opening the contact-photo chooser.
+shortcut:
+  from: contacts/android/new-contact-editor
+  to: contacts/android/photo-dialog
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the contact-photo chooser
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com\.android\.contacts:id/photo_touch_intercept_overlay

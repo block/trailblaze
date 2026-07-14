@@ -1,0 +1,19 @@
+id: "contacts/android/share-sheet"
+description: >
+  System share sheet over a contact card — "Sharing 1 file" headline with the
+  exported vCard preview and share targets (Bluetooth, Messaging…).
+android:
+  required:
+    - description: "Share sheet headline"
+      selector:
+        androidAccessibility:
+          textRegex: "^Sharing \\d+ files?$"
+          resourceIdRegex: "com\\.android\\.intentresolver:id/headline"
+    - description: "vCard file preview"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.intentresolver:id/content_preview_filename"
+    - description: "Bluetooth share target"
+      selector:
+        androidAccessibility:
+          textRegex: "^Bluetooth$"

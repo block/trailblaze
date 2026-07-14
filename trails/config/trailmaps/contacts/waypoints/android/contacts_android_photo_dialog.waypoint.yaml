@@ -1,0 +1,18 @@
+id: "contacts/android/photo-dialog"
+description: >
+  "Change photo" chooser dialog on the contact editor — Take photo /
+  Choose photo options with a CANCEL button.
+android:
+  required:
+    - description: "Change photo title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Change photo$"
+    - description: "Photo options list"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/select_dialog_listview"
+    - description: "Take photo option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Take photo$"

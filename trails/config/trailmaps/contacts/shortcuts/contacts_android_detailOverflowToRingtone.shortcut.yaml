@@ -1,0 +1,9 @@
+id: contacts_android_detailOverflowToRingtone
+description: Choose Set ringtone from the contact card overflow, opening the system ringtone picker.
+shortcut:
+  from: contacts/android/detail-overflow-menu
+  to: contacts/android/ringtone-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Set ringtone

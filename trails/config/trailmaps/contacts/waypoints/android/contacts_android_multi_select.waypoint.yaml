@@ -1,0 +1,18 @@
+id: "contacts/android/multi-select"
+description: >
+  Contacts list in multi-select mode (entered via long-press) — close button
+  and selected-count in the toolbar, Share/Delete actions, per-row checkboxes.
+android:
+  required:
+    - description: "Close selection button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/selection_close"
+    - description: "Selected count"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/selection_count_text"
+    - description: "Share selection action"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_share"

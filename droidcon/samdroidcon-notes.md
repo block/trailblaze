@@ -142,24 +142,46 @@ verified in `WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`.
 Fallback if the daemon won't start live: the captured asset-c-graph-*.png stills, or
 speak it — "100 named places, 81 shortcuts, committed in the repo today."
 
-**ANDROID CONTACTS MAP — NEW 2026-07-14, VERIFIED LIVE.** Contacts is no longer
-iOS-only: **32 Android waypoints + 32 mined example screenshots + 33 shortcuts** now
-sit beside the 100/81 iOS set (contacts chip reads **132**, android chip **135**).
-Android money shot: Target **contacts** → Platform **android** (header: **32 SCREENS ·
-33 SHORTCUTS**) → SUBWAY → FOCAL = `contacts/android/list-populated` → Fit View.
-Stage-talk line: every screenshot was captured by replaying 29 recorded micro-trails
-on-device (29/29 green) and mining the session logs with
-`trailblaze waypoint capture-example` — the product mapped the app with its own tools;
-all 32 self-validations MATCH.
+**ANDROID CONTACTS MAP — 2026-07-14, VERIFIED LIVE, FULL COVERAGE.** Contacts is no
+longer iOS-only: **37 Android waypoints + 37 mined example screenshots + 38 shortcuts**
+sit beside the 100/81 iOS set (contacts chip reads **137**). 37 IS full coverage —
+AOSP Contacts is a much smaller app than iOS Contacts; the count includes every
+settings screen, editor state, dialog, search state, plus the five system-integration
+states (share sheet, link picker, ringtone picker, photo dialog, multi-select).
+Android money shot: Target **contacts** → Platform **android** (header: **37 SCREENS ·
+38 SHORTCUTS**) → SUBWAY → FOCAL = `contacts/android/list-populated` → Fit View.
+
+**SELF-MAPPING MECHANICS (backs the new "The product mapped itself" slide).** The
+whole map is exhaust from Trailblaze's own tools — no screen was hand-screenshotted,
+no tree hand-transcribed:
+1. `trailblaze snapshot` reads the live UI tree; waypoint YAML is authored from the
+   anchors the tree itself exposes (~3 anchored regex selectors: title, resource-id,
+   one landmark; full-string match semantics — `^Sharing` fails, `^Sharing \d+ files?$`
+   matches).
+2. A recorded micro-trail per state replays deterministically to that screen
+   (launchMode: RESUME so app data survives).
+3. `trailblaze verify "<state description>"` on the reached screen writes a session
+   log carrying the REAL node tree + REAL screenshot in one shot.
+4. `trailblaze waypoint capture-example --id <waypoint> --session <session>` mines
+   that log into the committed `.example.json` + `.webp` pair and self-validates it
+   against the selectors (37/37 MATCH).
+Stage line: the map isn't documentation OF the tool, it's EXHAUST FROM the tool —
+the same primitives the agent navigates with (snapshot / verify / assertWaypoint)
+are what built the map.
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits
   on 52621, the 52620 viewer dies with "Address already in use" — `TRAILBLAZE_PORT=52621
   trailblaze --stop` first.
 - GOTCHA example pairs must be classifier-less (`*.example.json`/`.webp`) for graph
-  nodes to show screenshots; `capture-example` writes `*.example.android-phone.json` —
-  rename both files AND the embedded `screenshotFile` field (this repo's are fixed).
+  nodes to show screenshots; `capture-example` writes `*.example.android-phone.json`
+  when the source log records a classifier (run sessions do; `verify` CLI sessions
+  don't) — rename both files AND the embedded `screenshotFile` field.
 - `capture-example` won't overwrite existing pairs without `--force`.
+- GOTCHA long-press: `tapOnPoint {longPress: true}` and ref-based `longPress` both
+  degrade to a plain TAP on the on-device accessibility driver — a zero-distance
+  `dragTo` (same ref/point, `durationMs: 1500`) is the reliable press-and-hold
+  (that's how the multi-select shortcut works).
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's

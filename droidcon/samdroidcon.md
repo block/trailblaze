@@ -1371,15 +1371,53 @@ Demo app = CONTACTS (round-4 decision). Optional beat: the Calendar map exists t
 — "a pattern, not a one-off." NUMBER GUARD: Calendar was reported as 100 waypoints
 + 64 shortcuts — BOTH maps at exactly 100 smells like a display cap. Verify in the
 live viewer before quoting the Calendar count, or just say "another hundred-odd
-waypoints"; the Contacts 100/81 is confirmed from the embedded screenshots. Android contacts side
-is waypoint-thin today — if asked: "maps mature independently; the journey doesn't
-care." A 28s tour video also exists (asset-c-graph.mp4 in public/) if you'd rather
+waypoints"; the Contacts 100/81 is confirmed from the embedded screenshots. Android
+contacts is now fully mapped too — 37 waypoints / 38 shortcuts (2026-07-14), and the
+NEXT slide tells that story. A 28s tour video also exists (asset-c-graph.mp4 in public/) if you'd rather
 run cinema than click stills — swap the <div> block for a <video> line.
 PLAN B (live > canned): the viewer runs LOCAL, zero network — command in notes
 "Plan B" section; 30 seconds of mouse-wandering beats a flythrough.
-HAND-OFF: "The whole recipe, one slide."
+HAND-OFF: "And here's the part I didn't expect to be able to say out loud."
 -->
 
+---
+layout: center
+class: text-center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
+
+# The product mapped itself
+
+<div class="pt-2 text-sm opacity-60">the Android Contacts map — <b>37 waypoints · 38 shortcuts</b> — built by Trailblaze driving its own tools</div>
+
+<div class="grid grid-cols-4 gap-4 pt-10 text-left text-sm max-w-3xl mx-auto">
+  <div v-click><b>explore</b><br/><span class="opacity-60">snapshot the live screen — the UI tree names its own anchors</span></div>
+  <div v-click><b>describe</b><br/><span class="opacity-60">a waypoint is ~3 selectors of YAML: a title, an id, a landmark</span></div>
+  <div v-click><b>walk</b><br/><span class="opacity-60">a micro-trail replays to the state; the run logs the evidence</span></div>
+  <div v-click><b>mine</b><br/><span class="opacity-60">capture-example lifts screenshot + tree from its own logs, then self-validates</span></div>
+</div>
+
+<!--
+THE STORY (real, 2026-07-14, this repo): the Android Contacts map on the previous
+slide's platform toggle was not hand-drawn. An agent session drove Trailblaze's own
+CLI end-to-end: `snapshot` to read the live UI tree, waypoint YAML authored from
+what the tree itself exposes (anchored regexes on title/resource-id/landmark),
+a micro-trail per state to walk there deterministically, then
+`waypoint capture-example` mining the screenshot + node tree out of Trailblaze's
+own session logs — every example pair is a REAL device capture, self-validated
+(37/37 MATCH) against the selectors before it lands in the repo.
+THE LINE: the map is not documentation OF the tool — it's EXHAUST FROM the tool.
+The same primitives the agent uses to navigate (snapshot, verify, assertWaypoint)
+are the ones that built the map. Dogfooding closes the loop.
+NUMBERS: 37 waypoints / 38 shortcuts, verified in the live viewer header. If asked
+"why 37 vs iOS's 100": AOSP Contacts is a much smaller app — 37 IS full coverage
+(every settings screen, editor state, dialog, picker, search state, plus the
+system-integration states: share sheet, link picker, ringtone picker, photo
+dialog, multi-select).
+IF ASKED "how long": one working day, two agent sessions, on an emulator.
+HAND-OFF: "The whole recipe, one slide."
+-->
 
 ---
 

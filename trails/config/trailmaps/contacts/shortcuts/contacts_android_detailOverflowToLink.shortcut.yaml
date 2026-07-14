@@ -1,0 +1,9 @@
+id: contacts_android_detailOverflowToLink
+description: Choose Link from the contact card overflow, opening the link-contacts picker.
+shortcut:
+  from: contacts/android/detail-overflow-menu
+  to: contacts/android/link-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Link

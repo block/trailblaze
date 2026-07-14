@@ -1,0 +1,19 @@
+id: "contacts/android/ringtone-picker"
+description: >
+  System ringtone picker dialog ("Ringtones") — radio list of tones with
+  "Default ringtone" on top, OK/CANCEL buttons.
+android:
+  required:
+    - description: "Ringtones dialog title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Ringtones$"
+          resourceIdRegex: "android:id/alertTitle"
+    - description: "Default ringtone entry"
+      selector:
+        androidAccessibility:
+          textRegex: "^Default ringtone$"
+    - description: "Tone radio row"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.soundpicker:id/checked_text_view"
