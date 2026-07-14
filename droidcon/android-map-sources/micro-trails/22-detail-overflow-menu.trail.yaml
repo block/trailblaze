@@ -1,0 +1,21 @@
+- config:
+    title: 'Map micro: detail-overflow-menu'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the detail-overflow-menu state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementWithText:
+          text: Casey Trailblaze
+      - tapOnElementBySelector:
+          reason: Open the overflow menu
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: More options

@@ -1,0 +1,28 @@
+- config:
+    title: 'Map micro: customize-view'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the customize-view state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the navigation drawer
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Open navigation drawer
+      - tapOnElementBySelector:
+          reason: Open Settings
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/nav_settings"
+      - tapOnElementWithText:
+          text: Contacts to display
+      - tapOnElementWithText:
+          text: Customize

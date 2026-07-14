@@ -1,0 +1,23 @@
+- config:
+    title: 'Map micro: ringtone-picker'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the ringtone-picker state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementWithText:
+          text: Casey Trailblaze
+      - tapOnElementBySelector:
+          reason: Open the overflow menu
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: More options
+      - tapOnElementWithText:
+          text: Set ringtone

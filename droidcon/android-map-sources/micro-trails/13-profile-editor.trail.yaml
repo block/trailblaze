@@ -1,0 +1,27 @@
+- config:
+    title: 'Map micro: profile-editor'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the profile-editor state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the navigation drawer
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Open navigation drawer
+      - tapOnElementBySelector:
+          reason: Open Settings
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/nav_settings"
+      - tapOnElementWithText:
+          text: My info
+      - hideKeyboard: {}

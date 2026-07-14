@@ -168,6 +168,9 @@ no tree hand-transcribed:
 Stage line: the map isn't documentation OF the tool, it's EXHAUST FROM the tool —
 the same primitives the agent navigates with (snapshot / verify / assertWaypoint)
 are what built the map.
+Regen/extend on ANY machine: `droidcon/android-map-sources/` — README with the full
+pipeline + gotchas, seed-contacts.sh (the 8-contact device DB every screenshot
+assumes), and all 34 replayable micro-trails.
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits

@@ -1,0 +1,25 @@
+- config:
+    title: 'Map micro: editor-name-expanded'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the editor-name-expanded state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the new-contact editor
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/floating_action_button"
+      - hideKeyboard: {}
+      - tapOnElementBySelector:
+          reason: Expand name fields
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/expansion_view_container"

@@ -1,0 +1,21 @@
+- config:
+    title: 'Map micro: multi-select'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the multi-select state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - dragTo:
+          ref: a286
+          toX: 886
+          toY: 788
+          durationMs: 1500
+          reasoning: Press-and-hold the Casey row (zero-distance drag) to enter multi-select mode
+  - step: Without tapping anything, use assertVisibleWithText to confirm multi-select mode is active (assert the selected-count text in the toolbar, such as '1 selected').

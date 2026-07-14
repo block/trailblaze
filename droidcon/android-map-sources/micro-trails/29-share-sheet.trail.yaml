@@ -1,0 +1,24 @@
+- config:
+    title: 'Map micro: share-sheet'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the share-sheet state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementWithText:
+          text: Casey Trailblaze
+      - tapOnElementBySelector:
+          reason: Open the overflow menu
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: More options
+      - tapOnElementWithText:
+          text: Share
+  - step: Without tapping anything, use assertVisibleWithText to confirm the system share sheet is open (assert any visible share-target or sheet text you can see).

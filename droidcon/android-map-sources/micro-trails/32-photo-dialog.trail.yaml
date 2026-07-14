@@ -1,0 +1,25 @@
+- config:
+    title: 'Map micro: photo-dialog'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the photo-dialog state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the new-contact editor
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/floating_action_button
+      - hideKeyboard: {}
+      - tapOnElementBySelector:
+          reason: Open the contact-photo picker
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: com.android.contacts:id/photo_touch_intercept_overlay

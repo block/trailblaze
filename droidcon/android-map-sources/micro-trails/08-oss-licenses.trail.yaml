@@ -1,0 +1,31 @@
+- config:
+    title: 'Map micro: oss-licenses'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the oss-licenses state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the navigation drawer
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Open navigation drawer
+      - tapOnElementBySelector:
+          reason: Open Settings
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/nav_settings"
+      - swipe:
+          direction: UP
+          reasoning: reveal below-the-fold rows
+      - tapOnElementWithText:
+          text: About Contacts
+      - tapOnElementWithText:
+          text: Open source licenses

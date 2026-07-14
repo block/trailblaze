@@ -1,0 +1,22 @@
+- config:
+    title: 'Map micro: edit-existing'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the edit-existing state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementWithText:
+          text: Casey Trailblaze
+      - tapOnElementBySelector:
+          reason: Edit the contact
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/menu_edit"
+      - hideKeyboard: {}

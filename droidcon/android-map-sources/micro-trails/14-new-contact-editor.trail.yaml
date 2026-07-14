@@ -1,0 +1,20 @@
+- config:
+    title: 'Map micro: new-contact-editor'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the new-contact-editor state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the new-contact editor
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/floating_action_button"
+      - hideKeyboard: {}

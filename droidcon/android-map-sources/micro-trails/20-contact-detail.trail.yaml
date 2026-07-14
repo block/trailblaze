@@ -1,0 +1,44 @@
+- config:
+    title: 'Map micro: contact-detail'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the contact-detail state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the new-contact editor
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/floating_action_button"
+      - inputText:
+          text: Casey
+          reasoning: map tour
+      - tapOnElementBySelector:
+          reason: Focus last name
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Last name
+      - inputText:
+          text: Trailblaze
+          reasoning: map tour
+      - tapOnElementBySelector:
+          reason: Focus phone
+          nodeSelector:
+            androidAccessibility:
+              inputType: 3
+      - inputText:
+          text: 5550134
+          reasoning: map tour
+      - hideKeyboard: {}
+      - tapOnElementBySelector:
+          reason: Save the contact
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/editor_menu_save_button"

@@ -1,0 +1,24 @@
+- config:
+    title: 'Map micro: create-label-dialog'
+    target: contacts
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+    tags:
+    - map-micro
+- prompts:
+  - step: Navigate to the create-label-dialog state
+    recording:
+      tools:
+      - launchApp:
+          appId: com.android.contacts
+          launchMode: RESUME
+      - tapOnElementBySelector:
+          reason: Open the navigation drawer
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Open navigation drawer
+      - tapOnElementBySelector:
+          reason: Open create-label dialog
+          nodeSelector:
+            androidAccessibility:
+              resourceIdRegex: "com.android.contacts:id/nav_create_label"
