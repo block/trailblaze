@@ -1,0 +1,10 @@
+id: contacts_android_searchToNoResults
+description: Type a query that matches nothing.
+shortcut:
+  from: contacts/android/search-active
+  to: contacts/android/search-no-results
+parameters: []
+tools:
+  - inputText:
+      text: Zzzq
+      reasoning: shortcut input

@@ -1,0 +1,9 @@
+id: contacts_android_editorToPhoneTypePicker
+description: Open the phone label picker from the type spinner.
+shortcut:
+  from: contacts/android/new-contact-editor
+  to: contacts/android/phone-type-picker-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Mobile

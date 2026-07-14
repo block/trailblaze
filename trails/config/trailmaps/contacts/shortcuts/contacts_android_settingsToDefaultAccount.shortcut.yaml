@@ -1,0 +1,9 @@
+id: contacts_android_settingsToDefaultAccount
+description: Open the default-account picker.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/default-account-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Default account for new contacts

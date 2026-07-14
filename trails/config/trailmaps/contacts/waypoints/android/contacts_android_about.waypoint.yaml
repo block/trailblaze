@@ -1,0 +1,23 @@
+id: "contacts/android/about"
+description: >
+  About Contacts screen — Build version, Open source licenses, Privacy policy,
+  and Terms of service rows. Reached from the bottom of Contacts settings.
+android:
+  required:
+    - description: "About Contacts title"
+      selector:
+        androidAccessibility:
+          textRegex: "^About Contacts$"
+    - description: "Build version row"
+      selector:
+        androidAccessibility:
+          textRegex: "^Build version$"
+    - description: "Open source licenses row"
+      selector:
+        androidAccessibility:
+          textRegex: "^Open source licenses$"
+  forbidden:
+    - description: "Settings 'My info' row — would mean we're still on the settings list"
+      selector:
+        androidAccessibility:
+          textRegex: "^My info$"

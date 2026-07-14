@@ -1,0 +1,28 @@
+id: "contacts/android/new-contact-editor"
+description: >
+  Pristine "Create new contact" editor — Saving-to-Device header, empty
+  First/Last name fields, collapsed name section, SAVE button.
+android:
+  required:
+    - description: "Create new contact title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Create new contact$"
+    - description: "SAVE button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/editor_menu_save_button"
+    - description: "Collapsed name-fields expander"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Show more name fields$"
+    - description: "Untouched First name field (text still mirrors hint)"
+      selector:
+        androidAccessibility:
+          textRegex: "^First name$"
+          hintTextRegex: "^First name$"
+  forbidden:
+    - description: "Middle name field — only present when name section is expanded"
+      selector:
+        androidAccessibility:
+          hintTextRegex: "^Middle name$"

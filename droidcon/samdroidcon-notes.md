@@ -142,6 +142,25 @@ verified in `WaypointGraphEndpoint.kt` / `TrailblazePortManager.kt`.
 Fallback if the daemon won't start live: the captured asset-c-graph-*.png stills, or
 speak it — "100 named places, 81 shortcuts, committed in the repo today."
 
+**ANDROID CONTACTS MAP — NEW 2026-07-14, VERIFIED LIVE.** Contacts is no longer
+iOS-only: **32 Android waypoints + 32 mined example screenshots + 33 shortcuts** now
+sit beside the 100/81 iOS set (contacts chip reads **132**, android chip **135**).
+Android money shot: Target **contacts** → Platform **android** (header: **32 SCREENS ·
+33 SHORTCUTS**) → SUBWAY → FOCAL = `contacts/android/list-populated` → Fit View.
+Stage-talk line: every screenshot was captured by replaying 29 recorded micro-trails
+on-device (29/29 green) and mining the session logs with
+`trailblaze waypoint capture-example` — the product mapped the app with its own tools;
+all 32 self-validations MATCH.
+- The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
+  Casey Trailblaze 555-0134 is the star) so list/search screens look real.
+- GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits
+  on 52621, the 52620 viewer dies with "Address already in use" — `TRAILBLAZE_PORT=52621
+  trailblaze --stop` first.
+- GOTCHA example pairs must be classifier-less (`*.example.json`/`.webp`) for graph
+  nodes to show screenshots; `capture-example` writes `*.example.android-phone.json` —
+  rename both files AND the embedded `screenshotFile` field (this repo's are fixed).
+- `capture-example` won't overwrite existing pairs without `--force`.
+
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
 tried getting an LLM to drive your real app? … Keep your hand up if you'd trust it to run

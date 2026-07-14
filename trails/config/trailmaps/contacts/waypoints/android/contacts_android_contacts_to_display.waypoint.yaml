@@ -1,0 +1,27 @@
+id: "contacts/android/contacts-to-display"
+description: >
+  Contacts-to-display filter screen (AccountFilterActivity) — "Contacts to
+  display" title with All contacts / Customize radio rows.
+android:
+  required:
+    - description: "Contacts to display title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Contacts to display$"
+    - description: "All contacts radio row"
+      selector:
+        androidAccessibility:
+          textRegex: "^All contacts$"
+    - description: "Customize radio row"
+      selector:
+        androidAccessibility:
+          textRegex: "^Customize$"
+    - description: "A radio button control"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/radioButton"
+  forbidden:
+    - description: "Customize-view SAVE — would mean we advanced into the customize editor"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_save"

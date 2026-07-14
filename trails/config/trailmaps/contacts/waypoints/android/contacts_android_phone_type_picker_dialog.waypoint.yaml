@@ -1,0 +1,26 @@
+id: "contacts/android/phone-type-picker-dialog"
+description: >
+  Phone label picker dialog — single-choice list of phone types
+  (Mobile, Home, Work, Work Fax, Pager, Custom, Callback, Car…).
+android:
+  required:
+    - description: "Work Fax option (phone-only label)"
+      selector:
+        androidAccessibility:
+          textRegex: "^Work Fax$"
+          resourceIdRegex: "android:id/text1"
+    - description: "Pager option (phone-only label)"
+      selector:
+        androidAccessibility:
+          textRegex: "^Pager$"
+          resourceIdRegex: "android:id/text1"
+    - description: "Custom option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Custom$"
+          resourceIdRegex: "android:id/text1"
+  forbidden:
+    - description: "Custom label name title — that is the follow-up dialog"
+      selector:
+        androidAccessibility:
+          textRegex: "^Custom label name$"

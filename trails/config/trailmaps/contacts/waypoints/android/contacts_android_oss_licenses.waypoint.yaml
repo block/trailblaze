@@ -1,0 +1,19 @@
+id: "contacts/android/oss-licenses"
+description: >
+  Open-source licenses screen (LicenseActivity) — "Open source licenses" title
+  over a WebView of third-party notices (guava, libphonenumber, …).
+android:
+  required:
+    - description: "Open source licenses title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Open source licenses$"
+    - description: "License notices WebView content"
+      selector:
+        androidAccessibility:
+          textRegex: "Notices for.*"
+  forbidden:
+    - description: "Build version row — would mean we're still on the About screen"
+      selector:
+        androidAccessibility:
+          textRegex: "^Build version$"

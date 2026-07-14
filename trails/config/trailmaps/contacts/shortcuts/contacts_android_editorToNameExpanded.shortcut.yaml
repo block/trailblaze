@@ -1,0 +1,12 @@
+id: contacts_android_editorToNameExpanded
+description: Expand the additional name fields.
+shortcut:
+  from: contacts/android/new-contact-editor
+  to: contacts/android/editor-name-expanded
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Expand name fields
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/expansion_view_container

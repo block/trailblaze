@@ -1,0 +1,13 @@
+id: contacts_android_detailToEditExisting
+description: Edit the contact from its card.
+shortcut:
+  from: contacts/android/contact-detail
+  to: contacts/android/edit-existing
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Edit the contact
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/menu_edit
+  - hideKeyboard: {}

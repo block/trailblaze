@@ -1,0 +1,23 @@
+id: "contacts/android/edit-existing"
+description: >
+  "Edit contact" editor for an existing contact — same editor chrome as
+  create, but titled Edit contact and pre-filled with the contact's data.
+android:
+  required:
+    - description: "Edit contact title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Edit contact$"
+    - description: "SAVE button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/editor_menu_save_button"
+    - description: "Editor scroller"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/contact_editor_scroller"
+  forbidden:
+    - description: "Create new contact title — that is the create editor"
+      selector:
+        androidAccessibility:
+          textRegex: "^Create new contact$"

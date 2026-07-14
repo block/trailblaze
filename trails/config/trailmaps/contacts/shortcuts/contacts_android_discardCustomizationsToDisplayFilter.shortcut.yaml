@@ -1,0 +1,12 @@
+id: contacts_android_discardCustomizationsToDisplayFilter
+description: Confirm discarding customizations.
+shortcut:
+  from: contacts/android/discard-customizations-dialog
+  to: contacts/android/contacts-to-display
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Confirm discard
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: android:id/button1

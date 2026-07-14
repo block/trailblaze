@@ -1,0 +1,12 @@
+id: contacts_android_listToSearch
+description: Open search from the contacts list.
+shortcut:
+  from: contacts/android/list-populated
+  to: contacts/android/search-active
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open search
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/menu_search

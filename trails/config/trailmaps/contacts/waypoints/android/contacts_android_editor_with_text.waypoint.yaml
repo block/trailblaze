@@ -1,0 +1,25 @@
+id: "contacts/android/editor-with-text"
+description: >
+  "Create new contact" editor with a dirty draft — at least the first-name
+  field has typed text (an empty EditText mirrors its hint as text, so the
+  untouched field is forbidden).
+android:
+  required:
+    - description: "Create new contact title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Create new contact$"
+    - description: "SAVE button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/editor_menu_save_button"
+    - description: "First name field present"
+      selector:
+        androidAccessibility:
+          hintTextRegex: "^First name$"
+  forbidden:
+    - description: "Untouched First name field — text mirroring hint means nothing typed"
+      selector:
+        androidAccessibility:
+          textRegex: "^First name$"
+          hintTextRegex: "^First name$"

@@ -1,0 +1,9 @@
+id: contacts_android_settingsToPhoneticName
+description: Open the Phonetic name dialog.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/settings-phonetic-name-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Phonetic name

@@ -1,0 +1,24 @@
+id: "contacts/android/blocked-numbers"
+description: >
+  Blocked numbers screen (system telecom BlockedNumbersActivity, reached from
+  Contacts settings) — "Blocked numbers" title, the "Unknown" callers block
+  switch, explainer text, and an "Add a number" action.
+android:
+  required:
+    - description: "Blocked numbers title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Blocked numbers$"
+    - description: "Add a number action"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.server\\.telecom:id/add_blocked"
+    - description: "Block-unknown-callers switch row"
+      selector:
+        androidAccessibility:
+          textRegex: "Block calls from unidentified callers"
+  forbidden:
+    - description: "Add-number input field — would mean the add-blocked-number dialog is open"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.server\\.telecom:id/add_blocked_number"

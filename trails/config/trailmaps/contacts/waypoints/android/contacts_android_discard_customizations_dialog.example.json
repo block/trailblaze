@@ -1,0 +1,315 @@
+{
+  "waypointId": "contacts/android/discard-customizations-dialog",
+  "capturedAt": "2026-07-14T12:47:07.661035Z",
+  "capturedFrom": "logs/11_discard_customizations_dialog_trail_c7c2149f/005_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "contacts_android_discard_customizations_dialog.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x1": 273,
+    "y1": 1000,
+    "x2": 1166,
+    "y2": 1476,
+    "centerPoint": "719,1238",
+    "children": [
+      {
+        "nodeId": 2,
+        "x1": 329,
+        "y1": 1056,
+        "x2": 1110,
+        "y2": 1420,
+        "centerPoint": "719,1238",
+        "children": [
+          {
+            "nodeId": 3,
+            "x1": 329,
+            "y1": 1056,
+            "x2": 1110,
+            "y2": 1420,
+            "centerPoint": "719,1238",
+            "children": [
+              {
+                "nodeId": 4,
+                "x1": 329,
+                "y1": 1056,
+                "x2": 1110,
+                "y2": 1420,
+                "centerPoint": "719,1238",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x1": 329,
+                    "y1": 1056,
+                    "x2": 1110,
+                    "y2": 1224,
+                    "centerPoint": "719,1140",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x1": 329,
+                        "y1": 1056,
+                        "x2": 1110,
+                        "y2": 1195,
+                        "centerPoint": "719,1125",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x1": 329,
+                            "y1": 1056,
+                            "x2": 1110,
+                            "y2": 1195,
+                            "centerPoint": "719,1125",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x1": 329,
+                                "y1": 1056,
+                                "x2": 1110,
+                                "y2": 1119,
+                                "centerPoint": "719,1087",
+                                "className": "android.view.View",
+                                "resourceId": "android:id/textSpacerNoTitle"
+                              },
+                              {
+                                "nodeId": 9,
+                                "x1": 329,
+                                "y1": 1119,
+                                "x2": 1110,
+                                "y2": 1195,
+                                "centerPoint": "719,1157",
+                                "className": "android.widget.TextView",
+                                "resourceId": "android:id/message",
+                                "text": "Discard customizations?"
+                              }
+                            ],
+                            "className": "android.widget.LinearLayout"
+                          }
+                        ],
+                        "className": "android.widget.ScrollView",
+                        "resourceId": "android:id/scrollView"
+                      }
+                    ],
+                    "className": "android.widget.FrameLayout",
+                    "resourceId": "android:id/contentPanel"
+                  },
+                  {
+                    "nodeId": 10,
+                    "x1": 329,
+                    "y1": 1224,
+                    "x2": 1110,
+                    "y2": 1420,
+                    "centerPoint": "719,1322",
+                    "children": [
+                      {
+                        "nodeId": 11,
+                        "x1": 329,
+                        "y1": 1224,
+                        "x2": 1110,
+                        "y2": 1420,
+                        "centerPoint": "719,1322",
+                        "children": [
+                          {
+                            "nodeId": 12,
+                            "x1": 575,
+                            "y1": 1238,
+                            "x2": 844,
+                            "y2": 1406,
+                            "centerPoint": "709,1322",
+                            "className": "android.widget.Button",
+                            "clickable": true,
+                            "resourceId": "android:id/button2",
+                            "text": "CANCEL"
+                          },
+                          {
+                            "nodeId": 13,
+                            "x1": 844,
+                            "y1": 1238,
+                            "x2": 1068,
+                            "y2": 1406,
+                            "centerPoint": "956,1322",
+                            "className": "android.widget.Button",
+                            "clickable": true,
+                            "resourceId": "android:id/button1",
+                            "text": "OK"
+                          }
+                        ],
+                        "className": "android.widget.LinearLayout"
+                      }
+                    ],
+                    "className": "android.widget.ScrollView",
+                    "resourceId": "android:id/buttonPanel"
+                  }
+                ],
+                "className": "android.widget.LinearLayout",
+                "resourceId": "android:id/parentPanel"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.FrameLayout"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 13,
+    "children": [
+      {
+        "nodeId": 2,
+        "ref": "k134",
+        "bounds": {
+          "left": 329,
+          "top": 1119,
+          "right": 1110,
+          "bottom": 1195
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.TextView",
+          "resourceId": "android:id/message",
+          "text": "Discard customizations?",
+          "isMultiLine": true,
+          "packageName": "com.android.contacts",
+          "drawingOrder": 2,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_256",
+            "ACTION_512",
+            "ACTION_SET_SELECTION",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      },
+      {
+        "nodeId": 9,
+        "children": [
+          {
+            "nodeId": 6,
+            "ref": "j866",
+            "bounds": {
+              "left": 575,
+              "top": 1238,
+              "right": 844,
+              "bottom": 1406
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "android:id/button2",
+              "text": "CANCEL",
+              "isClickable": true,
+              "isMultiLine": true,
+              "packageName": "com.android.contacts",
+              "isFocusable": true,
+              "drawingOrder": 3,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_FOCUS",
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 7,
+            "ref": "k402",
+            "bounds": {
+              "left": 844,
+              "top": 1238,
+              "right": 1068,
+              "bottom": 1406
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "android:id/button1",
+              "text": "OK",
+              "isClickable": true,
+              "isMultiLine": true,
+              "packageName": "com.android.contacts",
+              "isFocusable": true,
+              "drawingOrder": 4,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_FOCUS",
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 329,
+          "top": 1224,
+          "right": 1110,
+          "bottom": 1420
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ScrollView",
+          "resourceId": "android:id/buttonPanel",
+          "packageName": "com.android.contacts",
+          "isFocusable": true,
+          "drawingOrder": 4,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_FOCUS",
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 273,
+      "top": 1000,
+      "right": 1166,
+      "bottom": 1476
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.android.contacts",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

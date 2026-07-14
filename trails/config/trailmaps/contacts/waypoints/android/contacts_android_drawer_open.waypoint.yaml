@@ -1,0 +1,28 @@
+id: "contacts/android/drawer-open"
+description: >
+  AOSP Contacts navigation drawer, slid open over the list — nav items
+  Contacts, Labels, Create label, and Settings, with the hamburger flipped to
+  "Close navigation drawer".
+android:
+  required:
+    - description: "Contacts nav item"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/nav_all_contacts"
+    - description: "Labels nav item"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/nav_groups"
+    - description: "Create label nav item"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/nav_create_label"
+    - description: "Settings nav item"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/nav_settings"
+  forbidden:
+    - description: "'Open navigation drawer' hamburger — would mean the drawer is closed"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation drawer"

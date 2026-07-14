@@ -1,0 +1,19 @@
+id: "contacts/android/customize-view"
+description: >
+  Customize-view editor (CustomContactListFilterActivity) — "Customize view"
+  title with a SAVE action; per-account label checkboxes when accounts exist.
+android:
+  required:
+    - description: "Customize view title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Customize view$"
+    - description: "SAVE action"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_save"
+  forbidden:
+    - description: "All contacts radio row — would mean we're on the display-filter picker"
+      selector:
+        androidAccessibility:
+          textRegex: "^All contacts$"

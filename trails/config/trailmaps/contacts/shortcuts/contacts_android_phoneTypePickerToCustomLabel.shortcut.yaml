@@ -1,0 +1,9 @@
+id: contacts_android_phoneTypePickerToCustomLabel
+description: Choose Custom to name a custom label.
+shortcut:
+  from: contacts/android/phone-type-picker-dialog
+  to: contacts/android/custom-label-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Custom

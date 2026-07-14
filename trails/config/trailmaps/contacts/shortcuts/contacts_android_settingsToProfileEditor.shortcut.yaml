@@ -1,0 +1,10 @@
+id: contacts_android_settingsToProfileEditor
+description: Open the My info profile editor.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/profile-editor
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: My info
+  - hideKeyboard: {}

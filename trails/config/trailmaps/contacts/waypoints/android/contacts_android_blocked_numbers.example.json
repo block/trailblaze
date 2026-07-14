@@ -1,0 +1,650 @@
+{
+  "waypointId": "contacts/android/blocked-numbers",
+  "capturedAt": "2026-07-14T12:40:16.148161Z",
+  "capturedFrom": "logs/05_blocked_numbers_trail_295eab67/004_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "contacts_android_blocked_numbers.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "y1": 84,
+            "x2": 1440,
+            "y2": 280,
+            "centerPoint": "720,182",
+            "children": [
+              {
+                "nodeId": 4,
+                "y1": 84,
+                "x2": 1440,
+                "y2": 280,
+                "centerPoint": "720,182",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "accessibilityText": "Back",
+                    "y1": 84,
+                    "x2": 196,
+                    "y2": 280,
+                    "centerPoint": "98,182",
+                    "className": "android.widget.ImageButton",
+                    "clickable": true
+                  },
+                  {
+                    "nodeId": 6,
+                    "x1": 252,
+                    "y1": 139,
+                    "x2": 739,
+                    "y2": 224,
+                    "centerPoint": "495,181",
+                    "className": "android.widget.TextView",
+                    "text": "Blocked numbers"
+                  },
+                  {
+                    "nodeId": 7,
+                    "x1": 1440,
+                    "y1": 84,
+                    "x2": 1440,
+                    "y2": 280,
+                    "centerPoint": "1440,182",
+                    "className": "android.widget.LinearLayout"
+                  }
+                ],
+                "className": "android.view.ViewGroup",
+                "resourceId": "android:id/action_bar"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/action_bar_container"
+          },
+          {
+            "nodeId": 8,
+            "y1": 280,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1336",
+            "children": [
+              {
+                "nodeId": 9,
+                "y1": 280,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1336",
+                "children": [
+                  {
+                    "nodeId": 10,
+                    "y1": 280,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1336",
+                    "children": [
+                      {
+                        "nodeId": 11,
+                        "y1": 280,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1336",
+                        "children": [
+                          {
+                            "nodeId": 12,
+                            "y1": 280,
+                            "x2": 1440,
+                            "y2": 1124,
+                            "centerPoint": "720,702",
+                            "children": [
+                              {
+                                "nodeId": 13,
+                                "y1": 280,
+                                "x2": 1440,
+                                "y2": 534,
+                                "centerPoint": "720,407",
+                                "children": [
+                                  {
+                                    "nodeId": 14,
+                                    "y1": 280,
+                                    "x2": 1440,
+                                    "y2": 534,
+                                    "centerPoint": "720,407",
+                                    "children": [
+                                      {
+                                        "nodeId": 15,
+                                        "y1": 280,
+                                        "x2": 1440,
+                                        "y2": 534,
+                                        "centerPoint": "720,407",
+                                        "children": [
+                                          {
+                                            "nodeId": 16,
+                                            "x1": 56,
+                                            "y1": 280,
+                                            "x2": 1162,
+                                            "y2": 534,
+                                            "centerPoint": "609,407",
+                                            "children": [
+                                              {
+                                                "nodeId": 17,
+                                                "x1": 56,
+                                                "y1": 336,
+                                                "x2": 287,
+                                                "y2": 412,
+                                                "centerPoint": "171,374",
+                                                "className": "android.widget.TextView",
+                                                "resourceId": "android:id/title",
+                                                "text": "Unknown"
+                                              },
+                                              {
+                                                "nodeId": 18,
+                                                "x1": 56,
+                                                "y1": 412,
+                                                "x2": 834,
+                                                "y2": 478,
+                                                "centerPoint": "445,445",
+                                                "className": "android.widget.TextView",
+                                                "resourceId": "android:id/summary",
+                                                "text": "Block calls from unidentified callers"
+                                              }
+                                            ],
+                                            "className": "android.widget.RelativeLayout"
+                                          },
+                                          {
+                                            "nodeId": 19,
+                                            "x1": 1162,
+                                            "y1": 280,
+                                            "x2": 1384,
+                                            "y2": 534,
+                                            "centerPoint": "1273,407",
+                                            "children": [
+                                              {
+                                                "nodeId": 20,
+                                                "x1": 1218,
+                                                "y1": 359,
+                                                "x2": 1384,
+                                                "y2": 454,
+                                                "centerPoint": "1301,406",
+                                                "className": "android.widget.Switch",
+                                                "resourceId": "android:id/switch_widget"
+                                              }
+                                            ],
+                                            "className": "android.widget.LinearLayout",
+                                            "resourceId": "android:id/widget_frame"
+                                          }
+                                        ],
+                                        "className": "android.widget.LinearLayout",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.widget.ListView",
+                                    "focused": true,
+                                    "resourceId": "android:id/list"
+                                  }
+                                ],
+                                "className": "android.widget.FrameLayout",
+                                "resourceId": "com.android.server.telecom:id/enhanced_call_blocking_container"
+                              },
+                              {
+                                "nodeId": 21,
+                                "y1": 534,
+                                "x2": 1440,
+                                "y2": 1124,
+                                "centerPoint": "720,829",
+                                "children": [
+                                  {
+                                    "nodeId": 22,
+                                    "x1": 56,
+                                    "y1": 590,
+                                    "x2": 1384,
+                                    "y2": 872,
+                                    "centerPoint": "720,731",
+                                    "className": "android.widget.TextView",
+                                    "text": "You won't receive calls or texts from blocked numbers."
+                                  },
+                                  {
+                                    "nodeId": 23,
+                                    "accessibilityText": "Add a number",
+                                    "x1": 56,
+                                    "y1": 872,
+                                    "x2": 406,
+                                    "y2": 1054,
+                                    "centerPoint": "231,963",
+                                    "className": "android.widget.TextView",
+                                    "clickable": true,
+                                    "resourceId": "com.android.server.telecom:id/add_blocked",
+                                    "text": "Add a number"
+                                  },
+                                  {
+                                    "nodeId": 24,
+                                    "x1": 56,
+                                    "y1": 1124,
+                                    "x2": 1384,
+                                    "y2": 1124,
+                                    "centerPoint": "720,1124",
+                                    "className": "android.widget.ListView",
+                                    "resourceId": "android:id/list"
+                                  }
+                                ],
+                                "className": "android.widget.LinearLayout"
+                              }
+                            ],
+                            "className": "android.widget.LinearLayout",
+                            "resourceId": "com.android.server.telecom:id/manage_blocked_ui"
+                          }
+                        ],
+                        "className": "android.widget.FrameLayout"
+                      }
+                    ],
+                    "className": "android.widget.LinearLayout"
+                  }
+                ],
+                "className": "android.widget.ScrollView"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.view.ViewGroup",
+        "resourceId": "android:id/decor_content_parent"
+      },
+      {
+        "nodeId": 25,
+        "x2": 1440,
+        "y2": 84,
+        "centerPoint": "720,42",
+        "className": "android.view.View",
+        "resourceId": "android:id/statusBarBackground"
+      },
+      {
+        "nodeId": 26,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 26,
+    "children": [
+      {
+        "nodeId": 1,
+        "ref": "e117",
+        "bounds": {
+          "left": 0,
+          "top": 84,
+          "right": 196,
+          "bottom": 280
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageButton",
+          "contentDescription": "Back",
+          "isClickable": true,
+          "packageName": "com.android.server.telecom",
+          "isFocusable": true,
+          "drawingOrder": 1,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_FOCUS",
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_CLICK",
+            "ACTION_64",
+            "ACTION_256",
+            "ACTION_512",
+            "ACTION_SET_SELECTION",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      },
+      {
+        "nodeId": 2,
+        "ref": "e882",
+        "bounds": {
+          "left": 252,
+          "top": 139,
+          "right": 739,
+          "bottom": 224
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.TextView",
+          "text": "Blocked numbers",
+          "packageName": "com.android.server.telecom",
+          "drawingOrder": 2,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_256",
+            "ACTION_512",
+            "ACTION_SET_SELECTION",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      },
+      {
+        "nodeId": 21,
+        "children": [
+          {
+            "nodeId": 12,
+            "children": [
+              {
+                "nodeId": 11,
+                "ref": "c110",
+                "children": [
+                  {
+                    "nodeId": 6,
+                    "bounds": {
+                      "left": 56,
+                      "top": 336,
+                      "right": 287,
+                      "bottom": 412
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.TextView",
+                      "resourceId": "android:id/title",
+                      "text": "Unknown",
+                      "packageName": "com.android.server.telecom",
+                      "drawingOrder": 1,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_256",
+                        "ACTION_512",
+                        "ACTION_SET_SELECTION",
+                        "ACTION_SHOW_ON_SCREEN"
+                      ]
+                    }
+                  },
+                  {
+                    "nodeId": 7,
+                    "bounds": {
+                      "left": 56,
+                      "top": 412,
+                      "right": 834,
+                      "bottom": 478
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.TextView",
+                      "resourceId": "android:id/summary",
+                      "text": "Block calls from unidentified callers",
+                      "isMultiLine": true,
+                      "packageName": "com.android.server.telecom",
+                      "drawingOrder": 2,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_256",
+                        "ACTION_512",
+                        "ACTION_SET_SELECTION",
+                        "ACTION_SHOW_ON_SCREEN"
+                      ]
+                    }
+                  },
+                  {
+                    "nodeId": 9,
+                    "ref": "b248",
+                    "bounds": {
+                      "left": 1218,
+                      "top": 359,
+                      "right": 1384,
+                      "bottom": 454
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.Switch",
+                      "resourceId": "android:id/switch_widget",
+                      "stateDescription": "OFF",
+                      "isCheckable": true,
+                      "isMultiLine": true,
+                      "packageName": "com.android.server.telecom",
+                      "drawingOrder": 1,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                      ]
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 280,
+                  "right": 1440,
+                  "bottom": 534
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.LinearLayout",
+                  "isClickable": true,
+                  "collectionItemInfo": {
+                    "rowIndex": 0,
+                    "rowSpan": 1,
+                    "columnIndex": 0,
+                    "columnSpan": 1,
+                    "isHeading": false
+                  },
+                  "packageName": "com.android.server.telecom",
+                  "drawingOrder": 1,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_SELECT",
+                    "ACTION_CLEAR_SELECTION",
+                    "ACTION_CLICK",
+                    "ACTION_64",
+                    "ACTION_SHOW_ON_SCREEN"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 280,
+              "right": 1440,
+              "bottom": 534
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ListView",
+              "resourceId": "android:id/list",
+              "isFocused": true,
+              "packageName": "com.android.server.telecom",
+              "isFocusable": true,
+              "drawingOrder": 1,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLEAR_FOCUS",
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN",
+                "ACTION_16908343"
+              ],
+              "collectionInfo": {
+                "rowCount": -1,
+                "columnCount": -1,
+                "isHierarchical": false
+              }
+            }
+          },
+          {
+            "nodeId": 14,
+            "ref": "i872",
+            "bounds": {
+              "left": 56,
+              "top": 590,
+              "right": 1384,
+              "bottom": 872
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "You won't receive calls or texts from blocked numbers.",
+              "isEditable": true,
+              "isMultiLine": true,
+              "inputType": 147457,
+              "packageName": "com.android.server.telecom",
+              "isTextSelectable": true,
+              "drawingOrder": 1,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SET_TEXT",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 15,
+            "ref": "f871",
+            "bounds": {
+              "left": 56,
+              "top": 872,
+              "right": 406,
+              "bottom": 1054
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "resourceId": "com.android.server.telecom:id/add_blocked",
+              "text": "Add a number",
+              "contentDescription": "Add a number",
+              "isClickable": true,
+              "isEditable": true,
+              "isMultiLine": true,
+              "inputType": 147457,
+              "packageName": "com.android.server.telecom",
+              "isLongClickable": true,
+              "isFocusable": true,
+              "isTextSelectable": true,
+              "drawingOrder": 2,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_FOCUS",
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_LONG_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SET_TEXT",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 16,
+            "bounds": {
+              "left": 56,
+              "top": 1124,
+              "right": 1384,
+              "bottom": 1124
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ListView",
+              "resourceId": "android:id/list",
+              "packageName": "com.android.server.telecom",
+              "isVisibleToUser": false,
+              "drawingOrder": 4,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+              ],
+              "collectionInfo": {
+                "rowCount": -1,
+                "columnCount": -1,
+                "isHierarchical": false
+              }
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 280,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ScrollView",
+          "packageName": "com.android.server.telecom",
+          "isFocusable": true,
+          "drawingOrder": 1,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_FOCUS",
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.android.server.telecom",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

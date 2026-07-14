@@ -1,0 +1,23 @@
+id: "contacts/android/list-populated"
+description: >
+  Contacts home with at least one contact row — alphabetically sectioned
+  list with search and the create-contact FAB; no empty-state actions.
+android:
+  required:
+    - description: "A contact row name"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/cliv_name_textview"
+    - description: "Create-contact FAB"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/floating_action_button"
+    - description: "Search button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_search"
+  forbidden:
+    - description: "Empty-state add-account button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/add_account_button"

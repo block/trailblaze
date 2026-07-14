@@ -1,0 +1,21 @@
+id: "contacts/android/search-active"
+description: >
+  Contact search open with an empty query — search field focused (text still
+  mirrors the "Search contacts" hint), back arrow shown, no clear button yet.
+android:
+  required:
+    - description: "Stop-searching back button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/search_back_button"
+    - description: "Empty search field (text mirrors hint)"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/search_view"
+          textRegex: "^Search contacts$"
+          hintTextRegex: "^Search contacts$"
+  forbidden:
+    - description: "Clear-search button — only present once a query is typed"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/search_close_button"

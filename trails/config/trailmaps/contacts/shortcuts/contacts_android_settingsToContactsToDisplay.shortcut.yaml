@@ -1,0 +1,9 @@
+id: contacts_android_settingsToContactsToDisplay
+description: Open the Contacts to display filter.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/contacts-to-display
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Contacts to display

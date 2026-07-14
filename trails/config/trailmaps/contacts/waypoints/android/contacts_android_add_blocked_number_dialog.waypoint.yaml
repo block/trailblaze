@@ -1,0 +1,25 @@
+id: "contacts/android/add-blocked-number-dialog"
+description: >
+  Add-blocked-number dialog over the Blocked numbers screen — "Block calls and
+  texts from" prompt, phone-number input, Cancel, and a Block button that stays
+  disabled until a number is entered.
+android:
+  required:
+    - description: "Block calls and texts from prompt"
+      selector:
+        androidAccessibility:
+          textRegex: "^Block calls and texts from$"
+    - description: "Phone number input"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.server\\.telecom:id/add_blocked_number"
+    - description: "Block confirm button"
+      selector:
+        androidAccessibility:
+          textRegex: "^Block$"
+          resourceIdRegex: "android:id/button1"
+  forbidden:
+    - description: "Add a number action — visible only when the dialog is not covering the list"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.server\\.telecom:id/add_blocked"

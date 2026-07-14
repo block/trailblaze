@@ -1,0 +1,12 @@
+id: contacts_android_editorTypedToSavedDetail
+description: Save the draft and land on the contact card.
+shortcut:
+  from: contacts/android/editor-with-text
+  to: contacts/android/contact-detail
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Save the contact
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/editor_menu_save_button

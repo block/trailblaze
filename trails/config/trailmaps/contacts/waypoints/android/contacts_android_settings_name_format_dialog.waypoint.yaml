@@ -1,0 +1,26 @@
+id: "contacts/android/settings-name-format-dialog"
+description: >
+  Name-format radio dialog over Contacts settings — "Name format" title with
+  First name first / Last name first single-choice options.
+android:
+  required:
+    - description: "Name format dialog title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Name format$"
+          resourceIdRegex: "android:id/alertTitle"
+    - description: "First name first option"
+      selector:
+        androidAccessibility:
+          textRegex: "^First name first$"
+          resourceIdRegex: "android:id/text1"
+    - description: "Last name first option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Last name first$"
+          resourceIdRegex: "android:id/text1"
+  forbidden:
+    - description: "Settings 'My info' row — visible only when no dialog covers the settings list"
+      selector:
+        androidAccessibility:
+          textRegex: "^My info$"

@@ -1,0 +1,24 @@
+id: "contacts/android/search-results"
+description: >
+  Contact search with a query that matches — clear button visible and at
+  least one contact row in the filtered list.
+android:
+  required:
+    - description: "Stop-searching back button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/search_back_button"
+    - description: "Clear-search button (query present)"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/search_close_button"
+    - description: "A matching contact row"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/cliv_name_textview"
+  forbidden:
+    - description: "No contacts message"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/totalContactsText"
+          textRegex: "^No contacts$"

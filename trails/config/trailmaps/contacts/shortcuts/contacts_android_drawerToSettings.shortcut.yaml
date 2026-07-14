@@ -1,0 +1,12 @@
+id: contacts_android_drawerToSettings
+description: Open Settings from the navigation drawer.
+shortcut:
+  from: contacts/android/drawer-open
+  to: contacts/android/settings
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open Settings
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/nav_settings

@@ -1,0 +1,20 @@
+id: "contacts/android/default-account-dialog"
+description: >
+  Default-account picker dialog over Contacts settings — "Default account for
+  new contacts" title listing the available accounts (just "Device" on an
+  account-less image).
+android:
+  required:
+    - description: "Default account dialog title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Default account for new contacts$"
+    - description: "Device account option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Device$"
+  forbidden:
+    - description: "Sort by row — the settings list is not the top window when this dialog shows"
+      selector:
+        androidAccessibility:
+          textRegex: "^Sort by$"

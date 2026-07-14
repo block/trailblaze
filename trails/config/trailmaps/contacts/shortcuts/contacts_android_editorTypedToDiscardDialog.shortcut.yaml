@@ -1,0 +1,9 @@
+id: contacts_android_editorTypedToDiscardDialog
+description: Back out of a dirty editor, triggering the discard prompt.
+shortcut:
+  from: contacts/android/editor-with-text
+  to: contacts/android/discard-changes-dialog
+parameters: []
+tools:
+  - hideKeyboard: {}
+  - pressBack: {}

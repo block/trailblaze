@@ -1,0 +1,9 @@
+id: contacts_android_displayFilterToCustomize
+description: Choose Customize to open the custom view editor.
+shortcut:
+  from: contacts/android/contacts-to-display
+  to: contacts/android/customize-view
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Customize

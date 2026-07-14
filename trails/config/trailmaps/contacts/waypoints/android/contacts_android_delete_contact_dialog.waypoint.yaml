@@ -1,0 +1,20 @@
+id: "contacts/android/delete-contact-dialog"
+description: >
+  "Delete this contact?" confirmation dialog with CANCEL / DELETE buttons.
+android:
+  required:
+    - description: "Delete confirmation message"
+      selector:
+        androidAccessibility:
+          textRegex: "^Delete this contact\\?$"
+          resourceIdRegex: "android:id/message"
+    - description: "DELETE button"
+      selector:
+        androidAccessibility:
+          textRegex: "^DELETE$"
+          resourceIdRegex: "android:id/button1"
+    - description: "CANCEL button"
+      selector:
+        androidAccessibility:
+          textRegex: "^CANCEL$"
+          resourceIdRegex: "android:id/button2"

@@ -1,0 +1,13 @@
+id: contacts_android_listEmptyToNewContact
+description: Tap the FAB on the empty list to start a new contact.
+shortcut:
+  from: contacts/android/list-empty
+  to: contacts/android/new-contact-editor
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the new-contact editor
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/floating_action_button
+  - hideKeyboard: {}

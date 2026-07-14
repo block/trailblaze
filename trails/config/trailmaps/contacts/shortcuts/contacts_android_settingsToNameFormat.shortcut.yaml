@@ -1,0 +1,9 @@
+id: contacts_android_settingsToNameFormat
+description: Open the Name format dialog.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/settings-name-format-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Name format

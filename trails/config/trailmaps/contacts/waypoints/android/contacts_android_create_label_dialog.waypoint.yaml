@@ -1,0 +1,20 @@
+id: "contacts/android/create-label-dialog"
+description: >
+  "Create label" input dialog from the navigation drawer — label name field
+  with CANCEL / OK buttons.
+android:
+  required:
+    - description: "Create label title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Create label$"
+    - description: "Label name input"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "android:id/text1"
+          hintTextRegex: "^Label name$"
+    - description: "OK button"
+      selector:
+        androidAccessibility:
+          textRegex: "^OK$"
+          resourceIdRegex: "android:id/button1"

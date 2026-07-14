@@ -1,0 +1,30 @@
+id: "contacts/android/list-empty"
+description: >
+  AOSP Contacts main list with zero contacts — "Your contacts list is empty"
+  message with ADD ACCOUNT and IMPORT buttons, nav-drawer hamburger, "Contacts"
+  title, and the create-contact FAB. First screen after a fresh install once the
+  notification permission dialog is dismissed.
+android:
+  required:
+    - description: "Empty-state message"
+      selector:
+        androidAccessibility:
+          textRegex: "Your contacts list is empty"
+          resourceIdRegex: "com\\.android\\.contacts:id/message"
+    - description: "ADD ACCOUNT empty-state button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/add_account_button"
+    - description: "IMPORT empty-state button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/import_contacts_button"
+    - description: "Create-contact FAB"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/floating_action_button"
+  forbidden:
+    - description: "A contact-row name — would mean the list is populated, not empty"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/cliv_name_textview"

@@ -1,0 +1,9 @@
+id: contacts_android_settingsToBlockedNumbers
+description: Open the Blocked numbers screen.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/blocked-numbers
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Blocked numbers

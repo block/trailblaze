@@ -1,0 +1,615 @@
+{
+  "waypointId": "contacts/android/phone-type-picker-dialog",
+  "capturedAt": "2026-07-14T12:55:43.497712Z",
+  "capturedFrom": "logs/17_phone_type_picker_dialog_trail_2177210c/004_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "contacts_android_phone_type_picker_dialog.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x1": 252,
+    "y1": 854,
+    "x2": 710,
+    "y2": 2392,
+    "centerPoint": "481,1623",
+    "children": [
+      {
+        "nodeId": 2,
+        "x1": 252,
+        "y1": 854,
+        "x2": 710,
+        "y2": 2392,
+        "centerPoint": "481,1623",
+        "children": [
+          {
+            "nodeId": 3,
+            "x1": 252,
+            "y1": 854,
+            "x2": 710,
+            "y2": 2392,
+            "centerPoint": "481,1623",
+            "children": [
+              {
+                "nodeId": 4,
+                "x1": 252,
+                "y1": 854,
+                "x2": 710,
+                "y2": 1022,
+                "centerPoint": "481,938",
+                "checked": true,
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Mobile"
+              },
+              {
+                "nodeId": 5,
+                "x1": 252,
+                "y1": 1022,
+                "x2": 710,
+                "y2": 1190,
+                "centerPoint": "481,1106",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Home"
+              },
+              {
+                "nodeId": 6,
+                "x1": 252,
+                "y1": 1190,
+                "x2": 710,
+                "y2": 1358,
+                "centerPoint": "481,1274",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Work"
+              },
+              {
+                "nodeId": 7,
+                "x1": 252,
+                "y1": 1358,
+                "x2": 710,
+                "y2": 1526,
+                "centerPoint": "481,1442",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Work Fax"
+              },
+              {
+                "nodeId": 8,
+                "x1": 252,
+                "y1": 1526,
+                "x2": 710,
+                "y2": 1694,
+                "centerPoint": "481,1610",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Home Fax"
+              },
+              {
+                "nodeId": 9,
+                "x1": 252,
+                "y1": 1694,
+                "x2": 710,
+                "y2": 1862,
+                "centerPoint": "481,1778",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Pager"
+              },
+              {
+                "nodeId": 10,
+                "x1": 252,
+                "y1": 1862,
+                "x2": 710,
+                "y2": 2030,
+                "centerPoint": "481,1946",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Other"
+              },
+              {
+                "nodeId": 11,
+                "x1": 252,
+                "y1": 2030,
+                "x2": 710,
+                "y2": 2198,
+                "centerPoint": "481,2114",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Custom"
+              },
+              {
+                "nodeId": 12,
+                "x1": 252,
+                "y1": 2198,
+                "x2": 710,
+                "y2": 2366,
+                "centerPoint": "481,2282",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Callback"
+              },
+              {
+                "nodeId": 13,
+                "x1": 252,
+                "y1": 2366,
+                "x2": 710,
+                "y2": 2392,
+                "centerPoint": "481,2379",
+                "className": "android.widget.CheckedTextView",
+                "clickable": true,
+                "resourceId": "android:id/text1",
+                "text": "Car"
+              }
+            ],
+            "className": "android.widget.ListView",
+            "scrollable": true
+          }
+        ],
+        "className": "android.widget.FrameLayout"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 13,
+    "children": [
+      {
+        "nodeId": 11,
+        "children": [
+          {
+            "nodeId": 1,
+            "ref": "f577",
+            "bounds": {
+              "left": 252,
+              "top": 854,
+              "right": 710,
+              "bottom": 1022
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Mobile",
+              "isClickable": true,
+              "isCheckable": true,
+              "isChecked": true,
+              "collectionItemInfo": {
+                "rowIndex": 0,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 1,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 2,
+            "ref": "q175",
+            "bounds": {
+              "left": 252,
+              "top": 1022,
+              "right": 710,
+              "bottom": 1190
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Home",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 1,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 2,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 3,
+            "ref": "c264",
+            "bounds": {
+              "left": 252,
+              "top": 1190,
+              "right": 710,
+              "bottom": 1358
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Work",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 2,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 3,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 4,
+            "ref": "e933",
+            "bounds": {
+              "left": 252,
+              "top": 1358,
+              "right": 710,
+              "bottom": 1526
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Work Fax",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 3,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 4,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 5,
+            "ref": "l407",
+            "bounds": {
+              "left": 252,
+              "top": 1526,
+              "right": 710,
+              "bottom": 1694
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Home Fax",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 4,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 5,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 6,
+            "ref": "v911",
+            "bounds": {
+              "left": 252,
+              "top": 1694,
+              "right": 710,
+              "bottom": 1862
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Pager",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 5,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 6,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 7,
+            "ref": "h575",
+            "bounds": {
+              "left": 252,
+              "top": 1862,
+              "right": 710,
+              "bottom": 2030
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Other",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 6,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 7,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 8,
+            "ref": "m313",
+            "bounds": {
+              "left": 252,
+              "top": 2030,
+              "right": 710,
+              "bottom": 2198
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Custom",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 7,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 8,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 9,
+            "ref": "m32",
+            "bounds": {
+              "left": 252,
+              "top": 2198,
+              "right": 710,
+              "bottom": 2366
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Callback",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 8,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 9,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          },
+          {
+            "nodeId": 10,
+            "ref": "l200",
+            "bounds": {
+              "left": 252,
+              "top": 2366,
+              "right": 710,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.CheckedTextView",
+              "resourceId": "android:id/text1",
+              "text": "Car",
+              "isClickable": true,
+              "isCheckable": true,
+              "collectionItemInfo": {
+                "rowIndex": 9,
+                "rowSpan": 1,
+                "columnIndex": 0,
+                "columnSpan": 1,
+                "isHeading": false
+              },
+              "packageName": "com.android.contacts",
+              "drawingOrder": 10,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_CLICK",
+                "ACTION_64",
+                "ACTION_256",
+                "ACTION_512",
+                "ACTION_SET_SELECTION",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 252,
+          "top": 854,
+          "right": 710,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ListView",
+          "isScrollable": true,
+          "packageName": "com.android.contacts",
+          "isFocusable": true,
+          "drawingOrder": 1,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_FOCUS",
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_SCROLL_FORWARD",
+            "ACTION_SHOW_ON_SCREEN",
+            "ACTION_16908343",
+            "ACTION_SCROLL_DOWN"
+          ],
+          "collectionInfo": {
+            "rowCount": -1,
+            "columnCount": -1,
+            "isHierarchical": false
+          }
+        }
+      }
+    ],
+    "bounds": {
+      "left": 252,
+      "top": 854,
+      "right": 710,
+      "bottom": 2392
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.android.contacts",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

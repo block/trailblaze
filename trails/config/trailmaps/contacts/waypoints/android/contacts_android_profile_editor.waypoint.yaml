@@ -1,0 +1,24 @@
+id: "contacts/android/profile-editor"
+description: >
+  My-info profile editor (ContactEditorActivity in profile mode, from Settings →
+  My info) — same field layout as the new-contact editor but saving to
+  "My local profile".
+android:
+  required:
+    - description: "Saving-to header naming the local profile"
+      selector:
+        androidAccessibility:
+          textRegex: "My local profile"
+    - description: "SAVE action"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/editor_menu_save_button"
+    - description: "First name field"
+      selector:
+        androidAccessibility:
+          hintTextRegex: "First name"
+  forbidden:
+    - description: "The list FAB — would mean we're back on the contacts list"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/floating_action_button"

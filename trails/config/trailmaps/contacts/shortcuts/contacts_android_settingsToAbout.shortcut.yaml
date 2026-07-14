@@ -1,0 +1,12 @@
+id: contacts_android_settingsToAbout
+description: Scroll to and open About Contacts.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/about
+parameters: []
+tools:
+  - swipe:
+      direction: UP
+      reasoning: reveal below-the-fold rows
+  - tapOnElementWithText:
+      text: About Contacts

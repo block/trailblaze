@@ -1,0 +1,22 @@
+id: "contacts/android/editor-name-expanded"
+description: >
+  Contact editor with the structured-name section expanded — Name prefix /
+  Middle name / Name suffix fields visible, collapse chevron shown.
+android:
+  required:
+    - description: "Create new contact title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Create new contact$"
+    - description: "Expanded name-fields collapser"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Collapse name fields$"
+    - description: "Name prefix field"
+      selector:
+        androidAccessibility:
+          hintTextRegex: "^Name prefix$"
+    - description: "Middle name field"
+      selector:
+        androidAccessibility:
+          hintTextRegex: "^Middle name$"

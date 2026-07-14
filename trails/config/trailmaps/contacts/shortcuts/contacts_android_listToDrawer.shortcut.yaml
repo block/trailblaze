@@ -1,0 +1,12 @@
+id: contacts_android_listToDrawer
+description: Open the navigation drawer from the contacts list.
+shortcut:
+  from: contacts/android/list-populated
+  to: contacts/android/drawer-open
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the navigation drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: Open navigation drawer

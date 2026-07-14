@@ -1,0 +1,12 @@
+id: contacts_android_drawerToCreateLabel
+description: Open the create-label dialog from the navigation drawer.
+shortcut:
+  from: contacts/android/drawer-open
+  to: contacts/android/create-label-dialog
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open create-label dialog
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.contacts:id/nav_create_label

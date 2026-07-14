@@ -1,0 +1,8 @@
+id: contacts_android_customizeToDiscardDialog
+description: Back out of the customize editor, triggering the discard prompt.
+shortcut:
+  from: contacts/android/customize-view
+  to: contacts/android/discard-customizations-dialog
+parameters: []
+tools:
+  - pressBack: {}

@@ -1,0 +1,12 @@
+id: contacts_android_permissionAllowToList
+description: Tap ALLOW on the notification permission dialog to land on the (empty) contacts list.
+shortcut:
+  from: contacts/android/notification-permission-prompt
+  to: contacts/android/list-empty
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Allow notifications
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.permissioncontroller:id/permission_allow_button

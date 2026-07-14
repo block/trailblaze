@@ -1,0 +1,26 @@
+id: "contacts/android/settings-phonetic-name-dialog"
+description: >
+  Phonetic-name radio dialog over Contacts settings — "Phonetic name" title with
+  Always show / Hide if empty single-choice options.
+android:
+  required:
+    - description: "Phonetic name dialog title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Phonetic name$"
+          resourceIdRegex: "android:id/alertTitle"
+    - description: "Always show option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Always show$"
+          resourceIdRegex: "android:id/text1"
+    - description: "Hide if empty option"
+      selector:
+        androidAccessibility:
+          textRegex: "^Hide if empty$"
+          resourceIdRegex: "android:id/text1"
+  forbidden:
+    - description: "Settings 'My info' row — visible only when no dialog covers the settings list"
+      selector:
+        androidAccessibility:
+          textRegex: "^My info$"

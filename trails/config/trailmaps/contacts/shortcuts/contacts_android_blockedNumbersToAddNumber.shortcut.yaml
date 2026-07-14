@@ -1,0 +1,12 @@
+id: contacts_android_blockedNumbersToAddNumber
+description: Open the add-blocked-number dialog.
+shortcut:
+  from: contacts/android/blocked-numbers
+  to: contacts/android/add-blocked-number-dialog
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open add-number dialog
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: com.android.server.telecom:id/add_blocked

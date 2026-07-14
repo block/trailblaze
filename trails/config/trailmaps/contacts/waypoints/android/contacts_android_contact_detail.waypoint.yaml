@@ -1,0 +1,23 @@
+id: "contacts/android/contact-detail"
+description: >
+  Contact card (QuickContact) — large name title over a scrollable card of
+  actions (call/text rows), with favorite star, Edit, and overflow in the
+  header.
+android:
+  required:
+    - description: "Large contact name title"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/large_title"
+    - description: "Favorite star button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_star"
+    - description: "Edit button"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_edit"
+    - description: "Card content scroller"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/content_scroller"

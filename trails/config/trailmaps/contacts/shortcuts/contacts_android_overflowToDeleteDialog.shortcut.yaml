@@ -1,0 +1,9 @@
+id: contacts_android_overflowToDeleteDialog
+description: Choose Delete, opening the confirm dialog.
+shortcut:
+  from: contacts/android/detail-overflow-menu
+  to: contacts/android/delete-contact-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Delete

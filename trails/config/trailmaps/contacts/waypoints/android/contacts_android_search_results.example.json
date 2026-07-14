@@ -1,0 +1,648 @@
+{
+  "waypointId": "contacts/android/search-results",
+  "capturedAt": "2026-07-14T12:59:10.714670Z",
+  "capturedFrom": "logs/26_search_results_trail_c4c7b48a/004_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "contacts_android_search_results.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "y1": 84,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1238",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "y1": 84,
+                                "x2": 1440,
+                                "y2": 280,
+                                "centerPoint": "720,182",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "y1": 84,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,182",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "y1": 84,
+                                        "x2": 1440,
+                                        "y2": 280,
+                                        "centerPoint": "720,182",
+                                        "children": [
+                                          {
+                                            "nodeId": 11,
+                                            "y1": 84,
+                                            "x2": 1440,
+                                            "y2": 280,
+                                            "centerPoint": "720,182",
+                                            "children": [
+                                              {
+                                                "nodeId": 12,
+                                                "accessibilityText": "stop searching",
+                                                "y1": 84,
+                                                "x2": 196,
+                                                "y2": 280,
+                                                "centerPoint": "98,182",
+                                                "className": "android.widget.ImageButton",
+                                                "clickable": true,
+                                                "resourceId": "com.android.contacts:id/search_back_button"
+                                              },
+                                              {
+                                                "nodeId": 13,
+                                                "x1": 252,
+                                                "y1": 84,
+                                                "x2": 1244,
+                                                "y2": 280,
+                                                "centerPoint": "748,182",
+                                                "className": "android.widget.AutoCompleteTextView",
+                                                "clickable": true,
+                                                "focused": true,
+                                                "hintText": "Search contacts",
+                                                "resourceId": "com.android.contacts:id/search_view",
+                                                "text": "Casey"
+                                              },
+                                              {
+                                                "nodeId": 14,
+                                                "accessibilityText": "Clear search",
+                                                "x1": 1244,
+                                                "y1": 84,
+                                                "x2": 1440,
+                                                "y2": 280,
+                                                "centerPoint": "1342,182",
+                                                "className": "android.widget.ImageView",
+                                                "clickable": true,
+                                                "resourceId": "com.android.contacts:id/search_close_button"
+                                              }
+                                            ],
+                                            "className": "android.widget.LinearLayout",
+                                            "resourceId": "com.android.contacts:id/search_box_expanded"
+                                          },
+                                          {
+                                            "nodeId": 15,
+                                            "x1": 1440,
+                                            "y1": 84,
+                                            "x2": 1440,
+                                            "y2": 280,
+                                            "centerPoint": "1440,182",
+                                            "className": "androidx.appcompat.widget.LinearLayoutCompat"
+                                          }
+                                        ],
+                                        "className": "android.view.ViewGroup",
+                                        "resourceId": "com.android.contacts:id/toolbar"
+                                      }
+                                    ],
+                                    "className": "android.widget.FrameLayout",
+                                    "resourceId": "com.android.contacts:id/toolbar_frame"
+                                  }
+                                ],
+                                "className": "android.widget.LinearLayout",
+                                "resourceId": "com.android.contacts:id/toolbar_parent"
+                              },
+                              {
+                                "nodeId": 16,
+                                "y1": 280,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1336",
+                                "children": [
+                                  {
+                                    "nodeId": 17,
+                                    "y1": 280,
+                                    "x2": 1440,
+                                    "y2": 2392,
+                                    "centerPoint": "720,1336",
+                                    "children": [
+                                      {
+                                        "nodeId": 18,
+                                        "y1": 280,
+                                        "x2": 1440,
+                                        "y2": 2392,
+                                        "centerPoint": "720,1336",
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "com.android.contacts:id/contacts_unavailable_container"
+                                      },
+                                      {
+                                        "nodeId": 19,
+                                        "y1": 280,
+                                        "x2": 1440,
+                                        "y2": 2392,
+                                        "centerPoint": "720,1336",
+                                        "children": [
+                                          {
+                                            "nodeId": 20,
+                                            "y1": 280,
+                                            "x2": 1440,
+                                            "y2": 2392,
+                                            "centerPoint": "720,1336",
+                                            "children": [
+                                              {
+                                                "nodeId": 21,
+                                                "y1": 280,
+                                                "x2": 1440,
+                                                "y2": 2392,
+                                                "centerPoint": "720,1336",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 22,
+                                                    "y1": 280,
+                                                    "x2": 1440,
+                                                    "y2": 2392,
+                                                    "centerPoint": "720,1336",
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 23,
+                                                        "y1": 280,
+                                                        "x2": 1440,
+                                                        "y2": 2392,
+                                                        "centerPoint": "720,1336",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 24,
+                                                            "y1": 305,
+                                                            "x2": 1440,
+                                                            "y2": 305,
+                                                            "centerPoint": "720,305",
+                                                            "className": "android.widget.FrameLayout"
+                                                          },
+                                                          {
+                                                            "nodeId": 25,
+                                                            "y1": 305,
+                                                            "x2": 1440,
+                                                            "y2": 501,
+                                                            "centerPoint": "720,403",
+                                                            "children": [
+                                                              {
+                                                                "nodeId": 26,
+                                                                "x1": 56,
+                                                                "y1": 330,
+                                                                "x2": 196,
+                                                                "y2": 470,
+                                                                "centerPoint": "126,400",
+                                                                "className": "android.widget.ImageView"
+                                                              },
+                                                              {
+                                                                "nodeId": 27,
+                                                                "accessibilityText": "Casey Trailblaze",
+                                                                "x1": 248,
+                                                                "y1": 358,
+                                                                "x2": 1328,
+                                                                "y2": 434,
+                                                                "centerPoint": "788,396",
+                                                                "className": "android.widget.TextView",
+                                                                "resourceId": "com.android.contacts:id/cliv_name_textview",
+                                                                "text": "Casey Trailblaze"
+                                                              }
+                                                            ],
+                                                            "className": "android.view.ViewGroup",
+                                                            "clickable": true
+                                                          }
+                                                        ],
+                                                        "className": "android.widget.ListView",
+                                                        "resourceId": "android:id/list"
+                                                      }
+                                                    ],
+                                                    "className": "android.view.ViewGroup",
+                                                    "enabled": false,
+                                                    "resourceId": "com.android.contacts:id/swipe_refresh"
+                                                  }
+                                                ],
+                                                "className": "android.widget.FrameLayout",
+                                                "resourceId": "com.android.contacts:id/contact_list"
+                                              }
+                                            ],
+                                            "className": "android.widget.LinearLayout",
+                                            "resourceId": "com.android.contacts:id/pinned_header_list_layout"
+                                          }
+                                        ],
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "com.android.contacts:id/contacts_list_container"
+                                      }
+                                    ],
+                                    "className": "android.view.ViewGroup",
+                                    "resourceId": "com.android.contacts:id/root"
+                                  }
+                                ],
+                                "className": "android.widget.FrameLayout",
+                                "resourceId": "com.android.contacts:id/content_frame"
+                              }
+                            ],
+                            "className": "android.widget.LinearLayout",
+                            "resourceId": "com.android.contacts:id/fragment_container"
+                          }
+                        ],
+                        "className": "androidx.drawerlayout.widget.DrawerLayout",
+                        "resourceId": "com.android.contacts:id/drawer_layout"
+                      }
+                    ],
+                    "className": "android.widget.FrameLayout",
+                    "resourceId": "android:id/content"
+                  }
+                ],
+                "className": "android.widget.LinearLayout",
+                "resourceId": "com.android.contacts:id/action_bar_root"
+              }
+            ],
+            "className": "android.widget.FrameLayout"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 28,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 28,
+    "children": [
+      {
+        "nodeId": 22,
+        "children": [
+          {
+            "nodeId": 21,
+            "children": [
+              {
+                "nodeId": 1,
+                "ref": "j486",
+                "bounds": {
+                  "left": 0,
+                  "top": 84,
+                  "right": 196,
+                  "bottom": 280
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.ImageButton",
+                  "resourceId": "com.android.contacts:id/search_back_button",
+                  "contentDescription": "stop searching",
+                  "isClickable": true,
+                  "packageName": "com.android.contacts",
+                  "isFocusable": true,
+                  "drawingOrder": 1,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_FOCUS",
+                    "ACTION_SELECT",
+                    "ACTION_CLEAR_SELECTION",
+                    "ACTION_CLICK",
+                    "ACTION_64",
+                    "ACTION_256",
+                    "ACTION_512",
+                    "ACTION_SET_SELECTION",
+                    "ACTION_SHOW_ON_SCREEN"
+                  ]
+                }
+              },
+              {
+                "nodeId": 2,
+                "ref": "c350",
+                "bounds": {
+                  "left": 252,
+                  "top": 84,
+                  "right": 1244,
+                  "bottom": 280
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.AutoCompleteTextView",
+                  "resourceId": "com.android.contacts:id/search_view",
+                  "text": "Casey",
+                  "hintText": "Search contacts",
+                  "isClickable": true,
+                  "isFocused": true,
+                  "isEditable": true,
+                  "inputType": 65713,
+                  "packageName": "com.android.contacts",
+                  "isLongClickable": true,
+                  "isFocusable": true,
+                  "isTextSelectable": true,
+                  "drawingOrder": 2,
+                  "maxTextLength": 5000,
+                  "actions": [
+                    "ACTION_CLEAR_FOCUS",
+                    "ACTION_SELECT",
+                    "ACTION_CLEAR_SELECTION",
+                    "ACTION_CLICK",
+                    "ACTION_LONG_CLICK",
+                    "ACTION_64",
+                    "ACTION_256",
+                    "ACTION_512",
+                    "ACTION_SET_SELECTION",
+                    "ACTION_SET_TEXT",
+                    "ACTION_SHOW_ON_SCREEN",
+                    "Enter"
+                  ]
+                }
+              },
+              {
+                "nodeId": 3,
+                "ref": "s163",
+                "bounds": {
+                  "left": 1244,
+                  "top": 84,
+                  "right": 1440,
+                  "bottom": 280
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.ImageView",
+                  "resourceId": "com.android.contacts:id/search_close_button",
+                  "contentDescription": "Clear search",
+                  "isClickable": true,
+                  "packageName": "com.android.contacts",
+                  "isFocusable": true,
+                  "drawingOrder": 3,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_FOCUS",
+                    "ACTION_SELECT",
+                    "ACTION_CLEAR_SELECTION",
+                    "ACTION_CLICK",
+                    "ACTION_64",
+                    "ACTION_256",
+                    "ACTION_512",
+                    "ACTION_SET_SELECTION",
+                    "ACTION_SHOW_ON_SCREEN"
+                  ]
+                }
+              },
+              {
+                "nodeId": 19,
+                "children": [
+                  {
+                    "nodeId": 14,
+                    "children": [
+                      {
+                        "nodeId": 10,
+                        "bounds": {
+                          "left": 0,
+                          "top": 305,
+                          "right": 1440,
+                          "bottom": 305
+                        },
+                        "driverDetail": {
+                          "class": "androidAccessibility",
+                          "className": "android.widget.FrameLayout",
+                          "isHeading": true,
+                          "collectionItemInfo": {
+                            "rowIndex": 0,
+                            "rowSpan": 1,
+                            "columnIndex": 0,
+                            "columnSpan": 1,
+                            "isHeading": true
+                          },
+                          "packageName": "com.android.contacts",
+                          "isVisibleToUser": false,
+                          "drawingOrder": 1,
+                          "maxTextLength": -1,
+                          "actions": [
+                            "ACTION_SELECT",
+                            "ACTION_CLEAR_SELECTION",
+                            "ACTION_64",
+                            "ACTION_SHOW_ON_SCREEN"
+                          ]
+                        }
+                      },
+                      {
+                        "nodeId": 13,
+                        "ref": "a159",
+                        "children": [
+                          {
+                            "nodeId": 12,
+                            "bounds": {
+                              "left": 248,
+                              "top": 358,
+                              "right": 1328,
+                              "bottom": 434
+                            },
+                            "driverDetail": {
+                              "class": "androidAccessibility",
+                              "className": "android.widget.TextView",
+                              "resourceId": "com.android.contacts:id/cliv_name_textview",
+                              "text": "Casey Trailblaze",
+                              "contentDescription": "Casey Trailblaze",
+                              "packageName": "com.android.contacts",
+                              "drawingOrder": 2,
+                              "maxTextLength": -1,
+                              "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_256",
+                                "ACTION_512",
+                                "ACTION_SET_SELECTION",
+                                "ACTION_SHOW_ON_SCREEN"
+                              ]
+                            }
+                          }
+                        ],
+                        "bounds": {
+                          "left": 0,
+                          "top": 305,
+                          "right": 1440,
+                          "bottom": 501
+                        },
+                        "driverDetail": {
+                          "class": "androidAccessibility",
+                          "className": "android.view.ViewGroup",
+                          "isClickable": true,
+                          "collectionItemInfo": {
+                            "rowIndex": 1,
+                            "rowSpan": 1,
+                            "columnIndex": 0,
+                            "columnSpan": 1,
+                            "isHeading": false
+                          },
+                          "packageName": "com.android.contacts",
+                          "isLongClickable": true,
+                          "drawingOrder": 2,
+                          "maxTextLength": -1,
+                          "actions": [
+                            "ACTION_SELECT",
+                            "ACTION_CLEAR_SELECTION",
+                            "ACTION_CLICK",
+                            "ACTION_LONG_CLICK",
+                            "ACTION_64",
+                            "ACTION_SHOW_ON_SCREEN"
+                          ]
+                        }
+                      }
+                    ],
+                    "bounds": {
+                      "left": 0,
+                      "top": 280,
+                      "right": 1440,
+                      "bottom": 2392
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.ListView",
+                      "resourceId": "android:id/list",
+                      "packageName": "com.android.contacts",
+                      "isLongClickable": true,
+                      "isFocusable": true,
+                      "drawingOrder": 1,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_FOCUS",
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_LONG_CLICK",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN",
+                        "ACTION_16908343"
+                      ],
+                      "collectionInfo": {
+                        "rowCount": -1,
+                        "columnCount": -1,
+                        "isHierarchical": false
+                      }
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 280,
+                  "right": 1440,
+                  "bottom": 2392
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.ViewGroup",
+                  "resourceId": "com.android.contacts:id/root",
+                  "packageName": "com.android.contacts",
+                  "drawingOrder": 1,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_SELECT",
+                    "ACTION_CLEAR_SELECTION",
+                    "ACTION_64",
+                    "ACTION_SHOW_ON_SCREEN"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 84,
+              "right": 1440,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.LinearLayout",
+              "resourceId": "com.android.contacts:id/fragment_container",
+              "packageName": "com.android.contacts",
+              "drawingOrder": 1,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "androidx.drawerlayout.widget.DrawerLayout",
+          "resourceId": "com.android.contacts:id/drawer_layout",
+          "packageName": "com.android.contacts",
+          "drawingOrder": 1,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_SELECT",
+            "ACTION_CLEAR_SELECTION",
+            "ACTION_64",
+            "ACTION_SHOW_ON_SCREEN"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.android.contacts",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

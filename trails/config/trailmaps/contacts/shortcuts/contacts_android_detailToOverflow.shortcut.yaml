@@ -1,0 +1,12 @@
+id: contacts_android_detailToOverflow
+description: Open the contact card overflow menu.
+shortcut:
+  from: contacts/android/contact-detail
+  to: contacts/android/detail-overflow-menu
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open overflow
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: More options

@@ -1,0 +1,12 @@
+id: contacts_android_listEmptyToDrawer
+description: Open the navigation drawer from the empty contacts list.
+shortcut:
+  from: contacts/android/list-empty
+  to: contacts/android/drawer-open
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the navigation drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: Open navigation drawer

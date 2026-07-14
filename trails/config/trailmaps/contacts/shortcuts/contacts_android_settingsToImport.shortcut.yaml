@@ -1,0 +1,9 @@
+id: contacts_android_settingsToImport
+description: Open the Import dialog.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/settings-import-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Import

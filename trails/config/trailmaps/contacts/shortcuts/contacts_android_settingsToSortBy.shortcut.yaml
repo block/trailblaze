@@ -1,0 +1,9 @@
+id: contacts_android_settingsToSortBy
+description: Open the Sort by dialog.
+shortcut:
+  from: contacts/android/settings
+  to: contacts/android/settings-sort-by-dialog
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Sort by

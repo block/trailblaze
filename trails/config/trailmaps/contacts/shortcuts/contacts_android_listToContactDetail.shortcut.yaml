@@ -1,0 +1,9 @@
+id: contacts_android_listToContactDetail
+description: Open a contact card from the list.
+shortcut:
+  from: contacts/android/list-populated
+  to: contacts/android/contact-detail
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Casey Trailblaze

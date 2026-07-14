@@ -1,0 +1,25 @@
+id: "contacts/android/settings-import-dialog"
+description: >
+  Import-source dialog over Contacts settings — "Import contacts from" title with a
+  ".vcf file" option (plus "SIM card" when the image exposes one) and a CANCEL button.
+android:
+  required:
+    - description: "Import dialog title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Import contacts from$"
+          resourceIdRegex: "android:id/alertTitle"
+    - description: ".vcf file source option"
+      selector:
+        androidAccessibility:
+          textRegex: "^\\.vcf file$"
+    - description: "CANCEL button"
+      selector:
+        androidAccessibility:
+          textRegex: "^CANCEL$"
+          resourceIdRegex: "android:id/button2"
+  forbidden:
+    - description: "Settings 'My info' row — visible only when no dialog covers the settings list"
+      selector:
+        androidAccessibility:
+          textRegex: "^My info$"

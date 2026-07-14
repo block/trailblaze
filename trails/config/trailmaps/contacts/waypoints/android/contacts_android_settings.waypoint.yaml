@@ -1,0 +1,28 @@
+id: "contacts/android/settings"
+description: >
+  AOSP Contacts settings screen (ContactsPreferenceActivity) — My info, Accounts,
+  Default account for new contacts, Contacts to display, Sort by, Name format,
+  Phonetic name, Import, Blocked numbers, About Contacts.
+android:
+  required:
+    - description: "Settings title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Settings$"
+    - description: "My info row"
+      selector:
+        androidAccessibility:
+          textRegex: "^My info$"
+    - description: "Default account row"
+      selector:
+        androidAccessibility:
+          textRegex: "^Default account for new contacts$"
+    - description: "Blocked numbers row"
+      selector:
+        androidAccessibility:
+          textRegex: "^Blocked numbers$"
+  forbidden:
+    - description: "An alert-dialog title — would mean one of the settings dialogs is open on top"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "android:id/alertTitle"

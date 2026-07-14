@@ -1,0 +1,9 @@
+id: contacts_android_aboutToOssLicenses
+description: Open the open-source licenses screen.
+shortcut:
+  from: contacts/android/about
+  to: contacts/android/oss-licenses
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Open source licenses

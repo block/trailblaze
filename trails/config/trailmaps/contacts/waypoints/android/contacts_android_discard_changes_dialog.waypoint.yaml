@@ -1,0 +1,21 @@
+id: "contacts/android/discard-changes-dialog"
+description: >
+  "Discard changes?" confirmation dialog — shown when backing out of a
+  dirty contact editor; CANCEL keeps editing, DISCARD abandons the draft.
+android:
+  required:
+    - description: "Discard changes message"
+      selector:
+        androidAccessibility:
+          textRegex: "^Discard changes\\?$"
+          resourceIdRegex: "android:id/message"
+    - description: "DISCARD button"
+      selector:
+        androidAccessibility:
+          textRegex: "^DISCARD$"
+          resourceIdRegex: "android:id/button1"
+    - description: "CANCEL button"
+      selector:
+        androidAccessibility:
+          textRegex: "^CANCEL$"
+          resourceIdRegex: "android:id/button2"

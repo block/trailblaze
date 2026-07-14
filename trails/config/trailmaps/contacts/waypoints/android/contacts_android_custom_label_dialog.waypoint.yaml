@@ -1,0 +1,20 @@
+id: "contacts/android/custom-label-dialog"
+description: >
+  "Custom label name" input dialog — free-text label field with
+  CANCEL / OK buttons, reached via the Custom phone type.
+android:
+  required:
+    - description: "Custom label name title"
+      selector:
+        androidAccessibility:
+          textRegex: "^Custom label name$"
+          resourceIdRegex: "android:id/alertTitle"
+    - description: "Label input field"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/custom_dialog_content"
+    - description: "OK button"
+      selector:
+        androidAccessibility:
+          textRegex: "^OK$"
+          resourceIdRegex: "android:id/button1"

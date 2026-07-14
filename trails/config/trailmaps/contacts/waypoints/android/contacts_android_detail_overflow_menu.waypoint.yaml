@@ -1,0 +1,21 @@
+id: "contacts/android/detail-overflow-menu"
+description: >
+  Contact card overflow menu — Link / Delete / Share / Create shortcut /
+  Set ringtone popup items.
+android:
+  required:
+    - description: "Delete menu item"
+      selector:
+        androidAccessibility:
+          textRegex: "^Delete$"
+          resourceIdRegex: "android:id/title"
+    - description: "Share menu item"
+      selector:
+        androidAccessibility:
+          textRegex: "^Share$"
+          resourceIdRegex: "android:id/title"
+    - description: "Set ringtone menu item"
+      selector:
+        androidAccessibility:
+          textRegex: "^Set ringtone$"
+          resourceIdRegex: "android:id/title"

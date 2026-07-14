@@ -1,0 +1,26 @@
+id: "contacts/android/discard-customizations-dialog"
+description: >
+  Discard-customizations confirm dialog — shown when backing out of the
+  Customize-view editor. Message-only dialog with CANCEL and OK.
+android:
+  required:
+    - description: "Discard customizations? message"
+      selector:
+        androidAccessibility:
+          textRegex: "^Discard customizations\\?$"
+          resourceIdRegex: "android:id/message"
+    - description: "OK button"
+      selector:
+        androidAccessibility:
+          textRegex: "^OK$"
+          resourceIdRegex: "android:id/button1"
+    - description: "CANCEL button"
+      selector:
+        androidAccessibility:
+          textRegex: "^CANCEL$"
+          resourceIdRegex: "android:id/button2"
+  forbidden:
+    - description: "Customize-view SAVE — visible only when the dialog is not covering the editor"
+      selector:
+        androidAccessibility:
+          resourceIdRegex: "com\\.android\\.contacts:id/menu_save"

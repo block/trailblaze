@@ -1,0 +1,10 @@
+id: contacts_android_searchToResults
+description: Type a query that matches contacts.
+shortcut:
+  from: contacts/android/search-active
+  to: contacts/android/search-results
+parameters: []
+tools:
+  - inputText:
+      text: Casey
+      reasoning: shortcut input
