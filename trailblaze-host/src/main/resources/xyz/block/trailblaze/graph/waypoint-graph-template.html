@@ -2111,6 +2111,9 @@
       display: flex; align-items: center; justify-content: center;
       color: var(--text-muted); font-size: 10px;
     }
+    /* Ring-2 signposts get a shorter thumbnail so distant rows don't stack. */
+    .vista-card.vista-card-far img,
+    .vista-card.vista-card-far .vista-no-shot { height: 74px; }
     .vista-card .vista-name {
       font-size: 11px; font-weight: 600; line-height: 1.25;
       max-width: 106px;
@@ -2134,6 +2137,37 @@
       font-size: 11px; font-weight: 600;
       flex-direction: row; gap: 6px;
     }
+    /* Distant waypoints (3+ hops) are name chips — a screenshot at that scale
+       is an illegible smudge, a name still reads. */
+    .vista-chip {
+      position: absolute;
+      transform: translate(-50%, calc(-100% - 10px * var(--vs, 1))) scale(var(--vs, 1));
+      transform-origin: 50% 100%;
+      transition: left 0.55s ease, top 0.55s ease, transform 0.55s ease, opacity 0.55s ease;
+      padding: 4px 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      font: inherit; font-size: 11px; color: var(--text);
+      white-space: nowrap;
+      cursor: pointer;
+      box-shadow: var(--shadow-card);
+    }
+    .vista-chip::after {
+      content: '';
+      position: absolute;
+      top: 100%; left: 50%;
+      transform: translateX(-50%);
+      width: 2px; height: 10px;
+      background: var(--border-strong);
+    }
+    .vista-chip:hover {
+      border-color: var(--accent);
+      transform: translate(-50%, calc(-100% - 10px * var(--vs, 1))) scale(calc(var(--vs, 1) * 1.12));
+      z-index: 200 !important;
+    }
+    .vista-chip.selected { border-color: var(--accent); }
+    .vista-chip.vista-card-th { border-color: var(--trailhead); color: var(--trailhead); font-weight: 600; }
     .vista-more {
       position: absolute;
       transform: translate(-50%, -100%) scale(var(--vs, 1));
@@ -2204,7 +2238,7 @@
        transform on their <g> wrappers — no React re-render per mousemove). */
     .vista-backdrop g { transition: transform 0.18s ease-out; }
     @media (prefers-reduced-motion: reduce) {
-      .vista-card, .vista-scene, .vista-trails path, .vista-backdrop g { transition: none !important; }
+      .vista-card, .vista-chip, .vista-scene, .vista-trails path, .vista-backdrop g { transition: none !important; }
     }
     .vista-you {
       position: absolute;
@@ -4954,12 +4988,24 @@
        ============================================================================ */
     const VISTA_DEPTH_MIN = 1;
     const VISTA_DEPTH_MAX = 4;
-    // Per-ring placement: vertical position (% from top), card scale, and how
-    // many signposts a ring can hold before the rest collapse into "+N".
-    const VISTA_RING_Y = { 1: 66, 2: 47, 3: 37, 4: 31.5 };
-    const VISTA_RING_S = { 1: 1, 2: 0.6, 3: 0.38, 4: 0.26 };
+    // Perspective projection: every node lives on a virtual ground plane at
+    // distance z(d) and projects toward a vanishing point on the horizon.
+    // One rule drives vertical position, scale, AND horizontal convergence,
+    // which is what makes the scene cohere as a single space.
+    const VISTA_HORIZON = 0.32;  // horizon line, fraction of scene height
+    const VISTA_EYE_Y = 0.90;    // where "you" stand, fraction of scene height
+    const VISTA_Z = (d) => 1 + d * 1.15;
+    const VISTA_SCALE = (d) => VISTA_Z(1) / VISTA_Z(d);  // 1.0 at one hop
+    // The 1.6 exponent exaggerates row separation over the optically-true
+    // 1/z — tall signpost cards need the extra vertical rhythm or the rings
+    // collapse into one overlapping band.
+    /* Hand-tuned ring heights: strict 1/z spacing stacks the far rings inside
+       the ring-2 cards' band, so each ring gets an explicit fraction with
+       enough clearance for the row in front of it. */
+    const VISTA_YFRAC = (d) =>
+      ({ 1: 0.645, 2: 0.50, 3: 0.38, 4: 0.335 })[d] || Math.max(0.33, 0.335 - (d - 4) * 0.012);
+    const VISTA_XFACTOR = (d) => 1.12 / VISTA_Z(d);      // ground-lane px → screen px
     const VISTA_RING_CAP = { 1: 7, 2: 9, 3: 12, 4: 14 };
-    const VISTA_ORIGIN = { x: 50, y: 90 }; // where "you" stand, in scene %
     // Hand-placed night-sky stars (sky viewBox is 100 × 32).
     const VISTA_STARS = [
       [6, 4], [14, 9], [22, 3], [31, 12], [40, 6], [47, 2], [55, 10], [62, 5],
@@ -5004,6 +5050,26 @@
       // Rings the user expanded past their signpost cap via the +N chip.
       const [expandedRings, setExpandedRings] = useState(() => new Set());
       useEffect(() => { setExpandedRings(new Set()); }, [focalId]);
+
+      // Scene layout is in PIXELS, not %, so the composition holds together
+      // at any window size (percent spread scattered fixed-size cards across
+      // ultrawide screens). Measured once on mount + on window resize.
+      const rootRef = useRef(null);
+      const [size, setSize] = useState({ w: 1400, h: 860 });
+      useEffect(() => {
+        const measure = () => {
+          const el = rootRef.current;
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          if (r.width > 40 && r.height > 40) {
+            setSize(prev => (Math.abs(prev.w - r.width) > 1 || Math.abs(prev.h - r.height) > 1)
+              ? { w: r.width, h: r.height } : prev);
+          }
+        };
+        measure();
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+      }, []);
 
       const walkTo = useCallback((id) => {
         if (!id || id === focalId) return;
@@ -5113,66 +5179,132 @@
         return buildBfsTree(focalId, adj);
       }, [focalId, adj]);
 
-      // Scene layout: place every node with depth 1..maxDepth. Ring nodes are
-      // ordered by their parent's x so trails fan out without crossing, then
-      // spread across the ring's arc; the final x blends the even spread with
-      // the parent pull so children lean toward the trail they branch from.
+      // Scene layout. Every node gets a lane on the virtual ground plane —
+      // ring 1 spreads evenly, deeper nodes fan around their parent's lane so
+      // branches stay visually over the trail they belong to — then the
+      // perspective projection maps lanes to screen px (deeper rows converge
+      // toward the vanishing point) and a collision pass keeps rows legible.
+      // Depth 1–2 render as cards; 3+ as name chips (screenshots are
+      // illegible smudges at those scales).
       const layout = useMemo(() => {
-        const pos = new Map(); // id -> { x, y, s, d }
+        const W = size.w, H = size.h;
+        const pos = new Map(); // id -> { x, y, s, d, kind } (x/y in px)
         const more = new Map(); // d -> hidden count
+        const laneOf = new Map(); // id -> ground-lane offset (px at z=0)
         const byDepth = new Map();
         tree.depth.forEach((d, id) => {
           if (id === focalId || d === 0 || d > maxDepth) return;
           if (!byDepth.has(d)) byDepth.set(d, []);
           byDepth.get(d).push(id);
         });
+        const labelOf = (id) => {
+          const th = trailheadFromNodeId(id);
+          return th ? th.id : id.split('/').pop();
+        };
+        const widthOf = (id, d) => {
+          const s = VISTA_SCALE(d);
+          if (d <= 2) return 118 * s;
+          return Math.min(140, 26 + labelOf(id).length * 5.6) * s;
+        };
         for (let d = 1; d <= maxDepth; d++) {
           const ids = byDepth.get(d) || [];
           if (ids.length === 0) continue;
-          const desired = ids.map(id => {
+          const parentLane = (id) => {
             const p = tree.parent.get(id);
-            const px = (p != null && pos.has(p)) ? pos.get(p).x : VISTA_ORIGIN.x;
-            return { id, px };
-          }).sort((a, b) => a.px - b.px || a.id.localeCompare(b.id));
+            return (p != null && laneOf.has(p)) ? laneOf.get(p) : 0;
+          };
+          const sorted = [...ids].sort((a, b) => parentLane(a) - parentLane(b) || a.localeCompare(b));
           // The +N chip toggles a ring's cap ×2 — enough to usually reveal
           // everything without letting a 30-card ring flatten the scene.
           const cap = VISTA_RING_CAP[d] * (expandedRings.has(d) ? 2 : 1);
-          let shown = desired;
-          if (desired.length > cap) {
+          let shown = sorted;
+          if (sorted.length > cap) {
             // Even sample across the sorted arc keeps the fan balanced.
-            const step = desired.length / cap;
+            const step = sorted.length / cap;
             const keep = new Set();
             for (let i = 0; i < cap; i++) keep.add(Math.floor(i * step));
-            shown = desired.filter((_, i) => keep.has(i));
-            more.set(d, desired.length - shown.length);
+            shown = sorted.filter((_, i) => keep.has(i));
+            more.set(d, sorted.length - shown.length);
           } else if (expandedRings.has(d)) {
             // Fully revealed — keep a chip so the ring can be collapsed again.
             more.set(d, 0);
           }
-          const n = shown.length;
-          const half = d === 1 ? 38 : d === 2 ? 33 : 28;
-          shown.forEach((it, i) => {
-            const t = n === 1 ? 0.5 : i / (n - 1);
-            const evenX = 50 - half + t * half * 2;
-            const x = evenX * 0.7 + it.px * 0.3;
-            pos.set(it.id, { x, y: VISTA_RING_Y[d], s: VISTA_RING_S[d], d });
+          // Assign ground lanes.
+          if (d === 1) {
+            const n = shown.length;
+            const G = Math.min(400, (W * 1.9) / Math.max(n, 1));
+            shown.forEach((id, i) => laneOf.set(id, (i - (n - 1) / 2) * G));
+          } else {
+            const groups = new Map();
+            shown.forEach(id => {
+              const pl = parentLane(id);
+              if (!groups.has(pl)) groups.set(pl, []);
+              groups.get(pl).push(id);
+            });
+            groups.forEach((kids, pl) => {
+              kids.forEach((id, j) => laneOf.set(id, pl + (j - (kids.length - 1) / 2) * 300));
+            });
+          }
+          // Project to screen and resolve horizontal collisions.
+          const z = VISTA_Z(d);
+          const s = VISTA_SCALE(d);
+          const y = VISTA_YFRAC(d) * H;
+          const xf = VISTA_XFACTOR(d);
+          const proj = shown.map(id => ({
+            id,
+            ideal: W / 2 + laneOf.get(id) * xf,
+            x: W / 2 + laneOf.get(id) * xf,
+            w: widthOf(id, d),
+          })).sort((a, b) => a.x - b.x);
+          for (let i = 1; i < proj.length; i++) {
+            const minX = proj[i - 1].x + (proj[i - 1].w + proj[i].w) / 2 + 10;
+            if (proj[i].x < minX) proj[i].x = minX;
+          }
+          // Collision pass only pushes right — recenter on the ideal mass.
+          if (proj.length > 1) {
+            const shift = proj.reduce((acc, p2) => acc + (p2.ideal - p2.x), 0) / proj.length;
+            proj.forEach(p2 => { p2.x += shift; });
+          }
+          proj.forEach(p2 => {
+            const x = Math.max(70, Math.min(W - 70, p2.x));
+            pos.set(p2.id, { x, y, s, d, kind: d <= 2 ? 'card' : 'chip' });
           });
         }
         return { pos, more };
-      }, [tree, focalId, maxDepth, expandedRings]);
+      }, [tree, focalId, maxDepth, expandedRings, size, trailheadFromNodeId]);
 
-      // Trail lines: one quadratic curve per placed node, from its parent's
-      // stand (or your feet, for ring 1) up to its signpost base.
+      // Ground trails: one tapered path per edge — wide at the near end,
+      // narrowing with distance, like an actual dirt path receding. Ring-1
+      // trails also carry a dashed centerline (the footpath texture from the
+      // trail map). All coordinates in px; `center` shares the fill path's
+      // curve so both glide together on refocus.
       const trailPaths = useMemo(() => {
+        const W = size.w, H = size.h;
+        const origin = { x: W / 2, y: VISTA_EYE_Y * H, s: 1 };
         const paths = [];
         layout.pos.forEach((p, id) => {
           const par = tree.parent.get(id);
-          const pp = (par && layout.pos.has(par)) ? layout.pos.get(par) : VISTA_ORIGIN;
+          const pp = (par && layout.pos.has(par)) ? layout.pos.get(par) : origin;
+          const isFromYou = pp === origin;
+          const wFar = 6 * p.s;
+          const wNear = isFromYou ? 16 : 6 * pp.s;
+          const wMid = (wFar + wNear) / 2;
           const midY = (pp.y + p.y) / 2;
-          paths.push({ id, d: 'M ' + pp.x + ' ' + pp.y + ' Q ' + p.x + ' ' + midY + ' ' + p.x + ' ' + p.y, depth: p.d });
+          paths.push({
+            id,
+            depth: p.d,
+            d: 'M ' + (pp.x - wNear) + ' ' + pp.y +
+               ' Q ' + (p.x - wMid) + ' ' + midY + ' ' + (p.x - wFar) + ' ' + p.y +
+               ' L ' + (p.x + wFar) + ' ' + p.y +
+               ' Q ' + (p.x + wMid) + ' ' + midY + ' ' + (pp.x + wNear) + ' ' + pp.y +
+               ' Z',
+            center: p.d === 1
+              ? 'M ' + pp.x + ' ' + pp.y + ' Q ' + p.x + ' ' + midY + ' ' + p.x + ' ' + p.y
+              : null,
+          });
         });
         return paths;
-      }, [layout.pos, tree.parent]);
+      }, [layout.pos, tree.parent, size]);
 
       // What action takes you to each 1-hop neighbor — the outgoing
       // shortcut's description (or "launch" off a trailhead), shown on the
@@ -5210,7 +5342,6 @@
         return opts;
       }, [trailheads, filtered.waypoints]);
 
-      const ringStroke = { 1: { w: 2.2, o: 0.5 }, 2: { w: 1.3, o: 0.34 }, 3: { w: 0.9, o: 0.22 }, 4: { w: 0.7, o: 0.15 } };
       // Atmospheric perspective — distant signposts fade like real haze.
       const ringOpacity = { 1: 1, 2: 0.92, 3: 0.8, 4: 0.66 };
 
@@ -5221,27 +5352,30 @@
         const label = th ? th.id : id.split('/').pop();
         const hops = p.d === 1 ? '1 hop away' : p.d + ' hops away';
         const action = p.d === 1 ? (focalOutDesc.get(id) || '') : '';
+        const isChip = p.kind === 'chip';
         cards.push(React.createElement('button', {
           key: id,
-          className: 'vista-card' + (th ? ' vista-card-th' : '') + (selectedWaypoint === id ? ' selected' : ''),
-          style: { left: p.x + '%', top: p.y + '%', '--vs': p.s, zIndex: 100 - p.d * 10, opacity: ringOpacity[p.d] || 0.6 },
-          title: (th ? (th.description || th.id) : ((wp && wp.description) || id)) + ' — click to walk there',
+          className: (isChip ? 'vista-chip' : 'vista-card') + (p.d === 2 ? ' vista-card-far' : '') + (th ? ' vista-card-th' : '') + (selectedWaypoint === id ? ' selected' : ''),
+          style: { left: p.x + 'px', top: p.y + 'px', '--vs': p.s, zIndex: 100 - p.d * 10, opacity: ringOpacity[p.d] || 0.6 },
+          title: (th ? (th.description || th.id) : ((wp && wp.description) || id)) + ' — ' + hops + ', click to walk there',
           onClick: () => {
             onSelectWaypoint(th ? null : id);
             beginWalk(id, p.x, p.y);
           },
         },
-          th
-            ? React.createElement(React.Fragment, null,
-                React.createElement('span', null, '🥾'), label)
-            : React.createElement(React.Fragment, null,
-                (wp && wp.screenshotDataUri)
-                  ? React.createElement('img', { src: wp.screenshotDataUri, alt: id })
-                  : React.createElement('div', { className: 'vista-no-shot' }, '(no screenshot)'),
-                React.createElement('div', { className: 'vista-name' }, label),
-                React.createElement('div', { className: 'vista-hops' }, hops),
-                action ? React.createElement('div', { className: 'vista-action' }, '👆 ' + action) : null,
-              ),
+          isChip
+            ? (th ? '🥾 ' + label : label)
+            : th
+              ? React.createElement(React.Fragment, null,
+                  React.createElement('span', null, '🥾'), label)
+              : React.createElement(React.Fragment, null,
+                  (wp && wp.screenshotDataUri)
+                    ? React.createElement('img', { src: wp.screenshotDataUri, alt: id })
+                    : React.createElement('div', { className: 'vista-no-shot' }, '(no screenshot)'),
+                  React.createElement('div', { className: 'vista-name' }, label),
+                  React.createElement('div', { className: 'vista-hops' }, hops),
+                  action ? React.createElement('div', { className: 'vista-action' }, '👆 ' + action) : null,
+                ),
         ));
       });
       layout.more.forEach((n, d) => {
@@ -5249,7 +5383,7 @@
         cards.push(React.createElement('button', {
           key: 'more-' + d,
           className: 'vista-more',
-          style: { left: '93%', top: VISTA_RING_Y[d] + '%', '--vs': VISTA_RING_S[d], zIndex: 100 - d * 10 },
+          style: { left: 'calc(100% - 70px)', top: (VISTA_YFRAC(d) * size.h) + 'px', '--vs': VISTA_SCALE(d), zIndex: 100 - d * 10 },
           title: expanded
             ? 'Collapse this ring back to its usual signpost count' + (n > 0 ? ' (' + n + ' still beyond the expanded cap)' : '')
             : n + ' more waypoint' + (n === 1 ? '' : 's') + ' ' + d + ' hop' + (d === 1 ? '' : 's') + ' out — click to reveal (or walk closer)',
@@ -5285,7 +5419,7 @@
         if (nearRef.current) nearRef.current.setAttribute('transform', 'translate(' + (nx * -1.8).toFixed(2) + ' 0)');
       }, []);
 
-      return React.createElement('div', { className: 'vista-view', onMouseMove: onSceneMouseMove },
+      return React.createElement('div', { className: 'vista-view', ref: rootRef, onMouseMove: onSceneMouseMove },
         React.createElement('div', { className: 'vista-backdrop' },
           // Sky + mountains — pure scenery, drawn from theme tokens. Stars
           // are CSS-hidden in the light theme; polygons are 4% wider than
@@ -5318,7 +5452,7 @@
               React.createElement('line', {
                 key: i, x1: 0, y1: y, x2: 100, y2: y,
                 stroke: 'var(--border)', strokeWidth: 1,
-                opacity: 0.1 + i * 0.012,
+                opacity: 0.16 + i * 0.02,
                 style: { vectorEffect: 'non-scaling-stroke' },
               }),
             ),
@@ -5329,22 +5463,31 @@
         // step-forward pulse while backdrop and UI chrome hold still.
         React.createElement('div', {
           className: 'vista-scene' + (walking ? ' vista-walking' : ''),
-          style: { transformOrigin: walking ? (walking.x + '% ' + walking.y + '%') : '50% 62%' },
+          style: { transformOrigin: walking ? (walking.x + 'px ' + walking.y + 'px') : '50% 62%' },
         },
         React.createElement('svg', {
           className: 'vista-trails',
-          viewBox: '0 0 100 100', preserveAspectRatio: 'none',
+          viewBox: '0 0 ' + size.w + ' ' + size.h, preserveAspectRatio: 'none',
         },
-          trailPaths.map(tp => {
-            const s = ringStroke[tp.depth] || ringStroke[4];
-            return React.createElement('path', {
-              key: tp.id, d: tp.d,
-              fill: 'none', stroke: 'var(--text-muted)',
-              strokeWidth: s.w, strokeOpacity: s.o,
-              strokeLinecap: 'round',
-              style: { vectorEffect: 'non-scaling-stroke' },
-            });
+          // Boot shadow grounds "you" on the plane.
+          React.createElement('ellipse', {
+            cx: size.w / 2, cy: VISTA_EYE_Y * size.h + 6,
+            rx: 54, ry: 8,
+            fill: 'rgba(0,0,0,0.22)',
           }),
+          trailPaths.map(tp => React.createElement('path', {
+            key: tp.id, d: tp.d,
+            fill: 'var(--text-muted)',
+            fillOpacity: { 1: 0.2, 2: 0.13, 3: 0.08, 4: 0.06 }[tp.depth] || 0.06,
+            stroke: 'none',
+          })),
+          trailPaths.filter(tp => tp.center).map(tp => React.createElement('path', {
+            key: tp.id + '-c', d: tp.center,
+            fill: 'none', stroke: 'var(--text-muted)',
+            strokeWidth: 2, strokeOpacity: 0.35,
+            strokeLinecap: 'round', strokeDasharray: '1 8',
+            style: { vectorEffect: 'non-scaling-stroke' },
+          })),
         ),
         cards,
         React.createElement('button', {
