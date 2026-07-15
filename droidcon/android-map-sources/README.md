@@ -145,14 +145,20 @@ the Trail Runner theme — neutral dark surfaces, green trailheads, blue
 accents, Hanken Grotesk/JetBrains Mono). The floating 🥾 Trailheads
 panel (top-left) is the live-demo hook: clicking a destination chip
 selects it, dims everything off-path, and walks a 🥾 marker down the
-entry trail. SUBWAY view with focal
+entry trail. Below it, the 🗺️ Featured Trails legend lists up to 8
+auto-named marquee routes ("Oss Licenses Trail", "Discard Customizations
+Dialog Trail", …) drawn on the map as colored dashes, park-map style —
+clicking one runs the whole trail: the route lights in its color and the
+🥾 walks every waypoint, trailhead to destination. SUBWAY view with focal
 `contacts/android/list-populated` + Fit View is the money shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,
-plus subway's `focal`/`depth`/`dest`), so you can bookmark exact demo
-states:
+`trail`, plus subway's `focal`/`depth`/`dest`), so you can bookmark exact
+demo states:
 
 - `/waypoints/graph#target=contacts&platform=android` — just the Android
   contacts map
 - `/waypoints/graph#target=contacts&view=subway&focal=contacts%2Fandroid%2Flist-populated&depth=3`
   — the subway money shot
+- `/waypoints/graph#target=contacts&platform=android&trail=discard-customizations-dialog-trail`
+  — lands mid trail-run: the named trail focused in its color, walker walking it

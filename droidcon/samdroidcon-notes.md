@@ -206,6 +206,13 @@ not the map render (upstream #202 gap — candidate report, don't file unprompte
    green and FLOWS, camera fits, and a 🥾 walks the route. Line: "the map doesn't
    just show the way in — watch the boot make the trip." (Panel steps back to 25%
    while selected; hover brings it back. Deselect = click empty canvas.)
+3½. NEW — click "Oss Licenses Trail" in the 🗺️ FEATURED TRAILS legend (same panel,
+   below trailheads): the orange route lights END-TO-END, camera fits, and the 🥾
+   runs the WHOLE trail — list → drawer → settings → about → oss-licenses. Line:
+   "trails have names now — watch the boot run one, trailhead to summit." Colored
+   dashes at rest = the 8 marquee trails, park-map style. Re-click the row (or
+   click empty canvas) to deselect. Deep link if needed:
+   `#target=contacts&platform=android&trail=discard-customizations-dialog-trail`.
 4. Click a DEEPER card (e.g. delete-contact-dialog): multi-leg walk — trailhead →
    contact-detail → overflow → dialog. "That's the agent's actual route."
 5. Switch to the subway money shot: `#target=contacts&view=subway&
@@ -284,6 +291,46 @@ LIVING TRAILS + WALKER (2026-07-15, commits e26b84a1 / 4e1c4c3a / 6aecb4ed):
   a 0×0 viewport. Verify via preview_eval + synthetic .click(); each screenshot
   ticks exactly one frame (walker/camera animations advance per shot). On a real
   projector none of this applies.
+NAMED TRAILS + MAP OVERLAY (2026-07-15, commit db377cb6, Sam's ask: "overlay trails
+on the map like an actual trail map — trailheads around different areas, walk all
+the waypoints when you run a trail"):
+- Every derived journey is now a NAMED TRAIL: destination words + park-map length
+  suffix — Spur (≤1 hop) / Path (≤3) / Trail (≤5) / Ridge (≤7) / Traverse (8+).
+  Deterministic from the graph, no stored state. android scope names that land:
+  "Discard Customizations Dialog Trail" (6 wp), "Oss Licenses Trail", "Add Blocked
+  Number Dialog Trail", "Ringtone Picker Path".
+- FEATURED TRAILS (≤8): longest trail per trailhead entry (every trailhead area
+  contributes — that's the "trailheads around the map" beat), then longest fills
+  to destinations not already visited by a featured route. Colors from the subway
+  palette SKIPPING GREEN (green stays trailheads-only). At rest they overlay the
+  map as colored dashes ('4 7') over the faint footpath dots — named-route marking,
+  exactly like a park map. Shared segments go to the LONGEST trail so marquee
+  routes read continuously and shorter ones branch off.
+- Panel gains a 🗺️ FEATURED TRAILS legend under Trailheads: color dot + name +
+  wp count, footer "42 trails blazed in scope — see all in Report →" (mode jump).
+- CLICK A TRAIL = RUN IT: exactly that route focuses in the trail's color (not
+  the all-entries union a waypoint click shows), camera fits, Detail opens on the
+  destination, and the 🥾 walks EVERY waypoint trailhead→destination — walker speed
+  scales (max(420, totalLen/8) px/s) so even the longest trail lands in ~8s; leg
+  cap 24 for trail runs (vs 14 for entry walks). Waypoint clicks / pane clicks /
+  filter changes all clear trail-run mode cleanly.
+- DEEP LINK: #trail=<slug> (slug = kebab name), e.g.
+  `#target=contacts&platform=android&trail=discard-customizations-dialog-trail`
+  — applied once at load, survives target/platform/view rewrites (APP_HASH_KEYS).
+- DATA PROVENANCE (Sam asked): trails are BFS-derived from authored trailheads +
+  shortcuts (same 42/108 as Report) — NOT replayed sessions. The full view
+  hierarchy lives one level down: waypoint classifiers match the live hierarchy
+  at runtime ("you are here"), grounded by capture-example snapshots taken FROM
+  real session logs. Trailheads need no hierarchy — declared entry tools + a
+  promised landing waypoint. Seam already commented in deriveJourneys to swap in
+  real recorded-run data later without touching rendering.
+- GOTCHA (verify workflow): occluded pane ALSO throttles setTimeout hard (chained
+  timers → 1s+, long chains → 1/min) — walker spawn/fitBounds fire late in the
+  pane, and multi-await eval scripts blow the 30s eval budget. Probe with single
+  synchronous evals + Bash sleeps between; screenshots still tick frames.
+- DEMO SCRIPT UPDATE: insert between beats 3 and 4 — click "Oss Licenses Trail"
+  in the panel: "these are named trails now — watch the boot run the whole thing,
+  trailhead to summit." Orange route end-to-end + full walk is the wow.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
