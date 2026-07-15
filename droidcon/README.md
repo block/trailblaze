@@ -3,14 +3,16 @@
 The talk deck is a [Slidev](https://sli.dev) presentation. Entry file:
 `samdroidcon.md`. Package manager: **bun**.
 
-## Quick start (deps already installed)
-
-If `node_modules/` is present in this directory, just start the dev server:
+## Quick start
 
 ```bash
 cd droidcon
-./node_modules/.bin/slidev samdroidcon.md --port 3030 --open
+./start-slides.sh
 ```
+
+Installs deps with `bun install` if `node_modules/` is missing, then starts the
+dev server on port 3030 (pass a different port as the first arg, e.g.
+`./start-slides.sh 3031`).
 
 Then open:
 
