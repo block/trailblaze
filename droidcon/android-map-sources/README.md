@@ -153,8 +153,8 @@ clicking one runs the whole trail: the route lights in its color and the
 `contacts/android/list-populated` + Fit View is the money shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,
-`trail`, plus subway's `focal`/`depth`/`dest`), so you can bookmark exact
-demo states:
+`trail`, subway's `focal`/`depth`/`dest`, and vista's `vfocal`/`vdepth`), so
+you can bookmark exact demo states:
 
 - `/waypoints/graph#target=contacts&platform=android` — just the Android
   contacts map
@@ -162,3 +162,6 @@ demo states:
   — the subway money shot
 - `/waypoints/graph#target=contacts&platform=android&trail=discard-customizations-dialog-trail`
   — lands mid trail-run: the named trail focused in its color, walker walking it
+- `/waypoints/graph#target=contacts&platform=android&view=vista&vfocal=contacts%2Fandroid%2Flist-populated`
+  — the experimental first-person Vista, standing on the contacts list looking
+  out over everything reachable

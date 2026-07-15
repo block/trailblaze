@@ -347,12 +347,18 @@ the waypoints when you run a trail"):
   the focal (🥾 + YOU ARE HERE plaque, bottom center), everything reachable
   stands as signposts scaled + raised by hop distance toward a mountain
   horizon — 1 hop = big and near, 3 hops = small on the ridge. Trail lines fan
-  from your feet; clicking a signpost WALKS there (re-roots the BFS; shared
-  keys make surviving cards glide = feels like stepping forward). Controls:
-  Standing-at picker, ‹ walk-back, Depth 1–4 (over-cap rings collapse to +N).
-  Deep link: `#target=contacts&platform=android&view=vista`. SubwayView is
-  byte-identical — Vista is a separate component; demo it only if it comes up,
-  Subway remains the canonical view. NOT in the demo script.
+  from your feet; clicking a signpost WALKS there (step-forward pulse zooms
+  toward it, re-roots the BFS, settles out on the new vista; surviving cards
+  + their trail lines glide). 1-hop signposts show the action that gets you
+  there ("👆 Tap the FAB…"); signpost stakes + per-ring haze sell the depth.
+  Bottom-left breadcrumb = your walk, click to jump back; bottom-right =
+  trailhead exits (invocable from anywhere). Night stars (dark theme),
+  perspective ground lines, mouse parallax on the mountains. Controls:
+  Standing-at picker, ‹ walk-back, Depth 1–4, +N chips expand a ring (×2).
+  Deep links: `#…&view=vista&vfocal=<id>&vdepth=N` — all three hash writers
+  (App/Subway/Vista) preserve each other's keys. SubwayView is byte-identical —
+  Vista is a separate component; demo it only if it comes up, Subway remains
+  the canonical view. NOT in the demo script.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
