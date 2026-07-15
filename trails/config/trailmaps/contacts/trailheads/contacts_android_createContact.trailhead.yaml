@@ -1,0 +1,11 @@
+# Viewer-visible sidecar for the `contacts_android_newContact` TS tool's trailhead.
+id: contacts_android_createContact
+description: >
+  Jump straight into a blank "Create new contact" editor from any device state via the
+  system ACTION_INSERT contacts intent — the same entry other apps use for "add to
+  contacts".
+trailhead:
+  to: contacts/android/new-contact-editor
+parameters: []
+tools:
+  - contacts_android_newContact: {}

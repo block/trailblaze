@@ -1,0 +1,11 @@
+# Viewer-visible sidecar for the `contacts_android_openContactCard` TS tool's trailhead.
+id: contacts_android_viewContact
+description: >
+  Open a contact's QuickContact card from any device state via the system ACTION_VIEW
+  contacts intent, resolving a contact id on-device — the same entry tapping a contact
+  in another app uses.
+trailhead:
+  to: contacts/android/contact-detail
+parameters: []
+tools:
+  - contacts_android_openContactCard: {}

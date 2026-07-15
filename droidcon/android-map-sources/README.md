@@ -65,6 +65,28 @@ for free; mines from run sessions get classifier-suffixed names — rename
 both files AND the embedded `screenshotFile` field. `capture-example`
 needs `--force` to overwrite an existing pair.
 
+## Trailheads (entry points)
+
+Four trailheads bootstrap the agent into the contacts map from ANY device
+state (the graph draws them as dashed entry edges from a virtual origin —
+they're what anchors the layout):
+
+- `contacts_android_launch` → `list-populated` (force-stop + MAIN/LAUNCHER)
+- `contacts_android_createContact` → `new-contact-editor` (system
+  `ACTION_INSERT` intent, package-pinned with `-p`)
+- `contacts_android_viewContact` → `contact-detail` (`ACTION_VIEW` with the
+  contact id resolved on-device in a single `sh -c` pipeline)
+- `contacts_ios_launch` → `contacts/ios/list` (FORCE_RESTART launch)
+
+Each is implemented as a TS tool in `tools/` with an inline
+`trailhead: { to }` block, PLUS a thin `trailheads/*.trailhead.yaml` sidecar
+aliasing it under a distinct id. Both layers are required today: the runner
+manifest reads the TS-inline block, but the graph viewer discovers
+trailheads only from `trailheads/*.trailhead.yaml` (upstream #202 removed
+the sidecars, which silently emptied the viewer's trailhead layer —
+candidate upstream report). All three Android intents were verified live
+against the mapped waypoints before authoring.
+
 ## Known issues worked around (candidate upstream reports)
 
 - **Run-session screenshot persistence writes 0-byte files** (observed

@@ -1,0 +1,12 @@
+# Viewer-visible sidecar for the `contacts_android_launchApp` TS tool's trailhead.
+# The graph viewer discovers trailheads from `trailheads/*.trailhead.yaml` only —
+# TS-inline `trailhead:` blocks reach the runner manifest but not the map render.
+id: contacts_android_launch
+description: >
+  Launch the Android Contacts app fresh (force-stop + MAIN/LAUNCHER intent) and land on
+  the populated contacts list, regardless of which screen the device is currently on.
+trailhead:
+  to: contacts/android/list-populated
+parameters: []
+tools:
+  - contacts_android_launchApp: {}

@@ -171,6 +171,13 @@ are what built the map.
 Regen/extend on ANY machine: `droidcon/android-map-sources/` — README with the full
 pipeline + gotchas, seed-contacts.sh (the 8-contact device DB every screenshot
 assumes), and all 34 replayable micro-trails.
+TRAILHEADS (added 2026-07-14): 4 entry points render as dashed edges from a virtual
+origin — Android launch→list, ACTION_INSERT→editor, ACTION_VIEW→contact card, iOS
+launch→list. Stage line: shortcuts move you WITHIN the map; trailheads get you INTO
+it from anywhere — launch intents are edges too.
+Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads
+`trailheads/*.trailhead.yaml`; TS-inline `trailhead:` reaches the runner manifest but
+not the map render (upstream #202 gap — candidate report, don't file unprompted).
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits
