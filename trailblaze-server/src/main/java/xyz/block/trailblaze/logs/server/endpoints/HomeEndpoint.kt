@@ -68,6 +68,7 @@ object HomeEndpoint {
         <p class="subtitle">${sessions.size} session(s)</p>
         <div class="actions">
           <a href="/report">View all sessions in one report</a>
+          <a href="/waypoints/graph">Waypoint Graph</a>
           <a href="/devices">Devices</a>
           <a href="/ping">Health check</a>
         </div>
