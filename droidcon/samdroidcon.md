@@ -361,9 +361,11 @@ saved as a **trail** → replayed with **zero LLM calls**
 
 <!--
 THE REFRAIN. Introduce here, echo at the close.
-Round 10: introduce it as the answer to BOTH Act 0 problems in one move — natural
-language on top (agents can drive devices: control), determinism underneath (journeys
-replay forever: quality). One thesis, both hard problems.
+REFRAMED (plane review, 2026-07-15): natural language on top (agents can drive devices)
++ determinism underneath (journeys replay forever) is the ANSWER to both Act 0 problems
+in one move — but frame it as the MECHANISM, not the finish line. The finish line is
+seeing your whole app as a map; this is how you get durable, trustworthy material to
+build that map out of.
 Quick refresher for anyone who missed last year — 90 seconds max.
 -->
 
@@ -582,9 +584,19 @@ Every architecture decision that follows defends one of those two things.
 
 </div>
 
+<div class="pt-4 text-lg opacity-60">
+
+Not the destination — **how we get to the map.**
+
+</div>
+
 <!--
-THE SPINE — state it once, plainly. Reprised on the recipe slide.
-HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
+THE MECHANISM — state it once, plainly. Reprised on the recipe slide.
+REFRAMED (plane review, 2026-07-15): this is the ENABLER, not the headline — the spine
+of the TALK is visibility/comprehension (seeing your whole app), and this thesis is what
+makes that seeing possible (durable, replayable artifacts to assemble into a map). Say
+it as scaffolding, not the point: "this is the mechanism that gets us there."
+HAND-OFF: "That's the mechanism. Production scale is what stress-tested it."
 -->
 
 ---
@@ -1623,8 +1635,15 @@ Keep the automatable automated. Spend humans on what's new.
 
 </div>
 
+<div class="pt-4 text-lg opacity-60">
+
+This is what made the map possible.
+
+</div>
+
 <!--
-The spine, reprised. Then the refrain on the next slide.
+The mechanism, reprised — one more time as scaffolding, not the point. Then the refrain
+on the next slide, and the map gets the last word before Q&A.
 -->
 
 ---
@@ -1674,6 +1693,12 @@ The robot pattern outlived every framework it was written in.
 
 </div>
 
+<div class="pt-6 text-xl opacity-80">
+
+And for the first time — **you can see it all.**
+
+</div>
+
 <div class="pt-10 text-2xl">Questions? 🙋</div>
 
 <!--
@@ -1681,6 +1706,9 @@ The robot pattern outlived every framework it was written in.
 DELIBERATE TRADE (cold read flagged): "the robots write the tests" says "tests" after
 slide 18 banned the word. Keep it — the 2016 robot-pattern callback outweighs the
 reframe in the final ten seconds, and "tests" is the audience's word for it.
+CLOSING LINE ADDED (plane review re-thread, 2026-07-15): the very last words before Q&A
+now land on the spine — visibility — not just the robots callback. Pays off the cold
+open's "we still can't see what we're testing."
 -->
 
 ---
