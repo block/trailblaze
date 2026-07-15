@@ -198,27 +198,28 @@ It drives a real phone. It just… **does it**.
 
 <div v-click class="pt-10 text-3xl">
 
-But it **falls short**:
-<div class="pt-2 text-2xl opacity-80"><b>controlling devices</b> &nbsp;·&nbsp; <b>testing what matters</b></div>
+But an **LLM on every run** is
+<div class="pt-2 text-2xl"><b>slow</b> &nbsp;·&nbsp; <b>expensive</b> &nbsp;·&nbsp; <b>non-deterministic</b></div>
+<div class="pt-3 text-xl opacity-70">Magic for exploring — <b>brutal for CI</b>.</div>
 
 </div>
 
 <!--
-REWRITTEN round 10 (Sam): open on the HYPE, make the dream concrete, then the gap.
-ROUND 11 (Sam): the example is now REAL-WORLD — this audience builds world-class apps
-with exactly these problems ("create a contact" was too simple). REGISTER for the whole
-act: dev-to-dev — talk through the problem we had and how we tried to solve it, not a
-product pitch. (The DEMO corpus stays contacts — that's the public-repo reproducibility
-story, hedged on the Four-Jobs slide.)
-Beat 1 (say it flat): AI is supposed to do everything — write our code, run our apps.
-Beat 2 (CLICK — the dream is real): hand an agent a real ask from a real backlog and it
-DRIVES A REAL PHONE. True today, and genuinely magic the first time you watch it.
-Beat 3 (CLICK — the turn): but on mobile it falls short in exactly the two ways this
-talk attacks — DEVICE CONTROL (how does an agent reliably drive real devices at all?)
-and TESTING (how do we trust, repeat, and afford what it did?).
-Promise-tracking: slide 3 = re-running the agent every time fails CI economics;
-slide 4 = you can't trust or rerun what it did (the missing link); slide 5 = the
-quality unit (user journeys); Act 4 = the CLI/tools agents use for device control.
+MERGED (plane review, 2026-07-15 — Sam): this slide now carries BOTH the hype AND the
+CI-economics catch. The old standalone "An LLM on every run?" slide is folded in here —
+rehearsing 5/6/7 felt repetitive (three "AI is impressive, but…" beats in a row).
+Beat 1 (flat): AI is supposed to do everything — write our code, run our apps.
+Beat 2 (CLICK — the dream is real): a real ask from a real backlog and it DRIVES A REAL
+PHONE. Genuinely magic the first time you watch it.
+Beat 3 (CLICK — the catch): but you can't run the LLM every time — slow, expensive,
+non-deterministic. Honor the upside first (great for exploring, and for agents DRIVING
+devices — one of the two hard problems), then land the turn: brutal for CI. The problem is
+CI ECONOMICS, not the capability.
+Deterministic replay answers this (replay alone is table stakes — Maestro has it too); our
+leg up = natural language FIRST + TS custom tools + full per-platform fidelity (backup slide
+has the head-to-head). ASSET A pt 1 is the visual proof later: blaze vs replay, 6m26s vs 2m20s.
+DEVICE CONTROL (the other hard problem) is no longer a bullet — name it aloud if you want the
+two-problems framing; Act 4 owns the machinery. The missing-link slide is the second problem.
 -->
 
 ---
@@ -229,33 +230,21 @@ layout: center
 
 # It's not that easy — yet
 
-<div v-click class="pt-8 text-2xl">
+<div v-click class="pt-8 text-3xl">
 
 A reliable trail takes **many cycles** — not one shot.
 
 </div>
 
-<div v-click class="pt-3 text-xl opacity-70">
+<div v-click class="pt-8 text-2xl">
 
-Maybe never one-shot — but it keeps **getting better**.
-
-</div>
-
-<div v-click class="pt-8 text-xl">
-
-**Trailheads** — the agent knows where to start.
+**Trailheads** get the agent started · iterate from **recorded trails**.
 
 </div>
 
-<div v-click class="pt-3 text-xl">
+<div v-click class="pt-8 text-lg opacity-60">
 
-Iterate from **recorded trails** + **natural-language steps**.
-
-</div>
-
-<div v-click class="pt-6 text-lg opacity-60">
-
-Coming: a **waypoint map** *(experimental)* — fewer cycles to a solid trail.
+Coming: a **waypoint map** *(experimental)* — fewer cycles still.
 
 </div>
 
@@ -280,39 +269,6 @@ BEATS (Sam's raw points, kept to short bullets):
 PLACEMENT: sits right after the cart user-journey example (route /5), as its own beat so it
 doesn't re-crowd that slide. If it reads too early (trailheads not yet defined), the fallback
 is to move it next to "One user journey" / into Act 2 — flag for Sam.
--->
-
----
-layout: center
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
-
-# An LLM on every run?
-
-<div class="pt-6 text-2xl">
-
-**Slow.** &nbsp; **Expensive.** &nbsp; **Non-deterministic.**
-
-</div>
-
-<div class="pt-8 text-lg opacity-70">
-
-Great for exploring — and for **agents driving devices**. Brutal for CI.
-
-</div>
-
-<!--
-Round 10 thread: FALLS-SHORT REASON #1. The naive fix for slide 2's gap is "just have
-the agent do it every run" — this slide kills that: the economics fail at CI scale.
-The economic hook from the abstract — land it before the seven targets multiply it.
-Round 9 (Sam): honor the upside before the brutal — LLM-per-run is GOOD for device
-control for agents (that's one of the two hard problems from the opening). The problem
-is CI economics, not the capability.
-Deterministic replay answers this, and replay alone is table stakes (Maestro has it too).
-Our leg up: natural language FIRST + custom tools in TypeScript + full per-platform
-fidelity — that's the positioning (backup slide has the head-to-head).
-ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m20s in the captions.
 -->
 
 ---
