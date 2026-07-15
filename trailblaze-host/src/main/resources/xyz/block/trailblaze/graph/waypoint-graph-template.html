@@ -469,6 +469,69 @@
       background: var(--trailhead);
       color: var(--bg);
     }
+    /* Featured-trails section — the park-map legend. Row dot = the route's
+       color on the canvas; the active row borders in its trail color too
+       (inline style, since each trail has its own hue). */
+    .trailheads-panel .trails-hdr {
+      display: flex; align-items: baseline; gap: 7px;
+      margin: 12px 0 0;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--text);
+    }
+    .trailheads-panel .trails-tagline {
+      margin: 3px 0 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .trailheads-panel .trail-row {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%;
+      margin-bottom: 4px;
+      padding: 5px 8px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px; font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .trailheads-panel .trail-row:hover { border-color: var(--border-strong); }
+    .trailheads-panel .trail-row.active { background: var(--bg-elevated); }
+    .trailheads-panel .trail-dot {
+      width: 10px; height: 10px; flex: none;
+      border-radius: 50%;
+      box-shadow: 0 0 7px currentColor;
+    }
+    .trailheads-panel .trail-name {
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .trailheads-panel .trail-meta {
+      flex: none;
+      font-size: 10.5px; font-weight: 500;
+      color: var(--text-muted);
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    }
+    .trailheads-panel .trails-more {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+      padding: 4px 8px 2px;
+      border: none; background: transparent;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 10.5px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .trailheads-panel .trails-more:hover { color: var(--accent); }
 
     .detail-panel {
       flex: none;
@@ -2169,26 +2232,50 @@
        touching the rendering layer.
     */
     function bfsFromTrailhead(trailheadId, startWaypointId, shortcuts, waypointIds) {
-      // shortest-path BFS, returns { waypointId: [pathOfWaypointIds] }
+      // shortest-path BFS, returns Map(waypointId -> { path: [wpIds], edgeIds: [shortcutIds] }).
+      // Edge ids (not just node pairs) so the map can light the exact rendered
+      // edges of a trail — two shortcuts can connect the same pair of waypoints.
       const adj = new Map();
       shortcuts.forEach(sc => {
         if (!adj.has(sc.from)) adj.set(sc.from, []);
-        adj.get(sc.from).push({ to: sc.to, sc });
+        adj.get(sc.from).push({ to: sc.to, id: sc.id });
       });
       const reached = new Map();
-      reached.set(startWaypointId, [startWaypointId]);
+      reached.set(startWaypointId, { path: [startWaypointId], edgeIds: [] });
       const queue = [startWaypointId];
       while (queue.length > 0) {
         const cur = queue.shift();
+        const curEntry = reached.get(cur);
         const next = adj.get(cur) || [];
-        for (const { to } of next) {
+        for (const { to, id } of next) {
           if (reached.has(to)) continue;
           if (!waypointIds.has(to)) continue;
-          reached.set(to, [...reached.get(cur), to]);
+          reached.set(to, { path: [...curEntry.path, to], edgeIds: [...curEntry.edgeIds, id] });
           queue.push(to);
         }
       }
       return reached;
+    }
+
+    /* Trail-map naming: every derived journey doubles as a *named trail*.
+       Deterministic — destination words + a length suffix the way park maps
+       grade routes (a Spur is a short offshoot, a Traverse crosses the whole
+       map) — so names survive regeneration without any stored state. */
+    function trailSuffix(legs) {
+      if (legs <= 1) return 'Spur';
+      if (legs <= 3) return 'Path';
+      if (legs <= 5) return 'Trail';
+      if (legs <= 7) return 'Ridge';
+      return 'Traverse';
+    }
+    function trailDisplayName(destId, legs) {
+      const tail = destId.split('/').pop() || destId;
+      const words = tail.split(/[-_]+/).filter(Boolean)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1));
+      return words.join(' ') + ' ' + trailSuffix(legs);
+    }
+    function trailSlug(name) {
+      return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
     function categorizeJourney(path) {
@@ -2221,9 +2308,10 @@
         // sort destinations by path length (shortest paths first), then by id
         const dests = [...reached.entries()]
           .filter(([id]) => id !== th.to) // skip trivial 1-step "trailhead → its own to"
-          .sort((a, b) => a[1].length - b[1].length || a[0].localeCompare(b[0]));
-        dests.forEach(([destId, path]) => {
+          .sort((a, b) => a[1].path.length - b[1].path.length || a[0].localeCompare(b[0]));
+        dests.forEach(([destId, { path, edgeIds }]) => {
           const dest = wpById.get(destId);
+          const name = trailDisplayName(destId, path.length - 1);
           journeys.push({
             num: counter++,
             id: 'journey::' + th.id + '::' + destId,
@@ -2231,7 +2319,13 @@
             trailheadLabel: th.id,
             destinationId: destId,
             destinationLabel: dest ? (dest.description?.split('.')[0] || dest.id) : destId,
+            name,
+            slug: trailSlug(name),
             path,
+            // Ordered edge keys for the map overlay + walker: the trailhead
+            // entry edge first, then each shortcut hop. Keys match the edge
+            // ids MapView renders ('trailhead::…' / 'shortcut::…').
+            edgeKeys: [trailheadEdgeKey('trailhead::', th), ...edgeIds.map(eid => 'shortcut::' + eid)],
             screens: path.length,
             category: categorizeJourney(path),
           });
@@ -2641,7 +2735,7 @@
     /* ============================================================================
        MAP VIEW
        ============================================================================ */
-    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, onInspectShortcut, themeKey }) {
+    function MapView({ filtered, selectedWaypoint, selectedTrail, trails, onSelectWaypoint, onInspectShortcut, themeKey }) {
       const positions = useMemo(
         () => computeLayout(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
         [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
@@ -2660,6 +2754,22 @@
       // Multiple trailheads → multiple paths → the union shows every shortest
       // way to get there.
       const focusedSet = useMemo(() => {
+        // A selected trail takes precedence and focuses *exactly that route*
+        // ("you are running this trail") — not the union of every entry path
+        // to its destination that a plain waypoint selection shows. isTrail
+        // tells the walker to travel the whole route, and color carries the
+        // trail's overlay color onto the focused edges.
+        if (selectedTrail) {
+          const trailNodes = new Set(selectedTrail.path);
+          trailNodes.add(TRAILHEAD_NODE_PREFIX + selectedTrail.trailheadId);
+          return {
+            nodes: trailNodes,
+            edges: new Set(selectedTrail.edgeKeys),
+            routes: [selectedTrail.edgeKeys],
+            isTrail: true,
+            color: selectedTrail.color || null,
+          };
+        }
         if (!selectedWaypoint) return null;
         const nodes = new Set([selectedWaypoint]);
         const edges = new Set(); // 'shortcut::<id>' or 'trailhead::<id>'
@@ -2726,7 +2836,7 @@
         // match the dimmed nodes around them.
 
         return { nodes, edges, routes };
-      }, [selectedWaypoint, filtered.shortcuts, filtered.trailheads]);
+      }, [selectedWaypoint, selectedTrail, filtered.shortcuts, filtered.trailheads]);
 
       const nodes = useMemo(() => [
         ...filtered.waypoints.map(wp => {
@@ -2770,6 +2880,19 @@
         [filtered.trailheads],
       );
 
+      // At rest the featured trails tint their footpath dots — the map reads
+      // like a park map with colored named routes. Shared segments go to the
+      // LONGEST trail (iterate shortest-first; later set() wins) so marquee
+      // routes read continuously and shorter ones visibly branch off them.
+      // Trailhead entry edges keep their green — green means "start here".
+      const restTrailColors = useMemo(() => {
+        const m = new Map();
+        (trails || []).slice().sort((a, b) => a.screens - b.screens).forEach(t => {
+          t.edgeKeys.forEach(k => { if (k.startsWith('shortcut::')) m.set(k, t.color); });
+        });
+        return m;
+      }, [trails]);
+
       const edges = useMemo(() => {
         // Group shortcuts by source so we can stagger their label Y offsets —
         // each child gets `index * 18 px` shift centered around 0, which
@@ -2807,6 +2930,14 @@
             if (!isFocused) classes.push('dimmed');
             if (focusedSet && isFocused) classes.push('focused');
 
+            // Trail tint: while running a trail its route takes the trail's
+            // color; at rest each featured trail's segments carry its color.
+            // Inline style beats the stylesheet, so the tint survives the
+            // .focused brightness/width rules.
+            const trailColor = focusedSet
+              ? (focusedSet.isTrail && isFocused ? focusedSet.color : null)
+              : (restTrailColors.get(edgeKey) || null);
+
             // Label class needs the dimmed marker too — labels are rendered
             // via EdgeLabelRenderer (a portal), so the .dimmed class on the
             // edge SVG never cascades down to them.
@@ -2831,17 +2962,24 @@
               },
               markerEnd: {
                 type: MarkerType.ArrowClosed,
-                color: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
+                color: trailColor || (isBack ? 'var(--back-edge)' : 'var(--tree-edge)'),
                 width: isBack ? 14 : 18,
                 height: isBack ? 14 : 18,
               },
               style: {
-                stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
-                strokeWidth: isBack ? 1.25 : 2.75,
+                stroke: trailColor || (isBack ? 'var(--back-edge)' : 'var(--tree-edge)'),
+                strokeWidth: trailColor ? 3 : (isBack ? 1.25 : 2.75),
                 // Footpath styling: round-capped near-zero dashes render as a
                 // dotted walking-route line (the way hiking maps draw trails).
+                // At-rest featured trails upgrade to longer colored dashes —
+                // park maps mark named routes over the generic dotted paths.
+                // While focused, keep the footpath dots: the trail-flow
+                // animation offsets are tuned to that exact dash cycle.
                 // Back-edges keep their own faint long-dash from the CSS class.
-                ...(isBack ? {} : { strokeDasharray: '0.5 8', strokeLinecap: 'round' }),
+                ...(isBack ? {} : {
+                  strokeDasharray: (trailColor && !focusedSet) ? '4 7' : '0.5 8',
+                  strokeLinecap: 'round',
+                }),
               },
             };
           }),
@@ -2870,7 +3008,7 @@
             };
           }),
         ];
-      }, [filtered.shortcuts, filtered.trailheads, entryPoints, focusedSet, onInspectShortcut]);
+      }, [filtered.shortcuts, filtered.trailheads, entryPoints, focusedSet, restTrailColors, onInspectShortcut]);
 
       const onNodeClick = useCallback((_, node) => {
         if (node.type === 'waypoint') onSelectWaypoint(node.id);
@@ -2940,10 +3078,16 @@
           && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         const routes = focusedSet && focusedSet.routes;
         if (reduced || !routes || !routes.length) return;
-        const route = routes.reduce((a, b) => (b.length < a.length ? b : a));
+        // Waypoint selection walks the SHORTEST entry route; an explicit
+        // trail run walks THE trail — every waypoint, trailhead to summit.
+        const route = focusedSet.isTrail
+          ? routes[0]
+          : routes.reduce((a, b) => (b.length < a.length ? b : a));
         // Very long routes would walk forever — the flowing dashes already
-        // carry the story there.
-        if (route.length === 0 || route.length > 14) return;
+        // carry the story there. Trail runs get more headroom (walking every
+        // waypoint is the point) plus speed scaling below.
+        const maxLegs = focusedSet.isTrail ? 24 : 14;
+        if (route.length === 0 || route.length > maxLegs) return;
         let cancelled = false;
         let rafId = 0;
         let attempts = 0;
@@ -2968,7 +3112,13 @@
           marker.textContent = '🥾';
           host.appendChild(marker);
           walkerRef.current = marker;
-          const SPEED = 420;       // px/s along the edge path
+          // Entry walks amble at a fixed pace; a full trail run scales its
+          // speed so even the longest featured trail lands in ~8s of stage
+          // time instead of a half-minute hike.
+          const totalLen = paths.reduce((s, p) => s + p.getTotalLength(), 0);
+          const SPEED = focusedSet.isTrail
+            ? Math.max(420, totalLen / 8)
+            : 420;                 // px/s along the edge path
           const MIN_LEG_MS = 260;  // short hops still read as movement
           let leg = 0;
           let legStart = 0;
@@ -2986,7 +3136,7 @@
             if (tf && tf !== 'none') {
               try { zoom = new DOMMatrixReadOnly(tf).a || 1; } catch (e) {}
             }
-            const counter = Math.min(2.5, Math.max(1, 1 / zoom));
+            const counter = Math.min(4, Math.max(1, 1 / zoom));
             marker.style.transform =
               'translate(' + pt.x + 'px,' + pt.y + 'px) translate(-50%, -50%)'
               + ' scale(' + counter + ')';
@@ -3311,7 +3461,7 @@
         App() — both writers re-read the current hash and preserve the other's
         keys in a canonical order so neither wipes the other's state and the
         equality no-op check stays stable. */
-    const APP_HASH_KEYS = ['target', 'platform', 'view'];
+    const APP_HASH_KEYS = ['target', 'platform', 'view', 'trail'];
     function buildSubwayHash({ focal, depth, dest }) {
       const keep = parseSubwayHash();
       const parts = [];
@@ -3328,12 +3478,13 @@
         new target/platform/view values while preserving the subway keys
         (`focal`, `depth`, `dest`) in the same canonical order as
         [buildSubwayHash]. */
-    function buildAppHash({ target, platform, view }, current) {
+    function buildAppHash({ target, platform, view, trail }, current) {
       const keep = current || parseSubwayHash();
       const parts = [];
       if (target) parts.push('target=' + encodeURIComponent(target));
       if (platform) parts.push('platform=' + encodeURIComponent(platform));
       if (view && view !== 'map') parts.push('view=' + encodeURIComponent(view));
+      if (trail) parts.push('trail=' + encodeURIComponent(trail));
       ['focal', 'depth', 'dest'].forEach(k => {
         if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
       });
@@ -4642,7 +4793,7 @@
        instead of hiding among the nodes. Clicking a destination selects that
        waypoint; the map's existing focus behavior then lights up the entry
        path and fits the camera to it. */
-    function TrailheadsPanel({ trailheads, selectedWaypoint, onSelectWaypoint }) {
+    function TrailheadsPanel({ trailheads, selectedWaypoint, onSelectWaypoint, trails, totalTrails, selectedTrail, onSelectTrail, onShowAllTrails }) {
       const [collapsed, setCollapsed] = useState(false);
       // toByPlatform trailheads arrive as one entry per platform destination —
       // group by id so a cross-platform trailhead renders one row with a chip
@@ -4659,7 +4810,7 @@
       if (groups.length === 0) return null;
       return React.createElement('div', {
         className: 'trailheads-panel' + (collapsed ? ' collapsed' : '')
-          + (selectedWaypoint ? ' faded' : ''),
+          + ((selectedWaypoint || selectedTrail) ? ' faded' : ''),
       },
         React.createElement('button', {
           className: 'th-title',
@@ -4695,6 +4846,40 @@
               ),
             ),
           ),
+        ),
+        // ---- Featured trails: the park-map legend. Each row's dot matches
+        // its route's color on the canvas; clicking runs the trail (focus +
+        // camera fit + the walker hiking every waypoint).
+        (collapsed || !trails || trails.length === 0) ? null : React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'trails-hdr' },
+            '🗺️ Featured trails',
+            React.createElement('span', { className: 'th-count' }, trails.length),
+          ),
+          React.createElement('div', { className: 'trails-tagline' },
+            'Named routes across the map — click one to walk every waypoint on it.',
+          ),
+          trails.map(t => {
+            const active = selectedTrail && selectedTrail.id === t.id;
+            return React.createElement('button', {
+              key: t.id,
+              className: 'trail-row' + (active ? ' active' : ''),
+              style: active ? { borderColor: t.color } : undefined,
+              title: t.trailheadId + ' → ' + t.destinationId,
+              onClick: () => onSelectTrail(t),
+            },
+              React.createElement('span', {
+                className: 'trail-dot',
+                style: { background: t.color, color: t.color },
+              }),
+              React.createElement('span', { className: 'trail-name' }, t.name),
+              React.createElement('span', { className: 'trail-meta' }, t.screens + ' wp'),
+            );
+          }),
+          totalTrails > trails.length ? React.createElement('button', {
+            className: 'trails-more',
+            onClick: onShowAllTrails,
+            title: 'Open the Report view for the full trail log',
+          }, totalTrails + ' trails blazed in scope — see all in Report →') : null,
         ),
       );
     }
@@ -4964,6 +5149,10 @@
       const [selectedPlatform, setSelectedPlatform] = useState(initialAppHash.platform || null);
       const [selectedWaypoint, setSelectedWaypoint] = useState(null);
       const [selectedJourneyId, setSelectedJourneyId] = useState(null);
+      // Trail-run mode: a featured/named trail whose exact route is focused
+      // on the map and walked end-to-end by the walker. Object, not id —
+      // it carries the route (edgeKeys/path) and its overlay color.
+      const [selectedTrail, setSelectedTrail] = useState(null);
       const [theme, setTheme] = useState('dark');
       // Shortcut inspect modal — click an edge label in any view to peek
       // at the shortcut's body (the actions it performs to get from `from`
@@ -5027,14 +5216,17 @@
       // as the subway writer; both writers preserve each other's keys.
       useEffect(() => {
         if (typeof window === 'undefined' || !window.history) return;
-        const next = buildAppHash({ target: selectedTarget, platform: selectedPlatform, view: mode });
+        const next = buildAppHash({
+          target: selectedTarget, platform: selectedPlatform, view: mode,
+          trail: selectedTrail ? selectedTrail.slug : null,
+        });
         if (next === window.location.hash) return;
         try {
           window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
         } catch (_) {
           // file:// URLs sometimes refuse history APIs — fall back silently.
         }
-      }, [mode, selectedTarget, selectedPlatform]);
+      }, [mode, selectedTarget, selectedPlatform, selectedTrail]);
 
       // ----- target/platform filters -----
       const targets = useMemo(() => {
@@ -5088,6 +5280,74 @@
         [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
       );
 
+      // ----- featured trails (map overlay) -----
+      // The full journey list is a lot as a map overlay (100+ routes in a
+      // real scope) — a park map names a handful of marquee routes instead.
+      // Feature the longest trail from each trailhead entry (so every
+      // trailhead area of the map contributes one), then the longest
+      // remaining trails to destinations no featured route already visits,
+      // capped at 8. Palette skips index 0 — that green is the trailheads'.
+      const featuredTrails = useMemo(() => {
+        const byEntry = new Map();
+        journeys.forEach(j => {
+          const k = j.trailheadId + '→' + j.path[0];
+          const cur = byEntry.get(k);
+          if (!cur || j.screens > cur.screens) byEntry.set(k, j);
+        });
+        const featured = [...byEntry.values()];
+        const covered = new Set();
+        featured.forEach(j => j.path.forEach(id => covered.add(id)));
+        [...journeys].sort((a, b) => b.screens - a.screens).forEach(j => {
+          if (featured.length >= 8) return;
+          if (featured.includes(j) || covered.has(j.destinationId)) return;
+          featured.push(j);
+          j.path.forEach(id => covered.add(id));
+        });
+        featured.sort((a, b) => b.screens - a.screens || a.name.localeCompare(b.name));
+        return featured.map((j, i) => ({
+          ...j,
+          color: SUBWAY_PALETTE[1 + (i % (SUBWAY_PALETTE.length - 1))],
+        }));
+      }, [journeys]);
+
+      // Waypoint selection always exits trail-run mode — the two focus
+      // models (union-of-entry-paths vs one named trail) are exclusive.
+      const onSelectWaypoint = useCallback((id) => {
+        setSelectedWaypoint(id);
+        setSelectedTrail(null);
+      }, []);
+      // Selecting a trail = "run this trail": focus exactly its route and
+      // open the destination's detail. Re-clicking the row toggles off.
+      const onSelectTrail = useCallback((j) => {
+        const next = selectedTrail && selectedTrail.id === j.id ? null : j;
+        setSelectedTrail(next);
+        setSelectedWaypoint(next ? next.destinationId : null);
+      }, [selectedTrail]);
+      // A filter change rebuilds the journey list — re-point the selected
+      // trail at its rebuilt twin (same id) or drop it if it left scope,
+      // so stale edge keys never reach the map.
+      useEffect(() => {
+        setSelectedTrail(prev => {
+          if (!prev) return prev;
+          return featuredTrails.find(j => j.id === prev.id)
+            || journeys.find(j => j.id === prev.id)
+            || null;
+        });
+      }, [journeys, featuredTrails]);
+      // Deep-link support: #trail=<slug> selects a named trail once journeys
+      // exist. One-shot at load, same policy as the other hash keys.
+      const trailHashAppliedRef = useRef(false);
+      useEffect(() => {
+        if (trailHashAppliedRef.current || !initialAppHash.trail || journeys.length === 0) return;
+        trailHashAppliedRef.current = true;
+        const j = featuredTrails.find(x => x.slug === initialAppHash.trail)
+          || journeys.find(x => x.slug === initialAppHash.trail);
+        if (j) {
+          setSelectedTrail(j);
+          setSelectedWaypoint(j.destinationId);
+        }
+      }, [journeys, featuredTrails, initialAppHash]);
+
       // ----- detail-panel data -----
       const selectedWaypointObj = useMemo(
         () => selectedWaypoint ? data.waypoints.find(w => w.id === selectedWaypoint) : null,
@@ -5109,10 +5369,10 @@
       // ----- selecting a journey jumps to its destination on the map -----
       const onSelectJourney = useCallback((j) => {
         setSelectedJourneyId(j.id);
-        setSelectedWaypoint(j.destinationId);
+        onSelectWaypoint(j.destinationId);
         // If we're not in MAP mode, switching there is more useful than staying.
         if (mode === 'screens') setMode('map');
-      }, [mode]);
+      }, [mode, onSelectWaypoint]);
 
       // ----- header strings -----
       const totalWaypoints = data.waypoints.length;
@@ -5256,8 +5516,9 @@
             : null,
           React.createElement('div', { className: 'canvas-area' },
             mode === 'map' ? React.createElement(MapView, {
-              filtered, selectedWaypoint,
-              onSelectWaypoint: setSelectedWaypoint,
+              filtered, selectedWaypoint, selectedTrail,
+              trails: featuredTrails,
+              onSelectWaypoint,
               onInspectShortcut: setInspectShortcut,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
             }) : null,
@@ -5267,22 +5528,27 @@
             mode === 'map' ? React.createElement(TrailheadsPanel, {
               trailheads: filtered.trailheads,
               selectedWaypoint,
-              onSelectWaypoint: setSelectedWaypoint,
+              onSelectWaypoint,
+              trails: featuredTrails,
+              totalTrails: journeys.length,
+              selectedTrail,
+              onSelectTrail,
+              onShowAllTrails: () => setMode('report'),
             }) : null,
             mode === 'subway' ? React.createElement(SubwayView, {
               filtered, journeys, selectedWaypoint,
-              onSelectWaypoint: setSelectedWaypoint,
+              onSelectWaypoint,
               onInspectShortcut: setInspectShortcut,
               onAgentTextChange: setAgentViewText,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
             }) : null,
             mode === 'screens' ? React.createElement(ScreensView, {
               filtered, selectedWaypoint,
-              onSelectWaypoint: setSelectedWaypoint,
+              onSelectWaypoint,
             }) : null,
             mode === 'report' ? React.createElement(ReportView, {
               filtered, journeys,
-              onSelectWaypoint: setSelectedWaypoint,
+              onSelectWaypoint,
             }) : null,
           ),
           // Right panel — collapsible dock with two tabs inside it.
@@ -5328,7 +5594,7 @@
                       outgoing: outgoingShortcuts,
                       trailheads: incomingTrailheads,
                       allWaypoints: data.waypoints,
-                      onSelectWaypoint: setSelectedWaypoint,
+                      onSelectWaypoint,
                     })
                   : React.createElement('div', { className: 'detail-content', style: { padding: '32px 22px', color: 'var(--text-muted)', fontSize: '13px' } },
                       'Click a waypoint on the canvas to see its details here.',
