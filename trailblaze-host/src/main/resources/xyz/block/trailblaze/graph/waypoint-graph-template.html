@@ -399,11 +399,17 @@
       border-radius: 16px;
       box-shadow: var(--shadow-elevated);
       padding: 12px 14px 10px;
+      transition: opacity 0.25s ease;
     }
     .trailheads-panel.collapsed {
       width: auto;
       padding: 8px 13px;
     }
+    /* While a waypoint is selected, eyes belong on the lit trail — the panel
+       steps back so it can't sit on top of the focused path after the camera
+       fit. Hover (or deselect) brings it back. */
+    .trailheads-panel.faded { opacity: 0.25; }
+    .trailheads-panel.faded:hover { opacity: 1; }
     .trailheads-panel .th-title {
       display: flex; align-items: baseline; gap: 7px;
       width: 100%;
@@ -2973,8 +2979,17 @@
             if (!legStart) legStart = ts;
             const t = Math.min(1, (ts - legStart) / legDur);
             const pt = paths[leg].getPointAtLength(legLen * t);
+            // Counter-scale against the viewport zoom (marker inherits it) so
+            // the boot stays readable when a long route fits at a far zoom.
+            let zoom = 1;
+            const tf = getComputedStyle(host).transform;
+            if (tf && tf !== 'none') {
+              try { zoom = new DOMMatrixReadOnly(tf).a || 1; } catch (e) {}
+            }
+            const counter = Math.min(2.5, Math.max(1, 1 / zoom));
             marker.style.transform =
-              'translate(' + pt.x + 'px,' + pt.y + 'px) translate(-50%, -50%)';
+              'translate(' + pt.x + 'px,' + pt.y + 'px) translate(-50%, -50%)'
+              + ' scale(' + counter + ')';
             if (t >= 1) {
               leg += 1;
               if (leg >= paths.length) {
@@ -4642,7 +4657,10 @@
       });
       const groups = [...byId.values()];
       if (groups.length === 0) return null;
-      return React.createElement('div', { className: 'trailheads-panel' + (collapsed ? ' collapsed' : '') },
+      return React.createElement('div', {
+        className: 'trailheads-panel' + (collapsed ? ' collapsed' : '')
+          + (selectedWaypoint ? ' faded' : ''),
+      },
         React.createElement('button', {
           className: 'th-title',
           onClick: () => setCollapsed(c => !c),
