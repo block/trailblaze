@@ -3037,6 +3037,15 @@
             inst.fitView({ duration: 600, padding: 0.18 });
             return;
           }
+          if (focusedSet.isTrail) {
+            // Trail runs are a tracking shot: the walker's follow-cam pans
+            // the viewport along the route at the user's CURRENT zoom, so
+            // fitting bounds here would fight it (and stomp the zoom).
+            // Only fall through to the fit when no walker will actually run.
+            const reduced = window.matchMedia
+              && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (!reduced && focusedSet.routes[0].length <= 24) return;
+          }
           // Compute a bounding box over every focused node (waypoints +
           // any focused trailhead pills). Use measured dimensions when
           // React Flow has them, fall back to the declared sizes.
@@ -3120,6 +3129,30 @@
             ? Math.max(420, totalLen / 8)
             : 420;                 // px/s along the edge path
           const MIN_LEG_MS = 260;  // short hops still read as movement
+          // Trail runs get a tracking shot: each frame the camera eases
+          // toward keeping the boot centered, at the user's CURRENT zoom —
+          // no fit-to-bounds zoom jump. The lerp makes it read as a
+          // follow-cam glide rather than a hard lock, and it re-reads the
+          // zoom every frame so pinching mid-walk still tracks. Skipped
+          // while the user drags the pane (don't fight the hand) and when
+          // the wrapper hasn't laid out yet (0×0 rect → NaN math).
+          const followCam = (pt) => {
+            if (!focusedSet.isTrail) return;
+            const inst = flowInstanceRef.current;
+            const wrap = document.querySelector('.map-flow');
+            if (!inst || !wrap) return;
+            if (wrap.querySelector('.react-flow__pane.dragging')) return;
+            const rect = wrap.getBoundingClientRect();
+            if (rect.width < 40 || rect.height < 40) return;
+            const vp = inst.getViewport();
+            const tx = rect.width / 2 - pt.x * vp.zoom;
+            const ty = rect.height / 2 - pt.y * vp.zoom;
+            inst.setViewport({
+              x: vp.x + (tx - vp.x) * 0.12,
+              y: vp.y + (ty - vp.y) * 0.12,
+              zoom: vp.zoom,
+            });
+          };
           let leg = 0;
           let legStart = 0;
           let legLen = paths[0].getTotalLength();
@@ -3140,6 +3173,7 @@
             marker.style.transform =
               'translate(' + pt.x + 'px,' + pt.y + 'px) translate(-50%, -50%)'
               + ' scale(' + counter + ')';
+            followCam(pt);
             if (t >= 1) {
               leg += 1;
               if (leg >= paths.length) {
