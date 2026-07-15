@@ -38,12 +38,18 @@ Droidcon USA 2026<br>Sam Edwards · Block
 </style>
 
 <!--
-DECK v7 — Act 0 rethreaded (round 10): hype → the dream works → falls short ×2
-(CI economics, missing link) → user journeys → seven targets → ten years.
+DECK v8 — SPINE REFRAMED (plane review, 2026-07-15): the through-line is VISIBILITY /
+COMPREHENSION — "you can't see what you're testing" — and the MAP is the destination.
+Determinism/recordability are the ENABLER, not the headline. Arc: one screenshot (2016) →
+readable trails → your whole app as a map (2026).
+Act 0 order now: ten-years HOOK (can't see what we test) → the user-journey unit → AI could
+do it all but not how we need it (hype + missing-link merged) → it's not that easy yet →
+what Trailblaze is (intro trio collapsed) → three differentiators → "any target" grid
+(seven-targets folded into differentiator #3).
 Content-complete; all four 📼 asset slides carry REAL embedded media (real runs, real numbers).
 Act + timing markers (and ASSET ids) live top-left of each slide but are HIDDEN by
 default via `.act-label { display: none }` in styles/index.css — flip to `block` for rehearsal.
-Spine: natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
+Enabler line (Act 1): natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
 samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&A bank.
 -->
 
@@ -51,175 +57,126 @@ samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&
 layout: center
 ---
 
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze? · 0:00–2:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 0:00–3:00</div>
 
-# First — what *is* Trailblaze?
+# Ten years on this problem
 
-<div class="grid grid-cols-2 gap-10 items-center pt-4">
+<div class="pt-2 text-2xl opacity-80 max-w-3xl mx-auto text-center">
 
-<div>
-<img src="./public/asset-d-github-repo.png" class="rounded-xl shadow-2xl w-full" alt="github.com/block/trailblaze" />
-</div>
-
-<div class="space-y-5">
-
-<div v-click class="text-xl">
-
-**Open source.** Apache-2.0
-<span class="opacity-70">github.com/block/trailblaze</span>
+We're still shipping mobile apps — and we still can't **see** what our tests cover, or tie them back to what the product actually wants.
 
 </div>
 
-<div v-click>
-
-```bash
-brew install block/tap/trailblaze
-```
-
-<div class="pt-2 text-xl opacity-80">You can use it <b>right now</b> — during this talk.</div>
-
+<div class="grid grid-cols-2 gap-10 pt-6 max-w-4xl mx-auto">
+  <div class="text-center">
+    <img src="./public/talk-2016.jpg" class="rounded-lg shadow-lg w-full" />
+    <div class="pt-3 text-lg"><b>2016</b> — <i>"A Screenshot is Worth 1,000 Words"</i></div>
+  </div>
+  <div class="text-center">
+    <img src="./public/talk-2025.jpg" class="rounded-lg shadow-lg w-full" />
+    <div class="pt-3 text-lg"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> · Brian Gardner</div>
+  </div>
 </div>
 
-</div>
+<div class="pt-6 text-center text-lg opacity-70">
+
+*By the end you'll see what the map is — and that you're already building it.*
 
 </div>
 
 <!--
-NEW (plane review, FB-1 — Sam): the deck used to jump straight from the cover into the
-problem statement. But this talk is about TRAILBLAZE + the problem, not the problem alone.
-Bring people up to speed FIRST: what it is, that it's open source, how we use it. Then the
-problem explains WHY it's shaped the way it is.
-BEAT: say the one-liner flat — "Trailblaze is an AI-driven UI testing framework. We built it
-at Block, it's open source, Apache-2.0, and it's on GitHub right now."
-CLICK: the realness beat. This is proof-of-existence, not a pitch. The card is GitHub's own
-OG render (org, description, contributors, issues, stars, forks) — it reads as "real project,"
-which is the entire job of this slide.
-ASSET: public/asset-d-github-repo.png — GitHub's OpenGraph card, fetched live 2026-07-14
-(opengraph.githubassets.com/1/block/trailblaze). Regenerate the same way; it auto-updates
-its own numbers. NOTE it renders LIGHT on our dark deck — that's deliberate, reads as a
-screenshot. If Sam prefers a true desktop screenshot of the repo page, swap the file and
-keep the path.
-NUMBERS AS OF 2026-07-14: 247 stars · 19 forks · 11 contributors · 21 open issues.
-Don't say the star count out loud — 247 is honest but modest, and pointing at it invites the
-wrong read. The repo CHROME (Block org, Apache-2.0, contributors, activity) carries "real"
-better than the number does.
+THE HOOK (plane review, 2026-07-15 — the reframe). Open COLD on the problem, not on
+credentials. The deck's spine is now VISIBILITY / COMPREHENSION — you can't see what
+you're testing — and the MAP is the destination (it's the title).
+BEAT: ten years shipping mobile; Espresso is still the fastest way to RUN tests, but we
+still can't SEE what we're testing or trace it to what the product wants.
+2016 CALLBACK: "A Screenshot is Worth 1,000 Words" — Sam couldn't tell what the tests did
+from the filenames. THIS 1,000-WORDS LINE IS A PLANT — it pays off as "1,000 tokens" at the
+reports slide (Act 3). Open with words here, pay off with tokens there.
+Both prior talks were Droidcon NYC; 2025 = open-sourcing Trailblaze on this stage with
+Brian ("a lot has happened since"). Credentials in passing, no dwelling — the problem is
+the point. Images: matched cards, both true 16:9 (2025's YouTube letterbox cropped off).
+HAND-OFF into the unit: "The thing we're trying to protect has a name — the user journey."
+-->
+
+---
+
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · The unit</div>
+
+# One user journey.
+
+<div class="pt-6 text-2xl opacity-70">
+
+what a user must **always** be able to do — the unit of quality
+
+</div>
+
+<div class="pt-10 text-4xl">
+
+You write it **once**.
+
+</div>
+
+<!--
+THE QUALITY UNIT — moved up to right after the hook (plane review). What the product
+actually wants, named. Industry term: critical user journey (CUJ) — the experiences a
+user must always be able to complete; the things needed for sign-off before release.
+BUILD: say it and let it hang — "One user journey. You write it once." Login is just the
+spoken example ("say, logging in"); don't dwell on login.
+HONESTY (still true): each journey is written once — MFA, first-time setup are their own
+journeys. What you get is a TRAILHEAD, and within it you can skip the normal noise so
+replay starts from known state. Trailheads get their formal slide in Act 2 — don't unpack.
+HAND-OFF: "So the obvious move is to point AI at it."
 -->
 
 ---
 layout: center
 ---
 
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · The turn · 3:00–6:00</div>
 
-# How we got here
+# AI could do it all — just not how we need it
 
-<div class="pt-8 space-y-5 text-2xl">
-  <div v-click><b>Nov 2024</b> — proof of concept</div>
-  <div v-click><b>Mar 2025</b> — full-time · named it <b>Trailblaze</b></div>
-  <div v-click><b>Droidcon NYC 2025</b> — open sourced</div>
-  <div v-click><b>Since</b> — drivers · platforms · trail files · CLI · MCP</div>
-  <div v-click class="pt-1"><b>Last month</b> — <code>brew install</code></div>
-</div>
-
-<!--
-NEW (plane review, FB-1). Sam's own past-talk style: DATED MILESTONE TIMELINE — narrate the
-evolution as a sequence, not a confession. Two beats, then today. No dwelling — this is
-context, not the talk.
-DETAILS FROM SAM (plane review, 2026-07-15) — bullets stay SHORT, the story is spoken:
-- Nov 2024: officially started the PROOF OF CONCEPT (don't name the pre-POC predecessor).
-- Mar 2025: went FULL-TIME on it and PICKED THE NAME (Trailblaze).
-- Droidcon NYC 2025: open sourced on a droidcon stage, one year ago, with Brian — best beat
-  for THIS room ("we open sourced it at droidcon last year — a lot has happened since").
-- "Since": lots of evolutions to talk through — drivers, platform support, the trail file
-  format, USER INTERACTION, the CLI, and MCP. Slide lists a representative subset; expand the
-  ones that matter aloud (user-interaction folded into the spoken version to keep the bullet short).
-- "Last month": shipped to Homebrew — `brew install block/tap/trailblaze` (~Jun 2026). The full
-  command lives on slide 2; here it's just the MILESTONE, not the CTA. Confirm the ~1-month
-  timing before the talk.
--->
-
----
-layout: center
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
-
-# And we *use* it
-
-<div class="pt-8 text-3xl font-bold">
-<span v-click>Square</span><span v-click><span class="opacity-40">&nbsp;·&nbsp;</span>Cash App</span>
-</div>
-
-<div v-click class="pt-6 text-2xl">
-
-Real apps. Real devices. **Every day, in CI.**
-
-</div>
-
-<div v-click class="pt-10 text-xl opacity-80">
-
-Not a demo. Not a prototype.
-This talk is what **running it for real** taught us.
-
-</div>
-
-<!--
-NEW (plane review, FB-1). Third beat of the intro arc: it's real, it's ours, it's load-bearing.
-Sam's stated goal for the whole talk (notes, 2026-07-11 reframe): "how Block is using
-Trailblaze in production (Square + Cash, 1.5+ years) and the philosophy of where it's going."
-This slide states that thesis OUT LOUD, up front, so the audience knows what kind of talk
-they're in — a production-lessons talk, not a product pitch.
-DELIBERATELY HELD BACK: the scale numbers. Seven targets and "hundreds of trails" are the
-Act 0 gut-punch two slides later — do NOT spend them here. Keep this qualitative.
-HAND-OFF into the problem statement (the pivot the whole intro exists to earn):
-"So that's the what. To explain why it looks the way it does — I have to start with the
-problem we had." → next slide: "AI is supposed to do everything."
--->
-
----
-layout: center
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 2:30–6:30</div>
-
-# AI is supposed to do *everything*
-
-<div v-click class="pt-8 text-3xl italic opacity-90">
+<div v-click class="pt-6 text-3xl italic opacity-90">
 
 "Validate the cart updates — make it a test."
 
 </div>
 
-<div v-click class="pt-8 text-3xl">
+<div v-click class="pt-6 text-2xl">
 
-It drives a real phone. It just… **does it**.
+It drives a real phone. It just… **does it.** *(genuinely magic the first time.)*
 
 </div>
 
-<div v-click class="pt-10 text-3xl">
+<div v-click class="pt-6 text-2xl">
 
-But an **LLM on every run** is
-<div class="pt-2 text-2xl"><b>slow</b> &nbsp;·&nbsp; <b>expensive</b> &nbsp;·&nbsp; <b>non-deterministic</b></div>
-<div class="pt-3 text-xl opacity-70">Magic for exploring — <b>brutal for CI</b>.</div>
+But an **LLM on every run** is <b>slow · expensive · non-deterministic</b> — magic for exploring, **brutal for CI.**
+
+</div>
+
+<div v-click class="pt-6 text-2xl">
+
+And it **throws away the link:** what *exactly* did it do? can you rerun it deterministically? the **objective is gone.**
 
 </div>
 
 <!--
-MERGED (plane review, 2026-07-15 — Sam): this slide now carries BOTH the hype AND the
-CI-economics catch. The old standalone "An LLM on every run?" slide is folded in here —
-rehearsing 5/6/7 felt repetitive (three "AI is impressive, but…" beats in a row).
-Beat 1 (flat): AI is supposed to do everything — write our code, run our apps.
-Beat 2 (CLICK — the dream is real): a real ask from a real backlog and it DRIVES A REAL
-PHONE. Genuinely magic the first time you watch it.
-Beat 3 (CLICK — the catch): but you can't run the LLM every time — slow, expensive,
-non-deterministic. Honor the upside first (great for exploring, and for agents DRIVING
-devices — one of the two hard problems), then land the turn: brutal for CI. The problem is
-CI ECONOMICS, not the capability.
-Deterministic replay answers this (replay alone is table stakes — Maestro has it too); our
-leg up = natural language FIRST + TS custom tools + full per-platform fidelity (backup slide
-has the head-to-head). ASSET A pt 1 is the visual proof later: blaze vs replay, 6m26s vs 2m20s.
-DEVICE CONTROL (the other hard problem) is no longer a bullet — name it aloud if you want the
-two-problems framing; Act 4 owns the machinery. The missing-link slide is the second problem.
+MERGED (plane review, 2026-07-15 — Sam): the old "AI is supposed to do everything"
+hype/economics slide + "The missing link" slide collapse into ONE quick turn. Four beats,
+click-built:
+1. AI is supposed to do everything — a real ask from a real backlog.
+2. The dream is REAL — it DRIVES A REAL PHONE. Honor the upside (great for exploring, and
+   for agents driving devices — one of the two hard problems: device control).
+3. First catch — CI ECONOMICS: slow/expensive/non-deterministic on every run.
+4. Second catch — it DISCARDS THE LINK: no durable record of what it did, no deterministic
+   rerun, and the objective (the most valuable artifact) is thrown away. "Losing the link"
+   is the phrase to hit.
+Deterministic replay answers beat 3 (replay alone is table stakes — Maestro has it too);
+KEEPING the natural-language objective answers beat 4 — that's the whole Trailblaze thesis,
+teased here. SAY the cart moment, don't demo it (Sam: "call it out" — kept lean). ASSET A
+(blaze vs replay, 6m26s vs 2m20s) is the visual proof later; the reports slide pays off "what
+exactly did it do?"
 -->
 
 ---
@@ -249,106 +206,113 @@ Coming: a **waypoint map** *(experimental)* — fewer cycles still.
 </div>
 
 <!--
-NEW (plane review, 2026-07-15 — Sam). The honest counterweight to the hype slide before it:
-the dream (agent drives the cart) is real, but getting a RELIABLE trail out of it is not
-one-shot. Give the room space to sit in this — it earns trust and motivates the whole rest
-of the talk (the determinism/replay machinery exists precisely because one-shot isn't enough).
-BEATS (Sam's raw points, kept to short bullets):
+KEEP (Sam confirmed, 2026-07-15). The honest counterweight, now positioned right after the
+AI-turn: the dream (agent drives the cart) is real, but getting a RELIABLE trail out of it
+is not one-shot. Give the room space to sit in this — it earns trust and motivates the whole
+rest of the talk (the determinism/replay machinery exists precisely because one-shot isn't
+enough).
+BEATS (Sam's raw points, short bullets):
 - Reliable trail authoring currently takes MANY CYCLES — we're finding this in practice.
-- It probably will NEVER be perfectly one-shot — but we keep doing things to make it better.
-  (Optimistic, not defeatist — the "— yet" in the title carries this.)
-- TRAILHEADS (established as part of Trailblaze) help a lot: the agent knows where to START.
-  Teaser only — trailheads get their FORMAL slide in Act 2 (line ~871). Don't over-explain here.
-- The iteration loop: RECORDED TRAIL FILES + the NATURAL-LANGUAGE STEPS give the agent
-  concrete material to iterate against, not a blank page.
-- WAYPOINTS (experimental) — PLANTS the Act 6 payoff ("Next: waypoints" + "Your app, as a
-  map", the subway/graph asset). Frame it exactly as Act 6 does: not fully proven, but bullish.
-  The vision: because authoring a solid trail takes so many cycles today, a waypoint map the
-  agent can navigate could make that far more seamless. Keep it a QUIET forward-look here (dim,
-  one line) — the real reveal is Act 6. Say it, don't dwell.
-PLACEMENT: sits right after the cart user-journey example (route /5), as its own beat so it
-doesn't re-crowd that slide. If it reads too early (trailheads not yet defined), the fallback
-is to move it next to "One user journey" / into Act 2 — flag for Sam.
+- It probably will NEVER be perfectly one-shot — but we keep making it better ("— yet").
+- TRAILHEADS help: the agent knows where to START (teaser — formal slide in Act 2).
+- The loop: RECORDED TRAILS + the NATURAL-LANGUAGE STEPS give the agent concrete material
+  to iterate against, not a blank page.
+- WAYPOINTS (experimental) PLANTS the Act 6 payoff — keep it a QUIET forward-look (dim, one
+  line); the real reveal is "Your app, as a map." Say it, don't dwell.
 -->
 
 ---
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
-
-# The missing link
-
-<div class="pt-6 space-y-6 text-3xl">
-  <div v-click>What <i>exactly</i> did it do?</div>
-  <div v-click>Run it again — <b>deterministically</b>?</div>
-  <div v-click>The <b>link is lost</b></div>
-  <div v-click>The objective — <b>thrown away</b></div>
-</div>
-
-<!--
-REWRITTEN round 10 — FALLS-SHORT REASON #2, answering slide 2's dream directly: the
-agent did the thing… and left you nothing you can trust or rerun. No jump into
-"natural-language tests" anymore; the NL idea was seeded on slide 2.
-ROUND 11 (Sam): "what exactly did it do?" TEES UP THE REPORTS — plant it as a promise
-and pay it off TWICE: recordings answer "what do I replay" (Acts 1–2), session reports
-answer "what happened and why" — per-step screenshots, hierarchy, LLM transcript —
-context for humans AND for the LLM (Act 3). Say something like: "hold that question;
-the answer became one of my favorite parts of this system."
-"Losing the link" is the phrase to hit. Bullets stay CUE FRAGMENTS (round 9).
-Expansions: (1) it worked — but which taps, which fields, which assertions? (2) the
-only way to run it again is asking the LLM again — slide 3 told you what that costs,
-and it may choose differently; (3) recorders capture actions with no objective, agents
-have objectives with no durable actions — the LINK between them is what's missing;
-(4) the objective is the what — the most valuable artifact — and most tools discard it.
-MOVED TO SPOKEN (round 10): "and what does exist is per-platform" — say it as the
-bridge into Seven Targets, two slides ahead.
-Expand aloud: the "how" matters mainly for assertions you DELIBERATELY keep mechanical —
-pinned verify: steps that replay unchanged and are never self-healed; that thread
-returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are earned;
-33 forbids from-scratch YAML.)
--->
-
+layout: center
 ---
 
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze? · 6:00–8:00</div>
 
-# One user journey.
+# So — what *is* Trailblaze?
 
-<div class="pt-6 text-2xl opacity-70">
+<div class="grid grid-cols-2 gap-10 items-center pt-4">
 
-what a user must **always** do — the unit of quality
+<div>
+<img src="./public/asset-d-github-repo.png" class="rounded-xl shadow-2xl w-full" alt="github.com/block/trailblaze" />
+</div>
+
+<div class="space-y-5">
+
+<div v-click class="text-xl">
+
+An **AI-driven UI testing framework.**
+**Open source**, Apache-2.0 · <span class="opacity-70">github.com/block/trailblaze</span>
 
 </div>
 
-<div class="pt-10 text-4xl">
+<div v-click class="text-xl">
 
-You write it **once**.
+Used at **Square** & **Cash App** — real apps, real devices, **every day, in CI.**
+
+</div>
+
+<div v-click>
+
+```bash
+brew install block/tap/trailblaze
+```
+
+<div class="pt-2 text-lg opacity-80">Open sourced on this stage last year — a lot has happened since.</div>
+
+</div>
+
+</div>
 
 </div>
 
 <!--
-Round 10 (Sam): this slide names the TESTING/QUALITY half of the two hard problems —
-from a quality perspective, user journeys are the thing we care about protecting.
-Device control is the other half (slides 2–3; machinery in Act 4). Trailblaze helps
-with BOTH — that claim lands at the Act 1 hand-off, next slide's close.
-BUILD 1 of 2 — the setup. Say it and let it hang: "One user journey. You write it once."
-Then advance, and it multiplies. (Big beat split across two slides — Sam's move.)
-Round 9 (Sam): was "One login flow" — don't dwell on login. "User journey" is the
-canonical UX term (industry: "critical user journey"/CUJ — the experiences a user must
-always be able to complete). Login is now just the spoken EXAMPLE ("say, logging in"),
-and this seeds Act 2's "Not a test — a user journey" + "Four critical jobs" slides.
-NO WINK LINE (Sam round 5.1): slide stays clean — the nuance is SPOKEN, not shown.
-HONESTY (Sam round 5, still true): each journey is written once — multi-factor auth,
-first-time setup are their own journeys. What you actually get is a TRAILHEAD, and
-within it you can skip the normal noise — onboarding screens, "select a default" — so
-replay starts from known state. (Trailheads get their formal slide in Act 2 — don't
-unpack here, just don't overclaim.)
+COLLAPSED (plane review, 2026-07-15 — Sam): the intro trio (First — what is Trailblaze? /
+How we got here / And we use it) folds into this ONE identity beat, placed AFTER the
+problem/journey setup so the problem explains WHY it's shaped this way.
+Say it flat: "Trailblaze is an AI-driven UI testing framework — built at Block, open source,
+Apache-2.0, on GitHub right now." Then the realness: Square + Cash, every day in CI — a
+PRODUCTION-LESSONS talk, not a pitch.
+TIMELINE as ONE spoken line (was its own slide): proof-of-concept Nov 2024 → full-time +
+named Mar 2025 → open sourced at Droidcon NYC last year with Brian → brew install last month.
+Don't dwell; don't name the pre-POC predecessor.
+The GitHub card is GitHub's own OG render (org, Apache-2.0, contributors, activity) — reads
+as "real project," which is this slide's whole job. Renders LIGHT on the dark deck on purpose.
+DON'T say the star count aloud (247 is honest but modest). NUMBERS as of 2026-07-14: 247
+stars · 19 forks · 11 contributors · 21 open issues (auto-updates in the OG card).
+HAND-OFF: "So why is it shaped this way? Three things."
+-->
+
+---
+layout: center
+---
+
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · Why Trailblaze · 8:00–9:00</div>
+
+# Three things make it different
+
+<div class="pt-8 space-y-6 text-2xl max-w-3xl mx-auto text-left">
+  <div v-click><b>1 · Natural language</b> — plus <b>recorded, deterministic</b> replay</div>
+  <div v-click><b>2 · Your custom tools</b> — first-class citizens to the LLM</div>
+  <div v-click><b>3 · Consistent across targets</b> — iOS, Android, and any target you choose</div>
+</div>
+
+<!--
+Sam's VERBATIM differentiators (plane review §5, VOICE SOURCE OF TRUTH): "natural language,
+but we have the recorded deterministic tools, and the tools are your contributed custom tools
+provided as first-class citizens to the LLM, and it's consistent across iOS and Android and
+other platforms that you choose the target."
+CI-cost/determinism is now the SUPPORT line under #1, NOT a headline (that's the reframe).
+The two hard problems (device control · protecting user journeys) are SPOKEN here if you want
+the framing — not a bullet.
+SEVEN-TARGETS scale FOLDS INTO #3 (Sam's call, 2026-07-15) — the device grid on the next slide
+makes #3 concrete rather than being its own abstract gut-punch beat.
+HAND-OFF into the grid: "and 'any target' is not hypothetical."
 -->
 
 ---
 
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · Why Trailblaze · #3</div>
 
-# Seven targets.
+# "Any target" — made concrete
 
 <div class="grid grid-cols-7 gap-3 pt-8 text-center text-sm">
 <div><div class="h-20 flex items-end justify-center"><ph-device-mobile-speaker class="text-7xl opacity-90" /></div><div class="pt-2">Android<br>phone</div></div>
@@ -362,60 +326,22 @@ unpack here, just don't overclaim.)
 
 <div class="pt-10 text-xl opacity-80">
 
-**Hundreds of trails** today.
+One journey · seven targets · **hundreds of trails today.**
 
 </div>
 
 <!--
-BUILD 2 of 2 — the multiplication. The grid IS the gut-punch: one journey, seven places.
-Round 9 (Sam): "projecting thousands" cut from the slide — speak it only if you want
-("and we're projecting thousands").
-Square imagery = real product shots (droidcon/public/square-*.png, pulled from
-squareup.com/us/en/hardware — Block's own marketing assets). Consumer devices =
-Phosphor line icons (speaker-variant = Android, camera-variant = Apple) — cleaner
-than emoji next to the real product shots (Sam round 5).
-SEVEN targets — never say eight.
-Scale framing: keep the automatable automated; manual testing focuses on
-new features + hardware-specific work automation can't reach yet.
--->
-
----
-layout: center
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
-
-# Ten years on this problem
-
-<div class="grid grid-cols-2 gap-10 pt-6 max-w-4xl mx-auto">
-  <div class="text-center">
-    <img src="./public/talk-2016.jpg" class="rounded-lg shadow-lg w-full" />
-    <div class="pt-3 text-lg"><b>2016</b> — <i>"A Screenshot is Worth 1,000 Words"</i></div>
-  </div>
-  <div class="text-center">
-    <img src="./public/talk-2025.jpg" class="rounded-lg shadow-lg w-full" />
-    <div class="pt-3 text-lg"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> · Brian Gardner</div>
-  </div>
-</div>
-
-<div class="pt-8 text-2xl text-center"><b>2026</b> — in production, and where it's going</div>
-
-<div class="pt-4 text-center text-lg opacity-70">
-
-*By the end you'll see what the map is — you're already building it.*
-
-</div>
-
-<!--
-Both prior talks were Droidcon NYC. Title seed #1. Credentials in one slide, no dwelling.
-Images (round 11 layout): title cards inline on their own rows, matched h-40, both true
-16:9 (2025's YouTube letterbox cropped off). 2016 = the actual title slide (from Sam's
-own Speaker Deck); 2025 = the droidcon NYC title card with Sam + Brian (session video).
-2025's future-work slide is a checklist this talk ticks off: "reuse the same prompts
-across platforms" → unified format; "custom app interactions" → custom tools/TS.
-HAND-OFF (round 10): two hard problems are now on the table — device control, and
-protecting user journeys. "Our answer to BOTH is a thesis about natural language
-and determinism."
+FOLDED INTO DIFFERENTIATOR #3 (Sam's call, 2026-07-15): the 7-device grid is no longer a
+standalone "Seven targets" abstract beat — it's #3 made concrete. The grid IS the gut-punch:
+one journey, seven places.
+Square imagery = real product shots (droidcon/public/square-*.png, from squareup.com hardware
+marketing). Consumer devices = Phosphor line icons (speaker-variant = Android, camera-variant
+= Apple) — cleaner than emoji next to the real product shots.
+SEVEN targets — never say eight (Sam round 8: "let go of the 8, 7 is fine"). Web via Playwright
+is an additional platform the driver covers — mention freely, don't renumber, don't hedge.
+Scale framing: keep the automatable automated; manual testing focuses on new features +
+hardware-specific work automation can't reach yet.
+HAND-OFF into Act 1: "One thesis makes all seven work the same way."
 -->
 
 ---
