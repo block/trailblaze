@@ -182,10 +182,16 @@ subway focal/depth/dest) — bookmarkable demo states, no live clicking to set u
 `#target=contacts&platform=android` (just contacts) and
 `#target=contacts&view=subway&focal=contacts%2Fandroid%2Flist-populated&depth=3`.
 DEMO REQUIREMENT: `toByPlatform` + deep links exist only on this branch — run the
-viewer FROM SOURCE: `TRAILBLAZE_PORT=<port> ./gradlew :trailblaze-desktop:run
---args="app --foreground --headless"`. `--foreground` is load-bearing: without it
-the CLI execs the INSTALLED ~/.trailblaze jar as a detached daemon (old code, old
-data) and exits. Old binaries skip the toByPlatform sidecar with a warning
+viewer FROM SOURCE: `TRAILBLAZE_PORT=<port> TRAILBLAZE_CONFIG_DIR=<repo>/trails/config
+./gradlew :trailblaze-desktop:run --args="app --foreground --headless"`.
+`--foreground` is load-bearing: without it the CLI execs the INSTALLED ~/.trailblaze
+jar as a detached daemon (old code, old data) and exits. AND every demo URL needs
+`?root=<repo>/trails/config` before the hash — gradle's working dir isn't the repo,
+so the default waypoint walk finds nothing and the graph silently falls back to
+classpath-bundled YAMLs = NO SCREENSHOTS in nodes (the exact "no more screenshots!"
+failure). Full demo URL shape:
+`/waypoints/graph?root=<repo>/trails/config#target=contacts&platform=android`.
+Old binaries skip the toByPlatform sidecar with a warning
 (kaml strictMode=false + per-file error isolation) — degradation, not breakage.
 Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads
 `trailheads/*.trailhead.yaml`; TS-inline `trailhead:` reaches the runner manifest but
