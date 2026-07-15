@@ -142,7 +142,10 @@ should read **37 WAYPOINTS · 38 SHORTCUTS** with a screenshot in every
 node (the header says "Trailmap", the stat label "waypoints" — renamed
 2026-07-14 in the map-view restyle; since 2026-07-15 the viewer wears
 the Trail Runner theme — neutral dark surfaces, green trailheads, blue
-accents, Hanken Grotesk/JetBrains Mono); SUBWAY view with focal
+accents, Hanken Grotesk/JetBrains Mono). The floating 🥾 Trailheads
+panel (top-left) is the live-demo hook: clicking a destination chip
+selects it, dims everything off-path, and walks a 🥾 marker down the
+entry trail. SUBWAY view with focal
 `contacts/android/list-populated` + Fit View is the money shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,

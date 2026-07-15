@@ -242,6 +242,27 @@ loading state "🥾 Blazing the trail…". DEMO BEAT: open map → point at the 
   degrade to a plain TAP on the on-device accessibility driver — a zero-distance
   `dragTo` (same ref/point, `durationMs: 1500`) is the reliable press-and-hold
   (that's how the multi-select shortcut works).
+LIVING TRAILS + WALKER (2026-07-15, commits e26b84a1 / 4e1c4c3a / 6aecb4ed):
+- e26b84a1 polish: focused trails FLOW (dash animation toward the selection),
+  trailhead nodes pulse a soft green beacon, 🥾 favicon + live tab title, TR-styled
+  minimap, 🔗 copy-link button (clipboard + ✓ flash), Trailheads panel collapses.
+- 6aecb4ed walker: selecting a waypoint sends a 🥾 WALKING the shortest entry route
+  (trailhead → selection) along the exact rendered curves. DEMO BEAT upgrade: click
+  the contacts_launch android chip → "the map doesn't just show the way in — watch
+  the boot make the trip." Respects prefers-reduced-motion; skips routes >14 legs.
+- 4e1c4c3a demo-day insurance: esm.sh imports pinned EXACT (@xyflow/react@12.8.4,
+  style.css to match, dagre@1.1.8) — the unpinned `@12` URL drifted to 12.11.2
+  mid-session, so venue-day behavior is now deterministic. Plus MeasureKick: React
+  Flow withholds EVERY edge until nodes measure, and measurement rides on
+  ResizeObserver, which only delivers when the page paints — an occluded/embedded
+  tab can stay edge-less forever. A tiny store-level watchdog force-measures
+  stragglers on a timer (no-op in a normal tab). Verified all four views, both
+  themes, both README deep links, 820px + 1600px, console clean.
+- GOTCHA (verify workflow, not the demo): the Claude preview pane never paints
+  unless screenshotted — rAF and ResizeObserver freeze, and trusted clicks hit-test
+  a 0×0 viewport. Verify via preview_eval + synthetic .click(); each screenshot
+  ticks exactly one frame (walker/camera animations advance per shot). On a real
+  projector none of this applies.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
