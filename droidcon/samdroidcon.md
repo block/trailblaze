@@ -24,6 +24,19 @@ class: cover text-center
 Droidcon USA 2026<br>Sam Edwards · Block
 </div>
 
+<style>
+/* Back-of-room legibility: enlarge default markdown bullet lists deck-wide. */
+/* Raw markdown lists only; explicitly-sized custom slides are untouched. */
+.slidev-layout ul > li {
+  font-size: 1.5rem;
+  line-height: 1.55;
+  margin-top: 0.45rem;
+}
+.slidev-layout ul > li ul > li {
+  font-size: 1.15rem;
+}
+</style>
+
 <!--
 DECK v7 — Act 0 rethreaded (round 10): hype → the dream works → falls short ×2
 (CI economics, missing link) → user journeys → seven targets → ten years.
@@ -37,22 +50,155 @@ samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 0:00–4:00</div>
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze? · 0:00–2:30</div>
 
-# AI is supposed to do *everything*
+# First — what *is* Trailblaze?
 
-<div v-click class="pt-8 text-xl">
+<div class="grid grid-cols-2 gap-10 items-center pt-4">
 
-*"Validate the new real-time cart updates — and make it a test."*
-An agent **drives a real phone**: taps, edits the cart, watches the totals.
-It just… **does it**.
+<div>
+<img src="./public/asset-d-github-repo.png" class="rounded-xl shadow-2xl w-full" alt="github.com/block/trailblaze" />
+</div>
+
+<div class="space-y-5">
+
+<div v-click class="text-xl">
+
+**Open source.** Apache-2.0
+<span class="opacity-70">github.com/block/trailblaze</span>
 
 </div>
 
-<div v-click class="pt-8 text-xl opacity-80">
+<div v-click>
 
-On mobile it still **falls short** where it counts:
-**controlling devices** &nbsp;·&nbsp; **testing what matters**
+```bash
+brew install block/tap/trailblaze
+```
+
+<div class="pt-2 text-xl opacity-80">You can use it <b>right now</b> — during this talk.</div>
+
+</div>
+
+</div>
+
+</div>
+
+<!--
+NEW (plane review, FB-1 — Sam): the deck used to jump straight from the cover into the
+problem statement. But this talk is about TRAILBLAZE + the problem, not the problem alone.
+Bring people up to speed FIRST: what it is, that it's open source, how we use it. Then the
+problem explains WHY it's shaped the way it is.
+BEAT: say the one-liner flat — "Trailblaze is an AI-driven UI testing framework. We built it
+at Block, it's open source, Apache-2.0, and it's on GitHub right now."
+CLICK: the realness beat. This is proof-of-existence, not a pitch. The card is GitHub's own
+OG render (org, description, contributors, issues, stars, forks) — it reads as "real project,"
+which is the entire job of this slide.
+ASSET: public/asset-d-github-repo.png — GitHub's OpenGraph card, fetched live 2026-07-14
+(opengraph.githubassets.com/1/block/trailblaze). Regenerate the same way; it auto-updates
+its own numbers. NOTE it renders LIGHT on our dark deck — that's deliberate, reads as a
+screenshot. If Sam prefers a true desktop screenshot of the repo page, swap the file and
+keep the path.
+NUMBERS AS OF 2026-07-14: 247 stars · 19 forks · 11 contributors · 21 open issues.
+Don't say the star count out loud — 247 is honest but modest, and pointing at it invites the
+wrong read. The repo CHROME (Block org, Apache-2.0, contributors, activity) carries "real"
+better than the number does.
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
+
+# How we got here
+
+<div class="pt-8 space-y-5 text-2xl">
+  <div v-click><b>Nov 2024</b> — proof of concept</div>
+  <div v-click><b>Mar 2025</b> — full-time · named it <b>Trailblaze</b></div>
+  <div v-click><b>Droidcon NYC 2025</b> — open sourced</div>
+  <div v-click><b>Since</b> — drivers · platforms · trail files · CLI · MCP</div>
+  <div v-click class="pt-1"><b>Last month</b> — <code>brew install</code></div>
+</div>
+
+<!--
+NEW (plane review, FB-1). Sam's own past-talk style: DATED MILESTONE TIMELINE — narrate the
+evolution as a sequence, not a confession. Two beats, then today. No dwelling — this is
+context, not the talk.
+DETAILS FROM SAM (plane review, 2026-07-15) — bullets stay SHORT, the story is spoken:
+- Nov 2024: officially started the PROOF OF CONCEPT (don't name the pre-POC predecessor).
+- Mar 2025: went FULL-TIME on it and PICKED THE NAME (Trailblaze).
+- Droidcon NYC 2025: open sourced on a droidcon stage, one year ago, with Brian — best beat
+  for THIS room ("we open sourced it at droidcon last year — a lot has happened since").
+- "Since": lots of evolutions to talk through — drivers, platform support, the trail file
+  format, USER INTERACTION, the CLI, and MCP. Slide lists a representative subset; expand the
+  ones that matter aloud (user-interaction folded into the spoken version to keep the bullet short).
+- "Last month": shipped to Homebrew — `brew install block/tap/trailblaze` (~Jun 2026). The full
+  command lives on slide 2; here it's just the MILESTONE, not the CTA. Confirm the ~1-month
+  timing before the talk.
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
+
+# And we *use* it
+
+<div class="pt-8 text-3xl font-bold">
+<span v-click>Square</span><span v-click><span class="opacity-40">&nbsp;·&nbsp;</span>Cash App</span>
+</div>
+
+<div v-click class="pt-6 text-2xl">
+
+Real apps. Real devices. **Every day, in CI.**
+
+</div>
+
+<div v-click class="pt-10 text-xl opacity-80">
+
+Not a demo. Not a prototype.
+This talk is what **running it for real** taught us.
+
+</div>
+
+<!--
+NEW (plane review, FB-1). Third beat of the intro arc: it's real, it's ours, it's load-bearing.
+Sam's stated goal for the whole talk (notes, 2026-07-11 reframe): "how Block is using
+Trailblaze in production (Square + Cash, 1.5+ years) and the philosophy of where it's going."
+This slide states that thesis OUT LOUD, up front, so the audience knows what kind of talk
+they're in — a production-lessons talk, not a product pitch.
+DELIBERATELY HELD BACK: the scale numbers. Seven targets and "hundreds of trails" are the
+Act 0 gut-punch two slides later — do NOT spend them here. Keep this qualitative.
+HAND-OFF into the problem statement (the pivot the whole intro exists to earn):
+"So that's the what. To explain why it looks the way it does — I have to start with the
+problem we had." → next slide: "AI is supposed to do everything."
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 2:30–6:30</div>
+
+# AI is supposed to do *everything*
+
+<div v-click class="pt-8 text-3xl italic opacity-90">
+
+"Validate the cart updates — make it a test."
+
+</div>
+
+<div v-click class="pt-8 text-3xl">
+
+It drives a real phone. It just… **does it**.
+
+</div>
+
+<div v-click class="pt-10 text-3xl">
+
+But it **falls short**:
+<div class="pt-2 text-2xl opacity-80"><b>controlling devices</b> &nbsp;·&nbsp; <b>testing what matters</b></div>
 
 </div>
 
@@ -72,6 +218,67 @@ and TESTING (how do we trust, repeat, and afford what it did?).
 Promise-tracking: slide 3 = re-running the agent every time fails CI economics;
 slide 4 = you can't trust or rerun what it did (the missing link); slide 5 = the
 quality unit (user journeys); Act 4 = the CLI/tools agents use for device control.
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+
+# It's not that easy — yet
+
+<div v-click class="pt-8 text-2xl">
+
+A reliable trail takes **many cycles** — not one shot.
+
+</div>
+
+<div v-click class="pt-3 text-xl opacity-70">
+
+Maybe never one-shot — but it keeps **getting better**.
+
+</div>
+
+<div v-click class="pt-8 text-xl">
+
+**Trailheads** — the agent knows where to start.
+
+</div>
+
+<div v-click class="pt-3 text-xl">
+
+Iterate from **recorded trails** + **natural-language steps**.
+
+</div>
+
+<div v-click class="pt-6 text-lg opacity-60">
+
+Coming: a **waypoint map** *(experimental)* — fewer cycles to a solid trail.
+
+</div>
+
+<!--
+NEW (plane review, 2026-07-15 — Sam). The honest counterweight to the hype slide before it:
+the dream (agent drives the cart) is real, but getting a RELIABLE trail out of it is not
+one-shot. Give the room space to sit in this — it earns trust and motivates the whole rest
+of the talk (the determinism/replay machinery exists precisely because one-shot isn't enough).
+BEATS (Sam's raw points, kept to short bullets):
+- Reliable trail authoring currently takes MANY CYCLES — we're finding this in practice.
+- It probably will NEVER be perfectly one-shot — but we keep doing things to make it better.
+  (Optimistic, not defeatist — the "— yet" in the title carries this.)
+- TRAILHEADS (established as part of Trailblaze) help a lot: the agent knows where to START.
+  Teaser only — trailheads get their FORMAL slide in Act 2 (line ~871). Don't over-explain here.
+- The iteration loop: RECORDED TRAIL FILES + the NATURAL-LANGUAGE STEPS give the agent
+  concrete material to iterate against, not a blank page.
+- WAYPOINTS (experimental) — PLANTS the Act 6 payoff ("Next: waypoints" + "Your app, as a
+  map", the subway/graph asset). Frame it exactly as Act 6 does: not fully proven, but bullish.
+  The vision: because authoring a solid trail takes so many cycles today, a waypoint map the
+  agent can navigate could make that far more seamless. Keep it a QUIET forward-look here (dim,
+  one line) — the real reveal is Act 6. Say it, don't dwell.
+PLACEMENT: sits right after the cart user-journey example (route /5), as its own beat so it
+doesn't re-crowd that slide. If it reads too early (trailheads not yet defined), the fallback
+is to move it next to "One user journey" / into Act 2 — flag for Sam.
 -->
 
 ---
@@ -113,10 +320,12 @@ ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m
 
 # The missing link
 
-- It **did it** — but what *exactly* did it do?
-- How do you run *that* again — **deterministically**?
-- The objective ↔ actions **link is lost**
-- The objective is the **what** · thrown away
+<div class="pt-6 space-y-6 text-3xl">
+  <div v-click>What <i>exactly</i> did it do?</div>
+  <div v-click>Run it again — <b>deterministically</b>?</div>
+  <div v-click>The <b>link is lost</b></div>
+  <div v-click>The objective — <b>thrown away</b></div>
+</div>
 
 <!--
 REWRITTEN round 10 — FALLS-SHORT REASON #2, answering slide 2's dream directly: the
@@ -147,13 +356,13 @@ returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are ea
 
 # One user journey.
 
-<div class="pt-4 text-lg opacity-60">
+<div class="pt-6 text-2xl opacity-70">
 
-what a user must **always** be able to do — the unit of quality
+what a user must **always** do — the unit of quality
 
 </div>
 
-<div class="pt-6 text-2xl opacity-70">
+<div class="pt-10 text-4xl">
 
 You write it **once**.
 
@@ -214,24 +423,27 @@ new features + hardware-specific work automation can't reach yet.
 -->
 
 ---
+layout: center
+---
 
 <div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # Ten years on this problem
 
-<div class="pt-2 space-y-4">
-  <div class="flex items-center gap-8">
-    <div class="flex-1"><b>2016</b> — <i>"Espresso: A Screenshot is Worth 1,000 Words"</i></div>
-    <img src="./public/talk-2016.jpg" class="h-40 rounded-lg shadow-lg" />
+<div class="grid grid-cols-2 gap-10 pt-6 max-w-4xl mx-auto">
+  <div class="text-center">
+    <img src="./public/talk-2016.jpg" class="rounded-lg shadow-lg w-full" />
+    <div class="pt-3 text-lg"><b>2016</b> — <i>"A Screenshot is Worth 1,000 Words"</i></div>
   </div>
-  <div class="flex items-center gap-8">
-    <div class="flex-1"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> (with Brian Gardner)</div>
-    <img src="./public/talk-2025.jpg" class="h-40 rounded-lg shadow-lg" />
+  <div class="text-center">
+    <img src="./public/talk-2025.jpg" class="rounded-lg shadow-lg w-full" />
+    <div class="pt-3 text-lg"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> · Brian Gardner</div>
   </div>
-  <div><b>2026</b> — 1.5 years in production, and where it's going</div>
 </div>
 
-<div class="pt-4 opacity-70">
+<div class="pt-8 text-2xl text-center"><b>2026</b> — in production, and where it's going</div>
+
+<div class="pt-4 text-center text-lg opacity-70">
 
 *By the end you'll see what the map is — you're already building it.*
 
@@ -576,7 +788,86 @@ To cut: delete this whole slide block (--- to ---).
 Unified validation of a user experience. Because it's sourced in git, you can drop the
 recordings for one platform (or all) and have the LLM re-materialize — it has the past
 recording and all its context to work from.
-HAND-OFF: "Here's what that journey looks like as one file."
+HAND-OFF: "Here's the same journey — and how little you need to start."
+-->
+
+---
+layout: center
+---
+
+<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+
+# The same journey, three ways
+
+<div class="text-xl opacity-70 pb-2">Create a contact · Google Contacts · <b>Android + iOS</b></div>
+
+<div class="grid grid-cols-3 gap-6 pt-4 text-left items-start">
+
+<div>
+<div class="pb-2 text-xl"><b>1 · Just words</b></div>
+<div class="text-base opacity-70 pb-2">any platform, day one</div>
+
+```yaml
+- step: Enter the name
+- step: Enter a phone
+- step: Save
+```
+
+<div class="pt-2 text-lg opacity-80">The agent runs the prose. <b>No recordings.</b></div>
+</div>
+
+<div v-click>
+<div class="pb-2 text-xl"><b>2 · + one recording</b></div>
+<div class="text-base opacity-70 pb-2">Android earns it</div>
+
+```yaml
+- step: Enter the name
+  recording:
+    android:
+      - inputText: Ada Lovelace
+```
+
+<div class="pt-2 text-lg opacity-80"><b>Android replays</b> · iOS via agent</div>
+</div>
+
+<div v-click>
+<div class="pb-2 text-xl"><b>3 · + both</b></div>
+<div class="text-base opacity-70 pb-2">now it's fully pinned</div>
+
+```yaml
+- step: Enter the name
+  recording:
+    android:
+      - inputText: Ada Lovelace
+    ios:
+      - inputText: Ada Lovelace
+```
+
+<div class="pt-2 text-lg opacity-80"><b>Both replay</b> · zero-LLM</div>
+</div>
+
+</div>
+
+<!--
+NEW (plane review, 2026-07-15 — Sam). Show the SAME user journey at three fidelities so the
+audience sees recordings are OPTIONAL and INCREMENTAL — you never start from a blank YAML.
+RUNNING EXAMPLE = CONTACTS (Sam): Google Contacts, the public repo's committed corpus, across
+Android + iOS. Real target ids: com.google.android.contacts / com.apple.MobileAddressBook;
+real trailhead = contacts_android_createContact (ACTION_INSERT → new-contact editor).
+THE BUILD (three columns, cols 2–3 on click):
+  1. Just words — pure NL steps, no recording: block. Runs on EVERY platform via the agent,
+     day one. This is the "version with no recorded steps" Sam asked for.
+  2. + one recording — Android gets a recording and replays deterministically; iOS with no
+     slot still runs the prose through the agent. Recordings are earned per platform.
+  3. + both — Android AND iOS recorded → the step replays zero-LLM everywhere.
+LEGIBILITY: deliberately ONE step ("Enter the name") shown across all three so the YAML stays
+big and the diff is obvious from the back. Recordings simplified to a single inputText per
+platform — real recordings also carry the tapOn to focus the field; say that aloud, don't
+crowd the slide.
+NOTE / FOLLOW-UP for Sam: the neighbouring legacy slides ("Scale found our design flaw",
+"One file = the user journey") still use the COFFEE example (QE sender / latte). If contacts
+is now THE running example, those two should switch to contacts too — flagged, not done here.
+HAND-OFF: "And here's the full shape of one of these files." → One file = the user journey.
 -->
 
 ---
