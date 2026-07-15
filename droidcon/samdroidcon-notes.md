@@ -196,6 +196,19 @@ Old binaries skip the toByPlatform sidecar with a warning
 Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads
 `trailheads/*.trailhead.yaml`; TS-inline `trailhead:` reaches the runner manifest but
 not the map render (upstream #202 gap — candidate report, don't file unprompted).
+ATLAS NOD + MAP RESTYLE (2026-07-14, Sam's call): the screenshot-node flow-map
+approach was inspired by Revyl's Atlas (revyl.com/atlas — Sam talks with the
+founder; waypoint collection arrived independently, the visualization direction
+came from them). On-slide footnote credit added to the ASSET C slide + spoken-nod
+line in its presenter notes; template header comment credits them too. To make the
+map view OURS without a redesign: (1) topo-contour canvas texture replaces the dot
+grid (MAP only — subway keeps dots), (2) painted trail-blaze marks on every card —
+one per platform, android green/ios blue, DOUBLE blaze = cross-platform (real-trail
+signal), (3) transition edges are round-cap dotted "footpath" lines, (4) trailhead
+glyph is now 🥾 (was ✈) per the iconography rule, (5) header stat renamed
+screens→WAYPOINTS (our vocabulary vs Atlas's "Screens/Transitions/User paths").
+Subway view untouched — already distinctly ours. Deck stills on the ASSET C slide
+predate the restyle; live demo shows the new look.
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits

@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trailblaze · Waypoint navigation graph</title>
+  <title>Trailblaze · Trailmap</title>
+
+  <!-- The screenshot-node flow-map rendering approach tips its hat to Revyl's
+       Atlas (https://revyl.com/atlas/) — we arrived at waypoint collection
+       independently and loved their visualization direction. The topographic
+       canvas, painted platform blazes, footpath edges, trail vocabulary, and
+       the subway view are Trailblaze's own. -->
 
   <!-- React Flow's stylesheet. Loaded from esm.sh CDN — internal devtool, browser
        will fetch on first load and cache thereafter. For air-gap support a future
@@ -36,6 +42,12 @@
          the dark background once paths got dense. 0.65 makes paths actually
          visible without competing with node screenshots. */
       --trailhead-bg: rgba(196, 169, 255, 0.14);
+      /* Painted trail-blaze marks on waypoint cards — platform color coding.
+         Android green is the platform's own brand green; iOS stays in the
+         viewer's blue family so the two read as "cool vs warm-green", not
+         "brand war". */
+      --blaze-android: #3ddc84;
+      --blaze-ios: #6fb3ff;
       --tree-edge: rgba(220, 226, 240, 0.7);
       --cross-edge: rgba(220, 226, 240, 0.14);
       --back-edge: rgba(220, 226, 240, 0.10);
@@ -69,6 +81,8 @@
       --accent-bg: rgba(37, 99, 235, 0.10);
       --trailhead: #7c3aed;
       --trailhead-bg: rgba(124, 58, 237, 0.10);
+      --blaze-android: #109d58;
+      --blaze-ios: #2563eb;
       --tree-edge: rgba(20, 24, 32, 0.72);
       --cross-edge: rgba(20, 24, 32, 0.18);
       --back-edge: rgba(20, 24, 32, 0.10);
@@ -514,6 +528,36 @@
     /* ============================================================================
        MAP VIEW — node cards
        ============================================================================ */
+    /* Topographic contour backdrop — the MAP canvas should read as a *map*,
+       not a dashboard. Faint concentric contour clusters (like isolated hills
+       on a topo sheet) tile behind the graph; the subway view keeps its own
+       clean dot grid. Drawn inline as an SVG tile so it needs no asset route;
+       stroke color is baked per-theme below because data-URIs can't read CSS
+       vars. Opacity is deliberately whisper-quiet — texture, not content. */
+    .map-flow {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(220,226,240,0.055)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
+      background-size: 520px 520px;
+    }
+    :root[data-theme="light"] .map-flow {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(20,28,45,0.06)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
+    }
+    /* Painted trail blaze — the rectangular paint mark real trails use on
+       trees/rocks. One mark per platform the waypoint declares, in that
+       platform's color; a cross-platform waypoint wears a double blaze
+       (the real-trail signal for "route continues — pay attention"). */
+    .blaze-stack {
+      display: inline-flex;
+      gap: 3px;
+      flex: none;
+      padding-top: 2px;
+    }
+    .blaze-mark {
+      width: 7px;
+      height: 15px;
+      border-radius: 2px;
+      transform: rotate(-2deg);
+      box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.28), 0 0 4px rgba(0,0,0,0.18);
+    }
     .waypoint-node {
       width: 220px;
       background: var(--bg-elevated);
@@ -535,6 +579,9 @@
     }
     .waypoint-title {
       padding: 10px 12px 9px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
       font-size: 13.5px; font-weight: 600;
       line-height: 1.4;
       color: var(--text-strong);
@@ -2178,6 +2225,25 @@
     /* ============================================================================
        NODE COMPONENTS
        ============================================================================ */
+    /** Platform blaze marks for a node card — one painted mark per declared
+        platform (android/ios/web), in trail-blaze style. Returns null when
+        the waypoint declares no platform (no mark beats a wrong mark). */
+    function blazeStack(data) {
+      const plats = (data.platforms && data.platforms.length)
+        ? data.platforms
+        : (data.platform ? [data.platform] : []);
+      if (!plats.length) return null;
+      const color = p =>
+        p === 'android' ? 'var(--blaze-android)'
+        : p === 'ios' ? 'var(--blaze-ios)'
+        : 'var(--trailhead)';
+      return React.createElement('span', { className: 'blaze-stack', 'aria-hidden': true, title: plats.join(' + ') },
+        plats.map(p => React.createElement('span', {
+          key: p, className: 'blaze-mark', style: { background: color(p) },
+        })),
+      );
+    }
+
     function WaypointNode({ data, selected }) {
       const cls = 'waypoint-node' + (selected ? ' selected' : '');
       return React.createElement('div', { className: cls, title: data.sourceLabel || data.label },
@@ -2185,9 +2251,12 @@
           type: 'target', position: Position.Top, isConnectable: false,
           style: { opacity: 0, top: 0 },
         }),
-        // Title strip — short human-readable name, derived from the description.
-        // Falls back to the id-leaf when description is missing.
-        React.createElement('div', { className: 'waypoint-title' }, data.title),
+        // Title strip — blaze mark(s) + short human-readable name, derived
+        // from the description. Falls back to the id-leaf when missing.
+        React.createElement('div', { className: 'waypoint-title' },
+          blazeStack(data),
+          React.createElement('span', null, data.title),
+        ),
         data.screenshotDataUri
           ? React.createElement('img', { src: data.screenshotDataUri, className: 'waypoint-screenshot', alt: data.label })
           : React.createElement('div', { className: 'waypoint-no-screenshot' }, '(no screenshot)'),
@@ -2202,7 +2271,7 @@
     function TrailheadNode({ data }) {
       return React.createElement('div', { title: data.description || data.label },
         React.createElement('div', { className: 'trailhead-node' },
-          React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+          React.createElement('span', { className: 'trailhead-icon' }, '🥾'),
           data.label,
         ),
         React.createElement(Handle, {
@@ -2417,6 +2486,8 @@
               title: shortNodeTitle(wp.description, wp.id),
               screenshotDataUri: wp.screenshotDataUri,
               sourceLabel: wp.sourceLabel,
+              platform: wp.platform,
+              platforms: wp.platforms,
             },
           };
         }),
@@ -2510,7 +2581,11 @@
               },
               style: {
                 stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
-                strokeWidth: isBack ? 1.25 : 2.5,
+                strokeWidth: isBack ? 1.25 : 2.75,
+                // Footpath styling: round-capped near-zero dashes render as a
+                // dotted walking-route line (the way hiking maps draw trails).
+                // Back-edges keep their own faint long-dash from the CSS class.
+                ...(isBack ? {} : { strokeDasharray: '0.5 8', strokeLinecap: 'round' }),
               },
             };
           }),
@@ -2599,6 +2674,7 @@
         // Re-key on filter/theme change so React Flow flushes layout state and
         // node positions don't tween between configurations.
         key: themeKey,
+        className: 'map-flow',
         nodes, edges, nodeTypes, edgeTypes,
         fitView: true,
         fitViewOptions: { padding: 0.18 },
@@ -2609,7 +2685,8 @@
         onNodeClick,
         onPaneClick,
       },
-        React.createElement(Background, { gap: 24, size: 1, color: 'rgba(220,226,240,0.05)' }),
+        // No dot-grid Background here — the map view's canvas texture is the
+        // topo-contour tile from .map-flow (see CSS). Subway keeps its dots.
         React.createElement(Controls, { showInteractive: false }),
         React.createElement(MiniMap, {
           pannable: true,
@@ -2913,7 +2990,7 @@
       // Focal model: the subway is a "what can I reach from this waypoint?"
       // view, with the focal waypoint sitting at the center. The picker
       // exposes every waypoint as a candidate focal, with trailhead landings
-      // marked (✈) so they're easy to spot. Default focal = the first
+      // marked (🥾) so they're easy to spot. Default focal = the first
       // trailhead's destination (the natural "starting point" of a journey).
       const trailheads = filtered.trailheads;
       const trailheadByLanding = useMemo(() => {
@@ -3313,6 +3390,8 @@
               title: shortNodeTitle(wp.description, wp.id),
               screenshotDataUri: wp.screenshotDataUri,
               sourceLabel: wp.sourceLabel,
+              platform: wp.platform,
+              platforms: wp.platforms,
             },
           });
         });
@@ -3606,7 +3685,7 @@
             sortedTHs.map(th => React.createElement('option', {
               key: TRAILHEAD_NODE_PREFIX + th.id,
               value: TRAILHEAD_NODE_PREFIX + th.id,
-            }, '✈ ' + th.id))));
+            }, '🥾 ' + th.id))));
         }
         if (trailheadDests.length > 0) {
           groups.push(React.createElement('optgroup', { key: 'landings', label: 'Trailhead landings' },
@@ -3680,7 +3759,7 @@
         const thById = new Map();
         filtered.trailheads.forEach(th => thById.set(th.id, th));
         const labelFor = (id) => {
-          if (id.startsWith(TRAILHEAD_NODE_PREFIX)) return '✈ ' + id.slice(TRAILHEAD_NODE_PREFIX.length);
+          if (id.startsWith(TRAILHEAD_NODE_PREFIX)) return '🥾 ' + id.slice(TRAILHEAD_NODE_PREFIX.length);
           return id;
         };
         const shortcutsFromTo = (from, to) => filtered.shortcuts.filter(sc => sc.from === from && sc.to === to);
@@ -3810,7 +3889,7 @@
           trailheadHint
             ? React.createElement(React.Fragment, null,
                 React.createElement('br'),
-                React.createElement('span', { style: { color: 'var(--trailhead)' } }, '✈ Reachable from trailhead: ' + trailheadHint),
+                React.createElement('span', { style: { color: 'var(--trailhead)' } }, '🥾 Reachable from trailhead: ' + trailheadHint),
               )
             : null,
         ),
@@ -3994,7 +4073,7 @@
           style: { opacity: 0, top: 0 },
         }),
         React.createElement('div', { className: pillCls },
-          React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+          React.createElement('span', { className: 'trailhead-icon' }, '🥾'),
           data.label,
         ),
         indicator,
@@ -4021,7 +4100,7 @@
             style: { opacity: 0, top: 0 },
           }),
           React.createElement('div', { className: 'subway-ghost-trailhead' },
-            React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+            React.createElement('span', { className: 'trailhead-icon' }, '🥾'),
             data.label,
           ),
           React.createElement(Handle, {
@@ -4263,7 +4342,7 @@
               React.createElement('div', { className: 'detail-edges' },
                 trailheads.map(th =>
                   React.createElement('div', { key: th.id, className: 'detail-edge' },
-                    React.createElement('span', { className: 'arrow' }, '✈'),
+                    React.createElement('span', { className: 'arrow' }, '🥾'),
                     React.createElement('span', { className: 'target-id' }, th.id),
                     th.description ? React.createElement('span', { className: 'desc' }, th.description) : null,
                   )
@@ -4375,7 +4454,7 @@
                 React.createElement('div', { className: 'detail-edges' },
                   trailheads.map(th =>
                     React.createElement('div', { key: th.id, className: 'detail-edge' },
-                      React.createElement('span', { className: 'arrow' }, '✈'),
+                      React.createElement('span', { className: 'arrow' }, '🥾'),
                       React.createElement('span', { className: 'target-id' }, th.id),
                       th.description ? React.createElement('span', { className: 'desc' }, th.description) : null,
                     )
@@ -4586,7 +4665,7 @@
             React.createElement('span', { className: 'logo' }, 'T'),
             'Trailblaze',
           ),
-          React.createElement('span', { className: 'scope' }, 'Waypoint map · ' + scopeLabel),
+          React.createElement('span', { className: 'scope' }, 'Trailmap · ' + scopeLabel),
           React.createElement('div', { className: 'mode-toggle' },
             React.createElement('button', {
               className: 'mode-button' + (mode === 'map' ? ' active' : ''),
@@ -4611,7 +4690,7 @@
           React.createElement('div', { className: 'header-counts' },
             React.createElement('span', { className: 'count-pair' },
               React.createElement('span', { className: 'num' }, filtered.waypoints.length),
-              'screens',
+              'waypoints',
             ),
             React.createElement('span', { className: 'count-pair' },
               React.createElement('span', { className: 'num' }, journeys.length),

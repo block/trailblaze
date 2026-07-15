@@ -1357,7 +1357,13 @@ class: text-center
   <img v-click src="./public/asset-c-graph-normal.png" class="absolute inset-x-0 mx-auto h-[370px] rounded-lg shadow-lg" />
 </div>
 
+<div class="pt-3 text-xs opacity-40">map-view rendering: a nod to Revyl's Atlas 🥾 the subway view is all ours</div>
+
 <!--
+SPOKEN NOD (Sam knows the founder): "Credit where due — Revyl's Atlas is mapping
+apps this way too, and their rendering pushed ours forward. We got here collecting
+waypoints for navigation; they got here from testing. The subway view, the topo
+canvas, the painted platform blazes — that's the trail talking."
 BRIDGE FROM the waypoints slide (cold read): "the mapping scaffolding already draws
 this — what's unproven is navigating OVER it: goTo, pathfinding." Kills the
 unproven→polished whiplash.
@@ -1367,6 +1373,10 @@ from the viewer header: 100 waypoints (authored + discovered), 81 shortcuts.
      the 47-node ring is the adjacency we hand the agent in its prompt
   2. CLICK: the map view zoomed to the list hub — real screenshots on every
      waypoint card, labeled shortcut edges between them
+NOTE: the embedded stills predate the 2026-07-14 map-view restyle (topo-contour
+canvas, painted platform blazes on cards, dotted footpath edges, 🥾 trailheads,
+"waypoints" stat label) — a LIVE demo shows the new look; the stills still tell
+the right story.
 Demo app = CONTACTS (round-4 decision). Optional beat: the Calendar map exists too
 — "a pattern, not a one-off." NUMBER GUARD: Calendar was reported as 100 waypoints
 + 64 shortcuts — BOTH maps at exactly 100 smells like a display cap. Verify in the

@@ -135,9 +135,11 @@ the `TRAILBLAZE_CONFIG_DIR` env var (set it to the same
 `<repo>/trails/config`).
 
 Open `/waypoints/graph?root=<repo>/trails/config`: Target **contacts** →
-Platform **android** should read **37 SCREENS · 38 SHORTCUTS** with a
-screenshot in every node; SUBWAY view with focal
-`contacts/android/list-populated` + Fit View is the money shot.
+Platform **android** should read **37 WAYPOINTS · 38 SHORTCUTS** with a
+screenshot in every node (the header says "Trailmap", the stat label
+"waypoints" — renamed 2026-07-14 in the map-view restyle); SUBWAY view
+with focal `contacts/android/list-populated` + Fit View is the money
+shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,
 plus subway's `focal`/`depth`/`dest`), and composes with `?root=`, so you
