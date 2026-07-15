@@ -17,7 +17,7 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
  * "Review my trail" — the AI authoring-assist pass (Phase 1 of the smarter-trail work).
  *
  * `POST /api/session/{id}/review` reconstructs the recorded trail YAML from a session's logs (the
- * same logs→YAML path the export/draft-variant flows use) and asks the configured LLM to critique
+ * same logs→YAML path the export/bundle-variant flows use) and asks the configured LLM to critique
  * it for two concrete problems: missing on-screen assertions and fragile selectors (coordinate /
  * index based). Returns structured [ReviewSuggestionDto]s the UI shows as accept/reject items.
  *

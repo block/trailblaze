@@ -13,14 +13,23 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.config.DefaultBehavior
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.yaml.TrailArgConfig
+import xyz.block.trailblaze.yaml.TrailConfig
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -262,6 +271,75 @@ class AgentLogEndpointTest {
     Console.log("Response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.OK, response.status)
+  }
+
+  @Test
+  fun `parameterized trail config with args round-trips through the agentlog endpoint`() = testApplication {
+    // Regression pin: a parameterized trail (one whose `config.args` declares typed args) embeds a
+    // TrailConfig in SessionStatus.Started, which the device POSTs to /agentlog as JSON. The args
+    // serializers used to hard-require a YAML decoder, so this decode 500'd for EVERY parameterized
+    // trail — the run passed on-device but its logs never parsed (broken report / UI / history).
+    val logsRepo = createTestLogsRepo()
+    application {
+      logsServerKtorEndpoints(logsRepo)
+    }
+
+    val received = mutableListOf<TrailblazeLog>()
+    AgentLogEndpoint.setServerReceivedLogsListener { received += it }
+    try {
+      val trailConfig = TrailConfig(
+        title = "Parameterized trail",
+        platform = "android",
+        args = linkedMapOf(
+          "recipient" to TrailArgConfig(type = TrailArgConfig.STRING),
+          "retries" to TrailArgConfig(
+            type = TrailArgConfig.INTEGER,
+            default = DefaultBehavior.Use(JsonPrimitive(3)),
+          ),
+          "verbose" to TrailArgConfig(
+            type = TrailArgConfig.BOOLEAN,
+            default = DefaultBehavior.Use(JsonPrimitive(false)),
+          ),
+        ),
+      )
+      val log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = trailConfig,
+          trailFilePath = "trails/forms/text-input-args.trail.yaml",
+          hasRecordedSteps = false,
+          testMethodName = "text-input-args",
+          testClassName = "text-input-args",
+          trailblazeDeviceInfo = TrailblazeDeviceInfo(
+            trailblazeDeviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID),
+            trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            widthPixels = 1080,
+            heightPixels = 1920,
+          ),
+        ),
+        session = SessionId("test-session-args"),
+        timestamp = Clock.System.now(),
+      )
+
+      // Encoding always worked — the regression was purely on the server DECODE side.
+      val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
+
+      val response = client.post("/agentlog") {
+        contentType(ContentType.Application.Json)
+        setBody(json)
+      }
+
+      assertEquals(HttpStatusCode.OK, response.status)
+      assertTrue(response.bodyAsText().contains("Log received and saved"))
+
+      val decoded = received.single() as TrailblazeLog.TrailblazeSessionStatusChangeLog
+      assertEquals(
+        trailConfig,
+        (decoded.sessionStatus as SessionStatus.Started).trailConfig,
+        "the parameterized trail's args must survive the JSON log round trip",
+      )
+    } finally {
+      AgentLogEndpoint.setServerReceivedLogsListener {}
+    }
   }
 
   @Test

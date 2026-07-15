@@ -85,9 +85,10 @@ class DesktopYamlRunnerWedgeDecisionTest {
 
   // On the host-agent path (preferHostAgent=true — the real CI accessibility V1 RPC path), a
   // mid-trail wedge surfaces NOT as the device's raw message but as the host-side `TrailblazeException`
-  // re-thrown by the trail loop, which `TrailblazeSessionManager.formatException` wraps into
-  // `Ended.Failed.exceptionMessage` as `<message-line>\n<stack-trace>`. Reproduce that exact shape so
-  // these tests fail if the wrapping ever stops carrying the signature the matcher keys on.
+  // re-thrown by the trail loop. Session logs written before `TrailblazeSessionManager` split the
+  // stack into `exceptionStackTrace` carry `<message-line>\n<stack-trace>` in
+  // `Ended.Failed.exceptionMessage`. Reproduce that legacy shape so these tests fail if the matcher
+  // ever stops tolerating a stack-bearing message.
   private fun hostAgentFailedStatus(rootMessage: String): SessionStatus.Ended.Failed {
     val wrapped = "$rootMessage\n" + RuntimeException(rootMessage).stackTraceToString()
     return SessionStatus.Ended.Failed(durationMs = 9_000, exceptionMessage = wrapped)
@@ -96,7 +97,7 @@ class DesktopYamlRunnerWedgeDecisionTest {
   @Test
   fun `host-agent path relaunches on the wrapped non-recoverable wedge`() {
     assertTrue(
-      "expected relaunch when the host-agent wedge signature survives formatException wrapping",
+      "expected relaunch when the host-agent wedge signature survives stack-bearing-message wrapping",
       DesktopYamlRunner.shouldRelaunchOnDeviceServer(hostAgentFailedStatus(nonRecoverableWedgeMessage)),
     )
   }

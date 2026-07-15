@@ -1,0 +1,22 @@
+config:
+  id: clock/cycle-through-tabs
+  target: clock
+  description: Launch Clock via the custom scripted tool, then visit each tab.
+  devices:
+    android: ANDROID_ONDEVICE_INSTRUMENTATION
+
+trail:
+  - step: "Launch the Clock app via the custom scripted tool"
+    recording:
+      android:
+        - clock_android_launchApp: {}
+
+  - step: "Tap the Alarm tab."
+
+  - step: "Tap the Clock tab."
+
+  - step: "Tap the Timer tab."
+
+  - step: "Tap the Stopwatch tab."
+
+  - step: "Verify the Stopwatch tab is now selected (the screen should show a stopwatch readout starting at 00:00.0 with a Start button)."

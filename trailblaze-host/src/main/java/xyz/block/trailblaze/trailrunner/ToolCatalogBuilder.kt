@@ -16,6 +16,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.buildToolDescriptorIgnoringSurface
 import xyz.block.trailblaze.toolcalls.toolName
@@ -365,14 +366,103 @@ object ToolCatalogBuilder {
 
   private fun paramsFromInputSchema(schema: JsonObject): List<ToolParamDto> {
     val props = (schema["properties"] as? JsonObject) ?: return emptyList()
+    val defs = schema["definitions"] as? JsonObject
     val required = (schema["required"] as? JsonArray)
       ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet().orEmpty()
-    return props.map { (name, el) ->
-      val o = el as? JsonObject
-      val type = (o?.get("type") as? JsonPrimitive)?.contentOrNull ?: "any"
-      val desc = (o?.get("description") as? JsonPrimitive)?.contentOrNull
-      ToolParamDto(name, type, required = name in required, desc)
+    return props.flatMap { (name, el) ->
+      val site = el as? JsonObject
+      val o = resolveLocalRef(site, defs)
+      unionParams(name, o, isRequired = name in required)
+        ?: listOf(
+          ToolParamDto(
+            name = name,
+            type = (o?.get("type") as? JsonPrimitive)?.contentOrNull ?: "any",
+            required = name in required,
+            description = ((site?.get("description") ?: o?.get("description")) as? JsonPrimitive)?.contentOrNull,
+            validValues = enumValues(o),
+          ),
+        )
     }
+  }
+
+  // ts-json-schema-generator emits named nested types as `$ref: "#/definitions/X"` (only the ROOT
+  // type is inlined via topRef:false); the union lowering below needs the resolved shape.
+  private fun resolveLocalRef(o: JsonObject?, defs: JsonObject?): JsonObject? {
+    val ref = (o?.get("\$ref") as? JsonPrimitive)?.contentOrNull ?: return o
+    return (defs?.get(ref.substringAfterLast('/')) as? JsonObject) ?: o
+  }
+
+  private fun enumValues(o: JsonObject?): List<String>? =
+    (o?.get("enum") as? JsonArray)
+      ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+      ?.takeIf { it.isNotEmpty() }
+
+  /**
+   * A discriminated-union property (`anyOf` of object variants, each carrying a `type` const)
+   * flattens into dotted params: one `<name>.type` discriminator (dropdown over the variant
+   * consts) plus each variant field as `<name>.<field>` gated by [ToolParamDto.visibleWhen] -
+   * the same lowering the MCP tool-discovery surface applies, so the web picker and the desktop
+   * picker agree on shape and the dotted names group back into nested YAML. Null when the
+   * property isn't that shape (callers fall through to the flat rendering).
+   */
+  private fun unionParams(parent: String, o: JsonObject?, isRequired: Boolean): List<ToolParamDto>? {
+    val anyOf = (o?.get("anyOf") as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return null
+    if (anyOf.isEmpty()) return null
+    data class Variant(val const: String, val desc: String?, val props: JsonObject, val required: Set<String>)
+    val variants = anyOf.map { v ->
+      val props = v["properties"] as? JsonObject ?: return null
+      val t = props["type"] as? JsonObject ?: return null
+      val const = (t["const"] as? JsonPrimitive)?.contentOrNull ?: return null
+      Variant(
+        const = const,
+        desc = (t["description"] as? JsonPrimitive)?.contentOrNull,
+        props = props,
+        required = (v["required"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet().orEmpty(),
+      )
+    }
+    val discriminatorName = "$parent.type"
+    val out = mutableListOf(
+      ToolParamDto(
+        name = discriminatorName,
+        type = "string",
+        required = isRequired,
+        description = variants.mapNotNull { v -> v.desc?.let { "${v.const}: $it" } }
+          .joinToString(" ")
+          .ifBlank { null },
+        validValues = variants.map { it.const },
+        validValueDescriptions = variants.map { it.desc.orEmpty() }.takeIf { l -> l.any { it.isNotBlank() } },
+      ),
+    )
+    // One flattened entry per distinct field name, accumulating every variant it appears in.
+    // `required` means "required while visible": true only when every variant that shows the
+    // field also requires it.
+    class Field(val dto: ToolParamDto, val forValues: MutableList<String> = mutableListOf(), var requiredWhileVisible: Boolean = true)
+    val fields = LinkedHashMap<String, Field>()
+    variants.forEach { v ->
+      v.props.forEach { (fname, fel) ->
+        if (fname == "type") return@forEach
+        val fo = fel as? JsonObject
+        val field = fields.getOrPut(fname) {
+          Field(
+            ToolParamDto(
+              name = "$parent.$fname",
+              type = (fo?.get("type") as? JsonPrimitive)?.contentOrNull ?: "any",
+              description = (fo?.get("description") as? JsonPrimitive)?.contentOrNull,
+              validValues = enumValues(fo),
+            ),
+          )
+        }
+        field.forValues += v.const
+        if (fname !in v.required) field.requiredWhileVisible = false
+      }
+    }
+    fields.values.forEach { f ->
+      out += f.dto.copy(
+        required = f.requiredWhileVisible,
+        visibleWhen = ToolParamVisibilityDto(parameterName = discriminatorName, values = f.forValues.distinct()),
+      )
+    }
+    return out
   }
 
   /**
@@ -391,8 +481,17 @@ object ToolCatalogBuilder {
   }
 
   private fun paramsFromDescriptor(d: TrailblazeToolDescriptor): List<ToolParamDto> =
-    d.requiredParameters.map { ToolParamDto(it.name, it.type.toDisplayType(), required = true, it.description) } +
-      d.optionalParameters.map { ToolParamDto(it.name, it.type.toDisplayType(), required = false, it.description) }
+    d.requiredParameters.map { it.toParamDto(required = true) } +
+      d.optionalParameters.map { it.toParamDto(required = false) }
+
+  private fun TrailblazeToolParameterDescriptor.toParamDto(required: Boolean): ToolParamDto = ToolParamDto(
+    name = name,
+    type = type.toDisplayType(),
+    required = required,
+    description = description,
+    validValues = validValues,
+    visibleWhen = visibleWhen?.let { ToolParamVisibilityDto(it.parameterName, it.values) },
+  )
 
   // Koog descriptor types come through uppercased (STRING, ARRAY, INT…); lowercase them so
   // Kotlin-tool params read the same as the lowercase types YAML-defined tools already show.

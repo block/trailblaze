@@ -210,6 +210,7 @@ object UnifiedTrailAdapter {
       context = unified.context,
       metadata = plainMetadata,
       memory = unified.memory,
+      args = unified.args,
     )
   }
 
@@ -246,6 +247,7 @@ object UnifiedTrailAdapter {
       priority = v1.priority,
       context = v1.context,
       memory = v1.memory,
+      args = v1.args,
       metadata = bridgeMetadata(v1),
     )
   }
@@ -319,6 +321,9 @@ object UnifiedTrailAdapter {
     priority = base.priority.orIfAbsent(fallback.priority),
     context = base.context.orIfAbsent(fallback.context),
     memory = base.memory.orIfAbsent(fallback.memory),
+    // Whole-map (not per-key) like `memory`: a trail's parameter contract is atomic — unioning two
+    // files' arg declarations could fabricate a signature no single source declared.
+    args = base.args.orArgsIfAbsent(fallback.args),
     metadata = mergeMetadata(base.metadata, fallback.metadata),
   )
 
@@ -343,6 +348,13 @@ object UnifiedTrailAdapter {
     takeUnless { it.isNullOrBlank() } ?: fallback ?: this
 
   private fun Map<String, String>?.orIfAbsent(fallback: Map<String, String>?): Map<String, String>? =
+    takeUnless { it.isNullOrEmpty() } ?: fallback ?: this
+
+  // Distinct name (not an `orIfAbsent` overload): the two Map overloads erase to the same JVM
+  // signature, and `@JvmName` isn't available in commonMain (wasmJs target).
+  private fun Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>?.orArgsIfAbsent(
+    fallback: Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>?,
+  ): Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>? =
     takeUnless { it.isNullOrEmpty() } ?: fallback ?: this
 
   /**

@@ -3,7 +3,7 @@
 // Babel strips types at load time regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-// One stage in the Create / Draft steps / Save pipeline shown on Home. Clickable when
+// One stage in the Create / Record / Save pipeline shown on Home. Clickable when
 // `onClick` is given (it jumps to the matching tab). The preview inside `children` makes the
 // stage concrete: a prompt field, a recording device, a saved trail folder. Titles are kept
 // short so they never truncate; the caption sits directly under the preview, extra height
@@ -50,7 +50,7 @@ function FlowArrow({ vertical }) {
 // THEN you run that blaze on each platform to RECORD the actual tool calls (one recording per
 // device). FINALLY the trail is saved and replays deterministically. Color carries the story:
 // purple = AI-authored (--tb-ai), blue = live run (--tb-running), green = deterministic (--tb-pass).
-// Each card jumps to its real stage: Create → Drafts (record) → Trails.
+// Each card jumps to its real stage: Create → Create (record) → Trails.
 function HomePipeline({ go, vertical }) {
   // Each plain-language step (authored at Create) resolves to a concrete tool call when recorded
   // on a device. Card 1 shows just the step; card 2 (Record) shows the tool each step captured.
@@ -68,7 +68,7 @@ function HomePipeline({ go, vertical }) {
         {/* 1 · Create the blaze: a prompt becomes ordered, plain-language steps — one spec, no
             device or recording yet. Purple = AI-authored content (--tb-ai). */}
         <FlowStage kicker="1 · Create" ico="sparkles" color="var(--tb-ai)" bg="rgba(181,140,255,.16)"
-          title="Write a prompt" sub="Becomes ordered steps." onClick={() => go('create')}>
+          title="Write a prompt" sub="An agent composes the trail with you." onClick={() => go('create')}>
           <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 10, background: 'var(--bg-standard)', overflow: 'hidden' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 11px', borderBottom: '1px solid var(--tb-hairline)' }}>
               <Ico n="sparkles" s={12} c="var(--tb-ai)" style={{ flex: '0 0 auto' }} />
@@ -91,7 +91,7 @@ function HomePipeline({ go, vertical }) {
             authored steps and captures the real tool calls — one recording per platform. This is
             where devices/platforms enter. Blue = live run (--tb-running). */}
         <FlowStage kicker="2 · Record" ico="circle-play" color="var(--tb-running)" bg="rgba(94,155,255,.16)"
-          title="Run on devices" sub="Each step records a real tool." onClick={() => go('drafts')}>
+          title="Run on devices" sub="Each step records a real tool." onClick={() => go('create')}>
           {/* Full-width box matching cards 1 and 3 (header row + rows that fill the width) so the
               three pipeline stages read at the same size. A RECORDING header stands in for card 1's
               prompt header / card 3's folder header. */}
@@ -154,19 +154,20 @@ function HomePipeline({ go, vertical }) {
   );
 }
 
-// The main ways to start a test.
+// The way to start a test: one Create door, mirroring the sidebar's Create group. The card lands
+// on a blank Create session (sel: 'new') where the author drives a live device by hand, describes
+// a flow to an agent, or both.
 function CreateOptions({ go }) {
   const opts = [
-    { key: 'create', ico: 'sparkles', color: 'var(--tb-ai)', bg: 'rgba(181,140,255,.16)', kicker: 'Agent', title: 'Prompt', sub: 'Describe the flow in plain language. The agent proposes ordered steps you refine, then record.', cta: 'Write a prompt' },
-    { key: 'interact', ico: 'pointer', color: 'var(--tb-running)', bg: 'rgba(94,155,255,.16)', kicker: 'Hands-on', title: 'Interact', sub: 'Drive a live device yourself. Every tap, type, and check becomes an editable step — or paste trail YAML and run it.', cta: 'Open a device' },
+    { key: 'create', payload: { sel: 'new' }, ico: 'sparkles', color: 'var(--tb-ai)', bg: 'rgba(181,140,255,.16)', kicker: 'Create', title: 'Create a trail', sub: 'Drive a live device yourself or describe the flow to an agent - every action becomes an editable step.', cta: 'New session' },
   ];
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
       {opts.map((o) => {
         return (
           <div key={o.key} className="tb-card" role="button" tabIndex={0}
-            onClick={() => go(o.key)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(o.key); } }}
+            onClick={() => go(o.key, o.payload)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(o.key, o.payload); } }}
             style={{ flex: '1 1 210px', minWidth: 0, padding: 16, display: 'flex', flexDirection: 'column', gap: 11, cursor: 'pointer', background: 'var(--bg-subtle)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: 10, background: o.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
@@ -197,12 +198,16 @@ function ReadinessPanel({ go }) {
   const selectedConnected = selectedDevices.filter((d) => d.connected !== false).length;
   const totalTrails = TB.countTrailBundles(trails.data || []);
   // One compact segment per check; the short value renders inline, the full guidance rides on hover.
+  // Before the first /status response, the daemon row is genuinely unknown - painting
+  // "not running" for that beat reads as a broken app. After the first response, "not running"
+  // is the honest state (a failed fetch maps to { running: false }).
+  const statusPending = status.loading && !status.data;
   const rows = [
     {
       label: 'Daemon',
-      value: status.data?.running ? `port ${status.data.daemonPort || '?'}` : 'not running',
-      hint: status.data?.running ? `Running on port ${status.data.daemonPort || '?'}` : 'Start the daemon before running tests.',
-      ok: !!status.data?.running,
+      value: statusPending ? 'checking…' : status.data?.running ? `port ${status.data.daemonPort || '?'}` : 'not running',
+      hint: statusPending ? 'Checking the daemon…' : status.data?.running ? `Running on port ${status.data.daemonPort || '?'}` : 'Start the daemon before running tests.',
+      ok: statusPending ? null : !!status.data?.running,
       action: 'settings',
     },
     {
@@ -235,7 +240,7 @@ function ReadinessPanel({ go }) {
           onClick={() => go(r.action)}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(r.action); } }}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 7, cursor: 'pointer', minWidth: 0 }}>
-          <Ico n={r.ok ? 'circle-check-big' : 'circle-alert'} s={13} c={r.ok ? 'var(--tb-pass)' : 'var(--tb-amber)'} />
+          <Ico n={r.ok === null ? 'loader-circle' : r.ok ? 'circle-check-big' : 'circle-alert'} s={13} c={r.ok === null ? 'var(--text-subtle)' : r.ok ? 'var(--tb-pass)' : 'var(--tb-amber)'} spin={r.ok === null} />
           <span style={{ fontSize: 11.5, fontWeight: 600, flex: '0 0 auto' }}>{r.label}</span>
           <span className="tb-sub" style={{ fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}>{r.value}</span>
         </div>
@@ -280,7 +285,7 @@ function BrowseTests({ go }) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14.5, fontWeight: 700 }}>Browse tests</div>
-        <div className="tb-sub" style={{ fontSize: 12, marginTop: 2 }}>{count ? `${count} saved trail${count === 1 ? '' : 's'} in your workspace - pick one and run it.` : 'Open the trail library to pick a saved test and run it.'}</div>
+        <div className="tb-sub" style={{ fontSize: 12, marginTop: 2 }}>{count ? `${count} trail${count === 1 ? '' : 's'} in your workspace` : 'Pick a saved test and run it'}</div>
       </div>
       <Ico n="arrow-right" s={16} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
     </div>
@@ -326,16 +331,15 @@ function HomeContent({ go, openRun }) {
       <ScreenHead
         eyebrow="Trail Runner"
         title={<>What would you like to <span style={{ color: 'var(--tb-pass)' }}>do today?</span></>}
-        sub="Start a new test or run an existing one."
         right={<HelpButton title="How Trail Runner works" onClick={() => setShowHelp(true)} />}
       />
 
-      {/* Section 1 — author a new test: the three ways to start, with the teaching pipeline tucked
+      {/* Section 1 - author a new test: the ways to start, with the teaching pipeline tucked
           behind a "?" popover on the header (no longer inline). */}
       <HomeSection first ico="sparkles" color="var(--tb-ai)" bg="rgba(181,140,255,.16)"
-        title="Create a new test" sub="Describe a flow, then record it once on your devices."
+        title="Create a new test"
         headerRight={
-          <HelpButton title="How a test is made" sub="A prompt becomes ordered steps, you record them once on each device, and the saved trail replays forever — deterministic, zero AI.">
+          <HelpButton title="How a test is made" sub="A prompt becomes ordered steps, you record them once on each device, and the saved trail replays forever - deterministic, zero AI.">
             <HomePipeline go={go} vertical />
           </HelpButton>
         }>
@@ -344,7 +348,7 @@ function HomeContent({ go, openRun }) {
 
       {/* Section 2 — re-run something that already exists: browse the library or revisit a run. */}
       <HomeSection ico="circle-play" color="var(--tb-running)" bg="rgba(94,155,255,.16)"
-        title="Run an existing test" sub="Browse your saved trails or revisit a recent run.">
+        title="Run an existing test">
         <BrowseTests go={go} />
         <RecentRuns go={go} />
       </HomeSection>
@@ -368,7 +372,7 @@ function HomeContent({ go, openRun }) {
             On the Prompt screen, write the objective in plain language. The model turns it into an ordered list of plain-language steps - the blaze. That is one portable spec; no device is touched and nothing is recorded yet.
           </HelpCard>
           <HelpCard ico="circle-play" color="var(--tb-running)" title="Record · run on each device">
-            Under Drafts, run the blaze on the devices you picked. The agent performs the authored steps and captures the real tool calls, producing one recording per platform. Watch each run live under Active.
+            Run the blaze on the devices you picked - it waits under the In progress entry on Home until every platform is recorded. The agent performs the authored steps and captures the real tool calls, producing one recording per platform. Watch each run live under Active.
           </HelpCard>
           <HelpCard ico="save" color="var(--tb-pass)" title="Save · keep it as a trail">
             Save the folder of recordings under Trails. Replays re-run the exact recorded tools - fast, deterministic, zero LLM calls - and the AI only steps back in if you re-record or self-heal kicks in on a drifted step.
@@ -429,11 +433,13 @@ function Skeleton({ rows = 3 }) {
     </>
   );
 }
-function Empty({ ico, title, sub }) {
+// icoColor/icoBg: optional accent so a screen's empty state can wear that surface's signature
+// hue (e.g. Create's violet) instead of always reading generic gray.
+function Empty({ ico, title, sub, icoColor, icoBg }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', padding: '40px 24px', color: 'var(--text-subtle)' }}>
-      <div style={{ width: 56, height: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-elevated)', border: '1px solid var(--tb-hairline)', marginBottom: 14 }}>
-        <Ico n={ico} s={24} c="var(--text-subtle)" />
+      <div style={{ width: 56, height: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', background: icoBg || 'var(--bg-elevated)', border: '1px solid var(--tb-hairline)', marginBottom: 14 }}>
+        <Ico n={ico} s={24} c={icoColor || 'var(--text-subtle)'} />
       </div>
       <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-standard)' }}>{title}</div>
       {sub && <div className="tb-sub" style={{ fontSize: 12.5, marginTop: 5, maxWidth: 320, lineHeight: 1.5 }}>{sub}</div>}

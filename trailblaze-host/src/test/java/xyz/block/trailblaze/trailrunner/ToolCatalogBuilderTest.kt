@@ -91,6 +91,63 @@ class ToolCatalogBuilderTest {
   }
 
   @Test
+  fun `a discriminated-union input flattens to a dropdown discriminator plus gated variant fields`() = runBlocking {
+    assumeAnalyzerRunnable()
+    // The configurable-trailhead shape (a signed-in entry-state tool): a union property
+    // must surface as dotted params the pickers can render - `account.type` as a closed dropdown,
+    // each variant's companion field gated on the discriminator value, flat params untouched.
+    // Named union types arrive from the generator as `${'$'}ref` + definitions, so this also pins
+    // the local-ref resolution.
+    val configDir = tempFolder.newFolder("config")
+    val toolsDir = File(configDir, "trailmaps/demo/tools").apply { mkdirs() }
+    File(toolsDir, "signedIn.ts").writeText(
+      """
+        |declare const trailblaze: { tool: <I, O>(spec: { handler: (input: I) => Promise<O> }) => any };
+        |type Account =
+        |  | { type: "pool"; serviceId?: string }
+        |  | { type: "existing"; email: string }
+        |  | { type: "newUser" };
+        |interface SignedInInput {
+        |  account: Account;
+        |  startingClientRoute?: string;
+        |}
+        |interface SignedInOutput { out: string; }
+        |
+        |export const signedIn = trailblaze.tool<SignedInInput, SignedInOutput>({
+        |  handler: async () => ({ out: "" }),
+        |});
+      """.trimMargin(),
+    )
+    val previousResolver = WorkspaceConfigDirHolder.resolver
+    WorkspaceConfigDirHolder.resolver = { configDir }
+    try {
+      val params = ToolCatalogBuilder.scriptedToolParams("demo", "signedIn")
+      val byName = params.associateBy { it.name }
+      assertTrue("account" !in byName, "the union parent must flatten away, got ${params.map { it.name }}")
+
+      val disc = byName.getValue("account.type")
+      assertEquals(listOf("pool", "existing", "newUser"), disc.validValues)
+      assertEquals(true, disc.required)
+      assertEquals(null, disc.visibleWhen)
+
+      val serviceId = byName.getValue("account.serviceId")
+      assertEquals("account.type", serviceId.visibleWhen?.parameterName)
+      assertEquals(listOf("pool"), serviceId.visibleWhen?.values)
+      assertEquals(false, serviceId.required, "serviceId is optional within its variant")
+
+      val email = byName.getValue("account.email")
+      assertEquals(listOf("existing"), email.visibleWhen?.values)
+      assertEquals(true, email.required, "email is required while its variant is selected")
+
+      val route = byName.getValue("startingClientRoute")
+      assertEquals(null, route.visibleWhen)
+      assertEquals(false, route.required)
+    } finally {
+      WorkspaceConfigDirHolder.resolver = previousResolver
+    }
+  }
+
+  @Test
   fun `one broken tool file does not blank out params for other tools in the same trailmap`() = runBlocking {
     assumeAnalyzerRunnable()
     // Regression test for the real bug this fix uncovered: the live `myapp` trailmap has 53 `.ts`

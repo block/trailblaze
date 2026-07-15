@@ -2,6 +2,7 @@ package xyz.block.trailblaze.config.project
 
 import java.io.File
 import java.nio.file.Path
+import kotlin.coroutines.cancellation.CancellationException
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 
@@ -78,7 +79,90 @@ object TrailblazeWorkspaceConfigResolver {
    * workspace than the trail runner.
    */
   fun resolveConfigFile(fromPath: Path): File? = resolve(fromPath).configFile
+
+  /**
+   * The workspace's declared `defaults.target` id, blank-normalized to null, from the workspace
+   * anchor discovered at [fromPath]. The single read path for callers that only need the id (the
+   * CLI target displays + `resolveCliTarget`); callers that also need the anchor file for
+   * diagnostics (the daemon's cached, logged resolution) use [loadWorkspaceDefaults] directly.
+   * Owning the `takeIf { isNotBlank() }` normalization here keeps a blank `defaults.target:` from
+   * being surfaced as a real id at any one call site.
+   */
+  fun workspaceDefaultTarget(
+    fromPath: Path,
+    consumer: String,
+    envReader: () -> String? = { System.getenv(CONFIG_DIR_ENV_VAR) },
+  ): String? =
+    loadWorkspaceDefaults(fromPath, consumer, envReader)?.defaults?.target?.takeIf { it.isNotBlank() }
+
+  /**
+   * The neutral-"default" target sentinel: rung 2 of effective-target precedence, shared by the
+   * CLI target surfaces (`resolveCliTarget`, `config get target`, `config target` listing) and
+   * the daemon's run resolution (`TrailblazeSettingsRepo.getCurrentSelectedTargetApp`).
+   *
+   * A persisted [selectedTargetAppId] counts as an *authoritative* user selection only when it is
+   * non-blank AND not equal to [neutralDefaultId]. Legacy CLI code auto-persisted the neutral
+   * default without any user intent, so a stored neutral id is indistinguishable from a fabricated
+   * one and must never mask a committed workspace [workspaceDefaultTarget]. Returns the
+   * authoritative id, or `null` when the caller should fall through to its workspace-default /
+   * built-in tiers.
+   *
+   * [neutralDefaultId] is a parameter rather than a hardcoded constant precisely because the two
+   * callers source it differently: the CLI passes the compile-time OSS static
+   * (`TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id`), while the daemon passes the
+   * runtime-injected `defaultHostAppTarget.id` from its distribution's app config. Routing both
+   * through this one function means the *sentinel logic* can't drift; keeping the two ids equal is
+   * the distribution's contract (see the KDoc on `TrailblazeDesktopAppConfig.defaultAppTarget`).
+   */
+  fun authoritativeSelectedTargetId(selectedTargetAppId: String?, neutralDefaultId: String): String? =
+    selectedTargetAppId?.takeIf { it.isNotBlank() && it != neutralDefaultId }
+
+  /**
+   * Resolves the workspace anchor from [fromPath] and loads its raw `defaults:` block,
+   * paired with the anchor file for caller diagnostics. Returns null when no anchor
+   * resolves or the file declares no `defaults:`. Load failures (malformed YAML, I/O)
+   * are logged — attributed to [consumer] — and degrade to null, so a broken workspace
+   * file never crashes the calling feature; the caller falls through to its next
+   * precedence tier instead.
+   *
+   * This is the single shared read path for `defaults.*` consumers (`defaults.target`,
+   * `defaults.maxLlmCalls`, …) — add new consumers here rather than re-implementing the
+   * resolve → load → swallow-and-log shape.
+   */
+  fun loadWorkspaceDefaults(
+    fromPath: Path,
+    consumer: String,
+    envReader: () -> String? = { System.getenv(CONFIG_DIR_ENV_VAR) },
+  ): LoadedWorkspaceDefaults? {
+    // Broad catch by design: callers sit on hot paths (Compose recomposition, per-dispatch
+    // MCP), so ANY throw from the walk-up or the YAML layer must degrade to "no workspace
+    // defaults", not crash the calling feature. TrailblazeProjectConfigException and
+    // IOException are the expected shapes; the rest is the safety net. Cancellation and
+    // interrupts are NOT failures to degrade from: a coroutine cancellation must propagate
+    // (swallowing it leaves the caller running through its own cancellation), and a thread
+    // interrupt must stay visible to the caller's next interruptible operation.
+    return try {
+      val configFile = resolve(fromPath, envReader).configFile ?: return null
+      val defaults = TrailblazeProjectConfigLoader.load(configFile)?.raw?.defaults ?: return null
+      LoadedWorkspaceDefaults(configFile = configFile, defaults = defaults)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
+      Console.log("Skipping workspace trailblaze.yaml for $consumer: interrupted")
+      null
+    } catch (e: Exception) {
+      Console.log("Skipping workspace trailblaze.yaml for $consumer: ${e.message}")
+      null
+    }
+  }
 }
+
+/** A workspace anchor's raw `defaults:` block plus the anchor file for diagnostics. */
+data class LoadedWorkspaceDefaults(
+  val configFile: File,
+  val defaults: ProjectDefaults,
+)
 
 data class ResolvedTrailblazeWorkspaceConfig(
   val workspaceRoot: WorkspaceRoot,

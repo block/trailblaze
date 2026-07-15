@@ -32,6 +32,12 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppCo
 class RunYamlRequestFactory(
   private val appConfig: SavedTrailblazeAppConfig,
   private val llmModel: TrailblazeLlmModel,
+  /**
+   * Effective target id from the full resolution rungs (persisted selection → workspace
+   * `defaults.target`), not the raw persisted [SavedTrailblazeAppConfig.selectedTargetAppId] —
+   * a run resolved through the workspace default would otherwise record `targetAppName = null`.
+   */
+  private val effectiveTargetAppId: () -> String?,
 ) {
   fun create(
     device: TrailblazeConnectedDeviceSummary,
@@ -46,7 +52,7 @@ class RunYamlRequestFactory(
     yaml = yaml,
     trailblazeLlmModel = llmModel,
     useRecordedSteps = useRecordedSteps,
-    targetAppName = appConfig.selectedTargetAppId,
+    targetAppName = effectiveTargetAppId(),
     config = TrailblazeConfig(
       selfHeal = appConfig.selfHealEnabled,
       overrideSessionId = null,

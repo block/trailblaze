@@ -4,6 +4,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.LlmTokenStatus
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -409,14 +410,36 @@ class ConfigTargetCommand : Callable<Int> {
     val targets = Console.runQuiet {
       parent.getConfigProvider().availableAppTargets.sortedBy { it.displayName }
     }
-    val currentTargetId = CliConfigHelper.readConfig()?.selectedTargetAppId
+    // Apply the neutral-"default" sentinel (see authoritativeSelectedTargetId): a persisted id
+    // equal to the neutral default is legacy auto-persist, not an authoritative selection, so it
+    // must not mask the workspace default in the listing.
+    val currentTargetId = authoritativeSelectedTargetId(CliConfigHelper.readConfig()?.selectedTargetAppId)
+    // With no authoritative selection, mark the workspace `defaults.target` (the daemon's
+    // rung-3 fallback — what a run would actually target) so the listing doesn't show no
+    // current target while runs resolve one. Seed the walk-up at the caller's cwd — and read
+    // TRAILBLAZE_CONFIG_DIR via callerEnv, not System.getenv — so the daemon-forwarded path
+    // reads the user's workspace, not the daemon's launch directory (CONFIG_DIR_ENV_VAR outranks
+    // the cwd walk-up).
+    val workspaceDefaultId = if (currentTargetId == null) {
+      TrailblazeWorkspaceConfigResolver.workspaceDefaultTarget(
+        fromPath = CliCallerContext.callerCwd(),
+        consumer = "config target list",
+        envReader = { CliCallerContext.callerEnv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR) },
+      )
+    } else {
+      null
+    }
 
     Console.info("")
     Console.info("Available Targets:")
     Console.info(ITEM_DIVIDER)
 
     for (target in targets) {
-      val current = if (target.id == currentTargetId) " (current)" else ""
+      val current = when (target.id) {
+        currentTargetId -> " (current)"
+        workspaceDefaultId -> " (current — workspace default)"
+        else -> ""
+      }
       Console.info("  [${target.id}] ${target.displayName}$current")
     }
 

@@ -3,15 +3,23 @@ package xyz.block.trailblaze.trailrunner
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
-import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -37,7 +45,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Interactive recording endpoints — the "drive the device from Trail Runner, every interaction
- * becomes an editable step" feature. Unlike `/api/draft/record` (which hands the blaze steps to the
+ * becomes an editable step" feature. Unlike `/api/folder/record` (which hands the blaze steps to the
  * agent to re-derive on the device), these routes let the author tap/type/swipe the live device
  * directly and capture each gesture as a deterministic Trailblaze tool.
  *
@@ -51,8 +59,8 @@ import java.util.concurrent.ConcurrentHashMap
  *  - [RecordingYamlCodec] serializes each captured tool to a runnable trail item the UI shows as a card.
  *
  * The web UI assembles those cards (plus any free-text prompt steps) into a `<platform>.trail.yaml`
- * and saves it into a draft folder via the existing draft endpoints — so a recording lands in the
- * same Blaze/draft flow as a proposed blaze.
+ * and saves it into a library folder via the /api/folder endpoints - so a recording lands in the
+ * same bundle flow as a proposed blaze.
  *
  * Routes (all POST; the device id rides in the JSON body since [TrailblazeDeviceId] is structured):
  *   /api/record/connect    — open a live connection, hold the stream for subsequent calls
@@ -60,20 +68,40 @@ import java.util.concurrent.ConcurrentHashMap
  *   /api/record/gesture    — dispatch a tap/longPress/swipe/inputText/pressKey AND record it as a tool
  *   /api/record/disconnect — release the connection
  */
+// This server has no ContentNegotiation plugin: a `call.respond(status, <object>)` throws at
+// response-serialization time and reaches the client as a naked HTTP 500, masking the real error
+// the branch meant to deliver. Every error response must be hand-encoded through this.
+private suspend fun <T> io.ktor.server.application.ApplicationCall.respondJson(
+  status: HttpStatusCode,
+  serializer: kotlinx.serialization.KSerializer<T>,
+  body: T,
+) = respondText(JSON.encodeToString(serializer, body), ContentType.Application.Json, status)
+
+/**
+ * Process-wide handle to the single recording service, so the demonstration mark-start path can
+ * capture its start-state frame through the SAME live connection the gesture path drives. Set once
+ * when [recordRoutes] wires the service; null on a daemon without a deviceManager.
+ */
+internal object TrailRunnerRecordingHolder {
+  @Volatile
+  var service: TrailRunnerRecordingService? = null
+}
+
 internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
   // One service per daemon (registered once): it holds the live connections keyed by device so
   // screen/gesture calls reach the already-open stream without reconnecting. Null when the daemon
   // runs without a deviceManager (e.g. the integration test harness) — every route then 503s.
   val service = deps.deviceManager?.let { TrailRunnerRecordingService(it) }
+  service?.let { TrailRunnerRecordingHolder.service = it }
 
   post("$PATH_BASE/api/record/connect") {
     if (service == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordConnectResponse(ok = false, error = "deviceManager not available"))
+      call.respondJson(HttpStatusCode.ServiceUnavailable, RecordConnectResponse.serializer(), RecordConnectResponse(ok = false, error = "deviceManager not available"))
       return@post
     }
     val body = runCatching { call.receive<RecordDeviceRequest>() }.getOrNull()
     if (body == null) {
-      call.respond(HttpStatusCode.BadRequest, RecordConnectResponse(ok = false, error = "trailblazeDeviceId is required"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordConnectResponse.serializer(), RecordConnectResponse(ok = false, error = "trailblazeDeviceId is required"))
       return@post
     }
     val resp = service.connect(body.trailblazeDeviceId)
@@ -85,12 +113,12 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
 
   post("$PATH_BASE/api/record/screen") {
     if (service == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordScreenResponse(ok = false, error = "deviceManager not available"))
+      call.respondJson(HttpStatusCode.ServiceUnavailable, RecordScreenResponse.serializer(), RecordScreenResponse(ok = false, error = "deviceManager not available"))
       return@post
     }
     val body = runCatching { call.receive<RecordDeviceRequest>() }.getOrNull()
     if (body == null) {
-      call.respond(HttpStatusCode.BadRequest, RecordScreenResponse(ok = false, error = "trailblazeDeviceId is required"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordScreenResponse.serializer(), RecordScreenResponse(ok = false, error = "trailblazeDeviceId is required"))
       return@post
     }
     val resp = service.screen(body.trailblazeDeviceId)
@@ -102,15 +130,64 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
 
   post("$PATH_BASE/api/record/gesture") {
     if (service == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordGestureResponse(ok = false, error = "deviceManager not available"))
+      call.respondJson(HttpStatusCode.ServiceUnavailable, RecordGestureResponse.serializer(), RecordGestureResponse(ok = false, error = "deviceManager not available"))
       return@post
     }
     val body = runCatching { call.receive<RecordGestureRequest>() }.getOrNull()
     if (body == null) {
-      call.respond(HttpStatusCode.BadRequest, RecordGestureResponse(ok = false, error = "malformed gesture request"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordGestureResponse.serializer(), RecordGestureResponse(ok = false, error = "malformed gesture request"))
       return@post
     }
-    val resp = service.gesture(body)
+    // Evidence capture (agent record mode): a gesture bound to an agent run is recorded with a
+    // before/after screenshot + view hierarchy, so the agent can read what the human demonstrated.
+    // The before frame must precede the dispatch; the after frame is captured off the request path.
+    val evidenceDir = if (body.resolveOnly) null else body.runId?.let { ExternalAgentSupervisor.evidenceDir(it) }
+    // Snapshot the demo phase at dispatch time (before the gesture lands): an action keeps the phase
+    // it was dispatched in even if its evidence settles and emits after a phase change. Null for a
+    // non-demo run, so no actions.ndjson line is written. "setup" while positioning, "step" once recording.
+    val demoPhase = if (body.resolveOnly) null else body.runId?.let { ExternalAgentSupervisor.demoActionPhase(it) }
+    val before = evidenceDir?.let { runCatching { service.captureEvidenceFrame(body.trailblazeDeviceId) }.getOrNull() }
+    // Never let a device-side failure escape as a bare 500 (the UI could only show "HTTP 500");
+    // turn it into a structured ok=false with the real reason so the panel can show what happened.
+    val resp = runCatching { dispatchGesture(deps, service, body) }.getOrElse { e ->
+      Console.log("[RecordRoutes] gesture failed: ${e.message}")
+      RecordGestureResponse(ok = false, error = "Gesture failed on the device: " + (e.message ?: e.toString()))
+    }
+    if (resp.ok && !body.resolveOnly && body.runId != null) {
+      val runId = body.runId
+      // The seq is claimed HERE, on the request path: the deferred capture finishes in
+      // data-dependent time, so claiming it in the coroutine would order evidence by capture
+      // completion, not by gesture. Null means the run was evicted - emit without evidence.
+      val seq = if (evidenceDir == null) null else ExternalAgentSupervisor.nextTapeSeq(runId)
+      if (evidenceDir == null || seq == null) {
+        emitGestureHumanAction(runId, body, resp, evidence = null, seq = seq, demoPhase = demoPhase)
+      } else {
+        // Wait out the transition, capture the settled after-state, then emit the event carrying
+        // both sides - one entry per action. Chained per run (enqueueEvidence) so events land in
+        // gesture order even when a slow capture overlaps a fast one.
+        ExternalAgentSupervisor.enqueueEvidence(runId, recordEvidenceScope) {
+          delay(EVIDENCE_SETTLE_MS)
+          var after = runCatching { service.captureEvidenceFrame(body.trailblazeDeviceId) }.getOrNull()
+          // A launch or navigation can outlast the settle window, so an identical hierarchy at
+          // first look gets re-checked before we conclude "no change" - stamping a landed action
+          // as a no-op misleads both the human (amber badge) and the agent (reply preamble).
+          var rechecks = 0
+          while (
+            rechecks < EVIDENCE_RECHECK_MAX &&
+            before?.hierarchy != null &&
+            before.hierarchy == after?.hierarchy
+          ) {
+            delay(EVIDENCE_RECHECK_MS)
+            after = runCatching { service.captureEvidenceFrame(body.trailblazeDeviceId) }.getOrNull() ?: after
+            rechecks++
+          }
+          val evidence = runCatching {
+            writeActionEvidence(evidenceDir, seq, before, after)
+          }.onFailure { Console.log("[RecordRoutes] evidence write failed: ${it.message}") }.getOrNull()
+          emitGestureHumanAction(runId, body, resp, evidence, seq = seq, demoPhase = demoPhase)
+        }
+      }
+    }
     call.respondText(
       text = JSON.encodeToString(RecordGestureResponse.serializer(), resp),
       contentType = ContentType.Application.Json,
@@ -119,12 +196,12 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
 
   post("$PATH_BASE/api/record/tree") {
     if (service == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordTreeResponse(ok = false, error = "deviceManager not available"))
+      call.respondJson(HttpStatusCode.ServiceUnavailable, RecordTreeResponse.serializer(), RecordTreeResponse(ok = false, error = "deviceManager not available"))
       return@post
     }
     val body = runCatching { call.receive<RecordDeviceRequest>() }.getOrNull()
     if (body == null) {
-      call.respond(HttpStatusCode.BadRequest, RecordTreeResponse(ok = false, error = "trailblazeDeviceId is required"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordTreeResponse.serializer(), RecordTreeResponse(ok = false, error = "trailblazeDeviceId is required"))
       return@post
     }
     val resp = service.tree(body.trailblazeDeviceId)
@@ -137,7 +214,7 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/record/tool-params") {
     val body = runCatching { call.receive<RecordToolParamsRequest>() }.getOrNull()
     if (body == null || body.className.isBlank()) {
-      call.respond(HttpStatusCode.BadRequest, RecordToolParamsResponse(ok = false, error = "className is required"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordToolParamsResponse.serializer(), RecordToolParamsResponse(ok = false, error = "className is required"))
       return@post
     }
     val params = withContext(Dispatchers.IO) {
@@ -152,12 +229,37 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/record/scripted-tool-params") {
     val body = runCatching { call.receive<RecordScriptedToolParamsRequest>() }.getOrNull()
     if (body == null || body.trailmap.isBlank() || body.toolId.isBlank()) {
-      call.respond(HttpStatusCode.BadRequest, RecordToolParamsResponse(ok = false, error = "trailmap and toolId are required"))
+      call.respondJson(HttpStatusCode.BadRequest, RecordToolParamsResponse.serializer(), RecordToolParamsResponse(ok = false, error = "trailmap and toolId are required"))
       return@post
     }
     val params = runCatching { ToolCatalogBuilder.scriptedToolParams(body.trailmap.trim(), body.toolId.trim()) }.getOrDefault(emptyList())
     call.respondText(
       text = JSON.encodeToString(RecordToolParamsResponse.serializer(), RecordToolParamsResponse(ok = true, parameters = params)),
+      contentType = ContentType.Application.Json,
+    )
+  }
+
+  post("$PATH_BASE/api/record/selector-advice") {
+    val provider = deps.selectorAdviceProvider
+    val body = runCatching { call.receive<SelectorAdviceRequest>() }.getOrNull()
+    if (body == null || body.stepYaml.isBlank()) {
+      call.respondJson(HttpStatusCode.BadRequest, SelectorAdviceResponse.serializer(), SelectorAdviceResponse(ok = false, error = "stepYaml is required"))
+      return@post
+    }
+    // Strictly advisory, strictly bounded: no provider, a slow model, or a provider error all
+    // yield the same ok-with-no-advice response - the pending card just doesn't grow a strip.
+    // The gate lives here (not only in the UI) so no client can accidentally block on a slow model.
+    val advice = if (provider == null) {
+      null
+    } else {
+      kotlinx.coroutines.withTimeoutOrNull(SELECTOR_ADVICE_BUDGET_MS) {
+        runCatching { provider(body) }
+          .onFailure { Console.log("[RecordRoutes] selector advice failed: ${it.message}") }
+          .getOrNull()
+      }
+    }
+    call.respondText(
+      text = JSON.encodeToString(SelectorAdviceResponse.serializer(), SelectorAdviceResponse(ok = true, advice = advice)),
       contentType = ContentType.Application.Json,
     )
   }
@@ -171,6 +273,215 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
     )
   }
 }
+
+// After-evidence capture runs off the request path: the tap response returns as soon as the
+// gesture lands, and the HUMAN_ACTION event is emitted once the settled after-state is captured.
+private val recordEvidenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/**
+ * Hard budget for the selector-advice assist: the verdict annotates the pending card within this
+ * window or not at all. Confirm-and-run never waits on it.
+ */
+private const val SELECTOR_ADVICE_BUDGET_MS = 3_000L
+
+/** How long the screen gets to settle after a gesture before the after-evidence frame is captured. */
+private const val EVIDENCE_SETTLE_MS = 900L
+private const val EVIDENCE_RECHECK_MS = 800L
+private const val EVIDENCE_RECHECK_MAX = 3
+
+/**
+ * Routes a gesture to the right dispatch path. A confirmed step ([RecordGestureRequest.runYaml]
+ * set, not resolveOnly) RUNS the author-confirmed tools through the shared tool-run machinery -
+ * the confirm-and-run moment executes the step exactly as it will replay (selector-driven, the
+ * whole tool series) rather than re-sending the raw coordinate tap that proposed it. Everything
+ * else keeps the raw-gesture path (resolve, resolve+dispatch, direct actions).
+ */
+private suspend fun dispatchGesture(
+  deps: TrailRunnerDeps,
+  service: TrailRunnerRecordingService,
+  body: RecordGestureRequest,
+): RecordGestureResponse = confirmedStepResponse(deps, body) ?: service.gesture(body)
+
+/**
+ * The confirmed-step half of [dispatchGesture]: null when the request isn't a confirmed step (the
+ * caller falls through to the raw-gesture path). Internal for direct unit testing.
+ */
+internal suspend fun confirmedStepResponse(deps: TrailRunnerDeps, body: RecordGestureRequest): RecordGestureResponse? {
+  val runYaml = body.runYaml
+  if (body.resolveOnly || runYaml == null) return null
+  val run = buildToolRunResponse(deps, ToolRunRequest(yaml = runYaml, trailblazeDeviceId = body.trailblazeDeviceId))
+  if (!run.success) return RecordGestureResponse(ok = false, error = run.error ?: "The confirmed step failed on the device.")
+  return RecordGestureResponse(
+    ok = true,
+    toolName = body.chosenOption?.toolName,
+    yaml = body.stepYaml,
+    label = body.prompt?.trim()?.takeIf { it.isNotEmpty() } ?: body.chosenOption?.label ?: body.type,
+    options = listOfNotNull(body.chosenOption),
+    element = body.element,
+  )
+}
+
+private fun emitGestureHumanAction(
+  runId: String,
+  body: RecordGestureRequest,
+  resp: RecordGestureResponse,
+  evidence: RecordActionEvidence?,
+  seq: Int?,
+  demoPhase: String?,
+) {
+  runCatching {
+    ExternalAgentSupervisor.emitHumanAction(
+      runId = runId,
+      title = resp.label ?: body.type,
+      input = humanActionInput(body),
+      output = humanActionOutput(resp, evidence, demoPhase, seq),
+    )
+  }.onFailure { Console.log("[RecordRoutes] emitHumanAction failed: ${it.message}") }
+  // For a demonstration run, the same action also lands as one durable actions.ndjson line, phase-
+  // stamped from dispatch time. No-op for non-demo runs (demoPhase null) or an evicted run (seq null).
+  if (demoPhase != null && seq != null) {
+    runCatching {
+      ExternalAgentSupervisor.appendDemoAction(runId, buildDemoActionLine(seq, demoPhase, body, resp, evidence))
+    }.onFailure { Console.log("[RecordRoutes] demo action append failed: ${it.message}") }
+  }
+}
+
+/**
+ * The durable actions.ndjson line for one demonstrated action: the phase-stamped gesture kind and
+ * its per-kind coordinates/text/key, the inferred title, the resolved element + ranked options +
+ * recorded YAML, and the evidence file references. Pure over its inputs (internal for direct testing).
+ */
+internal fun buildDemoActionLine(
+  seq: Int,
+  phase: String,
+  body: RecordGestureRequest,
+  resp: RecordGestureResponse,
+  evidence: RecordActionEvidence?,
+): JsonObject = buildJsonObject {
+  put("seq", seq)
+  put("phase", phase)
+  put("timeMs", System.currentTimeMillis())
+  put("kind", body.type)
+  // tap/longPress carry (x, y); swipe carries (startX, startY) -> (endX, endY).
+  (body.x ?: body.startX)?.let { put("x", it) }
+  (body.y ?: body.startY)?.let { put("y", it) }
+  body.endX?.let { put("endX", it) }
+  body.endY?.let { put("endY", it) }
+  if (body.type == "inputText") body.text?.let { put("text", it) }
+  if (body.type == "pressKey") body.key?.let { put("key", it) }
+  put("title", resp.label ?: body.prompt ?: body.type)
+  resp.element?.let { put("element", JSON.encodeToJsonElement(RecordElement.serializer(), it)) }
+  resp.yaml?.let { put("yaml", it) }
+  if (resp.options.isNotEmpty()) {
+    put("options", JSON.encodeToJsonElement(ListSerializer(RecordToolOption.serializer()), resp.options))
+  }
+  evidence?.let { ev ->
+    put(
+      "evidence",
+      buildJsonObject {
+        ev.before?.screenshot?.let { put("before", it) }
+        ev.after?.screenshot?.let { put("after", it) }
+        ev.before?.hierarchy?.let { put("beforeHierarchy", it) }
+        ev.after?.hierarchy?.let { put("afterHierarchy", it) }
+      },
+    )
+    ev.screenChanged?.let { put("screenChanged", it) }
+  }
+}
+
+/**
+ * Writes one action's evidence frames into [dir] as `<seq>-before.png` / `<seq>-after.png` (+
+ * `-hierarchy.txt` siblings) and describes what landed. Null when nothing was capturable.
+ * `screenChanged` compares the two hierarchy dumps - the "did that tap actually do anything"
+ * signal for both the agent and the event log.
+ */
+private fun writeActionEvidence(
+  dir: File,
+  seq: Int,
+  before: EvidenceFrame?,
+  after: EvidenceFrame?,
+): RecordActionEvidence? {
+  if (before == null && after == null) return null
+  dir.mkdirs()
+  fun side(name: String, frame: EvidenceFrame?): RecordEvidenceSide? {
+    if (frame == null) return null
+    val screenshot = frame.screenshot?.let { bytes ->
+      File(dir, "$seq-$name.${extensionOf(frame.mime)}").apply { writeBytes(bytes) }.name
+    }
+    val hierarchy = frame.hierarchy?.let { text ->
+      File(dir, "$seq-$name-hierarchy.txt").apply { writeText(text) }.name
+    }
+    if (screenshot == null && hierarchy == null) return null
+    return RecordEvidenceSide(screenshot = screenshot, hierarchy = hierarchy)
+  }
+  val beforeSide = side("before", before)
+  val afterSide = side("after", after)
+  if (beforeSide == null && afterSide == null) return null
+  return RecordActionEvidence(
+    dir = dir.absolutePath,
+    before = beforeSide,
+    after = afterSide,
+    screenChanged = if (before?.hierarchy != null && after?.hierarchy != null) before.hierarchy != after.hierarchy else null,
+  )
+}
+
+internal fun extensionOf(mime: String): String = when (mime) {
+  "image/png" -> "png"
+  "image/webp" -> "webp"
+  else -> "jpg"
+}
+
+/** Compact JSON summary of the dispatched gesture, for the HUMAN_ACTION conversation event. */
+private fun humanActionInput(body: RecordGestureRequest): JsonElement = buildJsonObject {
+  put("type", body.type)
+  body.x?.let { put("x", it) }
+  body.y?.let { put("y", it) }
+  body.startX?.let { put("startX", it) }
+  body.startY?.let { put("startY", it) }
+  body.endX?.let { put("endX", it) }
+  body.endY?.let { put("endY", it) }
+  if (body.type == "inputText") body.text?.let { put("text", it) }
+  put("action", body.action)
+  put("resolveOnly", body.resolveOnly)
+  body.prompt?.let { put("prompt", it) }
+  if (body.runYaml != null) put("confirmed", true)
+}
+
+/** Compact JSON summary of the gesture result, for the HUMAN_ACTION conversation event. The demo
+ *  phase ("setup"/"step") rides along so the web tape can separate positioning taps from
+ *  demonstrated steps even on a cold restore (no client-remembered mark-start timestamp). The tape
+ *  seq keys the action's actions.ndjson line and evidence files, so deleting a step can scrub the
+ *  durable bundle too. */
+private fun humanActionOutput(resp: RecordGestureResponse, evidence: RecordActionEvidence?, demoPhase: String? = null, seq: Int? = null): JsonElement = buildJsonObject {
+  demoPhase?.let { put("phase", it) }
+  seq?.let { put("seq", it) }
+  put("yaml", resp.yaml)
+  put("element", resp.element?.let { JSON.encodeToJsonElement(RecordElement.serializer(), it) } ?: JsonNull)
+  put("options", JSON.encodeToJsonElement(ListSerializer(RecordToolOption.serializer()), resp.options))
+  evidence?.let { put("evidence", JSON.encodeToJsonElement(RecordActionEvidence.serializer(), it)) }
+}
+
+/** One side (before/after) of an action's evidence: the file names inside the run's tape dir. */
+@Serializable
+internal data class RecordEvidenceSide(
+  val screenshot: String? = null,
+  val hierarchy: String? = null,
+)
+
+/**
+ * The on-disk evidence recorded for one demonstrated action, carried in the HUMAN_ACTION event's
+ * output. File names (not bytes) ride the event - the payload field cap would truncate images -
+ * and the UI fetches them via `/api/external-agent/{id}/evidence/{name}`.
+ */
+@Serializable
+internal data class RecordActionEvidence(
+  /** Absolute path of the run's tape dir; the agent reads evidence files from here directly. */
+  val dir: String,
+  val before: RecordEvidenceSide? = null,
+  val after: RecordEvidenceSide? = null,
+  /** Whether the view hierarchy differed before vs after; null when either side is missing. */
+  val screenChanged: Boolean? = null,
+)
 
 @Serializable
 internal data class RecordDeviceRequest(val trailblazeDeviceId: TrailblazeDeviceId)
@@ -240,6 +551,25 @@ internal data class RecordGestureRequest(
    * actually drive the device. Default false = resolve + dispatch (direct actions: type, keys).
    */
   val resolveOnly: Boolean = false,
+  /** When set, a successful gesture is mirrored into this external-agent conversation as a HUMAN_ACTION event. */
+  val runId: String? = null,
+  /**
+   * Confirmed-step dispatch (the Create screen's confirm-and-run): when [runYaml] is set on a
+   * non-resolveOnly request, the daemon dispatches by RUNNING that one-step trail yaml through the
+   * shared tool-run machinery (selector-driven, proving the step replays as recorded) instead of
+   * replaying the raw coordinate gesture. [stepYaml] / [prompt] / [chosenOption] / [element] are
+   * the author-confirmed step as recorded into the HUMAN_ACTION event - echoes of the resolve
+   * phase plus the author's own words, so the event stays self-contained.
+   */
+  val runYaml: String? = null,
+  /** The confirmed step's recording item (`- tools:` yaml); becomes the event's recorded step. */
+  val stepYaml: String? = null,
+  /** The author's natural-language description of the step; becomes the event title. */
+  val prompt: String? = null,
+  /** The selector option the author confirmed (first entry of the event's options). */
+  val chosenOption: RecordToolOption? = null,
+  /** The resolved element the step is grounded in, from the resolve phase. */
+  val element: RecordElement? = null,
 )
 
 @Serializable
@@ -299,6 +629,14 @@ internal data class RecordTreeResponse(
   val error: String? = null,
 )
 
+@Serializable
+internal data class SelectorAdviceResponse(
+  val ok: Boolean,
+  /** Null when no provider is wired, the model missed the budget, or it errored - all equivalent. */
+  val advice: SelectorAdvice? = null,
+  val error: String? = null,
+)
+
 /** One pickable tool for a proposed gesture: a label, the tool name, and its runnable trail-item YAML. */
 @Serializable
 internal data class RecordToolOption(
@@ -307,6 +645,17 @@ internal data class RecordToolOption(
   val yaml: String,
   /** true for `tapOnElementBySelector` candidates, false for the raw `tapOnPoint` fallback. */
   val isSelector: Boolean = false,
+)
+
+/**
+ * One captured evidence frame: raw screenshot bytes (with the sniffed mime, for the file
+ * extension) plus the flattened hierarchy text. Produced by
+ * [TrailRunnerRecordingService.captureEvidenceFrame]; written to disk by [writeActionEvidence].
+ */
+internal class EvidenceFrame(
+  val screenshot: ByteArray?,
+  val mime: String,
+  val hierarchy: String?,
 )
 
 /**
@@ -392,6 +741,46 @@ internal class TrailRunnerRecordingService(
         runCatching { AndroidHostAdbUtils.execAdbShellCommand(deviceId, listOf("rm", "-f", remote)) }
       }
     }
+  }
+
+  /**
+   * One evidence frame for a demonstrated action: the screen as pixels and as a flattened,
+   * labeled hierarchy. Null when the device isn't connected; either side may be null on a
+   * transient capture miss (the other still lands).
+   */
+  suspend fun captureEvidenceFrame(deviceId: TrailblazeDeviceId): EvidenceFrame? {
+    val conn = connections[deviceId] ?: return null
+    val bytes = runCatching {
+      conn.stream.getMirrorScreenshot().takeIf { it.isNotEmpty() }
+        ?: runCatching { conn.stream.getScreenshot() }.getOrNull()?.takeIf { it.isNotEmpty() }
+        ?: hostAndroidScreencap(deviceId)
+    }.getOrNull()
+    val hierarchy = runCatching { conn.stream.getTrailblazeNodeTree() }.getOrNull()
+      ?.let { hierarchyText(it, conn.stream.deviceWidth, conn.stream.deviceHeight) }
+    if (bytes == null && hierarchy == null) return null
+    return EvidenceFrame(
+      screenshot = bytes,
+      mime = bytes?.let { mimeOf(it) } ?: "image/png",
+      hierarchy = hierarchy,
+    )
+  }
+
+  /**
+   * The flattened view-hierarchy dump written as evidence: one line per identifiable element
+   * (bounds, type, label, id) - the same pipeline the Elements inspector uses, compact enough
+   * for an agent to read whole and ground selectors/assertions on.
+   */
+  private fun hierarchyText(tree: TrailblazeNode, width: Int, height: Int): String {
+    val rows = screenElements(tree).map { e ->
+      buildString {
+        append("(").append(e.left).append(",").append(e.top).append(",").append(e.right).append(",").append(e.bottom).append(")")
+        e.type?.let { append(" [").append(it).append("]") }
+        e.label?.let { append(" \"").append(it).append("\"") }
+        e.resourceId?.let { append(" id=").append(it) }
+        if (e.interactive) append(" interactive")
+      }
+    }
+    return "screen ${width}x$height, ${rows.size} elements\n" + rows.joinToString("\n")
   }
 
   suspend fun gesture(req: RecordGestureRequest): RecordGestureResponse {
@@ -568,14 +957,7 @@ internal class TrailRunnerRecordingService(
           deviceWidth = conn.stream.deviceWidth,
           deviceHeight = conn.stream.deviceHeight,
         )
-      val elements = tree.aggregate()
-        .filter { it.bounds != null && (it.driverDetail.isInteractive || it.driverDetail.hasIdentifiableProperties) }
-        .mapNotNull { toRecordElement(it) }
-        .filter { (it.right - it.left) > 0 && (it.bottom - it.top) > 0 }
-        // Collapse identical boxes (a wrapper + its labeled child often share bounds).
-        .distinctBy { "${it.left},${it.top},${it.right},${it.bottom},${it.label},${it.type}" }
-        .sortedWith(compareBy({ it.top }, { it.left }))
-        .take(150)
+      val elements = screenElements(tree)
       RecordTreeResponse(
         ok = true,
         deviceWidth = conn.stream.deviceWidth,
@@ -586,6 +968,19 @@ internal class TrailRunnerRecordingService(
       RecordTreeResponse(ok = false, error = it.message ?: "could not read the screen elements")
     }
   }
+
+  /**
+   * The identifiable elements on screen in reading order - shared by the Elements inspector
+   * ([tree]) and the evidence hierarchy dump ([hierarchyText]).
+   */
+  private fun screenElements(tree: TrailblazeNode): List<RecordElement> = tree.aggregate()
+    .filter { it.bounds != null && (it.driverDetail.isInteractive || it.driverDetail.hasIdentifiableProperties) }
+    .mapNotNull { toRecordElement(it) }
+    .filter { (it.right - it.left) > 0 && (it.bottom - it.top) > 0 }
+    // Collapse identical boxes (a wrapper + its labeled child often share bounds).
+    .distinctBy { "${it.left},${it.top},${it.right},${it.bottom},${it.label},${it.type}" }
+    .sortedWith(compareBy({ it.top }, { it.left }))
+    .take(150)
 
   /** Builds the plain-language [RecordElement] (label + friendly type + bounds) for a node. */
   private fun toRecordElement(node: TrailblazeNode): RecordElement? {

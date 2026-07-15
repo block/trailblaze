@@ -198,6 +198,16 @@ open class AndroidTrailblazeRule(
 
   private val agentMemory: AgentMemory = agentMemoryOverride ?: AgentMemory()
 
+  // True when the caller supplied the memory (the on-device `RunYamlRequestHandler` seeds a fresh
+  // instance from the host's per-RPC memory snapshot). On the host-orchestrated per-tool RPC path
+  // each tool is its own `runSuspend`, so the per-run `clearMemory()` below would wipe the
+  // just-seeded snapshot — losing a value an earlier step remembered and a later `{{var}}` step
+  // needs (a deterministic "typed the literal token" failure only on that RPC path; single-session
+  // runs are unaffected). The caller owns this instance's lifecycle (fresh per request, read back
+  // into the response), so the rule must not reset it. When the rule owns its memory (no override),
+  // clearing between runs stays correct.
+  private val memoryExternallyManaged: Boolean = agentMemoryOverride != null
+
   /**
    * Pre-built `ResolvedTarget` pairing [target] with [trailblazeDeviceId]. Threaded into the
    * lazy agents below so [MaestroTrailblazeAgent.buildExecutionContext] populates the
@@ -637,7 +647,12 @@ open class AndroidTrailblazeRule(
         ),
       )
     }
-    trailblazeAgent.clearMemory()
+    // Do NOT clear memory the caller seeded externally (RPC per-request snapshot) — see
+    // [memoryExternallyManaged]. Clearing it here wipes the host-seeded value that a later
+    // {{var}} step needs on the per-tool `./trailblaze run` RPC path.
+    if (!memoryExternallyManaged) {
+      trailblazeAgent.clearMemory()
+    }
 
     // Extract title before the loop so V3's caseTitleProvider sees it on every step.
     // Scans eagerly (not item-order dependent) so the title is available even when

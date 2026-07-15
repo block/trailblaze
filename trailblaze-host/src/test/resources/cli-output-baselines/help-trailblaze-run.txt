@@ -11,12 +11,13 @@ Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       [--markdown] [--no-daemon] [--no-logging] [--no-report]
                       [--[no-]save-recording] [--self-heal] [--[no-]
                       unified-recordings] [--[no-]use-recorded-steps]
-                      [-a=<agent>] [--compose-port=<composePort>]
-                      [--driver=<driverType>] [--llm=<llm>]
-                      [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
+                      [-a=<agent>] [--args-file=<file>]
+                      [--compose-port=<composePort>] [--driver=<driverType>]
+                      [--llm=<llm>] [--llm-model=<llmModel>]
+                      [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
-                      [--test-name=<testNameOverride>] [-d=<device>[,
-                      <device>...]]... [--memory=KEY=VAL]...
+                      [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
+                      [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
                       [--secret=KEY=VAL]... [--tags=<name>[,<name>...]]...
                       [<trailFile>...]
 Run a trail file (.trail.yaml) — execute a scripted test on a device.
@@ -54,6 +55,35 @@ removed in a future release.
                                with `--device` (passing both is rejected).
                                Connected devices that don't match any supported
                                platform are skipped.
+      --arg=KEY=VAL          Supply a value for a parameter the trail DECLARES
+                               under `config.args:`. Repeatable (`--arg
+                               recipient=sam@example.com --arg retries=3`).
+                               Unlike --memory, args are declared and typed:
+                               the value is coerced to the arg's declared type,
+                               a missing required arg fails before the run
+                               starts, and an undeclared arg is rejected.
+                               Referenced as `{{args.name}}` in prompts and
+                               tool params. Overrides an --args-file entry with
+                               the same key.
+                             The value is always a string here;
+                               declaration-driven coercion turns `retries=3`
+                               into a number for an `integer` arg. Use
+                               --args-file for structured (array/object) values.
+                             Arg values are logged in cleartext, persisted into
+                               logs/recordings, and surfaced to the LLM — args
+                               are non-sensitive by design. Route passwords,
+                               tokens, or other sensitive data through --secret
+                               memory instead.
+      --args-file=<file>     Read parameter values from a YAML or JSON file (a
+                               map of arg-name to value). Applied BEFORE --arg,
+                               so a --arg KEY=VAL overrides the file entry with
+                               the same key. A YAML-null value is rejected
+                               (args have no null) — use '' for an empty string.
+                             Arg values are logged in cleartext, persisted into
+                               logs/recordings, and surfaced to the LLM — args
+                               are non-sensitive by design. Route passwords,
+                               tokens, or other sensitive data through --secret
+                               memory instead.
       --capture-all          Enable all capture streams: video, logcat, iOS
                                logs, network (local dev mode)
       --[no-]capture-ios-logs

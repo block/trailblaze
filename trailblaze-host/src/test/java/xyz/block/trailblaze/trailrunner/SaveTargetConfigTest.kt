@@ -338,14 +338,41 @@ class SaveTargetConfigTest {
   }
 
   @Test
-  fun `createIfMissing leaves an absent trailblaze yaml absent because auto-discovery covers the new trailmap`() = runBlocking {
+  fun `createIfMissing scaffolds a workspace anchor when no trailblaze yaml exists yet`() = runBlocking {
     withWorkspace { configDir ->
+      // Behavior change from the original "leave it absent" contract: without the anchor file the
+      // workspace resolves as Scratch, so trailmap-declared targets never load at all - live
+      // registration and even a daemon restart both left the created target undiscoverable.
       val response = buildSaveTargetConfigResponse(
         SaveTargetConfigRequest(trailmapId = "myapp", displayName = "My App", createIfMissing = true),
       )
       assertTrue(response.ok)
       assertNull(response.warning)
-      assertFalse(File(configDir, "trailblaze.yaml").exists())
+      val configFile = File(configDir, "trailblaze.yaml")
+      assertTrue(configFile.exists())
+      // The scaffold parses as a valid workspace config with an empty targets list (auto-discover).
+      val config = TrailblazeConfigYaml.instance.decodeFromString(
+        TrailblazeProjectConfig.serializer(),
+        configFile.readText(),
+      )
+      assertEquals(emptyList(), config.targets)
+    }
+  }
+
+  @Test
+  fun `a second create after the anchor scaffold leaves the scaffold untouched`() = runBlocking {
+    withWorkspace { configDir ->
+      buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "first", displayName = "First", createIfMissing = true),
+      )
+      val scaffolded = File(configDir, "trailblaze.yaml").readText()
+      val response = buildSaveTargetConfigResponse(
+        SaveTargetConfigRequest(trailmapId = "second", displayName = "Second", createIfMissing = true),
+      )
+      assertTrue(response.ok)
+      assertNull(response.warning)
+      // Empty targets list means auto-discover: no rewrite, comments and formatting survive.
+      assertEquals(scaffolded, File(configDir, "trailblaze.yaml").readText())
     }
   }
 
@@ -449,18 +476,21 @@ class SaveTargetConfigTest {
   }
 
   @Test
-  fun `an edit-path save never attempts live registration`() = runBlocking {
+  fun `an edit-path save re-registers the target live so the edit is visible without restart`() = runBlocking {
     withWorkspace { configDir ->
       writeManifest(configDir, "demo", "id: demo\ntarget:\n  display_name: Demo\n")
-      var called = false
+      val registered = mutableListOf<String>()
       val response = buildSaveTargetConfigResponse(
-        // createIfMissing = false → the edit path, which must not touch the live target set.
+        // createIfMissing = false → the edit path. It must ALSO refresh the live target set:
+        // before this, an Edit Target save (e.g. adding android app_ids) was served from the
+        // stale registered snapshot until a daemon restart, so the target kept reading
+        // "Not installed on any connected device" right after the user fixed it.
         SaveTargetConfigRequest(trailmapId = "demo", displayName = "Demo Renamed"),
-        registerLiveTarget = { called = true; true },
+        registerLiveTarget = { id -> registered.add(id); true },
       )
       assertTrue(response.ok)
-      assertFalse(called)
-      assertFalse(response.registeredLive)
+      assertEquals(listOf("demo"), registered)
+      assertTrue(response.registeredLive)
     }
   }
 

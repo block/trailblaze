@@ -187,6 +187,14 @@ final class ShellController: NSObject, WKNavigationDelegate, WKScriptMessageHand
   func webView(_ wv: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
     showOffline()
   }
+  // A renderer (web-content process) crash otherwise strands the window on a black about:blank
+  // page with no way back short of relaunching the app - reload the app URL instead.
+  func webViewWebContentProcessDidTerminate(_ wv: WKWebView) {
+    DispatchQueue.main.async { [self] in
+      showingOffline = false
+      wv.load(URLRequest(url: target))
+    }
+  }
   func webView(_ wv: WKWebView, didFinish navigation: WKNavigation!) {
     if showingOffline {
     }

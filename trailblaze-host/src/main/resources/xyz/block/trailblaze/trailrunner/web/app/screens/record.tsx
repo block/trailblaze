@@ -4,7 +4,7 @@
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // Blaze → Record. Drive a live device: each interaction is captured as a deterministic tool step,
-// editable inline, then saved into a draft folder (blaze.yaml + <platform>.trail.yaml).
+// editable inline, then saved into a trail folder (blaze.yaml + <platform>.trail.yaml).
 // Live view + dispatch reuse the daemon's recording endpoints (RecordRoutes.kt).
 
 // Quote a string as a YAML scalar when it carries metacharacters (matches buildPromptTrailYaml).
@@ -216,6 +216,82 @@ function seedPrompt(action, element, gesture) {
   return 'Tap ' + thing;
 }
 
+// ─── Saving into the trail library (shared by this screen and the Create screen's composer) ───
+
+// The gate both save flows run before opening the dialog: something recorded, a trailhead picked
+// when the workspace offers any (the trail needs a declared starting point), and the trailhead's
+// required parameters filled. Returns the blocking message, or null when the save may proceed.
+function trailSaveBlocker({ hasSteps, availTrailheads, selectedTh, thMissingRequired }) {
+  if (!hasSteps) return 'Record at least one step before saving.';
+  if (availTrailheads.length && !selectedTh) return 'Pick a trailhead first - it is required so the trail has a known starting point.';
+  if (selectedTh && thMissingRequired.length) return 'Fill the trailhead required ' + (thMissingRequired.length === 1 ? 'parameter' : 'parameters') + ' (' + thMissingRequired.map((p) => p.name).join(', ') + ') first.';
+  return null;
+}
+
+// The baked-in step 0: the chosen trailhead as a deterministic tools step, so the saved trail is
+// reproducible from its known starting state. Null when no trailhead is chosen.
+function trailheadLeadStep(selectedTh, thDetail, args) {
+  if (!selectedTh || !window.jsyaml) return null;
+  return {
+    text: 'Start at ' + ((thDetail && thDetail.to) || selectedTh.name),
+    yaml: window.jsyaml.dump([{ tools: trailheadRunTools(selectedTh.name, thDetail && thDetail.tools, args) }], { lineWidth: -1 }).replace(/\n+$/, ''),
+    verify: false,
+  };
+}
+
+// Write a new trail bundle into the library at `dest`: a blaze.yaml built from the steps' prompts
+// plus the recorded <platform>.trail.yaml. `steps` is the full recorded list (lead step included),
+// each { text, yaml, verify }. Returns { ok, id } or { ok: false, error }.
+async function saveTrailToLibrary({ dest, target, platform, objective, steps }) {
+  const nm = dest.split('/').filter(Boolean).pop() || (target || 'recording');
+  const promptSteps = steps.filter((s) => (s.text || '').trim()).map((s) => ({ kind: s.verify ? 'verify' : 'step', text: s.text.trim() }));
+  const blazeYaml = TB.buildBlazeYaml(nm, target, platform, objective, promptSteps);
+  const created = await TB.createBundle(dest, blazeYaml);
+  if (!created.success) return { ok: false, error: created.error || 'Could not create the trail.' };
+  const variant = `${platform || 'recording'}.trail.yaml`;
+  const trailYaml = buildRecordedTrailYaml(nm, target, platform, steps);
+  const wrote = await TB.saveTrailFolderFile(created.id, variant, trailYaml);
+  if (!wrote.success) return { ok: false, error: wrote.error || `Saved the trail but could not write ${variant}.` };
+  return { ok: true, id: created.id };
+}
+
+// Save dialog shared by the Studio save flows: asks where in the trail library the new trail
+// folder should live, then hands the destination path back to the caller. The path is relative to
+// the workspace's primary trails root; folders are created as needed and the saved trail shows in
+// the Trails list immediately.
+function SaveTrailDialog({ target, busy, error, onCancel, onSave }) {
+  // Default destination: a target-scoped, timestamped folder the user is free to overwrite.
+  const [dest, setDest] = React.useState(() => (target ? target + '/' : '') + 'recorded-' + new Date().toTimeString().slice(0, 5).replace(':', ''));
+  const ok = dest.trim() !== '' && !busy;
+  return (
+    <div className="tb-overlay" onClick={() => { if (!busy) onCancel(); }} style={{ alignItems: 'center', padding: 24 }}>
+      <div className="tb-card" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 94vw)', padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <h2 className="tb-h2" style={{ fontSize: 17, margin: 0 }}>Save trail</h2>
+          <Btn sm ico="x" onClick={onCancel}>Close</Btn>
+        </div>
+        <div className="tb-sub" style={{ fontSize: 12.5, marginBottom: 16 }}>Creates a trail folder (<span className="tb-mono">blaze.yaml</span> + recordings) at this path in your trail library - folders are created as needed.</div>
+        <div className="tb-eyebrow" style={{ marginBottom: 6 }}>Folder path</div>
+        <input
+          autoFocus value={dest} spellCheck={false} placeholder="sample/login"
+          className="tb-mono"
+          onChange={(e) => setDest(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && ok) onSave(dest.trim()); if (e.key === 'Escape' && !busy) onCancel(); }}
+          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '8px 11px', color: 'var(--text-standard)', fontSize: 13, outline: 'none' }}
+        />
+        <div className="tb-sub" style={{ fontSize: 11, marginTop: 4 }}>Relative to the workspace · shows in the Trails list once saved</div>
+        {error && <div role="alert" style={{ marginTop: 10, fontSize: 12, color: 'var(--tb-danger-text)' }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+          <Btn onClick={onCancel} disabled={busy}>Cancel</Btn>
+          <Btn kind="primary" ico={busy ? 'loader-2' : 'save'} spin={busy} onClick={() => { if (ok) onSave(dest.trim()); }} disabled={!ok}>
+            {busy ? 'Saving…' : 'Save trail'}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Trailhead (the known state a trail starts from: step 0, clear → launch → sign in) ───
 
 // The trailheads available for `target` on `platform`. Scoped by the platform token in the id
@@ -262,11 +338,55 @@ function parseTrailhead(text, scripted) {
   } catch (e) { return null; }
 }
 
+// Visibility rule for flattened discriminated-union params (mirrors the desktop picker and the
+// MCP lowering): a param carrying visibleWhen applies only while the named discriminator param
+// holds one of the gating values. Unset discriminator = hidden, not shown-by-default.
+function paramVisible(p, args) {
+  if (!p.visibleWhen) return true;
+  const v = args[p.visibleWhen.parameterName];
+  return !!v && (p.visibleWhen.values || []).includes(v);
+}
+
+// Placeholders must never clip mid-sentence: use the description's first backticked example when
+// it has one (`/dl/view/activity`), else a short first sentence, else the bare type.
+function paramPlaceholder(p) {
+  const d = String(p.description || '');
+  const tick = d.match(/`([^`]+)`/);
+  if (tick) return tick[1];
+  const first = (d.split('.')[0] || '').trim();
+  return first && first.length <= 42 ? first : p.type;
+}
+
+// Descriptions render as hint lines, not code: drop the markdown backticks.
+function cleanParamDesc(d) {
+  return String(d || '').replace(/`/g, '');
+}
+
+// The sign-in identity param the Account picker drives. Only a free-text field qualifies - a param
+// with validValues is a variant selector (e.g. the account-profile ladder), never the account
+// itself. Dotted names test their leaf so `account.personaKey` doesn't read as "account".
+function trailheadAccountParam(params) {
+  return (params || []).find((p) => {
+    if (p.validValues && p.validValues.length) return false;
+    const leaf = p.name.split('.').pop();
+    return /email|account/i.test(leaf);
+  }) || null;
+}
+
 // The tool list that drives the device into a trailhead: a TOOLS-mode trailhead's inline list, or a
-// CLASS-mode trailhead invoked by its id (`<id>: {}`) with any filled params.
+// CLASS-mode trailhead invoked by its id (`<id>: {}`) with any filled params. Dotted param names
+// (account.email) nest under their parent key - the flattened schema is a UI shape, not the tool's
+// input shape.
 function trailheadRunTools(name, tools, args) {
   if (tools && tools.length) return tools;
-  const filled = args && Object.keys(args).length ? args : {};
+  const filled = {};
+  Object.entries(args || {}).forEach(([k, v]) => {
+    const dot = k.indexOf('.');
+    if (dot < 0) { filled[k] = v; return; }
+    const parent = k.slice(0, dot);
+    if (filled[parent] == null || typeof filled[parent] !== 'object') filled[parent] = {};
+    filled[parent][k.slice(dot + 1)] = v;
+  });
   return [{ [name]: filled }];
 }
 
@@ -300,8 +420,9 @@ function TrailheadStep({ target, platform, trailheads, selected, onSelect, detai
         desc: m.description || '',
       };
     })];
-  // The account/email param is driven by the Account picker, not this form.
-  const formParams = params.filter((p) => !accountParam || p.name !== accountParam.name);
+  // The account/email param is driven by the Account picker, not this form; params gated on an
+  // unselected variant (visibleWhen) stay out entirely.
+  const formParams = params.filter((p) => paramVisible(p, args) && (!accountParam || p.name !== accountParam.name));
   const accountSummary = accountParam ? (accountValue || 'no account') : 'Signed out';
   const summaryLabel = empty ? `No ${platLabel || ''} trailheads`.replace('  ', ' ') : selected ? ((meta && meta.to) || selected.name) : 'Pick a trailhead…';
   return (
@@ -351,16 +472,28 @@ function TrailheadStep({ target, platform, trailheads, selected, onSelect, detai
       {/* Any non-account params still get an editable row (required ones gate Go + save). */}
       {!empty && selected && formParams.length > 0 && (
         <div style={{ borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-standard)', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {formParams.map((p) => (
-            <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <label style={{ width: 130, flex: '0 0 auto', fontSize: 12, fontWeight: 600, color: 'var(--text-standard)' }} title={p.description || ''}>
-                <span className="tb-mono">{p.name}</span>{p.required && <span style={{ color: 'var(--tb-danger-text)', fontWeight: 700 }}> *</span>}
-              </label>
-              <input value={args[p.name] || ''} onChange={(e) => onArg && onArg(p.name, e.target.value)}
-                placeholder={p.description || p.type} spellCheck={false}
-                style={{ flex: 1, minWidth: 0, background: '#0a0a0a', border: '1px solid ' + (p.required && !String(args[p.name] || '').trim() ? 'var(--tb-danger-text)' : 'var(--tb-hairline)'), borderRadius: 8, outline: 'none', color: 'var(--text-standard)', padding: '7px 10px', font: 'inherit', fontSize: 13 }} />
-            </div>
-          ))}
+          {formParams.map((p) => {
+            // An enum param (validValues) is a fixed choice - a Select, never free text. The
+            // selected variant's description rides as the option hint.
+            const isSelect = !!(p.validValues && p.validValues.length);
+            return (
+              <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <label style={{ width: 130, flex: '0 0 auto', fontSize: 12, fontWeight: 600, color: 'var(--text-standard)' }} title={cleanParamDesc(p.description)}>
+                  <span className="tb-mono">{p.name}</span>{p.required && <span style={{ color: 'var(--tb-danger-text)', fontWeight: 700 }}> *</span>}
+                </label>
+                {isSelect ? (
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Select full value={args[p.name] || ''} onChange={(e) => onArg && onArg(p.name, e.target.value)}
+                      options={p.validValues.map((v, i) => ({ value: v, label: v, desc: cleanParamDesc((p.validValueDescriptions || [])[i] || '') || undefined }))} />
+                  </div>
+                ) : (
+                  <input value={args[p.name] || ''} onChange={(e) => onArg && onArg(p.name, e.target.value)}
+                    placeholder={paramPlaceholder(p)} spellCheck={false} title={cleanParamDesc(p.description)}
+                    style={{ flex: 1, minWidth: 0, background: '#0a0a0a', border: '1px solid ' + (p.required && !String(args[p.name] || '').trim() ? 'var(--tb-danger-text)' : 'var(--tb-hairline)'), borderRadius: 8, outline: 'none', color: 'var(--text-standard)', padding: '7px 10px', font: 'inherit', fontSize: 13 }} />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {/* Body — source link + go button. */}
@@ -494,32 +627,40 @@ function RecordScreen({ go, active, yamlSeed }) {
       const parsed = parseTrailhead(src, scripted) || { description: '', to: null, tools: [], className: null };
       setThDetail({ ...parsed, name: selectedTh.name, relPath: selectedThPath });
       setThLoading(false);
+      // Required discriminators (enum params) start on their first variant so their companion
+      // fields show and the form never gates on an invisible choice.
+      const applyParams = (params) => {
+        if (!alive) return;
+        setThParams(params || []);
+        const seed = {};
+        (params || []).forEach((p) => { if (p.required && p.validValues && p.validValues.length) seed[p.name] = p.validValues[0]; });
+        if (Object.keys(seed).length) setThArgs((a) => ({ ...seed, ...a }));
+      };
       // CLASS-mode trailhead with no inline tools → fetch its param schema so required args can be filled.
       if (parsed.className && !(parsed.tools && parsed.tools.length)) {
-        const params = await TB.recordToolParams(parsed.className);
-        if (alive) setThParams(params || []);
+        applyParams(await TB.recordToolParams(parsed.className));
       } else if (scripted && target && TB.scriptedToolParams) {
         // Scripted (.ts) trailhead — the tool itself IS the trailhead, so its own `<I>` fields are
         // the required args. Same on-demand fetch ProposalToolRow already does for a scripted tool
         // dropped into a recording step; without this, required args (e.g. email/password) would
         // silently stay unfilled and the baked run would call the tool with `{}`.
-        const params = await TB.scriptedToolParams(target, selectedTh.name);
-        if (alive) setThParams(params || []);
+        applyParams(await TB.scriptedToolParams(target, selectedTh.name));
       }
     }).catch(() => { if (alive) { setThDetail(null); setThLoading(false); } });
     return () => { alive = false; };
   }, [selectedThPath]);
 
   // The "account" param (a sign-in email) is driven by the Account picker beside the trailhead.
-  const accountParam = thParams.find((p) => /email|account/i.test(p.name)) || null;
+  const accountParam = trailheadAccountParam(thParams);
   const accountValue = accountParam ? (thArgs[accountParam.name] || '') : '';
   const setAccount = (email) => { if (accountParam) setThArgs((a) => ({ ...a, [accountParam.name]: email })); };
-  // Required params still missing a value — blocks "Go to trailhead" and save until filled.
-  const thMissingRequired = thParams.filter((p) => p.required && !String(thArgs[p.name] || '').trim());
-  // The filled args (trimmed, non-empty) to pass when running/baking the trailhead.
+  // Visible required params still missing a value - blocks "Go to trailhead" and save until
+  // filled. Params hidden behind an unselected variant (visibleWhen) never gate.
+  const thMissingRequired = thParams.filter((p) => paramVisible(p, thArgs) && p.required && !String(thArgs[p.name] || '').trim());
+  // The filled args (visible, trimmed, non-empty) to pass when running/baking the trailhead.
   const thFilledArgs = () => {
     const out = {};
-    thParams.forEach((p) => { const v = String(thArgs[p.name] || '').trim(); if (v) out[p.name] = v; });
+    thParams.forEach((p) => { if (!paramVisible(p, thArgs)) return; const v = String(thArgs[p.name] || '').trim(); if (v) out[p.name] = v; });
     return out;
   };
 
@@ -543,9 +684,23 @@ function RecordScreen({ go, active, yamlSeed }) {
   const [steps, setSteps] = React.useState([]);
   const [saving, setSaving] = React.useState(false);
   const [saveErr, setSaveErr] = React.useState(null);
+  const [saveOpen, setSaveOpen] = React.useState(false);
   // The trail's objective in plain language; feeds blaze.yaml's objective so the agent knows the
   // intent (recover from unexpected screens, re-derive steps on other platforms).
   const [context, setContext] = React.useState('Validates that a user can ');
+  // Broadcast the in-progress session to the shell: the nav rail's "Create" group lists
+  // it (device connected or steps captured = a session worth coming back to). All session state is
+  // in-component, so this window event is the rail's only view into it; the unmount cleanup clears
+  // the rail row when the screen is remounted for a new session.
+  const interactSessionActive = !!conn || steps.length > 0;
+  React.useEffect(() => {
+    const label = (context || '').trim();
+    const detail = interactSessionActive
+      ? { active: true, label: (label && label !== 'Validates that a user can' ? label : 'Recording session'), steps: steps.length }
+      : { active: false };
+    window.dispatchEvent(new CustomEvent('tb:interact-session', { detail }));
+  }, [interactSessionActive, steps.length, context]);
+  React.useEffect(() => () => { window.dispatchEvent(new CustomEvent('tb:interact-session', { detail: { active: false } })); }, []);
   // Guided focus walks the author through one stage at a time (Context → Trailhead → Steps).
   // `contextFocused` keeps Context active while they're still typing it (so the highlight doesn't
   // jump away on the first keystroke).
@@ -699,7 +854,10 @@ function RecordScreen({ go, active, yamlSeed }) {
         try {
           const r = await TB.recordScreen(id);
           if (!stop && r.ok && r.screenshotBase64) setFrame(`data:${r.mime || 'image/png'};base64,${r.screenshotBase64}`);
-        } catch (_) { /* transient — keep looping */ }
+          // Back off on failure: a degraded device fails instantly, and spinning at full request
+          // rate churns the embedded webview's renderer hard enough to kill the page.
+          if (!r || !r.ok) await sleep(250);
+        } catch (_) { await sleep(250); }
       }
     };
     loop();
@@ -968,8 +1126,8 @@ function RecordScreen({ go, active, yamlSeed }) {
   }
   const stopTest = () => { testAbortRef.current = true; };
 
-  // Dispatch the pasted ad hoc YAML as a full run on this device (same recipe as the trail and
-  // draft run flows: connect, dispatch, then follow it live in Active).
+  // Dispatch the pasted ad hoc YAML as a full run on this device (same recipe as the trail
+  // run flow: connect, dispatch, then follow it live in Active).
   async function runAdhocYaml() {
     const id = tbId();
     if (!adhocYaml.trim() || !id || adhocRunning) return;
@@ -988,6 +1146,7 @@ function RecordScreen({ go, active, yamlSeed }) {
         title: cfg.title || adhocName || 'Pasted YAML',
         target: cfg.target,
         device: (device && device.name) || selectedId,
+        sessionId: resp.sessionId,
       });
       go('active', { followLive: Date.now() });
     } catch (e) {
@@ -1001,9 +1160,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   const previewYaml = React.useMemo(() => {
     if (!window.jsyaml) return '';
     const recorded = steps.filter((s) => (s.text || '').trim() || (s.yaml || '').trim());
-    const leadStep = selectedTh
-      ? { text: 'Start at ' + ((thDetail && thDetail.to) || selectedTh.name), yaml: window.jsyaml.dump([{ tools: trailheadRunTools(selectedTh.name, thDetail && thDetail.tools, thFilledArgs()) }], { lineWidth: -1 }).replace(/\n+$/, ''), verify: false }
-      : null;
+    const leadStep = trailheadLeadStep(selectedTh, thDetail, thFilledArgs());
     const all = leadStep ? [leadStep, ...recorded] : recorded;
     if (!all.length) return '';
     return buildRecordedTrailYaml(target || 'recording', target, platform, all);
@@ -1012,35 +1169,29 @@ function RecordScreen({ go, active, yamlSeed }) {
   async function save() {
     if (saving) return;
     const recorded = steps.filter((s) => (s.text || '').trim() || (s.yaml || '').trim());
-    if (!recorded.length) { setSaveErr('Record at least one step before saving.'); return; }
-    // Trailhead is required when the target has any — the trail needs a declared starting point.
-    if (availTrailheads.length && !selectedTh) {
-      setSaveErr('Pick a trailhead first — it’s required so the trail has a known starting point.');
-      return;
-    }
-    if (selectedTh && thMissingRequired.length) {
-      setSaveErr('Fill the trailhead’s required ' + (thMissingRequired.length === 1 ? 'parameter' : 'parameters') + ' (' + thMissingRequired.map((p) => p.name).join(', ') + ') first.');
-      return;
-    }
+    const blocker = trailSaveBlocker({ hasSteps: recorded.length > 0, availTrailheads, selectedTh, thMissingRequired });
+    if (blocker) { setSaveErr(blocker); return; }
+    // All checks passed: ask where in the library the trail should live.
+    setSaveErr(null);
+    setSaveOpen(true);
+  }
+
+  // The dialog's confirm: write the bundle folder straight into the trail library at `dest`
+  // (blaze.yaml + the recorded <platform>.trail.yaml), then land on it in the Trails list.
+  async function doSave(dest) {
+    if (saving) return;
     setSaving(true); setSaveErr(null);
+    const recorded = steps.filter((s) => (s.text || '').trim() || (s.yaml || '').trim());
     // Bake the chosen trailhead in as step 0 so the saved trail is reproducible from the known state.
-    const leadStep = (selectedTh && window.jsyaml)
-      ? { text: 'Start at ' + ((thDetail && thDetail.to) || selectedTh.name), yaml: window.jsyaml.dump([{ tools: trailheadRunTools(selectedTh.name, thDetail && thDetail.tools, thFilledArgs()) }], { lineWidth: -1 }).replace(/\n+$/, ''), verify: false }
-      : null;
-    const recordedAll = leadStep ? [leadStep, ...recorded] : recorded;
-    // Auto-named — renamed on the In Progress (drafts) screen.
-    const stamp = new Date().toTimeString().slice(0, 5).replace(':', '');
-    const nm = `${target || 'recording'}-${stamp}`;
-    const promptSteps = recordedAll.filter((s) => (s.text || '').trim()).map((s) => ({ kind: s.verify ? 'verify' : 'step', text: s.text.trim() }));
-    const blazeYaml = TB.buildBlazeYaml(nm, target, platform, context.trim(), promptSteps);
-    const created = await TB.createDraft(nm, blazeYaml);
-    if (!created.success) { setSaving(false); setSaveErr(created.error || 'Could not create the draft.'); return; }
-    const variant = `${platform || 'recording'}.trail.yaml`;
-    const trailYaml = buildRecordedTrailYaml(nm, target, platform, recordedAll);
-    const wrote = await TB.updateDraftFile(created.id, variant, trailYaml);
+    const leadStep = trailheadLeadStep(selectedTh, thDetail, thFilledArgs());
+    const saved = await saveTrailToLibrary({
+      dest, target, platform, objective: context.trim(),
+      steps: leadStep ? [leadStep, ...recorded] : recorded,
+    });
     setSaving(false);
-    if (!wrote.success) { setSaveErr(wrote.error || `Saved the draft but could not write ${variant}.`); return; }
-    go('drafts', { sel: created.id });
+    if (!saved.ok) { setSaveErr(saved.error); return; }
+    setSaveOpen(false);
+    go('trails', { sel: saved.id });
   }
 
   // ─── Guided focus: which stage the author should look at next ───
@@ -1328,8 +1479,10 @@ function RecordScreen({ go, active, yamlSeed }) {
           </div>
 
           <Splitter onDown={startDrag} />
-          {/* Right — the recorded trail */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {/* Right - the recorded trail. minWidth floor: a persisted wide stage width
+              (tb-interact-leftw, up to 860px) on a now-narrow window would otherwise
+              collapse this pane and its full-width textareas to a sliver. */}
+          <div style={{ flex: 1, minWidth: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {/* Tabs: the recorded trail, the on-screen element inspector (the accessibility tree),
                 or the ad hoc YAML runner. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -1437,7 +1590,7 @@ function RecordScreen({ go, active, yamlSeed }) {
 
             {rightTab === 'runyaml' ? runYamlFooter : (
             <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{steps.length === 0 ? 'Record or add a step to save this trail.' : (testing ? 'Running every step on the device…' : 'Test replays the steps on the device. Saves to In Progress.')}</span>
+              <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{steps.length === 0 ? 'Record or add a step to save this trail.' : (testing ? 'Running every step on the device…' : 'Test replays the steps on the device. Save writes the trail into your library.')}</span>
               {saveErr && <span role="alert" style={{ color: 'var(--tb-danger-text)', fontSize: 12 }}>{saveErr}</span>}
               {/* Test the whole trail — runs each step on the device, highlighting it inline. */}
               <Btn sm kind={testing ? 'danger' : 'ghost'} ico={testing ? 'square' : 'play'} onClick={testing ? stopTest : testTrail}
@@ -1451,6 +1604,13 @@ function RecordScreen({ go, active, yamlSeed }) {
             )}
           </div>
         </div>
+      )}
+
+      {saveOpen && (
+        <SaveTrailDialog
+          target={target} busy={saving} error={saveErr}
+          onCancel={() => { setSaveOpen(false); setSaveErr(null); }}
+          onSave={doSave} />
       )}
 
       {paletteOpen && (
@@ -1829,7 +1989,7 @@ function ContextCard({ value, onChange, expanded, onFocus, onBlur, inputRef, car
 }
 
 // The "propose the next step" card: the resolved tool (not yet run), a prompt field, and Confirm/Cancel.
-function ProposalCard({ pending, num, prompt, setPrompt, busy, toolMap = new Set(), catalog = [], scope = null, platform = null, go, onConfirm, onCancel, onPickOption, onPickYaml, onAddCustom, armed = null, onArmAppend }) {
+function ProposalCard({ pending, num, prompt, setPrompt, busy, toolMap = new Set(), catalog = [], scope = null, platform = null, go, onConfirm, onCancel, onPickOption, onPickYaml, onAddCustom, armed = null, onArmAppend, advice = null }) {
   useLucide();
   const tools = React.useMemo(() => parseRecordStepTools(pending.yaml || ''), [pending.yaml]);
   const options = pending.options || [];
@@ -1894,6 +2054,13 @@ function ProposalCard({ pending, num, prompt, setPrompt, busy, toolMap = new Set
   };
   const [collapsed, setCollapsed] = React.useState({});
   const toggleCollapse = (idx) => setCollapsed((c) => ({ ...c, [idx]: !c[idx] }));
+  // The agent's selector verdict (Create screen): only offer the one-click swap when the
+  // recommendation differs from what's already chosen - endorsements annotate, never nag.
+  const adviceOptIdx = React.useMemo(() => {
+    if (!advice || advice.state !== 'done' || !advice.preferOption) return -1;
+    const i = options.findIndex((o) => o.label === advice.preferOption);
+    return i === curOptIdx ? -1 : i;
+  }, [advice, options, curOptIdx]);
   // Match the saved trail step cards: STEP = purple, VERIFY (assert) = blue.
   const accent = isAssert ? 'var(--tb-link)' : '#c4a8ff';
   // A description is required before the step can be confirmed + run.
@@ -1928,6 +2095,28 @@ function ProposalCard({ pending, num, prompt, setPrompt, busy, toolMap = new Set
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); if (canConfirm) onConfirm(); } }}
           style={{ width: '100%', boxSizing: 'border-box', minHeight: 44, resize: 'vertical', background: '#0a0a0a', border: '1px solid var(--tb-hairline)', borderRadius: 8, outline: 'none', color: 'var(--text-standard)', padding: '8px 10px', font: 'inherit', fontSize: 13.5, lineHeight: 1.5 }} />
       </div>
+
+      {/* The agent's reasoning strip (violet = the agent's lane, ch09): its take on the selector
+          choice, annotating within its 3s budget or vanishing. Purely advisory - it never gates
+          Confirm, and the thinking state is deliberately quiet (no layout shift on resolve). */}
+      {advice && (
+        <div style={{ borderTop: '1px solid var(--tb-hairline)', padding: '8px 12px', display: 'flex', alignItems: 'flex-start', gap: 8, background: 'color-mix(in srgb, var(--tb-ai) 7%, transparent)' }}>
+          <Ico n={advice.state === 'thinking' ? 'loader-circle' : 'sparkles'} s={13} c="var(--tb-ai)" spin={advice.state === 'thinking'} style={{ flex: '0 0 auto', marginTop: 1 }} />
+          {advice.state === 'thinking' ? (
+            <span className="tb-sub" style={{ fontSize: 11.5 }}>The agent is weighing the selector…</span>
+          ) : (
+            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-subtle-variant)' }}>{advice.reason}</span>
+              {adviceOptIdx >= 0 && (
+                <button onClick={() => changeTool0('opt:' + adviceOptIdx)} title={'Switch this step to ' + options[adviceOptIdx].label}
+                  style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'color-mix(in srgb, var(--tb-ai) 16%, transparent)', border: '1px solid var(--tb-ai)', borderRadius: 7, cursor: 'pointer', color: 'var(--tb-ai)', fontSize: 11, fontWeight: 700, padding: '3px 9px' }}>
+                  <Ico n="wand-sparkles" s={12} c="var(--tb-ai)" /> Use {options[adviceOptIdx].label}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 2 · Tools — the ordered series of tool calls this step runs. */}
       <div style={{ borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-standard)', padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -1975,10 +2164,14 @@ function ProposalCard({ pending, num, prompt, setPrompt, busy, toolMap = new Set
                 <Ico n="keyboard" s={15} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
                 <div style={{ minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700 }}>Type text</div><div className="tb-sub" style={{ fontSize: 10.5 }}>inputText</div></div>
               </button>
-              <button onClick={onAddCustom} style={nextStepBtn(false, 'var(--tb-running)')} title="Add any tool from the catalog to this step">
-                <Ico n="wrench" s={15} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
-                <div style={{ minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700 }}>Custom tool</div><div className="tb-sub" style={{ fontSize: 10.5 }}>pick from catalog</div></div>
-              </button>
+              {/* Only hosts that provide a tool palette get the Custom button (the Interact screen
+                  does; the Create trail rail doesn't). */}
+              {onAddCustom && (
+                <button onClick={onAddCustom} style={nextStepBtn(false, 'var(--tb-running)')} title="Add any tool from the catalog to this step">
+                  <Ico n="wrench" s={15} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
+                  <div style={{ minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700 }}>Custom tool</div><div className="tb-sub" style={{ fontSize: 10.5 }}>pick from catalog</div></div>
+                </button>
+              )}
             </div>
           </>
         )}

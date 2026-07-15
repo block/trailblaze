@@ -66,6 +66,23 @@ data class TrailConfig(
    * fields stay stable.
    */
   val memory: Map<String, String>? = null,
+  /**
+   * Declares this trail's parameters — the arguments a caller supplies per run
+   * (`--arg KEY=VAL` / `--args-file`) and references as `{{args.x}}` tokens. Map-keyed by arg
+   * name; the value is a [TrailArgConfig] (`type` / `description` / `default`, or the compact
+   * `name: <type>` scalar shorthand). A `default:` makes the arg optional, its absence required
+   * (Terraform's rule).
+   *
+   * Distinct from [memory]: `args` are DECLARED (typed, validated, bound once at submit and
+   * immutable), whereas `memory` is imperative undeclared string seeding. A missing required arg
+   * fails loudly before any device/LLM work; an undeclared `{{args.x}}` reference fails
+   * `trailblaze check`.
+   *
+   * Appended after [memory] to keep positional component accessors and binary-compat baselines for
+   * earlier fields stable.
+   */
+  @Serializable(with = TrailArgMapSerializer::class)
+  val args: Map<String, TrailArgConfig>? = null,
 )
 
 @Serializable

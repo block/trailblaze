@@ -59,27 +59,33 @@ function parseTrailSteps(yaml) {
     if (!window.jsyaml) return null;
     const doc = window.jsyaml.load(yaml);
     if (!Array.isArray(doc)) return null;
-    // A trail can split steps across several top-level `- prompts:` blocks; collect
-    // every array-valued one so later blocks aren't dropped.
-    const prompts = doc.filter((it) => it && Array.isArray(it.prompts)).flatMap((it) => it.prompts);
-    // The new format carries a leading `- trailhead:` item (the deterministic step 0); surface it as
-    // the first step so it isn't silently dropped.
-    const thItem = doc.find((it) => it && it.trailhead != null && typeof it.trailhead === 'object' && !Array.isArray(it.trailhead));
-    const th = thItem ? thItem.trailhead : null;
-    if (!prompts.length && !th) return null;
-    const entries = th ? [{ ...th, __trailhead: true }, ...prompts] : prompts;
+    const mapTools = (rec) => {
+      const tools = [];
+      for (const t of rec || []) {
+        if (t && typeof t === 'object') { const name = Object.keys(t)[0]; tools.push({ name, args: t[name] }); }
+        else if (typeof t === 'string') tools.push({ name: t, args: null });
+      }
+      return tools;
+    };
+    // Walk the doc ONCE in file order: `- trailhead:` (the deterministic step 0), `- prompts:`
+    // blocks, and root-level `- tools:` items (recorded steps the engine force-executes) all
+    // become steps. Dropping any of them made recorded trails read as empty.
+    const entries = [];
+    for (const it of doc) {
+      if (!it || typeof it !== 'object') continue;
+      if (it.trailhead != null && typeof it.trailhead === 'object' && !Array.isArray(it.trailhead)) entries.push({ ...it.trailhead, __trailhead: true });
+      else if (Array.isArray(it.prompts)) entries.push(...it.prompts);
+      else if (Array.isArray(it.tools)) entries.push({ __tools: it.tools });
+    }
+    if (!entries.length) return null;
     return entries.map((pr) => {
+      if (pr.__tools) return { kind: 'step', text: '', recorded: true, tools: mapTools(pr.__tools) };
       const kind = pr.__trailhead ? 'trailhead' : pr.verify != null ? 'verify' : 'step';
       const text = pr.step || pr.verify || pr.prompt || '';
-      const rec = pr.recording && Array.isArray(pr.recording.tools) ? pr.recording.tools : null;
-      const tools = [];
-      if (rec) {
-        for (const t of rec) {
-          if (t && typeof t === 'object') { const name = Object.keys(t)[0]; tools.push({ name, args: t[name] }); }
-          else if (typeof t === 'string') tools.push({ name: t, args: null });
-        }
-      }
-      return { kind, text: String(text), recorded: !!rec, tools };
+      const rec = pr.__trailhead
+        ? (Array.isArray(pr.tools) ? pr.tools : null)
+        : (pr.recording && Array.isArray(pr.recording.tools) ? pr.recording.tools : null);
+      return { kind, text: String(text), recorded: !!rec, tools: mapTools(rec) };
     });
   } catch (e) {
     return null;
@@ -549,7 +555,7 @@ function TrailConfigCard({ config }) {
 }
 
 // `yaml` (optional): parse steps from this YAML directly instead of fetching by trail id — lets a
-// draft file (not in the workspace index) reuse this view. `configTrail` overrides the config card.
+// folder file (not in the workspace index) reuse this view. `configTrail` overrides the config card.
 function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) {
   const detail = TB.useTrailDetail(yaml == null && trail ? trail.id : null);
   const effYaml = yaml != null ? yaml : detail.data?.yaml;
@@ -587,7 +593,7 @@ function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) 
   // Unified trails span platforms, so the step board goes full width with config ABOVE it (the trail's
   // identity/context reads first, then its steps). When the view is editable (a committed trail with a
   // save handler), render the editable matrix that writes the whole file back; otherwise the read-only
-  // table (drafts / non-editable contexts).
+  // table (non-editable contexts).
   if (!loading && unifiedModel) {
     const canEdit = editable && typeof onSave === 'function';
     const saveYaml = canEdit ? async (t) => { const r = await onSave(t); if (r && r.success) onSaved && onSaved(); return r; } : null;
@@ -629,8 +635,8 @@ function YamlMode({ trail }) {
   return <SearchableText text={yaml} language="yaml" fontSize={12.5} minHeight={200} />;
 }
 
-// `runs` (optional): an explicit list of run rows (used by the drafts popup, which scopes to the
-// draft's own sessions). Otherwise sessions are fetched and matched to this trail.
+// `runs` (optional): an explicit list of run rows (for callers that scope to a folder's own
+// sessions). Otherwise sessions are fetched and matched to this trail.
 function RunsMode({ trail, go, runs }) {
   const sessions = TB.useSessions();
   const matches = runs != null ? runs : (sessions.data || []).filter((s) => s.title === trail.title || (s.title || '').includes(trail.id));
@@ -652,7 +658,7 @@ function RunsMode({ trail, go, runs }) {
   );
 }
 
-// The Trails "Implementations" tab — the same Steps × recordings board the Drafts screen uses, but
+// The Trails "Implementations" tab - the bundle-level Steps × recordings board
 // over a committed trail BUNDLE (a folder of blaze.yaml + per-platform <platform>.trail.yaml files).
 // It loads the blaze + each variant via the /api/folder/* endpoints, holds the editable steps, and
 // hands StepsBoard the trail-side I/O primitives (save steps → blaze.yaml, record/play on a device,
@@ -666,7 +672,9 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
   const [steps, setSteps] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [reloadTick, setReloadTick] = React.useState(0);
-  const hasBlaze = !!blazeEntry;
+  // Presence comes from what was ACTUALLY loaded from the folder, not only the workspace index:
+  // right after Save creates blaze.yaml the index lags a round trip, and trusting it alone put a
+  // "no blaze.yaml yet" banner directly above a populated blaze.yaml column.
   const fileOf = (p) => (p || '').split('/').pop();
   const variants = React.useMemo(
     () => variantEntries.map((v) => ({ name: fileOf(v.path), platform: (v.platform || derivePlatformFromTrail(v) || '').toLowerCase() })),
@@ -678,7 +686,9 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
   const memberKey = (blazeEntry ? blazeEntry.id : '') + '|' + variants.map((v) => v.name).join(',');
   React.useEffect(() => {
     let cancelled = false;
-    const blazeP = hasBlaze ? TB.fetchTrailFolderFile(folderId, 'blaze.yaml') : Promise.resolve('');
+    // Always fetch: null on 404 normalizes to '' below, and a blaze.yaml the index doesn't know
+    // about yet (just saved / just committed) still loads.
+    const blazeP = TB.fetchTrailFolderFile(folderId, 'blaze.yaml');
     const varsP = Promise.all(variants.map((v) => TB.fetchTrailFolderFile(folderId, v.name).then((c) => [v.name, parseTrailYaml(c || '')])));
     Promise.all([blazeP, varsP]).then(([bz, entries]) => {
       if (cancelled) return;
@@ -687,6 +697,8 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
     });
     return () => { cancelled = true; };
   }, [folderId, memberKey, reloadTick]);
+
+  const hasBlaze = !!blazeEntry || !!(blazeYaml && blazeYaml.trim());
 
   // The canonical step list from disk: the blaze's prompts, or (no blaze yet) the representative
   // recording's prompts so the matrix still shows steps to edit / promote into a blaze.
@@ -705,6 +717,7 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
 
   const blazeConfigRows = React.useMemo(() => flattenObject(parseTrailYaml(blazeYaml || '').config || {}, { joinArray: (a) => a.join(', ') }), [blazeYaml]);
   const blazeTrailhead = React.useMemo(() => parseTrailYaml(blazeYaml || '').trailhead, [blazeYaml]);
+  const blazeToolsSteps = React.useMemo(() => parseTrailYaml(blazeYaml || '').toolsItems || [], [blazeYaml]);
   const linkedSessions = (sessions.data || []).filter((s) => s.trailId === folderId);
   const reloadAll = () => { setReloadTick((n) => n + 1); reloadIndex && reloadIndex(); };
 
@@ -782,7 +795,7 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
       )}
       <StepsBoard
         steps={steps || []} onStepsChange={setSteps} dirty={dirty} onSaveSteps={saveSteps}
-        variants={variants} variantDocs={variantDocs} blazeConfigRows={blazeConfigRows} blazeTrailhead={blazeTrailhead}
+        variants={variants} variantDocs={variantDocs} blazeConfigRows={blazeConfigRows} blazeTrailhead={blazeTrailhead} blazeToolsSteps={blazeToolsSteps}
         deviceList={deviceList} linkedSessions={linkedSessions}
         home={home} blazeName="blaze.yaml" target={target} canRecord={hasBlaze}
         onOpenFile={onOpenFile} dispatchRecord={dispatchRecord} dispatchPlay={dispatchPlay}
@@ -799,11 +812,11 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
   );
 }
 
-// Shared tabbed detail view for a SINGLE trail OR a draft file: Steps · Edit · Runs (+ Variants when
+// Shared tabbed detail view for a SINGLE trail OR a folder file: Steps · Edit · Runs (+ Variants when
 // given a sibling list). Edit is the YAML+tools editor. Used inline on the Trails screen (for one
-// selected trail) and inside the Drafts editor popup. Tab can be controlled (tab + onTab) or internal
+// selected trail) and for bundle folder files. Tab can be controlled (tab + onTab) or internal
 // (defaultTab). Data comes in via props (yaml, runs, tools, onSave) so it works for both a workspace
-// trail and a draft file. The bundle-level Steps × recordings matrix is a SEPARATE folder view
+// trail and a folder file. The bundle-level Steps × recordings matrix is a SEPARATE folder view
 // (TrailImplementationsBoard), shown when a bundle folder — not a single trail — is selected.
 function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onSave, onSaved, runs, go, openRun, variants, currentId, onSelectVariant, tab: tabProp, onTab, defaultTab, dirtyRef, highlight }) {
   useLucide();

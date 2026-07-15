@@ -498,10 +498,26 @@ function useStickyState(key, initial) {
   React.useEffect(() => {
     try { window.localStorage.setItem(key, JSON.stringify(v)); } catch (_) {}
   }, [key, v]);
-  return [v, setV];
+  // Several mounted components can hold the same key (the session brief writes the device pick,
+  // the composer and the mirror read it). localStorage alone never notifies same-document
+  // instances, so a set broadcasts to every other instance of the key.
+  const latest = React.useRef(v);
+  latest.current = v;
+  React.useEffect(() => {
+    const onSync = (e) => { const d = e.detail; if (d && d.key === key) setV(d.value); };
+    window.addEventListener('tb:sticky-sync', onSync);
+    return () => window.removeEventListener('tb:sticky-sync', onSync);
+  }, [key]);
+  const set = React.useCallback((next) => {
+    const value = typeof next === 'function' ? next(latest.current) : next;
+    latest.current = value;
+    setV(value);
+    window.dispatchEvent(new CustomEvent('tb:sticky-sync', { detail: { key, value } }));
+  }, [key]);
+  return [v, set];
 }
 
-function useResizableWidth(key, initial, min, max) {
+function useResizableWidth(key, initial, min, max, invert = false) {
   const clamp = (v) => Math.min(max, Math.max(min, v));
   const [w, setW] = React.useState(() => {
     const v = parseInt(window.localStorage.getItem(key) || '', 10);
@@ -512,7 +528,8 @@ function useResizableWidth(key, initial, min, max) {
   const startDrag = (e) => {
     e.preventDefault();
     const startX = e.clientX, startW = wRef.current;
-    const onMove = (ev) => setW(clamp(startW + (ev.clientX - startX)));
+    // invert: for panels anchored to the RIGHT edge, dragging the handle left grows the panel.
+    const onMove = (ev) => setW(clamp(startW + (invert ? (startX - ev.clientX) : (ev.clientX - startX))));
     const cleanup = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -928,6 +945,20 @@ function HoverTip({ tip, children, gap = 8, maxWidth = 340, place = 'bottom', st
   );
 }
 
+// Decode the XML entities that leak into UI strings from escaped view-hierarchy attributes
+// (element labels like "Network &amp; internet" flow into step titles and event rows). Server-side
+// escaping is correct for the XML payload; display strings decode client-side. &amp; last so
+// double-escaped input can't re-introduce entities.
+function decodeEntities(s) {
+  if (!s || typeof s !== 'string' || s.indexOf('&') === -1) return s;
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 // The "scoped by your target" footer banner shown at the bottom of a list rail (Trails, Tools,
 // and the Trailmaps component pages). Makes it obvious the list is filtered by the active target
 // picked in the target picker, and offers a one-click escape back to the full list. Rendered only
@@ -946,4 +977,4 @@ function TargetScopeBanner({ label, platform, onShowAll }) {
   );
 }
 
-Object.assign(window, { listNavKeyDown, clickable, useLucide, Ico, AppIcon, Dot, Chip, StatusChip, STATUS, Btn, Switch, Select, OptionRow, ScreenHead, RailHeader, useResizableWidth, useStickyState, applyTheme, useThemeController, Splitter, SearchableText, HelpButton, HelpDot, HelpCard, HelpOverlay, HoverTip, DetailHeader, TargetScopeBanner });
+Object.assign(window, { listNavKeyDown, clickable, useLucide, Ico, AppIcon, Dot, Chip, StatusChip, STATUS, Btn, Switch, Select, OptionRow, ScreenHead, RailHeader, useResizableWidth, useStickyState, applyTheme, useThemeController, Splitter, SearchableText, HelpButton, HelpDot, HelpCard, HelpOverlay, HoverTip, DetailHeader, TargetScopeBanner, decodeEntities });

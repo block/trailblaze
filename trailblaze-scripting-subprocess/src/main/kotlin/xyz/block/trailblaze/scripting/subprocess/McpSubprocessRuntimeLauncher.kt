@@ -123,6 +123,12 @@ object McpSubprocessRuntimeLauncher {
      * exercise the callback path can skip it — envelope injection degrades gracefully.
      */
     baseUrl: String? = null,
+    /**
+     * Per-subprocess `initialize` handshake bound, forwarded to [McpSubprocessSession.connect].
+     * Defaults to the production value; overridable so tests can drive the fail-fast path against
+     * a deliberately-hanging server without waiting the full default.
+     */
+    handshakeTimeoutMillis: Long = McpSubprocessSession.DEFAULT_HANDSHAKE_TIMEOUT_MS,
   ): LaunchedSubprocessRuntime {
     val scriptEntries = mcpServers.filter { it.script != null }
     if (scriptEntries.isEmpty()) {
@@ -176,6 +182,7 @@ object McpSubprocessRuntimeLauncher {
         val session = McpSubprocessSession.connect(
           spawnedProcess = spawned,
           stderrCapture = stderrCapture,
+          handshakeTimeoutMillis = handshakeTimeoutMillis,
         )
         started += session
 

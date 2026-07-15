@@ -64,6 +64,18 @@ sealed interface SessionStatus {
     data class Failed(
       override val durationMs: Long,
       val exceptionMessage: String?,
+      /**
+       * Stack trace of the session-ending exception, carried separately from
+       * [exceptionMessage]. Null on logs written before the split, where
+       * [exceptionMessage] may embed the stack trace after the message line.
+       */
+      val exceptionStackTrace: String? = null,
+      /**
+       * Structured failure classification for renderers that treat specific failures
+       * specially (e.g. [xyz.block.trailblaze.exception.TrailheadException.KIND]).
+       * Null for ordinary failures and on logs written before the field existed.
+       */
+      val failureKind: String? = null,
     ) : Ended
 
     @Serializable
@@ -89,6 +101,10 @@ sealed interface SessionStatus {
       override val durationMs: Long,
       val exceptionMessage: String?,
       val usedSelfHeal: Boolean = true,
+      /** See [Failed.exceptionStackTrace]. */
+      val exceptionStackTrace: String? = null,
+      /** See [Failed.failureKind]. */
+      val failureKind: String? = null,
     ) : Ended
 
     @Serializable

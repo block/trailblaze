@@ -142,13 +142,30 @@ class LogsRepo(
             }
           }
 
-          // Stop watching sessions that are no longer active (completed or removed).
-          // Keep _sessionLogsFlows for completed sessions (cached data is still useful).
+          // Stop watching sessions that are no longer active (completed or removed), and drop
+          // their parsed-log cache: an ended session's flow gets no further updates and the
+          // parsed logs (view hierarchies + cumulative LLM transcripts) are the largest retained
+          // objects on the heap. getSessionLogsFlow transparently re-reads from disk on next
+          // access, so evicting is behavior-neutral for readers.
           val noLongerActive = (sessionInfoWatcherJobs.keys - activeSessionIds).toList()
           noLongerActive.forEach { sessionId ->
             sessionInfoWatcherJobs.remove(sessionId)?.cancel()
             fileWatcherByTrailblazeSession.remove(sessionId)?.stopWatching()
+            _sessionLogsFlows.remove(sessionId)
           }
+        }
+      }
+
+      // (C) Periodic re-evaluation. Everything above is filesystem-event driven, so a session
+      // whose process wedged and stopped writing logs never re-emits - it stays frozen at
+      // Started in sessionInfoFlow forever, and the abandonment heuristic (which only runs
+      // inside rebuildSessionInfo) never gets a chance to flip it to Ended. This tick gives
+      // quiet sessions that chance, which in turn lets downstream collectors (e.g. the device
+      // manager's session-ended cleanup) release the device a couple of minutes after a wedge.
+      fileOperationScope.launch {
+        while (isActive) {
+          delay(30_000)
+          rebuildSessionInfo()
         }
       }
     } else {
@@ -600,13 +617,36 @@ class LogsRepo(
     return buildSessionInfo(allLogs)
   }
 
+  /**
+   * Summary-grade [SessionInfo]: parses ONLY the session-status-change logs (a handful of ~1KB
+   * files) and derives last-activity from file mtimes instead of deserializing every log.
+   *
+   * This exists for the sessions-list poll, which calls it for EVERY session every few seconds:
+   * [getSessionInfoDirect] parses each session's full log set (view hierarchies + the cumulative
+   * LLM transcript, which grows quadratically with step count), and doing that per-poll across a
+   * large logs dir exhausted the daemon heap. The status filename filter is reliable because
+   * [saveLogToDisk] embeds the log class's simple name in every filename.
+   */
+  fun getSessionInfoSummary(sessionId: SessionId): SessionInfo? {
+    val files = readLogFilesFromDisk(sessionId)
+    val statusLogs = files
+      .filter { it.name.contains("TrailblazeSessionStatusChangeLog") }
+      .mapNotNull { parseTrailblazeLogFromFile(it) }
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+    if (statusLogs.isEmpty()) return null
+    val lastActivityMs = files.maxOfOrNull { it.lastModified() } ?: 0L
+    return buildSessionInfo(statusLogs, lastActivityMsOverride = lastActivityMs)
+  }
+
   fun getSessionInfo(sessionId: SessionId): SessionInfo? {
     // Use cached logs from the flow if available, otherwise read from disk
     val allLogs = getCachedLogsForSession(sessionId)
     return buildSessionInfo(allLogs)
   }
 
-  private fun buildSessionInfo(allLogs: List<TrailblazeLog>): SessionInfo? {
+  // lastActivityMsOverride lets the summary path (status logs only) supply last-activity from file
+  // mtimes; when null, last activity comes from the newest parsed log as before.
+  private fun buildSessionInfo(allLogs: List<TrailblazeLog>, lastActivityMsOverride: Long? = null): SessionInfo? {
     if (allLogs.isEmpty()) {
       return null
     }
@@ -636,17 +676,18 @@ class LogsRepo(
       if (lastStatus is SessionStatus.Started) {
         val currentTimeMs = Clock.System.now().toEpochMilliseconds()
 
-        // Find the most recent log of any type to determine last activity (already have allLogs)
-        val mostRecentLog = allLogs.maxByOrNull { it.timestamp.toEpochMilliseconds() }
+        // Find the most recent activity: supplied by the summary path, else the newest parsed log
+        val lastActivityMs = lastActivityMsOverride
+          ?: allLogs.maxByOrNull { it.timestamp.toEpochMilliseconds() }?.timestamp?.toEpochMilliseconds()
 
-        if (mostRecentLog != null) {
-          val timeSinceLastActivity = currentTimeMs - mostRecentLog.timestamp.toEpochMilliseconds()
+        if (lastActivityMs != null) {
+          val timeSinceLastActivity = currentTimeMs - lastActivityMs
           val twoMinutesMs = DEFAULT_TIMEOUT
 
           if (timeSinceLastActivity > twoMinutesMs) {
             // Session is abandoned - generate a fake end log
             val abandonedTimestamp = kotlinx.datetime.Instant.fromEpochMilliseconds(
-              mostRecentLog.timestamp.toEpochMilliseconds() + twoMinutesMs,
+              lastActivityMs + twoMinutesMs,
             )
             val durationMs =
               abandonedTimestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
@@ -731,6 +772,22 @@ class LogsRepo(
    */
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
     if (readOnly) return File(logsDir, "noop")
+    // A terminal status is immutable: once any Ended.* is on disk for a session, later Ended.*
+    // appends are dropped. Without this, cancelling a run lets the killed runner's async failure
+    // land an Ended.Failed on top of the user's Ended.Cancelled, and the run reads as Failed.
+    // Read disk (not the cached flow) — the cache can lag the just-written status.
+    if (logEvent is TrailblazeLog.TrailblazeSessionStatusChangeLog && logEvent.sessionStatus is SessionStatus.Ended) {
+      val alreadyEnded = getLogsForSession(logEvent.session)
+        .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+        .any { it.sessionStatus is SessionStatus.Ended }
+      if (alreadyEnded) {
+        Console.log(
+          "[LogsRepo] Ignoring ${logEvent.sessionStatus::class.simpleName} for session " +
+            "${logEvent.session.value}: a terminal status is already recorded (first Ended wins)",
+        )
+        return File(getSessionDir(logEvent.session), "noop")
+      }
+    }
     @Suppress("NAME_SHADOWING")
     val logEvent = costEnricher(logEvent)
     val logCount = getNextLogCountForSession(logEvent.session)

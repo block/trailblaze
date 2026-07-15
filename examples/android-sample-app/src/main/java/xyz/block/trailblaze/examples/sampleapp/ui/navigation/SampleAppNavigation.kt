@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -64,7 +65,13 @@ fun SampleAppNavigation() {
         Tab.entries.forEach { tab ->
           NavigationBarItem(
             icon = { Icon(tab.icon, contentDescription = tab.label) },
-            label = { Text(tab.label) },
+            // Single line so the bar keeps its standard height no matter how many tabs exist. On
+            // the narrow (320dp-wide) CI emulators, 9 tabs make every label wrap, which grows the
+            // bar and pushes the bottom of tab screens off-screen - the accessibility driver then
+            // can't see elements recorded trails tap (taps/tap-interactions "Toggle A" broke this
+            // way when the tab count reached nine). Visual truncation is fine: the semantics
+            // tree still carries the full label, so text selectors keep matching.
+            label = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             selected = currentDestination?.hierarchy?.any { it.route == tab.route } == true,
             onClick = {
               navController.navigate(tab.route) {

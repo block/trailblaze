@@ -58,8 +58,13 @@ data class CliEndpointCallbacks(
    * installed its callback yet) — callers branch on the resulting `success` flag.
    */
   val onShowWindowRequest: () -> Boolean,
-  /** Provides current daemon status */
-  val statusProvider: () -> CliStatusResponse,
+  /**
+   * Provides current daemon status. Suspend so implementations can await (bounded) device
+   * queries - a plain function here invited `runBlocking` inside the Ktor handler, which runs
+   * on a Netty event-loop thread. When the device layer wedged, each status poll parked one
+   * worker permanently until the whole pool starved and every route (including /ping) hung.
+   */
+  val statusProvider: suspend () -> CliStatusResponse,
   /**
    * Called when CLI wants to execute a subcommand in-process on the daemon
    * (IPC fast path). Null means the feature isn't wired up and the endpoint

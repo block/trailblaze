@@ -193,6 +193,20 @@ abstract class TrailblazeDesktopAppConfig(
     return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR).takeIf { trailsDir.isDirectory }
   }
 
+  /**
+   * The neutral fallback target applied when no explicit / persisted / workspace-default target
+   * resolves, and the id the daemon treats as the neutral-"default" sentinel
+   * ([xyz.block.trailblaze.ui.TrailblazeSettingsRepo.getCurrentSelectedTargetApp]).
+   *
+   * **Contract: its `id` MUST equal [TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id].**
+   * The CLI's target-attribution surfaces hardcode that compile-time static as their neutral
+   * sentinel (`authoritativeSelectedTargetId` in `CliInfrastructure.kt`), while the daemon uses
+   * this injected value. If a distribution overrides this with a target whose id differs, CLI
+   * attribution and daemon run-resolution silently disagree on what "no explicit selection" means.
+   * Every shipped distribution injects [TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget]
+   * (a previous hardcoded per-distribution default moved to a committed workspace
+   * `defaults.target` instead) — keep it that way.
+   */
   abstract val defaultAppTarget: TrailblazeHostAppTarget
 
   /**

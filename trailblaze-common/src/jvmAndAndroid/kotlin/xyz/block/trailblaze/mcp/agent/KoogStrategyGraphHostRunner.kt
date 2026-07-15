@@ -290,8 +290,14 @@ suspend fun runPromptsWithKoogStrategyGraph(
     "via objectiveStatus before ending." +
     // Surface non-sensitive remembered values so the model can reason over what earlier steps
     // captured (parity with the legacy runner). agent is a BaseTrailblazeAgent, which is a
-    // TrailblazeAgentContext, so its memory is directly available.
-    renderRememberedValuesSection(agent.memory.variables, agent.memory.sensitiveKeys)
+    // TrailblazeAgentContext, so its memory is directly available. Bound trail args join the
+    // same list keyed by token spelling (`args.<name>`) — prompt text is never interpolated, so
+    // this is how the LLM resolves a literal `{{args.x}}` in an objective, exactly as it
+    // resolves `{{memory.x}}` today.
+    renderRememberedValuesSection(
+      agent.memory.variables + agent.memory.argsForLlmContext(),
+      agent.memory.sensitiveKeys,
+    )
   // Scope a verification block to its assertion/observation tools (see [verifyScopedAdvertisedTools]),
   // so the agent can't scroll/tap on a verify step and pollute state for a following step. The
   // kill-switch ([VERIFY_SCOPE_DISABLED_ENV]) reverts to the full surface without a redeploy if the

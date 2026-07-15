@@ -23,6 +23,38 @@ class UnifiedTrailMigratorTest {
   private val migrator = UnifiedTrailMigrator(yaml)
 
   @Test
+  fun `isLossyMigration is true for dropped content, for round-trip mismatch, and false for neither`() {
+    // The shared definition both the CLI exit-code gate and the bundle-path input-retention decision
+    // read. A mismatch with NO dropped keys must count as lossy on its own — that's the exact case
+    // (serializer loss, no schema-unknown key) the round-trip verifier exists to catch, and the one a
+    // droppedContent-only check would miss (letting the bundle path delete the only surviving source).
+    val clean = report()
+    val droppedOnly = report(dropped = listOf(DroppedContentEntry("android-phone.trail.yaml", "[1]", "below", 4)))
+    val mismatchOnly = report(mismatches = listOf(RoundTripFidelityEntry("step 1", "intended: A / re-decoded: B")))
+    val both = report(
+      dropped = listOf(DroppedContentEntry("android-phone.trail.yaml", "[1]", "below", 4)),
+      mismatches = listOf(RoundTripFidelityEntry("step 1", "intended: A / re-decoded: B")),
+    )
+
+    assertFalse(UnifiedTrailMigrator.isLossyMigration(clean), "a clean migration is not lossy")
+    assertTrue(UnifiedTrailMigrator.isLossyMigration(droppedOnly), "dropped content is lossy")
+    assertTrue(UnifiedTrailMigrator.isLossyMigration(mismatchOnly), "a round-trip mismatch alone is lossy")
+    assertTrue(UnifiedTrailMigrator.isLossyMigration(both), "dropped content AND a mismatch is lossy")
+  }
+
+  private fun report(
+    dropped: List<DroppedContentEntry> = emptyList(),
+    mismatches: List<RoundTripFidelityEntry> = emptyList(),
+  ) = UnifiedTrailMigrator.Report(
+    platformFilesLoaded = emptyList(),
+    drift = emptyList(),
+    familyCollapses = emptyList(),
+    unrecordableSteps = 0,
+    droppedContent = dropped,
+    roundTripMismatches = mismatches,
+  )
+
+  @Test
   fun `refuses to migrate a trail that contains a trailhead block`() {
     // Mapping a per-classifier trailhead into the unified `trailhead:` is a follow-up; until then the
     // migrator must fail fast rather than silently drop the deterministic step 0 (same policy as
@@ -681,10 +713,17 @@ class UnifiedTrailMigratorTest {
     // not present in this checkout (the case lives in the parent mirror,
     // not in the OSS tree), the test is skipped silently rather than
     // failing.
+    //
+    // This points at case_5649273 deliberately: it is the one suite_86078
+    // case that cannot be unified (android-phone runs an extra step, so its
+    // step counts diverge from the other five classifiers), which is exactly
+    // why it stays as six per-platform files. That makes it a durable
+    // six-classifier fixture — the unification effort that collapsed the rest
+    // of the suite into single trail.yaml files won't collapse this one.
     val repoRoot = findRepoRoot() ?: return
     val fixtureDir = File(
       repoRoot,
-      "trails/testrail/suite_86078/section_1008031/case_5649266",
+      "trails/testrail/suite_86078/section_1008028/case_5649273",
     )
     if (!fixtureDir.isDirectory) {
       return

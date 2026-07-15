@@ -9,10 +9,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.config.DefaultBehavior
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ElectronAppConfig
+import xyz.block.trailblaze.yaml.TrailArgConfig
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailSourceType
@@ -221,6 +223,10 @@ class UnifiedTrailAdapterTest {
     tags = listOf("smoke"),
     skip = "blocked on #123",
     memory = mapOf("email" to "tb+test@example.com"),
+    args = mapOf(
+      "recipient" to TrailArgConfig(type = TrailArgConfig.STRING),
+      "retries" to TrailArgConfig(type = TrailArgConfig.INTEGER, default = DefaultBehavior.Use(JsonPrimitive("3"))),
+    ),
   )
 
   @Test

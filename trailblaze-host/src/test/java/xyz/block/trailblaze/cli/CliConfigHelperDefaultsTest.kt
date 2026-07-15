@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
 import org.junit.Rule
@@ -41,6 +42,26 @@ class CliConfigHelperDefaultsTest {
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       config.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.WEB],
     )
+  }
+
+  @Test
+  fun `target selection stays null unless the user picks one (tri-state)`() {
+    // A fabricated selectedTargetAppId (e.g. "default") persisted without user intent would
+    // outrank / mask the workspace `defaults.target` rung on every later resolution.
+    val appDataDir = tempFolder.newFolder("runtime", "appdata")
+    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+
+    assertNull(CliConfigHelper.defaultConfig().selectedTargetAppId)
+
+    // First-run write path (getOrCreateConfig) must not persist a selection either.
+    CliConfigHelper.getOrCreateConfig()
+    assertNull(CliConfigHelper.readConfigRaw()?.selectedTargetAppId)
+
+    // Read-side hydration must not materialize one, and a config mutation that
+    // doesn't touch the target must not write one.
+    CliConfigHelper.updateConfig { it }
+    assertNull(CliConfigHelper.readConfig()?.selectedTargetAppId)
+    assertNull(CliConfigHelper.readConfigRaw()?.selectedTargetAppId)
   }
 
   @Test

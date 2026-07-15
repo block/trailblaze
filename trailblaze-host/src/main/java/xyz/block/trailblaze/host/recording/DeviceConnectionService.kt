@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.recording
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -139,29 +140,47 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       requireAccessibilityService = needsAccessibility,
     )
 
-    val (initialResponse, recordingSessionId) = withContext(Dispatchers.IO) {
-      HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-        sendProgressMessage = { Console.log("[DeviceConnectionService] $it") },
-        deviceId = device.trailblazeDeviceId,
-        trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
-        additionalInstrumentationArgs = deviceManager.onDeviceInstrumentationArgsProvider(),
-      )
-      if (needsAccessibility) {
-        AccessibilityServiceSetupUtils.enableAccessibilityService(
-          deviceId = device.trailblazeDeviceId,
-          hostPackage = instrumentationTarget.testAppId,
+    // Overall deadline for the whole connect dance (probe -> instrument -> install -> ready).
+    // Each piece is individually bounded, but the sequence retries the dance against a device
+    // whose on-device RPC channel is dead - a Run click would otherwise hang the HTTP response
+    // (and the browser, which has no fetch timeout) for many minutes with no error.
+    val connectResult = withTimeoutOrNull(ANDROID_CONNECT_OVERALL_TIMEOUT_MS) {
+      withContext(Dispatchers.IO) {
+        HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
           sendProgressMessage = { Console.log("[DeviceConnectionService] $it") },
+          deviceId = device.trailblazeDeviceId,
+          trailblazeOnDeviceInstrumentationTarget = instrumentationTarget,
+          additionalInstrumentationArgs = deviceManager.onDeviceInstrumentationArgsProvider(),
         )
-      }
-      rpcClient.waitForReady(
-        timeoutMs = 60_000L,
-        requireAndroidAccessibilityService = needsAccessibility,
-      )
+        if (needsAccessibility) {
+          AccessibilityServiceSetupUtils.enableAccessibilityService(
+            deviceId = device.trailblazeDeviceId,
+            hostPackage = instrumentationTarget.testAppId,
+            sendProgressMessage = { Console.log("[DeviceConnectionService] $it") },
+          )
+        }
+        rpcClient.waitForReady(
+          timeoutMs = 60_000L,
+          requireAndroidAccessibilityService = needsAccessibility,
+        )
 
-      val response = screenStateProvider.getScreenState(includeScreenshot = false)
-        ?: throw IOException("GetScreenState failed at connect")
-      response to TrailblazeSessionManager.generateSessionId("recording")
+        val response = screenStateProvider.getScreenState(includeScreenshot = false)
+          ?: throw IOException("GetScreenState failed at connect")
+        response to TrailblazeSessionManager.generateSessionId("recording")
+      }
     }
+    if (connectResult == null) {
+      val runnerPid = runCatching {
+        withContext(Dispatchers.IO) { rpcClient.probeRunnerPid() }
+      }.getOrDefault("UNKNOWN")
+      return ConnectionState.Error(
+        "Connecting to ${device.trailblazeDeviceId.instanceId} timed out after " +
+          "${ANDROID_CONNECT_OVERALL_TIMEOUT_MS / 1000}s - the on-device RPC channel is not " +
+          "answering (runner pid: $runnerPid). Restart the emulator (or the Trailblaze runner " +
+          "app on it) and try again.",
+      )
+    }
+    val (initialResponse, recordingSessionId) = connectResult
 
     val settingsState = deviceManager.settingsRepo.serverStateFlow.value
     val runYamlRequestTemplate = RunYamlRequest(
@@ -169,7 +188,10 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       testName = "recording",
       useRecordedSteps = false,
       trailblazeLlmModel = deviceManager.currentTrailblazeLlmModelProvider(),
-      targetAppName = settingsState.appConfig.selectedTargetAppId,
+      // Effective resolution (persisted selection → workspace defaults.target), matching the
+      // targetTestApp the connect path resolves — raw selectedTargetAppId is null under a
+      // workspace-default target and would record targetAppName = null.
+      targetAppName = deviceManager.getCurrentSelectedTargetApp()?.id,
       trailFilePath = null,
       config = TrailblazeConfig(
         overrideSessionId = recordingSessionId,
@@ -230,5 +252,14 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
         trailblazeDriverType = device.trailblazeDriverType,
       ),
     )
+  }
+
+  private companion object {
+    /**
+     * Overall bound on the Android connect dance. Generous next to one healthy pass (~40s worst
+     * case incl. an APK reinstall) but far below the multi-minute retry spiral a dead on-device
+     * RPC channel produces.
+     */
+    const val ANDROID_CONNECT_OVERALL_TIMEOUT_MS = 120_000L
   }
 }

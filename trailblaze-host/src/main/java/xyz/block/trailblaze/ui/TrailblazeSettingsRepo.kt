@@ -18,6 +18,7 @@ import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
 import xyz.block.trailblaze.util.Console
 
 class TrailblazeSettingsRepo(
@@ -151,10 +152,189 @@ class TrailblazeSettingsRepo(
     return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes.values.toSet()
   }
 
-  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? {
-    return allTargetApps().firstOrNull { appTarget ->
-      appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
+  /**
+   * Resolves the daemon-wide selected target app, or `null` when none resolves (callers then
+   * apply the neutral [defaultHostAppTarget]).
+   *
+   * Effective-target precedence for a run / tool dispatch:
+   *  1. Explicit per-run / per-session target — a trail's `config.target`, `--target`, or an
+   *     active session override. Applied by callers ABOVE this function.
+   *  2. Persisted user selection — [SavedTrailblazeAppConfig.selectedTargetAppId], set when the
+   *     user picks a target in the app or via `trailblaze config target`. A persisted id equal
+   *     to the neutral [defaultHostAppTarget]'s id is treated as "no explicit selection" for
+   *     precedence (legacy CLI code auto-persisted it — see the inline comment) and only
+   *     resolves when rung 3 doesn't.
+   *  3. Workspace default — `defaults.target` in the workspace `trails/config/trailblaze.yaml`
+   *     (committed team-wide default; validated against the loaded targets).
+   *  4. Neutral [TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget] — applied by callers
+   *     when this returns `null`.
+   *
+   * This function covers rungs 2–3. It returns `null` (rather than the neutral default) when
+   * neither resolves, preserving the nullable contract callers rely on to distinguish "no
+   * effective target" (a `(not set)` display) from an actual selection.
+   */
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? =
+    getCurrentSelectedTargetApp(cwd = workspaceAnchorSeedPath())
+
+  /**
+   * Effective target for a CLI-dispatched `run`, anchoring the workspace `defaults.target` rung
+   * (rung 3) at the run caller's cwd ([callerWorkspaceDir], forwarded over the wire) instead of
+   * this daemon's frozen [workspaceAnchorSeedPath].
+   *
+   * Without this, a daemon-dispatched `trailblaze run` fell back to the daemon's own
+   * `defaults.target`, so the target actually run could diverge from what
+   * `trailblaze config get target` reports — that prediction resolves rung 3 from the caller's
+   * cwd, while the daemon resolves it from wherever `app start` was launched. Anchoring here at
+   * the same cwd keeps the two in agreement.
+   *
+   * A null / blank / unparseable / non-absolute [callerWorkspaceDir] (older CLI shim, or a
+   * non-CLI submission that never sets it) falls back to [workspaceAnchorSeedPath] —
+   * byte-identical to the prior daemon-anchored behavior. Only the rung-3 anchor moves; rungs 2
+   * (persisted selection) and 4 (neutral default) are unaffected, as is the run determinism
+   * contract (per-terminal `--target` / `TRAILBLAZE_TARGET` pins are deliberately NOT consulted
+   * for a run).
+   *
+   * The absolute-path requirement matches the field's contract (the CLI forwards
+   * `callerCwd().toAbsolutePath()`): a *relative* value would otherwise resolve against the
+   * daemon's own process cwd and key [workspaceDefaultTargetCache] under a surprising path —
+   * silently reintroducing the daemon-anchored behavior this method exists to avoid. Anything
+   * not absolute degrades to the daemon anchor instead.
+   */
+  internal fun getCurrentSelectedTargetAppForCallerCwd(
+    callerWorkspaceDir: String?,
+    envReader: () -> String? = { System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR) },
+  ): TrailblazeHostAppTarget? {
+    val callerCwd = callerWorkspaceDir?.trim()?.takeIf { it.isNotEmpty() }
+      ?.let { runCatching { Paths.get(it) }.getOrNull() }
+      ?.takeIf { it.isAbsolute }
+    return getCurrentSelectedTargetApp(cwd = callerCwd ?: workspaceAnchorSeedPath(), envReader = envReader)
+  }
+
+  /**
+   * Seed for the workspace-anchor walk-up: the user's configured trails directory when it
+   * exists, else JVM cwd. Target discovery anchors at the configured trails dir (see
+   * `workspaceConfigDirOrNull` in `TrailblazeDesktopAppConfig`) — the `defaults.target` rung
+   * must follow the same workspace, or a daemon launched outside the workspace (app bundle,
+   * home dir) would discover its targets but never see its committed default.
+   *
+   * Recomputed per call (NOT frozen per process): `trailsDirectory` is user-configurable at
+   * runtime via the app settings, and [getCurrentSelectedTargetApp] now feeds run dispatch
+   * and attribution — freezing the first directory seen would keep resolving workspace A's
+   * `defaults.target` after the user switches the app to workspace B. The per-call cost is
+   * one `isDirectory` stat; the expensive walk-up + YAML parse stays memoized per seed in
+   * [workspaceDefaultTargetCache], so a directory *switch* re-anchors (new cache key) while
+   * an in-place edit of the same workspace's `trailblaze.yaml` still needs a restart (the
+   * per-seed freeze documented on the cache).
+   */
+  private fun workspaceAnchorSeedPath(): Path =
+    File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverStateFlow.value.appConfig))
+      .takeIf { it.isDirectory }
+      ?.toPath()
+      ?: Paths.get("")
+
+  /**
+   * Testable overload: callers can pass an explicit [cwd] (used to discover the workspace
+   * `trailblaze.yaml` for the `defaults.target` rung) and an [envReader] for the
+   * `TRAILBLAZE_CONFIG_DIR` override, without depending on JVM cwd or mutating real process
+   * environment.
+   */
+  internal fun getCurrentSelectedTargetApp(
+    cwd: Path,
+    envReader: () -> String? = { System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR) },
+  ): TrailblazeHostAppTarget? {
+    val loadedTargets = allTargetApps()
+    val persistedId = serverStateFlow.value.appConfig.selectedTargetAppId
+    // Rung 2: persisted user selection. The neutral default's own id is NOT authoritative on
+    // this rung: historical CLI code (`CliConfigHelper.defaultConfig` / `hydrateDefaults`)
+    // auto-persisted it without any user intent, so a stored "default" is indistinguishable
+    // from a fabricated one and must not mask a committed workspace `defaults.target`. It
+    // still resolves (below) when the workspace declares nothing, and `--target default`
+    // remains the explicit per-run escape hatch.
+    val persistedMatch = loadedTargets.firstOrNull { it.id == persistedId }
+    // The neutral-default sentinel is shared with the CLI target surfaces via
+    // TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId — same logic, but the
+    // neutral id here is this distribution's injected defaultHostAppTarget.id rather than the
+    // CLI's compile-time static. Keeping both callers on one implementation is the CLI/daemon
+    // parity guarantee (see CliDaemonTargetSentinelParityTest).
+    val authoritativePersistedId = TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId(
+      selectedTargetAppId = persistedId,
+      neutralDefaultId = defaultHostAppTarget.id,
+    )
+    if (persistedMatch != null && authoritativePersistedId != null) {
+      return persistedMatch
     }
+    // Rung 3: workspace `defaults.target`.
+    return resolveWorkspaceDefaultTargetApp(loadedTargets, cwd, envReader) ?: persistedMatch
+  }
+
+  /**
+   * The workspace's declared `defaults.target` id (blank-normalized to null) plus the anchor
+   * file it came from, memoized per walk-up seed path. The filesystem walk-up + YAML parse
+   * runs once per seed for the process lifetime — `getCurrentSelectedTargetApp` sits on hot
+   * paths (Compose recomposition, per-dispatch MCP), and freezing the workspace view per
+   * process matches `availableAppTargets`' once-per-JVM discovery semantics.
+   */
+  private data class WorkspaceDefaultTarget(val declaredId: String?, val configFilePath: String?)
+
+  private val workspaceDefaultTargetCache = ConcurrentHashMap<Path, WorkspaceDefaultTarget>()
+
+  /** Ids already warned about as unknown `defaults.target` values — warn once, not per call. */
+  private val warnedUnknownDefaultTargetIds = ConcurrentHashMap.newKeySet<String>()
+
+  /**
+   * Reads `defaults.target` from the workspace `trails/config/trailblaze.yaml` discovered from
+   * [cwd] and resolves it against [loadedTargets] (ids match case-sensitively, like every other
+   * target-id comparison). Returns `null` when no workspace file resolves, the field is absent
+   * or blank, or the declared id matches no loaded target (logged once, never thrown) — so a
+   * stale / mistyped id degrades to the neutral default rather than crashing every
+   * target-resolving call in that workspace.
+   *
+   * Note the deliberate precedence inversion vs `defaults.maxLlmCalls`
+   * ([xyz.block.trailblaze.cli.TrailCommand.resolveEffectiveMaxLlmCalls]): there the workspace
+   * default outranks the persisted per-machine value (a committed team cap should win); here
+   * the persisted user selection outranks the workspace default (an explicit target pick must
+   * stick).
+   */
+  internal fun resolveWorkspaceDefaultTargetApp(
+    loadedTargets: Set<TrailblazeHostAppTarget>,
+    cwd: Path,
+    envReader: () -> String?,
+  ): TrailblazeHostAppTarget? {
+    val workspaceDefault = workspaceDefaultTargetCache.getOrPut(cwd) {
+      val loaded = TrailblazeWorkspaceConfigResolver.loadWorkspaceDefaults(
+        fromPath = cwd,
+        consumer = "defaults.target",
+        envReader = envReader,
+      )
+      val declaredId = loaded?.defaults?.target?.takeIf { it.isNotBlank() }
+      if (declaredId != null) {
+        // Once per process (cache population): the answer to "why is this target selected
+        // when I never picked one?" — the successful rung-3 flip is otherwise invisible.
+        // Known limitation: emission is tied to cache population, so if the first
+        // getCurrentSelectedTargetApp() for a cwd happens inside a Console.runQuiet {} scope
+        // (a forwarded `/cli/exec snapshot`/`tool`), this line is suppressed AND the cache is
+        // now warm, so it won't reappear this process. Accepted — it's an observability nicety,
+        // not a correctness signal; grep the daemon log at startup to see it in the common case.
+        Console.log(
+          "Using workspace defaults.target=\"$declaredId\" from ${loaded.configFile.absolutePath} " +
+            "when no explicit target is selected.",
+        )
+      }
+      WorkspaceDefaultTarget(
+        declaredId = declaredId,
+        configFilePath = loaded?.configFile?.absolutePath,
+      )
+    }
+    val declaredId = workspaceDefault.declaredId ?: return null
+    val match = loadedTargets.firstOrNull { it.id == declaredId }
+    if (match == null && warnedUnknownDefaultTargetIds.add(declaredId)) {
+      Console.log(
+        "Workspace ${workspaceDefault.configFilePath} defaults.target=\"$declaredId\" matches " +
+          "no loaded target (${loadedTargets.map { it.id }.sorted()}); falling back to the " +
+          "default target.",
+      )
+    }
+    return match
   }
 
   /** Manages HTTP/HTTPS port resolution (runtime CLI overrides + persisted fallback). */

@@ -33,6 +33,9 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [phase, setPhase] = React.useState('config');
   const [runError, setRunError] = React.useState(null);
   const [copied, setCopied] = React.useState(false);
+  // In-flight guard: run() awaits several round trips (connect, YAML fetch, target switch) with
+  // the dialog still up, so without this a click stampede dispatches one run per click.
+  const [launching, setLaunching] = React.useState(false);
 
   const trailsResult = TB.useTrails();
   const allTrails = trailsResult.data || [];
@@ -86,6 +89,11 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     if (installedTargets.length === 0) return;
     const ids = installedTargets.map((a) => a.id);
     if (targetApp && ids.includes(targetApp)) return;
+    // A declared target that isn't resolvable on this device must NOT be silently substituted
+    // with another app: leave the picker empty so the user makes an explicit choice (the run
+    // warning explains). Auto-substituting bound a completely unrelated app (and launched its
+    // bootstrap automation on connect) for a Settings trail.
+    if (declaredTarget && !ids.includes(declaredTarget)) { setTargetApp(null); return; }
     // The trail's declared target wins (the trail is authored for it); otherwise fall
     // back to the app picked in the device picker, then the device's current target,
     // then the first installed. (The picked device always wins above.)
@@ -139,7 +147,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     platform: selectedDevice ? selectedDevice.platform : null,
     driver: selectedDevice ? selectedDevice.driver : null,
   });
-  const canRun = !!trail && !!selectedDevice && phase !== 'connecting';
+  const canRun = !!trail && !!selectedDevice && phase !== 'connecting' && !launching;
 
   // One-line live status per section, surfaced in the left nav so the rail reads
   // as a run summary rather than empty jump links.
@@ -160,38 +168,68 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   }
 
   async function run() {
-    if (!trail || !selectedDevice) return;
+    if (!trail || !selectedDevice || launching) return;
+    setLaunching(true);
     setRunError(null);
-    const tbId = { instanceId: selectedDevice.id, trailblazeDevicePlatform: (selectedDevice.platform || '').toUpperCase() };
-    if (connectedId !== selectedDevice.id) {
-      setPhase('connecting');
-      const connected = await TB.connectDevice(tbId);
-      if (!connected) { setRunError('Could not connect to the device.'); setPhase('failed'); return; }
-      setConnectedId(selectedDevice.id);
+    // Every awaited call below is raced against a deadline: the RPC layer has no timeout, so a
+    // wedged daemon/device otherwise leaves this dialog on a disabled "Starting…" forever with
+    // no error and no way to retry (observed live: three Run clicks, 3+ minutes each, silent).
+    const fail = (msg) => { setRunError(msg); setPhase('failed'); setLaunching(false); };
+    try {
+      const tbId = { instanceId: selectedDevice.id, trailblazeDevicePlatform: (selectedDevice.platform || '').toUpperCase() };
+      if (connectedId !== selectedDevice.id) {
+        setPhase('connecting');
+        // Detailed connect keeps the daemon's real failure reason (e.g. "No target app selected...")
+        // instead of a generic message the user can't act on.
+        const conn = await TB.withTimeout(TB.connectDeviceDetailed(tbId), 45000);
+        if (conn === '__timeout__') { fail('The daemon did not respond after 45s while connecting to the device. The device driver may be wedged - check the device and try again.'); return; }
+        if (!conn.ok) { fail(conn.error || 'Could not connect to the device.'); return; }
+        setConnectedId(selectedDevice.id);
+      }
+      const yaml = await TB.withTimeout(TB.fetchTrailYaml(trail.id), 30000);
+      if (yaml === '__timeout__') { fail('The daemon did not respond after 30s while loading the trail. It may be wedged - try again.'); return; }
+      if (!yaml) { fail('Could not load the trail YAML to run.'); return; }
+      const maxCalls = parseInt(cfg.maxLlmCalls, 10);
+      const opts = {
+        selfHeal: cfg.selfHeal,
+        useRecordedSteps: cfg.useRecordedSteps === 'replay' ? true : cfg.useRecordedSteps === 'ai' ? false : null,
+        maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && String(cfg.maxLlmCalls) !== '50') ? maxCalls : null,
+        agent: cfg.agent,
+        captureVideo: cfg.captureVideo,
+        captureLogcat: cfg.captureLogcat,
+        captureNetworkTraffic: cfg.captureNetwork,
+        captureIosLogs: cfg.captureIosLogs,
+        captureAnalytics: cfg.captureAnalytics,
+        captureEvents: cfg.captureEvents,
+      };
+      // Only rebind the daemon's global target on an explicit resolvable selection (targetApp).
+      // targetId can still carry an unresolvable declared target - rebinding to it would fail, and
+      // the run itself gets the honest server-side error ("target ... is not registered").
+      if (targetApp && targetApp !== currentTarget) {
+        const ok = await TB.withTimeout(TB.setTargetApp(targetApp), 30000);
+        if (ok === '__timeout__') { fail('The daemon did not respond after 30s while switching the target app. It may be wedged - try again.'); return; }
+        if (!ok) { fail('Could not switch to the selected target app.'); return; }
+      }
+      // No setLaunching(false) on the success path: the dialog is closing, and re-enabling the
+      // button during the close animation would reopen the double-dispatch window.
+      // Record the pending marker BEFORE navigating, then patch in the authoritative sessionId as
+      // soon as dispatch answers - the Active screen locks onto that id instead of guessing which
+      // session row is "the new run" (the guess mis-locked on fast finishes and stale rows).
+      TB.recordPendingRun({ title: trail.title || trail.id, target: targetId, device: selectedDevice.name });
+      // Fire-and-forget, but raced: a dispatch the daemon never answers must fail the pending
+      // marker on the Active screen (a red "couldn't start" card), not evaporate silently. The
+      // success shape is 2xx { ok: true, success, sessionId, error } - success:false is a dispatch
+      // failure too, not just ok:false (non-2xx).
+      TB.withTimeout(TB.dispatchRun(tbId, yaml, { ...opts, trailId: trail ? trail.id : null }), 45000).then((r) => {
+        if (r === '__timeout__') { TB.failPendingRun('The run request was sent but the daemon never answered after 45s. It may be wedged - check the daemon and try again.'); return; }
+        if (r && r.ok !== false && r.success !== false && r.sessionId) TB.setPendingRunSession(r.sessionId);
+        else TB.failPendingRun((r && r.error) || 'Run failed to start');
+      });
+      go('active', { followLive: Date.now() });
+      close();
+    } catch (e) {
+      fail('Starting the run failed unexpectedly: ' + ((e && e.message) || String(e)));
     }
-    const yaml = await TB.fetchTrailYaml(trail.id);
-    if (!yaml) { setRunError('Could not load the trail YAML to run.'); setPhase('failed'); return; }
-    const maxCalls = parseInt(cfg.maxLlmCalls, 10);
-    const opts = {
-      selfHeal: cfg.selfHeal,
-      useRecordedSteps: cfg.useRecordedSteps === 'replay' ? true : cfg.useRecordedSteps === 'ai' ? false : null,
-      maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && String(cfg.maxLlmCalls) !== '50') ? maxCalls : null,
-      agent: cfg.agent,
-      captureVideo: cfg.captureVideo,
-      captureLogcat: cfg.captureLogcat,
-      captureNetworkTraffic: cfg.captureNetwork,
-      captureIosLogs: cfg.captureIosLogs,
-      captureAnalytics: cfg.captureAnalytics,
-      captureEvents: cfg.captureEvents,
-    };
-    if (targetId && targetId !== currentTarget) {
-      const ok = await TB.setTargetApp(targetId);
-      if (!ok) { setRunError('Could not switch to the selected target app.'); setPhase('failed'); return; }
-    }
-    TB.dispatchRun(tbId, yaml, { ...opts, trailId: trail ? trail.id : null });
-    TB.recordPendingRun({ title: trail.title || trail.id, target: targetId, device: selectedDevice.name });
-    go('active', { followLive: Date.now() });
-    close();
   }
 
   const filteredTrails = trailQuery
@@ -293,7 +331,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
             </div>
             <div style={{ display: 'flex', alignItems: 'center', flex: '0 0 auto' }}>
               <span data-testid="run-config-run">
-                <Btn kind="primary" ico="play" onClick={run} disabled={!canRun}>{phase === 'connecting' ? 'Starting…' : 'Run'}</Btn>
+                <Btn kind="primary" ico="play" onClick={run} disabled={!canRun}>{phase === 'connecting' || launching ? 'Starting…' : 'Run'}</Btn>
               </span>
             </div>
           </div>

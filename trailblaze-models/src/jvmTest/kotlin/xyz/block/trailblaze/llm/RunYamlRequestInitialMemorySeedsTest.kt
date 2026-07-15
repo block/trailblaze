@@ -93,4 +93,64 @@ class RunYamlRequestInitialMemorySeedsTest {
     )
     assertEquals(mapOf("user" to "sam"), request.initialMemorySeeds)
   }
+
+  // -- args twins: initialArgs (one-way, seeds-like) vs argsSnapshot (round-trip, snapshot-like) --
+
+  @Test
+  fun `initialArgs permitted on fire-and-forget runs, like the memory seeds twin`() {
+    val request = RunYamlRequest(
+      testName = "test",
+      yaml = "",
+      trailFilePath = null,
+      targetAppName = null,
+      useRecordedSteps = false,
+      trailblazeDeviceId = deviceId,
+      trailblazeLlmModel = llmModel,
+      config = TrailblazeConfig(),
+      referrer = TrailblazeReferrer(id = "test", display = "Test"),
+      awaitCompletion = false,
+      initialArgs = mapOf("recipient" to "\"sam\""),
+    )
+    assertEquals(mapOf("recipient" to "\"sam\""), request.initialArgs)
+  }
+
+  @Test
+  fun `argsSnapshot on a fire-and-forget run is rejected, like the memorySnapshot twin`() {
+    val error = kotlin.test.assertFailsWith<IllegalArgumentException> {
+      RunYamlRequest(
+        testName = "test",
+        yaml = "",
+        trailFilePath = null,
+        targetAppName = null,
+        useRecordedSteps = false,
+        trailblazeDeviceId = deviceId,
+        trailblazeLlmModel = llmModel,
+        config = TrailblazeConfig(),
+        referrer = TrailblazeReferrer(id = "test", display = "Test"),
+        awaitCompletion = false,
+        argsSnapshot = mapOf("x" to "\"v\""),
+      )
+    }
+    assertTrue(error.message.orEmpty().contains("argsSnapshot"), error.message)
+  }
+
+  @Test
+  fun `sensitiveArgNames on a fire-and-forget run is rejected - taint accompanies the snapshot`() {
+    val error = kotlin.test.assertFailsWith<IllegalArgumentException> {
+      RunYamlRequest(
+        testName = "test",
+        yaml = "",
+        trailFilePath = null,
+        targetAppName = null,
+        useRecordedSteps = false,
+        trailblazeDeviceId = deviceId,
+        trailblazeLlmModel = llmModel,
+        config = TrailblazeConfig(),
+        referrer = TrailblazeReferrer(id = "test", display = "Test"),
+        awaitCompletion = false,
+        sensitiveArgNames = listOf("x"),
+      )
+    }
+    assertTrue(error.message.orEmpty().contains("sensitiveArgNames"), error.message)
+  }
 }

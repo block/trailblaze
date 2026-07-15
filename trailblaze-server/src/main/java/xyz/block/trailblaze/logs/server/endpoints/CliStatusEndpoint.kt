@@ -59,7 +59,7 @@ object CliStatusEndpoint {
 
   fun register(
     routing: Routing,
-    statusProvider: () -> CliStatusResponse,
+    statusProvider: suspend () -> CliStatusResponse,
   ) = with(routing) {
     get(CliEndpoints.STATUS) {
       try {

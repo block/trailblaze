@@ -535,6 +535,8 @@ open class CliReportGenerator {
       app_build_number = sessionInfo.targetAppInfo?.buildNumber,
       outcome = outcome,
       failure_reason = extractJsonFailureReason(status),
+      failure_stack = extractJsonFailureStack(status),
+      failure_kind = extractJsonFailureKind(status),
       device_log_excerpt = deviceLogExcerpt,
       has_recorded_steps = sessionInfo.hasRecordedSteps,
       recording_skip_reason = recordingInfo.skipReason,
@@ -568,6 +570,18 @@ open class CliReportGenerator {
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
       "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
+    else -> null
+  }
+
+  private fun extractJsonFailureStack(status: SessionStatus): String? = when (status) {
+    is SessionStatus.Ended.Failed -> status.exceptionStackTrace
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.exceptionStackTrace
+    else -> null
+  }
+
+  private fun extractJsonFailureKind(status: SessionStatus): String? = when (status) {
+    is SessionStatus.Ended.Failed -> status.failureKind
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.failureKind
     else -> null
   }
 

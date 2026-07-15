@@ -88,6 +88,24 @@ data class CliRunRequest(
    * from the session-start snapshot.
    */
   val initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
+  /**
+   * CLI `--arg KEY=VAL` / `--args-file` entries, already bound and typed against the trail's
+   * `config.args:` declaration, forwarded into [RunYamlRequest.initialArgs]. Each value is a
+   * JSON-encoded [kotlinx.serialization.json.JsonElement]. Empty for a non-parameterized trail.
+   */
+  val initialArgs: Map<String, String> = emptyMap(),
+  /**
+   * The run caller's absolute working directory, forwarded so the daemon anchors the workspace
+   * `defaults.target` (rung 3) resolution at the caller's workspace instead of the daemon's own
+   * frozen configured-trails-dir.
+   *
+   * Only matters when the trail declares no `config.target` and the run is dispatched to a daemon
+   * launched from a different workspace than the caller's shell: without this, the daemon fell
+   * back to its own `defaults.target`, so the target actually run could differ from the one
+   * `trailblaze config get target` reports (which resolves from the caller's cwd). Null for older
+   * CLI clients and for non-CLI submissions (MCP/HTTP), which keep the daemon-anchored behavior.
+   */
+  val callerWorkspaceDir: String? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:

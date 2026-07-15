@@ -286,5 +286,10 @@ object TrailRecordings {
       val possibleResourcePaths =
         possibleFileNames.map { possibleFileName -> "$path/$possibleFileName" }
       possibleResourcePaths.firstOrNull { resourcePath -> doesResourceExist(resourcePath) }
+        // No per-test subdirectory exists for this short name — fall back to a flat sibling
+        // unified file (e.g. `clock/launch-smoke.trail.yaml` instead of
+        // `clock/launch-smoke/trail.yaml`), the naming convention this framework recommends
+        // for a single-device example trail with nothing else to co-locate.
+        ?: "$path$DOT_TRAIL_DOT_YAML_FILE_SUFFIX".takeIf(doesResourceExist)
     }
 }

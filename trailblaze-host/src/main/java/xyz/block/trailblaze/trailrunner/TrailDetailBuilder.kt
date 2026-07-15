@@ -62,20 +62,34 @@ object TrailDetailBuilder {
     }
     val steps = mutableListOf<TrailStepEntry>()
     for (item in items) {
-      if (item !is TrailYamlItem.PromptsTrailItem) continue
-      for (promptStep in item.promptSteps) {
-        val tools = promptStep.recording?.tools?.map { it.name }.orEmpty()
-        when (promptStep) {
-          is DirectionStep -> steps.add(
-            TrailStepEntry(kind = "step", text = promptStep.step.trim(), tools = tools),
-          )
-          is VerificationStep -> steps.add(
-            TrailStepEntry(kind = "verify", text = promptStep.verify.trim(), tools = tools),
-          )
-          else -> steps.add(
-            TrailStepEntry(kind = "step", text = promptStep.prompt.trim(), tools = tools),
-          )
+      when (item) {
+        // A trailhead and a root-level `- tools:` block are real steps (the runners execute them
+        // deterministically); skipping them here made recorded trails read as "No recorded steps".
+        is TrailYamlItem.TrailheadTrailItem -> steps.add(
+          TrailStepEntry(
+            kind = "step",
+            text = item.trailhead.step?.trim().orEmpty(),
+            tools = item.trailhead.tools?.map { it.name }.orEmpty(),
+          ),
+        )
+        is TrailYamlItem.ToolTrailItem -> steps.add(
+          TrailStepEntry(kind = "step", text = "", tools = item.tools.map { it.name }),
+        )
+        is TrailYamlItem.PromptsTrailItem -> for (promptStep in item.promptSteps) {
+          val tools = promptStep.recording?.tools?.map { it.name }.orEmpty()
+          when (promptStep) {
+            is DirectionStep -> steps.add(
+              TrailStepEntry(kind = "step", text = promptStep.step.trim(), tools = tools),
+            )
+            is VerificationStep -> steps.add(
+              TrailStepEntry(kind = "verify", text = promptStep.verify.trim(), tools = tools),
+            )
+            else -> steps.add(
+              TrailStepEntry(kind = "step", text = promptStep.prompt.trim(), tools = tools),
+            )
+          }
         }
+        is TrailYamlItem.ConfigTrailItem -> {}
       }
     }
     return steps

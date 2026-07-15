@@ -68,11 +68,12 @@ class MigrateTrailsCommand : Callable<Int> {
   @Option(
     names = ["--fail-on-dropped-content"],
     description = [
-      "Exit non-zero (ASSERTION_FAILED) when the migration drops input content that did " +
-        "not round-trip — schema-unknown keys, or sibling keys in a tool entry the tool " +
-        "decoder discards. Off by default: a lossy migration still writes a usable file " +
-        "with leading DROPPED warning comments and exits 0. Turn this on in a pipeline " +
-        "that must refuse to chain (e.g. `migrate-trails && commit`) on a lossy migration.",
+      "Exit non-zero (ASSERTION_FAILED) when the migration is lossy: either input content that " +
+        "did not round-trip (schema-unknown keys, or sibling keys in a tool entry the tool decoder " +
+        "discards), or a round-trip fidelity mismatch (the emitted file decodes back to different " +
+        "tools/config than intended). Off by default: a lossy migration still writes a usable file " +
+        "with leading WARNING comments and exits 0. Turn this on in a pipeline that must refuse to " +
+        "chain (e.g. `migrate-trails && commit`) on a lossy migration.",
     ],
   )
   var failOnDroppedContent: Boolean = false
@@ -101,7 +102,8 @@ class MigrateTrailsCommand : Callable<Int> {
       UnifiedTrailMigrator.kindDriftComments(result.report.kindDrift) +
       UnifiedTrailMigrator.memoryDriftComments(result.report.memoryDrift) +
       UnifiedTrailMigrator.configDriftComments(result.report.configDrift) +
-      UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent)
+      UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent) +
+      UnifiedTrailMigrator.roundTripMismatchComments(result.report.roundTripMismatches)
     val yamlText = TrailblazeYaml.Default.encodeUnifiedTrailToString(
       trail = result.trail,
       leadingComments = drift,
@@ -148,6 +150,9 @@ class MigrateTrailsCommand : Callable<Int> {
     if (result.report.droppedContent.isNotEmpty()) {
       Console.log("Dropped (un-round-trippable) keys: ${result.report.droppedContent.size}")
     }
+    if (result.report.roundTripMismatches.isNotEmpty()) {
+      Console.log("Round-trip fidelity mismatches: ${result.report.roundTripMismatches.size}")
+    }
     if (result.report.familyCollapses.isNotEmpty()) {
       val summary = result.report.familyCollapses.groupBy { it.family }.map { (family, entries) ->
         val collapsed = entries.count { !it.diverged }
@@ -157,24 +162,33 @@ class MigrateTrailsCommand : Callable<Int> {
       Console.log("Family-collapses: $summary")
     }
 
-    // The file is always written (with its DROPPED warnings) so the artifact is reviewable;
-    // --fail-on-dropped-content only changes the exit code so a chained pipeline can refuse
-    // to proceed on a lossy migration. Off by default → today's exit-0 behavior is preserved.
+    // The file is always written (with its DROPPED / round-trip warnings) so the artifact is
+    // reviewable; --fail-on-dropped-content only changes the exit code so a chained pipeline can
+    // refuse to proceed on a lossy migration. Off by default → today's exit-0 behavior is preserved.
+    // Both classes of loss trip the gate: `droppedContent` (input keys the schema can't carry) and
+    // `roundTripMismatches` (the emitted file decodes back to different tools/config than intended).
     val dropped = result.report.droppedContent
-    if (failOnDroppedContent && dropped.isNotEmpty()) {
+    val mismatches = result.report.roundTripMismatches
+    if (failOnDroppedContent && UnifiedTrailMigrator.isLossyMigration(result.report)) {
       Console.error(
-        "trailblaze migrate-trails: --fail-on-dropped-content is set and the migration dropped " +
-          "${dropped.size} un-round-trippable key(s):",
+        "trailblaze migrate-trails: --fail-on-dropped-content is set and the migration was lossy — " +
+          "${dropped.size} un-round-trippable key(s), ${mismatches.size} round-trip mismatch(es):",
       )
       // List the first few so a CI log is actionable without opening the artifact. The full set
-      // (with YAML paths) is always in the DROPPED warning block at the top of the output file.
+      // (with YAML paths / details) is always in the warning block at the top of the output file.
       for (entry in dropped.take(MAX_DROPPED_LISTED)) {
         Console.error("  dropped `${entry.key}` at ${entry.path} (${entry.file} line ${entry.line})")
       }
       if (dropped.size > MAX_DROPPED_LISTED) {
-        Console.error("  ... and ${dropped.size - MAX_DROPPED_LISTED} more")
+        Console.error("  ... and ${dropped.size - MAX_DROPPED_LISTED} more dropped key(s)")
       }
-      Console.error("  See the DROPPED warnings in ${output.absolutePath}.")
+      for (entry in mismatches.take(MAX_DROPPED_LISTED)) {
+        Console.error("  round-trip mismatch at ${entry.location}")
+      }
+      if (mismatches.size > MAX_DROPPED_LISTED) {
+        Console.error("  ... and ${mismatches.size - MAX_DROPPED_LISTED} more mismatch(es)")
+      }
+      Console.error("  See the WARNING block in ${output.absolutePath}.")
       return EXIT_ASSERTION
     }
     return EXIT_OK

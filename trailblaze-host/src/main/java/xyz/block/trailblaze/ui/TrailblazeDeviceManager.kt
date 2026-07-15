@@ -124,10 +124,11 @@ class TrailblazeDeviceManager(
     _availableAppTargetsFlow.asStateFlow()
 
   /**
-   * Live view of the app-target set. Seeded from startup discovery and grown ADDITIVELY by
-   * [registerNewTarget] — existing target objects are never replaced or removed for the JVM's
-   * lifetime, so a run that captured its resolved target at run start stays consistent.
-   * Every read sees a complete immutable snapshot (old or new, never partial); edits, renames,
+   * Live view of the app-target set. Seeded from startup discovery; [registerNewTarget] appends
+   * net-new targets and swaps in the freshly-discovered instance for an edited id (Create/Edit
+   * Target saves). Individual target objects are immutable - a run that captured its resolved
+   * target at run start keeps that reference and stays consistent even if the set entry is later
+   * swapped. Every read sees a complete immutable snapshot (old or new, never partial); renames
    * and removals of existing targets still require a daemon restart (flagged by the
    * `target-drift` endpoint).
    *
@@ -402,10 +403,23 @@ class TrailblazeDeviceManager(
     // none. Without this, the trail's `target:` was ignored and a trail launched whichever app
     // the previously-selected target pointed at.
     val trailConfigTarget = trailConfig?.target
-    val resolvedTargetAppName = trailConfigTarget ?: settingsState.appConfig.selectedTargetAppId
-    val resolvedTargetTestApp =
-      trailConfigTarget?.let { id -> availableAppTargets.find { it.id == id } }
-        ?: getCurrentSelectedTargetApp()
+    // A declared target that doesn't resolve is a hard error, never a silent substitution:
+    // falling back to the globally-selected target ran (and bootstrapped) a completely unrelated
+    // app while the session still reported the declared target's name.
+    val resolvedTargetTestApp = if (trailConfigTarget != null) {
+      availableAppTargets.find { it.id == trailConfigTarget }
+        ?: error(
+          "Trail declares target '$trailConfigTarget' which is not registered in this daemon " +
+            "(available: ${availableAppTargets.map { it.id }.sorted()}). " +
+            "Fix the trail's target:, create the target, or restart Trail Runner to pick up edits.",
+        )
+    } else {
+      getCurrentSelectedTargetApp()
+    }
+    // Derive the recorded name from the SAME resolution as the target object — otherwise a
+    // target resolved through the workspace `defaults.target` rung would run against the app
+    // while recording `targetAppName = null`.
+    val resolvedTargetAppName = trailConfigTarget ?: resolvedTargetTestApp?.id
     val baseConfig = TrailblazeConfig(
       overrideSessionId = existingSessionId,
       sendSessionStartLog = sendSessionStartLog,
@@ -499,9 +513,11 @@ class TrailblazeDeviceManager(
       startCaptureFor = if (isNewSession) sessionId else null
       captureDeviceId = trailblazeDeviceId.instanceId
       // Resolve appId outside the lock would race with target updates, so capture both
-      // the target-override + app-config-default here.
+      // the target-override + effective daemon-wide target (persisted selection → workspace
+      // defaults.target) here. Raw selectedTargetAppId would be null under a workspace-default
+      // target, dropping app-scoping from the capture.
       val appConfig = settingsRepo.serverStateFlow.value.appConfig
-      captureAppId = sessionTargetRegistry.get(sessionId) ?: appConfig.selectedTargetAppId
+      captureAppId = sessionTargetRegistry.get(sessionId) ?: getCurrentSelectedTargetApp()?.id
       // Resolve capture options from the daemon's `appConfig` toggles. Per-run CLI
       // flags (--no-capture-video / --capture-logcat) are layered on by
       // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
@@ -1153,6 +1169,14 @@ class TrailblazeDeviceManager(
 
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = settingsRepo.getCurrentSelectedTargetApp()
 
+  /**
+   * Effective target for a CLI-dispatched `run`, anchoring the workspace `defaults.target` rung
+   * at the caller's [callerWorkspaceDir] rather than this daemon's frozen configured-trails-dir.
+   * See [TrailblazeSettingsRepo.getCurrentSelectedTargetAppForCallerCwd].
+   */
+  fun getCurrentSelectedTargetAppForCallerCwd(callerWorkspaceDir: String?): TrailblazeHostAppTarget? =
+    settingsRepo.getCurrentSelectedTargetAppForCallerCwd(callerWorkspaceDir)
+
   private val revylCliClient: RevylCliClient by lazy { RevylCliClient() }
 
   // Store running test instances per device - allows forceful driver shutdown
@@ -1183,8 +1207,16 @@ class TrailblazeDeviceManager(
    * This is aggressive - it shuts down the driver (killing child processes like XCUITest),
    * then cancels the coroutine job. No more "cooperative" cancellation.
    * The job cleanup (finally block) will handle removing it from the map.
+   *
+   * @param knownSessionId the session the CALLER is cancelling, when it has one in hand. The
+   * device->session mapping may already be cleared by the time this runs (an ended-but-wedged
+   * session), and capture teardown keyed only on that mapping leaked screenrecord/logcat streams
+   * that ran for hours (observed: 34% daemon CPU, a 25MB device.log, no mp4).
+   * @return true if a live execution was actually cancelled (an active coroutine scope was
+   * cancelled or an active session was registered for the device); false when there was nothing
+   * running to cancel, so callers can report an honest no-op instead of a phantom success.
    */
-  fun cancelSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+  fun cancelSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId, knownSessionId: SessionId? = null): Boolean {
     Console.log("FORCEFULLY CANCELLING test on device: ${trailblazeDeviceId.instanceId}")
 
     closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
@@ -1192,7 +1224,7 @@ class TrailblazeDeviceManager(
     closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
 
     // Step 2: Cancel the coroutine job (stop any remaining work)
-    cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
+    val scopeCancelled = cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
 
     // Clear the session from the sessions flow + per-session target override
     // under [sessionCreationLock] so a concurrent setTargetForActiveSession
@@ -1208,7 +1240,9 @@ class TrailblazeDeviceManager(
     // sessionCreationLock so a slow ffmpeg sprite-extract pass on stopAll can't deadlock
     // a concurrent device-management call (sprite gen is bound by `FFMPEG_TIMEOUT_SECONDS`
     // but seconds is enough to be felt). Idempotent if endSessionForDevice already ran.
-    cancelledSessionId?.let { sessionCaptureCoordinator.stopForSession(it) }
+    // The caller-supplied id covers the mapping-already-cleared case (see kdoc).
+    setOfNotNull(cancelledSessionId, knownSessionId).forEach { sessionCaptureCoordinator.stopForSession(it) }
+    return scopeCancelled || cancelledSessionId != null
   }
 
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
@@ -1247,12 +1281,15 @@ class TrailblazeDeviceManager(
     coroutineScopeByDevice.remove(trailblazeDeviceId)
   }
 
-  private fun cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId: TrailblazeDeviceId) {
+  /** @return true if an active scope existed for the device and was cancelled. */
+  private fun cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
+    var cancelledActiveScope = false
     coroutineScopeByDevice[trailblazeDeviceId]?.let { coroutineScopeForDevice ->
       Console.log("Cancelling coroutine job for device: ${trailblazeDeviceId.instanceId}")
       Console.log("  Scope isActive BEFORE cancel: ${coroutineScopeForDevice.isActive}")
       try {
         if (coroutineScopeForDevice.isActive) {
+          cancelledActiveScope = true
           coroutineScopeForDevice.cancel(CancellationException("Session cancelled by user - driver forcefully closed"))
 
           // Verify cancellation propagated by checking status over time
@@ -1281,6 +1318,7 @@ class TrailblazeDeviceManager(
         Console.log("  Scope removed from map for device: ${trailblazeDeviceId.instanceId}")
       }
     }
+    return cancelledActiveScope
   }
 
   fun getDeviceState(trailblazeDeviceId: TrailblazeDeviceId): DeviceState? {
@@ -1403,21 +1441,26 @@ class TrailblazeDeviceManager(
   companion object {
 
     /**
-     * Pure decision for additive-only registration. Total function (no null): returns
-     * [AppendDecision.AlreadyPresent] when [targetId] is already in [current] (idempotent),
-     * [AppendDecision.Appended] when it's net-new (present in [fresh], absent from [current]),
-     * or [AppendDecision.NotDiscovered] otherwise. Never touches [current]'s entries — they all
-     * survive by identity, which is what keeps a live append safe for in-flight runs holding a
-     * reference to their already-resolved target.
+     * Pure decision for live registration. Total function (no null): returns
+     * [AppendDecision.Appended] when [targetId] resolves in [fresh] - net-new ids are appended
+     * and an already-registered id is REPLACED with the fresh instance (an Edit Target save
+     * changes the on-disk manifest, and serving the stale snapshot made an edited target read
+     * "Not installed on any connected device" until a daemon restart). Returns
+     * [AppendDecision.AlreadyPresent] only when the id is registered but absent from [fresh]
+     * (nothing newer to swap in), and [AppendDecision.NotDiscovered] otherwise. Other entries
+     * survive by identity, and in-flight runs keep their captured reference to a replaced
+     * instance (nothing mutates it), which is what keeps a live swap safe.
      */
     internal fun appendNewTarget(
       current: Set<TrailblazeHostAppTarget>,
       fresh: Set<TrailblazeHostAppTarget>,
       targetId: String,
     ): AppendDecision {
-      current.firstOrNull { it.id == targetId }?.let { return AppendDecision.AlreadyPresent(it) }
-      val newTarget = fresh.firstOrNull { it.id == targetId } ?: return AppendDecision.NotDiscovered
-      return AppendDecision.Appended(newTarget = newTarget, updatedTargets = current + newTarget)
+      val existing = current.firstOrNull { it.id == targetId }
+      val newTarget = fresh.firstOrNull { it.id == targetId }
+        ?: return existing?.let { AppendDecision.AlreadyPresent(it) } ?: AppendDecision.NotDiscovered
+      val updated = if (existing == null) current + newTarget else current - existing + newTarget
+      return AppendDecision.Appended(newTarget = newTarget, updatedTargets = updated)
     }
 
     /**

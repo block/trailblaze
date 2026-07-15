@@ -34,6 +34,7 @@ import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
+import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.models.TriageReport
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -1254,6 +1255,171 @@ class GenerateTestResultsCliCommandTest {
         timestamp = Instant.parse(startedAt).plus(10.seconds),
       ),
     )
+  }
+
+  @Test
+  fun `each session directory gets its own session_result sidecar`() {
+    // The sidecar is the session's own entry from the report's results[], written into
+    // the session directory so a per-session log zip is self-describing (the upload
+    // script zips session directories after report generation).
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_07_13_sidecar_session")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "smokeTest",
+            testClassName = "WebSmokeTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-13T10:00:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-13T10:00:05Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val sidecarFile = File(logsDir, sessionId.value)
+        .resolve(GenerateTestResultsCliCommand.SESSION_RESULT_FILENAME)
+      assertTrue(
+        sidecarFile.exists(),
+        "expected ${GenerateTestResultsCliCommand.SESSION_RESULT_FILENAME} next to the session logs",
+      )
+      val sidecar = json.decodeFromString<SessionResult>(sidecarFile.readText())
+      assertEquals(report.results.single(), sidecar)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `retry sidecars keep each attempt's own outcome and put the roll-up on the winner`() {
+    // Two attempts of the same test (same trailFilePath → same stable test key): the
+    // report keeps one deduplicated row for the winning attempt, but EVERY attempt's
+    // session directory gets a sidecar — the winner's carries the retry roll-up
+    // (attempt, total_attempts, replaced_session_ids), the superseded attempt keeps
+    // its own raw outcome so its zip still explains what happened in that run.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val failedSessionId = SessionId("2026_07_13_attempt_one")
+      val passedSessionId = SessionId("2026_07_13_attempt_two")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = failedSessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/checkout.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "checkoutTest",
+            testClassName = "WebCheckoutTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = failedSessionId,
+          timestamp = Instant.parse("2026-07-13T10:00:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = failedSessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Failed(durationMs = 4_000, exceptionMessage = "boom"),
+          session = failedSessionId,
+          timestamp = Instant.parse("2026-07-13T10:00:04Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = passedSessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/checkout.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "checkoutTest",
+            testClassName = "WebCheckoutTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = passedSessionId,
+          timestamp = Instant.parse("2026-07-13T10:01:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = passedSessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = passedSessionId,
+          timestamp = Instant.parse("2026-07-13T10:01:05Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val winner = report.results.single()
+      assertEquals(passedSessionId, winner.session_id)
+      assertEquals(2, winner.total_attempts)
+      assertEquals(listOf(failedSessionId), winner.replaced_session_ids)
+
+      val winnerSidecar = json.decodeFromString<SessionResult>(
+        File(logsDir, passedSessionId.value)
+          .resolve(GenerateTestResultsCliCommand.SESSION_RESULT_FILENAME).readText(),
+      )
+      assertEquals(winner, winnerSidecar)
+
+      val replacedSidecar = json.decodeFromString<SessionResult>(
+        File(logsDir, failedSessionId.value)
+          .resolve(GenerateTestResultsCliCommand.SESSION_RESULT_FILENAME).readText(),
+      )
+      assertEquals(Outcome.FAILED, replacedSidecar.outcome)
+      assertEquals("boom", replacedSidecar.failure_reason)
+      // The roll-up lives on the winner; the superseded attempt keeps its raw record.
+      assertEquals(1, replacedSidecar.total_attempts)
+    } finally {
+      logsDir.deleteRecursively()
+    }
   }
 
   private fun writeLog(

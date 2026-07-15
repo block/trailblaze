@@ -237,6 +237,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             app_build_number = sessionInfo.targetAppInfo?.buildNumber,
             outcome = outcome,
             failure_reason = extractFailureReason(sessionInfo.latestStatus),
+            failure_stack = extractFailureStack(sessionInfo.latestStatus),
+            failure_kind = extractFailureKind(sessionInfo.latestStatus),
             device_log_excerpt = deviceLogExcerpt,
             has_recorded_steps = sessionInfo.hasRecordedSteps,
             recording_skip_reason = sessionRecordingInfo.skipReason,
@@ -288,6 +290,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     Console.log("")
     Console.log("📄 Summary written to: ${output.absolutePath}")
 
+    writeSessionResultSidecars(logsRepo, sessionResults, finalResults)
+
     // Generate tool usage report
     if (allSessionToolUsage.isNotEmpty()) {
       val markdown = generateToolUsageReport(allSessionToolUsage)
@@ -314,6 +318,41 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
     // Clean up file watchers to allow JVM to exit
     logsRepo.close()
+  }
+
+  /**
+   * Drops each session's own [SessionResult] into its session directory as
+   * [SESSION_RESULT_FILENAME], so a per-session log archive answers "how did this run
+   * go?" on its own — the upload script zips session directories AFTER report
+   * generation, which puts this sidecar inside every per-session logs zip (both the
+   * CI provider's `logs_*__<sessionId>.zip` and the S3-published per-run zip).
+   *
+   * The object is exactly that session's entry from the report's `results[]`, encoded
+   * with the same serializer: the kept (winning) attempt carries the retry roll-up
+   * (`attempt`, `total_attempts`, `replaced_session_ids`); a superseded attempt gets
+   * its own raw result — its outcome/failure_reason are its own, and the roll-up
+   * lives on the winner that replaced it.
+   *
+   * Write failures are non-fatal: the report itself must still land.
+   */
+  private fun writeSessionResultSidecars(
+    logsRepo: LogsRepo,
+    allAttempts: List<SessionResult>,
+    dedupedResults: List<SessionResult>,
+  ) {
+    val dedupedBySession = dedupedResults.associateBy { it.session_id }
+    var written = 0
+    for (attempt in allAttempts) {
+      val result = dedupedBySession[attempt.session_id] ?: attempt
+      try {
+        File(logsRepo.getSessionDir(result.session_id), SESSION_RESULT_FILENAME)
+          .writeText(jsonSerializer.encodeToString(value = result))
+        written++
+      } catch (e: Exception) {
+        Console.log("⚠️  Could not write $SESSION_RESULT_FILENAME for ${result.session_id.value}: ${e.message}")
+      }
+    }
+    Console.log("📎 Wrote $SESSION_RESULT_FILENAME into $written session directories")
   }
 
   private fun printFailedTests(results: List<SessionResult>) {
@@ -433,6 +472,18 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     else -> null
   }
 
+  private fun extractFailureStack(status: SessionStatus): String? = when (status) {
+    is SessionStatus.Ended.Failed -> status.exceptionStackTrace
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.exceptionStackTrace
+    else -> null
+  }
+
+  private fun extractFailureKind(status: SessionStatus): String? = when (status) {
+    is SessionStatus.Ended.Failed -> status.failureKind
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.failureKind
+    else -> null
+  }
+
   /**
    * Host-side CI provenance for one session — captured at log-upload time by the wrapping
    * upload script writing [HOST_CI_CONTEXT_FILENAME] into each session directory BEFORE
@@ -500,6 +551,17 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
      * log-file filter skips it.
      */
     const val HOST_CI_CONTEXT_FILENAME = "host_ci_context.json"
+
+    /**
+     * Per-session outcome sidecar written into each session directory by
+     * [writeSessionResultSidecars] — the session's own [SessionResult], identical to its
+     * entry in the report's `results[]`. Written before the session directories are
+     * zipped so it ships inside every per-session log archive; CI tooling that
+     * post-processes a single session (e.g. per-run artifact bundle producers) reads
+     * this instead of re-deriving the outcome from the raw logs. Filename intentionally
+     * starts with a non-hex character so [LogsRepo]'s log-file filter skips it.
+     */
+    const val SESSION_RESULT_FILENAME = "session_result.json"
   }
 
   /**

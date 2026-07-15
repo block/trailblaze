@@ -12,8 +12,10 @@ import xyz.block.trailblaze.config.project.WorkspaceContentHasher
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.nio.file.Path
 import java.nio.file.Paths
 
 // ---------------------------------------------------------------------------
@@ -196,15 +198,19 @@ internal const val TARGET_OPTION_DESCRIPTION_SESSION: String =
  *    revocation that wipes the daemon-side per-device override (the "Bug B" from
  *    PR #3463: `SessionTargetRegistry` is keyed on the recording session, which is
  *    torn down whenever a fresh CLI invocation re-claims the device).
- *  - [WorkspaceConfig] — the user configured a target via `trailblaze config target`
+ *  - [PersistedSelection] — the user configured a target via `trailblaze config target`
  *    (so [xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig.selectedTargetAppId]
- *    is non-null on disk). Surfaced in resolved-target headers as "from workspace config".
+ *    is non-null on disk). Surfaced in resolved-target headers as "from saved selection".
+ *  - [WorkspaceDefault] — the workspace `trails/config/trailblaze.yaml` declares
+ *    `defaults.target` and nothing more specific is set. Matches the daemon's rung-3
+ *    resolution ([xyz.block.trailblaze.ui.TrailblazeSettingsRepo.getCurrentSelectedTargetApp])
+ *    so the CLI surface agrees with what a run actually targets.
  *  - [BuiltinDefault] — none of the above; we fell back to
  *    [xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget].
  *    Surfaced as "built-in default" so the user understands the value isn't pinned.
  *
  * Lives in the infrastructure layer (rather than a per-command file) because the
- * four-way distinction is the same for every command that wants source attribution
+ * source distinction is the same for every command that wants source attribution
  * — toolbox is the first consumer, but future commands (e.g. a `--show-target`
  * variant of `tool`) reuse the same resolution.
  */
@@ -225,27 +231,59 @@ internal enum class ResolvedCliTargetSource(
 ) {
   Explicit(attributionLabel = null),
   EnvVar(attributionLabel = "from \$TRAILBLAZE_TARGET"),
-  WorkspaceConfig(attributionLabel = "from workspace config"),
+  PersistedSelection(attributionLabel = "from saved selection"),
+  WorkspaceDefault(attributionLabel = "from workspace defaults.target"),
   BuiltinDefault(attributionLabel = "built-in default"),
 }
 
 /**
  * Resolves the effective `--target` value plus the source it came from, in one
- * place, for any CLI command that wants the four-tier resolution
- * (`flag → TRAILBLAZE_TARGET env → workspace config → built-in default`).
+ * place, for any CLI command that wants the five-tier resolution
+ * (`flag → TRAILBLAZE_TARGET env → saved selection → workspace defaults.target →
+ * built-in default`).
  *
  * Returns the resolved id and the source — callers decide whether to render a
  * header, suppress one, etc. Distinct from [cliWithDaemon]'s `targetAppId` read,
- * which collapses the four-tier resolution into a single non-null id; this
- * helper preserves the distinction between "user explicitly set this" and "we
- * fell back to the framework default" so the CLI surface can communicate it.
+ * which passes the persisted selection (possibly null) straight through for
+ * session change-detection; this helper preserves the distinction between "user
+ * explicitly set this" and "we fell back to a default" so the CLI surface can
+ * communicate it.
  */
 internal data class ResolvedCliTarget(
   val id: String,
   val source: ResolvedCliTargetSource,
 )
 
-internal fun resolveCliTarget(flag: String?): ResolvedCliTarget {
+/**
+ * The neutral-"default" sentinel for every CLI target surface ([resolveCliTarget],
+ * `config get target`, `config target` listing). Thin adapter over the shared
+ * [TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId] that pins the CLI's neutral
+ * default to the compile-time OSS static ([xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget]).
+ *
+ * The daemon ([xyz.block.trailblaze.ui.TrailblazeSettingsRepo.getCurrentSelectedTargetApp]) calls
+ * the same shared function with its runtime-injected `defaultHostAppTarget.id`. Both routing
+ * through one implementation is what stops the CLI's target-attribution and the daemon's run
+ * resolution from silently disagreeing on what "no explicit selection" means — the parity this
+ * function exists to guarantee (see `CliDaemonTargetSentinelParityTest`).
+ */
+internal fun authoritativeSelectedTargetId(selectedTargetAppId: String?): String? =
+  TrailblazeWorkspaceConfigResolver.authoritativeSelectedTargetId(
+    selectedTargetAppId = selectedTargetAppId,
+    neutralDefaultId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+  )
+
+internal fun resolveCliTarget(
+  flag: String?,
+  /**
+   * Seed for the workspace-anchor walk-up (the `defaults.target` tier). Defaults to the
+   * caller's cwd ([CliCallerContext.callerCwd]) — the user's shell workspace, forwarded
+   * through the daemon `/cli/exec` path so a daemon launched elsewhere anchors at the
+   * caller's workspace rather than its own launch directory. Injectable so tests aren't
+   * coupled to the repo they run in (this repo is itself a workspace anchor declaring a
+   * default target).
+   */
+  workspaceAnchorSeedPath: Path = CliCallerContext.callerCwd(),
+): ResolvedCliTarget {
   // Normalize the explicit flag the same way [resolveCliTargetPin] does
   // (trim + lowercase) so logged ids, session-file comparisons, and daemon
   // arguments stay consistent regardless of which resolver a caller picks.
@@ -257,20 +295,45 @@ internal fun resolveCliTarget(flag: String?): ResolvedCliTarget {
     return ResolvedCliTarget(it, ResolvedCliTargetSource.Explicit)
   }
   // TRAILBLAZE_TARGET env var — set via `eval $(trailblaze device connect ... --target X)`
-  // or directly in the shell, parallel to TRAILBLAZE_DEVICE. Wins over workspace config
-  // so per-shell pinning beats per-project default in the multi-terminal case.
+  // or directly in the shell, parallel to TRAILBLAZE_DEVICE. Wins over the saved selection
+  // and workspace tiers so per-shell pinning beats per-machine and per-project defaults
+  // in the multi-terminal case.
   envTrailblazeTarget()?.let {
     return ResolvedCliTarget(it, ResolvedCliTargetSource.EnvVar)
   }
-  // readConfigRaw (not getOrCreateConfig) so we can tell "user set it" from "the
-  // framework hydrated null → 'default' on read." The hydration is convenient for
-  // the daemon path but loses the user-intent signal we need for source attribution.
+  val neutralDefaultId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id
+  // readConfigRaw so a daemon-bridged read can't shadow the on-disk state; null
+  // here is the tri-state "user never picked a target" signal. The neutral-default
+  // sentinel (see authoritativeSelectedTargetId) drops a legacy auto-persisted
+  // "default" on this tier so it can't mask a committed workspace default — same
+  // rule as the daemon's TrailblazeSettingsRepo.getCurrentSelectedTargetApp.
   val rawSetting = CliConfigHelper.readConfigRaw()?.selectedTargetAppId
-  if (rawSetting != null) {
-    return ResolvedCliTarget(rawSetting, ResolvedCliTargetSource.WorkspaceConfig)
+  authoritativeSelectedTargetId(rawSetting)?.let {
+    return ResolvedCliTarget(it, ResolvedCliTargetSource.PersistedSelection)
+  }
+  // Workspace `defaults.target` — the daemon's rung 3. The CLI has no loaded-target
+  // set to validate against, so the declared id is surfaced as-is (blank-normalized by
+  // the accessor); the daemon rejects an unknown id at dispatch the same way it always has.
+  // TRAILBLAZE_CONFIG_DIR is read via CliCallerContext.callerEnv — not System.getenv — for
+  // the same reason workspaceAnchorSeedPath is the caller's cwd: on a daemon launched elsewhere,
+  // System.getenv is the daemon's frozen env, and CONFIG_DIR_ENV_VAR OUTRANKS the cwd walk-up,
+  // so failing to forward it would resolve (and dispatch) the wrong workspace's default.
+  TrailblazeWorkspaceConfigResolver.workspaceDefaultTarget(
+    fromPath = workspaceAnchorSeedPath,
+    consumer = "defaults.target (cli)",
+    envReader = { CliCallerContext.callerEnv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR) },
+  )?.let {
+    return ResolvedCliTarget(it, ResolvedCliTargetSource.WorkspaceDefault)
+  }
+  if (rawSetting != null && rawSetting.isNotBlank()) {
+    // Legacy auto-persisted "default" with no workspace default declared: still a
+    // saved selection for attribution purposes. A blank persisted id is non-authoritative
+    // (authoritativeSelectedTargetId already rejected it) and must not surface here — it
+    // falls through to BuiltinDefault, matching the daemon, which never matches a blank id.
+    return ResolvedCliTarget(rawSetting, ResolvedCliTargetSource.PersistedSelection)
   }
   return ResolvedCliTarget(
-    xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+    neutralDefaultId,
     ResolvedCliTargetSource.BuiltinDefault,
   )
 }

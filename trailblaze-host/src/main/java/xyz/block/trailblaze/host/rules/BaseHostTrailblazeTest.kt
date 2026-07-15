@@ -64,6 +64,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
@@ -593,6 +594,12 @@ abstract class BaseHostTrailblazeTest(
      */
     initialMemorySeeds: Map<String, String> = emptyMap(),
     initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
+    /**
+     * CLI-bound `config.args:` values in [xyz.block.trailblaze.yaml.TrailArgBinder.encodeProvided]
+     * wire form, seeded via [xyz.block.trailblaze.AgentMemory.seedArgs] right after the memory
+     * tiers (string args may carry memory tokens, so memory must land first).
+     */
+    initialArgs: Map<String, String> = emptyMap(),
   ): HostYamlRunResult {
     // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
     if (forceStopApp) {
@@ -623,6 +630,7 @@ abstract class BaseHostTrailblazeTest(
       cliSeeds = initialMemorySeeds,
       cliSensitiveSeeds = initialMemorySensitiveSeeds,
     )
+    trailblazeAgent.memory.seedArgs(TrailArgBinder.decodeProvided(initialArgs))
     val sensitiveMemoryKeys: Set<String> = trailblazeAgent.memory.sensitiveKeys.toSet()
 
     if (sendSessionStartLog) {

@@ -15,6 +15,7 @@ import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.SessionEventsReader
 import xyz.block.trailblaze.ui.JvmLiveSessionDataProvider
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
@@ -50,7 +51,10 @@ internal const val SESSION_ARCHIVE_MAX_BYTES: Long = 512L * 1024 * 1024
 internal suspend fun fetchSessionSummaries(deps: TrailRunnerDeps): List<SessionSummary> =
   withContext(Dispatchers.IO) {
     deps.logsRepo.getSessionIds().mapNotNull { id ->
-      val info = runCatching { deps.logsRepo.getSessionInfoDirect(id) }.getOrNull() ?: return@mapNotNull null
+      // Summary-grade read: status logs + file mtimes only. The full-parse getSessionInfoDirect
+      // deserializes every log (hierarchies + LLM transcripts) and, called for every session on
+      // every poll, exhausted the daemon heap.
+      val info = runCatching { deps.logsRepo.getSessionInfoSummary(id) }.getOrNull() ?: return@mapNotNull null
       val trailId = runCatching {
         java.io.File(deps.logsRepo.logsDir, "$id/.trailrunner-trail-id").takeIf { it.isFile }?.readText()?.trim()
       }.getOrNull()
@@ -103,12 +107,36 @@ internal sealed interface CancelSessionOutcome {
 internal suspend fun buildCancelSessionOutcome(deps: TrailRunnerDeps, id: String): CancelSessionOutcome {
   val deviceManager = deps.deviceManager ?: return CancelSessionOutcome.NoDeviceManager
   if (resolveSafeSessionDir(deps.logsRepo.logsDir, id) == null) return CancelSessionOutcome.NotFound
-  val ok = withContext(Dispatchers.IO) {
-    runCatching {
-      JvmLiveSessionDataProvider(deps.logsRepo, deviceManager).cancelSession(SessionId(id))
-    }.getOrDefault(false)
+  val response = withContext(Dispatchers.IO) {
+    // A session that already reached a terminal status must stay terminal: a cancel raced against
+    // a fast finish would otherwise append Ended.Cancelled OVER Ended.Succeeded and rewrite
+    // history (observed live: a passed 12.5s run flipped to "cancelled" by a stale Stop button).
+    val alreadyEnded = deps.logsRepo.getSessionInfoDirect(SessionId(id))
+      ?.latestStatus is SessionStatus.Ended
+    // Ended-but-still-holding-a-device is the phantom-409 state: the session's logs say it's over
+    // but its cleanup never ran, so it's still registered as the device's active session and every
+    // new run 409s against it. That hold must be cancellable - release the device (without writing
+    // a second terminal status log over the real one) instead of short-circuiting.
+    val holdingDevice = deviceManager.activeDeviceSessionsFlow.value.entries
+      .firstOrNull { it.value.value == id }?.key
+    if (alreadyEnded && holdingDevice != null) {
+      // knownSessionId covers the mapping-already-cleared case: without it, an ended-but-wedged
+      // session's screenrecord/logcat capture streams keep running forever.
+      val released = runCatching { deviceManager.cancelSessionForDevice(holdingDevice, knownSessionId = SessionId(id)) }.getOrDefault(false)
+      CancelSessionResponse(ok = released, reason = if (released) "released_device" else "not_running")
+    } else if (alreadyEnded) {
+      CancelSessionResponse(ok = false, reason = "already_ended")
+    } else {
+      val ok = runCatching {
+        JvmLiveSessionDataProvider(deps.logsRepo, deviceManager).cancelSession(SessionId(id))
+      }.getOrDefault(false)
+      // "not_running": no live execution was found for the session (or the cancel path errored) -
+      // nothing was stopped and no cancellation log was written, and the UI should say so instead
+      // of silently pretending the Stop landed.
+      CancelSessionResponse(ok = ok, reason = if (ok) "cancelled" else "not_running")
+    }
   }
-  return CancelSessionOutcome.Ok(CancelSessionResponse(ok = ok))
+  return CancelSessionOutcome.Ok(response)
 }
 
 /**

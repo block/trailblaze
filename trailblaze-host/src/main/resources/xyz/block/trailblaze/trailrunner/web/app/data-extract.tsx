@@ -54,8 +54,8 @@ function buildPromptTrailYaml(title, target, platform, objective, prependSteps) 
 }
 
 // Serialize a `blaze.yaml` (the portable spec): config (with the original objective preserved in
-// metadata) + an ordered list of do/verify steps, NO recordings. Used by Create → Save blaze and
-// the Drafts step editor. `steps` is an array of { kind: 'do'|'verify', text }.
+// metadata) + an ordered list of do/verify steps, NO recordings. Used by the Create save flows
+// and the step editor. `steps` is an array of { kind: 'do'|'verify', text }.
 // Build a blaze.yaml from the structured fields. `extra` carries optional config (context) and
 // metadata (destination — the eventual commit home, kept in metadata so the OSS TrailConfig model
 // is untouched, same as objective).
@@ -84,7 +84,7 @@ function buildBlazeYaml(title, target, platform, objective, steps, extra) {
   return lines.join('\n');
 }
 
-// Re-serialize a draft's blaze.yaml when saving STRUCTURED edits (title/target/platform/destination/
+// Re-serialize a bundle's blaze.yaml when saving STRUCTURED edits (title/target/platform/destination/
 // steps), while PRESERVING any config the structured editor doesn't model (tags, priority, driver,
 // skip, description, memory, source, electron, id, plus extra metadata keys) — anything a user typed
 // in the raw YAML editor. Falls back to a clean buildBlazeYaml if the existing file can't be parsed.
@@ -153,6 +153,9 @@ function trailheadsForPlatform(trailmaps, target, platform) {
   if (!p) return all;
   const KNOWN = ['android', 'ios', 'web'];
   return all.filter((t) => {
+    // Dynamic (scripted) trailheads carry a real platforms field - the durable signal the
+    // name-token heuristic below was always standing in for.
+    if (t.platforms && t.platforms.length) return t.platforms.includes(p);
     const name = (t.name || '').toLowerCase();
     const named = KNOWN.find((k) => name.includes('_' + k + '_'));
     return !named || named === p;
@@ -410,7 +413,7 @@ function targetLabel(id, displayMap) {
 // The trailmaps whose components (tools, trailheads) are in scope
 // when `target` is active on `platform`: the target's own trailmap PLUS the generalized ones —
 // the framework core (trailblaze) and the platform's shared trailmaps (android/ios/web/mobile/
-// compose). This mirrors the agent's session-start tool composition and the trail/draft editor
+// compose). This mirrors the agent's session-start tool composition and the trail editor
 // palette (editorToolsFor), so the Tools and Trailmaps views show the same set a real run would:
 // platform-wide tools (android_*, mobile_*, trailblaze_*) stay visible for an app target instead
 // of vanishing because they don't live in the target's own trailmap. A null/unknown platform is
@@ -430,7 +433,7 @@ function scopeTrailmaps(target, platform) {
 // (metadata.objective), arrays are formatted by `joinArray` (default: comma-joined), scalars
 // stringify; `skip` (a Set) drops keys at any level. One predictable rule for every key — used for
 // the verbatim config block and for recorded selector params (JSON-encoded arrays, `reason` skipped).
-// Lives here (loaded before every screen) so drafts.jsx and trail-detail.jsx share one definition
+// Lives here (loaded before every screen) so the screens (record, trail-detail) share one definition
 // rather than leaning on cross-file <script> ordering.
 function flattenObject(obj, { joinArray = (a) => a.join(', '), skip, prefix } = {}) {
   const out = [];
@@ -453,13 +456,19 @@ Object.assign(window, {
 window.TB = {
   useStatus, useTrails, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, useTrailDetail, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionAnalytics, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
   addTrailRoot, removeTrailRoot, pickDirectoryViaShell, updateSetting, switchWorkspace, WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded, deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive, runIntegrationAction, fetchComponentSource, createTrailmapComponent, saveTargetConfig,
-  resolveRunDevice, connectDevice, fetchTrailYaml, dispatchRun, retrySession,
+  // Screens reach these through the TB namespace - a name defined in data-core but missing here
+  // throws "not a function" at click time (this is what broke every Run click once before),
+  // so any new data-core function a screen uses MUST be listed in this object too.
+  // TbNamespaceCoverageTest enforces this.
+  resolveRunDevice, connectDevice, connectDeviceDetailed, fetchTrailYaml, dispatchRun, retrySession, withTimeout, setPendingRunSession, createTrailDir, extractTrace,
   getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, fileUrl, summarizeAnalyticsProps, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
   recordPendingRun, getPendingRun, clearPendingRun, failPendingRun,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
-  buildBlazeYaml, mergeBlazeYaml, proposeSteps, createDraft, fetchDraftDetail, fetchDraftFile, updateDraftBlaze, updateDraftFile, deleteDraftFile, saveDraftTo, deleteDraft, revealDraft, recordDraft,
+  buildBlazeYaml, mergeBlazeYaml, proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
   fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, migrateTrailFolder,
-  useDrafts, useDraftDetail,
-  recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordToolParams, scriptedToolParams,
+  recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams,
+  useExternalAgents, useExternalAgentEvents, startExternalAgent, cancelExternalAgent, replyExternalAgent, applyTrailRunnerUiCommand, fetchAgentSkills,
+  startDemo, demoMarkStart, demoFinish, demoGenerate, demoAddPlatform, demoDeleteStep, demoRevealBundle,
+  decideExternalAgentPermission, setExternalAgentAutoApprove, demoTrailContent,
 };

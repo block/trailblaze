@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.toolcalls
 
+import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotSameInstanceAs
 import assertk.assertions.isNull
 import assertk.assertions.isSameInstanceAs
+import assertk.assertions.messageContains
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -20,6 +23,7 @@ import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.yaml.MalformedArgTokenException
 
 /**
  * Contract tests for the dispatch-boundary memory helpers in `ToolMemoryInterpolation.kt`:
@@ -206,6 +210,71 @@ class ToolMemoryInterpolationTest {
       .isSameInstanceAs(authored)
   }
 
+  // -- args-only memory (no remembered variables) --
+  //
+  // Regression coverage: the boundary's same-instance short circuit must consult BOTH memory
+  // stores. A parameterized trail with no `config.memory:` and no `remember()` calls has an
+  // EMPTY `variables` map for its whole run — checking only `variables.isEmpty()` here previously
+  // skipped interpolation entirely, so `{{args.x}}` never resolved at real dispatch even though
+  // direct `AgentMemory` unit tests (which call `interpolateVariables` directly, bypassing this
+  // boundary) never exercised the gate and so never caught it.
+
+  @Test
+  fun `args-only memory still resolves a typed tool's string field`() {
+    val argsOnlyMemory = AgentMemory().apply {
+      seedArgs(mapOf("recipient" to JsonPrimitive("sam")))
+    }
+    val authored = InputTextTrailblazeTool(text = "Hi {{args.recipient}}")
+
+    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
+
+    assertThat(dispatched.text).isEqualTo("Hi sam")
+    assertThat(dispatched).isNotSameInstanceAs(authored)
+  }
+
+  @Test
+  fun `args-only memory still resolves a yaml-defined tool's params tree`() {
+    val argsOnlyMemory = AgentMemory().apply {
+      seedArgs(mapOf("recipient" to JsonPrimitive("sam")))
+    }
+    val authored = YamlDefinedTrailblazeTool(
+      config = ToolYamlConfig(id = "myYamlTool"),
+      params = mapOf("text" to JsonPrimitive("{{args.recipient}}")),
+    )
+
+    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
+
+    assertThat(dispatched.params["text"]!!.jsonPrimitive.content).isEqualTo("sam")
+  }
+
+  @Test
+  fun `a whole-scalar integer arg in a typed String field dispatches its text, not the literal token`() {
+    // A whole-scalar {{args.count}} substitutes the arg's NATIVE number into the encoded tree;
+    // a String-typed Kotlin field can't decode an unquoted scalar, and before the text-rendered
+    // retry that decode failure fell into the round-trip catch and dispatched the literal token.
+    val argsOnlyMemory = AgentMemory().apply { seedArgs(mapOf("count" to JsonPrimitive(3))) }
+    val authored = InputTextTrailblazeTool(text = "{{args.count}}")
+
+    val dispatched = interpolateMemoryInTool(authored, argsOnlyMemory)
+
+    assertThat(dispatched.text).isEqualTo("3")
+  }
+
+  @Test
+  fun `a malformed args token hard-errors through the class-serializer round-trip, never dispatches as-authored`() {
+    // The round-trip catch below this call site is broad on purpose (it also legitimately
+    // swallows "this tool's shape can't encode"), but a malformed-token hard-error must never
+    // land in that bucket — that would silently dispatch the tool with the broken token literally
+    // intact instead of failing the run.
+    val argsOnlyMemory = AgentMemory().apply { seedArgs(mapOf("count" to JsonPrimitive(1))) }
+    val authored = InputTextTrailblazeTool(text = "{{args.count + 1}}")
+
+    assertFailure {
+      interpolateMemoryInTool(authored, argsOnlyMemory)
+    }.isInstanceOf(MalformedArgTokenException::class)
+      .messageContains("dotted paths only")
+  }
+
   @Test
   fun `OtherTrailblazeTool placeholder passes through untouched`() {
     // An unresolved placeholder: whichever executor resolves it to a concrete tool re-enters a
@@ -289,6 +358,39 @@ class ToolMemoryInterpolationTest {
     val rawPayload = payload("inputText") { put("text", "{{user}}") }
 
     assertThat(buildLogSafeResolvedPayload(rawPayload, AgentMemory())).isSameInstanceAs(rawPayload)
+  }
+
+  @Test
+  fun `args tokens resolve in the log-safe payload, matching what was dispatched`() {
+    // Args are non-sensitive by design; the persisted resolved payload must show the value the
+    // driver actually received — including when args are the ONLY seeded store (no variables).
+    val argsOnlyMemory = AgentMemory().apply {
+      seedArgs(mapOf("recipient" to JsonPrimitive("sam")))
+    }
+    val rawPayload = payload("inputText") { put("text", "Hi {{args.recipient}}") }
+
+    val resolved = buildLogSafeResolvedPayload(rawPayload, argsOnlyMemory)
+
+    assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("Hi sam")
+  }
+
+  @Test
+  fun `an arg that laundered in a sensitive value stays a token in the log-safe payload`() {
+    // --secret redaction must survive the args namespace: an arg whose value resolved FROM
+    // sensitive memory ('{{memory.pin}}') dispatches with the real value, but the persisted
+    // payload keeps the token form — same contract as sensitive variables.
+    val memory = AgentMemory().apply {
+      rememberSensitive("pin", "9876")
+      seedArgs(mapOf("vaultCode" to JsonPrimitive("{{memory.pin}}")))
+    }
+    val rawPayload = payload("inputText") { put("text", "{{args.vaultCode}}") }
+
+    val resolved = buildLogSafeResolvedPayload(rawPayload, memory)
+
+    assertThat(resolved.raw["text"]!!.jsonPrimitive.content).isEqualTo("{{args.vaultCode}}")
+    // The dispatch boundary, by contrast, resolves the real value.
+    val dispatched = interpolateMemoryInTool(InputTextTrailblazeTool(text = "{{args.vaultCode}}"), memory)
+    assertThat(dispatched.text).isEqualTo("9876")
   }
 
   // -- withAuthoredCommandIdentity --

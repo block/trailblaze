@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 /**
  * Tests for [CliCallerContext].
@@ -86,6 +87,21 @@ class CliCallerContextTest {
     // override." This is the backward-compat contract.
     val seen = CliCallerContext.withCallerCwd(null) { CliCallerContext.callerCwd() }
     assertEquals(Paths.get(""), seen)
+  }
+
+  @Test
+  fun `run-dispatch forwards a non-blank absolute path even with no binding`() {
+    // `TrailCommand.delegateToDaemon` forwards `callerCwd().toAbsolutePath().toString()` as
+    // CliRunRequest.callerWorkspaceDir. The `.toAbsolutePath()` is load-bearing: the no-binding
+    // default is Paths.get("") whose toString() is "" — which the daemon's resolver treats as
+    // blank and silently falls back to the daemon anchor (reverting the fix). Absolutizing first
+    // guarantees a usable workspace dir regardless of whether a thread-local is set.
+    val forwarded = CliCallerContext.callerCwd().toAbsolutePath().toString()
+    assertTrue(forwarded.isNotBlank(), "forwarded caller workspace dir must not be blank")
+    assertTrue(
+      Paths.get(forwarded).isAbsolute,
+      "forwarded caller workspace dir must be absolute so the daemon can anchor the workspace walk",
+    )
   }
 
   @Test

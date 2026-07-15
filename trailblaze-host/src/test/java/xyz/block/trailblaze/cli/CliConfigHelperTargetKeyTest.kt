@@ -57,4 +57,70 @@ class CliConfigHelperTargetKeyTest {
     assertNull(targetKey.set(baseConfig, "my.app"), "Dot is invalid")
     assertNull(targetKey.set(baseConfig, ""), "Empty string is invalid")
   }
+
+  /**
+   * A scratch dir with no workspace anchor above it, pinned as the caller cwd so the getter's
+   * `defaults.target` walk-up finds nothing — the test JVM cwd sits inside this repo (itself a
+   * workspace declaring a default target), so the getter must be driven from a clean seed.
+   */
+  private fun <T> withoutWorkspace(block: () -> T): T {
+    val dir = java.nio.file.Files.createTempDirectory("target-getter-test")
+    org.junit.Assume.assumeTrue(
+      "An ancestor of $dir already contains a trailblaze.yaml — skipping.",
+      xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver.resolveConfigFile(dir) == null,
+    )
+    return CliCallerContext.withCallerCwd(dir) { block() }
+  }
+
+  @Test
+  fun `target getter returns an authoritative selection unchanged`() {
+    withoutWorkspace {
+      assertEquals("myapp", targetKey.get(baseConfig.copy(selectedTargetAppId = "myapp")))
+    }
+  }
+
+  @Test
+  fun `target getter reports not-set when nothing is selected and no workspace default exists`() {
+    withoutWorkspace {
+      assertEquals("(not set)", targetKey.get(baseConfig.copy(selectedTargetAppId = null)))
+    }
+  }
+
+  @Test
+  fun `target getter treats a persisted neutral default id as not-set`() {
+    // The neutral-"default" sentinel: legacy auto-persist must not read as an authoritative
+    // selection, so with no workspace default the getter shows "(not set)", not "default".
+    withoutWorkspace {
+      val neutral = xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id
+      assertEquals("(not set)", targetKey.get(baseConfig.copy(selectedTargetAppId = neutral)))
+    }
+  }
+
+  /**
+   * A scratch workspace whose anchor declares `defaults.target: [defaultsTarget]`, pinned as the
+   * caller cwd so the getter's walk-up resolves it. Guarded like [withoutWorkspace] against an
+   * unexpected ancestor anchor.
+   */
+  private fun <T> withWorkspaceDefaultTarget(defaultsTarget: String, block: () -> T): T {
+    val dir = java.nio.file.Files.createTempDirectory("target-getter-ws-test")
+    org.junit.Assume.assumeTrue(
+      "An ancestor of $dir already contains a trailblaze.yaml — skipping.",
+      xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver.resolveConfigFile(dir) == null,
+    )
+    val configDir = dir.resolve("trails/config").toFile().apply { mkdirs() }
+    java.io.File(configDir, "trailblaze.yaml").writeText("defaults:\n  target: $defaultsTarget\n")
+    return CliCallerContext.withCallerCwd(dir) { block() }
+  }
+
+  @Test
+  fun `target getter surfaces the workspace default when nothing authoritative is selected`() {
+    // The branch this PR added: no authoritative selection + a workspace defaults.target declared
+    // → the getter reports the effective target a run resolves to, not "(not set)".
+    withWorkspaceDefaultTarget("alpha") {
+      assertEquals(
+        "(not set — workspace default: alpha)",
+        targetKey.get(baseConfig.copy(selectedTargetAppId = null)),
+      )
+    }
+  }
 }

@@ -378,6 +378,86 @@ class HostAccessibilityRpcClientTest {
   }
 
   /**
+   * The args twin of the memory-snapshot contract above: `{{args.x}}` tokens ride the wire
+   * as authored, and the bound value crosses in `RunYamlRequest.argsSnapshot` in
+   * [TrailArgBinder.encodeProvided] wire form (JSON-encoded strings), preserving the arg's
+   * native type for the device-side rehydration — an integer arg must arrive as `3`, not `"3"`.
+   */
+  @Test
+  fun `args tokens ride the RPC as authored and the args snapshot carries the typed wire value`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlSuccessBody()
+    }
+
+    val memory = AgentMemory().apply {
+      seedArgs(
+        mapOf(
+          "recipient" to kotlinx.serialization.json.JsonPrimitive("sam"),
+          "retries" to kotlinx.serialization.json.JsonPrimitive(3),
+        ),
+      )
+    }
+    runBlocking {
+      val result = createClient(memory).execute(
+        "inputText",
+        Json.parseToJsonElement("""{"text":"{{args.recipient}}"}""").jsonObject,
+        null,
+      )
+      assertThat(result).isInstanceOf(ExecutionResult.Success::class)
+    }
+
+    val request = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject
+    val yaml = request["yaml"]!!.jsonPrimitive.content
+    assertThat(yaml).contains("{{args.recipient}}")
+    assertThat(yaml).doesNotContain("sam")
+    val argsSnapshot = request["argsSnapshot"]!!.jsonObject
+    // encodeProvided wire form: each value is the arg's JSON-encoded text, so type survives.
+    assertThat(argsSnapshot["recipient"]!!.jsonPrimitive.content).isEqualTo("\"sam\"")
+    assertThat(argsSnapshot["retries"]!!.jsonPrimitive.content).isEqualTo("3")
+  }
+
+  /**
+   * Args-taint transport — outbound half: an arg that captured a `rememberSensitive` value at
+   * seed time carries its NAME in `RunYamlRequest.sensitiveArgNames` (the args twin of
+   * `sensitiveMemoryKeys`), because the device cannot re-derive taint once the source memory
+   * key is deleted. The tainted VALUE still travels in the args snapshot — the device needs it
+   * to resolve `{{args.x}}`; redaction is a logging/LLM-surface concern, not a transport one.
+   */
+  @Test
+  fun `dispatched RunYamlRequest marks tainted arg names alongside the args snapshot`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to runYamlSuccessBody()
+    }
+
+    val memory = AgentMemory().apply {
+      rememberSensitive("pin", "9876")
+      seedArgs(
+        mapOf(
+          "vaultCode" to kotlinx.serialization.json.JsonPrimitive("{{memory.pin}}"),
+          "recipient" to kotlinx.serialization.json.JsonPrimitive("sam"),
+        ),
+      )
+    }
+    runBlocking {
+      createClient(memory).execute(
+        "pressKey",
+        Json.parseToJsonElement("""{"keyCode":"BACK"}""").jsonObject,
+        null,
+      )
+    }
+
+    val request = Json.parseToJsonElement(
+      mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty().single(),
+    ).jsonObject
+    val sentNames = request["sensitiveArgNames"]!!.jsonArray.map { it.jsonPrimitive.content }
+    assertThat(sentNames).isEqualTo(listOf("vaultCode"))
+    val argsSnapshot = request["argsSnapshot"]!!.jsonObject
+    assertThat(argsSnapshot["vaultCode"]!!.jsonPrimitive.content).isEqualTo("\"9876\"")
+  }
+
+  /**
    * The remembered value never touches the wire YAML (it rides the JSON `memorySnapshot`
    * field), so YAML-significant characters (`"`, `\n`, `:`, `#`) in a remembered value can't
    * splice into the encoded trail and corrupt tool-arg parsing on the device. The YAML

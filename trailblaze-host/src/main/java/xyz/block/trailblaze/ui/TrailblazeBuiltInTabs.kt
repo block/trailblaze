@@ -103,6 +103,7 @@ object TrailblazeBuiltInTabs {
         LocalRunYamlRequestFactory provides RunYamlRequestFactory(
           appConfig = serverState.appConfig,
           llmModel = currentTrailblazeLlmModelProvider(),
+          effectiveTargetAppId = { trailblazeSettingsRepo.getCurrentSelectedTargetApp()?.id },
         )
       ) {
         TrailsBrowserTabComposable(
@@ -186,6 +187,7 @@ object TrailblazeBuiltInTabs {
         LocalRunYamlRequestFactory provides RunYamlRequestFactory(
           appConfig = serverState.appConfig,
           llmModel = currentTrailblazeLlmModelProvider(),
+          effectiveTargetAppId = { trailblazeSettingsRepo.getCurrentSelectedTargetApp()?.id },
         )
       ) {
         YamlTabComposable(

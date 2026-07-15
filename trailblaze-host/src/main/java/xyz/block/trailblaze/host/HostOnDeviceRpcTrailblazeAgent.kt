@@ -37,6 +37,7 @@ import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
@@ -508,6 +509,10 @@ class HostOnDeviceRpcTrailblazeAgent(
           // values redacted in its own logs (they'd otherwise arrive unmarked and log cleartext).
           memorySnapshot = memory.variables.toMap(),
           sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
+          // Args are immutable per run, so unlike memory they only travel host → device (no
+          // round-trip back). The device rehydrates them verbatim to resolve {{args.x}} tokens.
+          argsSnapshot = TrailArgBinder.encodeProvided(memory.args),
+          sensitiveArgNames = memory.sensitiveArgNames.toList(),
         )
 
         val name = tool::class.simpleName ?: "unknown"

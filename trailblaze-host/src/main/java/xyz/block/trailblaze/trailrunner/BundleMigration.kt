@@ -11,8 +11,8 @@ import java.io.File
  * reconciliation — NL-drift detection, per-classifier drivers/skip, family collapse, memory drift)
  * that adds the file mutation the UI needs: write the unified file into the folder as
  * `<folder>.trail.yaml`, then delete the per-platform inputs (+ `blaze.yaml`) the migrator consumed —
- * except when the migration was lossy (dropped input content), when the inputs are retained (see
- * [Outcome.inputsRetained]) so the only surviving copy of the dropped content isn't destroyed.
+ * except when the migration was lossy (dropped input content, or a round-trip fidelity mismatch),
+ * when the inputs are retained (see [Outcome.inputsRetained]) so the only surviving copy isn't destroyed.
  *
  * The side effects live in [migrateFolder] so it can be unit-tested against a temp dir with real
  * bundle content (see `BundleMigrationTest`), rather than only through the daemon route.
@@ -36,17 +36,19 @@ object BundleMigration {
     /** Per-platform input files (+ `blaze.yaml`) that were deleted. Empty when [inputsRetained]. */
     val removed: List<String>,
     /**
-     * True when the migration was lossy (the migrator dropped input content it could not carry) and
-     * the v1 inputs were therefore LEFT IN PLACE beside the written `trail.yaml` for manual
-     * reconciliation rather than deleted. [driftComments] leads with a note explaining the retention.
+     * True when the migration was lossy — the migrator dropped input content it could not carry, or
+     * the emitted file did not round-trip back to the intended tools/config — and the v1 inputs were
+     * therefore LEFT IN PLACE beside the written `trail.yaml` for manual reconciliation rather than
+     * deleted. [driftComments] leads with a note explaining the retention.
      */
     val inputsRetained: Boolean = false,
   )
 
   /**
    * Migrate [dir] in place: write `<dir.name>.trail.yaml`, then delete the consumed v1 inputs —
-   * UNLESS the migration was lossy (dropped input content), in which case the inputs are left in
-   * place so the dropped content isn't destroyed (see [Outcome.inputsRetained]).
+   * UNLESS the migration was lossy (dropped input content, or a round-trip fidelity mismatch), in
+   * which case the inputs are left in place so the lost content isn't destroyed (see
+   * [Outcome.inputsRetained]).
    *
    * Throws [IllegalArgumentException] when the migrator refuses the input (no `*.trail.yaml` files, a
    * top-level `- tools:` block, or a `- trailhead:` block — see [UnifiedTrailMigrator]), or when [dir]
@@ -87,7 +89,8 @@ object BundleMigration {
       UnifiedTrailMigrator.kindDriftComments(result.report.kindDrift) +
       UnifiedTrailMigrator.memoryDriftComments(result.report.memoryDrift) +
       UnifiedTrailMigrator.configDriftComments(result.report.configDrift) +
-      UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent)
+      UnifiedTrailMigrator.droppedContentComments(result.report.droppedContent) +
+      UnifiedTrailMigrator.roundTripMismatchComments(result.report.roundTripMismatches)
     val text = yaml.encodeUnifiedTrailToString(result.trail, comments)
     outFile.writeText(text)
 
@@ -99,14 +102,14 @@ object BundleMigration {
       .map { File(dir, it) }
       .filter { it.isFile && it.canonicalPath.startsWith(dir.canonicalPath + File.separator) }
 
-    // A lossy migration must not destroy its own source. When the migrator reports content it could
-    // not carry, the migrated file only WARNS about it in a leading comment — the v1 file is the
-    // only place that dropped content still exists. So leave both the v1 inputs and trail.yaml on
-    // disk for a human to reconcile, rather than deleting the inputs. "Lossy" today means dropped
-    // input keys; a future per-device runtime-divergence channel on the report would OR in here.
-    // Keep this notion of lossy in step with the CLI's lossy-migration exit-code decision
-    // (MigrateTrailsCommand) so the two paths don't contradict each other.
-    val inputsRetained = result.report.droppedContent.isNotEmpty()
+    // A lossy migration must not destroy its own source. When the migrated file only WARNS about
+    // content the migrator couldn't faithfully carry, the v1 file is the only place that content
+    // still exists — so leave both the v1 inputs and trail.yaml on disk for a human to reconcile,
+    // rather than deleting the inputs. Lossy = dropped input keys OR a round-trip fidelity mismatch
+    // (a value that doesn't survive serialize/re-decode); the definition is shared with the CLI's
+    // lossy-migration exit-code decision (MigrateTrailsCommand) via isLossyMigration so the two
+    // paths can't contradict each other.
+    val inputsRetained = UnifiedTrailMigrator.isLossyMigration(result.report)
 
     val removed = mutableListOf<String>()
     if (!inputsRetained) {
@@ -125,9 +128,9 @@ object BundleMigration {
 
   /** Leading lines explaining that a lossy migration left the v1 inputs in place (see [migrateFolder]). */
   private fun inputsRetainedComments(retained: List<String>): List<String> = listOf(
-    "NOTE: kept the v1 input file(s) in place — this migration dropped content that did not",
-    "round-trip (see the DROPPED warnings below), so the originals are the only surviving record.",
-    "Reconcile the dropped content into the migrated file, then delete the v1 file(s) manually:",
+    "NOTE: kept the v1 input file(s) in place — this migration lost content that did not round-trip",
+    "(see the DROPPED / round-trip WARNING lines below), so the originals are the only surviving record.",
+    "Reconcile the lost content into the migrated file, then delete the v1 file(s) manually:",
     "  ${retained.joinToString()}",
   )
 }

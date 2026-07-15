@@ -73,16 +73,19 @@ trail:
     recording:
       android-phone:
         - tapOnElementBySelector:
-            reason: Tap on the 'Toggle A' button as required by the objective.
+            reason: Tap the "Toggle A" chip, matched by its pinned contentDescription child rather than the label text (the FilterChip label isn't reliably promoted onto the a11y node).
             nodeSelector:
-              androidAccessibility:
-                textRegex: Toggle A
-        - wait: {}
+              containsChild:
+                androidAccessibility:
+                  contentDescriptionRegex: Toggle A
         - assertVisibleBySelector:
-            reason: After tapping Toggle A, wait for UI idle and then verify the FilterChip is checked. The wait above ensures Compose has recomposed and the AccessibilityDelegate has synced the checked=true state to UiAutomator before the assertion runs.
+            reason: Verify the chip is now selected. The checked state is captured reliably on the chip's accessibility node; scope it to Toggle A via its contentDescription child.
             nodeSelector:
               androidAccessibility:
-                textRegex: Toggle A
+                isChecked: true
+              containsChild:
+                androidAccessibility:
+                  contentDescriptionRegex: Toggle A
 
   - step: "Tap the \"Nested Button\" inside the parent container"
     recording:

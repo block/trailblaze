@@ -11,7 +11,9 @@ function TargetDevicePicker({ go }) {
   const devices = TB.useDevices();
   const [gt, setGlobalTarget] = TB.useGlobalTarget();
   const [appsByDevice, setAppsByDevice] = React.useState({});
-  const [appsLoading, setAppsLoading] = React.useState(false);
+  // Starts true so first paint shows the loading skeleton, never a false "No targets yet" flash -
+  // the fetch effect below runs after paint and flips it false on the zero-device path anyway.
+  const [appsLoading, setAppsLoading] = React.useState(true);
   // Bumped by Refresh so installed apps/versions re-fetch even when the device set is
   // unchanged (the common case: a device stays connected but its app build changed).
   const [appsNonce, setAppsNonce] = React.useState(0);
@@ -107,7 +109,7 @@ function TargetDevicePicker({ go }) {
   };
 
   const empty = !devices.loading && deviceList.length === 0;
-  const noGroups = !appsLoading && groupList.length === 0 && webDevices.length === 0;
+  const noGroups = !devices.loading && !appsLoading && groupList.length === 0 && webDevices.length === 0;
   const selCountTotal = gt ? (gt.deviceIds || []).length : 0;
   const connectedCount = deviceList.filter((d) => d.connected).length;
 

@@ -26,7 +26,7 @@ trailmap authoring:
 
 | Example | Platform | What it is |
 |---|---|---|
-| [`android-sample-app/`](android-sample-app/) | Android | A small Android app used as a deterministic test target, with its own trails. |
+| [`android-sample-app/`](android-sample-app/) | Android | A small Android app used as a deterministic test target, with its own trails. Its [`README`](android-sample-app/README.md) walks through the **parameterized-trail (`config.args:` + `--arg`) reference**. |
 | [`ios-sample-app/`](ios-sample-app/) | iOS | A minimal SwiftUI app mirroring the Android sample's Forms screen, used for iOS evals. |
 | [`compose-desktop/`](compose-desktop/) | Desktop | A Compose for Desktop sample target. |
 | [`playwright-electron/`](playwright-electron/) | Electron | A bundled Electron sample app driven through the Playwright driver. |

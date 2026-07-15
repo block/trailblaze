@@ -144,6 +144,7 @@ object TrailIndexBuilder {
       // a `<device>.trail.yaml` whose content we couldn't classify falls back to "v1".
       format = cfg?.format ?: if (isUnifiedBare) "unified" else "v1",
       configId = cfg?.id,
+      hasRecordedSteps = cfg?.hasRecordedSteps ?: false,
     )
   }
 
@@ -175,6 +176,8 @@ object TrailIndexBuilder {
     val id: String?,
     /** On-disk YAML shape from [xyz.block.trailblaze.yaml.unified.TrailDocument]: "unified" or "v1". */
     val format: String,
+    /** Whether the file carries any recorded (deterministically replayable) steps. */
+    val hasRecordedSteps: Boolean,
   )
 
   private val configCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, CachedConfig>>()
@@ -204,6 +207,7 @@ object TrailIndexBuilder {
         tags = config?.tags ?: emptyList(),
         id = config?.id,
         format = format,
+        hasRecordedSteps = tb.hasRecordedSteps(yaml),
       )
       configCache[key] = mtime to result
       result

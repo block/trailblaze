@@ -76,6 +76,9 @@ button { font-family: inherit; cursor: pointer; }
 .tb-nav.active { background: var(--bg-prominent); color: var(--text-standard); font-weight: 600; }
 .tb-nav.active::before { content:""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 99px; background: var(--tb-primary-green); }
 .tb-nav .ico { flex: 0 0 18px; display: inline-flex; }
+/* Badge cluster layout lives here (not inline) so the collapsed rail can re-anchor it: an auto
+   margin inside a centered row would otherwise drag the icon off the rail's center line. */
+.tb-nav .bdg { margin-left: auto; }
 .tb-nav .cnt { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--text-subtle); background: var(--bg-standard); padding: 1px 7px; border-radius: 99px; }
 .tb-rail-foot { padding-top: 8px; }
 
@@ -87,7 +90,24 @@ button { font-family: inherit; cursor: pointer; }
   .tb-rail { width: 60px; flex-basis: 60px; }
   .tb-rail .label, .tb-rail .tb-rail-h, .tb-rail .tb-brand .name, .tb-rail .cnt { display: none; }
   .tb-rail .tb-nav { justify-content: center; padding: 9px; }
+  .tb-rail .tb-nav .bdg { position: absolute; margin-left: 0; right: 4px; top: 4px; }
+  .tb-rail .tb-rail-scroll { scrollbar-width: none; }
+  .tb-rail .tb-rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
 }
+
+/* User-collapsed rail: same icon-only treatment as the narrow-window breakpoint, but toggled and
+   persisted. The pickers render their own compact (icon-only) markup when collapsed.
+   Alignment invariants for the icon column:
+   - the badge cluster re-anchors to the row corner (its auto margin would drag the icon left of
+     the rail's center line inside a justify-content:center row);
+   - the scroll area hides its scrollbar (a gutter shrinks only the scrolling rows' centering
+     width, shifting their icons relative to the chips outside the scroller). */
+.tb-rail.collapsed { width: 60px; flex-basis: 60px; }
+.tb-rail.collapsed .label, .tb-rail.collapsed .tb-rail-h, .tb-rail.collapsed .tb-brand .name, .tb-rail.collapsed .cnt { display: none; }
+.tb-rail.collapsed .tb-nav { justify-content: center; padding: 9px; }
+.tb-rail.collapsed .tb-nav .bdg { position: absolute; margin-left: 0; right: 4px; top: 4px; }
+.tb-rail.collapsed .tb-rail-scroll { scrollbar-width: none; }
+.tb-rail.collapsed .tb-rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
 
 .tb-main {
   flex: 1; min-width: 0; display: flex; flex-direction: column;

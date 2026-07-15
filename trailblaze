@@ -65,7 +65,15 @@ set -- "${FILTERED_ARGS[@]}"
 JAR_DIR=$(dev_jar_dir)
 
 if [ "$BLAZE_JAR" = "1" ]; then
-  if dev_ensure_jar "$JAR_DIR"; then
+  if [ -n "${TRAILBLAZE_JAR:-}" ] && [ -f "$TRAILBLAZE_JAR" ]; then
+    # An explicitly provided jar wins: no staleness fingerprint, no rebuild, and crucially no
+    # stop-the-running-daemon. The daemon exports its own jar here to processes it spawns, so a
+    # child's `trailblaze mcp` (or any CLI call inside an agent conversation) can never decide
+    # the source tree is "stale" and kill the daemon that spawned it. The fingerprint is also
+    # cwd-sensitive (git pathspecs + the relative jar dir), so a child running from a different
+    # working directory would false-positive on staleness without this bypass.
+    export TRAILBLAZE_JAR
+  elif dev_ensure_jar "$JAR_DIR"; then
     # JAR is ready — export TRAILBLAZE_JAR so the production script's tb_run*
     # functions use it directly (no Gradle overhead).
     export TRAILBLAZE_JAR="$DEV_JAR_PATH"

@@ -13,6 +13,11 @@ import xyz.block.trailblaze.trailrunner.DeleteSessionRequest
 import xyz.block.trailblaze.trailrunner.DeleteSessionResponse
 import xyz.block.trailblaze.trailrunner.DeviceAppsResponse
 import xyz.block.trailblaze.trailrunner.EditedTrailsResponse
+import xyz.block.trailblaze.trailrunner.ExternalAgentEventsResponse
+import xyz.block.trailblaze.trailrunner.ExternalAgentReplyRequest
+import xyz.block.trailblaze.trailrunner.ExternalAgentRunRequest
+import xyz.block.trailblaze.trailrunner.ExternalAgentRunsResponse
+import xyz.block.trailblaze.trailrunner.ExternalAgentStartResponse
 import xyz.block.trailblaze.trailrunner.FavoriteRequest
 import xyz.block.trailblaze.trailrunner.FavoritesResponse
 import xyz.block.trailblaze.trailrunner.GetDeviceAppsRequest
@@ -107,6 +112,11 @@ internal object TrailRunnerDtoTsBindings {
     DeviceAppsResponse.serializer().descriptor,
     InstalledAppsResponse.serializer().descriptor,
     EditedTrailsResponse.serializer().descriptor,
+    ExternalAgentEventsResponse.serializer().descriptor,
+    ExternalAgentReplyRequest.serializer().descriptor,
+    ExternalAgentRunRequest.serializer().descriptor,
+    ExternalAgentRunsResponse.serializer().descriptor,
+    ExternalAgentStartResponse.serializer().descriptor,
     FavoriteRequest.serializer().descriptor,
     FavoritesResponse.serializer().descriptor,
     IntegrationsResponse.serializer().descriptor,

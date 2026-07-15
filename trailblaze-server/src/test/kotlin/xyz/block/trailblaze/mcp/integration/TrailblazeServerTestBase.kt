@@ -8,7 +8,9 @@ import org.junit.Before
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -258,6 +260,23 @@ abstract class TrailblazeServerTestBase {
       )
       processBuilder.directory(projectRoot)
       processBuilder.redirectErrorStream(true)
+
+      // Pin the launched server to a neutral workspace config unless the caller
+      // already set one: a trailblaze.yaml workspace anchor anywhere above the
+      // project root would otherwise apply its defaults (e.g. `defaults.target`)
+      // to the server under test, changing which target and tool surface these
+      // tests exercise.
+      if (System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR).isNullOrBlank()) {
+        val neutralConfigDir = Files.createTempDirectory("trailblaze-test-config").toFile()
+        neutralConfigDir.deleteOnExit()
+        val neutralConfigFile = File(neutralConfigDir, "trailblaze.yaml")
+        neutralConfigFile.writeText(
+          "# Neutral workspace anchor for integration tests — declares no defaults.\n",
+        )
+        neutralConfigFile.deleteOnExit()
+        processBuilder.environment()[TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR] =
+          neutralConfigDir.absolutePath
+      }
 
       // Inherit IO so we can see the output (nice for debugging)
       processBuilder.inheritIO()

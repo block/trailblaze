@@ -5,10 +5,13 @@
 
 let _pendingRun = null;
 function recordPendingRun(info) {
-  _pendingRun = { title: (info && info.title) || 'New run', target: info && info.target, device: info && info.device, at: Date.now(), error: null };
+  _pendingRun = { title: (info && info.title) || 'New run', target: info && info.target, device: info && info.device, at: Date.now(), error: null, sessionId: (info && info.sessionId) || null };
 }
 function getPendingRun() { return _pendingRun; }
 function clearPendingRun() { _pendingRun = null; }
+// Patch the authoritative sessionId (returned by dispatchRun) onto the in-flight pending marker so
+// the Active screen can lock onto the real session instead of guessing "newest running row".
+function setPendingRunSession(sessionId) { if (_pendingRun && sessionId) _pendingRun = { ..._pendingRun, sessionId }; }
 // Mark the in-flight pending run as failed so the Active screen can show why it never
 // started (e.g. the device couldn't be reached), instead of a marker that just vanishes.
 function failPendingRun(error) { if (_pendingRun) _pendingRun = { ..._pendingRun, error: error || 'Run failed to start' }; }
@@ -31,9 +34,12 @@ const API = {
   // (window.TbRpc, app/rpc/daemon.ts), not this REST map.
 };
 
+// cache: 'no-store' mirrors the server-side Cache-Control interceptor - the desktop shell's
+// WKWebView replays header-less GETs from its persistent NSURLCache, which left polled JSON
+// (e.g. polled run status) stale until a full page reload.
 async function safeJson(url, init) {
   try {
-    const res = await fetch(url, init);
+    const res = await fetch(url, { cache: 'no-store', ...(init || {}) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (e) {
@@ -43,7 +49,7 @@ async function safeJson(url, init) {
 
 async function safeText(url) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
   } catch (e) {
@@ -87,12 +93,18 @@ function useFetched(loader, deps = []) {
   }, [...deps, version]);
   React.useEffect(() => {
     // Switching the workspace re-points the daemon at a different folder, which invalidates every
-    // fetched resource (trails, trailmaps, tools, drafts, status, …). Rather than thread a reload
+    // fetched resource (trails, trailmaps, tools, status, …). Rather than thread a reload
     // through each screen, every useFetched-backed hook listens for one global signal and refetches.
     // The workspace-switch call sites dispatch `tb:workspace-changed` after the change is applied.
+    // `tb:daemon-recovered` (from the shell's health watchdog) refetches the same way: while the
+    // daemon was unreachable every in-flight fetch hung or failed, so all data is suspect.
     const onWorkspaceChanged = () => setVersion((v) => v + 1);
     window.addEventListener('tb:workspace-changed', onWorkspaceChanged);
-    return () => window.removeEventListener('tb:workspace-changed', onWorkspaceChanged);
+    window.addEventListener('tb:daemon-recovered', onWorkspaceChanged);
+    return () => {
+      window.removeEventListener('tb:workspace-changed', onWorkspaceChanged);
+      window.removeEventListener('tb:daemon-recovered', onWorkspaceChanged);
+    };
   }, []);
   return { ...state, reload: () => setVersion((v) => v + 1) };
 }
@@ -127,6 +139,12 @@ async function connectDevice(trailblazeDeviceId) {
   return await window.TbRpc.connectToDevice(trailblazeDeviceId);
 }
 
+// Like connectDevice but returns { ok, error } so callers can show the daemon's real failure
+// reason (e.g. "No target app selected. Pick one in the Target dropdown before connecting.").
+async function connectDeviceDetailed(trailblazeDeviceId) {
+  return await window.TbRpc.connectToDeviceDetailed(trailblazeDeviceId);
+}
+
 async function fetchTrailYaml(id) {
   // Trail detail comes from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
   const d = await window.TbRpc.getTrailDetail(id);
@@ -137,6 +155,14 @@ async function dispatchRun(trailblazeDeviceId, yaml, opts = {}) {
   // Run dispatch goes through the typed RPC client (window.TbRpc, from app/rpc/daemon.ts); a
   // precondition failure (no deviceManager / blank yaml) comes back as { ok: false, error }.
   return await window.TbRpc.dispatchRun({ trailblazeDeviceId, yaml, ...opts });
+}
+
+// Race a launch-path RPC against a deadline. The RPC layer has no timeout by design (some calls
+// legitimately run minutes), so a wedged daemon leaves fetch pending forever - and the run flow's
+// "Starting…" state with it. Resolves to '__timeout__' instead of rejecting, matching the
+// connectDevice race pattern in blaze.tsx.
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((res) => setTimeout(() => res('__timeout__'), ms))]);
 }
 
 async function retrySession(session) {
@@ -273,7 +299,7 @@ async function updateSetting(patch) {
 
 // Apply a workspace switch end to end: persist the new trails directory, then — only if the daemon
 // accepted it — broadcast `tb:workspace-changed` so every useFetched-backed hook refetches against
-// the new folder (trails, trailmaps, tools, drafts, status, …). Returns { ok, applied, empty, error }.
+// the new folder (trails, trailmaps, tools, status, …). Returns { ok, applied, empty, error }.
 // `empty` is true when the new workspace has no trails AND no trailmaps yet, so callers can warn that
 // it will look empty until content is added (the daemon still accepts the switch — empty is allowed).
 async function switchWorkspace(path) {
@@ -369,8 +395,10 @@ async function clearSessions() {
 
 async function cancelSession(id) {
   // Session cancel goes through the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
+  // reason: 'cancelled' | 'released_device' | 'already_ended' | 'not_running' | null (request itself failed).
   const res = await window.TbRpc.cancelSession(id);
-  return { ok: res ? res.ok !== false : false };
+  if (!res) return { ok: false, reason: null };
+  return { ok: res.ok !== false, reason: res.reason || null };
 }
 
 async function revealSession(id) {
@@ -447,7 +475,7 @@ async function saveTargetConfig(req) {
   return j ? { ok: !!j.ok, error: j.error, created: !!j.created, warning: j.warning, registeredLive: !!j.registeredLive } : { ok: false, error: 'request failed' };
 }
 
-// ─── Blaze authoring: propose + drafts ────────────────────────────────────────
+// ─── Blaze authoring: propose + bundles ────────────────────────────────────────
 // Turn an objective into proposed steps. opts: { target, platform, ground, trailblazeDeviceId }.
 async function proposeSteps(objective, opts = {}) {
   try {
@@ -461,12 +489,19 @@ async function proposeSteps(objective, opts = {}) {
   } catch (e) { return { steps: [], error: String(e) }; }
 }
 
-// Create a draft folder from a blaze.yaml. Returns { success, id }.
-async function createDraft(name, yaml) {
+// ─── Library trail folder editing (/api/folder/*) ──────────────────────────────────────────────
+// The bundle surface: a trail folder in the library (`blaze.yaml` + `<platform>.trail.yaml`
+// siblings), identified by its folder id `<rootIdx>/<relPath>` (e.g. `0/sample/login`). Create
+// sessions save straight here - there is no staging area - and the Trails board edits, records
+// into, and deletes these folders in place.
+
+// Create a new bundle folder directly at `destination` (relative to the primary root) and write its
+// blaze.yaml. Returns { success, id }.
+async function createBundle(destination, yaml) {
   try {
-    const r = await fetch('/trailrunner/api/draft', {
+    const r = await fetch('/trailrunner/api/folder/create', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, yaml }),
+      body: JSON.stringify({ destination, yaml }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || body.success === false) return { success: false, error: body.error || `HTTP ${r.status}` };
@@ -474,80 +509,29 @@ async function createDraft(name, yaml) {
   } catch (e) { return { success: false, error: String(e) }; }
 }
 
-async function fetchDraftDetail(id) {
-  return await safeJson(`/trailrunner/api/draft?id=${encodeURIComponent(id)}`);
+// Bundle detail (title, steps, variants) for a folder that carries a blaze.yaml.
+async function fetchBundleDetail(id) {
+  return await safeJson(`/trailrunner/api/folder?id=${encodeURIComponent(id)}`);
 }
 
-async function fetchDraftFile(id, name) {
-  return await safeText(`/trailrunner/api/draft/file?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`);
-}
-
-async function updateDraftBlaze(id, yaml) {
+// Delete a whole bundle folder from the library. Honor the server's OkResponse.ok - a 200 alone
+// doesn't mean the recursive delete succeeded.
+async function deleteTrailFolder(id) {
   try {
-    const r = await fetch('/trailrunner/api/draft', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, yaml }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.success === false) return { success: false, error: body.error || `HTTP ${r.status}` };
-    return body;
-  } catch (e) { return { success: false, error: String(e) }; }
-}
-
-// Write any single file in a draft folder (blaze.yaml or a <platform>.trail.yaml) — inline editing.
-async function updateDraftFile(id, name, yaml) {
-  try {
-    const r = await fetch('/trailrunner/api/draft/file', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, name, yaml }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.success === false) return { success: false, error: body.error || `HTTP ${r.status}` };
-    return body;
-  } catch (e) { return { success: false, error: String(e) }; }
-}
-
-// Delete one recorded <platform>.trail.yaml from a draft folder (never blaze.yaml).
-async function deleteDraftFile(id, name) {
-  try {
-    const r = await fetch(`/trailrunner/api/draft/file/delete?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`, { method: 'POST' });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
-    return { ok: true };
-  } catch (e) { return { ok: false, error: String(e) }; }
-}
-
-// Promote a draft: move its folder to `destination` (relative to the primary root). Returns { success, id }.
-async function saveDraftTo(id, destination) {
-  try {
-    const r = await fetch('/trailrunner/api/draft/save-to', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, destination }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.success === false) return { success: false, error: body.error || `HTTP ${r.status}` };
-    return body;
-  } catch (e) { return { success: false, error: String(e) }; }
-}
-
-async function deleteDraft(id) {
-  try {
-    const r = await fetch('/trailrunner/api/draft/delete', {
+    const r = await fetch('/trailrunner/api/folder/delete', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     });
-    // Honor the server's OkResponse.ok (the route now returns the real recursive-delete result and a
-    // 409 when the folder isn't a staged draft) — a 200 alone doesn't mean the delete succeeded.
     const body = await r.json().catch(() => ({}));
     if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
     return { ok: true };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
-// Reveal a draft's folder in Finder.
-async function revealDraft(id) {
+// Reveal a bundle folder in Finder.
+async function revealTrailFolder(id) {
   try {
-    const r = await fetch('/trailrunner/api/draft/reveal', {
+    const r = await fetch('/trailrunner/api/folder/reveal', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     });
@@ -555,27 +539,6 @@ async function revealDraft(id) {
     return { ok: !!(r.ok && body.ok) };
   } catch (e) { return { ok: false }; }
 }
-
-// Record one variant per device: fan out the draft's blaze steps to each device. Returns
-// { ok, sessionIds }. The recorded <platform>.trail.yaml lands back in the folder on completion.
-async function recordDraft(id, deviceIds, options) {
-  try {
-    const r = await fetch('/trailrunner/api/draft/record', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, deviceIds, ...(options || {}) }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: body.error || `HTTP ${r.status}` };
-    // 200 can still carry a partial error (some devices started, some didn't).
-    return { ok: true, sessionIds: body.sessionIds || [], error: body.error || null };
-  } catch (e) { return { ok: false, error: String(e) }; }
-}
-
-// ─── Library trail folder editing (/api/folder/*) ──────────────────────────────────────────────
-// These mirror the /api/draft/* file/record endpoints but target an EXPLICITLY-chosen committed
-// trail folder (a bundle), identified by its folder id `<rootIdx>/<relPath>` (e.g. `0/sample/login`).
-// They deliberately bypass the drafts-only fence — the Trails board uses them to make a committed
-// bundle as editable as a draft (edit steps, record, delete a recording).
 async function fetchTrailFolderFile(folderId, name) {
   return await safeText(`/trailrunner/api/folder/file?id=${encodeURIComponent(folderId)}&name=${encodeURIComponent(name)}`);
 }
@@ -670,8 +633,14 @@ async function recordGesture(trailblazeDeviceId, gesture) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trailblazeDeviceId, ...gesture }),
     });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    // Read the body as text so a non-JSON error (e.g. a bare 5xx) still yields a real message
+    // instead of a naked "HTTP 500".
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) { /* non-JSON error body */ }
+    if (!r.ok || body.ok === false) {
+      const detail = body.error || (raw && raw.trim() ? raw.trim().split('\n')[0].slice(0, 200) : '') || `HTTP ${r.status}`;
+      return { ok: false, error: detail, status: r.status };
+    }
     return body;
   } catch (e) { return { ok: false, error: String(e) }; }
 }
@@ -683,6 +652,21 @@ async function recordTree(trailblazeDeviceId) {
     const r = await fetch('/trailrunner/api/record/tree', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ trailblazeDeviceId }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return body;
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// Selector advice for a pending step: a fast model's second opinion on which selector candidate
+// will replay most reliably. Strictly advisory - the server hard-caps its wait, and callers race
+// it against their own budget. Returns { ok, advice: { reason, preferOption? } | null }.
+async function recordSelectorAdvice(payload) {
+  try {
+    const r = await fetch('/trailrunner/api/record/selector-advice', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
@@ -746,16 +730,321 @@ async function toolToolUsageCounts() {
   } catch (e) { return {}; }
 }
 
+async function fetchExternalAgents() {
+  return await safeJson('/trailrunner/api/external-agents') || { supportedAgents: [], runs: [] };
+}
+
+// A failed response's body is read as TEXT first: a structured {error} is preferred, but even a
+// non-JSON crash page yields its first line instead of collapsing to a bare "HTTP <code>".
+function externalAgentErrorDetail(status, raw, body) {
+  if (body && body.error) return body.error;
+  const line = String(raw || '').trim().split('\n')[0].slice(0, 200);
+  if (line) return line;
+  return status >= 500
+    ? `the daemon hit an internal error (HTTP ${status}) and gave no details - its log has the full story`
+    : `the daemon rejected the request (HTTP ${status}) with no details`;
+}
+
+async function startExternalAgent(request) {
+  try {
+    const r = await fetch('/trailrunner/api/external-agent/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request || {}),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body) };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+async function fetchExternalAgentEvents(id) {
+  if (!id) return { events: [] };
+  return await safeJson(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/events`) || { events: [] };
+}
+
+// The skills the conversation's child CLI can discover (workspace .claude/skills up the ancestry
+// plus ~/.claude/skills), with names, descriptions, and on-disk locations. Powers the Skills tab.
+async function fetchAgentSkills() {
+  return await safeJson('/trailrunner/api/external-agent/skills') || { ok: false, skills: [] };
+}
+
+async function cancelExternalAgent(id) {
+  if (!id) return { ok: false, error: 'missing run id' };
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    const body = await r.json().catch(() => ({}));
+    return { ok: !!(r.ok && body.ok), error: body.error || null };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+async function replyExternalAgent(id, prompt) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/reply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body) };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// ─── Demonstrate-first Create: the demo-session lifecycle endpoints ────────────────────────────
+// A demo session is a solo-style run in "demo mode": start-demo creates it (phase positioning),
+// mark-start bakes in the chosen trailhead (phase recording), finish records the objective (phase
+// done), generate launches the authoring agent. Gestures keep using recordGesture with the demo
+// runId - the server tags them setup (before mark-start) or step (after). The failure `status` is
+// returned so callers can tell a not-yet-landed endpoint (404) from a real error.
+
+async function startDemo(request) {
+  try {
+    const r = await fetch('/trailrunner/api/external-agent/start-demo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request || {}),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// `trailhead`: { name, args, yaml } for the picked trailhead, or null for manual positioning.
+async function demoMarkStart(id, trailhead) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/mark-start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trailhead: trailhead || null }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+async function demoFinish(id, { objective, notes }) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/finish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ objective, notes: notes || null }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+async function demoGenerate(id, { agentType, model, sandbox }) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentType, model: model || null, sandbox: sandbox || null }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// Deletes one demonstrated step (a mistake made mid-recording) by its HUMAN_ACTION event id; the
+// server removes the event, its actions.ndjson line, and its evidence files from the bundle.
+async function demoDeleteStep(id, { eventId }) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/delete-step`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventId }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// Collect another platform's demonstration for a trail that's already verified on one: the server
+// resets the demo phase back to positioning (bound to the passed device) so the same
+// Position -> Record -> Describe -> Generate flow runs again for the second device.
+async function demoAddPlatform(id, { deviceId }) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/add-platform`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: deviceId || null }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// Reveal the demonstration bundle folder (actions.ndjson + evidence) in the OS file browser -
+// same affordance as the trail/library "reveal" actions, for the demo's on-disk bundle.
+async function demoRevealBundle(id) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/reveal-bundle`, { method: 'POST' });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// ─── External-agent permission gating (mid-run tool approvals) ─────────────────────────────────
+// Answer one pending tool-permission request the agent raised (`allow` this once, `allow_always`
+// for this tool, or `deny`). The server clears it from run.pendingPermissions; the poll reflects it.
+async function decideExternalAgentPermission(id, requestId, decision) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/permission`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId, decision }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// Flip the run's mid-run auto-approve: when enabled, the agent's tool requests are granted without
+// prompting. Reflected back in run.autoApprove on the next poll.
+async function setExternalAgentAutoApprove(id, enabled) {
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/auto-approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !!enabled }),
+    });
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status };
+    return body;
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
+// The trail file(s) the generation agent is writing, polled while it works so the live trail rail can
+// stream them in as they appear. Files fill progressively (empty until the agent creates the trail);
+// 404-graceful so a daemon build without the endpoint yet just yields no files rather than erroring.
+async function demoTrailContent(id) {
+  if (!id) return { ok: false, files: [] };
+  try {
+    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/trail-content`);
+    const raw = await r.text().catch(() => '');
+    let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
+    if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status, files: [] };
+    return { files: [], ...body };
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e), files: [] }; }
+}
+
+// `afterSeq`: only deliver events strictly newer than this — pass the max seq already fetched so
+// a stream opened mid-run never re-delivers history as if it were live.
+function streamExternalAgentEvents(id, afterSeq, onEvent, onDone, onError) {
+  if (!id) return null;
+  const after = Number.isFinite(afterSeq) ? afterSeq : -1;
+  const es = new EventSource(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/stream?afterSeq=${after}`);
+  es.addEventListener('agent-event', (e) => {
+    try { onEvent && onEvent(JSON.parse(e.data)); } catch (_) {}
+  });
+  es.addEventListener('done', (e) => {
+    onDone && onDone(e);
+    es.close();
+  });
+  es.addEventListener('error', (e) => {
+    // A transient drop (daemon restart, network blip) leaves readyState CONNECTING: the browser
+    // auto-reconnects, re-sending Last-Event-ID (which the server honors), so keep the source
+    // open and dedup handles any overlap. Only a terminal failure (CLOSED - e.g. the run no
+    // longer exists server-side) is surfaced to the caller.
+    if (es.readyState !== EventSource.CLOSED) return;
+    onError && onError(e);
+  });
+  return es;
+}
+
+// Merge streamed/fetched event batches into an existing list, deduped by seq. Returns the
+// existing array unchanged when nothing new arrived so React consumers don't re-render.
+function mergeExternalAgentEvents(existing, incoming) {
+  const base = existing || [];
+  const add = (incoming || []).filter(Boolean);
+  if (!add.length) return base;
+  const seen = new Set(base.map((e) => e.seq));
+  const fresh = add.filter((e) => !seen.has(e.seq));
+  if (!fresh.length) return base;
+  return base.concat(fresh).sort((a, b) => a.seq - b.seq);
+}
+
+function applyTrailRunnerUiCommand(command, go) {
+  if (!command || !command.action) return { ok: false, error: 'missing action' };
+  const params = command.params || {};
+  const valueOf = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
+    if (v && typeof v === 'object' && 'value' in v) return v.value;
+    return v;
+  };
+  const route = command.route || valueOf(params.route);
+  const p = {};
+  Object.keys(params || {}).forEach((k) => { p[k] = valueOf(params[k]); });
+  switch (command.action) {
+    case 'navigate':
+      if (!route || !go) return { ok: false, error: 'missing route' };
+      go(String(route), p);
+      return { ok: true };
+    case 'open_session': {
+      const sessionId = command.sessionId || valueOf(params.sessionId);
+      if (!sessionId || !go) return { ok: false, error: 'missing sessionId' };
+      const view = valueOf(params.view) || 'completed';
+      go(String(view), { sel: String(sessionId) });
+      return { ok: true };
+    }
+    case 'open_trail': {
+      const trailId = command.trailId || valueOf(params.trailId);
+      if (!trailId || !go) return { ok: false, error: 'missing trailId' };
+      go('trails', { sel: String(trailId) });
+      return { ok: true };
+    }
+    case 'trail_output': {
+      // The agent's result channel: surface the declared trail in the details panel WITHOUT
+      // navigating away from the conversation. The chat listens and pins its YAML tab to this trail.
+      const trailId = command.trailId || valueOf(params.trailId);
+      if (!trailId) return { ok: false, error: 'missing trailId' };
+      window.dispatchEvent(new CustomEvent('tb:external-agent-trail-output', { detail: command }));
+      return { ok: true };
+    }
+    case 'ask_user':
+      // The question renders inline in the transcript as a card with clickable answers (see
+      // AgentAskCard). Nothing to navigate — acknowledge so it isn't treated as an unknown command.
+      return { ok: true };
+    case 'focus_external_agent': {
+      const runId = valueOf(params.runId);
+      if (!go) return { ok: false, error: 'missing navigator' };
+      go('agents', runId ? { sel: String(runId) } : {});
+      return { ok: true };
+    }
+    case 'show_message':
+      window.dispatchEvent(new CustomEvent('tb:external-agent-message', { detail: command }));
+      return { ok: true };
+    default:
+      return { ok: false, error: `unknown UI command: ${command.action}` };
+  }
+}
+
 Object.assign(window, {
   WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded,
-  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun,
+  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, setPendingRunSession,
   API, safeJson, safeText, useFetched, fileUrl,
-  recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
-  resolveRunDevice, connectDevice, fetchTrailYaml, dispatchRun, retrySession,
+  recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
+  resolveRunDevice, connectDevice, connectDeviceDetailed, fetchTrailYaml, dispatchRun, retrySession, withTimeout,
   getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   pickDirectoryViaShell, addTrailRoot, removeTrailRoot, updateSetting, runIntegrationAction,
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
   fetchComponentSource, createTrailmapComponent, saveTargetConfig,
-  proposeSteps, createDraft, fetchDraftDetail, fetchDraftFile, updateDraftBlaze, saveDraftTo, deleteDraft, recordDraft,
+  proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
   fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, migrateTrailFolder,
+  fetchExternalAgents, startExternalAgent, fetchExternalAgentEvents, cancelExternalAgent, streamExternalAgentEvents, fetchAgentSkills,
+  replyExternalAgent, applyTrailRunnerUiCommand, mergeExternalAgentEvents,
+  startDemo, demoMarkStart, demoFinish, demoGenerate, demoAddPlatform, demoDeleteStep, demoRevealBundle,
+  decideExternalAgentPermission, setExternalAgentAutoApprove, demoTrailContent,
 });

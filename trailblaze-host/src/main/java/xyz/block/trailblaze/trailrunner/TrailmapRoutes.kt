@@ -9,6 +9,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.TargetIconConvention
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
@@ -47,6 +51,13 @@ object TrailmapCatalogBuilder {
   // real `id:` from each YAML file's own text (cheap, same weight class as DISPLAY_NAME/CLASS_KEY)
   // to look up its REAL discovered path instead of guessing one from the resolved name.
   private val ID_FIELD = Regex("(?m)^\\s*id:\\s*[\"']?(.+?)[\"']?\\s*$")
+
+  // The analyzer enrichment projects a scripted tool's spec gates into namespaced `_meta` keys
+  // (AnalyzerScriptedToolEnrichment.mergeMeta); supported platforms live there, not as a field.
+  private fun InlineScriptToolConfig.supportedPlatformsFromMeta(): List<String>? =
+    (meta?.get("trailblaze/supportedPlatforms") as? JsonArray)
+      ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
+      ?.takeIf { it.isNotEmpty() }
 
   fun build(
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
@@ -196,12 +207,22 @@ object TrailmapCatalogBuilder {
     // Trailheads: union of YAML-sourced (`trailhead != null`) and scripted-sourced
     // (InlineScriptToolConfig.trailhead != null, analyzer-resolved) — mirrors the same union
     // ToolDiscoveryToolSet.computeRoleNames already does for the CLI/desktop, now backed by the
-    // identical resolved data instead of a parallel regex.
+    // identical resolved data instead of a parallel regex. A scripted trailhead's entry carries
+    // its flavor (so pickers know a parameter schema is fetchable via scripted-tool-params) and
+    // its supported platforms (from the analyzer-enriched `_meta`, the durable platform signal
+    // the `_<platform>_` name heuristic stood in for).
     val trailheads = (
       tools.filter { it.trailhead != null }
         .map { TrailmapComponent(it.id, yamlRelPath(it.id, "trailheads", TOOL_LAYOUT_BY_DIR.getValue("trailheads").suffix)) } +
         target?.tools.orEmpty().filter { it.trailhead != null }
-          .map { TrailmapComponent(it.name, scriptedRelPath(it.script) ?: fallbackRelPath("tools", it.name, ".ts")) }
+          .map {
+            TrailmapComponent(
+              name = it.name,
+              relPath = scriptedRelPath(it.script) ?: fallbackRelPath("tools", it.name, ".ts"),
+              flavor = ToolFlavor.SCRIPTED,
+              platforms = it.supportedPlatformsFromMeta(),
+            )
+          }
       ).sortedBy { it.name }
 
     return TrailmapEntry(
@@ -454,15 +475,18 @@ internal suspend fun buildSaveTargetConfigResponse(
       // it instead of the retry silently taking the edit path and never registering.
       val warning = if (request.createIfMissing) registerCreatedTargetBestEffort(trailmapId) else null
       // Now that the trailmap manifest is written and the workspace `targets:` list carries the id,
-      // register it into the running daemon's live target set so it's selectable without a restart.
-      // Best-effort and additive-only: gated on warning == null (a workspace-list write that failed
-      // means discovery can't see the id anyway) and skipped entirely on the edit path or without a
-      // device manager — any failure just leaves registeredLive = false and the restart banner.
+      // (re-)register it into the running daemon's live target set so it's selectable without a
+      // restart. Runs on BOTH the create and edit paths: an edit swaps the fresh instance in for
+      // the stale live snapshot (an app_ids edit was otherwise invisible until restart, so the
+      // target forever read "Not installed on any connected device"). Best-effort: gated on
+      // warning == null (a workspace-list write that failed means discovery can't see the id
+      // anyway; warning is create-only so edits always pass) and skipped without a device manager
+      // - any failure just leaves registeredLive = false and the restart banner.
       // The runCatching is defensive: registerNewTarget already swallows its own discovery
       // failures and returns false, so this only trips if the callback itself throws unexpectedly.
-      val registeredLive = request.createIfMissing && warning == null && registerLiveTarget != null &&
+      val registeredLive = warning == null && registerLiveTarget != null &&
         runCatching { registerLiveTarget(trailmapId) }.getOrElse {
-          Console.log("[TrailmapRoutes] live registration of created trailmap '$trailmapId' failed (create already succeeded): ${it.message}")
+          Console.log("[TrailmapRoutes] live registration of trailmap '$trailmapId' failed (save already succeeded): ${it.message}")
           false
         }
       SaveTargetConfigResponse(
@@ -497,15 +521,35 @@ internal fun computeWorkspaceTargetsAfterCreate(existingTargets: List<String>, n
 // write succeeded. The manifest writes don't need this (they're per-trailmap files).
 private val workspaceTargetsWriteLock = Any()
 
+// Scaffolded when the first target is created in a workspace that has no `trailblaze.yaml`
+// anchor file yet. The anchor's presence is what makes workspace discovery resolve the
+// workspace as Configured; an empty `targets:` list means auto-discover, so every trailmap
+// under `trailmaps/` (this one and future ones) loads with no list maintenance.
+private val WORKSPACE_ANCHOR_SCAFFOLD = """
+  |# Trailblaze workspace config, created automatically when the first target was added here.
+  |# All sections are optional. An empty `targets:` list auto-discovers every trailmap under
+  |# trailmaps/, so newly created targets load without editing this file.
+  |targets: []
+  |
+""".trimMargin()
+
 /**
- * After a `createIfMissing` save, make sure the workspace will actually load the trailmap: a
- * `trailblaze.yaml` with a non-empty `targets:` list only loads the listed ids, so the id is
- * appended there (atomic tmp-file+rename, same as the manifest write; comments are lost to the
- * re-serialize — the same accepted tradeoff). No config file, or an empty/omitted `targets:` list,
- * means auto-discovery already covers the trailmap and nothing is written. Idempotent — an
- * already-listed id is a no-op — so it runs on every `createIfMissing` save, letting an API
- * caller whose registration previously failed re-attempt it (the web form's own recovery is the
- * manual instruction carried in the warning text — it blocks known-duplicate ids client-side).
+ * After a `createIfMissing` save, make sure the workspace will actually load the trailmap:
+ *
+ * - **No `trailblaze.yaml` at all** - scaffold a minimal anchor file. Without it, the workspace
+ *   resolves as Scratch and trailmap-declared targets never load, so the trailmap written above
+ *   would be undiscoverable both live and after a restart (the restart banner's promise would be
+ *   a lie in a brand-new workspace).
+ * - **Non-empty `targets:` list** - it only loads the listed ids, so the id is appended there
+ *   (atomic tmp-file+rename, same as the manifest write; comments are lost to the re-serialize -
+ *   the same accepted tradeoff).
+ * - **Existing file with an empty/omitted `targets:` list** - auto-discovery already covers the
+ *   trailmap; nothing is written.
+ *
+ * Idempotent - an already-listed id is a no-op - so it runs on every `createIfMissing` save,
+ * letting an API caller whose registration previously failed re-attempt it (the web form's own
+ * recovery is the manual instruction carried in the warning text - it blocks known-duplicate ids
+ * client-side).
  *
  * Best-effort by design: the trailmap itself was already created, so a failure here must not read
  * as "create failed." Returns a user-facing warning string when the registration was needed but
@@ -516,24 +560,37 @@ private fun registerCreatedTargetBestEffort(trailmapId: String): String? {
   val configFile = File(configDir, TrailblazeConfigPaths.CONFIG_FILENAME)
   return runCatching {
     synchronized(workspaceTargetsWriteLock) {
-      val raw = TrailblazeProjectConfigLoader.load(configFile)?.raw ?: return@synchronized null
-      val updatedTargets = computeWorkspaceTargetsAfterCreate(raw.targets, trailmapId) ?: return@synchronized null
+      val loaded = TrailblazeProjectConfigLoader.load(configFile)
+      if (loaded == null) {
+        // `load` returns null only when the file doesn't exist (a malformed file throws and
+        // takes the warning path below), so this can't clobber a hand-authored config.
+        configFile.parentFile?.mkdirs()
+        replaceFileAtomically(configFile, WORKSPACE_ANCHOR_SCAFFOLD)
+        return@synchronized null
+      }
+      val updatedTargets = computeWorkspaceTargetsAfterCreate(loaded.raw.targets, trailmapId) ?: return@synchronized null
       val yaml = TrailblazeConfigYaml.instance.encodeToString(
         TrailblazeProjectConfig.serializer(),
-        raw.copy(targets = updatedTargets),
+        loaded.raw.copy(targets = updatedTargets),
       )
-      val tmp = File.createTempFile("trailblaze", ".yaml.tmp", configFile.parentFile)
-      tmp.writeText(yaml)
-      if (!tmp.renameTo(configFile)) {
-        tmp.delete()
-        error("could not replace ${configFile.absolutePath}")
-      }
+      replaceFileAtomically(configFile, yaml)
       null
     }
   }.getOrElse {
     Console.log("[TrailmapRoutes] created trailmap '$trailmapId' but could not update ${configFile.absolutePath}: ${it.message}")
     "Created the trailmap, but couldn't update trails/config/trailblaze.yaml — since it lists " +
       "targets: explicitly, add '$trailmapId' there for the new target to load."
+  }
+}
+
+// Write-to-sibling-temp then rename, so a crash/disk-full mid-write can never leave the target
+// file truncated (same pattern as the manifest write above).
+private fun replaceFileAtomically(target: File, content: String) {
+  val tmp = File.createTempFile("trailblaze", ".yaml.tmp", target.parentFile)
+  tmp.writeText(content)
+  if (!tmp.renameTo(target)) {
+    tmp.delete()
+    error("could not replace ${target.absolutePath}")
   }
 }
 

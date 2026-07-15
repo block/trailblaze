@@ -87,6 +87,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.ElectronAppConfig
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
@@ -488,6 +489,7 @@ object TrailblazeHostYamlRunner {
         agentImplementation = runYamlRequest.agentImplementation,
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+        initialArgs = runYamlRequest.initialArgs,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -618,6 +620,7 @@ object TrailblazeHostYamlRunner {
         agentImplementation = runYamlRequest.agentImplementation,
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+        initialArgs = runYamlRequest.initialArgs,
         onStepProgress = { step, total, text ->
           onProgressMessage("Step $step/$total: $text")
         },
@@ -896,6 +899,9 @@ object TrailblazeHostYamlRunner {
         cliSeeds = runYamlRequest.initialMemorySeeds,
         cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
       )
+      // Seed the `args.` namespace from the CLI-bound values AFTER memory, so a token-valued
+      // default (`default: '{{memory.email}}'`) resolves against the just-seeded memory.
+      agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
       val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
 
       if (runYamlRequest.config.sendSessionStartLog) {
@@ -1226,6 +1232,7 @@ object TrailblazeHostYamlRunner {
           cliSeeds = runYamlRequest.initialMemorySeeds,
           cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
         )
+        agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
         val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
 
         if (runYamlRequest.config.sendSessionStartLog) {
@@ -1476,6 +1483,7 @@ object TrailblazeHostYamlRunner {
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         initialMemorySeeds = runYamlRequest.initialMemorySeeds,
         initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
+        initialArgs = runYamlRequest.initialArgs,
       )
       // Surface the last successful tool's payload back out through HostYamlRunResult.
       lastToolResult = yamlRun.lastToolResult
@@ -1636,6 +1644,7 @@ object TrailblazeHostYamlRunner {
       cliSeeds = runYamlRequest.initialMemorySeeds,
       cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
     )
+    sharedAgentMemory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
     val sensitiveMemoryKeys: Set<String> = sharedAgentMemory.sensitiveKeys.toSet()
     // Pre-resolve the session's target once (#2699 — closes the deferred wiring note on
     // ResolvedTarget and surfaces ctx.target.{id, appIds, appId} to scripted tools).
@@ -2054,6 +2063,8 @@ object TrailblazeHostYamlRunner {
       cliSeeds = runYamlRequest.initialMemorySeeds,
       cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
     )
+    // Seed args after memory; the host pushes them to the device via each dispatch's argsSnapshot.
+    agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
     val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
 
     val elementComparator = TrailblazeElementComparator(

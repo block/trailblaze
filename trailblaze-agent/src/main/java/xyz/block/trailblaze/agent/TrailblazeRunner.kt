@@ -163,8 +163,11 @@ class TrailblazeRunner(
       // matches the guard already applied by ScriptTrailblazeTool.buildInput and
       // TrailblazeContextEnvelope. Sensitive values remain available for ${var} interpolation
       // in tool args, just not surfaced into the LLM's per-step reminder text.
+      // Bound trail args join the same reminder keyed by token spelling (`args.<name>`) — prompt
+      // text is never interpolated, so this list is how the LLM resolves a literal `{{args.x}}`
+      // in an objective, exactly as it resolves `{{memory.x}}` today.
       val rememberedValues = (agent as? TrailblazeAgentContext)?.memory?.let { mem ->
-        mem.variables.filterKeys { it !in mem.sensitiveKeys }.toMap()
+        mem.variables.filterKeys { it !in mem.sensitiveKeys } + mem.argsForLlmContext()
       } ?: emptyMap()
       val koogLlmRequestMessages: List<Message> = TrailblazeTracer.trace("createNextChatRequest", "agent") {
         llmClientHelper.createNextChatRequest(

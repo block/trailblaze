@@ -429,40 +429,81 @@ function useGlobalTarget() {
   return [_globalTarget, setGlobalTarget];
 }
 
-// Draft blazes (Blaze → Drafts). Overlays a live "recording" status from any running session
-// linked to the draft (its run carries trailId === draft id).
-function useDrafts() {
+function useExternalAgents() {
   const hook = useFetched(async () => {
-    const raw = await safeJson('/trailrunner/api/drafts');
-    return { data: (raw && raw.drafts) || [], mock: false };
+    const raw = await fetchExternalAgents();
+    return {
+      data: {
+        supportedAgents: raw.supportedAgents || [],
+        runs: raw.runs || [],
+      },
+      mock: false,
+    };
   });
-  const sessions = useSessions();
-  // Group this draft's recordings (runs whose trailId === draft id) so status reflects real
-  // outcomes — a failed run must NOT read as "Recorded" just because a partial file was written.
-  const byDraft = {};
-  (sessions.data || []).forEach((s) => { if (s.trailId) (byDraft[s.trailId] = byDraft[s.trailId] || []).push(s); });
-  const data = (hook.data || []).map((d) => {
-    const linked = byDraft[d.id] || [];
-    const anyRunning = linked.some((s) => s.status === 'running');
-    const anyFailed = linked.some((s) => s.status === 'failed' || s.status === 'timeout');
-    const anyPassed = linked.some((s) => s.status === 'passed' || s.status === 'healed');
-    let status;
-    if (anyRunning) status = 'recording';
-    else if (anyFailed && !anyPassed) status = 'failed';
-    else if (anyFailed && anyPassed) status = 'partial';
-    else if (anyPassed || d.hasRecordings) status = 'recorded';
-    else status = 'draft';
-    return { ...d, status };
-  });
-  return { ...hook, data };
+  const reloadRef = React.useRef(hook.reload);
+  reloadRef.current = hook.reload;
+  const hasRunning = ((hook.data && hook.data.runs) || []).some((r) => r.status === 'running');
+  React.useEffect(() => {
+    if (!hasRunning) return;
+    const id = setInterval(() => reloadRef.current(), 1500);
+    return () => clearInterval(id);
+  }, [hasRunning]);
+  return hook;
 }
 
-function useDraftDetail(id) {
-  return useFetched(async () => {
-    if (!id) return { data: null, mock: false };
-    const raw = await safeJson(`/trailrunner/api/draft?id=${encodeURIComponent(id)}`);
-    return { data: raw, mock: false };
-  }, [id]);
+function useExternalAgentEvents(runId, isRunning, onLiveEvent, follow) {
+  const [state, setState] = React.useState({ data: [], loading: true, error: null });
+  const liveRef = React.useRef(onLiveEvent);
+  liveRef.current = onLiveEvent;
+
+  React.useEffect(() => {
+    setState({ data: [], loading: !!runId, error: null });
+  }, [runId]);
+
+  // Fetch history first, THEN open the stream strictly after it (?afterSeq): streamed events
+  // append client-side (deduped by seq), so a chatty run costs one fetch plus one SSE message per
+  // event — and `onLiveEvent` fires only for genuinely live events, never for loaded history.
+  // That ordering is what keeps UI commands from re-applying when a running run is (re)opened.
+  React.useEffect(() => {
+    if (!runId) return;
+    let closed = false;
+    let es = null;
+    const merge = (incoming) => setState((s) => ({ ...s, loading: false, data: mergeExternalAgentEvents(s.data, incoming) }));
+    fetchExternalAgentEvents(runId).then((raw) => {
+      if (closed) return;
+      const events = raw.events || [];
+      merge(events);
+      if (!isRunning) return;
+      const afterSeq = events.reduce((m, e) => Math.max(m, e.seq), -1);
+      es = streamExternalAgentEvents(
+        runId,
+        afterSeq,
+        (event) => {
+          if (closed) return;
+          merge([event]);
+          if (liveRef.current) liveRef.current(event);
+        },
+        () => { if (!closed) fetchExternalAgentEvents(runId).then((raw2) => { if (!closed) merge(raw2.events || []); }); },
+        () => {},
+      );
+    });
+    return () => { closed = true; if (es) es.close(); };
+  }, [runId, isRunning]);
+
+  // Follow a FINISHED run by polling (record mode: the human demonstrates after the agent's turn,
+  // so new human_action events arrive with no live SSE open). Merge only — never fire onLiveEvent,
+  // so the live-only UI-command apply invariant above stays intact. When the run is running the
+  // SSE effect already delivers everything, so this stays idle.
+  React.useEffect(() => {
+    if (!runId || !follow || isRunning) return;
+    let closed = false;
+    const merge = (incoming) => setState((s) => ({ ...s, loading: false, data: mergeExternalAgentEvents(s.data, incoming) }));
+    const tick = () => { if (!closed) fetchExternalAgentEvents(runId).then((raw) => { if (!closed) merge(raw.events || []); }); };
+    const timer = setInterval(tick, 1500);
+    return () => { closed = true; clearInterval(timer); };
+  }, [runId, isRunning, follow]);
+
+  return state;
 }
 
 Object.assign(window, {
@@ -471,5 +512,5 @@ Object.assign(window, {
   useDeviceApps, useTrailRoots, useSettings, useIntegrations, useSessionYaml, useTargetAppMap,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
   useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
-  useDrafts, useDraftDetail,
+  useExternalAgents, useExternalAgentEvents,
 });

@@ -393,4 +393,58 @@ class TrailmapCatalogBuilderTest {
       assertFalse(gated.single { it.id == "beta" }.workspaceListed)
     }
   }
+
+  @Test
+  fun `an inline trailhead carries its flavor and supported platforms, a yaml one carries neither`() {
+    // The flavor tells pickers a parameter schema is fetchable (scripted-tool-params); platforms
+    // (projected from the analyzer-enriched `_meta`) are the durable platform signal the
+    // `_<platform>_` name heuristic stood in for.
+    assumeAnalyzerRunnable()
+    val configDir = tempFolder.newFolder("config-meta")
+    val trailmapDir = File(configDir, "trailmaps/demo4").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: demo4
+      target:
+        display_name: Demo4
+        tools:
+          - demo4_signedIn
+      """.trimIndent(),
+    )
+    val trailheadsDir = File(trailmapDir, "trailheads").apply { mkdirs() }
+    File(trailheadsDir, "demo4_fresh.trailhead.yaml").writeText(
+      """
+      id: demo4_fresh
+      description: "fresh install"
+      trailhead:
+        to: "demo4/home"
+      tools: []
+      """.trimIndent(),
+    )
+    val toolsDir = File(trailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "demo4_signedIn.ts").writeText(
+      """
+        |${declareTypedToolStub()}
+        |interface I { email: string; }
+        |interface O { ok: boolean; }
+        |
+        |export const demo4_signedIn = trailblaze.tool<I, O>(
+        |  {
+        |    supportedPlatforms: ["android", "ios"],
+        |    trailhead: { dynamic: true },
+        |  },
+        |  async () => ({ ok: true }),
+        |);
+      """.trimMargin(),
+    )
+
+    withWorkspace(configDir) {
+      val byName = TrailmapCatalogBuilder.build().single { it.id == "demo4" }.trailheads.associateBy { it.name }
+
+      assertEquals(ToolFlavor.SCRIPTED, byName.getValue("demo4_signedIn").flavor)
+      assertEquals(listOf("android", "ios"), byName.getValue("demo4_signedIn").platforms)
+      assertEquals(null, byName.getValue("demo4_fresh").flavor)
+      assertEquals(null, byName.getValue("demo4_fresh").platforms)
+    }
+  }
 }

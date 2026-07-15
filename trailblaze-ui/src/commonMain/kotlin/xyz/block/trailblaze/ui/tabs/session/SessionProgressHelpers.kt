@@ -202,10 +202,12 @@ internal fun patchProgressItemsForSessionEnd(
 /** Extracts a human-readable failure message from a terminal session status. */
 internal fun extractSessionFailureReason(status: SessionStatus): String? {
   return when (status) {
+    // When exceptionStackTrace is present the producer already split the stack out of
+    // exceptionMessage; cleanExceptionMessage is only the fallback for legacy logs.
     is SessionStatus.Ended.Failed ->
-      status.exceptionMessage?.let { cleanExceptionMessage(it) }
+      status.exceptionMessage?.let { if (status.exceptionStackTrace != null) it else cleanExceptionMessage(it) }
     is SessionStatus.Ended.FailedWithSelfHeal ->
-      status.exceptionMessage?.let { cleanExceptionMessage(it) }
+      status.exceptionMessage?.let { if (status.exceptionStackTrace != null) it else cleanExceptionMessage(it) }
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
       "Max calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
@@ -523,6 +525,11 @@ internal fun objectiveDurationMs(objective: ObjectiveProgress): Long? {
 
 /**
  * Strips Java stack traces from an exception message, keeping only the human-readable error.
+ *
+ * Legacy fallback: sessions logged before the producer split the stack into
+ * `SessionStatus.Ended.Failed.exceptionStackTrace` embed the stack inside `exceptionMessage`,
+ * so this heuristic reverse-engineers the message head. Newer statuses carry a message-only
+ * `exceptionMessage` — callers skip this when `exceptionStackTrace` is non-null.
  */
 internal fun cleanExceptionMessage(message: String): String {
   val lines = message.lines()

@@ -61,4 +61,43 @@ class LogsRepoDiskTruthTest {
     // Sanity: the cache was genuinely primed empty before the Ended log arrived.
     assertFalse(cachedBefore?.latestStatus is SessionStatus.Ended)
   }
+
+  @Test
+  fun `a second Ended status is not appended over an existing terminal status`() {
+    val logsDir = tempLogsDir()
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val sessionId = SessionId("session-cancelled-then-runner-fails")
+
+    // The user cancels: Ended.Cancelled lands first.
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Cancelled(
+          durationMs = 5000L,
+          cancellationMessage = "Session manually cancelled by user",
+        ),
+        session = sessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
+
+    // The killed runner's async failure tries to append Ended.Failed on top.
+    logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Ended.Failed(
+          durationMs = 37900L,
+          exceptionMessage = "RPC call failed: network error during RPC call",
+        ),
+        session = sessionId,
+        timestamp = Clock.System.now(),
+      ),
+    )
+
+    val statuses = logsRepo.getLogsForSession(sessionId)
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .filter { it.sessionStatus is SessionStatus.Ended }
+    assertTrue(
+      statuses.size == 1 && statuses.single().sessionStatus is SessionStatus.Ended.Cancelled,
+      "first Ended must win; got ${statuses.map { it.sessionStatus }}",
+    )
+  }
 }

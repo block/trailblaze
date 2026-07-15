@@ -157,15 +157,16 @@ class CliCommandValidationTest {
   }
 
   // ---------------------------------------------------------------------------
-  // CliConfigHelper.readConfig — in-memory target hydration
+  // CliConfigHelper.readConfig — target stays tri-state (never hydrated)
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `readConfig hydrates missing target to 'default' without writing to disk`() = withIsolatedAppDataDir {
-    // When selectedTargetAppId is missing (older config file predating the
-    // field), readConfig materializes the "default" target in memory.
-    // The on-disk file must stay untouched until the user actually mutates
-    // their config — we don't want a setup check to silently rewrite settings.
+  fun `readConfig keeps a missing target null without writing to disk`() = withIsolatedAppDataDir {
+    // `selectedTargetAppId = null` is the tri-state "no explicit selection"
+    // signal that lets the daemon resolve the workspace `defaults.target`
+    // rung. readConfig must neither materialize "default" in memory (a later
+    // updateConfig would persist it and read back as a user pick, masking the
+    // workspace default forever) nor write to disk on a plain read.
     //
     // Wrapped in [withIsolatedAppDataDir] so this CliConfigHelper.updateConfig
     // call writes to a TemporaryFolder, not the developer's real
@@ -180,15 +181,14 @@ class CliCommandValidationTest {
 
     val hydrated = CliConfigHelper.readConfig()
 
-    assertEquals(
-      DefaultTrailblazeHostAppTarget.id,
+    assertNull(
       hydrated?.selectedTargetAppId,
-      "readConfig should hydrate missing target to 'default'",
+      "readConfig must not fabricate a target selection",
     )
     assertEquals(
       beforeContents,
       CliConfigHelper.getSettingsFile().readText(),
-      "readConfig must not write to disk when only hydration is needed",
+      "readConfig must not write to disk on a plain read",
     )
   }
 
@@ -1679,8 +1679,36 @@ class CliCommandValidationTest {
     assertNull(cmd.target, "--target must remain null when not explicitly passed")
   }
 
+  /**
+   * Fresh empty temp dir to use as [resolveCliTarget]'s `workspaceAnchorSeedPath`. The default
+   * seed is the JVM cwd, which for this test JVM sits INSIDE this repo — itself a
+   * workspace anchor declaring a `defaults.target` — so any test exercising the tiers
+   * below the flag/env ones must pass a scratch seed or the repo's own workspace leaks
+   * into the assertion. Guarded with an assumption (mirroring
+   * `TrailblazeSettingsRepoTargetPrecedenceTest`) in case a temp-dir ancestor carries an
+   * unexpected anchor.
+   */
+  private fun scratchWorkspaceSeed(): java.nio.file.Path {
+    val dir = java.nio.file.Files.createTempDirectory("cli-target-test")
+    org.junit.Assume.assumeTrue(
+      "An ancestor of $dir already contains a trailblaze.yaml — skipping.",
+      xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+        .resolveConfigFile(dir) == null,
+    )
+    return dir
+  }
+
+  /** Scratch workspace whose anchor declares `defaults.target: [defaultsTarget]`; returns a seed inside it. */
+  private fun scratchWorkspaceSeedWithDefaultTarget(defaultsTarget: String): java.nio.file.Path {
+    val root = scratchWorkspaceSeed()
+    val configDir = root.resolve("trails/config").toFile().apply { mkdirs() }
+    File(configDir, "trailblaze.yaml").writeText("defaults:\n  target: $defaultsTarget\n")
+    return root
+  }
+
   // ---------------------------------------------------------------------------
-  // resolveCliTarget — three-tier resolution (flag → workspace config → built-in)
+  // resolveCliTarget — five-tier resolution
+  // (flag → env → saved selection → workspace defaults.target → built-in)
   // ---------------------------------------------------------------------------
 
   @Test
@@ -1704,7 +1732,7 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveCliTarget reads workspace config when flag is null and config is set`() {
+  fun `resolveCliTarget reads the saved selection when flag is null and config is set`() {
     withIsolatedAppDataDir {
       CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "square") }
 
@@ -1712,9 +1740,9 @@ class CliCommandValidationTest {
 
       assertEquals("square", resolution.id)
       assertEquals(
-        ResolvedCliTargetSource.WorkspaceConfig,
+        ResolvedCliTargetSource.PersistedSelection,
         resolution.source,
-        "config-backed value must be attributed to WorkspaceConfig, not BuiltinDefault",
+        "config-backed value must be attributed to PersistedSelection, not BuiltinDefault",
       )
     }
   }
@@ -1739,10 +1767,139 @@ class CliCommandValidationTest {
       // for the latter.
       CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
 
-      val resolution = resolveCliTarget(flag = null)
+      // Scratch seed: the default seed (JVM cwd) is inside this repo, whose own
+      // workspace anchor declares a defaults.target and would resolve as
+      // WorkspaceDefault instead of falling through to BuiltinDefault.
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = scratchWorkspaceSeed())
 
       assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
       assertEquals(ResolvedCliTargetSource.BuiltinDefault, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget resolves workspace defaults-target when nothing more specific is set`() {
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+
+      val seed = scratchWorkspaceSeedWithDefaultTarget("alpha")
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = seed)
+
+      assertEquals("alpha", resolution.id)
+      assertEquals(
+        ResolvedCliTargetSource.WorkspaceDefault,
+        resolution.source,
+        "a workspace defaults.target must be attributed to WorkspaceDefault so the CLI " +
+          "surface matches what the daemon's rung-3 resolution will actually run against",
+      )
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget treats a blank workspace defaults-target as absent`() {
+    // A quoted blank `defaults.target:` must not resolve to a blank id — the accessor
+    // blank-normalizes, so this falls through to the built-in default.
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+
+      val seed = scratchWorkspaceSeedWithDefaultTarget("\"   \"")
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = seed)
+
+      assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
+      assertEquals(ResolvedCliTargetSource.BuiltinDefault, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget saved selection wins over workspace defaults-target`() {
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "beta") }
+
+      val seed = scratchWorkspaceSeedWithDefaultTarget("alpha")
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = seed)
+
+      assertEquals("beta", resolution.id)
+      assertEquals(ResolvedCliTargetSource.PersistedSelection, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget workspace defaults-target outranks a persisted neutral default id`() {
+    // Mirrors the daemon's rung-2 sentinel (TrailblazeSettingsRepo.getCurrentSelectedTargetApp):
+    // legacy CLI code auto-persisted the neutral default's id without user intent, so a
+    // stored "default" must not mask a committed workspace defaults.target.
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = DefaultTrailblazeHostAppTarget.id) }
+
+      val seed = scratchWorkspaceSeedWithDefaultTarget("alpha")
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = seed)
+
+      assertEquals("alpha", resolution.id)
+      assertEquals(ResolvedCliTargetSource.WorkspaceDefault, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget persisted neutral default id still resolves when workspace declares nothing`() {
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = DefaultTrailblazeHostAppTarget.id) }
+
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = scratchWorkspaceSeed())
+
+      assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
+      assertEquals(ResolvedCliTargetSource.PersistedSelection, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget treats a blank persisted selection as absent`() {
+    // A blank (non-null) persisted id is non-authoritative — authoritativeSelectedTargetId
+    // rejects it, and the terminal legacy-"default" fallback must not surface it verbatim.
+    // It falls through to BuiltinDefault, matching the daemon (which never matches a blank id
+    // against its loaded targets).
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "   ") }
+
+      val resolution = resolveCliTarget(flag = null, workspaceAnchorSeedPath = scratchWorkspaceSeed())
+
+      assertEquals(DefaultTrailblazeHostAppTarget.id, resolution.id)
+      assertEquals(ResolvedCliTargetSource.BuiltinDefault, resolution.source)
+    }
+  }
+
+  @Test
+  fun `resolveCliTarget reads the workspace default through the caller-forwarded TRAILBLAZE_CONFIG_DIR`() {
+    // Pins the daemon-forwarding fix: the workspace-default tier must resolve
+    // TRAILBLAZE_CONFIG_DIR via CliCallerContext.callerEnv (the caller shell's value
+    // forwarded through /cli/exec), NOT System.getenv (the daemon's frozen-at-startup env).
+    // Here the caller-env names a workspace whose anchor declares defaults.target=beta while
+    // the cwd-anchor seed points at a bare scratch dir with no anchor. A regression that read
+    // System.getenv would miss the forwarded var, fall through the empty scratch seed, and
+    // resolve BuiltinDefault instead of "beta".
+    if (normalizedTrailblazeTargetEnv() != null) return
+    withIsolatedAppDataDir {
+      CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+
+      val forwardedWorkspace = scratchWorkspaceSeedWithDefaultTarget("beta")
+      val forwardedConfigDir = forwardedWorkspace.resolve("trails/config").toFile().absolutePath
+
+      val resolution = CliCallerContext.withCallerEnv(
+        mapOf(
+          xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR
+            to forwardedConfigDir,
+        ),
+      ) {
+        resolveCliTarget(flag = null, workspaceAnchorSeedPath = scratchWorkspaceSeed())
+      }
+
+      assertEquals("beta", resolution.id)
+      assertEquals(ResolvedCliTargetSource.WorkspaceDefault, resolution.source)
     }
   }
 
@@ -1818,9 +1975,47 @@ class CliCommandValidationTest {
         CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "square") }
         val resolution = resolveCliTarget("   ")
         assertEquals("square", resolution.id)
-        assertEquals(ResolvedCliTargetSource.WorkspaceConfig, resolution.source)
+        assertEquals(ResolvedCliTargetSource.PersistedSelection, resolution.source)
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // authoritativeSelectedTargetId — the neutral-"default" sentinel shared by
+  // resolveCliTarget, `config get target`, and the `config target` listing.
+  // These pin the sentinel directly (the display surfaces read the workspace
+  // filesystem, so their own getters aren't hermetically unit-testable — this
+  // pure function is the single source of truth they all delegate to).
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `authoritativeSelectedTargetId returns a real selection unchanged`() {
+    assertEquals("square", authoritativeSelectedTargetId("square"))
+    // Casing is preserved — the sentinel only compares against the neutral id, it does
+    // not normalize (lowerCamelCase trailmap ids must round-trip).
+    assertEquals("playwrightSample", authoritativeSelectedTargetId("playwrightSample"))
+  }
+
+  @Test
+  fun `authoritativeSelectedTargetId treats null as no authoritative selection`() {
+    assertNull(authoritativeSelectedTargetId(null))
+  }
+
+  @Test
+  fun `authoritativeSelectedTargetId drops a legacy persisted neutral default id`() {
+    // The sentinel: a stored "default" is legacy auto-persist, not a user pick, so callers
+    // fall through to the workspace-default / built-in tiers instead of surfacing it as a
+    // selection. This is what keeps `config get target` / the listing from showing "default"
+    // while a run actually resolves the workspace `defaults.target`.
+    assertNull(authoritativeSelectedTargetId(DefaultTrailblazeHostAppTarget.id))
+  }
+
+  @Test
+  fun `authoritativeSelectedTargetId drops a blank persisted id`() {
+    // A blank persisted id is non-authoritative too — otherwise `config get target` prints an
+    // empty string and resolveCliTarget forwards a blank id the daemon rejects.
+    assertNull(authoritativeSelectedTargetId(""))
+    assertNull(authoritativeSelectedTargetId("   "))
   }
 
   // ---------------------------------------------------------------------------
@@ -1950,16 +2145,16 @@ class CliCommandValidationTest {
   }
 
   // ---------------------------------------------------------------------------
-  // resolveCliTarget — env-vs-workspace-config precedence test
+  // resolveCliTarget — env-vs-saved-selection precedence test
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `resolveCliTarget env wins over workspace config when both are set`() {
-    // The four-tier resolver places env ABOVE workspace config so per-shell
-    // pinning beats per-project default in the multi-terminal case — but the
+  fun `resolveCliTarget env wins over the saved selection when both are set`() {
+    // The resolver places env ABOVE the saved selection so per-shell
+    // pinning beats per-machine default in the multi-terminal case — but the
     // existing tests only cover env-when-config-is-unset and explicit-flag-
     // wins-over-env. Without this test, a future refactor that flipped the
-    // precedence (e.g. by reading workspace config first) would silently
+    // precedence (e.g. by reading the saved selection first) would silently
     // change semantics on every multi-terminal user. Pin precedence directly.
     val envValue = normalizedTrailblazeTargetEnv() ?: return
     withIsolatedAppDataDir {
@@ -1969,7 +2164,7 @@ class CliCommandValidationTest {
       assertEquals(
         ResolvedCliTargetSource.EnvVar,
         resolution.source,
-        "env tier must win over workspace config when both supply a value",
+        "env tier must win over the saved selection when both supply a value",
       )
     }
   }
@@ -1988,7 +2183,11 @@ class CliCommandValidationTest {
     // `!!` checkpoint relies on.
     assertNull(ResolvedCliTargetSource.Explicit.attributionLabel)
     assertEquals("from \$TRAILBLAZE_TARGET", ResolvedCliTargetSource.EnvVar.attributionLabel)
-    assertEquals("from workspace config", ResolvedCliTargetSource.WorkspaceConfig.attributionLabel)
+    assertEquals("from saved selection", ResolvedCliTargetSource.PersistedSelection.attributionLabel)
+    assertEquals(
+      "from workspace defaults.target",
+      ResolvedCliTargetSource.WorkspaceDefault.attributionLabel,
+    )
     assertEquals("built-in default", ResolvedCliTargetSource.BuiltinDefault.attributionLabel)
   }
 

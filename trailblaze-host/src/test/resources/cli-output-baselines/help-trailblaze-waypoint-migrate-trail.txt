@@ -5,8 +5,8 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint migrate-trail [-hV] [--write] --session=<sessionDir>
-       <trailFile>
+Usage: trailblaze waypoint migrate-trail [-hV] [--write]
+       [--classifier=<classifier>] --session=<sessionDir> <trailFile>
 Mechanically migrate a trail's Maestro-shape selectors to accessibility shape.
 Every `tapOnElementBySelector` / `assertVisibleBySelector` whose `nodeSelector`
 still
@@ -20,6 +20,23 @@ migration in
 place. Pair with a recorded session log directory (`--session`) for the same
 trail.
       <trailFile>   Path to the trail YAML file to migrate.
+      --classifier=<classifier>
+                    For a unified-format trail file only: which classifier's
+                      recordings to
+                    migrate (e.g. `android-phone`, `ios-tablet`). A session is
+                      captured
+                    against one device at a time, so migrate-trail always
+                      operates on one
+                    classifier per invocation — unified format just changes
+                      where that
+                    classifier's tool list lives (nested under this trail's
+                      `recording:`
+                    map instead of its own file). If omitted, inferred from the
+                      session
+                    logs' device classifier when exactly one available
+                      classifier matches;
+                    otherwise this is required. Ignored for legacy-format trail
+                      files.
   -h, --help        Show this help message and exit.
       --session=<sessionDir>
                     Session log directory from a dual-tree recorded run of this

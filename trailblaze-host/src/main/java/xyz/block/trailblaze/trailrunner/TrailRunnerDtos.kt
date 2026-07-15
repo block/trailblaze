@@ -17,6 +17,439 @@ data class IntegrationsResponse(val integrations: List<IntegrationDto>)
 @Serializable
 data class OkResponse(val ok: Boolean, val error: String? = null)
 
+// ─── External coding-agent sessions ─────────────────────────────────────────
+//
+// Trail Runner can supervise opaque vendor CLIs (Claude Code, Codex CLI) without becoming their
+// tool executor. The child CLI owns its model/tool loop; Trail Runner owns process lifecycle,
+// normalized event streaming, and a small UI-command protocol that lets the child explain which
+// Trail Runner surface should be shown next.
+
+@Serializable
+enum class ExternalAgentType {
+  @SerialName("claude")
+  CLAUDE,
+
+  @SerialName("codex")
+  CODEX,
+
+  /**
+   * No agent attached: a human-only Create session. The daemon spawns no child process - the run
+   * exists purely as the event stream the human's demonstrated actions (HUMAN_ACTION) land in,
+   * so recording and saving a trail works without any vendor CLI installed.
+   */
+  @SerialName("solo")
+  SOLO,
+}
+
+@Serializable
+enum class ExternalAgentSessionStatus {
+  @SerialName("running")
+  RUNNING,
+
+  @SerialName("completed")
+  COMPLETED,
+
+  @SerialName("failed")
+  FAILED,
+
+  @SerialName("cancelled")
+  CANCELLED,
+}
+
+@Serializable
+enum class ExternalAgentEventKind {
+  @SerialName("lifecycle")
+  LIFECYCLE,
+
+  @SerialName("user_message")
+  USER_MESSAGE,
+
+  @SerialName("assistant_message")
+  ASSISTANT_MESSAGE,
+
+  @SerialName("reasoning")
+  REASONING,
+
+  @SerialName("tool_call")
+  TOOL_CALL,
+
+  @SerialName("tool_result")
+  TOOL_RESULT,
+
+  @SerialName("ui_command")
+  UI_COMMAND,
+
+  @SerialName("stdout")
+  STDOUT,
+
+  @SerialName("stderr")
+  STDERR,
+
+  @SerialName("final_result")
+  FINAL_RESULT,
+
+  @SerialName("usage")
+  USAGE,
+
+  @SerialName("error")
+  ERROR,
+
+  @SerialName("human_action")
+  HUMAN_ACTION,
+
+  @SerialName("permission_request")
+  PERMISSION_REQUEST,
+
+  @SerialName("permission_decision")
+  PERMISSION_DECISION,
+}
+
+/**
+ * One entry in the external-agent provider registry. Everything the UI needs to offer a provider
+ * — the picker label, availability, the composer's model options, and the setup instructions the
+ * "Configure agents" page renders — lives on this DTO, so adding a provider (or a model) is a
+ * server-side registry change, not a UI change.
+ */
+@Serializable
+data class ExternalAgentOptionDto(
+  val id: ExternalAgentType,
+  val display: String,
+  val executable: String,
+  val available: Boolean,
+  val detail: String? = null,
+  /** How to install the CLI (shell command(s), shown verbatim on the setup page). */
+  val installHint: String? = null,
+  /** How to sign in / grant the CLI access to its models. */
+  val authHint: String? = null,
+  /** How model selection works for this provider (aliases, config). */
+  val modelsHint: String? = null,
+  val docsUrl: String? = null,
+  /** Predefined model choices for the composer's picker. Empty id = the CLI's own default. */
+  val models: List<ExternalAgentModelOptionDto> = emptyList(),
+)
+
+@Serializable
+data class ExternalAgentModelOptionDto(val id: String, val display: String)
+
+@Serializable
+data class TrailRunnerUiContextDto(
+  val route: String? = null,
+  val trailId: String? = null,
+  val sessionId: String? = null,
+  val target: String? = null,
+  val platform: String? = null,
+  val deviceId: TrailblazeDeviceId? = null,
+)
+
+@Serializable
+data class TrailRunnerUiCommandDto(
+  val version: Int = 1,
+  /**
+   * One of: navigate, open_session, open_trail, trail_output, show_message, focus_external_agent.
+   * Kept as a string instead of an enum so older Trail Runner builds can safely ignore newer
+   * commands while still showing the raw command in the event stream.
+   */
+  val action: String,
+  val route: String? = null,
+  val sessionId: String? = null,
+  val trailId: String? = null,
+  val message: String? = null,
+  val severity: String? = null,
+  /** String-valued parameters for route/query state, for example {"sel":"session-id"}. */
+  val params: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class ExternalAgentRunRequest(
+  val agentType: ExternalAgentType,
+  val prompt: String,
+  val title: String? = null,
+  val model: String? = null,
+  /**
+   * Optional working directory for the child CLI. The web UI sends the active workspace; the daemon
+   * falls back to [TrailRunnerDeps.trailsRootProvider] when this is blank or unusable.
+   */
+  val cwd: String? = null,
+  /**
+   * Cross-vendor access level: read-only, workspace-write, or danger-full-access (default
+   * workspace-write). Translated into each CLI's own permission mechanism — Codex `--sandbox`,
+   * Claude permission mode / skip-permissions — by `externalAgentCommand`.
+   */
+  val sandbox: String? = null,
+  /** Whether to append/prepend the Trail Runner UI-command contract to the child agent prompt. */
+  val includeUiContract: Boolean = true,
+  /**
+   * Instruction block prepended to the first turn's child prompt but NOT shown as the user
+   * message. The UI sends session recipes (e.g. the guided compose script) here, so the composer
+   * and the transcript carry only the human's own words while the child CLI still gets the full
+   * script. Follow-up turns resume the same vendor thread, which already carries it.
+   */
+  val promptPreamble: String? = null,
+  val uiContext: TrailRunnerUiContextDto? = null,
+  /**
+   * Extra directories the agent may access outside its cwd. Claude: passed via `--add-dir`.
+   * Codex sandboxing does not block reads outside the workspace, so no flag is needed there.
+   */
+  val extraDirs: List<String> = emptyList(),
+)
+
+@Serializable
+data class ExternalAgentRunDto(
+  val id: String,
+  val agentType: ExternalAgentType,
+  val title: String,
+  val prompt: String,
+  val cwd: String,
+  val model: String? = null,
+  val status: ExternalAgentSessionStatus,
+  val startedAtMs: Long,
+  val endedAtMs: Long? = null,
+  val externalThreadId: String? = null,
+  val exitCode: Int? = null,
+  val error: String? = null,
+  val eventCount: Int = 0,
+  /** Present only for demonstrate-first Create runs; lets the web restore the demo phase on refresh. */
+  val demo: DemoStateDto? = null,
+  /**
+   * Set only on a GENERATION run: the demonstration run it authors a trail from. The web hides such
+   * runs from the Create sidebar (one entry per trail-in-progress) and embeds their transcript in
+   * the demonstration's view instead.
+   */
+  val demoRunId: String? = null,
+  /**
+   * Permission requests from the spawned CLI that are waiting on a human decision. The web renders
+   * one approve/deny card per entry; the events stream carries the transcript record separately.
+   */
+  val pendingPermissions: List<ExternalAgentPermissionRequestDto> = emptyList(),
+  /** When true, this run auto-allows every permission request without asking the human. */
+  val autoApprove: Boolean = false,
+)
+
+/**
+ * A permission request from a spawned CLI that is waiting on a human decision (approve / deny).
+ * [inputJson] is the tool's proposed input as a compact JSON string, for the card's preview.
+ */
+@Serializable
+data class ExternalAgentPermissionRequestDto(
+  val id: String,
+  val toolName: String,
+  val inputJson: String? = null,
+  val requestedAtMs: Long,
+)
+
+// Body of `/permission-request` (the MCP proxy is the only caller). The proxy forwards the tool the
+// spawned CLI wants to run; the route suspends until the human decides, then answers with the
+// --permission-prompt-tool contract's allow/deny shape (see [ExternalAgentPermissionResponse]).
+@Serializable
+data class ExternalAgentPermissionRequestBody(
+  val toolName: String,
+  val inputJson: String? = null,
+  val toolUseId: String? = null,
+)
+
+// Response to `/permission-request`. `behavior` is "allow" or "deny"; on allow [updatedInputJson]
+// is the (pass-through) input the tool should run with; on deny [message] explains why. The proxy
+// converts this back into the object form Claude Code's --permission-prompt-tool contract expects.
+@Serializable
+data class ExternalAgentPermissionResponse(
+  val behavior: String,
+  val updatedInputJson: String? = null,
+  val message: String? = null,
+)
+
+// Body of `/permission`: the human's decision on a pending request. `decision` is one of
+// "allow", "allow_always" (allow + remember this tool for the run), or "deny".
+@Serializable
+data class ExternalAgentPermissionDecisionRequest(
+  val requestId: String,
+  val decision: String,
+)
+
+// Body of `/auto-approve`: turn per-run auto-approval on or off.
+@Serializable
+data class ExternalAgentAutoApproveRequest(val enabled: Boolean)
+
+// Response to `/demo/trail-content`: the files of the trail a demonstration's generation run has
+// delivered (or is writing). [files] is empty until any are known.
+@Serializable
+data class DemoTrailContentResponse(
+  val ok: Boolean,
+  val trailId: String? = null,
+  val files: List<DemoTrailFileDto> = emptyList(),
+  val error: String? = null,
+)
+
+@Serializable
+data class DemoTrailFileDto(val name: String, val content: String)
+
+@Serializable
+data class ExternalAgentEventDto(
+  val id: String,
+  val runId: String,
+  val seq: Int,
+  val timeMs: Long,
+  val agentType: ExternalAgentType,
+  val kind: ExternalAgentEventKind,
+  val status: ExternalAgentSessionStatus? = null,
+  val title: String? = null,
+  val text: String? = null,
+  val toolName: String? = null,
+  val toolCallId: String? = null,
+  /** Compact JSON string for arbitrary vendor-specific payloads. */
+  val input: String? = null,
+  /** Compact JSON string for arbitrary vendor-specific payloads. */
+  val output: String? = null,
+  val uiCommand: TrailRunnerUiCommandDto? = null,
+  /** Compact JSON string for arbitrary vendor-specific usage payloads. */
+  val usage: String? = null,
+  /** Compact JSON string for the raw vendor event. */
+  val raw: String? = null,
+)
+
+/**
+ * A follow-up turn on an existing run. The daemon resumes the vendor thread ([ExternalAgentRunDto.externalThreadId])
+ * with a fresh CLI invocation, so a run is a whole conversation — events keep appending across turns.
+ */
+@Serializable
+data class ExternalAgentReplyRequest(val prompt: String)
+
+@Serializable
+data class ExternalAgentRunsResponse(
+  val supportedAgents: List<ExternalAgentOptionDto>,
+  val runs: List<ExternalAgentRunDto>,
+)
+
+@Serializable
+data class ExternalAgentStartResponse(
+  val ok: Boolean,
+  val run: ExternalAgentRunDto? = null,
+  val error: String? = null,
+)
+
+@Serializable
+data class ExternalAgentEventsResponse(val events: List<ExternalAgentEventDto>)
+
+// ─── Demonstrate-first Create (demo sessions) ───────────────────────────────
+//
+// A demonstration is a solo-style (agent-less) run in "demo mode": the human positions the app,
+// presses Start, then demonstrates a flow on the device mirror. Every gesture drives the device
+// AND is captured into a durable on-disk bundle (manifest + actions.ndjson + evidence frames)
+// under the run's tape dir, so a later slice can author a trail from it. Phases:
+// positioning -> recording -> done.
+
+@Serializable
+data class StartDemoRequest(
+  val target: String? = null,
+  val platform: String? = null,
+  val trailblazeDeviceId: TrailblazeDeviceId,
+  val title: String? = null,
+)
+
+@Serializable
+data class StartDemoResponse(
+  val ok: Boolean,
+  val runId: String? = null,
+  val error: String? = null,
+)
+
+/** The trailhead the human positioned from; a null trailhead in [DemoMarkStartRequest] means manual positioning. */
+@Serializable
+data class DemoTrailheadDto(
+  val name: String,
+  val args: Map<String, String> = emptyMap(),
+  val yaml: String? = null,
+)
+
+@Serializable
+data class DemoMarkStartRequest(val trailhead: DemoTrailheadDto? = null)
+
+@Serializable
+data class DemoPhaseResponse(
+  val ok: Boolean,
+  val phase: String? = null,
+  val error: String? = null,
+)
+
+@Serializable
+data class DemoFinishRequest(
+  val objective: String,
+  val notes: String? = null,
+)
+
+@Serializable
+data class DemoFinishResponse(
+  val ok: Boolean,
+  val bundleDir: String? = null,
+  val error: String? = null,
+)
+
+/**
+ * Body of `/demo/delete-step`: remove one demonstrated step (a mistake made mid-recording) by the
+ * id of its HUMAN_ACTION event. The event, its actions.ndjson line, and its evidence files all go.
+ */
+@Serializable
+data class DemoDeleteStepRequest(val eventId: String)
+
+/**
+ * Demo state rides the existing run snapshot so the web can restore the phase on refresh.
+ * [bundleDir] is the CURRENT platform's bundle dir (`<draftDir>/demos/<platform>/`); [draftDir] is
+ * the whole draft dir under the workspace; [generationRunId] is the external-agent run launched by
+ * /demo/generate to author the trail from this demonstration (null until generation is requested).
+ *
+ * A trail is demonstrable on multiple platforms: [platform] is the platform being demonstrated now,
+ * [platforms] is every platform demonstrated so far (each with whether its demonstration completed).
+ * Once a generation run delivers a trail, [trailId]/[trailFiles]/[trailVerified] carry it (observed
+ * from the generation run's `trail_output`). Every field beyond [phase] is optional so an older
+ * payload still deserializes.
+ */
+@Serializable
+data class DemoStateDto(
+  val phase: String,
+  val bundleDir: String? = null,
+  val objective: String? = null,
+  val generationRunId: String? = null,
+  /** The platform key being demonstrated right now (iphone, ipad, android, android-tablet, web). */
+  val platform: String? = null,
+  /** Every platform demonstrated for this trail, in first-demonstrated order. */
+  val platforms: List<DemoPlatformDto> = emptyList(),
+  val draftDir: String? = null,
+  val trailId: String? = null,
+  /** Comma-separated files the delivered trail touched (from the generation run's trail_output). */
+  val trailFiles: String? = null,
+  /** The server-side verified verdict for the delivered trail (a passing run was actually observed). */
+  val trailVerified: Boolean? = null,
+)
+
+/** One demonstrated platform: its key (see [DemoStateDto.platform]) and whether its demo completed. */
+@Serializable
+data class DemoPlatformDto(
+  val key: String,
+  val done: Boolean,
+)
+
+/** Body of `/demo/add-platform`: the device to demonstrate the next platform on (same shape start-demo uses). */
+@Serializable
+data class DemoAddPlatformRequest(val deviceId: TrailblazeDeviceId)
+
+/**
+ * Launch the generation agent for a finished demonstration: a new external-agent run reads the
+ * demonstration bundle and authors a trail from it. [sandbox] defaults to workspace-write (the run
+ * writes the trail into the trails library); [model] is the optional vendor model alias.
+ */
+@Serializable
+data class DemoGenerateRequest(
+  val agentType: ExternalAgentType,
+  val model: String? = null,
+  val sandbox: String? = null,
+)
+
+@Serializable
+data class DemoGenerateResponse(
+  val ok: Boolean,
+  val generationRunId: String? = null,
+  val error: String? = null,
+)
+
 /**
  * Whether the currently-loaded app-target set differs from what the active workspace would declare.
  * The target set is resolved once at daemon startup (it wires into the device manager), so a
@@ -143,6 +576,8 @@ data class TrailIndexEntry(
   val format: String = "v1",
   /** The trail's declared `config.id`. Per-platform variants of one logical trail share it. */
   val configId: String? = null,
+  /** Whether the file carries any recorded (deterministically replayable) steps. */
+  val hasRecordedSteps: Boolean = false,
 )
 
 /** Result of migrating a legacy per-platform bundle folder to a single unified `.trail.yaml`. */
@@ -215,6 +650,22 @@ data class ToolParamDto(
   val type: String,
   val required: Boolean = true,
   val description: String? = null,
+  /** Closed set of allowed values (a schema enum, or a union discriminator's variants) - render a dropdown. */
+  val validValues: List<String>? = null,
+  /** Per-value descriptions aligned with [validValues] ("" when a value has none); null when no value has one. */
+  val validValueDescriptions: List<String>? = null,
+  /**
+   * Present when this param belongs to some variants of a discriminated union: it applies only
+   * while the named sibling param (the `<parent>.type` discriminator) holds one of [ToolParamVisibilityDto.values].
+   * Same lowering the MCP tool-discovery surface uses; dotted names group back into nested YAML.
+   */
+  val visibleWhen: ToolParamVisibilityDto? = null,
+)
+
+@Serializable
+data class ToolParamVisibilityDto(
+  val parameterName: String,
+  val values: List<String>,
 )
 
 @Serializable
@@ -329,17 +780,15 @@ data class RunRequest(
   // serialized Trail Runner contract stays producer-agnostic for the OSS module.
   val captureEvents: Boolean? = null,
   val trailId: String? = null,
-  // When set together, this run is recording a draft-blaze variant: on objective-complete the
-  // daemon writes the recorded `<variant>.trail.yaml` into the draft folder identified by [draftId].
-  val draftId: String? = null,
-  val variant: String? = null,
-  // Lets a run completion write the recorded `<variant>.trail.yaml` back into a *committed* library
-  // folder (one that has left `drafts/`). `@Transient` so it is NOT part of the serialized public
-  // `RunRequest`: no `/api/run` or RPC client can set it, keeping the safety fence in
-  // [maybeWriteDraftVariant] intact for ordinary callers. Only the server-side `/api/folder/record`
-  // path sets it true, in-process, on the `RunRequest` it constructs and passes straight to dispatch
-  // (the value is read back from the same in-memory object in `onComplete`, never re-parsed from JSON).
-  @Transient val allowCommittedVariantWrite: Boolean = false,
+  // When set together, this run is recording a bundle variant: on objective-complete the daemon
+  // writes the recorded `<variant>.trail.yaml` into the bundle folder identified by [bundleId].
+  // `@Transient` so they are NOT part of the serialized public `RunRequest`: no `/api/run` or RPC
+  // client can request a library write. Only the server-side `/api/folder/record` path sets them,
+  // in-process, on the `RunRequest` it constructs and passes straight to dispatch (the values are
+  // read back from the same in-memory object in `onComplete`, never re-parsed from JSON) - their
+  // presence IS the authorization checked by [maybeWriteBundleVariant].
+  @Transient val bundleId: String? = null,
+  @Transient val variant: String? = null,
 ) : RpcRequest<RunResponse>
 
 @Serializable
@@ -390,8 +839,14 @@ data class ClearSessionsRequest(val confirm: Boolean = false)
 @Serializable
 data class ClearSessionsResponse(val deleted: Int)
 
+/**
+ * [reason] disambiguates the `ok = false` cases so the UI can be honest about what happened:
+ * "cancelled" (ok = true), "already_ended" (the run reached a terminal status before the cancel
+ * landed), or "not_running" (no live execution was found to cancel - nothing was stopped and no
+ * cancellation was recorded).
+ */
 @Serializable
-data class CancelSessionResponse(val ok: Boolean)
+data class CancelSessionResponse(val ok: Boolean, val reason: String? = null)
 
 @Serializable
 data class RebuildDaemonResponse(
@@ -550,8 +1005,11 @@ data class TrailmapComponent(
   // Path relative to the workspace, carrying the trails/config/trailmaps/ marker so
   // it resolves via ToolSourceFiles.fileForResource for reveal + lazy body read.
   val relPath: String,
-  // Tools only — null for trailheads/system-prompts.
+  // Tools and dynamic (scripted) trailheads - null for YAML trailheads/system-prompts.
   val flavor: ToolFlavor? = null,
+  // Platforms the component supports (a scripted tool's supportedPlatforms gate). Null =
+  // unrestricted; pickers fall back to the `_<platform>_` name-token heuristic.
+  val platforms: List<String>? = null,
 )
 
 @Serializable
@@ -651,7 +1109,7 @@ data class RunToolSetDto(
   val tools: List<String>,
 )
 
-// ─── Blaze authoring: propose + drafts ────────────────────────────────────────
+// ─── Blaze authoring: propose + bundles ────────────────────────────────────────
 // NOTE: ProposedStep moved to :trailblaze-host (OSS) as part of the TrailRunnerExtension seam
 // (same package — no import needed). See TrailRunnerExtensionDtos.kt.
 
@@ -689,61 +1147,39 @@ data class ReviewTrailResponse(
   val error: String? = null,
 )
 
-// A draft blaze: a folder holding a `blaze.yaml` spec plus zero or more recorded
+// A trail bundle: a library folder holding a `blaze.yaml` spec plus zero or more recorded
 // `<platform>.trail.yaml` variants. [id] is "<rootIdx>/<relPath>"; [home] is the folder's
-// path relative to its root; [inDrafts] is true while it lives under the `drafts/` staging dir.
+// path relative to its root.
+
+/** `POST /api/folder/create` - a new bundle folder born directly at [destination] in the library. */
 @Serializable
-data class DraftSummary(
-  val id: String,
-  val name: String,
-  val home: String,
-  val inDrafts: Boolean,
-  val variants: List<String> = emptyList(),
-  val hasRecordings: Boolean = false,
-)
+data class CreateBundleRequest(val destination: String, val yaml: String)
 
 @Serializable
-data class DraftsResponse(val drafts: List<DraftSummary>)
+data class CreateBundleResponse(val success: Boolean, val id: String? = null, val error: String? = null)
 
 @Serializable
-data class CreateDraftRequest(val name: String, val yaml: String)
+data class BundleVariant(val name: String, val platform: String? = null)
 
 @Serializable
-data class CreateDraftResponse(val success: Boolean, val id: String? = null, val error: String? = null)
-
-@Serializable
-data class DraftVariant(val name: String, val platform: String? = null)
-
-@Serializable
-data class DraftDetailResponse(
+data class BundleDetailResponse(
   val id: String,
   val name: String,
   val objective: String? = null,
   val target: String? = null,
   val platform: String? = null,
-  // Where this draft will be committed (its eventual home under the trails workspace). Picked up
-  // front and carried in the blaze's config.metadata["destination"]; the folder physically stays
-  // under drafts/ until the user commits.
-  val destination: String? = null,
   val context: String? = null,
   val home: String,
-  val inDrafts: Boolean,
   val blazeYaml: String,
   val steps: List<TrailStepEntry> = emptyList(),
-  val variants: List<DraftVariant> = emptyList(),
+  val variants: List<BundleVariant> = emptyList(),
 )
 
 @Serializable
-data class UpdateDraftRequest(val id: String, val yaml: String)
+data class BundleIdRequest(val id: String)
 
 @Serializable
-data class SaveDraftToRequest(val id: String, val destination: String)
-
-@Serializable
-data class DraftIdRequest(val id: String)
-
-@Serializable
-data class RecordDraftRequest(
+data class RecordBundleRequest(
   val id: String,
   val deviceIds: List<TrailblazeDeviceId>,
   // Optional recording properties set in the Configure-recording dialog; forwarded to each run.
@@ -764,7 +1200,7 @@ data class RecordDraftRequest(
 )
 
 @Serializable
-data class RecordDraftResponse(val sessionIds: List<String> = emptyList(), val error: String? = null)
+data class RecordBundleResponse(val sessionIds: List<String> = emptyList(), val error: String? = null)
 
 @Serializable
-data class UpdateDraftFileRequest(val id: String, val name: String, val yaml: String)
+data class UpdateBundleFileRequest(val id: String, val name: String, val yaml: String)

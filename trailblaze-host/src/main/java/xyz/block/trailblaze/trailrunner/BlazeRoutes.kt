@@ -2,6 +2,7 @@ package xyz.block.trailblaze.trailrunner
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -11,14 +12,35 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.KSerializer
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 
 /**
- * Blaze authoring endpoints: propose steps from an objective, and the draft-blaze folder lifecycle
- * (list / create / detail / update / record variants / promote / delete). A draft is a folder with a
- * `blaze.yaml` spec plus accumulating `<platform>.trail.yaml` recordings — see [DraftStore].
+ * Blaze authoring endpoints: propose steps from an objective, and the trail-bundle folder surface
+ * (create / detail / file edit / record variants / delete). A bundle is a library folder with a
+ * `blaze.yaml` spec plus accumulating `<platform>.trail.yaml` recordings - see [BundleStore].
  */
+// This server has no ContentNegotiation plugin: a `call.respond(status, <object>)` throws at
+// runtime instead of serializing. Every DTO body in this file goes through this hand-encoded
+// respond instead.
+private suspend fun <T> ApplicationCall.respondJson(
+  serializer: KSerializer<T>,
+  body: T,
+  status: HttpStatusCode = HttpStatusCode.OK,
+) = respondText(
+  text = JSON.encodeToString(serializer, body),
+  contentType = ContentType.Application.Json,
+  status = status,
+)
+
+/** Resolves a bundle folder id against the current trail roots, on the IO dispatcher. */
+private suspend fun resolveBundle(deps: TrailRunnerDeps, id: String, requireBlaze: Boolean): BundleStore.ResolvedBundle? =
+  withContext(Dispatchers.IO) {
+    val (primary, extras) = resolveRoots(deps.trailsRootProvider)
+    BundleStore.resolve(id, primary, extras, requireBlaze)
+  }
+
 internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
   // objective -> proposed steps. Plan-only by default; `ground=true` requests a device-grounded
   // pass. The actual LLM/exploration work is supplied by the desktop app via [deps.proposeStepsProvider]
@@ -26,17 +48,17 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/blaze/propose") {
     val provider = deps.proposeStepsProvider
     if (provider == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, ProposeResponse(error = "step proposer not available"))
+      call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "step proposer not available"), HttpStatusCode.ServiceUnavailable)
       return@post
     }
     val body = runCatching { call.receive<ProposeRequest>() }.getOrNull()
     val objective = body?.objective?.trim().orEmpty()
     if (objective.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, ProposeResponse(error = "objective is required"))
+      call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "objective is required"), HttpStatusCode.BadRequest)
       return@post
     }
     if (body!!.ground && body.trailblazeDeviceId == null) {
-      call.respond(HttpStatusCode.BadRequest, ProposeResponse(error = "grounding requires a connected device"))
+      call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "grounding requires a connected device"), HttpStatusCode.BadRequest)
       return@post
     }
     val response = runCatching {
@@ -46,299 +68,99 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
       Console.log("[BlazeRoutes] propose failed: ${e.message}")
       ProposeResponse(error = e.message ?: "could not propose steps")
     }
-    call.respondText(
-      text = JSON.encodeToString(ProposeResponse.serializer(), response),
-      contentType = ContentType.Application.Json,
-    )
+    call.respondJson(ProposeResponse.serializer(), response)
   }
 
-  get("$PATH_BASE/api/drafts") {
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val drafts = withContext(Dispatchers.IO) { DraftStore.list(primary, extras) }
-    call.respondText(
-      text = JSON.encodeToString(DraftsResponse.serializer(), DraftsResponse(drafts)),
-      contentType = ContentType.Application.Json,
-    )
-  }
+  // ─── Library-folder editing (/api/folder/*) ───────────────────────────────────
+  // The file read/write/delete/record surface for trail folders in the library
+  // (id like "0/myapp/login"). Most routes resolve with requireBlaze=false so they
+  // also work on a folder before its blaze.yaml exists.
 
-  post("$PATH_BASE/api/draft") {
-    val body = runCatching { call.receive<CreateDraftRequest>() }.getOrNull()
-    val name = body?.name?.trim().orEmpty()
+  // Create a new trail bundle folder directly at a caller-chosen destination in the library and
+  // write its blaze.yaml. This is how a Create session's Save lands: no staging dir, no later
+  // promotion - the folder is born at its final home and shows up in the Trails list immediately.
+  post("$PATH_BASE/api/folder/create") {
+    val body = runCatching { call.receive<CreateBundleRequest>() }.getOrNull()
+    val destination = body?.destination?.trim().orEmpty()
     val yaml = body?.yaml?.trim().orEmpty()
-    if (name.isEmpty() || yaml.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, CreateDraftResponse(success = false, error = "name and yaml are required"))
+    if (destination.isEmpty() || yaml.isEmpty()) {
+      call.respondJson(CreateBundleResponse.serializer(), CreateBundleResponse(success = false, error = "destination and yaml are required"), HttpStatusCode.BadRequest)
       return@post
     }
     val result = withContext(Dispatchers.IO) {
       runCatching {
         val primary = resolvePrimaryRoot(deps.trailsRootProvider)
-        DraftStore.create(primary, name, yaml)
+        BundleStore.createAt(primary, destination, yaml)
       }
     }
-    if (result.isSuccess) {
-      call.respond(CreateDraftResponse(success = true, id = result.getOrThrow()))
-    } else {
-      call.respond(CreateDraftResponse(success = false, error = result.exceptionOrNull()?.message ?: "unknown error"))
-    }
+    val response = result.fold(
+      onSuccess = { CreateBundleResponse(success = true, id = it) },
+      onFailure = { CreateBundleResponse(success = false, error = it.message ?: "unknown error") },
+    )
+    call.respondJson(CreateBundleResponse.serializer(), response)
   }
 
-  get("$PATH_BASE/api/draft") {
+  // Bundle detail (title, steps, variants) for a library folder with a blaze.yaml - for callers
+  // viewing a bundle that lives in the library (e.g. the Create screen's trail rail following a
+  // folder the agent writes).
+  get("$PATH_BASE/api/folder") {
     val id = call.request.queryParameters["id"]?.trim().orEmpty()
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
+    val resolved = resolveBundle(deps, id, requireBlaze = true)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@get
     }
     val detail = withContext(Dispatchers.IO) {
-      DraftStore.detail(resolved.dir, id, resolved.home, resolved.inDrafts, resolved.root)
+      BundleStore.detail(resolved.dir, id, resolved.home, resolved.root)
     }
-    call.respondText(
-      text = JSON.encodeToString(DraftDetailResponse.serializer(), detail),
-      contentType = ContentType.Application.Json,
-    )
+    call.respondJson(BundleDetailResponse.serializer(), detail)
   }
 
-  // Read one file inside a draft folder (blaze.yaml or a <platform>.trail.yaml) so the UI can show
-  // its contents in-app. The name is a plain filename, kept inside the resolved draft dir.
-  get("$PATH_BASE/api/draft/file") {
-    val id = call.request.queryParameters["id"]?.trim().orEmpty()
-    val name = call.request.queryParameters["name"]?.trim().orEmpty()
-    if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) {
-      call.respond(HttpStatusCode.BadRequest)
-      return@get
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@get
-    }
-    val content = withContext(Dispatchers.IO) {
-      val file = java.io.File(resolved.dir, name)
-      if (file.canonicalPath.startsWith(resolved.dir.canonicalPath + "/") && file.isFile) file.readText() else null
-    }
-    if (content == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@get
-    }
-    call.respondText(text = content, contentType = ContentType.parse("application/yaml"))
-  }
-
-  put("$PATH_BASE/api/draft") {
-    val body = runCatching { call.receive<UpdateDraftRequest>() }.getOrNull()
-    val id = body?.id?.trim().orEmpty()
-    val yaml = body?.yaml
-    if (id.isEmpty() || yaml.isNullOrBlank()) {
-      call.respond(HttpStatusCode.BadRequest, SaveTrailResponse(success = false, error = "id and yaml are required"))
-      return@put
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@put
-    }
-    // Drafts API mutates staged drafts only. `resolve` finds any folder with a blaze.yaml, so without
-    // this guard a stale id could overwrite an already-committed trail's spec (same root cause the
-    // delete route guards against).
-    if (!resolved.inDrafts) {
-      call.respond(HttpStatusCode.Conflict, SaveTrailResponse(success = false, error = "only staged drafts can be edited"))
-      return@put
-    }
-    val result = withContext(Dispatchers.IO) { runCatching { DraftStore.updateBlaze(resolved.dir, yaml) } }
-    if (result.isSuccess) {
-      call.respond(SaveTrailResponse(success = true, savedPath = resolved.home))
-    } else {
-      call.respond(SaveTrailResponse(success = false, error = result.exceptionOrNull()?.message ?: "unknown error"))
-    }
-  }
-
-  // Write any single file in a draft folder (blaze.yaml OR a recorded <platform>.trail.yaml) so the
-  // UI can edit each file inline. Name is validated + kept inside the resolved draft dir.
-  put("$PATH_BASE/api/draft/file") {
-    val body = runCatching { call.receive<UpdateDraftFileRequest>() }.getOrNull()
-    val id = body?.id?.trim().orEmpty()
-    val name = body?.name?.trim().orEmpty()
-    val yaml = body?.yaml
-    if (id.isEmpty() || name.isEmpty() || yaml == null) {
-      call.respond(HttpStatusCode.BadRequest, SaveTrailResponse(success = false, error = "id, name and yaml are required"))
-      return@put
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@put
-    }
-    if (!resolved.inDrafts) {
-      call.respond(HttpStatusCode.Conflict, SaveTrailResponse(success = false, error = "only staged drafts can be edited"))
-      return@put
-    }
-    val ok = withContext(Dispatchers.IO) { runCatching { DraftStore.writeFile(resolved.dir, name, yaml) }.getOrDefault(false) }
-    if (ok) {
-      call.respond(SaveTrailResponse(success = true, savedPath = resolved.home))
-    } else {
-      call.respond(HttpStatusCode.BadRequest, SaveTrailResponse(success = false, error = "could not write $name"))
-    }
-  }
-
-  // Delete one recorded <platform>.trail.yaml from a staged draft folder (never blaze.yaml).
-  post("$PATH_BASE/api/draft/file/delete") {
-    val id = call.request.queryParameters["id"]?.trim().orEmpty()
-    val name = call.request.queryParameters["name"]?.trim().orEmpty()
-    if (id.isEmpty() || name.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, OkResponse(ok = false))
-      return@post
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
+  // Delete a whole bundle folder from the library. Deliberate and user-facing (the Trails folder
+  // view's Delete): resolve keeps it contained under the trail roots, requireBlaze pins the id to
+  // a real bundle folder (a suite/container directory recursively deleting would take every trail
+  // under it), and an empty home (the root itself) is refused so a stale id can never wipe the
+  // workspace.
+  post("$PATH_BASE/api/folder/delete") {
+    val id = runCatching { call.receive<BundleIdRequest>() }.getOrNull()?.id?.trim().orEmpty()
+    val resolved = resolveBundle(deps, id, requireBlaze = true)
+    if (resolved == null || resolved.home.isEmpty()) {
       call.respond(HttpStatusCode.NotFound)
       return@post
     }
-    if (!resolved.inDrafts) {
-      call.respond(HttpStatusCode.Conflict, OkResponse(ok = false))
-      return@post
-    }
-    val ok = withContext(Dispatchers.IO) { runCatching { DraftStore.deleteFile(resolved.dir, name) }.getOrDefault(false) }
-    call.respondText(
-      text = JSON.encodeToString(OkResponse.serializer(), OkResponse(ok = ok)),
-      contentType = ContentType.Application.Json,
-    )
+    val ok = withContext(Dispatchers.IO) { BundleStore.delete(resolved.dir) }
+    call.respondJson(OkResponse.serializer(), OkResponse(ok = ok))
   }
 
-  post("$PATH_BASE/api/draft/save-to") {
-    val body = runCatching { call.receive<SaveDraftToRequest>() }.getOrNull()
-    val id = body?.id?.trim().orEmpty()
-    val destination = body?.destination?.trim().orEmpty()
-    if (id.isEmpty() || destination.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, CreateDraftResponse(success = false, error = "id and destination are required"))
-      return@post
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@post
-    }
-    // Only a staged draft may be promoted. Without this guard a stale id for an already-committed
-    // folder would ATOMIC_MOVE a live trail-library directory to a new path (same guard the delete
-    // route applies). The UI also blocks committing while a recording is in flight via `anyRunning`;
-    // that gate is not yet enforced server-side (see TODO in maybeWriteDraftVariant).
-    if (!resolved.inDrafts) {
-      call.respond(HttpStatusCode.Conflict, CreateDraftResponse(success = false, error = "only staged drafts can be saved to the library"))
-      return@post
-    }
-    val result = withContext(Dispatchers.IO) {
-      runCatching { DraftStore.saveTo(resolved.dir, primary, destination) }
-    }
-    if (result.isSuccess) {
-      call.respond(CreateDraftResponse(success = true, id = result.getOrThrow()))
-    } else {
-      call.respond(CreateDraftResponse(success = false, error = result.exceptionOrNull()?.message ?: "unknown error"))
-    }
-  }
-
-  post("$PATH_BASE/api/draft/delete") {
-    val id = runCatching { call.receive<DraftIdRequest>() }.getOrNull()?.id?.trim().orEmpty()
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@post
-    }
-    // Only staged drafts may be deleted. `resolve` happily finds any trail folder with a blaze.yaml,
-    // so without this guard a stale id for an already-committed folder would recursively delete the
-    // committed trail-library directory.
-    if (!resolved.inDrafts) {
-      call.respond(HttpStatusCode.Conflict, OkResponse(ok = false))
-      return@post
-    }
-    val ok = withContext(Dispatchers.IO) { DraftStore.delete(resolved.dir) }
-    call.respondText(
-      text = JSON.encodeToString(OkResponse.serializer(), OkResponse(ok = ok)),
-      contentType = ContentType.Application.Json,
-    )
-  }
-
-  // Reveal a draft's folder in the OS file browser (Finder). Resolves the draft, then hands its
-  // directory to the desktop reveal util — same affordance as the tool/trail "reveal" actions.
-  post("$PATH_BASE/api/draft/reveal") {
-    val id = runCatching { call.receive<DraftIdRequest>() }.getOrNull()?.id?.trim().orEmpty()
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
+  // Reveal a bundle folder in the OS file browser (Finder) - same affordance as the tool/trail
+  // "reveal" actions, for a library folder.
+  post("$PATH_BASE/api/folder/reveal") {
+    val id = runCatching { call.receive<BundleIdRequest>() }.getOrNull()?.id?.trim().orEmpty()
+    val resolved = resolveBundle(deps, id, requireBlaze = false)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@post
     }
     val ok = withContext(Dispatchers.IO) {
       runCatching { TrailblazeDesktopUtil.revealFileInFinder(resolved.dir); true }
-        .onFailure { Console.log("[BlazeRoutes] draft reveal failed: ${it.message}") }
+        .onFailure { Console.log("[BlazeRoutes] folder reveal failed: ${it.message}") }
         .getOrDefault(false)
     }
-    call.respondText(
-      text = JSON.encodeToString(OkResponse.serializer(), OkResponse(ok = ok)),
-      contentType = ContentType.Application.Json,
-    )
+    call.respondJson(OkResponse.serializer(), OkResponse(ok = ok))
   }
 
-  // Record one variant per selected device: dispatch the draft's blaze steps to each device with
-  // recording capture on. Each run carries draftId+variant so the recorded YAML lands back in the
-  // folder on completion (see [maybeWriteDraftVariant]).
-  post("$PATH_BASE/api/draft/record") {
-    val deviceManager = deps.deviceManager
-    if (deviceManager == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordDraftResponse(error = "deviceManager not available"))
-      return@post
-    }
-    val body = runCatching { call.receive<RecordDraftRequest>() }.getOrNull()
-    val id = body?.id?.trim().orEmpty()
-    if (id.isEmpty() || body!!.deviceIds.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, RecordDraftResponse(error = "id and at least one device are required"))
-      return@post
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras) }
-    if (resolved == null) {
-      call.respond(HttpStatusCode.NotFound)
-      return@post
-    }
-    val response = recordIntoFolder(deps, resolved, body, allowCommittedWrite = false)
-    // If nothing started, surface the failure instead of returning an empty success. If some started,
-    // include the partial errors so the UI can flag the devices that didn't record.
-    val status = if (response.sessionIds.isEmpty() && response.error != null) HttpStatusCode.BadGateway else HttpStatusCode.OK
-    call.respondText(
-      text = JSON.encodeToString(RecordDraftResponse.serializer(), response),
-      contentType = ContentType.Application.Json,
-      status = status,
-    )
-  }
-
-  // ─── Library-folder editing (/api/folder/*) ───────────────────────────────────
-  // Same file read/write/delete/record surface as the draft routes, but resolved with
-  // requireBlaze=false and WITHOUT the `inDrafts` fence: the caller is intentionally editing a
-  // committed library trail folder (id like "0/myapp/login"), not a staged draft.
-
-  // Read one file inside a committed library folder. Mirrors GET /api/draft/file but resolves with
-  // requireBlaze=false.
+  // Read one file inside a library folder (blaze.yaml or a <platform>.trail.yaml) so the UI can
+  // show its contents in-app. The name is a plain filename, kept inside the resolved folder.
   get("$PATH_BASE/api/folder/file") {
     val id = call.request.queryParameters["id"]?.trim().orEmpty()
     val name = call.request.queryParameters["name"]?.trim().orEmpty()
-    if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) {
-      call.respond(HttpStatusCode.BadRequest)
-      return@get
-    }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = false) }
+    val resolved = resolveBundle(deps, id, requireBlaze = false)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@get
     }
-    val content = withContext(Dispatchers.IO) {
-      val file = java.io.File(resolved.dir, name)
-      if (file.canonicalPath.startsWith(resolved.dir.canonicalPath + "/") && file.isFile) file.readText() else null
-    }
+    // BundleStore.readFile owns the filename validation + containment, same as writeFile/deleteFile.
+    val content = withContext(Dispatchers.IO) { BundleStore.readFile(resolved.dir, name) }
     if (content == null) {
       call.respond(HttpStatusCode.NotFound)
       return@get
@@ -346,50 +168,45 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
     call.respondText(text = content, contentType = ContentType.parse("application/yaml"))
   }
 
-  // Write any single file in a committed library folder (an existing file OR a brand-new blaze.yaml
-  // for a folder that doesn't have one yet). No `inDrafts` fence — this is the whole point.
+  // Write any single file in a library folder (an existing file OR a brand-new blaze.yaml for a
+  // folder that doesn't have one yet).
   put("$PATH_BASE/api/folder/file") {
-    val body = runCatching { call.receive<UpdateDraftFileRequest>() }.getOrNull()
+    val body = runCatching { call.receive<UpdateBundleFileRequest>() }.getOrNull()
     val id = body?.id?.trim().orEmpty()
     val name = body?.name?.trim().orEmpty()
     val yaml = body?.yaml
     if (id.isEmpty() || name.isEmpty() || yaml == null) {
-      call.respond(HttpStatusCode.BadRequest, SaveTrailResponse(success = false, error = "id, name and yaml are required"))
+      call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "id, name and yaml are required"), HttpStatusCode.BadRequest)
       return@put
     }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = false) }
+    val resolved = resolveBundle(deps, id, requireBlaze = false)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@put
     }
-    val ok = withContext(Dispatchers.IO) { runCatching { DraftStore.writeFile(resolved.dir, name, yaml) }.getOrDefault(false) }
+    val ok = withContext(Dispatchers.IO) { runCatching { BundleStore.writeFile(resolved.dir, name, yaml) }.getOrDefault(false) }
     if (ok) {
-      call.respond(SaveTrailResponse(success = true, savedPath = resolved.home))
+      call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = true, savedPath = resolved.home))
     } else {
-      call.respond(HttpStatusCode.BadRequest, SaveTrailResponse(success = false, error = "could not write $name"))
+      call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "could not write $name"), HttpStatusCode.BadRequest)
     }
   }
 
-  // Delete one file from a committed library folder (DraftStore.deleteFile still refuses blaze.yaml).
+  // Delete one file from a library folder (BundleStore.deleteFile still refuses blaze.yaml).
   post("$PATH_BASE/api/folder/file/delete") {
     val id = call.request.queryParameters["id"]?.trim().orEmpty()
     val name = call.request.queryParameters["name"]?.trim().orEmpty()
     if (id.isEmpty() || name.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, OkResponse(ok = false))
+      call.respondJson(OkResponse.serializer(), OkResponse(ok = false), HttpStatusCode.BadRequest)
       return@post
     }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = false) }
+    val resolved = resolveBundle(deps, id, requireBlaze = false)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@post
     }
-    val ok = withContext(Dispatchers.IO) { runCatching { DraftStore.deleteFile(resolved.dir, name) }.getOrDefault(false) }
-    call.respondText(
-      text = JSON.encodeToString(OkResponse.serializer(), OkResponse(ok = ok)),
-      contentType = ContentType.Application.Json,
-    )
+    val ok = withContext(Dispatchers.IO) { runCatching { BundleStore.deleteFile(resolved.dir, name) }.getOrDefault(false) }
+    call.respondJson(OkResponse.serializer(), OkResponse(ok = ok))
   }
 
   // Migrate a legacy per-platform bundle folder into a single unified `<folder>.trail.yaml` (deleting
@@ -399,16 +216,15 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/folder/migrate-unified") {
     val id = call.request.queryParameters["id"]?.trim().orEmpty()
     if (id.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, MigrateFolderResponse(success = false, error = "id is required"))
+      call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = "id is required"), HttpStatusCode.BadRequest)
       return@post
     }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = false) }
-    // resolve() only path-validates — it returns a ResolvedDraft for a directory that doesn't exist.
+    val resolved = resolveBundle(deps, id, requireBlaze = false)
+    // resolve() only path-validates - it returns a ResolvedBundle for a directory that does not exist.
     // Without the isDirectory check, a missing folder would fall through to the migrator and surface
     // as a 400 with its internal "no *.trail.yaml files" message instead of a plain 404.
     if (resolved == null || !withContext(Dispatchers.IO) { resolved.dir.isDirectory }) {
-      call.respond(HttpStatusCode.NotFound, MigrateFolderResponse(success = false, error = "folder not found"))
+      call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = "folder not found"), HttpStatusCode.NotFound)
       return@post
     }
     val outcome = withContext(Dispatchers.IO) { runCatching { BundleMigration.migrateFolder(resolved.dir) } }
@@ -420,7 +236,8 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
           "[BlazeRoutes] migrate-unified '$id': wrote ${o.outputName}, " +
             "removed [${o.removed.joinToString()}], ${o.driftComments.size} drift warning(s)",
         )
-        call.respond(
+        call.respondJson(
+          MigrateFolderResponse.serializer(),
           MigrateFolderResponse(
             success = true,
             outputName = o.outputName,
@@ -436,60 +253,51 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
         // a top-level `- tools:` block, a `- trailhead:`, or an already-migrated folder. Everything
         // else is an unexpected server error.
         val status = if (e is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.InternalServerError
-        call.respond(status, MigrateFolderResponse(success = false, error = e.message ?: (e::class.simpleName ?: "migration failed")))
+        call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = e.message ?: (e::class.simpleName ?: "migration failed")), status)
       },
     )
   }
 
-  // Record one variant per selected device into a committed library folder. Same dispatch as
-  // /api/draft/record, but allowCommittedVariantWrite=true so the recorded variant lands back in the
-  // committed folder. Requires a blaze.yaml to drive the run.
+  // Record one variant per selected device into a library folder: dispatch the folder's blaze steps
+  // to each device with recording capture on. Each run carries bundleId+variant so the recorded YAML
+  // lands back in the folder on completion (see [maybeWriteBundleVariant]). Requires a blaze.yaml.
   post("$PATH_BASE/api/folder/record") {
     val deviceManager = deps.deviceManager
     if (deviceManager == null) {
-      call.respond(HttpStatusCode.ServiceUnavailable, RecordDraftResponse(error = "deviceManager not available"))
+      call.respondJson(RecordBundleResponse.serializer(), RecordBundleResponse(error = "deviceManager not available"), HttpStatusCode.ServiceUnavailable)
       return@post
     }
-    val body = runCatching { call.receive<RecordDraftRequest>() }.getOrNull()
+    val body = runCatching { call.receive<RecordBundleRequest>() }.getOrNull()
     val id = body?.id?.trim().orEmpty()
     if (id.isEmpty() || body!!.deviceIds.isEmpty()) {
-      call.respond(HttpStatusCode.BadRequest, RecordDraftResponse(error = "id and at least one device are required"))
+      call.respondJson(RecordBundleResponse.serializer(), RecordBundleResponse(error = "id and at least one device are required"), HttpStatusCode.BadRequest)
       return@post
     }
-    val (primary, extras) = withContext(Dispatchers.IO) { resolveRoots(deps.trailsRootProvider) }
-    val resolved = withContext(Dispatchers.IO) { DraftStore.resolve(id, primary, extras, requireBlaze = true) }
+    // requireBlaze: a folder with no blaze.yaml has nothing to record from.
+    val resolved = resolveBundle(deps, id, requireBlaze = true)
     if (resolved == null) {
       call.respond(HttpStatusCode.NotFound)
       return@post
     }
-    if (!withContext(Dispatchers.IO) { java.io.File(resolved.dir, "blaze.yaml").isFile }) {
-      call.respond(HttpStatusCode.BadRequest, RecordDraftResponse(error = "folder has no blaze.yaml to record from"))
-      return@post
-    }
-    val response = recordIntoFolder(deps, resolved, body, allowCommittedWrite = true)
+    val response = recordIntoFolder(deps, resolved, body)
+    // If nothing started, surface the failure instead of returning an empty success. If some started,
+    // include the partial errors so the UI can flag the devices that didn't record.
     val status = if (response.sessionIds.isEmpty() && response.error != null) HttpStatusCode.BadGateway else HttpStatusCode.OK
-    call.respondText(
-      text = JSON.encodeToString(RecordDraftResponse.serializer(), response),
-      contentType = ContentType.Application.Json,
-      status = status,
-    )
+    call.respondJson(RecordBundleResponse.serializer(), response, status)
   }
 }
 
 /**
- * Shared body of the record routes: read the folder's `blaze.yaml` (optionally prepending the
+ * Body of the record route: read the folder's `blaze.yaml` (optionally prepending the
  * "Fresh install" clear-app-data setup tool), then dispatch one recording run per selected device via
- * the same path as `POST /api/run`. Each run carries `draftId`+`variant` so the recorded
- * `<variant>.trail.yaml` lands back in the folder on completion (see `maybeWriteDraftVariant`).
- * [allowCommittedWrite] is forwarded to each [RunRequest] so the `/api/folder/record` caller can land
- * the variant in a committed library folder (the draft-record caller passes false).
+ * the same path as `POST /api/run`. Each run carries `bundleId`+`variant` so the recorded
+ * `<variant>.trail.yaml` lands back in the folder on completion (see `maybeWriteBundleVariant`).
  */
 private suspend fun recordIntoFolder(
   deps: TrailRunnerDeps,
-  resolved: DraftStore.ResolvedDraft,
-  body: RecordDraftRequest,
-  allowCommittedWrite: Boolean,
-): RecordDraftResponse {
+  resolved: BundleStore.ResolvedBundle,
+  body: RecordBundleRequest,
+): RecordBundleResponse {
   val id = resolved.home.let { "${resolved.rootIdx}/$it" }
   val baseYaml = withContext(Dispatchers.IO) { java.io.File(resolved.dir, "blaze.yaml").readText() }
   // Step 0 for this recording. The trailhead is platform-specific, so it's chosen per-platform on the
@@ -505,8 +313,8 @@ private suspend fun recordIntoFolder(
   val errors = mutableListOf<String>()
   for (device in body.deviceIds) {
     val variant = device.trailblazeDevicePlatform.name.lowercase()
-    // Share the same dispatch path as POST /api/run; draftId+variant make the recorded
-    // <variant>.trail.yaml land back in the folder on completion (see maybeWriteDraftVariant).
+    // Share the same dispatch path as POST /api/run; bundleId+variant make the recorded
+    // <variant>.trail.yaml land back in the folder on completion (see maybeWriteBundleVariant).
     val response = when (
       val r = buildRunDispatchResult(
         deps,
@@ -522,12 +330,11 @@ private suspend fun recordIntoFolder(
           // trailId is the source-trail id the Runs/Trace views navigate to (go('trails', {sel})
           // / useTrailDetail), which resolve indexed *file* ids — not the folder id. Point it at the
           // concrete per-platform variant file this recording produces (`<folder>/<variant>`, e.g.
-          // `…/login/ios`) so a run launched from the matrix opens its source trail + YAML. draftId
-          // stays the folder id: maybeWriteDraftVariant resolves the folder, not a file.
+          // `…/login/ios`) so a run launched from the matrix opens its source trail + YAML. bundleId
+          // stays the folder id: maybeWriteBundleVariant resolves the folder, not a file.
           trailId = "$id/$variant",
-          draftId = id,
+          bundleId = id,
           variant = variant,
-          allowCommittedVariantWrite = allowCommittedWrite,
         ),
       )
     ) {
@@ -538,7 +345,7 @@ private suspend fun recordIntoFolder(
     else errors += "$variant: ${response.error ?: "failed to start"}"
   }
   val errorText = errors.takeIf { it.isNotEmpty() }?.joinToString("; ")
-  return RecordDraftResponse(sessionIds = sessionIds, error = errorText)
+  return RecordBundleResponse(sessionIds = sessionIds, error = errorText)
 }
 
 /**

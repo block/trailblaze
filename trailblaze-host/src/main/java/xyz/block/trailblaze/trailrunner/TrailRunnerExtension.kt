@@ -67,6 +67,15 @@ interface TrailRunnerExtension {
   val reviewTrailProvider: (suspend (recordedYaml: String, target: String?, platform: String?) -> List<ReviewSuggestionDto>)?
     get() = null
 
+  /**
+   * Create's selector-advice assist: a fast second opinion on which selector candidate of a
+   * pending step will replay most reliably. Hard-time-boxed by the route (the confirm gate never
+   * waits on it); implementations should use a fast, cheap model. `null` disables the assist -
+   * the pending card simply never grows a reasoning strip.
+   */
+  val selectorAdviceProvider: (suspend (SelectorAdviceRequest) -> SelectorAdvice?)?
+    get() = null
+
   /** Re-resolves app-target ids against the CURRENT workspace (for the workspace-target-drift check). */
   val appTargetIdsProvider: (() -> Set<String>)?
     get() = null

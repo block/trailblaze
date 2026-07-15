@@ -17,6 +17,7 @@ import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailheadException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
@@ -29,6 +30,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.TrailheadDefinition
 
 /**
  * Exercises the self-heal orchestration lifted into [TrailblazeRunnerUtil].
@@ -443,6 +445,118 @@ class TrailblazeRunnerUtilTest {
     assertTrue(result is TrailblazeToolResult.Success)
     assertTrue(callbackInvocations.isEmpty())
     assertEquals(listOf<PromptStep>(step), runner.runSuspendCalls)
+  }
+
+  // --- trailhead fail-fast -----------------------------------------------------------------
+
+  @Test
+  fun `trailhead recording failure throws TrailheadException even with selfHeal=true`() {
+    // The trailhead is the deterministic bootstrap that reaches the trail's starting state.
+    // When it fails the trail never began, so selfHeal must NOT hand off to AI recovery -
+    // that only masks the failure behind a later step's unrelated error.
+    val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ ->
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "app never signed in")
+        },
+        trailblazeRunner = runner,
+      )
+    val trailheadStep =
+      TrailheadDefinition(
+        step = "Launch the app signed in with the test account",
+        tools = listOf(tool("launchSignedIn")),
+      ).toPromptStep()
+
+    val ex =
+      assertFailsWith<TrailheadException> {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(trailheadStep),
+            useRecordedSteps = true,
+            selfHeal = true,
+          )
+        }
+      }
+    val message = ex.message ?: ""
+    // The first line must already say the trailhead failed and which tool failed - CI
+    // summaries surface only the first line of a failure reason.
+    val firstLine = message.lineSequence().first()
+    assertTrue(firstLine.contains(TrailheadException.MESSAGE_PREFIX), message)
+    assertTrue(firstLine.contains("launchSignedIn"), message)
+    assertTrue(message.contains("Launch the app signed in with the test account"), message)
+    // The full tool call (with args) must appear so triage sees exactly what was dispatched.
+    assertTrue(message.contains(tool("launchSignedIn").trailblazeTool.toString()), message)
+    assertTrue(message.contains("app never signed in"), message)
+    assertTrue(runner.recoverCalls.isEmpty(), "a trailhead failure must not hand off to self-heal")
+  }
+
+  @Test
+  fun `trailhead failure aborts the remaining trail steps`() {
+    // Encodes the bug this guards against: a failed trailhead must not let the trail continue
+    // and fail minutes later on an unrelated assertion against the wrong device state.
+    val attemptedTools = mutableListOf<List<TrailblazeTool>>()
+    val runner = FakeTestAgentRunner(recoverReturn = { _, _ -> objectiveComplete("recovered") })
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          attemptedTools += tools
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "app never signed in")
+        },
+        trailblazeRunner = runner,
+      )
+    val trailheadStep =
+      TrailheadDefinition(step = "Launch signed in", tools = listOf(tool("launchSignedIn")))
+        .toPromptStep()
+
+    assertFailsWith<TrailheadException> {
+      runBlocking {
+        util.runPromptSuspend(
+          prompts = listOf(trailheadStep, recordedStep("Verify the home tab", tool("assertHomeTab"))),
+          useRecordedSteps = true,
+          selfHeal = true,
+        )
+      }
+    }
+
+    assertEquals(1, attemptedTools.size, "the trail step must never dispatch after a trailhead failure")
+    assertTrue(runner.recoverCalls.isEmpty())
+    assertTrue(runner.runSuspendCalls.isEmpty())
+  }
+
+  @Test
+  fun `NL-only trailhead AI failure throws TrailheadException`() {
+    // A trailhead with no recorded tools blazes via AI; when the AI cannot reach the starting
+    // state the same fail-loudly contract applies.
+    val runner =
+      FakeTestAgentRunner(
+        runSuspendReturn = { step ->
+          AgentTaskStatus.Failure.ObjectiveFailed(
+            statusData = fakeStatusData(step.prompt),
+            llmExplanation = "could not sign in",
+          )
+        },
+      )
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ -> TrailblazeToolResult.Success() },
+        trailblazeRunner = runner,
+      )
+    val trailheadStep = TrailheadDefinition(step = "Launch signed in").toPromptStep()
+
+    val ex =
+      assertFailsWith<TrailheadException> {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(trailheadStep),
+            useRecordedSteps = true,
+            selfHeal = true,
+          )
+        }
+      }
+    val message = ex.message ?: ""
+    assertTrue(message.lineSequence().first().contains(TrailheadException.MESSAGE_PREFIX), message)
+    assertTrue(message.contains("Launch signed in"), message)
   }
 
   // --- shared tool-batch scope -------------------------------------------------------------

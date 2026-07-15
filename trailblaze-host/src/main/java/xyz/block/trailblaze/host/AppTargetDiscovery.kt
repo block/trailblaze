@@ -15,6 +15,7 @@ import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
+import xyz.block.trailblaze.config.project.workspaceRootFromConfigDir
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
@@ -142,6 +143,35 @@ object AppTargetDiscovery {
       // goes to stderr, which the launcher discards — the trace would be invisible.
       Console.error("$logPrefix Error loading app targets from YAML: ${e.message}\n${e.stackTraceToString()}")
       setOf(defaultFallback)
+    }
+  }
+
+  /**
+   * A [discover] `workspaceConfigProvider` anchored at an explicitly-selected `trails/config`
+   * directory (e.g. the one the user picked in Trail Runner settings, published via
+   * `WorkspaceConfigDirHolder`), with fallback to the default CWD walk-up.
+   *
+   * When [configDirProvider] supplies a dir that carries its own `trailblaze.yaml`, the ENTIRE
+   * workspace anchors there - anchor file plus declared targets/toolsets/tools - so live target
+   * re-discovery reads the same workspace the create-target write used, rather than the daemon
+   * launch CWD. Falls back to the CWD walk-up when no dir is supplied or it has no own
+   * `trailblaze.yaml` (then we keep the legacy split: CWD anchor, overridden payload dir).
+   */
+  fun anchoredWorkspaceConfigProvider(
+    configDirProvider: () -> File?,
+  ): () -> ResolvedTrailblazeWorkspaceConfig = {
+    val overrideConfigDir = configDirProvider()
+    val anchored = overrideConfigDir
+      ?.let { workspaceRootFromConfigDir(it) }
+      ?.let { root ->
+        ResolvedTrailblazeWorkspaceConfig(
+          workspaceRoot = root,
+          configFile = root.configFile.toFile(),
+          configDir = overrideConfigDir,
+        )
+      }
+    anchored ?: TrailblazeWorkspaceConfigResolver.resolve(Paths.get("")).let { resolved ->
+      if (overrideConfigDir != null) resolved.copy(configDir = overrideConfigDir) else resolved
     }
   }
 

@@ -9,7 +9,6 @@ import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.config.project.TrailDiscovery
-import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailDeviceSelection
@@ -47,9 +46,16 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
+import xyz.block.trailblaze.yaml.TrailArgBinder
+import xyz.block.trailblaze.yaml.TrailArgConfig
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlMap
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -271,6 +277,40 @@ open class TrailCommand : Callable<Int> {
     ],
   )
   var sensitiveSeeds: List<String> = emptyList()
+
+  @Option(
+    names = ["--arg"],
+    paramLabel = "KEY=VAL",
+    arity = "1",
+    description = [
+      "Supply a value for a parameter the trail DECLARES under `config.args:`. Repeatable " +
+        "(`--arg recipient=sam@example.com --arg retries=3`). Unlike --memory, args are " +
+        "declared and typed: the value is coerced to the arg's declared type, a missing " +
+        "required arg fails before the run starts, and an undeclared arg is rejected. " +
+        "Referenced as `{{args.name}}` in prompts and tool params. Overrides an --args-file " +
+        "entry with the same key.",
+      "The value is always a string here; declaration-driven coercion turns `retries=3` into a " +
+        "number for an `integer` arg. Use --args-file for structured (array/object) values.",
+      "Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the " +
+        "LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive " +
+        "data through --secret memory instead."
+    ],
+  )
+  var argSeeds: List<String> = emptyList()
+
+  @Option(
+    names = ["--args-file"],
+    paramLabel = "<file>",
+    description = [
+      "Read parameter values from a YAML or JSON file (a map of arg-name to value). Applied " +
+        "BEFORE --arg, so a --arg KEY=VAL overrides the file entry with the same key. A " +
+        "YAML-null value is rejected (args have no null) — use '' for an empty string.",
+      "Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the " +
+        "LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive " +
+        "data through --secret memory instead."
+    ],
+  )
+  var argsFile: File? = null
 
   @Option(
     names = ["--max-llm-calls"],
@@ -520,6 +560,19 @@ open class TrailCommand : Callable<Int> {
     }
     this.resolvedMemorySeeds = parsedMemorySeeds
     this.resolvedSensitiveSeeds = parsedSensitiveSeeds
+
+    // Parse --args-file / --arg early (same fail-fast rationale as memory): a malformed --arg
+    // entry, an unreadable/non-map args file, or a YAML-null value must exit MISUSE before any
+    // device/LLM resolution. Precedence: --args-file first, then --arg overrides per key. The
+    // per-trail bind against each trail's declared `config.args:` happens later at dispatch.
+    val parsedProvidedArgs: Map<String, JsonElement>
+    try {
+      parsedProvidedArgs = parseProvidedArgs(argSeeds, argsFile)
+    } catch (e: IllegalArgumentException) {
+      Console.error("Error: ${e.message}")
+      return TrailblazeExitCode.MISUSE.code
+    }
+    this.resolvedProvidedArgs = parsedProvidedArgs
 
     // Validate --max-llm-calls flag value early so a CLI typo (e.g. `--max-llm-calls 0`)
     // exits USAGE rather than later tripping the model-layer require with an
@@ -971,6 +1024,25 @@ open class TrailCommand : Callable<Int> {
             val effectiveUseRecordedSteps = resolveUseRecordedSteps(yamlContent)
             logReplayModeBanner(file, yamlContent, effectiveUseRecordedSteps)
 
+            // Bind parameterized-trail args against this trail's declaration before dispatch, so a
+            // missing required arg / unknown arg / bad value fails MISUSE without reaching the daemon.
+            // A trail that fails to PARSE skips the bind and is submitted as-is: the daemon-side
+            // decode owns that failure (counted as one failed file, same as the in-process path) —
+            // an uncaught throw here would abort the whole batch, and a bind against a null
+            // declaration would misreport the parse error as "declares no `config.args:`".
+            val declaredArgsOrParseFailure = runCatching {
+              createTrailblazeYaml().extractTrailConfig(yamlContent)?.args
+            }
+            val initialArgs = declaredArgsOrParseFailure.fold(
+              onSuccess = { declared -> boundArgsWireOrReport(declaredArgs = declared, target = file.name) },
+              onFailure = { emptyMap() },
+            )
+            if (initialArgs == null) {
+              failed++
+              worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.MISUSE.code)
+              continue
+            }
+
             val request = CliRunRequest(
               yamlContent = yamlContent,
               trailFilePath = file.absolutePath,
@@ -997,6 +1069,12 @@ open class TrailCommand : Callable<Int> {
               maxLlmCalls = resolveEffectiveMaxLlmCalls(),
               initialMemorySeeds = parsedMemorySeeds(),
               initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+              initialArgs = initialArgs,
+              // Anchor the daemon's workspace `defaults.target` (rung-3) resolution at OUR cwd, not
+              // the daemon's launch dir, so a run with no `config.target` targets the same app
+              // `config get target` reports here. `run` isn't a forwarded subcommand, so this
+              // executes in the user's CLI JVM — callerCwd() is the user's shell cwd.
+              callerWorkspaceDir = CliCallerContext.callerCwd().toAbsolutePath().toString(),
             )
 
             var lastProgress: String? = null
@@ -1391,9 +1469,14 @@ open class TrailCommand : Callable<Int> {
 
     // Parse trail config to extract driver and platform hints (before device loading so we can
     // short-circuit for web/compose trails that don't need Android/iOS device discovery).
+    // Track parse failure distinctly from "parsed, but no config block": the args bind below
+    // must skip a parse-FAILED trail so the runner's decode error surfaces as the real cause —
+    // binding against `null` there would misreport it as "declares no `config.args:`".
+    var trailConfigParseFailed = false
     val trailConfig = try {
       createTrailblazeYaml().extractTrailConfig(yamlContent, deviceClassifiersForDriver)
     } catch (_: Exception) {
+      trailConfigParseFailed = true
       null
     }
 
@@ -1490,6 +1573,17 @@ open class TrailCommand : Callable<Int> {
     // See SessionId.pinnedFor — same construction is used in handleCliRunRequest.
     val pinnedSessionId = SessionId.pinnedFor(testName)
 
+    // Bind parameterized-trail args against this trail's declaration before dispatch, so a
+    // missing required / unknown / bad-typed arg exits MISUSE before the device does any work.
+    // A trail whose config failed to PARSE skips the bind: the runner's decode error owns that
+    // failure, and a bind against a null declaration would mask it as an args problem.
+    val initialArgs = if (trailConfigParseFailed) {
+      emptyMap()
+    } else {
+      boundArgsWireOrReport(declaredArgs = trailConfig?.args, target = file.name)
+        ?: return TrailblazeExitCode.MISUSE.code to emptyList()
+    }
+
     // Create the run request
     val runYamlRequest = RunYamlRequest(
       testName = testName,
@@ -1529,6 +1623,7 @@ open class TrailCommand : Callable<Int> {
       maxLlmCalls = resolveEffectiveMaxLlmCalls(),
       initialMemorySeeds = parsedMemorySeeds(),
       initialMemorySensitiveSeeds = parsedSensitiveSeeds(),
+      initialArgs = initialArgs,
     )
 
     return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file, pinnedSessionId)
@@ -2246,24 +2341,26 @@ open class TrailCommand : Callable<Int> {
   /**
    * Reads `defaults.maxLlmCalls` from the workspace `trailblaze.yaml` discovered from
    * [cwd], or null when no workspace file resolves or the field is absent / invalid.
-   * Loader failures are caught and logged so a parse error in the workspace file never
-   * blocks a CLI invocation — the cap falls through to the persisted-config tier instead.
+   * Loader failures are caught and logged (inside
+   * [TrailblazeWorkspaceConfigResolver.loadWorkspaceDefaults]) so a parse error in the
+   * workspace file never blocks a CLI invocation — the cap falls through to the
+   * persisted-config tier instead.
+   *
+   * Note the deliberate precedence inversion vs `defaults.target`
+   * ([xyz.block.trailblaze.ui.TrailblazeSettingsRepo.getCurrentSelectedTargetApp]): here the
+   * workspace default outranks the persisted per-machine value (a committed team cap should
+   * win); there the persisted user selection outranks the workspace default (an explicit
+   * target pick must stick).
    */
   private fun workspaceMaxLlmCalls(cwd: java.nio.file.Path): Int? {
-    val resolved = try {
-      TrailblazeWorkspaceConfigResolver.resolve(cwd)
-    } catch (e: Exception) {
-      Console.log("Skipping workspace trailblaze.yaml for max-llm-calls: ${e.message}")
-      return null
-    }
-    val configFile = resolved.configFile ?: return null
-    val rawValue = try {
-      TrailblazeProjectConfigLoader.load(configFile)?.raw?.defaults?.maxLlmCalls
-    } catch (e: Exception) {
-      Console.log("Skipping workspace trailblaze.yaml for max-llm-calls: ${e.message}")
-      return null
-    }
-    return parsePositiveIntOrWarn(rawValue, "${configFile.absolutePath} defaults.max-llm-calls")
+    val loaded = TrailblazeWorkspaceConfigResolver.loadWorkspaceDefaults(
+      fromPath = cwd,
+      consumer = "max-llm-calls",
+    ) ?: return null
+    return parsePositiveIntOrWarn(
+      loaded.defaults.maxLlmCalls,
+      "${loaded.configFile.absolutePath} defaults.max-llm-calls",
+    )
   }
 
   private fun parsePositiveIntOrWarn(raw: String?, source: String): Int? {
@@ -2298,6 +2395,13 @@ open class TrailCommand : Callable<Int> {
   private var resolvedSensitiveSeeds: Map<String, String> = emptyMap()
 
   /**
+   * The merged `--args-file` (< precedence) + `--arg` (> precedence) provided values for the
+   * in-flight [call], each a [JsonElement]. Bound per-trail against the trail's declared
+   * `config.args:` right before dispatch. Populated by [call]'s early-validation block.
+   */
+  private var resolvedProvidedArgs: Map<String, JsonElement> = emptyMap()
+
+  /**
    * Returns the resolved `--memory KEY=VAL` map for the in-flight [call]. Walks the raw
    * `memorySeeds` list as a fallback for test paths that construct a [TrailCommand]
    * outside `CommandLine` parsing — production callers always reach this through [call],
@@ -2322,6 +2426,26 @@ open class TrailCommand : Callable<Int> {
       resolvedSensitiveSeeds
     } else {
       parseMemorySeeds(sensitiveSeeds)
+    }
+
+  /**
+   * Binds the run's provided args ([resolvedProvidedArgs]) against ONE trail's declared
+   * `config.args:`, returning the wire-encoded (JSON-string) map to seed — or `null` after
+   * emitting a MISUSE error envelope. Fails before any device/LLM work on a missing required
+   * arg, an unknown arg, a null value, or a value that can't coerce to its declared type.
+   */
+  private fun boundArgsWireOrReport(declaredArgs: Map<String, TrailArgConfig>?, target: String): Map<String, String>? =
+    when (val result = TrailArgBinder.bind(declaredArgs, resolvedProvidedArgs)) {
+      is TrailArgBinder.BindResult.Success -> TrailArgBinder.encodeProvided(result.args)
+      is TrailArgBinder.BindResult.Failure -> {
+        reportCliError(
+          verb = "Run",
+          target = target,
+          reason = result.message,
+          hint = "Declare the parameter under the trail's `config.args:`, or fix the --arg / --args-file value.",
+        )
+        null
+      }
     }
 
   /**
@@ -2462,6 +2586,48 @@ open class TrailCommand : Callable<Int> {
         out[key] = value
       }
       return out
+    }
+
+    /**
+     * Merges the optional `--args-file` (applied first) and the `--arg KEY=VAL` list (overrides
+     * per key) into the provided-args map bound at dispatch. Throws [IllegalArgumentException]
+     * (→ CLI MISUSE) on a malformed `--arg` entry or an unreadable/non-map args file.
+     *
+     * A `--arg` value is ALWAYS a JSON string ([JsonPrimitive] of `VAL`); declaration-driven
+     * coercion at bind time turns `retries=3` into a number for an `integer` arg, so `--arg
+     * x=null` is the 4-char string, never JSON null. An args-file value keeps its parsed
+     * YAML/JSON shape, so a YAML null surfaces as JSON null and is rejected loudly at bind.
+     */
+    internal fun parseProvidedArgs(argSeeds: List<String>, argsFile: File?): Map<String, JsonElement> {
+      val merged = LinkedHashMap<String, JsonElement>()
+      argsFile?.let { merged.putAll(parseArgsFile(it)) }
+      for (entry in argSeeds) {
+        val eq = entry.indexOf('=')
+        require(eq > 0) {
+          "Invalid --arg entry \"$entry\" — expected KEY=VAL with a non-empty KEY."
+        }
+        merged[entry.substring(0, eq)] = JsonPrimitive(entry.substring(eq + 1))
+      }
+      return merged
+    }
+
+    private fun parseArgsFile(file: File): Map<String, JsonElement> {
+      require(file.exists()) { "--args-file not found: ${file.path}" }
+      require(file.isFile) { "--args-file is not a regular file: ${file.path}" }
+      // Read OUTSIDE the parse try: an I/O failure (e.g. permission denied) is not a syntax
+      // error, and labeling it "not valid YAML/JSON" sends the user debugging the wrong thing.
+      val text = try {
+        file.readText()
+      } catch (e: java.io.IOException) {
+        throw IllegalArgumentException("--args-file ${file.path} could not be read: ${e.message}")
+      }
+      val node = try {
+        Yaml.default.parseToYamlNode(text)
+      } catch (e: Exception) {
+        throw IllegalArgumentException("--args-file ${file.path} is not valid YAML/JSON: ${e.message}")
+      }
+      require(node is YamlMap) { "--args-file ${file.path} must be a map of arg-name to value." }
+      return node.entries.entries.associate { (k, v) -> k.content to YamlJsonBridge.yamlNodeToJsonElement(v) }
     }
 
     /**

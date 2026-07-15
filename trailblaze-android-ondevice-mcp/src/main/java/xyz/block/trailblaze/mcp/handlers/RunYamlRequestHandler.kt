@@ -28,6 +28,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
@@ -235,6 +236,12 @@ class RunYamlRequestHandler(
     val agentMemory = AgentMemory().apply {
       variables.putAll(request.memorySnapshot)
       request.sensitiveMemoryKeys.forEach { markSensitive(it) }
+      // Args are already bound + resolved on the host (token-valued defaults included), so the
+      // device rehydrates them verbatim via putArg — never seedArgs, which would re-interpolate.
+      TrailArgBinder.decodeProvided(request.argsSnapshot).forEach { (name, value) -> putArg(name, value) }
+      // Taint marking can't be re-derived here (a mid-run delete of the source memory key strips
+      // the value this side would match against), so it rides the wire like sensitiveMemoryKeys.
+      request.sensitiveArgNames.forEach { markArgSensitive(it) }
     }
 
     return try {

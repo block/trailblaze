@@ -1,0 +1,105 @@
+config:
+  id: clock/assert-mixed-visibility
+  devices:
+    android: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trail:
+  - step: "Launch the Clock app"
+    recording:
+      android:
+        - launchApp:
+            appId: com.android.deskclock
+
+  - step: "Navigate to the ALARM tab"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Switch to the ALARM tab.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/text1
+                textRegex: ALARM
+
+  - verify: "The add alarm button is visible"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The FAB to add a new alarm should be present.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/fab
+                contentDescriptionRegex: Add alarm
+                isClickable: true
+
+  - step: "Add a new alarm"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Tap the add alarm FAB.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/fab
+                contentDescriptionRegex: Add alarm
+                isClickable: true
+
+  - step: "Select 8 as the hour and 00 as the minutes and confirm with OK"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Select 8 as the hour.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "8"
+        - tapOnElementBySelector:
+            reason: Select 00 as the minutes.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "00"
+        - tapOnElementBySelector:
+            reason: Confirm the alarm time.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/button1
+                textRegex: OK
+                isClickable: true
+
+  - step: "If a notification permission dialog appears, tap DON'T ALLOW"
+
+  - verify: "The new 8:00 AM alarm is visible in the alarm list"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The newly created alarm should show 8:00 in the alarm list.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: 8:00
+
+  - verify: "There is no Delete button visible yet (alarm not expanded)"
+    recording:
+      android:
+        - assertNotVisibleWithText:
+            text: Delete
+
+  - step: "Expand the alarm and delete it"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Expand the alarm to access delete.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/arrow
+                contentDescriptionRegex: Expand alarm
+                isClickable: true
+        - tapOnElementBySelector:
+            reason: Delete the alarm.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/delete
+                textRegex: Delete
+                isClickable: true
+
+  - verify: "The 8:00 AM alarm is no longer visible"
+    recording:
+      android:
+        - assertNotVisibleWithText:
+            text: 8:00

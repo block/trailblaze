@@ -113,8 +113,12 @@ function BlazeScreen({ pinnedId, go }) {
       const ok = await TB.setTargetApp(target);
       if (!ok) { TB.failPendingRun(`Could not switch to the ${target} target app.`); return; }
     }
-    const r = await TB.dispatchRun(tbDeviceId, yaml);
-    if (r && r.ok === false) TB.failPendingRun(r.error || 'Failed to start the run.');
+    const r = await TB.withTimeout(TB.dispatchRun(tbDeviceId, yaml), 45000);
+    // success:false rides a 2xx { ok: true } envelope - it is a dispatch failure too, and used
+    // to fall through both branches here (marker silently evaporated after its TTL).
+    if (r === '__timeout__') TB.failPendingRun('The run request was sent but the daemon never answered after 45s. It may be wedged - check the daemon and try again.');
+    else if (r && r.ok !== false && r.success !== false && r.sessionId) TB.setPendingRunSession(r.sessionId);
+    else TB.failPendingRun((r && r.error) || 'Failed to start the run.');
   }
 
   const appLabel = (a) => (a.displayName || a.id) + (a.versionName ? ` (${a.versionName})` : '');

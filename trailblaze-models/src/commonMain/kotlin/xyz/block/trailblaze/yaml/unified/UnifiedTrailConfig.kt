@@ -101,6 +101,13 @@ data class UnifiedTrailConfig(
    * reports and session lists. Trail-level like the v1 `TrailConfig.title` it round-trips with.
    */
   val title: String? = null,
+  /**
+   * Trail parameters — declared per-run arguments referenced as `{{args.x}}`. Trail-level (not
+   * per-classifier): a trail's parameter contract is the same regardless of which device runs it.
+   * Round-trips one-to-one with the v1 [xyz.block.trailblaze.yaml.TrailConfig.args].
+   */
+  @kotlinx.serialization.Serializable(with = xyz.block.trailblaze.yaml.TrailArgMapSerializer::class)
+  val args: Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>? = null,
 ) {
   companion object {
     /**

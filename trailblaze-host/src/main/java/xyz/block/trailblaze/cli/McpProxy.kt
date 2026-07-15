@@ -30,9 +30,16 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -90,7 +97,21 @@ class McpProxy(
    * tool call.
    */
   private val initialTarget: String? = null,
+  /**
+   * When set (the supervising Trail Runner daemon injects `TRAILRUNNER_PERMISSION_RUN_ID` into the
+   * spawned server's mcp-config env), the proxy runs in human-approvable permission mode: it
+   * advertises an `approval_prompt` tool in every `tools/list` response, and routes each
+   * `tools/call name=approval_prompt` to the daemon's permission-request endpoint (a human approves
+   * or denies in Trail Runner) instead of forwarding it to the daemon's `/mcp`. Injectable so the
+   * pure helpers can be unit-tested without a live daemon.
+   */
+  private val permissionRunId: String? =
+    System.getenv("TRAILRUNNER_PERMISSION_RUN_ID")?.takeIf { it.isNotBlank() },
 ) {
+
+  /** Test/prod seam: whether this proxy runs in human-approvable permission mode. */
+  internal val permissionApprovalEnabled: Boolean
+    get() = permissionRunId != null
 
   private val daemonUrl: String = "http://localhost:$port/mcp"
   private val pingUrl: String = "http://localhost:$port/ping"
@@ -138,6 +159,11 @@ class McpProxy(
   // (measured: 17 probes across 15 tool calls in a no-device environment).
   // Capped at [MAX_INITIAL_AUTODETECT_ATTEMPTS]; see [tryConsumeAutodetectAttempt].
   private val initialAutodetectAttempts = AtomicInteger(0)
+
+  // The background thread running the `notifications/initialized`-triggered startup
+  // device-bind (see [injectInitialDeviceBindAsync]). Never cleared -- joining a
+  // finished thread is instant, and the CAS above keeps the injection one-shot.
+  private val initialBindThread = AtomicReference<Thread?>(null)
 
   // The client's requested protocol version -- used to bridge version mismatches between
   // the client and the MCP SDK (e.g., client wants 2025-11-25 but SDK only supports 2025-06-18)
@@ -215,6 +241,16 @@ class McpProxy(
 
         log("-> ${line.take(200)}")
 
+        // A spawned CLI's permission prompt arrives as a `tools/call name=approval_prompt`. Handle
+        // it off the main loop (a human approval can take minutes) and DON'T forward it to `/mcp` --
+        // the daemon's permission-request endpoint owns the decision. JSON-RPC allows out-of-order
+        // responses, so the async write via the shared, synchronized stdout path can't stall other
+        // traffic on the main loop.
+        if (permissionRunId != null && isApprovalPromptCall(line)) {
+          handleApprovalPromptAsync(line, stdoutForTransport, log)
+          continue
+        }
+
         // Decide injection ordering relative to forwarding for the two trigger
         // shapes the proxy supports:
         //
@@ -225,14 +261,21 @@ class McpProxy(
         //    daemon's session setup and could be rejected with "Server not
         //    initialized" (consuming the one-shot CAS in the process, leaving
         //    the agent's first real call unbound). Forward first, then inject —
-        //    mirrors `reInitializeSession`'s replay order.
+        //    mirrors `reInitializeSession`'s replay order. The injection runs on
+        //    a background thread ([injectInitialDeviceBindAsync]): a device bind
+        //    can take many seconds on the daemon, and the client's `tools/list`
+        //    arrives immediately after this notification — running the bind
+        //    inline starved that response long enough for Claude Code's
+        //    permission engine to declare the proxy's tools missing and abort.
         //
         //  - `tools/call`: the lazy-client fallback for MCP clients that skip
         //    `notifications/initialized` entirely. If we forward first, the
         //    daemon executes the client's real tool call on a session that's
         //    not yet device-bound — exactly the bug this injection exists to
         //    prevent. Inject first so the device-bind lands before the real
-        //    call.
+        //    call — which also means joining any in-flight background bind, so
+        //    a real call can never overtake the startup bind. Only `tools/call`
+        //    waits; every other message is answered immediately.
         //
         // The CAS guard in [maybeInjectInitialDeviceBind] ensures the injection
         // still fires at most once across the proxy's lifetime regardless of
@@ -240,17 +283,23 @@ class McpProxy(
         // [reInitializeSession]'s replay path.
         val isInitializedNotification = isInitializedNotification(line)
         if (!isInitializedNotification) {
+          if (isInitialInjectionTrigger(line)) awaitInitialDeviceBind(log)
           maybeInjectInitialDeviceBind(line, log)
         }
 
-        val response = forwardRequest(line, log)
+        var response = forwardRequest(line, log)
+        // In permission mode, advertise the synthetic `approval_prompt` tool in tools/list results
+        // so the client can address it as `mcp__trailblaze__approval_prompt`.
+        if (response != null && permissionRunId != null && isToolsListRequest(line)) {
+          response = injectApprovalPromptTool(response)
+        }
         if (response != null) {
           log("<- ${response.take(200)}")
           writeToStdout(stdoutForTransport, response)
         }
 
         if (isInitializedNotification) {
-          maybeInjectInitialDeviceBind(line, log)
+          injectInitialDeviceBindAsync(line, log)
         }
       }
     } catch (e: Exception) {
@@ -648,6 +697,43 @@ class McpProxy(
    * [tryConsumeAutodetectAttempt]) — otherwise every tools/call for the rest
    * of the session would re-pay the ~2s probe.
    */
+  /**
+   * Run [maybeInjectInitialDeviceBind] on a background thread so the main stdio
+   * loop keeps answering requests while the bind is in flight. A device bind can
+   * take many seconds on the daemon (device connect + target resolution), and the
+   * client's `tools/list` typically arrives right after `notifications/initialized`
+   * — starving it made Claude Code's permission engine conclude the proxy's tools
+   * don't exist and abort the whole run.
+   *
+   * The thread reference is published once via CAS so a duplicate
+   * `notifications/initialized` can't spawn a second bind; [awaitInitialDeviceBind]
+   * joins it before any real `tools/call` is forwarded.
+   */
+  private fun injectInitialDeviceBindAsync(clientLine: String, log: (String) -> Unit) {
+    if (hasInjectedInitialDeviceBind.get()) return
+    val thread = Thread({ maybeInjectInitialDeviceBind(clientLine, log) }, "trailblaze-initial-device-bind")
+    thread.isDaemon = true
+    if (initialBindThread.compareAndSet(null, thread)) {
+      thread.start()
+    }
+  }
+
+  /**
+   * Block until any in-flight background startup bind ([injectInitialDeviceBindAsync])
+   * has finished. Called only for real `tools/call` lines — the injection's whole
+   * contract is that the bind lands before the client's first real call, and the
+   * synchronous pre-forward injection would otherwise short-circuit on the CAS
+   * while the background bind is still mid-flight. The bind's HTTP posts carry
+   * their own timeouts, so this join is bounded by the same limits the old
+   * inline execution was.
+   */
+  private fun awaitInitialDeviceBind(log: (String) -> Unit) {
+    val thread = initialBindThread.get() ?: return
+    if (!thread.isAlive) return
+    log("Holding tools/call until the in-flight startup device-bind completes...")
+    runCatching { thread.join() }
+  }
+
   private fun maybeInjectInitialDeviceBind(clientLine: String, log: (String) -> Unit) {
     // Cheap atomic read before the JSON parse: once the one-shot injection has
     // already fired, every subsequent stdin line would otherwise re-parse JSON
@@ -1097,6 +1183,162 @@ class McpProxy(
     }
   }
 
+  // ─── Human-approvable permissions (approval_prompt interception) ────────────
+
+  /** True iff [jsonRpc] is a `tools/list` request (whose response we augment with approval_prompt). */
+  internal fun isToolsListRequest(jsonRpc: String): Boolean {
+    val root = runCatching { Json.parseToJsonElement(jsonRpc).jsonObject }.getOrNull() ?: return false
+    return root["method"]?.jsonPrimitive?.contentOrNull == "tools/list"
+  }
+
+  /** True iff [jsonRpc] is a `tools/call` for the injected `approval_prompt` tool. */
+  internal fun isApprovalPromptCall(jsonRpc: String): Boolean {
+    val root = runCatching { Json.parseToJsonElement(jsonRpc).jsonObject }.getOrNull() ?: return false
+    if (root["method"]?.jsonPrimitive?.contentOrNull != "tools/call") return false
+    val name = root["params"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: return false
+    return name == "approval_prompt" || name.endsWith("__approval_prompt")
+  }
+
+  /**
+   * Adds the `approval_prompt` tool descriptor to a `tools/list` RESPONSE so the client can address
+   * it as `mcp__trailblaze__approval_prompt`. The schema is permissive by design ({type:object} with
+   * optional tool_name/input/tool_use_id) so it accepts whatever Claude Code's permission-prompt-tool
+   * contract passes. Idempotent; returns [response] unchanged when it isn't a parseable tools/list
+   * result or already carries the tool.
+   */
+  internal fun injectApprovalPromptTool(response: String): String {
+    return try {
+      val root = Json.parseToJsonElement(response).jsonObject
+      val result = root["result"]?.jsonObject ?: return response
+      val tools = result["tools"]?.jsonArray ?: return response
+      val alreadyPresent =
+        tools.any { (it as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull == "approval_prompt" }
+      if (alreadyPresent) return response
+      val approvalTool = buildJsonObject {
+        put("name", "approval_prompt")
+        put(
+          "description",
+          "Trail Runner permission approval. A human approves or denies this tool call in the Trail Runner UI.",
+        )
+        put(
+          "inputSchema",
+          buildJsonObject {
+            put("type", "object")
+            put(
+              "properties",
+              buildJsonObject {
+                put("tool_name", buildJsonObject { put("type", "string") })
+                put("input", buildJsonObject { put("type", "object") })
+                put("tool_use_id", buildJsonObject { put("type", "string") })
+              },
+            )
+          },
+        )
+      }
+      val newResult = JsonObject(result.toMutableMap().apply { put("tools", JsonArray(tools + approvalTool)) })
+      val newRoot = JsonObject(root.toMutableMap().apply { put("result", newResult) })
+      Json.encodeToString(JsonObject.serializer(), newRoot)
+    } catch (_: Exception) {
+      response
+    }
+  }
+
+  /** Handles an approval_prompt tools/call off the main loop so a slow human approval never stalls it. */
+  private fun handleApprovalPromptAsync(line: String, stdout: OutputStream, log: (String) -> Unit) {
+    val thread = Thread(
+      {
+        runCatching { handleApprovalPrompt(line, stdout, log) }
+          .onFailure { log("Approval prompt handling failed: ${it.message}") }
+      },
+      "mcp-proxy-approval",
+    )
+    thread.isDaemon = true
+    thread.start()
+  }
+
+  private fun handleApprovalPrompt(line: String, stdout: OutputStream, log: (String) -> Unit) {
+    val root = Json.parseToJsonElement(line).jsonObject
+    val id = root["id"]
+    val args = root["params"]?.jsonObject?.get("arguments")?.jsonObject
+    val toolName = args?.get("tool_name")?.jsonPrimitive?.contentOrNull.orEmpty()
+    val inputElement = args?.get("input")
+    val toolUseId = args?.get("tool_use_id")?.jsonPrimitive?.contentOrNull
+    val inputJson = inputElement?.let { Json.encodeToString(JsonElement.serializer(), it) }
+    log("Routing approval for '$toolName' to Trail Runner; waiting for the human to decide...")
+    val decision = postPermissionRequest(toolName, inputJson, toolUseId)
+    val resultText = approvalDecisionResultText(
+      behavior = decision.behavior,
+      message = decision.message,
+      originalInput = inputElement,
+      updatedInputJson = decision.updatedInputJson,
+    )
+    writeToStdout(stdout, buildApprovalToolResponse(id, resultText))
+  }
+
+  private data class ApprovalHttpDecision(
+    val behavior: String,
+    val updatedInputJson: String?,
+    val message: String?,
+  )
+
+  /**
+   * POSTs the permission request to the daemon and blocks until the human decides. The read timeout
+   * is effectively infinite because a human approval has no upper bound; MCP_TOOL_TIMEOUT on the
+   * spawned CLI (set by the supervisor) is what keeps the CLI itself from timing out the tool call.
+   */
+  private fun postPermissionRequest(
+    toolName: String,
+    inputJson: String?,
+    toolUseId: String?,
+  ): ApprovalHttpDecision {
+    val body = buildJsonObject {
+      put("toolName", toolName)
+      if (inputJson != null) put("inputJson", inputJson)
+      if (toolUseId != null) put("toolUseId", toolUseId)
+    }.toString()
+    val url = "http://localhost:$port/trailrunner/api/external-agent/$permissionRunId/permission-request"
+    return runBlocking {
+      val response = httpClient.post(url) {
+        contentType(ContentType.Application.Json)
+        setBody(body)
+        timeout {
+          requestTimeoutMillis = Long.MAX_VALUE
+          socketTimeoutMillis = Long.MAX_VALUE
+        }
+      }
+      val obj = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+      ApprovalHttpDecision(
+        behavior = obj["behavior"]?.jsonPrimitive?.contentOrNull ?: "deny",
+        updatedInputJson = obj["updatedInputJson"]?.jsonPrimitive?.contentOrNull,
+        message = obj["message"]?.jsonPrimitive?.contentOrNull,
+      )
+    }
+  }
+
+  private fun buildApprovalToolResponse(id: JsonElement?, resultText: String): String {
+    val root = buildJsonObject {
+      put("jsonrpc", "2.0")
+      put("id", id ?: JsonNull)
+      put(
+        "result",
+        buildJsonObject {
+          put(
+            "content",
+            buildJsonArray {
+              add(
+                buildJsonObject {
+                  put("type", "text")
+                  put("text", resultText)
+                },
+              )
+            },
+          )
+        },
+      )
+    }
+    return Json.encodeToString(JsonObject.serializer(), root)
+  }
+
   /** Write a JSON-RPC line to stdout, synchronized to prevent interleaving. */
   private fun writeToStdout(stdout: OutputStream, line: String) {
     synchronized(stdout) {
@@ -1234,6 +1476,34 @@ internal fun findOnPath(name: String): File? {
   } catch (_: Exception) {
     null
   }
+}
+
+/**
+ * Builds the MCP tool-result text for a permission decision -- the exact JSON string Claude Code's
+ * `--permission-prompt-tool` contract expects as the single text content block. On allow,
+ * `updatedInput` is [updatedInputJson] parsed back to an object, else the tool's [originalInput]
+ * passed through (an empty object when neither is present). On deny it carries the [message]. Pure so
+ * the wire contract is unit-testable without a live daemon.
+ */
+internal fun approvalDecisionResultText(
+  behavior: String,
+  message: String?,
+  originalInput: JsonElement?,
+  updatedInputJson: String?,
+): String = if (behavior == "allow") {
+  val updated =
+    updatedInputJson?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() }
+      ?: originalInput
+      ?: JsonObject(emptyMap())
+  buildJsonObject {
+    put("behavior", "allow")
+    put("updatedInput", updated)
+  }.toString()
+} else {
+  buildJsonObject {
+    put("behavior", "deny")
+    put("message", message ?: "The tool call was denied.")
+  }.toString()
 }
 
 /**

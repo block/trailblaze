@@ -59,6 +59,28 @@ See [Trailmaps](trailmaps.md) for the trailmap manifest schema, per-file scripte
 workspace-vs-classpath precedence rule. For the binary-friendly config bundle story inside
 `trails/config/`, see [External Config](generated/external-config.md).
 
+### Workspace defaults
+
+`trailblaze.yaml` can declare a committed, team-wide default target so everyone in the
+workspace targets the same app without per-machine setup:
+
+```yaml
+defaults:
+  target: my-app
+```
+
+Effective-target precedence (highest first): an explicit per-run target (`--target`, a
+trail's `config.target`, or an active session override) → the persisted user selection
+(picking a target in the app, or `trailblaze config target`) → this workspace default → the
+neutral built-in target. The id must match a loaded target (case-sensitive); an unknown or
+blank id is logged and skipped rather than failing the run.
+
+One nuance: a persisted selection of `default` (the neutral built-in target's own id) does
+NOT outrank the workspace default — older CLI versions wrote it automatically without any
+user intent, so it can't be told apart from a fabricated value. It still applies when the
+workspace declares no default, and `--target default` remains the explicit per-run way to
+force the neutral target.
+
 If you author scripted tools, the framework also lays down generated files under
 `trails/config/trailmaps/` and `trails/.trailblaze/` (typed bindings, a per-trailmap
 `tsconfig.json`, the vendored SDK bundle). For what each one is and which to commit, see

@@ -2,6 +2,9 @@ package xyz.block.trailblaze.trailrunner
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.createRouteScopedPlugin
+import io.ktor.server.application.install
+import io.ktor.server.request.path
 import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Routing
 import kotlinx.coroutines.Dispatchers
@@ -48,9 +51,15 @@ object TrailRunnerEndpoint {
       llmModelListsProvider = llmModelListsProvider,
       proposeStepsProvider = extension.proposeStepsProvider,
       reviewTrailProvider = extension.reviewTrailProvider,
+      selectorAdviceProvider = extension.selectorAdviceProvider,
       appTargetIdsProvider = extension.appTargetIdsProvider,
       rebuildGradleTask = rebuildGradleTask,
     )
+    // API JSON must never be served from an HTTP cache: the desktop shell's WKWebView keeps a
+    // persistent NSURLCache that happily replays header-less GET responses, so a bundle's readiness
+    // gates (and any other polled JSON) would stay stale until a full page reload. Static assets
+    // and index.html already send no-store explicitly; this covers the data plane.
+    routing.install(noStoreApiCachePlugin)
     routing.apply {
       staticRoutes()
       trailRoutes(deps)
@@ -67,6 +76,7 @@ object TrailRunnerEndpoint {
       runRoutes(deps)
       blazeRoutes(deps)
       recordRoutes(deps)
+      externalAgentRoutes(deps)
       daemonRoutes(deps)
       // Typed /rpc/<Name> endpoints (sessions/tools/trailmaps) — the migration target the UI's
       // generated createTrailRunnerRpcClient calls, sharing the route builders' backing logic.
@@ -104,6 +114,9 @@ internal class TrailRunnerDeps(
   // selectors, returning read-only suggestions. Supplied by the desktop app (owns the LLM client);
   // null in tests / when no provider is wired (the route then returns a friendly unavailable error).
   val reviewTrailProvider: (suspend (recordedYaml: String, target: String?, platform: String?) -> List<ReviewSuggestionDto>)? = null,
+  // Create's selector-advice assist: fast second opinion on a pending step's selector candidates.
+  // Time-boxed at the route; null (tests / OSS default) disables the assist. See [TrailRunnerExtension].
+  val selectorAdviceProvider: (suspend (SelectorAdviceRequest) -> SelectorAdvice?)? = null,
   // Re-runs app-target discovery against the CURRENT (live) workspace and returns the resolved
   // target ids. Used by the workspace-target-drift check to tell whether a switch changed the set
   // (which only takes effect on restart). Null in contexts without target discovery (e.g. tests).
@@ -112,6 +125,16 @@ internal class TrailRunnerDeps(
   // [TrailRunnerEndpoint.register].
   val rebuildGradleTask: String = DEFAULT_REBUILD_GRADLE_TASK,
 )
+
+// See the install site in [TrailRunnerEndpoint.register] for why API/RPC JSON is marked no-store.
+private val noStoreApiCachePlugin = createRouteScopedPlugin("TrailRunnerNoStoreApiCache") {
+  onCall { call ->
+    val p = call.request.path()
+    if (p.startsWith("$PATH_BASE/api/") || p.startsWith("/rpc/")) {
+      call.response.headers.append("Cache-Control", "no-store")
+    }
+  }
+}
 
 internal const val PATH_BASE = "/trailrunner"
 internal const val RESOURCE_ROOT = "xyz/block/trailblaze/trailrunner/web/"

@@ -10,6 +10,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Test
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
@@ -31,6 +33,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -245,6 +248,45 @@ class RunYamlRequestHandlerTest {
     val responseSnapshot = result.data.memorySnapshot
     assertEquals("from-host", responseSnapshot["host_wrote"])
     assertEquals("from-device", responseSnapshot["device_wrote"])
+  }
+
+  /**
+   * Inbound half of the args RPC crossing: the handler rehydrates `request.argsSnapshot`
+   * VERBATIM — native JSON identity preserved, no re-interpolation against on-device memory
+   * (args were already bound + resolved on the host) — and re-marks `request.sensitiveArgNames`
+   * so the sticky taint survives the process boundary (the device can't re-derive it once the
+   * source memory key is deleted). Args are immutable per run, so nothing rides back.
+   */
+  @Test
+  fun `request argsSnapshot rehydrates verbatim and sensitiveArgNames re-mark taint`() = runTest {
+    var seenArgs: Map<String, JsonElement> = emptyMap()
+    var seenSensitiveArgNames: Set<String> = emptySet()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, agentMemory ->
+        seenArgs = agentMemory.args
+        seenSensitiveArgNames = agentMemory.sensitiveArgNames.toSet()
+        RunYamlCallbackResult(session = session)
+      },
+    )
+
+    val result = handler.handle(
+      testRequest.copy(
+        awaitCompletion = true,
+        argsSnapshot = TrailArgBinder.encodeProvided(
+          mapOf(
+            "retries" to JsonPrimitive(3),
+            "vault_code" to JsonPrimitive("9876"),
+          ),
+        ),
+        sensitiveArgNames = listOf("vault_code"),
+      ),
+    )
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    // Native JSON identity survives the wire: an integer arg arrives as the number 3, not "3".
+    assertEquals(JsonPrimitive(3), seenArgs["retries"])
+    assertEquals(JsonPrimitive("9876"), seenArgs["vault_code"])
+    assertEquals(setOf("vault_code"), seenSensitiveArgNames)
   }
 
   /**

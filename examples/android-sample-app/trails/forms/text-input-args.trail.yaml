@@ -1,0 +1,31 @@
+config:
+  id: sample-app/forms/text-input-args
+  target: xyz.block.trailblaze.examples.sampleapp
+  # Parameterized trail: `config.args:` declares typed parameters the caller supplies per run with
+  # `--arg name="…"` (repeatable) or `--args-file <yaml|json>`, referenced as the args tokens in the
+  # step prose below. Each arg has a `default:`, which makes it optional — omit `default:` to make an
+  # arg required and fail fast when it isn't supplied. `trailblaze check` validates every args-token
+  # reference against this block. See ../../README.md for the runnable invocations.
+  args:
+    name:
+      type: string
+      default: "Jane Doe"
+    email:
+      type: string
+      default: "jane@example.com"
+
+trailhead:
+  step: Launch the sample app
+  recording:
+    android:
+      launchApp:
+        appId: xyz.block.trailblaze.examples.sampleapp
+        launchMode: REINSTALL
+
+trail:
+  - step: Navigate to the "Forms" tab
+  - step: Tap the "Name" field and type "{{args.name}}"
+  - step: Tap the "Email" field and type "{{args.email}}"
+  - step: Tap the "Submit" button
+  - step: Verify "{{args.name}}" and "{{args.email}}" appear in the submission result
+  - step: Tap "Clear All" and verify "{{args.name}}" is no longer visible

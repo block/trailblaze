@@ -37,6 +37,7 @@ export interface CancelSessionRequest {
 
 export interface CancelSessionResponse {
   ok: boolean;
+  reason?: string | null;
 }
 
 export interface CreateTrailDirRequest {
@@ -54,6 +55,24 @@ export interface DeleteSessionRequest {
 
 export interface DeleteSessionResponse {
   deleted: string;
+}
+
+export interface DemoPlatformDto {
+  key: string;
+  done: boolean;
+}
+
+export interface DemoStateDto {
+  phase: string;
+  bundleDir?: string | null;
+  objective?: string | null;
+  generationRunId?: string | null;
+  platform?: string | null;
+  platforms?: DemoPlatformDto[];
+  draftDir?: string | null;
+  trailId?: string | null;
+  trailFiles?: string | null;
+  trailVerified?: boolean | null;
 }
 
 export interface DeviceAppDto {
@@ -74,6 +93,108 @@ export interface DeviceAppsResponse {
 export interface EditedTrailsResponse {
   paths: string[];
 }
+
+export interface ExternalAgentEventDto {
+  id: string;
+  runId: string;
+  seq: number;
+  timeMs: number;
+  agentType: ExternalAgentType;
+  kind: ExternalAgentEventKind;
+  status?: ExternalAgentSessionStatus | null;
+  title?: string | null;
+  text?: string | null;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  input?: string | null;
+  output?: string | null;
+  uiCommand?: TrailRunnerUiCommandDto | null;
+  usage?: string | null;
+  raw?: string | null;
+}
+
+export type ExternalAgentEventKind = "lifecycle" | "user_message" | "assistant_message" | "reasoning" | "tool_call" | "tool_result" | "ui_command" | "stdout" | "stderr" | "final_result" | "usage" | "error" | "human_action" | "permission_request" | "permission_decision";
+
+export interface ExternalAgentEventsResponse {
+  events: ExternalAgentEventDto[];
+}
+
+export interface ExternalAgentModelOptionDto {
+  id: string;
+  display: string;
+}
+
+export interface ExternalAgentOptionDto {
+  id: ExternalAgentType;
+  display: string;
+  executable: string;
+  available: boolean;
+  detail?: string | null;
+  installHint?: string | null;
+  authHint?: string | null;
+  modelsHint?: string | null;
+  docsUrl?: string | null;
+  models?: ExternalAgentModelOptionDto[];
+}
+
+export interface ExternalAgentPermissionRequestDto {
+  id: string;
+  toolName: string;
+  inputJson?: string | null;
+  requestedAtMs: number;
+}
+
+export interface ExternalAgentReplyRequest {
+  prompt: string;
+}
+
+export interface ExternalAgentRunDto {
+  id: string;
+  agentType: ExternalAgentType;
+  title: string;
+  prompt: string;
+  cwd: string;
+  model?: string | null;
+  status: ExternalAgentSessionStatus;
+  startedAtMs: number;
+  endedAtMs?: number | null;
+  externalThreadId?: string | null;
+  exitCode?: number | null;
+  error?: string | null;
+  eventCount?: number;
+  demo?: DemoStateDto | null;
+  demoRunId?: string | null;
+  pendingPermissions?: ExternalAgentPermissionRequestDto[];
+  autoApprove?: boolean;
+}
+
+export interface ExternalAgentRunRequest {
+  agentType: ExternalAgentType;
+  prompt: string;
+  title?: string | null;
+  model?: string | null;
+  cwd?: string | null;
+  sandbox?: string | null;
+  includeUiContract?: boolean;
+  promptPreamble?: string | null;
+  uiContext?: TrailRunnerUiContextDto | null;
+  extraDirs?: string[];
+}
+
+export interface ExternalAgentRunsResponse {
+  supportedAgents: ExternalAgentOptionDto[];
+  runs: ExternalAgentRunDto[];
+}
+
+export type ExternalAgentSessionStatus = "running" | "completed" | "failed" | "cancelled";
+
+export interface ExternalAgentStartResponse {
+  ok: boolean;
+  run?: ExternalAgentRunDto | null;
+  error?: string | null;
+}
+
+export type ExternalAgentType = "claude" | "codex" | "solo";
 
 export interface FavoriteRequest {
   id: string;
@@ -274,8 +395,6 @@ export interface RunRequest {
   captureAnalytics?: boolean | null;
   captureEvents?: boolean | null;
   trailId?: string | null;
-  draftId?: string | null;
-  variant?: string | null;
 }
 
 export interface RunResponse {
@@ -450,6 +569,14 @@ export interface ToolParamDto {
   type: string;
   required?: boolean;
   description?: string | null;
+  validValues?: string[] | null;
+  validValueDescriptions?: string[] | null;
+  visibleWhen?: ToolParamVisibilityDto | null;
+}
+
+export interface ToolParamVisibilityDto {
+  parameterName: string;
+  values: string[];
 }
 
 export interface ToolRevealRequest {
@@ -505,6 +632,7 @@ export interface TrailIndexEntry {
   kind?: string;
   format?: string;
   configId?: string | null;
+  hasRecordedSteps?: boolean;
 }
 
 export interface TrailIndexResponse {
@@ -521,6 +649,26 @@ export interface TrailRootsResponse {
   extras: string[];
   primaryBranch?: string | null;
   primaryIsWorktree?: boolean;
+}
+
+export interface TrailRunnerUiCommandDto {
+  version?: number;
+  action: string;
+  route?: string | null;
+  sessionId?: string | null;
+  trailId?: string | null;
+  message?: string | null;
+  severity?: string | null;
+  params?: Record<string, string>;
+}
+
+export interface TrailRunnerUiContextDto {
+  route?: string | null;
+  trailId?: string | null;
+  sessionId?: string | null;
+  target?: string | null;
+  platform?: string | null;
+  deviceId?: TrailblazeDeviceId | null;
 }
 
 export interface TrailStepEntry {
@@ -540,6 +688,7 @@ export interface TrailmapComponent {
   name: string;
   relPath: string;
   flavor?: ToolFlavor | null;
+  platforms?: string[] | null;
 }
 
 export interface TrailmapEntry {

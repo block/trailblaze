@@ -321,6 +321,7 @@ abstract class TrailblazeDesktopApp(
       maxLlmCalls = request.maxLlmCalls,
       initialMemorySeeds = request.initialMemorySeeds,
       initialMemorySensitiveSeeds = request.initialMemorySensitiveSeeds,
+      initialArgs = request.initialArgs,
     )
 
     // Execute and wait for completion
@@ -333,8 +334,18 @@ abstract class TrailblazeDesktopApp(
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
       runYamlRequest = runYamlRequest,
-      targetTestApp = trailConfig?.target?.let { desktopAppConfig.availableAppTargets.findById(it) }
-        ?: deviceManager.getCurrentSelectedTargetApp(),
+      // `config.target` first; else fall back to the workspace-resolved target (rungs 2-3)
+      // anchored at the RUN CALLER's cwd, not this daemon's launch dir — so a daemon-dispatched
+      // run targets the same app that `config get target` reports from that cwd. Forwarded via
+      // CliRunRequest.callerWorkspaceDir; null (older CLI / non-CLI submission) keeps the
+      // daemon-anchored behavior. Precedence + caller-cwd threading are unit-tested via
+      // resolveDaemonRunTargetApp (CliRunTargetResolutionTest).
+      targetTestApp = resolveDaemonRunTargetApp(
+        configTarget = trailConfig?.target,
+        callerWorkspaceDir = request.callerWorkspaceDir,
+        findTargetById = { desktopAppConfig.availableAppTargets.findById(it) },
+        resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
+      ),
       noLogging = request.noLogging,
       captureVideo = request.captureVideo,
       captureLogcat = request.captureLogcat,

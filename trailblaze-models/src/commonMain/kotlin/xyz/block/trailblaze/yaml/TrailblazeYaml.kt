@@ -437,8 +437,11 @@ class TrailblazeYaml internal constructor(
       // it replays deterministically (zero tools, no AI), same as a step whose `recording` is a
       // non-null empty ToolRecording just above. Only `tools == null` (never declared) is excluded.
       is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools != null
-      is TrailYamlItem.ConfigTrailItem,
-      is TrailYamlItem.ToolTrailItem -> false
+      // A root-level `- tools:` step IS a recording: every runner loop force-executes it directly
+      // (no AI), so a tools-only trail replays deterministically and must not be classified as
+      // agent-driven by auto mode, session badges, or the CLI.
+      is TrailYamlItem.ToolTrailItem -> true
+      is TrailYamlItem.ConfigTrailItem -> false
     }
   }
 

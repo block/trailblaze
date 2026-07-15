@@ -116,6 +116,18 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
       if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
       return result.ok;
     },
+    /**
+     * ConnectToDeviceRequest → { ok, error }. Same call as connectToDevice but keeps the daemon's
+     * failure reason (e.g. "No target app selected...") so the UI can show the real cause instead
+     * of a generic "could not connect".
+     */
+    connectToDeviceDetailed: async (
+      trailblazeDeviceId: TrailblazeDeviceId,
+    ): Promise<{ ok: boolean; error: string | null }> => {
+      const result = await rpc.connectToDevice({ trailblazeDeviceId });
+      if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
+      return { ok: result.ok, error: result.ok ? null : (result.error && result.error.message) || null };
+    },
     /** GetSessionsRequest → response (or null). Used by useSessions. */
     getSessions: (): Promise<SessionsResponse | null> => dataOrNull(trailRunner.getSessions()),
     /** GetToolsRequest → response (or null). Used by useTools. */

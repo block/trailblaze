@@ -17,11 +17,13 @@ migration utility, not part of the public surface. Still callable via
                       classifier (e.g. `android-phone.trail.yaml` →
                       `android-phone`).
       --fail-on-dropped-content
-                    Exit non-zero (ASSERTION_FAILED) when the migration drops
-                      input content that did not round-trip — schema-unknown
-                      keys, or sibling keys in a tool entry the tool decoder
-                      discards. Off by default: a lossy migration still writes
-                      a usable file with leading DROPPED warning comments and
+                    Exit non-zero (ASSERTION_FAILED) when the migration is
+                      lossy: either input content that did not round-trip
+                      (schema-unknown keys, or sibling keys in a tool entry the
+                      tool decoder discards), or a round-trip fidelity mismatch
+                      (the emitted file decodes back to different tools/config
+                      than intended). Off by default: a lossy migration still
+                      writes a usable file with leading WARNING comments and
                       exits 0. Turn this on in a pipeline that must refuse to
                       chain (e.g. `migrate-trails && commit`) on a lossy
                       migration.

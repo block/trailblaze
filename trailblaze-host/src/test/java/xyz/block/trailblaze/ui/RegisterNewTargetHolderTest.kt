@@ -79,19 +79,36 @@ class RegisterNewTargetHolderTest {
   }
 
   @Test
-  fun `already-present id is idempotent and does not re-emit to collectors`() = runTest {
-    val existing = target("aaa")
-    val holder = MutableStateFlow<Set<TrailblazeHostAppTarget>>(setOf(existing))
+  fun `re-registered id swaps in the fresh instance and emits to collectors`() = runTest {
+    val stale = target("aaa")
+    val holder = MutableStateFlow<Set<TrailblazeHostAppTarget>>(setOf(stale))
     val emissions = mutableListOf<Set<TrailblazeHostAppTarget>>()
     val collector = launch(UnconfinedTestDispatcher(testScheduler)) { holder.collect { emissions.add(it) } }
-    // Fresh discovery re-resolved a different instance for the same id (e.g. its YAML was edited).
+    // Fresh discovery re-resolved a different instance for the same id (its YAML was edited).
     val freshReResolved = target("aaa")
 
     val resolved = TrailblazeDeviceManager.casAppendNewTarget(holder, setOf(freshReResolved), "aaa")
 
+    // The fresh instance replaces the stale one AND a new snapshot is emitted, so an Edit Target
+    // save becomes visible to the picker without a daemon restart.
+    assertSame(freshReResolved, resolved)
+    assertSame(freshReResolved, holder.value.single())
+    assertEquals(2, emissions.size)
+    collector.cancel()
+  }
+
+  @Test
+  fun `registered id absent from fresh discovery is idempotent and does not re-emit`() = runTest {
+    val existing = target("aaa")
+    val holder = MutableStateFlow<Set<TrailblazeHostAppTarget>>(setOf(existing))
+    val emissions = mutableListOf<Set<TrailblazeHostAppTarget>>()
+    val collector = launch(UnconfinedTestDispatcher(testScheduler)) { holder.collect { emissions.add(it) } }
+
+    val resolved = TrailblazeDeviceManager.casAppendNewTarget(holder, setOf(target("bbb")), "aaa")
+
+    // Nothing newer to swap in: the existing instance resolves and no second snapshot is emitted,
+    // so the picker doesn't needlessly recompose.
     assertSame(existing, resolved)
-    // A collector (a composable) sees ONLY the initial value — no second snapshot is emitted, so
-    // the picker doesn't needlessly recompose; mutation of existing targets stays on the restart flow.
     assertEquals(1, emissions.size)
     collector.cancel()
   }

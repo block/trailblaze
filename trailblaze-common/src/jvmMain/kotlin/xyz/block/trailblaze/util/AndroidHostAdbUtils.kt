@@ -165,6 +165,13 @@ object AndroidHostAdbUtils {
     return try {
       block(dadbFor(deviceId))
     } catch (e: IOException) {
+      // A device-side sync FAIL (pulling/pushing an unreadable or missing remote path) also
+      // arrives as an IOException, but the transport is healthy - the device answered, the
+      // answer was "no". Evicting and retrying would run every denied transfer twice and churn
+      // the shared client under concurrent callers (observed: the installed-apps badge fetcher
+      // logging an eviction per system APK it isn't allowed to pull). Propagate it as the
+      // terminal failure it is; only transport-level errors earn the eviction below.
+      if (e.message.orEmpty().startsWith("Sync failed")) throw e
       Console.log(
         "[AndroidHostAdbUtils] withDadb evicting cached client for $serial after IOException " +
           "(${e.javaClass.simpleName}: ${e.message}); retrying once",

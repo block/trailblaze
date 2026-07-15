@@ -74,6 +74,18 @@ data class TrailblazeProjectConfig(
  */
 @Serializable
 data class ProjectDefaults(
+  /**
+   * Target-trailmap id a run / tool dispatch uses when nothing more specific is set —
+   * the committed, team-wide default so everyone in the workspace targets the same app
+   * without per-machine setup.
+   *
+   * Precedence (highest first): explicit per-run target (`--target`, a trail's
+   * `config.target`, or an active session override) → the per-machine persisted user
+   * selection (`trailblaze config target`) → this workspace default → the neutral
+   * built-in target. The id is validated against the loaded targets at resolution time;
+   * an unknown id is logged and skipped (falls through to the neutral default) rather than
+   * crashing every invocation in the workspace.
+   */
   @SerialName("target") val target: String? = null,
   @SerialName("llm") val llm: String? = null,
   /**

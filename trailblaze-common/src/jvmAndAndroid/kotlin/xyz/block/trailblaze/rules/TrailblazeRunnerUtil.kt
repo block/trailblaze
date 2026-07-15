@@ -9,6 +9,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplet
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailheadException
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -16,6 +17,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -102,6 +104,10 @@ class TrailblazeRunnerUtil(
    *   for — and the AI loop already honors it by aborting without an LLM retry
    *   (`TrailblazeKoogLlmClientHelper`), so recorded replay does the same rather than routing
    *   a known-terminal error through AI recovery.
+   * - A trailhead step (a lowered `trailhead:`, marked via [DirectionStep.isTrailhead]) also
+   *   always throws on failure - a [TrailheadException] - regardless of [selfHeal]: the trail
+   *   never reached its starting state, so recovery or continuing would only mask the real
+   *   failure behind a later step's unrelated error.
    * - Otherwise, the step is run with AI via [TestAgentRunner.runSuspend].
    */
   suspend fun runPromptSuspend(
@@ -112,16 +118,19 @@ class TrailblazeRunnerUtil(
   ): TrailblazeToolResult {
     for ((index, prompt) in prompts.withIndex()) {
       onStepProgress?.invoke(index + 1, prompts.size, prompt.prompt)
+      // Rides into every failure message so CI logs can say WHERE the trail died
+      // without the reader cross-referencing the trail file.
+      val stepLabel = "step ${index + 1} of ${prompts.size}"
       if (useRecordedSteps && prompt.canPromptStepUseRecording()) {
-        runRecordedPrompt(prompt, selfHeal)
+        runRecordedPrompt(prompt, selfHeal, stepLabel)
       } else {
-        runAiPrompt(prompt)
+        runAiPrompt(prompt, stepLabel)
       }
     }
     return TrailblazeToolResult.Success()
   }
 
-  private suspend fun runRecordedPrompt(prompt: PromptStep, selfHeal: Boolean) {
+  private suspend fun runRecordedPrompt(prompt: PromptStep, selfHeal: Boolean, stepLabel: String) {
     val stepStartTime = Clock.System.now()
     val stepTaskId = TaskId.generate()
     emitObjectiveStart(prompt)
@@ -146,12 +155,23 @@ class TrailblazeRunnerUtil(
           success = false,
           failureReason = failureReason,
         )
+        // A trailhead failure is always terminal, even when selfHeal is requested: the trailhead
+        // is the deterministic bootstrap that reaches the trail's starting state, so when it
+        // fails the trail never began. Routing it into self-heal recovery (or continuing to the
+        // next step) only masks the real failure behind a later, unrelated assertion error.
+        if (prompt.isTrailheadStep()) {
+          throw TrailheadException(
+            headline =
+              "tool '${recordingResult.failedTool.name}' could not reach the trail's starting state",
+            detail = buildTrailheadFailureDetail(prompt, recordingResult, failureMessage),
+          )
+        }
         // A FatalError throws even when selfHeal is requested — see the runPromptSuspend kdoc.
         val fatal = recordingResult.failureResult is TrailblazeToolResult.Error.FatalError
         if (!selfHeal || fatal) {
           throw TrailblazeException(
             buildString {
-              appendLine("Failed to run recording for prompt step:")
+              appendLine("Failed to run recording for prompt step ($stepLabel):")
               appendLine("  prompt: ${prompt.prompt}")
               appendLine(
                 "  recorded tools: ${prompt.recording!!.tools.joinToString(", ") { it.name }}"
@@ -166,31 +186,43 @@ class TrailblazeRunnerUtil(
         }
         markSelfHealUsed(prompt, recordingResult)
         val status = trailblazeRunner.recover(prompt, recordingResult)
-        throwIfTerminalFailure(prompt, status)
+        throwIfTerminalFailure(prompt, status, stepLabel)
       }
     }
   }
 
-  private suspend fun runAiPrompt(prompt: PromptStep) {
+  private suspend fun runAiPrompt(prompt: PromptStep, stepLabel: String) {
     val status = trailblazeRunner.runSuspend(prompt)
-    throwIfTerminalFailure(prompt, status)
+    throwIfTerminalFailure(prompt, status, stepLabel)
   }
 
-  private fun throwIfTerminalFailure(prompt: PromptStep, status: AgentTaskStatus) {
+  private fun throwIfTerminalFailure(prompt: PromptStep, status: AgentTaskStatus, stepLabel: String) {
     // Assign to a `val` to force expression-context exhaustiveness over the sealed
     // AgentTaskStatus hierarchy. A new subtype will then fail the compile instead of silently
     // falling through here as a (wrong) success.
     @Suppress("UNUSED_VARIABLE")
     val exhaustive: Unit = when (status) {
       is ObjectiveComplete -> Unit
-      is AgentTaskStatus.Failure ->
+      is AgentTaskStatus.Failure -> {
+        val statusDetail = buildString {
+          appendLine("Status Type: ${status::class.java.name}")
+          appendLine("Status: ${TrailblazeJsonInstance.encodeToString(status)}")
+        }
+        // Same fail-loudly contract as the recorded path: an NL-only trailhead the AI could not
+        // satisfy means the trail never reached its starting state.
+        if (prompt.isTrailheadStep()) {
+          throw TrailheadException(
+            headline = "could not reach the trail's starting state: ${prompt.prompt}",
+            detail = statusDetail,
+          )
+        }
         throw TrailblazeException(
           buildString {
-            appendLine("Failed to successfully run prompt with AI ${TrailblazeJsonInstance.encodeToString(prompt)}")
-            appendLine("Status Type: ${status::class.java.name}")
-            appendLine("Status: ${TrailblazeJsonInstance.encodeToString(status)}")
+            appendLine("Failed to successfully run prompt with AI ($stepLabel) ${TrailblazeJsonInstance.encodeToString(prompt)}")
+            append(statusDetail)
           },
         )
+      }
       is AgentTaskStatus.InProgress,
       is AgentTaskStatus.McpScreenAnalysis,
       -> Unit
@@ -286,6 +318,26 @@ class TrailblazeRunnerUtil(
   }
 
   private fun PromptStep.canPromptStepUseRecording(): Boolean = recordable && recording != null
+
+  private fun PromptStep.isTrailheadStep(): Boolean = this is DirectionStep && isTrailhead
+
+  /**
+   * The detail body under [TrailheadException]'s self-contained first line: the full tool call
+   * (name + args) and the underlying failure, for the complete report.
+   */
+  private fun buildTrailheadFailureDetail(
+    prompt: PromptStep,
+    recordingResult: PromptRecordingResult.Failure,
+    failureMessage: String,
+  ): String = buildString {
+    appendLine("  trailhead step: ${prompt.prompt}")
+    appendLine("  failed tool call: ${recordingResult.failedTool.trailblazeTool}")
+    appendLine("  failure: $failureMessage")
+    appendLine(
+      "The run was aborted before any trail steps ran. Fix the trailhead (or the device state " +
+        "it needs) before debugging the trail itself.",
+    )
+  }
 
   private fun TrailblazeToolResult.errorMessageOrToString(): String =
     (this as? TrailblazeToolResult.Error)?.errorMessage ?: toString()

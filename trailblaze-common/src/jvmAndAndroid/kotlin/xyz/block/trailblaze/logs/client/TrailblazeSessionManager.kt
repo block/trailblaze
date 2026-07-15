@@ -3,6 +3,7 @@ package xyz.block.trailblaze.logs.client
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.exception.TrailheadException
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -259,24 +260,35 @@ class TrailblazeSessionManager(
       isSuccess && session.usedSelfHeal -> SessionStatus.Ended.SucceededWithSelfHeal(durationMs)
       !isSuccess && session.usedSelfHeal -> SessionStatus.Ended.FailedWithSelfHeal(
         durationMs = durationMs,
-        exceptionMessage = formatException(exception),
+        exceptionMessage = formatExceptionMessage(exception),
+        exceptionStackTrace = exception?.stackTraceToString(),
+        failureKind = failureKind(exception),
       )
       isSuccess -> SessionStatus.Ended.Succeeded(durationMs)
       else -> SessionStatus.Ended.Failed(
         durationMs = durationMs,
-        exceptionMessage = formatException(exception),
+        exceptionMessage = formatExceptionMessage(exception),
+        exceptionStackTrace = exception?.stackTraceToString(),
+        failureKind = failureKind(exception),
       )
     }
   }
 
   /**
-   * Formats an exception as a string for logging.
+   * The human-readable message of a session-ending exception. The stack trace is carried
+   * separately in `exceptionStackTrace` — do not fold it back in here; report consumers
+   * render this field verbatim as the failure reason.
    */
-  private fun formatException(exception: Throwable?): String {
-    return buildString {
-      appendLine(exception?.message)
-      appendLine(exception?.stackTraceToString())
-    }
+  private fun formatExceptionMessage(exception: Throwable?): String? =
+    exception?.let { it.message ?: it.toString() }
+
+  /**
+   * Structured classification for failures CI renders specially — see
+   * [SessionStatus.Ended.Failed.failureKind]. Null for ordinary failures.
+   */
+  private fun failureKind(exception: Throwable?): String? = when (exception) {
+    is TrailheadException -> TrailheadException.KIND
+    else -> null
   }
 
   companion object {

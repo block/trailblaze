@@ -25,6 +25,8 @@ import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.TrailArgTokens
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -256,10 +258,17 @@ class CheckCommand : Callable<Int> {
       )
     }
 
+    // Static `{{args.x}}` token validation across every trail in the workspace: a token that
+    // references an arg the trail doesn't declare under `config.args:`, or that carries an
+    // expression instead of a plain dotted path, fails the build. Pure text scan (no device / LLM /
+    // subprocess), so it always runs — independent of the trail-recording tsc phase and its
+    // kill-switch. See [TrailArgTokens].
+    val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot)
+
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
-    return maxOf(typecheckExit, testExit, validationExit)
+    return maxOf(typecheckExit, testExit, validationExit, argTokenExit)
   }
 
   /**
@@ -735,6 +744,74 @@ class CheckCommand : Callable<Int> {
       )
       EXIT_OK
     }
+  }
+
+  /**
+   * Static arg-token validation. Walks every trail file under `<workspace>/trails/` and, per file,
+   * checks its `{{args.x}}` / `${args.x}` tokens against the trail's own `config.args:` declaration
+   * (see [validateArgTokensInTrail]). Fatal ([EXIT_TYPE_ERROR]) when any trail carries an undeclared
+   * or malformed (expression) arg token; clean ([EXIT_OK]) otherwise. Cheap pure-text scan — no
+   * subprocess — so it runs on every `check` regardless of scope or the recording-validation
+   * kill-switch. Wrapped in a non-fatal catch so an IO hiccup can't spuriously fail a build; genuine
+   * findings return through the normal path.
+   *
+   * Internal (not private) so the phase-level exit-code contract is directly testable — same
+   * visibility rationale as [validateArgTokensInTrail] and the companion's exit constants.
+   */
+  internal fun runArgTokenValidationPhase(workspaceRoot: File): Int {
+    return try {
+      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR).toFile()
+      if (!trailsRoot.isDirectory) return EXIT_OK
+      val yaml = createTrailblazeYaml()
+      var findingCount = 0
+      trailsRoot.walkTopDown()
+        .filter { it.isFile && TrailTscValidator.isTrailFile(it.name) }
+        .sortedBy { it.path }
+        .forEach { file ->
+          val errors = validateArgTokensInTrail(file.readText(), yaml)
+          if (errors.isNotEmpty()) {
+            findingCount += errors.size
+            val rel = trailsRoot.toPath().relativize(file.toPath())
+            errors.forEach { Console.error("trailblaze check: $rel — $it") }
+          }
+        }
+      if (findingCount > 0) {
+        Console.error(
+          "trailblaze check: arg-token validation FAILED — $findingCount finding(s) above. Declare " +
+            "each referenced arg under the trail's `config.args:`, or fix the token.",
+        )
+        EXIT_TYPE_ERROR
+      } else {
+        EXIT_OK
+      }
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze check: arg-token validation phase failed (ignored): " +
+          (e.message ?: e::class.simpleName),
+      )
+      EXIT_OK
+    }
+  }
+
+  /**
+   * PURE per-trail arg-token validation: extracts the trail's declared `config.args:` names and runs
+   * [TrailArgTokens.validate] over the raw YAML. An undeclared arg reference or an expression token
+   * is a finding; a declared-but-unused arg is fine. A trail that fails to parse yields no findings
+   * here — the parse-level validators own that error, and double-reporting would be noise.
+   *
+   * Takes [yaml] (a fully-wired [xyz.block.trailblaze.yaml.TrailblazeYaml]) so a batch caller builds
+   * the tool registry once; unit tests can pass [createTrailblazeYaml].
+   */
+  internal fun validateArgTokensInTrail(
+    yamlText: String,
+    yaml: xyz.block.trailblaze.yaml.TrailblazeYaml = createTrailblazeYaml(),
+  ): List<String> {
+    val declaredArgNames = try {
+      yaml.extractTrailConfig(yamlText)?.args?.keys ?: emptySet()
+    } catch (e: Exception) {
+      return emptyList()
+    }
+    return TrailArgTokens.validate(yamlText, declaredArgNames)
   }
 
   /**

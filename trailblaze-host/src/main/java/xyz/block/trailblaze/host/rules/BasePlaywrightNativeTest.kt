@@ -40,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.util.toPascalCaseIdentifier
@@ -302,6 +303,12 @@ open class BasePlaywrightNativeTest(
      */
     initialMemorySeeds: Map<String, String> = emptyMap(),
     initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
+    /**
+     * CLI-bound `config.args:` values in [xyz.block.trailblaze.yaml.TrailArgBinder.encodeProvided]
+     * wire form, seeded via [xyz.block.trailblaze.AgentMemory.seedArgs] right after the memory
+     * tiers (string args may carry memory tokens, so memory must land first).
+     */
+    initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     // Run the entire agent loop on the Playwright thread to maintain thread affinity.
@@ -351,6 +358,7 @@ open class BasePlaywrightNativeTest(
       cliSeeds = initialMemorySeeds,
       cliSensitiveSeeds = initialMemorySensitiveSeeds,
     )
+    playwrightAgent.memory.seedArgs(TrailArgBinder.decodeProvided(initialArgs))
     val sensitiveMemoryKeys: Set<String> = playwrightAgent.memory.sensitiveKeys.toSet()
 
     if (sendSessionStartLog) {

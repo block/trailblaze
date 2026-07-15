@@ -8,8 +8,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
@@ -17,6 +27,9 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 
 /**
  * Tests for [WaypointMigrateTrailCommand]'s helper functions — the pieces that drive the
@@ -301,6 +314,163 @@ class WaypointMigrateTrailCommandTest {
     assertEquals(1, cmd.countUnmigratableNotVisible(items))
     // The not-visible assert is not a collect target — pairing index only sees the tap.
     assertEquals(listOf("Tap"), cmd.collectMaestroSelectors(items).map { it.maestroSelector.textRegex })
+  }
+
+  // ----- unified-format helpers -----------------------------------------------------
+
+  @Test
+  fun `collectMaestroSelectorsUnified only walks the target classifier's recordings`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap foo",
+          recordings = mapOf(
+            "android-phone" to listOf(
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+            ),
+            "android-tablet" to listOf(
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Bar"))),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertEquals(listOf("Foo"), cmd.collectMaestroSelectorsUnified(trail, "android-phone").map { it.maestroSelector.textRegex })
+    assertEquals(listOf("Bar"), cmd.collectMaestroSelectorsUnified(trail, "android-tablet").map { it.maestroSelector.textRegex })
+    assertTrue(cmd.collectMaestroSelectorsUnified(trail, "ios-tablet").isEmpty())
+  }
+
+  @Test
+  fun `countUnmigratableNotVisibleUnified scopes to the target classifier`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "assert gone",
+          recordings = mapOf(
+            "android-phone" to listOf(
+              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("Gone"))),
+            ),
+            "android-tablet" to listOf(
+              wrap("assertNotVisibleBySelector", AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = accessibilitySelector("AlreadyMigrated"))),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android-phone"))
+    assertEquals(0, cmd.countUnmigratableNotVisibleUnified(trail, "android-tablet"))
+  }
+
+  @Test
+  fun `availableClassifiers collects keys from the trailhead and every step`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trailhead = UnifiedTrailStep(step = "launch", recordings = mapOf("android-phone" to emptyList())),
+      trail = listOf(
+        UnifiedTrailStep(step = "tap foo", recordings = mapOf("android-tablet" to emptyList())),
+      ),
+    )
+    assertEquals(setOf("android-phone", "android-tablet"), cmd.availableClassifiers(trail))
+  }
+
+  @Test
+  fun `migrateUnifiedTrail rewrites only the target classifier's tools`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trailhead = UnifiedTrailStep(
+        step = "launch",
+        recordings = mapOf(
+          "android-phone" to listOf(
+            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+          ),
+          "android-tablet" to listOf(
+            wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Foo"))),
+          ),
+        ),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap bar",
+          recordings = mapOf(
+            "android-phone" to listOf(
+              wrap("tapOnElementBySelector", TapOnByElementSelector(nodeSelector = maestroSelector("Bar"))),
+            ),
+          ),
+        ),
+      ),
+    )
+    val migratedTrailheadSelector = accessibilitySelector("Foo")
+    val migratedStepSelector = accessibilitySelector("Bar")
+    val migrations = mapOf(0 to migratedTrailheadSelector, 1 to migratedStepSelector)
+    val result = cmd.migrateUnifiedTrail(
+      trail, "android-phone", migrations, WaypointMigrateTrailCommand.IndexedCursor(),
+    )
+
+    val phoneTrailheadTool = result.trailhead!!.recordings["android-phone"]!![0].trailblazeTool as TapOnByElementSelector
+    assertEquals(migratedTrailheadSelector, phoneTrailheadTool.nodeSelector)
+    val tabletTrailheadTool = result.trailhead!!.recordings["android-tablet"]!![0].trailblazeTool as TapOnByElementSelector
+    assertEquals("Foo", tabletTrailheadTool.nodeSelector?.androidMaestro?.textRegex)
+    val phoneStepTool = result.trail[0].recordings["android-phone"]!![0].trailblazeTool as TapOnByElementSelector
+    assertEquals(migratedStepSelector, phoneStepTool.nodeSelector)
+  }
+
+  /**
+   * Writes a `_TrailblazeSessionStatusChangeLog.json` fixture carrying the given classifiers —
+   * the actual log type + field ([SessionStatus.Started.trailblazeDeviceInfo]) a real captured
+   * session populates, encoded through the same [TrailblazeJson.defaultWithoutToolsInstance] the
+   * command reads with, so the fixture stays honest about the real wire shape.
+   */
+  private fun writeSessionStatusLog(dir: File, fileNumber: Int, classifiers: List<String>) {
+    val log: TrailblazeLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = SessionStatus.Started(
+        trailConfig = null,
+        trailFilePath = null,
+        hasRecordedSteps = false,
+        testMethodName = "someTest",
+        testClassName = "SomeTestClass",
+        trailblazeDeviceInfo = TrailblazeDeviceInfo(
+          trailblazeDeviceId = TrailblazeDeviceId(
+            instanceId = "emulator-5554",
+            trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+          ),
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          widthPixels = 1080,
+          heightPixels = 2400,
+          classifiers = classifiers.map { TrailblazeDeviceClassifier(it) },
+        ),
+      ),
+      session = SessionId("test-session"),
+      timestamp = Instant.fromEpochMilliseconds(0),
+    )
+    File(dir, "${fileNumber}_TrailblazeSessionStatusChangeLog.json").writeText(
+      TrailblazeJson.defaultWithoutToolsInstance.encodeToString(log),
+    )
+  }
+
+  @Test
+  fun `inferClassifier auto-selects the single classifier the session logs agree on`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val dir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    writeSessionStatusLog(dir, 1, listOf("android-phone"))
+    assertEquals("android-phone", cmd.inferClassifier(setOf("android-phone", "android-tablet"), dir))
+  }
+
+  @Test
+  fun `inferClassifier returns null when no classifier or more than one is present`() {
+    val cmd = WaypointMigrateTrailCommand()
+    val emptyDir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    assertNull(cmd.inferClassifier(setOf("android-phone"), emptyDir))
+
+    val ambiguousDir = createTempDirectory("migrate-trail-test").toFile().also { tempDirs += it }
+    writeSessionStatusLog(ambiguousDir, 1, listOf("android-phone"))
+    writeSessionStatusLog(ambiguousDir, 2, listOf("android-tablet"))
+    assertNull(cmd.inferClassifier(setOf("android-phone", "android-tablet"), ambiguousDir))
   }
 
   // ----- classNameFromYamlToolName ------------------------------------------------

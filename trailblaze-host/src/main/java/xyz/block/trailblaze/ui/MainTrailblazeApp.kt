@@ -283,6 +283,14 @@ class MainTrailblazeApp(
             onClick = { windowVisible = !windowVisible }
           )
           Item(
+            text = "Show Trail Runner",
+            onClick = {
+              TrailblazeDesktopUtil.openInDefaultBrowser(
+                "${trailblazeSavedSettingsRepo.portManager.serverUrl}/trailrunner/"
+              )
+            }
+          )
+          Item(
             text = "View Logs",
             onClick = {
               val desktopLogsDir = TrailblazeDesktopUtil.getDesktopLogsDirectory()

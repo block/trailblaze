@@ -9,6 +9,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.MalformedArgTokenException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -57,7 +58,7 @@ fun <T : TrailblazeTool> interpolateMemoryInTool(
   memory: AgentMemory,
   disabled: Boolean = isBoundaryMemoryInterpolationDisabled(),
 ): T {
-  if (disabled || memory.variables.isEmpty()) return tool
+  if (disabled || (memory.variables.isEmpty() && memory.args.isEmpty())) return tool
   return when (tool) {
     is OtherTrailblazeTool -> tool
     is RawArgumentTrailblazeTool -> tool
@@ -170,9 +171,15 @@ fun buildLogSafeResolvedPayload(
   rawPayload: OtherTrailblazeTool,
   memory: AgentMemory,
 ): OtherTrailblazeTool {
-  if (memory.variables.isEmpty()) return rawPayload
+  if (memory.variables.isEmpty() && memory.args.isEmpty()) return rawPayload
   val scrubMemory = AgentMemory().apply {
     variables.putAll(memory.variables)
+    // putArg (already-resolved values), not seedArgs: re-seeding would re-run token resolution.
+    // argsForLogSafePayload masks any arg that laundered a sensitive memory value in via a
+    // token-valued default back to its own {{args.name}} token — the args-namespace analog of
+    // the sensitive-variables masking below. Everything else resolves in the persisted payload
+    // just like the dispatch boundary resolved it.
+    memory.argsForLogSafePayload().forEach { (name, value) -> putArg(name, value) }
     memory.sensitiveKeys.forEach { key -> variables[key] = "{{$key}}" }
   }
   // warnUnknownTokens = false: this scrub AgentMemory is rebuilt every call, so its per-instance
@@ -196,9 +203,28 @@ private fun <T : TrailblazeTool> interpolateViaClassSerializer(tool: T, memory: 
   if (interpolated == tree) {
     tool
   } else {
-    INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, interpolated)
+    try {
+      INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, interpolated)
+    } catch (decodeFailure: Exception) {
+      if (decodeFailure is kotlin.coroutines.cancellation.CancellationException) throw decodeFailure
+      // A whole-scalar {{args.x}} on an integer/boolean arg substitutes the arg's NATIVE value
+      // into the tree; when the receiving Kotlin field is a String, the strict decode rejects
+      // the unquoted scalar. The tree walk can't know the field type, so retry with every token
+      // rendered as text — reachable only when the native-typed tree already failed, so working
+      // native substitutions (YAML-defined params trees, matching field types) are unaffected.
+      // If this also fails, the outer catch's pass-through diagnostics apply as usual.
+      val textRendered = memory.interpolateVariablesInJson(tree, renderWholeScalarArgTokensAsText = true)
+      INTERPOLATION_JSON.decodeFromJsonElement(concreteSerializer, textRendered)
+    }
   }
 } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+  throw e
+} catch (e: MalformedArgTokenException) {
+  // A hard-error, not a round-trip incompatibility: an LLM-authored expression inside an
+  // `{{args.x}}` token (tokens are dotted paths only, never expressions). The broad catch
+  // below would otherwise swallow this identically to "tool can't round-trip" and dispatch
+  // the tool as-authored with the broken token literally intact — defeating the whole point
+  // of hard-erroring on a malformed token. Must stay ahead of `catch (e: Exception)`.
   throw e
 } catch (e: Exception) {
   // No serializer (dynamically-constructed tool), or a field shape the bare Json can't encode

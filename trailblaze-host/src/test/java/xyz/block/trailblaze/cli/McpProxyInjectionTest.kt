@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.cli
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
@@ -8,6 +10,7 @@ import picocli.CommandLine
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.WebInstanceIds
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -554,5 +557,130 @@ class McpProxyInjectionTest {
     val args = Json.parseToJsonElement(raw).jsonObject["params"]!!.jsonObject["arguments"]!!.jsonObject
     assertEquals("ANDROID", args["action"]!!.jsonPrimitive.content)
     assertEquals("emulator-5554", args["deviceId"]!!.jsonPrimitive.content)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Human-approvable permissions (approval_prompt interception)
+  // ---------------------------------------------------------------------------
+  //
+  // When the supervising daemon injects TRAILRUNNER_PERMISSION_RUN_ID, the proxy advertises an
+  // `approval_prompt` tool in tools/list responses and intercepts tools/call for it (routing the
+  // decision to the daemon rather than forwarding to /mcp). These pin the pure helpers that decide
+  // and shape that flow, with no live daemon.
+
+  @Test
+  fun `permissionApprovalEnabled reflects whether a run id was supplied`() {
+    assertTrue(McpProxy(permissionRunId = "run-1").permissionApprovalEnabled)
+    assertFalse(McpProxy(permissionRunId = null).permissionApprovalEnabled)
+  }
+
+  @Test
+  fun `isToolsListRequest fires only on tools-list`() {
+    val proxy = McpProxy(permissionRunId = "run-1")
+    assertTrue(proxy.isToolsListRequest("""{"jsonrpc":"2.0","id":"1","method":"tools/list"}"""))
+    assertFalse(
+      proxy.isToolsListRequest(
+        """{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"tap"}}""",
+      ),
+    )
+    assertFalse(proxy.isToolsListRequest("not json"))
+  }
+
+  @Test
+  fun `isApprovalPromptCall recognizes the injected tool by bare and namespaced name`() {
+    val proxy = McpProxy(permissionRunId = "run-1")
+    assertTrue(
+      proxy.isApprovalPromptCall(
+        """{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"approval_prompt","arguments":{}}}""",
+      ),
+    )
+    assertTrue(
+      proxy.isApprovalPromptCall(
+        """{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"mcp__trailblaze__approval_prompt","arguments":{}}}""",
+      ),
+    )
+    // A different tool call is forwarded normally, not intercepted.
+    assertFalse(
+      proxy.isApprovalPromptCall(
+        """{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"tap","arguments":{}}}""",
+      ),
+    )
+    assertFalse(proxy.isApprovalPromptCall("""{"jsonrpc":"2.0","id":"1","method":"tools/list"}"""))
+  }
+
+  @Test
+  fun `injectApprovalPromptTool adds the approval tool to a tools-list result`() {
+    val proxy = McpProxy(permissionRunId = "run-1")
+    val response =
+      """{"jsonrpc":"2.0","id":"1","result":{"tools":[{"name":"tap","inputSchema":{"type":"object"}}]}}"""
+
+    val tools =
+      Json.parseToJsonElement(proxy.injectApprovalPromptTool(response))
+        .jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
+    val approval = tools.map { it.jsonObject }.single { it["name"]?.jsonPrimitive?.contentOrNull == "approval_prompt" }
+    // The device tool the daemon already advertised is preserved alongside the injected one.
+    assertTrue(tools.any { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull == "tap" })
+    assertEquals("object", approval["inputSchema"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun `injectApprovalPromptTool is idempotent`() {
+    val proxy = McpProxy(permissionRunId = "run-1")
+    val once =
+      proxy.injectApprovalPromptTool(
+        """{"jsonrpc":"2.0","id":"1","result":{"tools":[]}}""",
+      )
+    val twice = proxy.injectApprovalPromptTool(once)
+
+    val tools = Json.parseToJsonElement(twice).jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
+    assertEquals(1, tools.count { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull == "approval_prompt" })
+  }
+
+  @Test
+  fun `injectApprovalPromptTool leaves a non-tools-list response untouched`() {
+    val proxy = McpProxy(permissionRunId = "run-1")
+    val errorResponse = """{"jsonrpc":"2.0","id":"1","error":{"code":-32000,"message":"boom"}}"""
+    assertEquals(errorResponse, proxy.injectApprovalPromptTool(errorResponse))
+  }
+
+  @Test
+  fun `approvalDecisionResultText on allow passes the original input through`() {
+    val input = Json.parseToJsonElement("""{"x":1}""")
+    val text =
+      approvalDecisionResultText(behavior = "allow", message = null, originalInput = input, updatedInputJson = null)
+
+    val decoded = Json.parseToJsonElement(text).jsonObject
+    assertEquals("allow", decoded["behavior"]!!.jsonPrimitive.content)
+    assertEquals(1, decoded["updatedInput"]!!.jsonObject["x"]!!.jsonPrimitive.content.toInt())
+  }
+
+  @Test
+  fun `approvalDecisionResultText on allow prefers an explicit updated input`() {
+    val input = Json.parseToJsonElement("""{"x":1}""")
+    val text =
+      approvalDecisionResultText(
+        behavior = "allow",
+        message = null,
+        originalInput = input,
+        updatedInputJson = """{"x":2}""",
+      )
+
+    val updated = Json.parseToJsonElement(text).jsonObject["updatedInput"]!!.jsonObject
+    assertEquals(2, updated["x"]!!.jsonPrimitive.content.toInt())
+  }
+
+  @Test
+  fun `approvalDecisionResultText on deny carries the message`() {
+    val text =
+      approvalDecisionResultText(
+        behavior = "deny",
+        message = "not this time",
+        originalInput = null,
+        updatedInputJson = null,
+      )
+
+    val decoded = Json.parseToJsonElement(text).jsonObject
+    assertEquals("deny", decoded["behavior"]!!.jsonPrimitive.content)
+    assertEquals("not this time", decoded["message"]!!.jsonPrimitive.content)
   }
 }

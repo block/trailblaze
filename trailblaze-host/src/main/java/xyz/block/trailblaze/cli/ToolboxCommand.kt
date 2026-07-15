@@ -141,10 +141,10 @@ class ToolboxCommand : Callable<Int> {
       }
     }
 
-    // Resolve --target if the user didn't pass one. Mirrors the resolution used by
-    // `tool` / `snapshot` (workspace settings' selectedTargetAppId, hydrated to
-    // "default" when unset) so toolbox behaves the same on first use — no need to
-    // know the word "target" exists to browse the catalogue.
+    // Resolve --target if the user didn't pass one: TRAILBLAZE_TARGET env → the saved
+    // selection (`trailblaze config target`) → the workspace's `defaults.target` →
+    // built-in default. Matches the daemon's own fallback so toolbox behaves the same
+    // on first use — no need to know the word "target" exists to browse the catalogue.
     //
     // `--name X` is platform/target-agnostic (the daemon searches every target for
     // the named tool), so we send no `target` argument at all in that mode and let

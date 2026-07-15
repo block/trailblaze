@@ -1,0 +1,32 @@
+config:
+  id: clock/assert-alarm-tab-visible
+  devices:
+    android: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trail:
+  - step: "Launch the Clock app"
+    recording:
+      android:
+        - launchApp:
+            appId: com.android.deskclock
+
+  - verify: "The ALARM tab is visible"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The ALARM tab should be visible on the Clock app's main screen.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/text1
+                textRegex: ALARM
+
+  - verify: "The add alarm button is visible"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The FAB button to add a new alarm should be visible.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/fab
+                contentDescriptionRegex: Add alarm
+                isClickable: true

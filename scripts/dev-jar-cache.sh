@@ -70,7 +70,8 @@ dev_source_hash() {
       '*.kt' '*.kts' '*.java' '*.properties' '*.toml' '*.xml' '*.pro' \
       '**/src/**/resources/**/*.yaml' '**/src/**/resources/**/*.yml' \
       '**/src/**/resources/**/*.json' '**/src/**/resources/**/*.html' \
-      '**/src/**/resources/**/*.ts' '**/src/**/resources/**/*.js' \
+      '**/src/**/resources/**/*.ts' '**/src/**/resources/**/*.tsx' \
+      '**/src/**/resources/**/*.js' '**/src/**/resources/**/*.jsx' \
       '**/src/**/resources/**/*.mjs' '**/src/**/resources/**/*.cjs' \
       '*sdks/typescript/src/*' '*sdks/typescript/tools/*' \
       '*sdks/typescript/package.json' '*sdks/typescript/bun.lock' \
@@ -80,7 +81,7 @@ dev_source_hash() {
     # scope as the diff filter above (grep regex instead of pathspec, since
     # this leg's input is a plain filename list) — keep both in sync.
     git ls-files --others --exclude-standard \
-      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|js|mjs|cjs)$|(^|/)sdks/typescript/(src|tools)/|(^|/)sdks/typescript/(package\.json|bun\.lock|runtime-globals\.d\.ts)$' \
+      | grep -E '\.(kt|kts|java|properties|toml|xml|pro)$|(^|/)src/.*/resources/.*\.(yaml|yml|json|html|ts|tsx|js|jsx|mjs|cjs)$|(^|/)sdks/typescript/(src|tools)/|(^|/)sdks/typescript/(package\.json|bun\.lock|runtime-globals\.d\.ts)$' \
       | grep -vE '(^|/)\.trailblaze/' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
     } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1

@@ -106,7 +106,15 @@ function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedT
               options={devices.map((d) => [d.id, d.name + (connectedId === d.id ? '  ✓ connected' : '')])} />}
       </Field>
       <Field flag="Target app" ico="package" full
-        desc={'The app under test, as installed on the selected device.' + (declaredTarget ? ` This trail declares '${declaredTarget}', so it's preselected.` : '')}>
+        desc={'The app under test, as installed on the selected device.'
+          + (declaredTarget && installedTargets.some((a) => a.id === declaredTarget)
+            ? ` This trail declares '${declaredTarget}', so it's preselected.` : '')}>
+        {declaredTarget && installedTargets.length > 0 && !installedTargets.some((a) => a.id === declaredTarget) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: 'var(--tb-warn, #e0a800)', fontSize: 12.5 }}>
+            <Ico n="triangle-alert" s={13} c="var(--tb-warn, #e0a800)" />
+            <span>This trail declares target '{declaredTarget}', which isn't resolvable on this device - the run is blocked unless you explicitly pick an app below to run against instead.</span>
+          </div>
+        )}
         {sel && sel.platform === 'web'
           ? <span className="tb-sub" style={{ fontSize: 12.5 }}>Web runs drive the browser - no installed app to pick.</span>
           : installedTargets.length > 0

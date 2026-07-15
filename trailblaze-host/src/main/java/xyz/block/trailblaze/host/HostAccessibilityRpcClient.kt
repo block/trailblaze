@@ -25,6 +25,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
@@ -195,6 +196,9 @@ class HostAccessibilityRpcClient(
         // a plain string map that carries no sensitivity marking.
         memorySnapshot = memory.variables.toMap(),
         sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
+        // Args are immutable per run, so unlike memory they only travel host → device.
+        argsSnapshot = TrailArgBinder.encodeProvided(memory.args),
+        sensitiveArgNames = memory.sensitiveArgNames.toList(),
       )
 
       when (val rpcResult = rpcClient.rpcCall(singleToolRequest)) {
@@ -359,6 +363,7 @@ class HostAccessibilityRpcClient(
       awaitCompletion = true,
       memorySnapshot = memory.variables.toMap(),
       sensitiveMemoryKeys = memory.sensitiveKeys.toList(),
+      argsSnapshot = TrailArgBinder.encodeProvided(memory.args),
     )
     return when (val rpcResult = rpcClient.rpcCall(syncRequest)) {
       is RpcResult.Failure -> {

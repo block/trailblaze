@@ -14,25 +14,31 @@ function classifyUserMessage(text) {
   return 'Context';
 }
 
-function Collapsible({ label, tone, mono = true, children, text, startOpen = false, maxClosed = 0 }) {
+function Collapsible({ label, tone, mono = true, children, text, startOpen = false, maxClosed = 0, bare = false }) {
   const [open, setOpen] = React.useState(startOpen);
   const body = text != null ? text : children;
   const chars = text != null ? text.length : null;
+  // `bare`: no box. For the lowest-priority process/thinking content — a border there is redundant
+  // ornamentation on content the eye should skip (Tufte 1+1=3). Just a muted caret + label.
+  const containerStyle = bare
+    ? { }
+    : { borderRadius: 10, border: '1px solid ' + (tone === 'user' ? 'rgba(94,155,255,.25)' : tone === 'assistant' ? 'rgba(0,224,19,.25)' : 'var(--tb-hairline)'), background: tone === 'user' ? 'rgba(94,155,255,.07)' : tone === 'assistant' ? 'rgba(0,224,19,.05)' : 'var(--bg-prominent)', overflow: 'hidden' };
+  const labelColor = tone === 'user' ? (bare ? 'var(--text-subtle)' : 'var(--tb-running)') : tone === 'assistant' ? (bare ? 'var(--text-subtle)' : 'var(--tb-pass)') : 'var(--text-subtle)';
   return (
-    <div style={{ borderRadius: 10, border: '1px solid ' + (tone === 'user' ? 'rgba(94,155,255,.25)' : tone === 'assistant' ? 'rgba(0,224,19,.25)' : 'var(--tb-hairline)'), background: tone === 'user' ? 'rgba(94,155,255,.07)' : tone === 'assistant' ? 'rgba(0,224,19,.05)' : 'var(--bg-prominent)', overflow: 'hidden' }}>
+    <div style={containerStyle}>
       <div
         role="button"
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', userSelect: 'none' }}
+        style={{ display: 'flex', alignItems: 'center', gap: bare ? 5 : 8, padding: bare ? '3px 2px' : '7px 11px', cursor: 'pointer', userSelect: 'none' }}
       >
-        <Ico n={open ? 'chevron-down' : 'chevron-right'} s={13} c="var(--text-subtle)" />
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: tone === 'user' ? 'var(--tb-running)' : tone === 'assistant' ? 'var(--tb-pass)' : 'var(--text-subtle)' }}>{label}</span>
+        <Ico n={open ? 'chevron-down' : 'chevron-right'} s={bare ? 12 : 13} c="var(--text-subtle)" />
+        <span style={{ fontSize: bare ? 11 : 10.5, fontWeight: bare ? 500 : 700, letterSpacing: bare ? 0 : '.06em', textTransform: bare ? 'none' : 'uppercase', color: labelColor }}>{label}</span>
         {!open && chars != null && <span className="tb-sub" style={{ fontSize: 10.5 }}>{(chars / 1000).toFixed(1)}k chars</span>}
       </div>
       {open && (
-        <div style={{ padding: '0 12px 10px' }}>
+        <div style={{ padding: bare ? '2px 0 8px 17px' : '0 12px 10px' }}>
           {text != null
             ? <pre className={mono ? 'tb-mono' : ''} data-selectable style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-subtle-variant)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 420, overflow: 'auto' }}>{text}</pre>
             : children}

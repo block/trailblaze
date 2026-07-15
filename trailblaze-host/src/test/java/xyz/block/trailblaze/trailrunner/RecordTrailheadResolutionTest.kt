@@ -4,7 +4,7 @@ import kotlin.test.assertEquals
 import org.junit.Test
 
 /**
- * Covers `prependTrailheadTool`, which `/api/draft/record` uses to inject the per-platform trailhead
+ * Covers `prependTrailheadTool`, which `/api/folder/record` uses to inject the per-platform trailhead
  * as step 0 — now a first-class `- trailhead: <id>` root element ahead of the prompts. The trailhead
  * id comes from the recording's platform column / the Configure-recording dialog — it is
  * platform-specific and never read from the cross-platform blaze.yaml.

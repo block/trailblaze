@@ -1,0 +1,51 @@
+config:
+  id: clock/assert-after-navigation
+  devices:
+    android: ANDROID_ONDEVICE_ACCESSIBILITY
+
+trail:
+  - step: "Launch the Clock app"
+    recording:
+      android:
+        - launchApp:
+            appId: com.android.deskclock
+
+  - step: "Tap on the TIMER tab"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Navigate to the TIMER tab to test assertions after navigation.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/text1
+                textRegex: TIMER
+
+  - verify: "The timer setup screen is showing"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: After tapping TIMER, the timer setup view should be visible.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/timer_setup
+
+  - step: "Tap on the ALARM tab"
+    recording:
+      android:
+        - tapOnElementBySelector:
+            reason: Navigate back to the ALARM tab.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: android:id/text1
+                textRegex: ALARM
+
+  - verify: "The alarm screen is showing with the add alarm button"
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The FAB to add alarms should be visible after navigating back.
+            nodeSelector:
+              androidAccessibility:
+                resourceIdRegex: com.android.deskclock:id/fab
+                contentDescriptionRegex: Add alarm
+                isClickable: true

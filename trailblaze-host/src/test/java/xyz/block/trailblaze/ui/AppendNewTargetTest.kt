@@ -13,20 +13,22 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager.AppendDecision
 
 /**
- * Pins the additive-only contract of [TrailblazeDeviceManager.appendNewTarget] — the pure
- * decision behind live target registration (`registerNewTarget`):
+ * Pins the contract of [TrailblazeDeviceManager.appendNewTarget] - the pure decision behind
+ * live target registration (`registerNewTarget`):
  *
  * - **Net-new id appends** ([AppendDecision.Appended]): a target present in the fresh
- *   discovery but not the current set is added; the current set's entries survive by object
+ *   discovery but not the current set is added; the OTHER current entries survive by object
  *   identity (never re-resolved instances), which is what keeps a live append safe for
  *   in-flight runs holding a reference to their already-resolved target.
- * - **Already-present id is idempotent** ([AppendDecision.AlreadyPresent]) and returns the
- *   EXISTING instance, even when fresh discovery produced a new instance for the same id (e.g.
- *   the target's YAML was also edited on disk) — mutation of existing targets stays on the
- *   restart-required flow, and a concurrent/double register still resolves the target rather
- *   than a spurious null.
- * - **Id absent from fresh discovery** ([AppendDecision.NotDiscovered]) — the caller falls
- *   back to the restart-required flow rather than fabricating a target.
+ * - **Already-present id is REPLACED with the fresh instance** ([AppendDecision.Appended]):
+ *   an Edit Target save changes the on-disk manifest, and serving the stale registered
+ *   snapshot made an edited target read "Not installed on any connected device" until a
+ *   daemon restart. In-flight runs keep their captured reference to the replaced instance
+ *   (nothing mutates it), so the swap is safe.
+ * - **Registered id absent from fresh discovery** ([AppendDecision.AlreadyPresent]) - there is
+ *   nothing newer to swap in, so the existing instance is returned (idempotent success).
+ * - **Id neither registered nor in fresh discovery** ([AppendDecision.NotDiscovered]) - the
+ *   caller falls back to the restart-required flow rather than fabricating a target.
  */
 class AppendNewTargetTest {
 
@@ -61,15 +63,37 @@ class AppendNewTargetTest {
   }
 
   @Test
-  fun `already-present id is idempotent and returns the existing instance`() {
-    val existing = target("aaa")
-    // Fresh discovery re-resolved a DIFFERENT instance for the same id (e.g. YAML edited on disk).
+  fun `re-registered id replaces the stale instance with the fresh resolution`() {
+    val stale = target("aaa")
+    val bystander = target("bbb")
+    // Fresh discovery re-resolved a DIFFERENT instance for the same id (Edit Target save
+    // changed the on-disk manifest - e.g. new android app_ids).
     val freshReResolved = target("aaa")
 
-    val result = assertIs<AppendDecision.AlreadyPresent>(
-      TrailblazeDeviceManager.appendNewTarget(setOf(existing), setOf(freshReResolved), "aaa"),
+    val result = assertIs<AppendDecision.Appended>(
+      TrailblazeDeviceManager.appendNewTarget(
+        setOf(stale, bystander),
+        setOf(freshReResolved, target("bbb")),
+        "aaa",
+      ),
     )
-    // The existing (in-flight-safe) instance is returned, not the fresh re-resolution.
+    // The fresh instance wins - this is what makes an Edit Target save visible without restart.
+    assertSame(freshReResolved, result.newTarget)
+    assertEquals(setOf("aaa", "bbb"), result.updatedTargets.map { it.id }.toSet())
+    assertTrue(result.updatedTargets.any { it === freshReResolved })
+    assertTrue(result.updatedTargets.none { it === stale })
+    // Untouched entries still survive by identity.
+    assertTrue(result.updatedTargets.any { it === bystander })
+  }
+
+  @Test
+  fun `registered id absent from fresh discovery returns the existing instance`() {
+    val existing = target("aaa")
+
+    val result = assertIs<AppendDecision.AlreadyPresent>(
+      TrailblazeDeviceManager.appendNewTarget(setOf(existing), setOf(target("bbb")), "aaa"),
+    )
+    // Nothing newer to swap in - the existing (in-flight-safe) instance is returned.
     assertSame(existing, result.existing)
   }
 

@@ -2011,8 +2011,14 @@ class TrailblazeMcpServer(
             { request -> handler(request) }
           },
           statusProvider = {
+            // Bounded and suspend on purpose: the device scan walks live adb/RPC channels and
+            // can hang indefinitely when a device wedges. An unbounded (or runBlocking) call
+            // here turns every status poll into a permanently parked Netty worker until the
+            // whole daemon stops answering - status must degrade to 0 devices instead.
             val deviceCount = try {
-              kotlinx.coroutines.runBlocking { mcpBridge.getAvailableDevices().size }
+              kotlinx.coroutines.withTimeoutOrNull(5.seconds) {
+                mcpBridge.getAvailableDevices().size
+              } ?: 0
             } catch (_: Exception) {
               0
             }

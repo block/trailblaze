@@ -5,40 +5,53 @@
 
 // The Steps × recordings board — a folder's blaze steps on the left (editable), one column per
 // recorded <platform>.trail.yaml showing the tools it ran for each step. This is the shared working
-// surface for BOTH a draft folder (Drafts screen) and a committed trail bundle (Trails screen): the
+// surface for a committed trail bundle (Trails screen): the
 // two folders are structurally identical (a blaze.yaml spec + per-device recordings), so the grid is
 // the same. The difference is purely the data layer — each parent passes its own dispatch/save/delete
-// callbacks (drafts hit /api/draft/*, trails hit /api/folder/*). The board owns only view-local state
+// callbacks (the Trails screen hits /api/folder/*). The board owns only view-local state
 // (which columns are shown, device pickers, hover, the record dialog, optimistic "starting…"); the
 // parent owns the data (steps, the parsed variant docs) and the I/O.
 
 // Icon + color for a recording's run status. Collapses healed → green-pass and timeout → red-fail
-// (distinct from the global STATUS map). Shared by the board and the drafts rail/run-history rows.
+// (distinct from the global STATUS map). Shared by the board and the run-history rows.
 const RUN_STATUS_DOT = {
   passed: ['check-circle-2', 'var(--tb-pass)'], healed: ['check-circle-2', 'var(--tb-pass)'],
   failed: ['x-circle', 'var(--tb-fail)'], timeout: ['x-circle', 'var(--tb-fail)'],
   running: ['loader-2', 'var(--tb-running)'],
 };
 
-// Parse a trail/blaze yaml into { config, prompts, trailhead }. The top-level doc is a list whose
-// items carry a `config:`, `prompts:`, or (new format) `trailhead:` key — the trailhead is the
-// deterministic step 0 the flow launches from.
+// Parse a trail/blaze yaml into { config, prompts, trailhead, toolsItems }. The top-level doc is a
+// list whose items carry a `config:`, `prompts:`, `tools:` (a recorded step the engine
+// force-executes), or (new format) `trailhead:` key - the trailhead is the deterministic step 0
+// the flow launches from.
 function parseTrailYaml(content) {
   try {
     const doc = window.jsyaml ? window.jsyaml.load(content) : null;
     let config = {};
     let prompts = [];
     let trailhead = null;
+    const toolsItems = [];
     const items = Array.isArray(doc) ? doc : doc ? [doc] : [];
     for (const it of items) {
       if (it && it.config) config = it.config;
       if (it && it.prompts) prompts = it.prompts;
       if (it && it.trailhead != null) trailhead = it.trailhead;
+      if (it && Array.isArray(it.tools)) toolsItems.push(it.tools);
     }
-    return { ok: true, config, prompts, trailhead };
+    return { ok: true, config, prompts, trailhead, toolsItems };
   } catch (e) {
-    return { ok: false, error: String(e && e.message ? e.message : e), config: {}, prompts: [], trailhead: null };
+    return { ok: false, error: String(e && e.message ? e.message : e), config: {}, prompts: [], trailhead: null, toolsItems: [] };
   }
+}
+
+// Tool names from one parsed `tools:` array (entries are `{ toolName: {args} }` maps or bare strings).
+function toolNamesOf(toolsArray) {
+  const names = [];
+  for (const t of toolsArray || []) {
+    if (t && typeof t === 'object') names.push(Object.keys(t)[0]);
+    else if (typeof t === 'string') names.push(t);
+  }
+  return names;
 }
 
 // Patch one recorded step's tool list in a variant file, PRESERVING every other top-level item —
@@ -397,7 +410,7 @@ function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClos
 }
 
 // Tools for an editor palette given a target + platform: the target app's own tools plus the
-// generalized ones (framework core + the platform's toolsets). Shared by the drafts and trails
+// generalized ones (framework core + the platform's toolsets). Shared by the trails
 // editors so both browse the same set — and the same trailmap scope the Tools/Trailmaps list views
 // use (TB.scopeTrailmaps), so the editor palette and the catalog never drift.
 function editorToolsFor(catalog, target, platform) {
@@ -433,7 +446,7 @@ const PLATFORM_LABEL = { android: 'Android', ios: 'iOS', web: 'Web' };
 //     variant's inline raw-YAML editor (replaces the old slide-in push view).
 function StepsBoard({
   steps, onStepsChange, dirty, onSaveSteps,
-  variants = [], variantDocs = {}, blazeConfigRows = [], blazeTrailhead = null,
+  variants = [], variantDocs = {}, blazeConfigRows = [], blazeTrailhead = null, blazeToolsSteps = [],
   deviceList = [], linkedSessions = [],
   home, blazeName = 'blaze.yaml', target, canRecord = true,
   onOpenFile, dispatchRecord, dispatchPlay, onConfigureRun, onDeleteFile, onViewRun, onError, boardRef, onSaveVariantTools, onSaveVariantYaml, onFetchVariantYaml,
@@ -724,7 +737,7 @@ function StepsBoard({
             <div className="tb-board-pin" style={{ padding: '10px 12px', borderBottom: '1px solid var(--tb-hairline-strong)', display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-subtle)' }}>
               <Ico n="file-text" s={13} c="var(--tb-link)" style={{ flex: '0 0 auto' }} />
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--tb-link)', flex: '0 0 auto' }}>{blazeName}</span>
-              <span className="tb-sub" style={{ fontSize: 10.5, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {(steps || []).length} {(steps || []).length === 1 ? 'step' : 'steps'}</span>
+              <span className="tb-sub" style={{ fontSize: 10.5, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {(steps || []).length + blazeToolsSteps.length} {(steps || []).length + blazeToolsSteps.length === 1 ? 'step' : 'steps'}</span>
               <span {...clickable(() => onOpenFile(blazeName))} title={'Edit ' + blazeName} style={{ fontSize: 11, color: 'var(--tb-link)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 3, flex: '0 0 auto' }}><Ico n="pencil" s={11} /> Edit YAML</span>
             </div>
             {/* empty state — no recorded columns yet. Show the platform picker inline (the same list
@@ -914,13 +927,21 @@ function StepsBoard({
               // available — it's an opt-in field and shouldn't carry a full row of "None" controls.
               const anyTh = gridColumns.some((c) => (c.trailheadOpts || []).length || colTrailheads[c.platform]);
               const specTrailhead = blazeTrailhead && blazeTrailhead.step ? String(blazeTrailhead.step) : null;
+              // A trailhead may carry recorded tools with or without a `step:` sentence - show
+              // them so a tools-only trailhead doesn't read as "none".
+              const specTrailheadTools = blazeTrailhead && Array.isArray(blazeTrailhead.tools) ? toolNamesOf(blazeTrailhead.tools) : [];
               return (
                 <React.Fragment>
                   <div className="tb-board-pin" style={{ borderTop: '1px solid var(--tb-hairline)', padding: '8px 12px', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '.05em', opacity: 0.7 }}>Trailhead</span>
                     {specTrailhead
                       ? <span data-selectable style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-standard)' }}>{specTrailhead}</span>
-                      : <span className="tb-sub" style={{ fontSize: 11.5 }}>{anyTh ? 'chosen per device' : 'none'}</span>}
+                      : specTrailheadTools.length === 0 && <span className="tb-sub" style={{ fontSize: 11.5 }}>{anyTh ? 'chosen per device' : 'none'}</span>}
+                    {specTrailheadTools.length > 0 && (
+                      <span className="tb-mono" style={{ fontSize: 11, color: 'var(--text-subtle-variant)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Ico n="box" s={11} c="var(--text-subtle-variant)" style={{ flex: '0 0 auto' }} /> {specTrailheadTools.join(' · ')}
+                      </span>
+                    )}
                   </div>
                   {gridColumns.length > 0 && !anyTh && (
                     <div style={{ gridColumn: 'span ' + gridColumns.length, borderTop: '1px solid var(--tb-hairline)', borderLeft: '1px solid var(--tb-hairline)', padding: '8px 12px', display: 'flex', alignItems: 'center' }}>
@@ -955,6 +976,27 @@ function StepsBoard({
               <div key={col.platform} style={{ borderTop: '2px solid var(--tb-hairline-strong)', borderLeft: '1px solid var(--tb-hairline)', padding: '12px 12px 9px' }}>
                 <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-subtle-variant)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Recording</span>
               </div>
+            ))}
+
+            {/* root-level `- tools:` steps recorded straight into this file - real steps the engine
+                force-executes, but not NL-editable rows (edit them via the YAML), so they render
+                read-only. Before this, a tools-recorded blaze read as "0 steps". */}
+            {blazeToolsSteps.map((toolsArr, i) => (
+              <React.Fragment key={'bt' + i}>
+                <div className="tb-board-pin" style={{ borderTop: '1px solid var(--tb-hairline)', padding: '9px 12px', background: 'var(--bg-subtle)', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                  <span style={{ flex: '0 0 auto', width: 14, marginTop: 5 }} />
+                  <Chip tone="green" style={{ width: 58, justifyContent: 'center', flex: '0 0 auto', marginTop: 2 }}>TOOLS</Chip>
+                  <span className="tb-mono" data-selectable style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-standard)', wordBreak: 'break-word', paddingTop: 2 }}>{toolNamesOf(toolsArr).join(' · ') || '(empty)'}</span>
+                  <span {...clickable(() => onOpenFile(blazeName))} title={'Recorded in ' + blazeName + ' - edit via YAML'} style={{ fontSize: 11, color: 'var(--tb-link)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 3, flex: '0 0 auto', marginTop: 3 }}><Ico n="pencil" s={11} /></span>
+                </div>
+                {gridColumns.map((col) => (
+                  <div key={col.platform} style={{ borderTop: '1px solid var(--tb-hairline)', borderLeft: '1px solid var(--tb-hairline)', padding: '9px 12px' }}>
+                    {/* Not a gap in this device's recording: the shared file's tools run verbatim
+                        on every device, so the cell says that instead of a cryptic dash. */}
+                    <span style={{ fontSize: 11.5, color: 'var(--text-subtle-variant)', fontStyle: 'italic' }}>shared - runs as recorded</span>
+                  </div>
+                ))}
+              </React.Fragment>
             ))}
 
             {/* one row per step */}
@@ -1073,7 +1115,7 @@ function StepsBoard({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
                 <Ico n="file-text" s={13} c="var(--tb-link)" />
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--tb-link)' }}>{blazeName}</span>
-                <span className="tb-sub" style={{ fontSize: 10.5 }}>· {(steps || []).length} {(steps || []).length === 1 ? 'step' : 'steps'}</span>
+                <span className="tb-sub" style={{ fontSize: 10.5 }}>· {(steps || []).length + blazeToolsSteps.length} {(steps || []).length + blazeToolsSteps.length === 1 ? 'step' : 'steps'}</span>
               </div>
               {(steps || []).map((s, i) => {
                 const isV = s.kind === 'verify';
@@ -1116,7 +1158,7 @@ function StepsBoard({
         // platform-specific) and default to whatever this platform's column already picked.
         const plat = (recChosen[0] && recChosen[0].platform) || '';
         return (
-          <RecordConfigDialog devices={recChosen} draftTarget={target} busy={busy}
+          <RecordConfigDialog devices={recChosen} bundleTarget={target} busy={busy}
             trailheads={TB.trailheadsForPlatform(trailmaps.data, target, plat)}
             defaultTrailhead={colTrailheads[plat] || ''}
             onClose={() => setRecDialogOpen(false)}
@@ -1150,7 +1192,7 @@ function StepsBoard({
 
 // Configure-recording dialog (mirrors the Configure-run dialog): confirm the devices, pick the target
 // app, and adjust recording properties before dispatching. `onRecord(options)` does the run.
-function RecordConfigDialog({ devices, draftTarget, busy, trailheads, defaultTrailhead, onClose, onRecord }) {
+function RecordConfigDialog({ devices, bundleTarget, busy, trailheads, defaultTrailhead, onClose, onRecord }) {
   useLucide();
   const primary = devices && devices[0];
   const deviceApps = TB.useDeviceApps(primary && primary.platform !== 'web' ? primary.platform : null, primary ? primary.id : null);
@@ -1161,8 +1203,8 @@ function RecordConfigDialog({ devices, draftTarget, busy, trailheads, defaultTra
     const ids = installed.map((a) => a.id);
     if (targetApp && ids.includes(targetApp)) return;
     const cur = deviceApps.data && deviceApps.data.currentTargetAppId;
-    setTargetAppId(draftTarget && ids.includes(draftTarget) ? draftTarget : (cur && ids.includes(cur) ? cur : ids[0]));
-  }, [installed.map((a) => a.id).join(','), draftTarget]);
+    setTargetAppId(bundleTarget && ids.includes(bundleTarget) ? bundleTarget : (cur && ids.includes(cur) ? cur : ids[0]));
+  }, [installed.map((a) => a.id).join(','), bundleTarget]);
   // Trailhead options for THIS recording's platform (scoped by the caller) + the built-ins None /
   // Fresh install. Defaults to the platform column's current pick. The dialog remounts each open, so
   // the initial state tracks defaultTrailhead without a sync effect.
@@ -1223,7 +1265,7 @@ function RecordConfigDialog({ devices, draftTarget, busy, trailheads, defaultTra
               {installed.length ? (
                 <Select title="Target app" value={targetApp || ''} onChange={(e) => setTargetAppId(e.target.value)}
                   options={installed.map((a) => [a.id, a.displayName || a.id])} />
-              ) : <span className="tb-sub" style={{ fontSize: 12 }}>{draftTarget || 'device default'}</span>}
+              ) : <span className="tb-sub" style={{ fontSize: 12 }}>{bundleTarget || 'device default'}</span>}
             </Row>
           )}
           {(isMobile || trailheadList.length > 0) && (

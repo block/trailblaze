@@ -538,6 +538,34 @@ val copyAgentSkillResources by tasks.registering(Sync::class) {
   }
 }
 
+// Package the bundled trailblaze authoring skill (skills/trailblaze) as a single zip JAR
+// resource so AgentSkillMaterializer can unpack it into a workspace's .claude/skills/ when
+// an external agent session starts and no trailblaze skill is otherwise discoverable there.
+// Zipped (rather than staged file-by-file) because classpath resources can't be listed as a
+// directory at runtime; one known-name zip entry sidesteps that.
+val zipTrailblazeSkill by tasks.registering(Zip::class) {
+  group = "trailblaze"
+  description = "Packages the bundled trailblaze authoring skill for workspace materialization."
+  from(layout.projectDirectory.dir("../skills/trailblaze"))
+  destinationDirectory = layout.buildDirectory.dir("generated-resources/agent-skills/xyz/block/trailblaze/trailrunner")
+  archiveFileName = "trailblaze-skill.zip"
+  isPreserveFileTimestamps = false
+  isReproducibleFileOrder = true
+}
+
+// The demonstrate-first Create generation agent leans on this second skill (skills/trailblaze-author):
+// how to turn a captured human demonstration bundle into a durable, verified trail. Packaged and
+// materialized identically to the trailblaze skill above (see AgentSkillMaterializer).
+val zipTrailblazeAuthorSkill by tasks.registering(Zip::class) {
+  group = "trailblaze"
+  description = "Packages the bundled trailblaze-author skill for workspace materialization."
+  from(layout.projectDirectory.dir("../skills/trailblaze-author"))
+  destinationDirectory = layout.buildDirectory.dir("generated-resources/agent-skills/xyz/block/trailblaze/trailrunner")
+  archiveFileName = "trailblaze-author-skill.zip"
+  isPreserveFileTimestamps = false
+  isReproducibleFileOrder = true
+}
+
 // Add generated resources to source sets
 sourceSets {
   main {
@@ -551,6 +579,14 @@ sourceSets {
     resources.srcDir(
       copyAgentSkillResources.map { layout.buildDirectory.dir("generated-resources/agent-skill").get() },
     )
+    // Both skill zips write into this one dir; a single srcDir picks up both, so it must not be
+    // registered twice or the entries collide. builtBy carries BOTH producers to every consumer
+    // of the source set (processResources, sourcesJar, ...) - a provider mapped from just one
+    // task would leave the other an undeclared dependency, which Gradle fails validation on.
+    resources.srcDir(
+      files(layout.buildDirectory.dir("generated-resources/agent-skills"))
+        .builtBy(zipTrailblazeSkill, zipTrailblazeAuthorSkill),
+    )
   }
 }
 
@@ -559,6 +595,8 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   dependsOn(copyTypescriptCompilerResources)
   dependsOn(copyScriptedToolWrapperTemplate)
   dependsOn(copyAgentSkillResources)
+  dependsOn(zipTrailblazeSkill)
+  dependsOn(zipTrailblazeAuthorSkill)
 }
 
 dependencyGuard {

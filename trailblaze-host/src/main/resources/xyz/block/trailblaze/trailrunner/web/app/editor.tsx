@@ -3,6 +3,13 @@
 // Babel strips types at load time regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
+// Build the YAML snippet for a tool: `- toolId: {}` or `- toolId:` + `<param>: <type>` lines.
+function toolSnippet(t) {
+  const ps = t.parameters || [];
+  if (!ps.length) return `- ${t.id}: {}`;
+  return `- ${t.id}:\n` + ps.map((p) => `    ${p.name}: <${p.type || 'value'}>`).join('\n');
+}
+
 function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOnly = false, wrap = false, apiRef, highlight }) {
   const hostRef = React.useRef(null);
   const flashedRef = React.useRef(null);
@@ -368,11 +375,11 @@ function ToolDocPopover({ tool, rect }) {
   );
 }
 
-// The shared "Edit" surface used by the trail detail view (Trails screen inline + Drafts popup):
+// The shared "Edit" surface used by the trail detail view (Trails screen inline):
 // a YAML editor with live trail validation, a soft-wrap toggle, its own Save, and a tools browser
 // (hover a tool for its docs, click to insert at the cursor). Content + save are supplied by the
-// caller so the same editor works for a workspace trail and a draft file. `dirtyRef` lets a host
-// (the drafts drawer) check for unsaved edits before closing.
+// caller so the same editor works for a workspace trail and a folder file. `dirtyRef` lets a host
+// (a drawer host) check for unsaved edits before closing.
 // Best-effort read of `config.target` / `config.platform` from raw trail YAML, so the trail schema can
 // be scoped to the trail's target without parsing the whole doc. Regex, not a YAML parse, on purpose:
 // it must never throw on half-typed content, and the first top-level `target:`/`platform:` is the config.
@@ -578,8 +585,11 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
           </Btn>
         )}
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', border: '1px solid var(--tb-hairline)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-standard)' }}>
-        <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 0, border: 'none', borderRadius: 0 }}>
+      {/* Width floors + a shrinkable palette: without them a narrow container (a narrow board Raw
+          view behind three rails) starved the editor pane to ~0 and wrapped YAML one character
+          per line. Overflow scrolls as the last resort instead of squeezing further. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', border: '1px solid var(--tb-hairline)', borderRadius: 10, overflowX: 'auto', overflowY: 'hidden', background: 'var(--bg-standard)' }}>
+        <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 280, border: 'none', borderRadius: 0 }}>
           {content === null
             ? <div className="tb-sub" style={{ padding: 16 }}>Loading…</div>
             : (window.TBMonaco && window.TBMonaco.mountTrailYaml
@@ -587,7 +597,7 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
               : <CodeEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} />)}
         </div>
         {palette && (
-          <div style={{ width: 280, flex: '0 0 auto', borderLeft: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--bg-subtle)' }}>
+          <div style={{ flex: '0 1 280px', minWidth: 170, borderLeft: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--bg-subtle)' }}>
             <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--tb-hairline)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 7 }}>Tools</div>
               <input value={toolQuery} onChange={(e) => setToolQuery(e.target.value)} placeholder="Filter tools…"

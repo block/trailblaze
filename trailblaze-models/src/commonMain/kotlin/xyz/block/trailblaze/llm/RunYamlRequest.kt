@@ -173,11 +173,60 @@ data class RunYamlRequest(
    * envelope. Trailing field for positional/binary-compat stability, same as the seeds above.
    */
   val sensitiveMemoryKeys: List<String> = emptyList(),
+
+  /**
+   * Parameterized-trail arguments (`--arg KEY=VAL` / `--args-file`), already bound and typed by
+   * the CLI against the trail's `config.args:` declaration. Each value is a JSON-encoded
+   * [kotlinx.serialization.json.JsonElement] (see
+   * [xyz.block.trailblaze.yaml.TrailArgBinder.encodeProvided]) so an integer/boolean arg keeps
+   * its native type across the wire. The runner seeds these into the `args.` namespace
+   * (`AgentMemory.seedArgs`) AFTER composing memory, so a token-valued default
+   * (`default: '{{memory.email}}'`) resolves against the seeded memory. Empty for a
+   * non-parameterized trail.
+   *
+   * Distinct from [initialMemorySeeds]: args are DECLARED and typed; memory seeds are undeclared
+   * strings. Trailing field for positional/binary-compat stability.
+   */
+  val initialArgs: Map<String, String> = emptyMap(),
+
+  /**
+   * Snapshot of the host's already-seeded `args.` namespace, carried to the device on an
+   * on-device-RPC sub-dispatch so on-device tools resolve `{{args.x}}` against the same values
+   * the host has. Parallel to [memorySnapshot] but for args; each value is a JSON-encoded
+   * [kotlinx.serialization.json.JsonElement]. The on-device `RunYamlRequestHandler` rehydrates
+   * these verbatim (`AgentMemory.putArg`) — args are immutable per run, so unlike memory they
+   * never round-trip back. Empty when [awaitCompletion] is `false` (same round-trip requirement
+   * as [memorySnapshot]).
+   *
+   * Version-skew note: an on-device daemon predating this field ignores it and leaves
+   * `{{args.x}}` tokens literal on the device — update host and device together for
+   * parameterized on-device trails.
+   */
+  val argsSnapshot: Map<String, String> = emptyMap(),
+
+  /**
+   * Names in [argsSnapshot] whose values captured a sensitive memory value (a token-valued arg
+   * like `--arg x='{{memory.pin}}'`). The args-side twin of [sensitiveMemoryKeys]: the snapshot
+   * itself carries no taint marking, and the device cannot re-derive it — taint is sticky against
+   * a later `delete` of the source memory key, while the device builds a fresh `AgentMemory` per
+   * RPC and post-delete snapshots no longer contain the value to match against. The on-device
+   * `RunYamlRequestHandler` re-marks these (`AgentMemory.markArgSensitive`) right after
+   * rehydrating args, keeping the device's LLM-context and log-safe surfaces redacted.
+   */
+  val sensitiveArgNames: List<String> = emptyList(),
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {
       "RunYamlRequest with awaitCompletion=false cannot carry a memorySnapshot — memory " +
         "sync requires a round-trip. Either set awaitCompletion=true or send empty memory."
+    }
+    require(awaitCompletion || argsSnapshot.isEmpty()) {
+      "RunYamlRequest with awaitCompletion=false cannot carry an argsSnapshot — args " +
+        "sync requires a round-trip. Either set awaitCompletion=true or send empty args."
+    }
+    require(awaitCompletion || sensitiveArgNames.isEmpty()) {
+      "RunYamlRequest with awaitCompletion=false cannot carry sensitiveArgNames — the taint " +
+        "marking accompanies argsSnapshot, which requires a round-trip."
     }
     require(maxLlmCalls == null || maxLlmCalls > 0) {
       "maxLlmCalls must be a positive integer when set, was $maxLlmCalls."

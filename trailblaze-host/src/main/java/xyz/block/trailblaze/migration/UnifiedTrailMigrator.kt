@@ -330,8 +330,10 @@ class UnifiedTrailMigrator(
         emptyList()
       }
 
+    val migratedTrail = UnifiedTrail(config = mergedConfig, trail = collapsedSteps)
+
     return Result(
-      trail = UnifiedTrail(config = mergedConfig, trail = collapsedSteps),
+      trail = migratedTrail,
       report = Report(
         platformFilesLoaded = platformFiles.map { it.name },
         blazeLoaded = blazeFile.isFile,
@@ -342,6 +344,10 @@ class UnifiedTrailMigrator(
         familyCollapses = collapseReports,
         unrecordableSteps = collapsedSteps.withIndex().count { !it.value.recordable },
         droppedContent = droppedContent,
+        // Confidence check: prove the file we're about to write decodes back to the tools we intended.
+        // Behavior-preserving normalization (elided defaults, Maestro scalar re-coercion) round-trips
+        // equal and is silent here; only a value that decodes to something different is reported.
+        roundTripMismatches = TrailRoundTripFidelityVerifier.verify(trailblazeYaml, migratedTrail),
       ),
     )
   }
@@ -575,6 +581,15 @@ class UnifiedTrailMigrator(
      * re-decode of each input file (see [TrailRoundTripDropDetector]). Empty for clean inputs.
      */
     val droppedContent: List<DroppedContentEntry> = emptyList(),
+    /**
+     * Round-trip fidelity mismatches — non-empty when the emitted unified file does NOT decode back
+     * to the tools/config the migrator intended to write (a serializer that can't round-trip a
+     * non-default value, a nested arg a concrete tool model drops, a config field lost on re-encode).
+     * Produced by [TrailRoundTripFidelityVerifier] by comparing DECODED objects, so behavior-preserving
+     * normalization (elided defaults, Maestro scalar re-coercion) round-trips equal and never appears
+     * here. Empty for a faithful migration.
+     */
+    val roundTripMismatches: List<RoundTripFidelityEntry> = emptyList(),
   )
 
   data class ConfigDriftEntry(
@@ -737,6 +752,39 @@ class UnifiedTrailMigrator(
       }
       return lines
     }
+
+    /**
+     * Leading-comment lines naming any place the emitted unified file does not decode back to the
+     * intended tools/config — a genuine, behavior-changing fidelity loss (distinct from the
+     * behavior-preserving normalization the verifier tolerates). Empty for a faithful migration.
+     */
+    fun roundTripMismatchComments(mismatches: List<RoundTripFidelityEntry>): List<String> {
+      if (mismatches.isEmpty()) return emptyList()
+      val lines = mutableListOf(
+        "WARNING: ${mismatches.size} location(s) did NOT round-trip — the emitted file decodes back to",
+        "different tools/config than the migrator intended. This is a real fidelity loss (not cosmetic default",
+        "elision). Review each and fix the tool/config serializer or re-author the affected step:",
+      )
+      for (entry in mismatches.take(MAX_DRIFT_DETAIL_LINES)) {
+        lines += "  ${entry.location}:"
+        entry.detail.split('\n').forEach { lines += "    $it" }
+      }
+      if (mismatches.size > MAX_DRIFT_DETAIL_LINES) {
+        lines += "  ... and ${mismatches.size - MAX_DRIFT_DETAIL_LINES} more"
+      }
+      return lines
+    }
+
+    /**
+     * A migration is lossy when the emitted unified file no longer carries everything the inputs
+     * meant — either input content the decode couldn't round-trip ([Report.droppedContent]) or a
+     * value that doesn't survive the migrator's serialize/re-decode reshape ([Report.roundTripMismatches]).
+     * Both callers of "was this lossy?" — the CLI's `--fail-on-dropped-content` exit-code gate and the
+     * Trail Runner bundle path's decision to RETAIN the v1 inputs rather than delete them — must agree,
+     * so the definition lives here once.
+     */
+    fun isLossyMigration(report: Report): Boolean =
+      report.droppedContent.isNotEmpty() || report.roundTripMismatches.isNotEmpty()
 
     private const val MAX_DRIFT_DETAIL_LINES = 5
     private const val SNIPPET_MAX_LEN = 100

@@ -15,15 +15,44 @@ class Boundary extends React.Component {
   }
 }
 
+// Last-resort boundary around the WHOLE app. The per-screen Boundary above only covers .tb-main;
+// a throw in the nav rail, command palette, or run dialog previously unmounted the entire root -
+// a solid blank page with the only recovery being a manual reload. This gives that failure an
+// honest card and a reload button instead.
+class RootBoundary extends React.Component {
+  constructor(p){ super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err){ return { err }; }
+  componentDidCatch(err){ console.error('App error:', err); }
+  render(){
+    if (this.state.err) {
+      return (
+        <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-standard, #111)' }}>
+          <div className="tb-card" style={{ width: 'min(440px, 90vw)', padding: 20, background: 'var(--bg-elevated, #1c1c1c)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-standard, #eee)' }}>Something broke</div>
+            <div style={{ fontSize: 12.5, lineHeight: 1.55, marginTop: 8, color: 'var(--text-subtle, #aaa)' }}>
+              The app hit an unexpected error and couldn't recover on its own. Reloading usually fixes it - your trails and runs are safe on disk.
+            </div>
+            <div className="tb-mono" style={{ fontSize: 10.5, marginTop: 10, color: 'var(--text-subtle, #888)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+              {String((this.state.err && this.state.err.message) || this.state.err)}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button type="button" onClick={() => window.location.reload()}
+                style={{ cursor: 'pointer', font: 'inherit', fontSize: 12.5, fontWeight: 600, borderRadius: 8, padding: '7px 14px', border: '1px solid var(--tb-hairline, #333)', background: 'var(--bg-subtle, #222)', color: 'var(--text-standard, #eee)' }}>
+                Reload the app
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const NAV = [
   // Home is reached via the target chip at the top of the rail (no standalone nav item) — it folds
-  // in the target/device picker. Blaze = the ways to start a trail.
-  // "Interact" (not "Record") so it doesn't collide with the Blaze run recordings.
-  { group: 'Create', items: [
-    ['create', 'Prompt', 'sparkles'],
-    ['interact', 'Interact', 'pointer'],
-  ] },
-  { group: 'Drafts', items: [['drafts', 'In Progress', 'files']] },
+  // in the target/device picker. The Create group (one door: drive the device, describe a flow,
+  // or both) renders its own session list above these, in NavRail.
   { group: 'Trails', items: [['trails', 'List', 'route']] },
   { group: 'Runs', items: [['active', 'Active', 'radio'], ['completed', 'Completed', 'check-circle-2']] },
 ];
@@ -37,7 +66,7 @@ const FOOT = [['settings', 'Settings', 'settings']];
 // Top-of-sidebar target picker. Shows "Select Target" when nothing is
 // chosen; otherwise the active target app and how many devices are selected for it, with
 // a status dot. Tapping opens Home, where the full target + device picker now lives.
-function TargetPicker({ go, route }) {
+function TargetPicker({ go, route, collapsed }) {
   useLucide();
   const [gt] = TB.useGlobalTarget();
   const devices = TB.useDevices();
@@ -63,6 +92,18 @@ function TargetPicker({ go, route }) {
   // The target picker now lives on Home (the standalone Targets screen was folded in), so
   // tapping this jumps Home and highlights while you're there.
   const on = route === 'home';
+  if (collapsed) {
+    return (
+      <div style={{ padding: '0 0 10px', display: 'flex', justifyContent: 'center' }}>
+        <div role="button" tabIndex={0} onClick={() => go('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('home'); } }}
+          title={(gt ? (gt.label || gt.target) + ' · ' + deviceSummary : 'Select a target') + ' - open Home'}
+          style={{ position: 'relative', display: 'inline-flex', cursor: 'pointer', padding: 3, borderRadius: 8, background: on ? 'var(--bg-standard)' : 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)' }}>
+          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />
+          <span style={{ position: 'absolute', right: -2, bottom: -2, width: 9, height: 9, borderRadius: 99, background: dot, border: '2px solid var(--bg-sheet)' }} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ padding: '0 0 10px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '8px 9px', borderRadius: 8,
@@ -88,8 +129,10 @@ function TargetPicker({ go, route }) {
 // attached to its number, not floating after the label.
 function NavBadge({ badge }) {
   if (!badge || (!badge.glow && !badge.count)) return null;
+  // Layout (margin-left auto) lives in CSS (.tb-nav .bdg): the collapsed rail re-anchors the
+  // cluster to the row corner - an inline auto margin would defeat the row's centered icon there.
   return (
-    <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
+    <span className="bdg" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
       {badge.glow && <span className="tb-glowdot" role="img" title="Run in progress" aria-label="Run in progress" />}
       {badge.count ? <span className="cnt" style={{ marginLeft: 0 }}>{badge.count}</span> : null}
     </span>
@@ -101,7 +144,7 @@ function NavBadge({ badge }) {
 // to the real repo name). Clicking opens a popover that explains the workspace is the source of
 // every trail/tool/recording, and lets you re-point it to another folder or reveal it on disk.
 // The popover is fixed-positioned (the rail is overflow:hidden, so an absolute card would clip).
-function WorkspaceChip() {
+function WorkspaceChip({ collapsed }) {
   useLucide();
   const status = TB.useStatus();
   const dir = status.data && status.data.trailsDirectory;
@@ -180,24 +223,30 @@ function WorkspaceChip() {
     }
   };
   return (
-    <div style={{ padding: '0 0 10px' }}>
+    <div style={{ padding: '0 0 10px', ...(collapsed ? { display: 'flex', justifyContent: 'center' } : {}) }}>
       <button ref={btnRef} onClick={() => (open ? setOpen(false) : openPop())} aria-expanded={open}
         title={'Workspace: ' + dir + '\n' + TB.WORKSPACE_BLURB + (branch ? '\nBranch: ' + branch + (isWorktree ? ' (git worktree)' : '') : '') + (restart ? '\n\nRestart needed to load this workspace’s app targets.' : '')}
-        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px', borderRadius: 8,
-          background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }}>
-        <Ico n="folder-git-2" s={15} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
-        <span className="label" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden' }}>
-          <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
-          {branch && (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-subtle)', overflow: 'hidden' }}>
-              <Ico n="git-branch" s={10} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{branch}</span>
-              {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontWeight: 600 }}>· worktree</span>}
-            </span>
-          )}
-        </span>
-        {restart && <span aria-label="Restart needed" title="Restart needed to load this workspace’s app targets" style={{ flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--tb-amber)' }} />}
-        <Ico n="chevron-down" s={13} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
+        style={collapsed
+          // 38px square: the exact outer box of the collapsed target chip above (30px icon + 3px
+          // padding + 1px border per side), so the two read as one aligned column of tiles.
+          ? { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38, borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }
+          : { display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px', borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }}>
+        <Ico n="folder-git-2" s={15} c={collapsed && isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+        {!collapsed && (
+          <span className="label" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden' }}>
+            <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+            {branch && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-subtle)', overflow: 'hidden' }}>
+                <Ico n="git-branch" s={10} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{branch}</span>
+                {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontWeight: 600 }}>· worktree</span>}
+              </span>
+            )}
+          </span>
+        )}
+        {!collapsed && restart && <span aria-label="Restart needed" title="Restart needed to load this workspace’s app targets" style={{ flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--tb-amber)' }} />}
+        {!collapsed && <Ico n="chevron-down" s={13} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}
+        {collapsed && restart && <span aria-label="Restart needed" style={{ position: 'absolute', right: -2, top: -2, width: 8, height: 8, borderRadius: '50%', background: 'var(--tb-amber)', border: '2px solid var(--bg-sheet)' }} />}
       </button>
       {open && pos && (
         <React.Fragment>
@@ -238,15 +287,102 @@ function WorkspaceChip() {
   );
 }
 
-function NavRail({ route, go, badges = {}, openPalette }) {
+// A session row in one of the rail's Create groups: status icon + title, smaller than the main
+// nav items so the lists read as children of their group.
+function SessionNavRow({ ico, color, spin, label, count, on, onClick, title }) {
   return (
-    <div className="tb-rail">
-      <div className="tb-brand"><span className="name">Trail Runner</span></div>
-      <TargetPicker go={go} route={route} />
-      <WorkspaceChip />
+    <div className={'tb-nav' + (on ? ' active' : '')} onClick={onClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
+      role="button" tabIndex={0} title={title || label}>
+      <span className="ico"><Ico n={ico} s={14} c={color} spin={spin} /></span>
+      <span className="label" style={{ fontSize: 12.5, fontWeight: 500, color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>{label}</span>
+      {count != null && <NavBadge badge={{ count }} />}
+    </div>
+  );
+}
+
+// Group header for the rail's Create sections: the label with an inline "+" on the right (the way
+// a new session starts - there is no separate "New Session" row). The + reads as pressed while
+// that group's blank composer is the open screen.
+function RailGroupHeader({ label, plusTitle, onPlus, plusOn }) {
+  return (
+    <div className="tb-rail-h" style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 5 }}>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      <button type="button" onClick={onPlus} title={plusTitle} aria-label={plusTitle}
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, border: 'none', cursor: 'pointer', flex: '0 0 auto',
+          color: plusOn ? 'var(--text-standard)' : 'var(--text-subtle)', background: plusOn ? 'var(--bg-prominent)' : 'transparent' }}>
+        <Ico n="plus" s={13} />
+      </button>
+    </div>
+  );
+}
+
+// How many agent conversations the rail lists before folding the rest behind "N older" (the daemon
+// retains up to 50 finished conversations - the rail must not become a 50-row scroll by default).
+const RAIL_AGENT_SESSIONS_VISIBLE = 6;
+
+function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSel, goStudio, interactSession, goInteract }) {
+  const [collapsed, setCollapsed] = useStickyState('tb-rail-collapsed', false);
+  const [showAllAgents, setShowAllAgents] = useState(false);
+  const agentVisible = showAllAgents ? agentRuns : agentRuns.slice(0, RAIL_AGENT_SESSIONS_VISIBLE);
+  const agentHidden = agentRuns.length - agentVisible.length;
+  const interactActive = !!(interactSession && interactSession.active);
+  return (
+    <div className={'tb-rail' + (collapsed ? ' collapsed' : '')}>
+      <div className="tb-brand" style={{ justifyContent: collapsed ? 'center' : 'space-between' }}>
+        <span className="name">Trail Runner</span>
+        <button type="button" onClick={() => setCollapsed((v) => !v)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'var(--text-subtle)', cursor: 'pointer', padding: 4, borderRadius: 6 }}>
+          <Ico n={collapsed ? 'panel-left-open' : 'panel-left-close'} s={16} />
+        </button>
+      </div>
+      <TargetPicker go={go} route={route} collapsed={collapsed} />
+      <WorkspaceChip collapsed={collapsed} />
       {/* Divider separating the workspace/target context from the Blaze→Runs authoring nav. */}
       <div style={{ height: 1, background: 'var(--tb-hairline)', margin: '0 8px 10px' }} />
       <div className="tb-rail-scroll">
+        {/* Create: one door. The group header's + starts a session where you drive the device by
+            hand, describe a flow to the agent, or both; the sessions themselves list right under
+            it. The list lives here (not in a column on the Create screen) so sessions are
+            reachable from anywhere. The collapsed (icon-only) rail swaps the header + rows for a
+            single sparkles entry. */}
+        <div className="tb-rail-group">
+          {!collapsed && <RailGroupHeader label="Create" plusTitle="New session - drive the device by hand or describe a flow, every action becomes a step"
+            onPlus={() => goStudio('new')} plusOn={route === 'create' && studioSel === 'new'} />}
+          {collapsed && (
+            <div className={'tb-nav' + (route === 'create' ? ' active' : '')} onClick={() => goStudio('new')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goStudio('new'); } }}
+              role="button" tabIndex={0} title="Create - new session">
+              <span className="ico"><Ico n="sparkles" s={18} /></span><span className="label">Create</span><NavBadge badge={badges.create} />
+            </div>
+          )}
+          {!collapsed && agentVisible.map((run) => {
+            // A solo run's lifecycle status is an implementation detail (born finished, no
+            // process): its row wears the hands-on identity instead of a status glyph.
+            const solo = run.agentType === 'solo';
+            const [ico, color] = solo ? ['pointer', 'var(--tb-running)'] : externalAgentStatusIcon(run.status);
+            return (
+              <SessionNavRow key={run.id} ico={ico} color={color} spin={run.status === 'running'}
+                label={run.title || run.id} title={(run.title || run.id) + ' · ' + (solo ? 'solo' : run.status)}
+                on={route === 'create' && studioSel === run.id} onClick={() => goStudio(run.id)} />
+            );
+          })}
+          {!collapsed && (agentHidden > 0 || showAllAgents) && (
+            <div className="tb-nav" role="button" tabIndex={0} onClick={() => setShowAllAgents((v) => !v)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAllAgents((v) => !v); } }}>
+              <span className="ico"><Ico n={showAllAgents ? 'chevron-up' : 'chevron-down'} s={14} c="var(--text-subtle)" /></span>
+              <span className="label" style={{ fontSize: 12, color: 'var(--text-subtle)' }}>{showAllAgents ? 'Show fewer' : agentHidden + ' older'}</span>
+            </div>
+          )}
+          {/* An in-progress legacy Interact recording session (reached via the command palette's
+              ad hoc YAML action) folds into the same group so navigating away and back stays
+              obvious. */}
+          {!collapsed && interactActive && (
+            <SessionNavRow ico="disc" color="var(--tb-running)" spin={false}
+              label={interactSession.label || 'Recording session'} count={interactSession.steps || null}
+              title={(interactSession.label || 'Recording session') + (interactSession.steps ? ' · ' + interactSession.steps + ' steps' : '')}
+              on={route === 'interact'} onClick={goInteract} />
+          )}
+        </div>
         {NAV.map((g, gi) => (
           <div className="tb-rail-group" key={gi}>
             {g.group && <div className="tb-rail-h">{g.group}</div>}
@@ -301,7 +437,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
   const match = (...vals) => !ql || vals.some((v) => v != null && String(v).toLowerCase().includes(ql));
 
   const actions = [
-    ['sparkles', 'Blaze from a prompt', '⌘B', () => { go('create'); close(); }],
+    ['sparkles', 'Create a trail', '⌘B', () => { go('create'); close(); }],
     ['braces', 'Run ad hoc YAML…', null, () => { go('interact', { openYaml: true }); close(); }],
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
     ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
@@ -386,6 +522,61 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
   );
 }
 
+// A retired route that forwards to its replacement (params intact), so old links and
+// TRAILRUNNER_UI navigate commands keep working after routes merge.
+function RedirectScreen({ go, to, params, active }) {
+  React.useEffect(() => { if (active) go(to, params || {}); }, [active]);
+  return null;
+}
+
+// Daemon health watchdog. Every data hook fetches through the daemon; when it dies or wedges,
+// those fetches hang or fail silently and the app degrades to skeletons with no explanation
+// (an hour of "checking…" with no indication anything was wrong). This pings a cheap endpoint on a short abort
+// timeout so unreachability becomes an explicit, recoverable state: the shell shows a banner
+// while down, and the down-to-up transition broadcasts `tb:daemon-recovered` so every
+// useFetched-backed hook refetches the data that went stale during the outage.
+function useDaemonHealth() {
+  const [down, setDown] = React.useState(false);
+  const failsRef = React.useRef(0);
+  const check = React.useCallback(async () => {
+    try {
+      const res = await fetch('/ping', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      failsRef.current = 0;
+      setDown((was) => {
+        if (was) window.dispatchEvent(new Event('tb:daemon-recovered'));
+        return false;
+      });
+    } catch (e) {
+      failsRef.current += 1;
+      // Two consecutive misses before declaring down - a single slow response during a heavy
+      // operation must not flash a scary banner.
+      if (failsRef.current >= 2) setDown(true);
+    }
+  }, []);
+  React.useEffect(() => {
+    check();
+    const id = setInterval(check, 5000);
+    return () => clearInterval(id);
+  }, [check]);
+  return { down, retry: check };
+}
+
+function DaemonDownBanner({ retry }) {
+  return (
+    <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', background: 'rgba(255,90,90,.14)', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
+      <Ico n="unplug" s={15} c="var(--tb-danger-text)" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--tb-danger-text)' }}>Can't reach the Trail Runner daemon.</span>
+        <span className="tb-sub" style={{ fontSize: 12, marginLeft: 8 }}>
+          Requests are timing out; data on screen may be stale. Reconnecting automatically - if this persists, restart Trail Runner.
+        </span>
+      </div>
+      <Btn sm ico="refresh-cw" onClick={retry}>Retry now</Btn>
+    </div>
+  );
+}
+
 function App() {
   const [route, setRoute] = useState('home');
   const [payload, setPayload] = useState({});
@@ -446,14 +637,58 @@ function App() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
+  const health = useDaemonHealth();
   const devices = TB.useDevices();
   const deviceList = devices.data || [];
   const trails = TB.useTrails();
-  const [gt] = TB.useGlobalTarget();
+  const [gt, setGt] = TB.useGlobalTarget();
+  // Validate the sticky target against the daemon's live target list once per target change.
+  // localStorage can outlive a target (e.g. its trailmap was deleted): every screen would then
+  // show it as active while device connect / mirror / run all fail with "no target app selected".
+  // Clearing it sends the user back through the picker instead of half-working. Targets pending
+  // a daemon restart are spared - they're legitimately absent from the live list.
+  const trailsRef = React.useRef(null);
+  trailsRef.current = trails.data;
+  React.useEffect(() => {
+    if (!gt || !gt.target) return;
+    let stale = false;
+    const missingFromLiveList = async () => {
+      const r = await Promise.resolve(TB.getTargetApps()).catch(() => null);
+      const apps = (r && r.targetApps) || [];
+      if (apps.length === 0) return false; // empty/failed fetch proves nothing
+      if (apps.some((a) => a.id === gt.target)) return false;
+      if (((TB.getTargetsRestartNeeded && TB.getTargetsRestartNeeded()) || []).includes(gt.target)) return false;
+      // A target the loaded trails index still references exists in this workspace - a live list
+      // that omits it is degraded (partially initialized daemon), not proof the target is gone.
+      if ((trailsRef.current || []).some((t) => t.target === gt.target)) return false;
+      return true;
+    };
+    (async () => {
+      if (stale || !(await missingFromLiveList())) return;
+      // Confirm before clearing: a daemon that just (re)started or is degraded can briefly serve
+      // a built-ins-only list that omits a perfectly valid workspace target - one bad snapshot
+      // must not nuke the user's selection. Only two agreeing reads, seconds apart, clear it.
+      await new Promise((res) => setTimeout(res, 4000));
+      if (stale || !(await missingFromLiveList()) || stale) return;
+      setGt({ target: null, label: null, deviceIds: gt.deviceIds || [] });
+    })();
+    return () => { stale = true; };
+  }, [gt && gt.target]);
   const sessions = TB.useSessions();
-  const drafts = TB.useDrafts();
-  // In-progress drafts = those still living under drafts/ (not yet promoted to the library).
-  const draftCount = (drafts.data || []).filter((d) => d.inDrafts).length;
+  const externalAgents = TB.useExternalAgents();
+  // Create session selection lives here (not in the screen) because the rail lists the
+  // sessions: rail rows and the screen must agree on which one is open. 'new' = composer.
+  const [studioSel, setStudioSel] = useState(null);
+  // The legacy Interact screen (reached via the palette's ad hoc YAML action) broadcasts its
+  // in-progress recording session (device connected or steps captured) so the rail can fold it
+  // into the Create group; null when idle.
+  const [interactSession, setInteractSession] = useState(null);
+  useEffect(() => {
+    const h = (e) => setInteractSession(e.detail && e.detail.active ? e.detail : null);
+    window.addEventListener('tb:interact-session', h);
+    return () => window.removeEventListener('tb:interact-session', h);
+  }, []);
+  const goStudio = (id) => { setStudioSel(id); go('create'); };
   // Sidebar "Trails" count = trail bundles, scoped to the active target AND its platform when
   // the selected devices all share one. Mirrors the Trails list's target/platform filter so the
   // badge matches the scoped list (a target with iOS-only and Android-only trails counts only
@@ -469,14 +704,17 @@ function App() {
     return TB.countTrailBundles(arr);
   }, [trails.data, gt && gt.target, gtPlatform]);
   // Runs badges: a live count, plus a glowing dot on Active while a run is in flight (the
-  // sessions hook polls every 2.5s while anything is running, so this stays current). Exclude
-  // draft-recording sessions (trailId like `<n>/drafts/...`) so the badges match what the Active
-  // and Completed screens actually list (both filter those out); otherwise drafts inflate the count.
-  const sessionList = (sessions.data || []).filter((s) => !/^\d+\/drafts\//.test(String(s.trailId || '')));
+  // sessions hook polls every 2.5s while anything is running, so this stays current).
+  const sessionList = sessions.data || [];
   const runningCount = sessionList.filter((s) => s.status === 'running').length;
   const completedCount = sessionList.length - runningCount;
+  const externalAgentRuns = (externalAgents.data && externalAgents.data.runs) || [];
+  // A generation run (non-null demoRunId) is embedded inside its demo run's view, never its own
+  // sidebar entry - the demo run is the single door for the whole Record -> Generate flow.
+  const createSidebarRuns = externalAgentRuns.filter((r) => !r.demoRunId);
+  const runningExternalAgentCount = externalAgentRuns.filter((r) => r.status === 'running').length;
   const navBadges = {
-    drafts: { count: draftCount },
+    create: { count: runningExternalAgentCount, glow: runningExternalAgentCount > 0 },
     trails: { count: bundleCount },
     active: { count: runningCount, glow: runningCount > 0 },
     completed: { count: completedCount },
@@ -490,9 +728,10 @@ function App() {
   const screens = {
     home: <HomeScreen go={go} openRun={openRun} />,
     prompt: <BlazeScreen pinnedId={pinnedId} go={go} />,
-    create: <CreateScreen go={go} />,
-    interact: <RecordScreen go={go} yamlSeed={pf('interact')} />,
-    drafts: <DraftsScreen go={go} initSel={pf('drafts').sel} />,
+    create: <ExternalAgentsScreen go={go} agents={externalAgents} sel={studioSel} onSel={setStudioSel} initSel={pf('create').sel} />,
+    agents: <RedirectScreen go={go} to="create" params={pf('agents')} />,
+    'agents-setup': <AgentSetupScreen go={go} />,
+    interact: <RecordScreen key="interact" go={go} yamlSeed={pf('interact')} />,
     trails: <TrailsScreen go={go} openRun={openRun} initSel={pf('trails').sel} initMode={pf('trails').mode} />,
     tools: <ToolsScreen initTool={pf('tools').tool} go={go} />,
     trailheads: <ComponentTypeScreen kind="trailheads" initSel={pf('trailheads').sel} />,
@@ -509,8 +748,11 @@ function App() {
 
   return (
     <div className="tb-window">
+      {health.down && <DaemonDownBanner retry={health.retry} />}
       <div className="tb-body">
-        <NavRail route={activeRoute} go={go} badges={navBadges} openPalette={() => setPalette(true)} />
+        <NavRail route={activeRoute} go={go} badges={navBadges} openPalette={() => setPalette(true)}
+          agentRuns={createSidebarRuns} studioSel={studioSel} goStudio={goStudio}
+          interactSession={interactSession} goInteract={() => go('interact')} />
         <div className="tb-main">
           {/* Visited screens stay mounted and just hide, so every tab keeps its
               state (selection, filters, collapsed folders, scroll) across
@@ -524,14 +766,13 @@ function App() {
             </div>
           ))}
         </div>
-        {/* App-level right rail, mirroring the left nav rail. The draft editor's pair-with-agent
-            chat portals into this slot (so it keeps the draft's context); empty (zero width) on
-            every other screen. */}
+        {/* App-level right rail, mirroring the left nav rail. Screens that carry a companion
+            chat portal into this slot; empty (zero width) on every other screen. */}
         <div className="tb-rail-right" id="tb-agent-rail"></div>
       </div>
-      {palette && <CommandPalette go={go} openRun={openRun} close={closePalette} closing={paletteClosing} trails={trails.data || []} />}
-      {run && <RunConfigDialog trail={run.trail} seed={run.seed} pinnedId={pinnedId} go={go} close={closeRun} closing={runClosing} />}
+      {palette && <Boundary><CommandPalette go={go} openRun={openRun} close={closePalette} closing={paletteClosing} trails={trails.data || []} /></Boundary>}
+      {run && <Boundary><RunConfigDialog trail={run.trail} seed={run.seed} pinnedId={pinnedId} go={go} close={closeRun} closing={runClosing} /></Boundary>}
     </div>
   );
 }
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+ReactDOM.createRoot(document.getElementById('root')).render(<RootBoundary><App /></RootBoundary>);

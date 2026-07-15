@@ -281,6 +281,9 @@ afterEvaluate {
     // Forward stdin to the JVM process so STDIO MCP transport can read JSON-RPC
     // from the parent process's stdin (e.g., `./trailblaze mcp`).
     standardInput = System.`in`
+    // Same bounded heap the JAR launcher sets (scripts/trailblaze at the OSS repo root) - without it a
+    // Gradle-mode daemon runs at the JVM default and drifts from the shipped configuration.
+    maxHeapSize = System.getenv("TRAILBLAZE_MAX_HEAP") ?: "4g"
 
     if (System.getProperty("os.name").contains("Mac")) {
       jvmArgs(*macOsJvmArgs.toTypedArray())

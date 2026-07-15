@@ -8,8 +8,14 @@ import io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel
 import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification
 import io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams
 import io.modelcontextprotocol.kotlin.sdk.types.Method
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
 import kotlinx.io.asSource
@@ -21,6 +27,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -115,6 +122,23 @@ class McpSubprocessSession internal constructor(
     )
 
     /**
+     * Hard bound on the subprocess MCP `initialize` handshake in [connect]. The handshake is
+     * awaited from a `bun` subprocess that could hang before answering; without a bound the
+     * connect parks indefinitely. That indefinite park is the root of the daemon-wide MCP wedge
+     * (build 3366): a `device` connect that triggered the subprocess cold-build never returned,
+     * and — because the build runs while holding session-scoped state the shared MCP dispatch
+     * path needs — every later request, including a fresh session's `initialize`, timed out at
+     * 300s while `/ping` stayed healthy. Bounding the handshake makes a wedged subprocess fail
+     * that one session-startup call fast instead. 60s is generous for a cold `bun` start yet far
+     * below the 300s client timeout. Overridable via
+     * `TRAILBLAZE_MCP_SUBPROCESS_HANDSHAKE_TIMEOUT_MS`; a malformed / non-positive value falls
+     * back to the default. Read once at class load, matching the daemon's other env knobs.
+     */
+    val DEFAULT_HANDSHAKE_TIMEOUT_MS: Long =
+      System.getenv("TRAILBLAZE_MCP_SUBPROCESS_HANDSHAKE_TIMEOUT_MS")
+        ?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: 60_000L
+
+    /**
      * Default stderr severity classifier. Lines mentioning "error" surface as WARNING so they
      * show up in session logs; everything else is DEBUG. Authors wanting richer classification
      * pass their own classifier to [connect].
@@ -143,7 +167,15 @@ class McpSubprocessSession internal constructor(
       clientInfo: Implementation = DEFAULT_CLIENT_INFO,
       stderrCapture: StderrCapture = StderrCapture(),
       stderrClassifier: (String) -> StdioClientTransport.StderrSeverity = DEFAULT_STDERR_CLASSIFIER,
+      handshakeTimeoutMillis: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
     ): McpSubprocessSession {
+      // A non-positive bound would make the watchdog's `delay` return immediately and force-kill
+      // every subprocess before it could answer — fail loudly on the programming error instead.
+      // The default and env-parse paths already guarantee a positive value; this guards direct
+      // callers / tests.
+      require(handshakeTimeoutMillis > 0) {
+        "handshakeTimeoutMillis must be positive, was $handshakeTimeoutMillis"
+      }
       val process = spawnedProcess.process
       // Pump stderr on a session-owned daemon thread instead of handing the error stream to
       // the MCP transport. The transport tears its entire coroutine scope down the instant the
@@ -178,22 +210,89 @@ class McpSubprocessSession internal constructor(
         routeLoggingMessage(notification.params, spawnedProcess.scriptFile.name)
         CompletableDeferred(Unit)
       }
+      // Tears the just-spawned subprocess down on any handshake failure. Runs under
+      // NonCancellable so it completes even when the caller's coroutine is being cancelled —
+      // otherwise the suspend teardown would abort on the cancelled scope and leak the
+      // subprocess. Shares the same escalation knobs as [shutdown] so both paths scale together.
+      suspend fun teardownFailedHandshake() {
+        withContext(NonCancellable) {
+          runCatching { client.close() }
+          withContext(Dispatchers.IO) { destroyWithEscalation(process, Duration.DEFAULT) }
+          joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
+          runCatching { stderrCapture.close() }
+        }
+      }
+
+      // Bound the MCP `initialize` handshake with a watchdog rather than `withTimeout`.
+      // `client.connect` completes the handshake by reading the subprocess's stdout, and that
+      // read is a blocking, non-cancellable native read — a `bun` subprocess that hangs before
+      // answering parks it, and `withTimeout` cannot unwind a thread blocked in a native read
+      // (verified by test: a plain `withTimeout` returns only once the subprocess exits on its
+      // own). See [DEFAULT_HANDSHAKE_TIMEOUT_MS] for why that park wedges the whole daemon. So
+      // arm a watchdog that force-destroys the subprocess after the timeout; that closes its
+      // stdout, the parked read unwinds, and `client.connect` throws — no matter which thread /
+      // dispatcher the handshake is running on.
+      //
+      // `decided` is the single arbiter of the outcome, claimed via compare-and-set by exactly one
+      // of {watchdog fires, handshake succeeds}. It closes the boundary race where the handshake
+      // returns in the same instant the watchdog's `delay` elapses: cancelling the watchdog alone
+      // can't stop the coroutine once `delay` has returned (nothing suspends after it), so without
+      // the CAS the watchdog could still force-destroy a subprocess we'd already handed back as a
+      // live session. Whoever wins the CAS acts; the loser stands down.
+      val decided = AtomicBoolean(false)
+      // Own the scope (not just the launched job) so every exit path can cancel it — the scope's
+      // root Job would otherwise dangle. Detached from the caller's coroutine on purpose: the
+      // watchdog must be able to fire while the caller thread is parked in the non-cancellable
+      // native read (the whole point), which a child of that coroutine could not.
+      val watchdogScope = CoroutineScope(Dispatchers.IO)
+      watchdogScope.launch {
+        delay(handshakeTimeoutMillis)
+        if (decided.compareAndSet(false, true)) {
+          // A wedged subprocess writes nothing to stderr, so without this line the force-kill is
+          // silent and a session-startup failure is indistinguishable from any other. Name the
+          // culprit script + the bound it blew so on-call can attribute it.
+          Console.log(
+            "[McpSubprocessSession] handshake watchdog fired for " +
+              "'${spawnedProcess.scriptFile.name}' after ${handshakeTimeoutMillis}ms — " +
+              "force-destroying the subprocess",
+          )
+          runCatching { process.destroyForcibly() }
+        }
+      }
       try {
         client.connect(transport)
       } catch (t: Throwable) {
-        // Handshake failed (server crashed during init, bad protocol version, streams closed,
-        // etc.). Without this path the caller has no [McpSubprocessSession] to shutdown, so
-        // the subprocess would orphan itself and leak stdin/stdout/stderr pipes. Shares the
-        // same escalation knobs as [shutdown] so both cleanup paths scale together.
-        runCatching { client.close() }
-        withContext(Dispatchers.IO) {
-          destroyWithEscalation(process, Duration.DEFAULT)
+        watchdogScope.cancel()
+        // A genuine parent cancellation must surface as cancellation, never be re-attributed as a
+        // handshake timeout — which it could be if it raced the watchdog and lost the CAS below.
+        // Teardown still runs (under NonCancellable) so the subprocess isn't leaked.
+        if (t is CancellationException) {
+          teardownFailedHandshake()
+          throw t
         }
-        joinPreservingInterrupt(stderrPump, STDERR_PUMP_JOIN_MS)
-        runCatching { stderrCapture.close() }
+        // If we can still claim the outcome, this was an organic handshake failure (server crashed
+        // during init, bad protocol version) — propagate it unchanged. If the CAS fails, the
+        // watchdog already claimed it and is force-destroying the subprocess: surface an attributable
+        // timeout (with the stream-closed exception as cause) rather than the opaque read error, so
+        // the launcher names the culprit script.
+        val timedOut = !decided.compareAndSet(false, true)
+        teardownFailedHandshake()
+        if (timedOut) {
+          throw McpSubprocessHandshakeTimeoutException(spawnedProcess.scriptFile.name, handshakeTimeoutMillis, t)
+        }
         throw t
       }
-      return McpSubprocessSession(spawnedProcess, transport, client, stderrCapture, stderrPump)
+      // Handshake returned. Race the watchdog for the outcome: if we win, the watchdog stands down
+      // (its CAS will fail) and we hand back the live session. If we lose, the watchdog is already
+      // force-destroying the subprocess — don't return a session whose process is being torn down
+      // under it; fail as a timeout, consistent with the catch above.
+      if (decided.compareAndSet(false, true)) {
+        watchdogScope.cancel()
+        return McpSubprocessSession(spawnedProcess, transport, client, stderrCapture, stderrPump)
+      }
+      watchdogScope.cancel()
+      teardownFailedHandshake()
+      throw McpSubprocessHandshakeTimeoutException(spawnedProcess.scriptFile.name, handshakeTimeoutMillis)
     }
 
     /**
@@ -354,3 +453,21 @@ private fun destroyWithEscalation(process: Process, exitWait: McpSubprocessSessi
     }
   }
 }
+
+/**
+ * Thrown when a subprocess MCP `initialize` handshake ([McpSubprocessSession.connect]) does not
+ * complete within its timeout. Carries the script name + timeout so the session-startup failure
+ * (see [McpSubprocessRuntimeLauncher.launchAll]'s fail-fast) is attributable to the offending
+ * script. The subprocess has already been torn down by the time this is thrown.
+ *
+ * [cause] preserves the stream-closed exception the watchdog's force-destroy produced (the parked
+ * `client.connect` read unwinds with it) so the underlying failure isn't lost in the daemon log.
+ */
+class McpSubprocessHandshakeTimeoutException(
+  val scriptName: String,
+  val timeoutMillis: Long,
+  cause: Throwable? = null,
+) : Exception(
+  "MCP subprocess '$scriptName' did not complete its initialize handshake within ${timeoutMillis}ms",
+  cause,
+)

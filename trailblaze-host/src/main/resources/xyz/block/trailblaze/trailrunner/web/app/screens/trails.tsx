@@ -21,7 +21,9 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   // (a later tree/variant selection changes `current` and the gate below drops the stale highlight).
   const [editHighlight, setEditHighlight] = React.useState(null);
   React.useEffect(() => {
-    if (initSel) setSelected(initSel);
+    // An explicit selection handoff (e.g. a just-saved trail) also dismisses any lingering
+    // folder overview - otherwise the previous visit's pane wins over the requested trail.
+    if (initSel) { setSelected(initSel); setFolderView(null); }
     if (initMode) setMode(initMode);
   }, [initSel, initMode]);
   const [query, setQuery] = React.useState('');
@@ -41,11 +43,14 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   // manual filter tweaks afterward persist until the target changes again.
   React.useEffect(() => {
     if (!gt || !gt.target) return;
-    setFilterTarget(gt.target);
+    if (!trails.data) return; // wait for the list before deciding
+    // Only scope to targets that actually exist in the loaded trails - a stale sticky target
+    // (e.g. pointing at a deleted trailmap) would otherwise filter every trail out ("0 of N").
+    setFilterTarget(targets.includes(gt.target) ? gt.target : 'all');
     // Reset to 'all' when the selection has no single platform (mixed devices or none),
     // so a previously-forced platform doesn't keep hiding the other variants.
     setFilterPlatform(gtPlatform || 'all');
-  }, [gt && gt.target, gtPlatform]);
+  }, [gt && gt.target, gtPlatform, trails.data]);
   const [addBusy, setAddBusy] = React.useState(false);
   const [addError, setAddError] = React.useState(null);
   const [editedOnly, setEditedOnly] = React.useState(false);
@@ -102,12 +107,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     }
     setSelected(null);
   }, [roots]);
-
-  React.useEffect(() => {
-    if (!selected && trails.data && trails.data.length > 0) {
-      setSelected(trails.data[0].id);
-    }
-  }, [trails.data]);
 
   const allTrails = trails.data || [];
 
@@ -169,7 +168,15 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     // per logical trail, sorted by title / priority — not every device file flattened out of context.
     return TB.buildTrailBundleRows(filteredTrails, sortBy);
   }, [filteredTrails, sortBy, trails.extra]);
-  const current = allTrails.find((t) => t.id === selected) || allTrails[0];
+  // A selection may arrive as a bundle-folder id (a save returns the folder, not a
+  // file) - resolve it to the folder's first trail. Reactive on purpose: right after a save
+  // the refreshed list may not have landed yet, and this picks the trail up when it does.
+  // No arbitrary default: `selected` is plain React state so a reload clears it while the sticky
+  // filters survive - falling back to allTrails[0] put a trail the user never opened (often
+  // filtered out of the visible tree) in the detail pane, and Run launched it.
+  const current = allTrails.find((t) => t.id === selected)
+    || (selected ? allTrails.find((t) => (t.id || '').startsWith(selected + '/')) : null)
+    || null;
   const [treeW, startTreeDrag] = useResizableWidth('tb-trails-tree-w', 280, 200, 600);
 
   // The list is "scoped by target" when the target filter still matches the active target —
@@ -242,6 +249,17 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     } else {
       setMigrate({ ok: false, error: (r && r.error) || 'Migration failed' });
     }
+  };
+
+  // Whole-folder delete (the trash button in the folder-view header). Deliberate and loud: the
+  // native confirm names the folder and its file count; recovery is git-only for committed files.
+  const doDeleteFolder = async () => {
+    const fileCount = fvVariants.length + (fvBlaze ? 1 : 0);
+    if (!window.confirm(`Delete "${fvName}" and the ${fileCount} file${fileCount === 1 ? '' : 's'} inside it? Committed files are recoverable via git; anything uncommitted is lost.`)) return;
+    const r = await TB.deleteTrailFolder(fvFolderId);
+    if (!r || r.ok === false) { window.alert((r && r.error) || 'Could not delete the folder.'); return; }
+    setFolderView(null);
+    try { await trails.reload(); } catch (e) { /* index refetches on next navigation */ }
   };
 
   const openFolderTrail = React.useCallback((name, highlight = null) => {
@@ -481,7 +499,9 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
         )}
         {!trails.loading && !folderView && !current && (
           <div style={{ padding: '60px 32px' }}>
-            <EmptyState ico="folder-search" title="No trails found" sub="Set a trails directory in Settings, or open a workspace that contains .trail.yaml files." />
+            {allTrails.length === 0
+              ? <EmptyState ico="folder-search" title="No trails found" sub="Set a trails directory in Settings, or open a workspace that contains .trail.yaml files." />
+              : <EmptyState ico="mouse-pointer-click" title="Select a trail" sub="Pick a trail from the list to see its steps, edit it, or run it." />}
           </div>
         )}
         {/* Folder view: the bundle's Implementations matrix (steps × per-device recordings). Shown
@@ -505,6 +525,8 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                     {/* Fold this legacy per-platform bundle into a single unified .trail.yaml — the
                         format trails are moving toward. Only for all-v1 bundles (see fvAllV1). */}
                     {fvAllV1 && <Btn sm ico="layers" onClick={() => setMigrate('confirm')} title="Combine these per-platform files into one unified trail">Migrate to unified</Btn>}
+                    <Btn sm ico="folder-symlink" onClick={() => TB.revealTrailFolder(fvFolderId)} title="Reveal this trail's folder in Finder" />
+                    <Btn sm ico="trash-2" onClick={doDeleteFolder} title="Delete this trail's folder and every file in it" />
                     <button
                       onClick={() => onToggleFavorite(folderView)}
                       title={favSet.has(folderView) ? 'Unpin this trail’s directory' : 'Pin this trail’s directory (all platform variants)'}
@@ -539,7 +561,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 ) : null}
                 meta={(
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    {current.kind === 'blaze' && <Chip tone="amber"><Ico n="flame" s={11} /> Blaze · prompt-only</Chip>}
+                    {current.kind === 'blaze' && <Chip tone="amber"><Ico n="flame" s={11} /> Blaze · {current.hasRecordedSteps ? 'recorded' : 'prompt-only'}</Chip>}
                     {current.target && <Chip tone="blue">{current.target}</Chip>}
                     {current.platform && <Chip>{current.platform}</Chip>}
                     {current.priority && <Chip tone="amber">{current.priority}</Chip>}

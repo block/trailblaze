@@ -63,8 +63,28 @@ data class SessionResult(
   /** Number of LLM calls made */
   val llm_call_count: Int? = null,
 
-  /** Human-readable failure reason (if failed) */
+  /**
+   * Human-readable failure reason (if failed). In reports that carry a [failure_stack]
+   * key this is the exception message only; legacy reports (no [failure_stack] key) may
+   * embed the full stack trace after the message line, so consumers keep a head-cut
+   * heuristic as the fallback for those.
+   */
   val failure_reason: String? = null,
+
+  /**
+   * Stack trace of the failure, carried separately from [failure_reason]. Null when the
+   * failure had no stack trace (e.g. cancellation/timeout) and absent on reports written
+   * before the field existed.
+   */
+  val failure_stack: String? = null,
+
+  /**
+   * Structured failure classification (e.g. "TRAILHEAD" —
+   * `xyz.block.trailblaze.exception.TrailheadException.KIND`). Renderers dispatch on this
+   * instead of matching message prefixes; null for ordinary failures and absent on legacy
+   * reports (where consumers fall back to the message-prefix match).
+   */
+  val failure_kind: String? = null,
 
   /** Excerpt from device logs (logcat) around the failure, if available */
   val device_log_excerpt: String? = null,

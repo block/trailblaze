@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -97,7 +98,26 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     name = "target",
     description = "Target app for device connections and custom tools",
     validValues = "App target ID. Run 'trailblaze config target' to see all.",
-    get = { config -> config.selectedTargetAppId ?: "(not set)" },
+    get = { config ->
+      // Apply the same neutral-"default" sentinel as `resolveCliTarget`: a persisted id equal
+      // to the neutral default is legacy auto-persist, NOT an authoritative selection, so it
+      // must not mask the workspace `defaults.target`. When no authoritative selection is saved,
+      // surface the workspace default so `config get target` doesn't claim "(not set)" while
+      // runs target something. Caveat: this predicts the effective target from the *caller's*
+      // workspace; a daemon-dispatched `run` currently fills rung-3 from the daemon's frozen
+      // configured-trails-dir, so the two can disagree when the shell cwd's workspace differs
+      // from the daemon's. `toolbox` avoids this by forwarding the resolved id explicitly;
+      // aligning the run-dispatch path is a tracked follow-up. Seed the walk-up at the caller's cwd — and read TRAILBLAZE_CONFIG_DIR via
+      // callerEnv, not System.getenv — so the daemon-forwarded `/cli/exec` path reads the user's
+      // workspace, not the daemon's launch directory (CONFIG_DIR_ENV_VAR outranks the cwd walk-up).
+      authoritativeSelectedTargetId(config.selectedTargetAppId)
+        ?: TrailblazeWorkspaceConfigResolver.workspaceDefaultTarget(
+          fromPath = CliCallerContext.callerCwd(),
+          consumer = "config get target",
+          envReader = { CliCallerContext.callerEnv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR) },
+        )?.let { "(not set — workspace default: $it)" }
+        ?: "(not set)"
+    },
     set = { config, value ->
       // Preserve caller-supplied casing so lowerCamelCase trailmap ids (e.g. `playwrightSample`)
       // round-trip correctly. The validator widened to accept uppercase letters in the
@@ -392,11 +412,13 @@ object CliConfigHelper {
   /**
    * Reads the current config from disk, or returns null if not found.
    *
-   * Applies in-memory hydration for forward-compat: older config files may
-   * predate [SavedTrailblazeAppConfig.selectedTargetAppId] and deserialize to
-   * `null`. We materialize the default target (`"default"`) on read instead of
-   * writing to disk, so that a plain setup check is read-only. The value is
-   * persisted naturally the next time the user mutates their config.
+   * Applies in-memory hydration for derivable machine-local fields (driver
+   * types, directories). Deliberately does NOT hydrate
+   * [SavedTrailblazeAppConfig.selectedTargetAppId]: `null` there is the
+   * tri-state "no explicit selection" signal that lets the daemon's
+   * workspace-`defaults.target` rung resolve — materializing `"default"` would
+   * be persisted by the next [updateConfig] and read back as a user pick,
+   * permanently masking the workspace default.
    *
    * If you need the exact on-disk state (e.g. for a diagnostic command that
    * shows the raw settings file), use [readConfigRaw] instead.
@@ -449,8 +471,6 @@ object CliConfigHelper {
     return copy(
       selectedTrailblazeDriverTypes = existingDriverTypes +
         defaultDriverTypes.filterKeys { it !in existingDriverTypes },
-      selectedTargetAppId = selectedTargetAppId
-        ?: TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
       logsDirectory = logsDirectory ?: derivedLogsDirectory(derivedAppDataDir),
       trailsDirectory = trailsDirectory ?: derivedTrailsDirectory(derivedAppDataDir),
       appDataDirectory = appDataDirectory ?: derivedAppDataDir.canonicalPath,
@@ -507,7 +527,6 @@ object CliConfigHelper {
     val appDataDir = effectiveAppDataDirectory()
     return SavedTrailblazeAppConfig(
       selectedTrailblazeDriverTypes = defaultDriverTypes(),
-      selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
       logsDirectory = derivedLogsDirectory(appDataDir),
       trailsDirectory = derivedTrailsDirectory(appDataDir),
       appDataDirectory = appDataDir.canonicalPath,

@@ -126,7 +126,7 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
             )}
             <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h1 className="tb-h1" style={{ fontSize: 20 }}>{s.title}</h1>
+              <h1 className="tb-h1" style={{ fontSize: 20 }}>{decodeEntities(s.title)}</h1>
               <StatusChip s={s.status} />
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 20px', marginTop: 10 }}>

@@ -136,6 +136,39 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
   if (yaml.isBlank()) {
     return RunDispatchResult.Invalid(HttpStatusCode.BadRequest, "yaml is required")
   }
+  // Reject a duplicate dispatch while the device already has an active (or still-initializing)
+  // run. Without this gate, a click stampede creates one parallel session + capture pipeline per
+  // click on the same device (16 observed), each superseded run stranded as a zombie "Running"
+  // row. A tracked session with no logs yet (info == null) is the stampede window between
+  // dispatch and first log, so it counts as active.
+  val activeSessionId = deviceManager.getCurrentSessionIdForDevice(id)
+  if (activeSessionId != null) {
+    // Fresh per-session read (re-runs the abandonment heuristic), NOT sessionInfoFlow: the flow
+    // only rebuilds on filesystem events, so a wedged session that stopped writing logs stays
+    // frozen at Started in the flow forever - a phantom 409 that outlives the session it names,
+    // while the Active tab (which reads the fresh summary) says the same session already ended.
+    val info = deps.logsRepo.getSessionInfoSummary(activeSessionId)
+    val ended = info != null && info.latestStatus is xyz.block.trailblaze.logs.model.SessionStatus.Ended
+    if (ended) {
+      // The session is over but still registered as the device's holder (its cleanup never ran -
+      // e.g. abandoned after a wedge). Release the device and let this dispatch proceed. Pass the
+      // session id so its capture streams stop even if the device mapping is already gone.
+      runCatching { deviceManager.cancelSessionForDevice(id, knownSessionId = activeSessionId) }
+    } else {
+      // info == null is the stampede window between dispatch and first log - still counts as
+      // active so a click stampede can't stack parallel sessions on one device.
+      val holder = when {
+        activeSessionId.value.startsWith("yaml") -> "a Studio conversation"
+        activeSessionId.value.startsWith("recording") -> "a trail run"
+        else -> "a session"
+      }
+      return RunDispatchResult.Invalid(
+        HttpStatusCode.Conflict,
+        "This device is busy: $holder (${activeSessionId.value}) is still using it. " +
+          "Stop it from the Active tab or wait for it to finish before starting another run.",
+      )
+    }
+  }
   // Explicit per-request agent wins; otherwise fall back to the persisted global agent setting
   // (the one the UI's run-controls agent picker edits), then the built-in default.
   val agentImpl = body.agent
@@ -188,9 +221,9 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       onComplete = {
         analyticsCapture?.let { c -> runCatching { c.close() } }
         eventCapture?.let { c -> runCatching { c.close() } }
-        // When this run was a draft-blaze recording (draftId + variant set), write the recorded
-        // <variant>.trail.yaml back into the draft folder. No-op for ordinary runs.
-        maybeWriteDraftVariant(deps, body, sessionId)
+        // When this run was a bundle recording (bundleId + variant set), write the recorded
+        // <variant>.trail.yaml back into the bundle folder. No-op for ordinary runs.
+        maybeWriteBundleVariant(deps, body, sessionId)
       },
     )
     // Dispatch is async: the caller gets the sessionId immediately and follows the
@@ -232,32 +265,22 @@ internal fun Route.runRoutes(deps: TrailRunnerDeps) {
   }
 }
 
-// Materialize a finished draft-recording run into its draft folder. No-op unless the run carried
-// both [RunRequest.draftId] and [RunRequest.variant]. Reuses the same logs→YAML conversion as the
-// session export endpoint.
-private fun maybeWriteDraftVariant(deps: TrailRunnerDeps, body: RunRequest, sessionId: String) {
-  val draftId = body.draftId?.takeIf { it.isNotBlank() } ?: return
+// Materialize a finished bundle-recording run into its bundle folder. No-op unless the run carried
+// both [RunRequest.bundleId] and [RunRequest.variant] - @Transient fields only the server-side
+// `/api/folder/record` dispatch can set, so a raw REST/RPC caller can never land a recorded
+// variant in a library folder. Reuses the same logs→YAML conversion as the session export endpoint.
+private fun maybeWriteBundleVariant(deps: TrailRunnerDeps, body: RunRequest, sessionId: String) {
+  val bundleId = body.bundleId?.takeIf { it.isNotBlank() } ?: return
   val variant = body.variant?.takeIf { it.isNotBlank() } ?: return
   runCatching {
     val (primary, extras) = resolveRoots(deps.trailsRootProvider)
-    // KNOWN LIMITATION: commit (save-to) is not yet serialized against an in-flight recording for the
-    // same draft (no running-session registry is plumbed here). The UI gates this via `anyRunning`;
-    // server-side we fail safe — if the folder was moved/committed between dispatch and now, we refuse
-    // to write rather than overwrite a committed trail, and log it so the dropped recording is visible.
-    // The recording itself is still recoverable from the session logs via the export endpoint.
-    val resolved = DraftStore.resolve(draftId, primary, extras)
-      ?: return Console.log("[BlazeRoutes] draft $draftId no longer resolvable (committed/moved during recording?); variant '$variant' from session $sessionId not written")
-    // `/api/run` accepts draftId/variant from any caller; never let a run completion write into a
-    // folder that has left drafts/ (a committed trail in the library) — UNLESS the caller explicitly
-    // opted in (the `/api/folder/record` path is intentionally editing a committed library folder).
-    if (!resolved.inDrafts && !body.allowCommittedVariantWrite) {
-      return Console.log("[BlazeRoutes] draft $draftId is no longer staged; refusing to write variant '$variant' (session $sessionId) into a committed trail folder")
-    }
+    val resolved = BundleStore.resolve(bundleId, primary, extras)
+      ?: return Console.log("[BlazeRoutes] bundle $bundleId no longer resolvable (moved during recording?); variant '$variant' from session $sessionId not written")
     val logs = deps.logsRepo.getLogsForSession(SessionId(sessionId))
     if (logs.isEmpty()) {
       return Console.log("[BlazeRoutes] no logs for session $sessionId; variant '$variant' not written")
     }
     val yaml = logs.generateRecordedYaml(createTrailblazeYaml())
-    DraftStore.writeVariant(resolved.dir, variant, yaml)
-  }.onFailure { Console.log("[BlazeRoutes] draft variant write failed: ${it.message}") }
+    BundleStore.writeVariant(resolved.dir, variant, yaml)
+  }.onFailure { Console.log("[BlazeRoutes] bundle variant write failed: ${it.message}") }
 }

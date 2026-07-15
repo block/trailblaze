@@ -124,15 +124,21 @@ fun TapsScreen() {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
       ) {
+        // FilterChip exposes its selection state on its accessibility node but doesn't reliably
+        // promote its label — after a recompose the "Toggle A"/"Toggle B" text can drop from the
+        // derived a11y tree, leaving the chip nameless (a real TalkBack defect). Pin an accessible
+        // name so a selector can always resolve it, like the "A11y Tap" button above.
         FilterChip(
           selected = toggleASelected,
           onClick = { toggleASelected = !toggleASelected },
           label = { Text("Toggle A") },
+          modifier = Modifier.semantics { contentDescription = "Toggle A" },
         )
         FilterChip(
           selected = toggleBSelected,
           onClick = { toggleBSelected = !toggleBSelected },
           label = { Text("Toggle B") },
+          modifier = Modifier.semantics { contentDescription = "Toggle B" },
         )
       }
 

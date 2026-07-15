@@ -64,14 +64,23 @@ inline fun <
   reified TResponse : Any,
   reified TRequest : RpcRequest<TResponse>,
 > Route.registerRpcHandler(handler: RpcHandler<TRequest, TResponse>) {
-  post(TRequest::class.toRpcPath()) {
+  val path = TRequest::class.toRpcPath()
+  post(path) {
+    // Arrival + completion lines make a hung handler visible in the daemon log: an arrival with
+    // no matching completion is the smoking gun. Without these, a wedged RPC leaves the browser
+    // promise pending forever and the server log shows nothing at all.
+    val startedAtMs = System.currentTimeMillis()
+    xyz.block.trailblaze.util.Console.log("[rpc] -> $path")
     try {
       val request: TRequest = call.receive()
       val result = handler.handle(request)
       call.respondRpcResult(result)
+      xyz.block.trailblaze.util.Console.log("[rpc] <- $path (${System.currentTimeMillis() - startedAtMs}ms)")
     } catch (e: CancellationException) {
+      xyz.block.trailblaze.util.Console.log("[rpc] <- $path CANCELLED (${System.currentTimeMillis() - startedAtMs}ms)")
       throw e
     } catch (e: Exception) {
+      xyz.block.trailblaze.util.Console.log("[rpc] <- $path ERROR ${e.message} (${System.currentTimeMillis() - startedAtMs}ms)")
       call.respondRpcException(e)
     }
   }
