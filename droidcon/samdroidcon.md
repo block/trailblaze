@@ -41,7 +41,8 @@ Droidcon USA 2026<br>Sam Edwards · Block
 DECK v7 — Act 0 rethreaded (round 10): hype → the dream works → falls short ×2
 (CI economics, missing link) → user journeys → seven targets → ten years.
 Content-complete; all four 📼 asset slides carry REAL embedded media (real runs, real numbers).
-Act + timing markers (and ASSET ids) appear top-left of each slide.
+Act + timing markers (and ASSET ids) live top-left of each slide but are HIDDEN by
+default via `.act-label { display: none }` in styles/index.css — flip to `block` for rehearsal.
 Spine: natural language on top, determinism underneath. Refrain: "Blaze once, trail forever."
 samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&A bank.
 -->
@@ -50,7 +51,7 @@ samdroidcon-notes.md = source of truth: changelog, cut-priority list, Plan B, Q&
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze? · 0:00–2:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze? · 0:00–2:30</div>
 
 # First — what *is* Trailblaze?
 
@@ -108,7 +109,7 @@ better than the number does.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
 
 # How we got here
 
@@ -141,7 +142,7 @@ DETAILS FROM SAM (plane review, 2026-07-15) — bullets stay SHORT, the story is
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · What is Trailblaze?</div>
 
 # And we *use* it
 
@@ -179,7 +180,7 @@ problem we had." → next slide: "AI is supposed to do everything."
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 2:30–6:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0 · The problem · 2:30–6:30</div>
 
 # AI is supposed to do *everything*
 
@@ -224,7 +225,7 @@ quality unit (user journeys); Act 4 = the CLI/tools agents use for device contro
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # It's not that easy — yet
 
@@ -285,7 +286,7 @@ is to move it next to "One user journey" / into Act 2 — flag for Sam.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # An LLM on every run?
 
@@ -316,7 +317,7 @@ ASSET A pt 1 (slide 14) is the visual proof: blaze vs replay videos, 6m26s vs 2m
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # The missing link
 
@@ -352,7 +353,7 @@ returns in Act 2. Don't leave dangling. (Not "handwritten" — recordings are ea
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # One user journey.
 
@@ -389,7 +390,7 @@ unpack here, just don't overclaim.)
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # Seven targets.
 
@@ -426,7 +427,7 @@ new features + hardware-specific work automation can't reach yet.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 0</div>
 
 # Ten years on this problem
 
@@ -465,7 +466,7 @@ and determinism."
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1 · The thesis · 4:00–9:00</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1 · The thesis · 4:00–9:00</div>
 
 # Blaze once, trail forever.
 
@@ -488,7 +489,7 @@ Quick refresher for anyone who missed last year — 90 seconds max.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # We're blazing a lot of trails…
 
@@ -537,7 +538,7 @@ payoff in Act 6 (you've watched this map assemble).
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # The LLM is the compiler
 
@@ -562,7 +563,7 @@ NOT the device itself (Kotlin/Java is what actually runs the code on Android).
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # Self-heal = recompilation
 
@@ -584,7 +585,7 @@ A* cost model (recording=1.0, AI=5.0) lives on a BACKUP slide.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # YAML: the shared surface
 
@@ -610,7 +611,7 @@ This is the answer to "do you just trust the AI?"
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # The trail lifecycle
 
@@ -640,7 +641,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1 · 📼 ASSET A · part 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1 · 📼 ASSET A · part 1</div>
 
 # Zero-LLM trail replay
 
@@ -688,7 +689,7 @@ PLAN B (video misbehaves): paste-ready fallback slide in notes ("Plan B" section
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
 
 # Natural language on top.
 # Determinism underneath.
@@ -706,7 +707,7 @@ HAND-OFF: "That's the thesis. Production scale is what stress-tested it."
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2 · One journey, one file · 9:00–15:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2 · One journey, one file · 9:00–15:30</div>
 
 # Scale found our design flaw
 
@@ -749,7 +750,7 @@ the unified-format slide resolves this exact picture.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2 · optional</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2 · optional</div>
 
 # The natural language drifted
 
@@ -774,7 +775,7 @@ To cut: delete this whole slide block (--- to ---).
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # Not a test — a user journey
 
@@ -795,7 +796,7 @@ HAND-OFF: "Here's the same journey — and how little you need to start."
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # The same journey, three ways
 
@@ -872,7 +873,7 @@ HAND-OFF: "And here's the full shape of one of these files." → One file = the 
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # One file = the user journey
 
@@ -926,7 +927,7 @@ HAND-OFF: "So what do you actually write these for? The jobs your users must alw
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # Four critical jobs. One file each.
 
@@ -989,7 +990,7 @@ allows, honesty where it doesn't.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # Parameterize, don't hardcode
 
@@ -1019,7 +1020,7 @@ Guaranteed Q&A topic otherwise (test accounts in CI).
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # Trailheads: deterministic starts
 
@@ -1054,7 +1055,7 @@ the same HOW — and I'd seen that problem ten years ago."
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3 · What vs How · 15:30–21:00</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3 · What vs How · 15:30–21:00</div>
 
 # 2016: the robot pattern
 
@@ -1072,7 +1073,7 @@ The 10-year callback — a beat, not the spine. One slide of nostalgia, then the
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
 # The LLM twist
 
@@ -1097,7 +1098,7 @@ comment block; the first block was invisible on stage.)
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
 # A screenshot was worth 1,000 words
 
@@ -1131,7 +1132,7 @@ today the same context is what lets the agent solve failures.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
 # Reports with no strings attached
 
@@ -1152,7 +1153,7 @@ to see how things are doing ACROSS all the platforms. Worth a spoken beat here.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3</div>
 
 # The last run down that trail
 
@@ -1177,7 +1178,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 3 · 📼 ASSET A · part 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 3 · 📼 ASSET A · part 2</div>
 
 # Walking a real run's report
 
@@ -1210,7 +1211,7 @@ who gets to write them, and how do agents reach them?"
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1: who writes tools · 21:00–24:00</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1: who writes tools · 21:00–24:00</div>
 
 # Tools wanted out of the binary
 
@@ -1246,7 +1247,7 @@ mode; the Square composition story was in the invisible first block.)
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
 # TypeScript: the types ARE the schema
 
@@ -1282,7 +1283,7 @@ type-awareness. The types aren't just for the compiler; they're the editing expe
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
 # Tools return data, not just text
 
@@ -1300,7 +1301,7 @@ build was on the device before launching. In the repo, first step of the blaze.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
 # Where do conditionals go?
 
@@ -1326,7 +1327,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
 # "Could the LLM construct it?"
 
@@ -1351,7 +1352,7 @@ that never actually ran. Recordings come from a successful run, full stop.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1 · optional</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1 · optional</div>
 
 # Not every tool is for the LLM
 
@@ -1370,7 +1371,7 @@ OPTIONAL (cut-priority #3 in notes) — Act 4 is the tightest stretch (10 slides
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2: how agents reach tools · 24:00–26:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2: how agents reach tools · 24:00–26:30</div>
 
 # The CLI pivot
 
@@ -1389,7 +1390,7 @@ the CLI is the primary surface.
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2</div>
 
 # Driving the device *is* constructing the trail.
 
@@ -1412,7 +1413,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2 · 📼 ASSET B</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 2 · 📼 ASSET B</div>
 
 # An agent blazing a trail
 
@@ -1460,7 +1461,7 @@ selector-based; the transcript lines are verbatim.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 4 · Guardrails · 26:30–27:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Guardrails · 26:30–27:30</div>
 
 # Trust, but compile
 
@@ -1496,7 +1497,7 @@ HAND-OFF: "Authoring got fast. The other half of slow was the driver."
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 5 · Owning the driver · 27:30–30:00</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 5 · Owning the driver · 27:30–30:00</div>
 
 # ~3x faster: owning the driver
 
@@ -1546,7 +1547,7 @@ HAND-OFF: "We'd protected the language; now the determinism underneath it is fas
 layout: center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · The map · 30:00–34:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6 · The map · 30:00–34:30</div>
 
 # You've watched this map assemble for half an hour
 
@@ -1571,7 +1572,7 @@ Title payoff = a NAMING, not a reveal.
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
 
 # Not just test authoring
 
@@ -1595,7 +1596,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6</div>
 
 # You never need a trail
 
@@ -1617,7 +1618,7 @@ proven yet — and I'm bullish."
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · The future</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6 · The future</div>
 
 # Next: waypoints
 
@@ -1637,7 +1638,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
 
 # Your app, as a map
 
@@ -1686,7 +1687,7 @@ layout: center
 class: text-center
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 6 · 📼 ASSET C</div>
 
 # The product mapped itself
 
@@ -1722,7 +1723,7 @@ HAND-OFF: "The whole recipe, one slide."
 
 ---
 
-<div class="text-sm opacity-50 absolute top-4 left-4">ACT 7 · The recipe · 34:30–36:30</div>
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 7 · The recipe · 34:30–36:30</div>
 
 # The recipe
 

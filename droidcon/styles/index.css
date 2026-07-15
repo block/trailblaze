@@ -1,0 +1,8 @@
+/* Global deck styles (auto-loaded by Slidev, applies to every slide). */
+
+/* Hide the top-left ACT / timing / asset corner labels deck-wide.
+   They stay in the slide source for navigation/reference — this just hides them.
+   To show them for rehearsal: change `none` to `block` (or delete this rule). */
+.act-label {
+  display: none !important;
+}
