@@ -4912,8 +4912,8 @@
           totalTrails > trails.length ? React.createElement('button', {
             className: 'trails-more',
             onClick: onShowAllTrails,
-            title: 'Open the Report view for the full trail log',
-          }, totalTrails + ' trails blazed in scope — see all in Report →') : null,
+            title: 'Open the Trail Guide for the full trail log',
+          }, totalTrails + ' trails blazed in scope — see all in the Trail Guide →') : null,
         ),
       );
     }
@@ -5423,10 +5423,12 @@
           ),
           React.createElement('span', { className: 'scope' }, 'Trailmap · ' + scopeLabel),
           React.createElement('div', { className: 'mode-toggle' },
+            // Display labels lean into the trail vocabulary; internal mode
+            // keys ('map', 'report') are unchanged so existing links keep working.
             React.createElement('button', {
               className: 'mode-button' + (mode === 'map' ? ' active' : ''),
               onClick: () => setMode('map'),
-            }, 'Map'),
+            }, 'Trail Map'),
             React.createElement('button', {
               className: 'mode-button' + (mode === 'subway' ? ' active' : ''),
               onClick: () => setMode('subway'),
@@ -5443,7 +5445,7 @@
             React.createElement('button', {
               className: 'mode-button' + (mode === 'report' ? ' active' : ''),
               onClick: () => setMode('report'),
-            }, 'Report'),
+            }, 'Trail Guide'),
           ),
           React.createElement('div', { className: 'header-counts' },
             React.createElement('span', { className: 'count-pair', title: 'Entry points that bootstrap the agent into the map' },

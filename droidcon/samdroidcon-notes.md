@@ -254,7 +254,8 @@ chips (platform-labelled when cross-platform); CLICK A CHIP live on stage: it
 selects the destination and the map dims + zooms the entry path (free via the
 existing focus behavior). Report view = "trail guide" now and LEADS with a green
 Trailheads section. Header stats start with TRAILHEADS. Vocabulary is fully ours:
-mode button Screens→Waypoints (hash key 'screens' unchanged — old #view= links
+mode buttons Map→"Trail Map", Report→"Trail Guide", Screens→Waypoints
+(hash keys 'map'/'report'/'screens' unchanged — old #view= links
 fine), sidebar "Trails / N trails blazed", report cards "Trail"/"waypoints",
 loading state "🥾 Blazing the trail…". DEMO BEAT: open map → point at the panel →
 "three ways in, one click shows the way" → click contacts_launch android chip.
@@ -309,7 +310,7 @@ the waypoints when you run a trail"):
   exactly like a park map. Shared segments go to the LONGEST trail so marquee
   routes read continuously and shorter ones branch off.
 - Panel gains a 🗺️ FEATURED TRAILS legend under Trailheads: color dot + name +
-  wp count, footer "42 trails blazed in scope — see all in Report →" (mode jump).
+  wp count, footer "42 trails blazed in scope — see all in the Trail Guide →" (mode jump).
 - CLICK A TRAIL = RUN IT: exactly that route focuses in the trail's color (not
   the all-entries union a waypoint click shows), camera fits, Detail opens on the
   destination, and the 🥾 walks EVERY waypoint trailhead→destination — walker speed
