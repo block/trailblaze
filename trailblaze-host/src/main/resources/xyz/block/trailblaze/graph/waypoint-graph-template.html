@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Trailblaze · Trailmap</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🥾</text></svg>">
 
   <!-- The screenshot-node flow-map rendering approach tips its hat to Revyl's
        Atlas (https://revyl.com/atlas/) — we arrived at waypoint collection
@@ -399,11 +400,24 @@
       box-shadow: var(--shadow-elevated);
       padding: 12px 14px 10px;
     }
+    .trailheads-panel.collapsed {
+      width: auto;
+      padding: 8px 13px;
+    }
     .trailheads-panel .th-title {
       display: flex; align-items: baseline; gap: 7px;
+      width: 100%;
+      padding: 0; border: none; background: transparent;
+      font-family: inherit;
       font-size: 12px; font-weight: 700;
       letter-spacing: 0.05em; text-transform: uppercase;
       color: var(--trailhead);
+      cursor: pointer;
+    }
+    .trailheads-panel .th-chevron {
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 10px;
     }
     .trailheads-panel .th-title .th-count {
       font-size: 11px; font-weight: 600;
@@ -767,6 +781,19 @@
       box-shadow: var(--shadow-card);
     }
     .trailhead-node .trailhead-icon { margin-right: 6px; opacity: 0.9; }
+    /* Trailheads beacon — a slow expanding green ring, the "you can start
+       here" signal. Deliberately subtle: one pulse every ~3.2s, and off for
+       reduced-motion users. */
+    @media (prefers-reduced-motion: no-preference) {
+      .trailhead-node {
+        animation: beacon 3.2s ease-out infinite;
+      }
+      @keyframes beacon {
+        0%   { box-shadow: var(--shadow-card), 0 0 0 0 rgba(0, 224, 19, 0.30); }
+        70%  { box-shadow: var(--shadow-card), 0 0 0 9px rgba(0, 224, 19, 0); }
+        100% { box-shadow: var(--shadow-card), 0 0 0 0 rgba(0, 224, 19, 0); }
+      }
+    }
 
     /* Edge hover — when the user mouses over an edge, brighten the path and
        label so it pops out of the dense graph. React Flow's default :hover is
@@ -841,6 +868,21 @@
     .react-flow__edge.focused .react-flow__edge-path {
       stroke-width: 3.5 !important;
       filter: brightness(1.2);
+    }
+    /* The focused trail FLOWS — the footpath dots march from trailhead toward
+       the selected waypoint, so the route reads as movement, not just
+       highlight. Offsets are exact dash-cycle multiples (footpath 0.5+8=8.5,
+       entry 7+6=13) so the loop is seamless. Skipped entirely for users who
+       prefer reduced motion — the brightness/width focus still carries. */
+    @media (prefers-reduced-motion: no-preference) {
+      .react-flow__edge.focused .react-flow__edge-path {
+        animation: trail-flow 0.9s linear infinite;
+      }
+      .react-flow__edge.trailhead-edge.focused .react-flow__edge-path {
+        animation: trail-flow-entry 0.9s linear infinite;
+      }
+      @keyframes trail-flow { to { stroke-dashoffset: -8.5; } }
+      @keyframes trail-flow-entry { to { stroke-dashoffset: -13; } }
     }
 
     /* ============================================================================
@@ -1641,6 +1683,13 @@
     }
     .empty-state h2 { font-size: 16px; font-weight: 500; margin: 0; color: var(--text); }
     .empty-state p { font-size: 13px; margin: 0; max-width: 380px; text-align: center; line-height: 1.5; }
+    @media (prefers-reduced-motion: no-preference) {
+      .loading-blaze { animation: loading-breathe 1.6s ease-in-out infinite; }
+      @keyframes loading-breathe {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+      }
+    }
 
     /* React Flow edge & control overrides */
     .react-flow__edge-path { stroke-linecap: round; }
@@ -1650,11 +1699,12 @@
     }
     .react-flow__controls button:hover { background: var(--bg-elevated-2) !important; }
     .react-flow__minimap {
-      background: var(--bg-elevated) !important;
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      background: var(--bg-elevated-2) !important;
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      overflow: hidden;
     }
-    .react-flow__minimap-mask { fill: rgba(0, 0, 0, 0.4); }
+    .react-flow__minimap-mask { fill: rgba(0, 0, 0, 0.35); }
 
     /* ============================================================================
        SCREENS VIEW — flat gallery grid of all waypoints
@@ -1895,7 +1945,7 @@
 </head>
 <body>
   <div id="root">
-    <div class="empty-state"><p>🥾 Blazing the trail…</p></div>
+    <div class="empty-state"><p class="loading-blaze">🥾 Blazing the trail…</p></div>
   </div>
 
   <!-- Graph data is inlined as a JSON literal. The Kotlin renderer replaces the
@@ -2738,8 +2788,9 @@
             // set. Sharing a landing waypoint with a focused trailhead
             // doesn't make this one's edge focused.
             const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
-            const classes = [];
+            const classes = ['trailhead-edge'];
             if (!isFocused) classes.push('dimmed');
+            if (focusedSet && isFocused) classes.push('focused');
             const labelClasses = ['trailhead'];
             if (!isFocused) labelClasses.push('dimmed');
             return {
@@ -2836,7 +2887,7 @@
           nodeColor: subwayMiniMapNodeColor,
           nodeStrokeColor: 'rgba(232, 232, 232, 0.35)',
           nodeStrokeWidth: 1,
-          maskColor: 'rgba(0, 0, 0, 0.55)',
+          maskColor: 'rgba(0, 0, 0, 0.35)',
         }),
       );
     }
@@ -4147,7 +4198,7 @@
             nodeColor: subwayMiniMapNodeColor,
             nodeStrokeColor: 'rgba(232, 232, 232, 0.35)',
             nodeStrokeWidth: 1,
-            maskColor: 'rgba(0, 0, 0, 0.55)',
+            maskColor: 'rgba(0, 0, 0, 0.35)',
           }),
         ),
       );
@@ -4165,7 +4216,7 @@
       if (node.selected) return '#3399ff';
       const cls = (node && node.className) || '';
       if (cls.indexOf('subway-focal') >= 0) return '#3399ff';
-      return 'rgba(232, 232, 232, 0.6)';
+      return 'rgba(232, 232, 232, 0.8)';
     }
 
     function SubwayStationNode({ data, selected }) {
@@ -4189,7 +4240,11 @@
           style: { opacity: 0, top: 0 },
         }),
         React.createElement('div', { className: cls },
-          React.createElement('div', { className: 'waypoint-title' }, data.title),
+          // Same blaze strip as the map cards — stations are waypoints too.
+          React.createElement('div', { className: 'waypoint-title' },
+            blazeStack(data),
+            React.createElement('span', null, data.title),
+          ),
           data.screenshotDataUri
             ? React.createElement('img', { src: data.screenshotDataUri, className: 'waypoint-screenshot', alt: data.label })
             : React.createElement('div', { className: 'waypoint-no-screenshot' }, '(no screenshot)'),
@@ -4429,6 +4484,7 @@
        waypoint; the map's existing focus behavior then lights up the entry
        path and fits the camera to it. */
     function TrailheadsPanel({ trailheads, selectedWaypoint, onSelectWaypoint }) {
+      const [collapsed, setCollapsed] = useState(false);
       // toByPlatform trailheads arrive as one entry per platform destination —
       // group by id so a cross-platform trailhead renders one row with a chip
       // per destination. Tiny list; no memo needed.
@@ -4442,15 +4498,20 @@
       });
       const groups = [...byId.values()];
       if (groups.length === 0) return null;
-      return React.createElement('div', { className: 'trailheads-panel' },
-        React.createElement('div', { className: 'th-title' },
+      return React.createElement('div', { className: 'trailheads-panel' + (collapsed ? ' collapsed' : '') },
+        React.createElement('button', {
+          className: 'th-title',
+          onClick: () => setCollapsed(c => !c),
+          title: collapsed ? 'Show trailheads' : 'Collapse — the map keeps its trailhead pills',
+        },
           '🥾 Trailheads',
           React.createElement('span', { className: 'th-count' }, groups.length),
+          React.createElement('span', { className: 'th-chevron' }, collapsed ? '▸' : '▾'),
         ),
-        React.createElement('div', { className: 'th-tagline' },
+        collapsed ? null : React.createElement('div', { className: 'th-tagline' },
           'Every run starts here — these bootstrap the agent into the map from any device state.',
         ),
-        groups.map(g =>
+        collapsed ? null : groups.map(g =>
           React.createElement('div', { key: g.id, className: 'th-item' },
             React.createElement('div', { className: 'th-id', title: g.description || g.id },
               React.createElement('span', { className: 'th-boot' }, '🥾'),
@@ -4781,6 +4842,24 @@
         document.documentElement.setAttribute('data-theme', theme);
       }, [theme]);
 
+      // Tab title tracks the scope so multiple open trailmaps stay tellable
+      // apart in the tab strip.
+      useEffect(() => {
+        const scope = [selectedTarget, selectedPlatform].filter(Boolean).join('/');
+        document.title = 'Trailblaze · Trailmap' + (scope ? ' · ' + scope : '');
+      }, [selectedTarget, selectedPlatform]);
+
+      // Copy-link button — the hash already carries the full view state
+      // (scope, view, subway focal), so sharing a demo state is one click.
+      const [linkCopied, setLinkCopied] = useState(false);
+      const onCopyLink = useCallback(() => {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(window.location.href).then(() => {
+          setLinkCopied(true);
+          setTimeout(() => setLinkCopied(false), 1400);
+        });
+      }, []);
+
       // Mirror target/platform/view into the hash so the current scope is
       // always shareable as a URL. Same replaceState-not-pushState rationale
       // as the subway writer; both writers preserve each other's keys.
@@ -4928,6 +5007,12 @@
               'shortcuts',
             ),
           ),
+          React.createElement('button', {
+            className: 'theme-toggle',
+            onClick: onCopyLink,
+            'aria-label': 'Copy link to this view',
+            title: 'Copy a link to this exact view — scope, mode, and focus all live in the URL',
+          }, linkCopied ? '✓' : '🔗'),
           React.createElement('button', {
             className: 'theme-toggle',
             onClick: () => setTheme(t => t === 'dark' ? 'light' : 'dark'),
