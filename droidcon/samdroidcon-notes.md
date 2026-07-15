@@ -197,6 +197,27 @@ Old binaries skip the toByPlatform sidecar with a warning
 Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads
 `trailheads/*.trailhead.yaml`; TS-inline `trailhead:` reaches the runner manifest but
 not the map render (upstream #202 gap — candidate report, don't file unprompted).
+🎬 VIEWER DEMO SCRIPT — 90 seconds, consolidated (2026-07-15; beats verified live):
+1. Open `/waypoints/graph#target=contacts&platform=android` (bookmark it). Land on
+   MAP: 37 waypoints, every card a real screenshot, dark Trail Runner look.
+2. Point at the floating 🥾 TRAILHEADS panel: "every run starts at one of these —
+   no preconditions, any device state."
+3. Click the contacts_launch → list-populated chip: map dims, entry trail lights
+   green and FLOWS, camera fits, and a 🥾 walks the route. Line: "the map doesn't
+   just show the way in — watch the boot make the trip." (Panel steps back to 25%
+   while selected; hover brings it back. Deselect = click empty canvas.)
+4. Click a DEEPER card (e.g. delete-contact-dialog): multi-leg walk — trailhead →
+   contact-detail → overflow → dialog. "That's the agent's actual route."
+5. Switch to the subway money shot: `#target=contacts&view=subway&
+   focal=contacts%2Fandroid%2Flist-populated&depth=3` — "focal at center, ≤3
+   forward hops: this is the adjacency we hand the agent."
+6. Detail panel → AGENT tab (subway mode only; disabled elsewhere by design):
+   the literal prompt text, hops + descriptions + shortcuts. Hit Copy. "You could
+   paste this into any LLM."
+7. REPORT: "contacts trail guide" — green Trailheads section up top, 108 trails
+   below. "Auto-derived, refreshed every run."
+Escape hatches: 🔗 button copies the exact current view; theme toggle if the room
+lighting fights the dark theme (light theme verified end-to-end).
 ATLAS NOD + MAP RESTYLE (2026-07-14, Sam's call): the screenshot-node flow-map
 approach was inspired by Revyl's Atlas (revyl.com/atlas — Sam talks with the
 founder; waypoint collection arrived independently, the visualization direction
