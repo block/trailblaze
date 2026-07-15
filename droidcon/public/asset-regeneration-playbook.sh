@@ -138,9 +138,14 @@ reset_app() {
 start_recorder() {
   local pfx="$1"; local stop="$WORK/stop-$pfx"; rm -f "$stop"
   "$ADB" -s "$SERIAL" shell "rm -f /sdcard/$pfx-seg-*.mp4"
+  # Redirect the backgrounded subshell's fds: a `rec=$(start_recorder …)` command
+  # substitution reads stdout until EOF, and a bare `( … ) &` keeps that pipe open
+  # for the loop's whole life — so without this the caller BLOCKS until the 36-min
+  # recorder loop ends and the blaze/replay never starts. With fds detached, the
+  # sub gets EOF right after `echo $!` and returns the pid immediately.
   ( i=1; while [ $i -le 12 ] && [ ! -f "$stop" ]; do
       "$ADB" -s "$SERIAL" shell screenrecord --bit-rate 4000000 --size 720x1280 \
-             --time-limit 180 "/sdcard/$pfx-seg-$i.mp4"; i=$((i+1)); done ) &
+             --time-limit 180 "/sdcard/$pfx-seg-$i.mp4"; i=$((i+1)); done ) >/dev/null 2>&1 &
   echo $!   # recorder pid
 }
 stop_recorder() {  # $1=pfx  $2=recorder-pid
