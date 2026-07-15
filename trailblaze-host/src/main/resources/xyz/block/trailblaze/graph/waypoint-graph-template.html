@@ -2018,6 +2018,136 @@
       max-width: 200px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+
+    /* ==========================================================================
+       VISTA VIEW — first-person lookout (experimental fork of the Subway idea).
+       Faux-3D: a horizon scene where reachable waypoints stand as signposts,
+       scaled + raised by hop distance so depth reads as perspective.
+       ========================================================================== */
+    .vista-view {
+      position: relative;
+      height: 100%; width: 100%;
+      overflow: hidden;
+      /* Sky above the horizon (top ~32%), ground below. The accent tint keeps
+         the sky on-theme in both light and dark palettes. */
+      background:
+        linear-gradient(to bottom,
+          color-mix(in srgb, var(--accent) 14%, var(--bg)) 0%,
+          color-mix(in srgb, var(--accent) 5%, var(--bg)) 26%,
+          var(--bg) 32%,
+          color-mix(in srgb, var(--bg-elevated) 70%, var(--bg)) 33%,
+          var(--bg) 100%);
+    }
+    .vista-backdrop {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .vista-horizon {
+      position: absolute; left: 0; right: 0; top: 32%;
+      border-top: 1px solid var(--border-strong);
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .vista-trails {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .vista-card {
+      position: absolute;
+      transform: translate(-50%, -100%) scale(var(--vs, 1));
+      transform-origin: 50% 100%;
+      transition: left 0.55s ease, top 0.55s ease, transform 0.55s ease, opacity 0.55s ease;
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      width: 118px;
+      padding: 6px 6px 5px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 9px;
+      box-shadow: var(--shadow-card);
+      cursor: pointer;
+      font: inherit; color: var(--text);
+      text-align: center;
+    }
+    .vista-card:hover {
+      border-color: var(--accent);
+      z-index: 200 !important;
+    }
+    .vista-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+    .vista-card img {
+      width: 100%; height: 118px;
+      object-fit: cover; object-position: top;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .vista-card .vista-no-shot {
+      width: 100%; height: 118px;
+      border-radius: 6px; border: 1px dashed var(--border);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); font-size: 10px;
+    }
+    .vista-card .vista-name {
+      font-size: 11px; font-weight: 600; line-height: 1.25;
+      max-width: 106px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .vista-card .vista-hops {
+      font-size: 9px; color: var(--text-muted);
+    }
+    /* Trailhead signposts are green pills, matching the rest of the app. */
+    .vista-card.vista-card-th {
+      width: auto; max-width: 150px;
+      padding: 6px 12px;
+      border-color: var(--trailhead);
+      color: var(--trailhead);
+      font-size: 11px; font-weight: 600;
+      flex-direction: row; gap: 6px;
+    }
+    .vista-more {
+      position: absolute;
+      transform: translate(-50%, -100%) scale(var(--vs, 1));
+      transform-origin: 50% 100%;
+      padding: 4px 9px;
+      background: var(--bg-elevated);
+      border: 1px dashed var(--border-strong);
+      border-radius: 999px;
+      font-size: 10px; color: var(--text-muted);
+      pointer-events: auto; cursor: help;
+    }
+    .vista-you {
+      position: absolute;
+      left: 50%; bottom: 3.5%;
+      transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      z-index: 150;
+      cursor: pointer;
+      background: none; border: none; font: inherit; color: var(--text);
+    }
+    .vista-you .vista-boot { font-size: 30px; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35)); }
+    .vista-you .vista-plaque {
+      display: flex; flex-direction: column; align-items: center; gap: 1px;
+      padding: 6px 14px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--trailhead);
+      border-radius: 8px;
+      box-shadow: var(--shadow-card);
+    }
+    .vista-you .vista-plaque .vista-you-tag {
+      font-size: 9px; letter-spacing: 0.14em; color: var(--trailhead); font-weight: 700;
+    }
+    .vista-you .vista-plaque .vista-you-name {
+      font-size: 12px; font-weight: 600;
+      max-width: 240px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .vista-empty {
+      position: absolute; left: 50%; top: 46%;
+      transform: translate(-50%, -50%);
+      padding: 10px 16px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      color: var(--text-muted); font-size: 12px;
+    }
   </style>
 
   <script type="importmap">
@@ -4698,6 +4828,295 @@
     const SUBWAY_GHOST_CARD_H = 145;
 
     /* ============================================================================
+       VISTA VIEW — experimental first-person fork of the Subway concept.
+       Same focal model (directed BFS from "where I stand"), different render:
+       instead of a graph canvas, you stand at the bottom of a horizon scene and
+       reachable waypoints are signposts scaled + raised by hop distance, so
+       depth reads as perspective. Clicking a signpost walks there (re-roots the
+       BFS) — shared node keys let CSS transitions glide the survivors, which
+       plays as walking forward. SubwayView is intentionally untouched.
+       ============================================================================ */
+    const VISTA_DEPTH_MIN = 1;
+    const VISTA_DEPTH_MAX = 4;
+    // Per-ring placement: vertical position (% from top), card scale, and how
+    // many signposts a ring can hold before the rest collapse into "+N".
+    const VISTA_RING_Y = { 1: 66, 2: 47, 3: 37, 4: 31.5 };
+    const VISTA_RING_S = { 1: 1, 2: 0.6, 3: 0.38, 4: 0.26 };
+    const VISTA_RING_CAP = { 1: 7, 2: 9, 3: 12, 4: 14 };
+    const VISTA_ORIGIN = { x: 50, y: 90 }; // where "you" stand, in scene %
+
+    function VistaView({ filtered, selectedWaypoint, onSelectWaypoint }) {
+      const trailheads = filtered.trailheads;
+      const wpById = useMemo(
+        () => new Map(filtered.waypoints.map(w => [w.id, w])),
+        [filtered.waypoints],
+      );
+
+      // Default focal mirrors the subway: first trailhead pill, else the
+      // alphabetically-first waypoint.
+      const defaultFocalId = useMemo(() => {
+        if (trailheads.length > 0) return TRAILHEAD_NODE_PREFIX + trailheads[0].id;
+        if (filtered.waypoints.length > 0) {
+          return [...filtered.waypoints].sort((a, b) => a.id.localeCompare(b.id))[0].id;
+        }
+        return null;
+      }, [trailheads, filtered.waypoints]);
+
+      const [focalId, setFocalId] = useState(defaultFocalId);
+      const [maxDepth, setMaxDepth] = useState(3);
+
+      // Minimal back-stack (subway's history model, without forward).
+      const [stack, setStack] = useState([]);
+      const walkTo = useCallback((id) => {
+        if (!id || id === focalId) return;
+        setStack(prev => [...prev, focalId]);
+        setFocalId(id);
+      }, [focalId]);
+      const walkBack = useCallback(() => {
+        setStack(prev => {
+          if (prev.length === 0) return prev;
+          setFocalId(prev[prev.length - 1]);
+          return prev.slice(0, -1);
+        });
+        onSelectWaypoint(null);
+      }, [onSelectWaypoint]);
+
+      const isTrailheadId = (id) => typeof id === 'string' && id.startsWith(TRAILHEAD_NODE_PREFIX);
+      const trailheadFromNodeId = useCallback((id) => {
+        if (!isTrailheadId(id)) return null;
+        const tid = id.slice(TRAILHEAD_NODE_PREFIX.length);
+        return trailheads.find(th => th.id === tid) || null;
+      }, [trailheads]);
+
+      // Resync focal when the filter wipes it out.
+      useMemo(() => {
+        if (!focalId) return;
+        const existsAsWaypoint = filtered.waypoints.some(w => w.id === focalId);
+        const existsAsTrailhead = isTrailheadId(focalId) && !!trailheadFromNodeId(focalId);
+        if (!existsAsWaypoint && !existsAsTrailhead) {
+          setFocalId(defaultFocalId);
+          setStack([]);
+        }
+      }, [filtered.waypoints, trailheads, focalId, defaultFocalId, trailheadFromNodeId]);
+
+      // Directed adjacency — same forward-only model as the subway.
+      const adj = useMemo(() => {
+        const a = new Map();
+        filtered.shortcuts.forEach(sc => {
+          if (!a.has(sc.from)) a.set(sc.from, new Set());
+          a.get(sc.from).add(sc.to);
+          if (!a.has(sc.to)) a.set(sc.to, new Set());
+        });
+        trailheads.forEach(th => {
+          const tid = TRAILHEAD_NODE_PREFIX + th.id;
+          if (!a.has(tid)) a.set(tid, new Set());
+          if (th.to) {
+            a.get(tid).add(th.to);
+            if (!a.has(th.to)) a.set(th.to, new Set());
+          }
+        });
+        return a;
+      }, [filtered.shortcuts, trailheads]);
+
+      const tree = useMemo(() => {
+        if (!focalId) return { depth: new Map(), parent: new Map(), children: new Map() };
+        return buildBfsTree(focalId, adj);
+      }, [focalId, adj]);
+
+      // Scene layout: place every node with depth 1..maxDepth. Ring nodes are
+      // ordered by their parent's x so trails fan out without crossing, then
+      // spread across the ring's arc; the final x blends the even spread with
+      // the parent pull so children lean toward the trail they branch from.
+      const layout = useMemo(() => {
+        const pos = new Map(); // id -> { x, y, s, d }
+        const more = new Map(); // d -> hidden count
+        const byDepth = new Map();
+        tree.depth.forEach((d, id) => {
+          if (id === focalId || d === 0 || d > maxDepth) return;
+          if (!byDepth.has(d)) byDepth.set(d, []);
+          byDepth.get(d).push(id);
+        });
+        for (let d = 1; d <= maxDepth; d++) {
+          const ids = byDepth.get(d) || [];
+          if (ids.length === 0) continue;
+          const desired = ids.map(id => {
+            const p = tree.parent.get(id);
+            const px = (p != null && pos.has(p)) ? pos.get(p).x : VISTA_ORIGIN.x;
+            return { id, px };
+          }).sort((a, b) => a.px - b.px || a.id.localeCompare(b.id));
+          const cap = VISTA_RING_CAP[d];
+          let shown = desired;
+          if (desired.length > cap) {
+            // Even sample across the sorted arc keeps the fan balanced.
+            const step = desired.length / cap;
+            const keep = new Set();
+            for (let i = 0; i < cap; i++) keep.add(Math.floor(i * step));
+            shown = desired.filter((_, i) => keep.has(i));
+            more.set(d, desired.length - shown.length);
+          }
+          const n = shown.length;
+          const half = d === 1 ? 38 : d === 2 ? 33 : 28;
+          shown.forEach((it, i) => {
+            const t = n === 1 ? 0.5 : i / (n - 1);
+            const evenX = 50 - half + t * half * 2;
+            const x = evenX * 0.7 + it.px * 0.3;
+            pos.set(it.id, { x, y: VISTA_RING_Y[d], s: VISTA_RING_S[d], d });
+          });
+        }
+        return { pos, more };
+      }, [tree, focalId, maxDepth]);
+
+      // Trail lines: one quadratic curve per placed node, from its parent's
+      // stand (or your feet, for ring 1) up to its signpost base.
+      const trailPaths = useMemo(() => {
+        const paths = [];
+        layout.pos.forEach((p, id) => {
+          const par = tree.parent.get(id);
+          const pp = (par && layout.pos.has(par)) ? layout.pos.get(par) : VISTA_ORIGIN;
+          const midY = (pp.y + p.y) / 2;
+          paths.push({ id, d: 'M ' + pp.x + ' ' + pp.y + ' Q ' + p.x + ' ' + midY + ' ' + p.x + ' ' + p.y, depth: p.d });
+        });
+        return paths;
+      }, [layout.pos, tree.parent]);
+
+      // Focal display bits for the "you are here" signpost.
+      const focalTrailhead = trailheadFromNodeId(focalId);
+      const focalWp = focalTrailhead ? null : wpById.get(focalId);
+      const focalLabel = focalTrailhead
+        ? '🥾 ' + focalTrailhead.id
+        : (focalId ? focalId.split('/').pop() : '—');
+
+      // Focal picker options — every trailhead pill, then every waypoint.
+      const focalOptions = useMemo(() => {
+        const opts = [];
+        dedupeTrailheadsById(trailheads).forEach(th => {
+          opts.push(React.createElement('option', { key: 'th:' + th.id, value: TRAILHEAD_NODE_PREFIX + th.id }, '🥾 ' + th.id));
+        });
+        [...filtered.waypoints].sort((a, b) => a.id.localeCompare(b.id)).forEach(w => {
+          opts.push(React.createElement('option', { key: w.id, value: w.id }, w.id));
+        });
+        return opts;
+      }, [trailheads, filtered.waypoints]);
+
+      const ringStroke = { 1: { w: 2.2, o: 0.5 }, 2: { w: 1.3, o: 0.34 }, 3: { w: 0.9, o: 0.22 }, 4: { w: 0.7, o: 0.15 } };
+
+      const cards = [];
+      layout.pos.forEach((p, id) => {
+        const th = trailheadFromNodeId(id);
+        const wp = th ? null : wpById.get(id);
+        const label = th ? th.id : id.split('/').pop();
+        const hops = p.d === 1 ? '1 hop away' : p.d + ' hops away';
+        cards.push(React.createElement('button', {
+          key: id,
+          className: 'vista-card' + (th ? ' vista-card-th' : '') + (selectedWaypoint === id ? ' selected' : ''),
+          style: { left: p.x + '%', top: p.y + '%', '--vs': p.s, zIndex: 100 - p.d * 10 },
+          title: (th ? (th.description || th.id) : ((wp && wp.description) || id)) + ' — click to walk there',
+          onClick: () => {
+            onSelectWaypoint(th ? null : id);
+            walkTo(id);
+          },
+        },
+          th
+            ? React.createElement(React.Fragment, null,
+                React.createElement('span', null, '🥾'), label)
+            : React.createElement(React.Fragment, null,
+                (wp && wp.screenshotDataUri)
+                  ? React.createElement('img', { src: wp.screenshotDataUri, alt: id })
+                  : React.createElement('div', { className: 'vista-no-shot' }, '(no screenshot)'),
+                React.createElement('div', { className: 'vista-name' }, label),
+                React.createElement('div', { className: 'vista-hops' }, hops),
+              ),
+        ));
+      });
+      layout.more.forEach((n, d) => {
+        cards.push(React.createElement('div', {
+          key: 'more-' + d,
+          className: 'vista-more',
+          style: { left: '93%', top: VISTA_RING_Y[d] + '%', '--vs': VISTA_RING_S[d], zIndex: 100 - d * 10 },
+          title: n + ' more waypoint' + (n === 1 ? '' : 's') + ' ' + d + ' hop' + (d === 1 ? '' : 's') + ' out — walk closer or raise Depth to see them',
+        }, '+' + n));
+      });
+
+      return React.createElement('div', { className: 'vista-view' },
+        React.createElement('div', { className: 'vista-backdrop' },
+          // Mountain silhouettes — pure scenery, drawn from theme tokens.
+          React.createElement('svg', {
+            viewBox: '0 0 100 32', preserveAspectRatio: 'none',
+            style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '32%' },
+          },
+            React.createElement('polygon', { points: '0,32 12,14 24,26 38,10 52,28 66,16 80,30 92,20 100,32', fill: 'var(--border-strong)', opacity: 0.35 }),
+            React.createElement('polygon', { points: '0,32 18,22 34,30 50,18 68,31 84,24 100,32', fill: 'var(--border)', opacity: 0.55 }),
+          ),
+          React.createElement('div', { className: 'vista-horizon' }),
+        ),
+        React.createElement('svg', {
+          className: 'vista-trails',
+          viewBox: '0 0 100 100', preserveAspectRatio: 'none',
+        },
+          trailPaths.map(tp => {
+            const s = ringStroke[tp.depth] || ringStroke[4];
+            return React.createElement('path', {
+              key: tp.id, d: tp.d,
+              fill: 'none', stroke: 'var(--text-muted)',
+              strokeWidth: s.w, strokeOpacity: s.o,
+              strokeLinecap: 'round',
+              style: { vectorEffect: 'non-scaling-stroke' },
+            });
+          }),
+        ),
+        React.createElement('div', { className: 'subway-help' },
+          React.createElement('strong', { style: { color: 'var(--text)' } }, 'Vista'),
+          React.createElement('br'),
+          'You’re standing at the focal waypoint, looking out over everything reachable in ≤ ' + maxDepth + ' forward hop' + (maxDepth === 1 ? '' : 's') + '. Nearer signposts are one tap away; the small ones sit farther down the trail. Click a signpost to walk there.',
+        ),
+        React.createElement('div', { className: 'subway-trailhead-picker' },
+          React.createElement('div', { className: 'depth-stepper', title: 'Walk back to where you last stood' },
+            React.createElement('button', {
+              type: 'button', onClick: walkBack, disabled: stack.length === 0,
+              title: 'Walk back', 'aria-label': 'Walk back',
+            }, '‹'),
+          ),
+          React.createElement('label', null, 'Standing at'),
+          React.createElement('select', {
+            value: focalId || '',
+            onChange: (e) => { onSelectWaypoint(null); walkTo(e.target.value); },
+          }, focalOptions),
+          React.createElement('label', { title: 'How many forward hops are visible from here' }, 'Depth'),
+          React.createElement('div', { className: 'depth-stepper', title: 'Hops visible (' + VISTA_DEPTH_MIN + '–' + VISTA_DEPTH_MAX + ')' },
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setMaxDepth(d => Math.max(VISTA_DEPTH_MIN, d - 1)),
+              disabled: maxDepth <= VISTA_DEPTH_MIN,
+              title: 'Decrease depth', 'aria-label': 'Decrease depth',
+            }, '−'),
+            React.createElement('div', { className: 'depth-value' }, maxDepth),
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setMaxDepth(d => Math.min(VISTA_DEPTH_MAX, d + 1)),
+              disabled: maxDepth >= VISTA_DEPTH_MAX,
+              title: 'Increase depth', 'aria-label': 'Increase depth',
+            }, '+'),
+          ),
+        ),
+        cards.length === 0 ? React.createElement('div', { className: 'vista-empty' },
+          'Nothing ahead from here — this waypoint has no outgoing shortcuts. Walk back (‹) or pick another spot to stand.',
+        ) : null,
+        cards,
+        React.createElement('button', {
+          className: 'vista-you',
+          title: focalWp ? 'You are standing at ' + focalId + ' — click for details' : 'You are standing at this trailhead',
+          onClick: () => { if (focalWp) onSelectWaypoint(focalId); },
+        },
+          React.createElement('span', { className: 'vista-boot' }, '🥾'),
+          React.createElement('span', { className: 'vista-plaque' },
+            React.createElement('span', { className: 'vista-you-tag' }, 'YOU ARE HERE'),
+            React.createElement('span', { className: 'vista-you-name' }, focalLabel),
+          ),
+        ),
+      );
+    }
+
+    /* ============================================================================
        SCREENS VIEW — flat gallery
        ============================================================================ */
     function ScreensView({ filtered, selectedWaypoint, onSelectWaypoint }) {
@@ -5177,8 +5596,8 @@
       // back below so the address bar always names the current scope.
       const initialAppHash = useRef(parseSubwayHash()).current;
       const [mode, setMode] = useState(
-        ['map', 'subway', 'screens', 'report'].includes(initialAppHash.view) ? initialAppHash.view : 'map',
-      );                                                        // 'map' | 'subway' | 'screens' | 'report'
+        ['map', 'subway', 'vista', 'screens', 'report'].includes(initialAppHash.view) ? initialAppHash.view : 'map',
+      );                                                        // 'map' | 'subway' | 'vista' | 'screens' | 'report'
       const [selectedTarget, setSelectedTarget] = useState(initialAppHash.target || null);
       const [selectedPlatform, setSelectedPlatform] = useState(initialAppHash.platform || null);
       const [selectedWaypoint, setSelectedWaypoint] = useState(null);
@@ -5434,6 +5853,11 @@
               onClick: () => setMode('subway'),
               title: 'Concentric, focal-centered view of the shortcut graph',
             }, 'Subway'),
+            React.createElement('button', {
+              className: 'mode-button' + (mode === 'vista' ? ' active' : ''),
+              onClick: () => setMode('vista'),
+              title: 'Experimental first-person lookout — stand at a waypoint and see everything reachable ahead',
+            }, 'Vista'),
             // Display label is "Waypoints" (our vocabulary); the internal mode
             // key stays 'screens' so existing #view=screens links keep working.
             React.createElement('button', {
@@ -5577,6 +6001,10 @@
               onInspectShortcut: setInspectShortcut,
               onAgentTextChange: setAgentViewText,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
+            }) : null,
+            mode === 'vista' ? React.createElement(VistaView, {
+              filtered, selectedWaypoint,
+              onSelectWaypoint,
             }) : null,
             mode === 'screens' ? React.createElement(ScreensView, {
               filtered, selectedWaypoint,

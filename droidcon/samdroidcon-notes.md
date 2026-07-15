@@ -342,6 +342,17 @@ the waypoints when you run a trail"):
   zoom IN before clicking the trail — that's what makes the tracking shot land;
   at full-fit zoom the camera barely needs to move. Verified in-pane: zoom
   matrix component identical before/during run, pan gliding toward the boot.
+- VISTA (EXPERIMENTAL, Sam's ask "a more engaging, 3D-looking subway copy"):
+  new 5th tab between Subway and Waypoints. First-person lookout: you stand at
+  the focal (🥾 + YOU ARE HERE plaque, bottom center), everything reachable
+  stands as signposts scaled + raised by hop distance toward a mountain
+  horizon — 1 hop = big and near, 3 hops = small on the ridge. Trail lines fan
+  from your feet; clicking a signpost WALKS there (re-roots the BFS; shared
+  keys make surviving cards glide = feels like stepping forward). Controls:
+  Standing-at picker, ‹ walk-back, Depth 1–4 (over-cap rings collapse to +N).
+  Deep link: `#target=contacts&platform=android&view=vista`. SubwayView is
+  byte-identical — Vista is a separate component; demo it only if it comes up,
+  Subway remains the canonical view. NOT in the demo script.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
