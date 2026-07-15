@@ -218,6 +218,16 @@ TR's "zero to one green moment per screen" rule), Hanken Grotesk + JetBrains Mon
 pill toggles/edge-chips, 16px card radius, subway lines rebuilt from the TR accent
 family. Semantics on stage: GREEN = start here (trailheads, reachable-hint),
 BLUE = selection/interaction. Deck stills predate this pass too.
+TRAILHEADS SECTION (698fa69a, Sam 2026-07-15 "that's our thing"): map view has a
+floating 🥾 Trailheads panel (top-left) — one row per trailhead, per-destination
+chips (platform-labelled when cross-platform); CLICK A CHIP live on stage: it
+selects the destination and the map dims + zooms the entry path (free via the
+existing focus behavior). Report view = "trail guide" now and LEADS with a green
+Trailheads section. Header stats start with TRAILHEADS. Vocabulary is fully ours:
+mode button Screens→Waypoints (hash key 'screens' unchanged — old #view= links
+fine), sidebar "Trails / N trails blazed", report cards "Trail"/"waypoints",
+loading state "🥾 Blazing the trail…". DEMO BEAT: open map → point at the panel →
+"three ways in, one click shows the way" → click contacts_launch android chip.
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits
