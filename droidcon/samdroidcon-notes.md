@@ -359,6 +359,12 @@ the waypoints when you run a trail"):
   (App/Subway/Vista) preserve each other's keys. SubwayView is byte-identical —
   Vista is a separate component; demo it only if it comes up, Subway remains
   the canonical view. NOT in the demo script.
+  Iteration 3 (Sam: "not really coming together… try one more iteration"):
+  layout is now true perspective over measured pixels (holds together on any
+  window size), depth 3+ renders as name-pill chips instead of unreadable
+  thumbnails, and the trails are tapered ground polygons with dashed
+  centerlines fanning from your feet — the strongest part of the look.
+  Verdict stands: keep, don't demo.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
