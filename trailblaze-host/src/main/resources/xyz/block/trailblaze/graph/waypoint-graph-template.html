@@ -120,7 +120,10 @@
       color: var(--text);
       font-family: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       font-feature-settings: "ss01", "cv11";
-      overflow: hidden;
+      /* clip, not hidden: hidden still allows programmatic scroll (e.g. the
+         browser scrolling a focused button into view), which wedged the whole
+         layout sideways when the header overflowed at narrow widths. */
+      overflow: clip;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -201,6 +204,14 @@
     .header-counts .count-pair .num {
       color: var(--text-strong); font-size: 13px; font-weight: 600;
       letter-spacing: -0.01em; text-transform: none;
+    }
+    /* Narrow windows: shed the least load-bearing stats instead of letting
+       the header overflow (trailheads + waypoints always stay). */
+    @media (max-width: 1020px) {
+      .header-counts .count-pair:nth-child(4) { display: none; }
+    }
+    @media (max-width: 900px) {
+      .header-counts .count-pair:nth-child(3) { display: none; }
     }
 
     .theme-toggle {
@@ -365,6 +376,79 @@
     }
 
     .canvas-area { flex: 1; position: relative; min-width: 0; min-height: 0; }
+
+    /* ============================================================================
+       TRAILHEADS PANEL — floating "ways in" card on the map canvas
+       ============================================================================
+       Trailheads are Trailblaze's signature concept: the tools that bootstrap
+       an agent into the map from ANY device state. This panel gives them a
+       first-class home instead of leaving them as just another node type.
+       Clicking a destination selects that waypoint, which reuses the map's
+       focus behavior — the entry path lights up and the camera fits it. */
+    .trailheads-panel {
+      position: absolute;
+      top: 14px; left: 14px;
+      z-index: 6;
+      width: 248px;
+      max-height: calc(100% - 28px);
+      overflow-y: auto;
+      background: var(--bg-overlay);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-strong);
+      border-radius: 16px;
+      box-shadow: var(--shadow-elevated);
+      padding: 12px 14px 10px;
+    }
+    .trailheads-panel .th-title {
+      display: flex; align-items: baseline; gap: 7px;
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--trailhead);
+    }
+    .trailheads-panel .th-title .th-count {
+      font-size: 11px; font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .trailheads-panel .th-tagline {
+      margin: 3px 0 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .trailheads-panel .th-item { margin-bottom: 10px; }
+    .trailheads-panel .th-item:last-child { margin-bottom: 2px; }
+    .trailheads-panel .th-id {
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+      font-size: 11px; font-weight: 500;
+      color: var(--text);
+      word-break: break-word;
+      margin-bottom: 5px;
+    }
+    .trailheads-panel .th-id .th-boot { margin-right: 5px; }
+    .trailheads-panel .th-dests { display: flex; flex-wrap: wrap; gap: 5px; }
+    .trailheads-panel .th-dest {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--trailhead);
+      background: var(--trailhead-bg);
+      color: var(--trailhead);
+      font-size: 11px; font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+      max-width: 100%;
+    }
+    .trailheads-panel .th-dest .th-dest-label {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .trailheads-panel .th-dest:hover { box-shadow: 0 0 0 2px var(--trailhead-bg); }
+    .trailheads-panel .th-dest.active {
+      background: var(--trailhead);
+      color: var(--bg);
+    }
 
     .detail-panel {
       flex: none;
@@ -1668,6 +1752,48 @@
     }
     .report-toc-item:hover { border-color: var(--accent); color: var(--text); }
 
+    /* Trailheads section — the report leads with the ways IN before listing
+       the trails that fan out from them. */
+    .report-trailheads {
+      margin-bottom: 32px;
+      padding: 18px 20px 8px;
+      border: 1px solid var(--trailhead);
+      border-radius: 16px;
+      background: var(--trailhead-bg);
+    }
+    .report-trailheads h2 {
+      font-size: 13px; font-weight: 700;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--trailhead);
+      margin: 0 0 4px;
+    }
+    .report-trailheads .report-trailheads-sub {
+      font-size: 12px; color: var(--text-muted);
+      margin: 0 0 14px; line-height: 1.5; max-width: 700px;
+    }
+    .report-trailheads .report-th-row {
+      display: flex; align-items: baseline; gap: 12px;
+      padding: 8px 0 10px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .report-trailheads .report-th-id {
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+      font-size: 12px; font-weight: 600;
+      color: var(--trailhead);
+      flex: none;
+    }
+    .report-trailheads .report-th-desc {
+      font-size: 12px; color: var(--text-muted);
+      line-height: 1.5;
+      flex: 1; min-width: 220px;
+    }
+    .report-trailheads .report-th-dest {
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+      font-size: 11px; color: var(--text);
+      flex: none;
+    }
+
     .report-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
@@ -1676,7 +1802,7 @@
     .report-card {
       background: transparent;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 16px;
       padding: 20px;
       transition: border-color 0.12s;
     }
@@ -1769,7 +1895,7 @@
 </head>
 <body>
   <div id="root">
-    <div class="empty-state"><p>Loading…</p></div>
+    <div class="empty-state"><p>🥾 Blazing the trail…</p></div>
   </div>
 
   <!-- Graph data is inlined as a JSON literal. The Kotlin renderer replaces the
@@ -4219,12 +4345,29 @@
       const titleScope = targets.length === 1 ? targets[0] : 'app';
 
       return React.createElement('div', { className: 'report-view' },
-        React.createElement('h1', { className: 'report-title' }, titleScope + ' user flows'),
+        React.createElement('h1', { className: 'report-title' }, titleScope + ' trail guide'),
         React.createElement('p', { className: 'report-subtitle' },
-          'Auto-derived from the waypoint navigation graph: every reachable (trailhead → screen) pair across ',
-          React.createElement('strong', null, filtered.waypoints.length + ' screen' + (filtered.waypoints.length === 1 ? '' : 's')),
+          'Auto-derived from the waypoint navigation graph: every reachable (trailhead → waypoint) pair across ',
+          React.createElement('strong', null, filtered.waypoints.length + ' waypoint' + (filtered.waypoints.length === 1 ? '' : 's')),
           ', generated from your test corpus and refreshed on every run. Use these for UX teardown work, QA coverage planning, and AI agent navigation context.',
         ),
+
+        // Trailheads lead the guide — the ways IN come before the trails out.
+        filtered.trailheads.length > 0 ? React.createElement('div', { className: 'report-trailheads' },
+          React.createElement('h2', null, '🥾 Trailheads'),
+          React.createElement('p', { className: 'report-trailheads-sub' },
+            'Every trail below starts at one of these entry points. A trailhead bootstraps the agent into the map from any device state — no preconditions, no setup steps.',
+          ),
+          dedupeTrailheadsById(filtered.trailheads).map(th =>
+            React.createElement('div', { key: th.id, className: 'report-th-row' },
+              React.createElement('span', { className: 'report-th-id' }, '🥾 ' + th.id),
+              React.createElement('span', { className: 'report-th-desc' }, (th.description || '').trim() || '—'),
+              React.createElement('span', { className: 'report-th-dest' },
+                '→ ' + filtered.trailheads.filter(t => t.id === th.id).map(t => t.to).join(' · '),
+              ),
+            ),
+          ),
+        ) : null,
 
         // Table of contents
         journeys.length > 0 ? React.createElement('div', { className: 'report-toc' },
@@ -4242,15 +4385,15 @@
             return React.createElement('div', { key: j.id, className: 'report-card' },
               React.createElement('div', { className: 'meta-row' },
                 React.createElement('span', { className: 'meta-num' }, (j.num + '').padStart(2, '0')),
-                React.createElement('span', null, 'Path'),
+                React.createElement('span', null, 'Trail'),
                 React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
-                React.createElement('span', null, j.screens + ' screen' + (j.screens === 1 ? '' : 's')),
+                React.createElement('span', null, j.screens + ' waypoint' + (j.screens === 1 ? '' : 's')),
               ),
               React.createElement('h3', null, j.destinationLabel),
               React.createElement('p', { className: 'description' },
                 'From ' + j.trailheadLabel + ' → ' + j.destinationId + '. ' +
-                'Walks ' + j.screens + ' mapped app ' + (j.screens === 1 ? 'screen' : 'screens') + '. ' +
-                'Use this path for mobile UX teardown work, QA coverage planning, and AI agent navigation context.',
+                'Walks ' + j.screens + ' mapped ' + (j.screens === 1 ? 'waypoint' : 'waypoints') + '. ' +
+                'Use this trail for mobile UX teardown work, QA coverage planning, and AI agent navigation context.',
               ),
               screensInPath.length > 0 ? React.createElement('div', { className: 'screens-strip' },
                 screensInPath.map((wp, i) =>
@@ -4277,7 +4420,64 @@
     }
 
     /* ============================================================================
-       SIDEBAR — User Journeys list
+       TRAILHEADS PANEL — the ways in, first-class
+       ============================================================================
+       Floating card on the map canvas listing every trailhead in scope.
+       Trailheads are the signature Trailblaze concept — the tools that get an
+       agent INTO the map from any device state — so they get their own section
+       instead of hiding among the nodes. Clicking a destination selects that
+       waypoint; the map's existing focus behavior then lights up the entry
+       path and fits the camera to it. */
+    function TrailheadsPanel({ trailheads, selectedWaypoint, onSelectWaypoint }) {
+      // toByPlatform trailheads arrive as one entry per platform destination —
+      // group by id so a cross-platform trailhead renders one row with a chip
+      // per destination. Tiny list; no memo needed.
+      const byId = new Map();
+      trailheads.forEach(th => {
+        if (!byId.has(th.id)) byId.set(th.id, { id: th.id, description: th.description, dests: [] });
+        const g = byId.get(th.id);
+        if (!g.dests.some(d => d.to === th.to)) {
+          g.dests.push({ to: th.to, platform: th.to.split('/')[1] || '' });
+        }
+      });
+      const groups = [...byId.values()];
+      if (groups.length === 0) return null;
+      return React.createElement('div', { className: 'trailheads-panel' },
+        React.createElement('div', { className: 'th-title' },
+          '🥾 Trailheads',
+          React.createElement('span', { className: 'th-count' }, groups.length),
+        ),
+        React.createElement('div', { className: 'th-tagline' },
+          'Every run starts here — these bootstrap the agent into the map from any device state.',
+        ),
+        groups.map(g =>
+          React.createElement('div', { key: g.id, className: 'th-item' },
+            React.createElement('div', { className: 'th-id', title: g.description || g.id },
+              React.createElement('span', { className: 'th-boot' }, '🥾'),
+              g.id,
+            ),
+            React.createElement('div', { className: 'th-dests' },
+              g.dests.map(d =>
+                React.createElement('button', {
+                  key: d.to,
+                  className: 'th-dest' + (selectedWaypoint === d.to ? ' active' : ''),
+                  title: 'Light up the entry path to ' + d.to,
+                  onClick: () => onSelectWaypoint(selectedWaypoint === d.to ? null : d.to),
+                },
+                  '→',
+                  React.createElement('span', { className: 'th-dest-label' },
+                    g.dests.length > 1 ? d.platform : (d.to.split('/').pop() || d.to),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    /* ============================================================================
+       SIDEBAR — Trails list
        ============================================================================ */
     function JourneysSidebar({ journeys, selectedJourneyId, onSelectJourney, mode }) {
       // The sidebar contributes to MAP and REPORT modes. SCREENS is the gallery
@@ -4285,8 +4485,8 @@
       if (mode === 'screens') return null;
       return React.createElement('aside', { className: 'sidebar' },
         React.createElement('div', { className: 'sidebar-header' },
-          React.createElement('h2', null, 'User Journeys'),
-          React.createElement('div', { className: 'sub' }, journeys.length + ' path' + (journeys.length === 1 ? '' : 's') + ' discovered'),
+          React.createElement('h2', null, 'Trails'),
+          React.createElement('div', { className: 'sub' }, journeys.length + ' trail' + (journeys.length === 1 ? '' : 's') + ' blazed'),
         ),
         React.createElement('div', { className: 'sidebar-list' },
           journeys.map(j =>
@@ -4297,7 +4497,7 @@
             },
               React.createElement('div', { className: 'journey-row1' },
                 React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
-                React.createElement('span', { className: 'journey-screens' }, j.screens + ' scr'),
+                React.createElement('span', { className: 'journey-screens' }, j.screens + ' wp'),
               ),
               React.createElement('div', { className: 'journey-row2' }, j.destinationLabel),
               React.createElement('div', { className: 'journey-row3' }, 'via ' + j.trailheadLabel),
@@ -4697,10 +4897,12 @@
               onClick: () => setMode('subway'),
               title: 'Concentric, focal-centered view of the shortcut graph',
             }, 'Subway'),
+            // Display label is "Waypoints" (our vocabulary); the internal mode
+            // key stays 'screens' so existing #view=screens links keep working.
             React.createElement('button', {
               className: 'mode-button' + (mode === 'screens' ? ' active' : ''),
               onClick: () => setMode('screens'),
-            }, 'Screens',
+            }, 'Waypoints',
               React.createElement('span', { className: 'count' }, filtered.waypoints.length),
             ),
             React.createElement('button', {
@@ -4709,13 +4911,17 @@
             }, 'Report'),
           ),
           React.createElement('div', { className: 'header-counts' },
+            React.createElement('span', { className: 'count-pair', title: 'Entry points that bootstrap the agent into the map' },
+              React.createElement('span', { className: 'num' }, dedupeTrailheadsById(filtered.trailheads).length),
+              'trailheads',
+            ),
             React.createElement('span', { className: 'count-pair' },
               React.createElement('span', { className: 'num' }, filtered.waypoints.length),
               'waypoints',
             ),
             React.createElement('span', { className: 'count-pair' },
               React.createElement('span', { className: 'num' }, journeys.length),
-              'paths',
+              'trails',
             ),
             React.createElement('span', { className: 'count-pair' },
               React.createElement('span', { className: 'num' }, filtered.shortcuts.length),
@@ -4807,6 +5013,14 @@
               onSelectWaypoint: setSelectedWaypoint,
               onInspectShortcut: setInspectShortcut,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
+            }) : null,
+            // Trailheads panel floats over the map canvas only — subway's
+            // top-left already hosts the focal explainer card, and the
+            // trailheads there are pinned pills anyway.
+            mode === 'map' ? React.createElement(TrailheadsPanel, {
+              trailheads: filtered.trailheads,
+              selectedWaypoint,
+              onSelectWaypoint: setSelectedWaypoint,
             }) : null,
             mode === 'subway' ? React.createElement(SubwayView, {
               filtered, journeys, selectedWaypoint,
@@ -5003,7 +5217,7 @@
 
     function EmptyState({ message }) {
       return React.createElement('div', { className: 'empty-state' },
-        React.createElement('h2', null, 'No waypoints to display'),
+        React.createElement('h2', null, '🥾 No waypoints blazed yet'),
         React.createElement('p', null, message),
       );
     }
