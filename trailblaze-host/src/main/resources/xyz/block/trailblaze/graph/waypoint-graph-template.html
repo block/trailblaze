@@ -884,6 +884,27 @@
       @keyframes trail-flow { to { stroke-dashoffset: -8.5; } }
       @keyframes trail-flow-entry { to { stroke-dashoffset: -13; } }
     }
+    /* The agent walker — a boot that travels the entry route when a waypoint
+       is selected (created/positioned from JS inside .react-flow__viewport,
+       so it pans and zooms with the graph). */
+    .trail-walker {
+      position: absolute;
+      top: 0; left: 0;
+      z-index: 10;
+      font-size: 22px;
+      line-height: 1;
+      pointer-events: none;
+      filter: drop-shadow(0 0 7px rgba(0, 224, 19, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+      will-change: transform;
+    }
+    .trail-walker.arrived {
+      animation: walker-arrive 0.65s ease-out forwards;
+    }
+    @keyframes walker-arrive {
+      0%   { opacity: 1; }
+      40%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
 
     /* ============================================================================
        SUBWAY VIEW — concentric, focal-centered, expand-on-click
@@ -2636,6 +2657,9 @@
         if (!selectedWaypoint) return null;
         const nodes = new Set([selectedWaypoint]);
         const edges = new Set(); // 'shortcut::<id>' or 'trailhead::<id>'
+        // Ordered edge-key routes (trailhead → W), one per trailhead that
+        // reaches W — the walker animation below travels the shortest one.
+        const routes = [];
 
         // Build forward adjacency, keyed by source. Each entry holds the
         // outgoing shortcut id alongside the destination so we can identify
@@ -2672,11 +2696,13 @@
           if (!found) return;
 
           // Walk back from W → trailhead-destination, marking the route.
+          const routeEdges = [];
           let cur = selectedWaypoint;
           while (cur !== null && parent.get(cur) !== null) {
             nodes.add(cur);
             const p = parent.get(cur);
             edges.add('shortcut::' + p.edgeId);
+            routeEdges.push('shortcut::' + p.edgeId);
             cur = p.from;
           }
           // Add the trailhead-destination + the trailhead pill itself
@@ -2684,6 +2710,8 @@
           nodes.add(th.to);
           nodes.add(TRAILHEAD_NODE_PREFIX + th.id);
           edges.add(trailheadEdgeKey('trailhead::', th));
+          routeEdges.push(trailheadEdgeKey('trailhead::', th));
+          routes.push(routeEdges.reverse()); // now ordered trailhead → W
         });
 
         // Strict path-only focus: nothing else gets added. Off-path edges
@@ -2691,7 +2719,7 @@
         // the graph — the user explicitly asked for label brightness to
         // match the dimmed nodes around them.
 
-        return { nodes, edges };
+        return { nodes, edges, routes };
       }, [selectedWaypoint, filtered.shortcuts, filtered.trailheads]);
 
       const nodes = useMemo(() => [
@@ -2891,6 +2919,90 @@
           );
         }, 80);
         return () => clearTimeout(t);
+      }, [focusedSet]);
+
+      // ---- Agent walker ------------------------------------------------
+      // A boot walks the SHORTEST entry route (trailhead → selection) when a
+      // waypoint is selected — the map doesn't just highlight how an agent
+      // would get there, it shows the walk. The marker lives inside
+      // .react-flow__viewport so it inherits pan/zoom, and it samples the
+      // rendered edge SVG paths via getPointAtLength, so it follows exactly
+      // what the user sees (including smoothstep curves).
+      const walkerRef = useRef(null);
+      useEffect(() => {
+        const reduced = window.matchMedia
+          && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const routes = focusedSet && focusedSet.routes;
+        if (reduced || !routes || !routes.length) return;
+        const route = routes.reduce((a, b) => (b.length < a.length ? b : a));
+        // Very long routes would walk forever — the flowing dashes already
+        // carry the story there.
+        if (route.length === 0 || route.length > 14) return;
+        let cancelled = false;
+        let rafId = 0;
+        let attempts = 0;
+        let timer = 0;
+        // Wait a beat so React Flow has rendered the focused edges and the
+        // fitBounds camera move is underway (the marker pans with it).
+        const spawn = () => {
+          if (cancelled) return;
+          const host = document.querySelector('.map-flow .react-flow__viewport');
+          const esc = (window.CSS && CSS.escape) ? CSS.escape : (s => s.replace(/"/g, '\\"'));
+          const paths = host && route.map(key =>
+            document.querySelector('.map-flow .react-flow__edge[data-id="' + esc(key) + '"] .react-flow__edge-path'));
+          if (!host || paths.some(p => !p)) {
+            // Focused edges can be briefly out of the DOM while React Flow
+            // re-measures nodes (see MeasureKick) — retry a few beats.
+            attempts += 1;
+            if (attempts <= 10) timer = setTimeout(spawn, 250);
+            return;
+          }
+          const marker = document.createElement('div');
+          marker.className = 'trail-walker';
+          marker.textContent = '🥾';
+          host.appendChild(marker);
+          walkerRef.current = marker;
+          const SPEED = 420;       // px/s along the edge path
+          const MIN_LEG_MS = 260;  // short hops still read as movement
+          let leg = 0;
+          let legStart = 0;
+          let legLen = paths[0].getTotalLength();
+          let legDur = Math.max(MIN_LEG_MS, (legLen / SPEED) * 1000);
+          const step = (ts) => {
+            if (cancelled) return;
+            if (!legStart) legStart = ts;
+            const t = Math.min(1, (ts - legStart) / legDur);
+            const pt = paths[leg].getPointAtLength(legLen * t);
+            marker.style.transform =
+              'translate(' + pt.x + 'px,' + pt.y + 'px) translate(-50%, -50%)';
+            if (t >= 1) {
+              leg += 1;
+              if (leg >= paths.length) {
+                marker.classList.add('arrived');
+                setTimeout(() => {
+                  if (marker.parentNode) marker.parentNode.removeChild(marker);
+                  if (walkerRef.current === marker) walkerRef.current = null;
+                }, 700);
+                return;
+              }
+              legStart = 0;
+              legLen = paths[leg].getTotalLength();
+              legDur = Math.max(MIN_LEG_MS, (legLen / SPEED) * 1000);
+            }
+            rafId = requestAnimationFrame(step);
+          };
+          rafId = requestAnimationFrame(step);
+        };
+        timer = setTimeout(spawn, 350);
+        return () => {
+          cancelled = true;
+          clearTimeout(timer);
+          if (rafId) cancelAnimationFrame(rafId);
+          if (walkerRef.current && walkerRef.current.parentNode) {
+            walkerRef.current.parentNode.removeChild(walkerRef.current);
+          }
+          walkerRef.current = null;
+        };
       }, [focusedSet]);
 
       return React.createElement(ReactFlow, {
