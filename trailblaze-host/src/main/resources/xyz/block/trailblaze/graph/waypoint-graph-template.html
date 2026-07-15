@@ -15,6 +15,9 @@
        will fetch on first load and cache thereafter. For air-gap support a future
        version vendors these assets, but for now we choose the simpler path. -->
   <link rel="stylesheet" href="https://esm.sh/@xyflow/react@12/dist/style.css">
+  <!-- Trail Runner brand fonts — same import the trailrunner surface uses
+       (trailblaze-host/.../trailrunner/web/styles/trailrunner.css). -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 
   <style>
     /* ============================================================================
@@ -24,82 +27,90 @@
        <html>. Every visual surface reads from these vars so the theme toggle is
        a single attribute swap rather than a CSS recompile.
     */
+    /* Palettes follow the Trail Runner design language (trailrunner.css):
+       neutral near-black surface tiers (depth via background, not borders),
+       white-alpha hairlines, sky-blue accent, and exactly ONE high-emphasis
+       green moment per screen — here, the trailheads (where a run starts). */
     :root[data-theme="dark"] {
       color-scheme: dark;
-      --bg: #0e1014;
-      --bg-radial: radial-gradient(ellipse at top, #1a1f2e 0%, #0e1014 60%);
-      --bg-elevated: #181c25;
-      --bg-elevated-2: #20252f;
-      --bg-overlay: rgba(20, 24, 32, 0.85);
-      --border: #262b35;
-      --border-strong: #353c4a;
-      --border-active: #4f5b76;
-      --accent: #7da9ff;
-      --accent-strong: #a8c4ff;
-      --accent-bg: rgba(125, 169, 255, 0.14);
-      --trailhead: #c4a9ff;
+      --bg: #0f0f0f;
+      --bg-radial: radial-gradient(ellipse at top, #161616 0%, #0f0f0f 60%);
+      --bg-elevated: #181818;
+      --bg-elevated-2: #232323;
+      --bg-overlay: rgba(15, 15, 15, 0.88);
+      --border: rgba(255, 255, 255, 0.07);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --border-active: rgba(255, 255, 255, 0.20);
+      --accent: #3399ff;
+      --accent-strong: #66b2ff;
+      --accent-bg: rgba(51, 153, 255, 0.14);
+      /* Trail Runner's primary green is the palette's single high-emphasis
+         moment; trailheads are the graph's "start here", so they own it. */
+      --trailhead: #00e013;
       /* Edge contrast bumped: 0.38 was unreadable at default zoom against
          the dark background once paths got dense. 0.65 makes paths actually
          visible without competing with node screenshots. */
-      --trailhead-bg: rgba(196, 169, 255, 0.14);
+      --trailhead-bg: rgba(0, 224, 19, 0.10);
       /* Painted trail-blaze marks on waypoint cards — platform color coding.
-         Android green is the platform's own brand green; iOS stays in the
-         viewer's blue family so the two read as "cool vs warm-green", not
-         "brand war". */
-      --blaze-android: #3ddc84;
-      --blaze-ios: #6fb3ff;
-      --tree-edge: rgba(220, 226, 240, 0.7);
-      --cross-edge: rgba(220, 226, 240, 0.14);
-      --back-edge: rgba(220, 226, 240, 0.10);
-      --text: #e7eaf0;
+         Android sits in the trailhead's green family (success tone), iOS in
+         the accent's blue family, so the pair reads "cool vs warm-green",
+         not "brand war". */
+      --blaze-android: #00d533;
+      --blaze-ios: #3399ff;
+      --tree-edge: rgba(232, 232, 232, 0.68);
+      --cross-edge: rgba(232, 232, 232, 0.14);
+      --back-edge: rgba(232, 232, 232, 0.10);
+      --text: #e8e8e8;
       --text-strong: #ffffff;
-      --text-muted: #7d8597;
-      --text-faint: #565d6e;
-      --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.18);
-      --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
-      --badge-navigate: #7da9ff;
-      --badge-auth: #ffb86b;
-      --badge-payment: #5eddb0;
-      --badge-search: #d088ff;
-      --badge-support: #ffd166;
-      --badge-legal: #8a93a3;
-      --badge-cancel: #ff7a8a;
-      --badge-account: #95a4c4;
+      --text-muted: #a2a2a2;
+      --text-faint: #666666;
+      --shadow-card: 0 1px 2px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.22);
+      --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06);
+      --badge-navigate: #3399ff;
+      --badge-auth: #ff8700;
+      --badge-payment: #00d533;
+      --badge-search: #b141ff;
+      --badge-support: #fb60c4;
+      --badge-legal: #a2a2a2;
+      --badge-cancel: #f84752;
+      --badge-account: #3b7fe6;
     }
     :root[data-theme="light"] {
       color-scheme: light;
-      --bg: #f8f9fb;
-      --bg-radial: radial-gradient(ellipse at top, #ffffff 0%, #eef1f6 60%);
+      --bg: #edeff3;
+      --bg-radial: radial-gradient(ellipse at top, #ffffff 0%, #edeff3 60%);
       --bg-elevated: #ffffff;
-      --bg-elevated-2: #f4f6fa;
+      --bg-elevated-2: #e7eaf0;
       --bg-overlay: rgba(255, 255, 255, 0.92);
-      --border: #e4e7ee;
-      --border-strong: #cdd2dc;
-      --border-active: #98a2b3;
-      --accent: #2563eb;
-      --accent-strong: #1e40af;
-      --accent-bg: rgba(37, 99, 235, 0.10);
-      --trailhead: #7c3aed;
-      --trailhead-bg: rgba(124, 58, 237, 0.10);
-      --blaze-android: #109d58;
-      --blaze-ios: #2563eb;
-      --tree-edge: rgba(20, 24, 32, 0.72);
-      --cross-edge: rgba(20, 24, 32, 0.18);
-      --back-edge: rgba(20, 24, 32, 0.10);
-      --text: #1f2330;
-      --text-strong: #0a0d14;
-      --text-muted: #5b6478;
-      --text-faint: #8b94a6;
+      --border: rgba(15, 23, 42, 0.10);
+      --border-strong: rgba(15, 23, 42, 0.16);
+      --border-active: rgba(15, 23, 42, 0.27);
+      --accent: #377bff;
+      --accent-strong: #3b7fe6;
+      --accent-bg: rgba(55, 123, 255, 0.10);
+      /* Pressed-state green from Trail Runner — the full-brightness #00e013
+         doesn't carry enough contrast as text on white. */
+      --trailhead: #00b843;
+      --trailhead-bg: rgba(0, 184, 67, 0.10);
+      --blaze-android: #00b843;
+      --blaze-ios: #377bff;
+      --tree-edge: rgba(20, 22, 26, 0.72);
+      --cross-edge: rgba(20, 22, 26, 0.18);
+      --back-edge: rgba(20, 22, 26, 0.10);
+      --text: #14161a;
+      --text-strong: #14161a;
+      --text-muted: #525964;
+      --text-faint: #9aa1ab;
       --shadow-card: 0 1px 2px rgba(15,23,42,0.06), 0 4px 14px rgba(15,23,42,0.06);
       --shadow-elevated: 0 8px 32px rgba(15,23,42,0.12), 0 2px 6px rgba(15,23,42,0.08);
-      --badge-navigate: #2563eb;
+      --badge-navigate: #377bff;
       --badge-auth: #b45309;
-      --badge-payment: #047857;
-      --badge-search: #7c3aed;
-      --badge-support: #b45309;
-      --badge-legal: #475569;
-      --badge-cancel: #be123c;
-      --badge-account: #475569;
+      --badge-payment: #00812f;
+      --badge-search: #9752ff;
+      --badge-support: #a43979;
+      --badge-legal: #6b7280;
+      --badge-cancel: #d92735;
+      --badge-account: #3b7fe6;
     }
 
     * { box-sizing: border-box; }
@@ -107,7 +118,7 @@
       margin: 0; padding: 0; height: 100vh; width: 100vw;
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+      font-family: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       font-feature-settings: "ss01", "cv11";
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
@@ -135,25 +146,30 @@
     .app-header .brand .logo {
       width: 18px; height: 18px;
       display: inline-flex; align-items: center; justify-content: center;
-      background: var(--accent); color: #fff;
-      border-radius: 5px; font-size: 11px; font-weight: 700;
+      /* Inverse-neutral chip (Trail Runner style) — keeps green exclusive
+         to trailheads and blue to interactive accents. */
+      background: var(--text-strong); color: var(--bg);
+      border-radius: 6px; font-size: 11px; font-weight: 700;
     }
     .app-header .scope {
       color: var(--text-muted); font-weight: 500;
       padding-left: 12px; margin-left: 4px;
       border-left: 1px solid var(--border);
+      /* Hanken Grotesk runs wider than the system stack — without this the
+         flex header wraps the scope into a stacked column. */
+      white-space: nowrap;
     }
     .mode-toggle {
       display: inline-flex;
       background: var(--bg-elevated-2);
-      border-radius: 8px;
+      border-radius: 999px; /* Trail Runner signature pill */
       padding: 3px;
       margin: 0 auto;
       gap: 2px;
     }
     .mode-button {
       padding: 5px 14px;
-      border-radius: 6px;
+      border-radius: 999px;
       border: none; background: transparent;
       color: var(--text-muted);
       font-family: inherit; font-size: 12px; font-weight: 600;
@@ -191,7 +207,7 @@
       width: 30px; height: 30px;
       display: inline-flex; align-items: center; justify-content: center;
       border: 1px solid var(--border-strong);
-      border-radius: 7px;
+      border-radius: 999px;
       background: var(--bg-elevated-2);
       color: var(--text-muted);
       cursor: pointer;
@@ -370,7 +386,7 @@
       word-break: break-word;
     }
     .detail-panel-header .id {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11px; color: var(--text-muted);
       margin-top: 4px; word-break: break-all;
     }
@@ -429,10 +445,10 @@
     .detail-edge .arrow {
       color: var(--text-faint);
       margin: 0 4px;
-      font-family: ui-monospace, monospace;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
     }
     .detail-edge .target-id {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       color: var(--text); font-size: 11px;
     }
     .detail-edge .desc {
@@ -441,7 +457,7 @@
     }
     .detail-source {
       padding: 8px 16px 14px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 10px; color: var(--text-faint);
       word-break: break-all;
     }
@@ -489,7 +505,7 @@
       margin-top: 4px;
       color: var(--text-faint);
       font-size: 11px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
     }
     .matcher-entry pre {
       margin: 6px 0 0;
@@ -497,7 +513,7 @@
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 4px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 10.5px;
       line-height: 1.45;
       color: var(--text);
@@ -535,7 +551,7 @@
        stroke color is baked per-theme below because data-URIs can't read CSS
        vars. Opacity is deliberately whisper-quiet — texture, not content. */
     .map-flow {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(220,226,240,0.055)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(232,232,232,0.055)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
       background-size: 520px 520px;
     }
     :root[data-theme="light"] .map-flow {
@@ -562,7 +578,7 @@
       width: 220px;
       background: var(--bg-elevated);
       border: 1px solid var(--border-strong);
-      border-radius: 10px;
+      border-radius: 16px; /* Trail Runner card radius */
       overflow: hidden;
       transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
       cursor: pointer;
@@ -613,7 +629,7 @@
     }
     .waypoint-label {
       padding: 8px 11px 10px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11.5px;
       line-height: 1.4;
       word-break: break-word;
@@ -633,7 +649,7 @@
     }
     .react-flow__edge-text {
       fill: var(--text) !important;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif !important;
+      font-family: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, system-ui, sans-serif !important;
       font-size: 12px !important;
       font-weight: 600;
       pointer-events: none;
@@ -659,7 +675,7 @@
       border: 1.5px solid var(--trailhead);
       font-size: 12.5px;
       font-weight: 600;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       max-width: 280px;
       text-align: center;
       line-height: 1.3;
@@ -690,14 +706,14 @@
     .edge-label {
       position: absolute;
       pointer-events: all;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+      font-family: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       font-size: 12px;
       font-weight: 600;
       color: var(--text);
       background: var(--bg-elevated);
       border: 1px solid var(--border-strong);
-      border-radius: 6px;
-      padding: 3px 8px;
+      border-radius: 999px;
+      padding: 3px 9px;
       box-shadow: 0 1px 3px rgba(0,0,0,0.15);
       white-space: nowrap;
       max-width: 180px;
@@ -774,7 +790,7 @@
       background: var(--bg-elevated-2);
       border: 1px solid var(--border);
       border-radius: 3px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 10px;
       color: var(--text);
     }
@@ -788,7 +804,7 @@
     }
     .agent-prompt-body pre {
       margin: 0;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 12px;
       line-height: 1.5;
       color: var(--text);
@@ -871,7 +887,7 @@
       line-height: 1.4;
     }
     .detail-inline-title .id {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11px;
       color: var(--text-muted);
     }
@@ -959,7 +975,7 @@
     }
     .agent-view-body pre {
       margin: 0;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 12px;
       line-height: 1.5;
       color: var(--text);
@@ -994,7 +1010,7 @@
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 3px 6px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11px;
       cursor: pointer;
       /* Lock the width so the surrounding picker bar doesn't reflow
@@ -1008,7 +1024,7 @@
     }
     .subway-trailhead-picker select:hover { border-color: var(--accent); }
     .subway-trailhead-picker .static-value {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11px;
       color: var(--text);
       padding: 3px 6px;
@@ -1060,7 +1076,7 @@
     .subway-trailhead-picker .depth-stepper .depth-value {
       min-width: 26px;
       text-align: center;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 12px;
       font-weight: 600;
       color: var(--text);
@@ -1109,7 +1125,7 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.35);
       pointer-events: none;
       letter-spacing: -0.02em;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
     }
 
     /* Ghost preview cards — scaled-down waypoint cards that fan out from
@@ -1120,7 +1136,7 @@
     .subway-ghost-card {
       width: 78px;
       background: var(--bg-elevated);
-      border: 1px solid rgba(220, 226, 240, 0.22);
+      border: 1px solid rgba(232, 232, 232, 0.22);
       border-radius: 6px;
       overflow: hidden;
       opacity: 0.55;
@@ -1135,7 +1151,7 @@
       color: var(--text);
       font-weight: 600;
       letter-spacing: -0.005em;
-      border-bottom: 1px solid rgba(220, 226, 240, 0.1);
+      border-bottom: 1px solid rgba(232, 232, 232, 0.1);
       max-height: 28px;
       overflow: hidden;
       display: -webkit-box;
@@ -1164,7 +1180,7 @@
       border-radius: 999px;
       font-size: 9px;
       font-weight: 600;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       opacity: 0.6;
       filter: saturate(0.6);
       pointer-events: none;
@@ -1182,7 +1198,7 @@
       opacity: 0.42;
       filter: saturate(0.4) brightness(0.85);
       border-style: dashed;
-      border-color: rgba(220, 226, 240, 0.32);
+      border-color: rgba(232, 232, 232, 0.32);
     }
     .subway-flow .react-flow__node.subway-back-node:hover .subway-ghost-card {
       opacity: 0.95;
@@ -1312,7 +1328,7 @@
       border-radius: 999px;
       font-size: 13.5px;
       font-weight: 700;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       letter-spacing: 0.01em;
       box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.08), var(--shadow-card);
       cursor: pointer;
@@ -1379,13 +1395,13 @@
       font-weight: 600;
       color: var(--text-muted);
       letter-spacing: 0.01em;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
     }
     .shortcut-modal-route {
       margin-top: 6px;
       font-size: 14px;
       color: var(--text-strong);
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-weight: 600;
       word-break: break-word;
     }
@@ -1455,12 +1471,12 @@
       justify-content: center;
       font-size: 11px;
       font-weight: 700;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
     }
     .shortcut-step-body {
       flex: 1;
       margin: 0;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 12px;
       line-height: 1.55;
       color: var(--text);
@@ -1475,7 +1491,7 @@
       border-radius: 8px;
     }
     .shortcut-modal-native code {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 12px;
       color: var(--text-strong);
       background: rgba(124, 58, 237, 0.1);
@@ -1602,7 +1618,7 @@
       border-top: 1px solid var(--border);
     }
     .screen-card .screen-id {
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 11px;
       line-height: 1.35;
       color: var(--text);
@@ -1645,7 +1661,7 @@
       border-radius: 7px;
       font-size: 11px;
       color: var(--text-muted);
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       cursor: pointer;
       transition: border-color 0.12s, color 0.12s;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1669,7 +1685,7 @@
       display: flex; align-items: center; gap: 10px;
       margin-bottom: 10px;
       font-size: 11px; color: var(--text-faint);
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       letter-spacing: 0.04em; text-transform: uppercase;
     }
     .report-card .meta-num {
@@ -1719,7 +1735,7 @@
     }
     .report-card .strip-label {
       margin-top: 4px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 10px; color: var(--text-muted);
       overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap;
@@ -1731,7 +1747,7 @@
       padding: 3px 8px;
       border: 1px solid var(--border);
       border-radius: 5px;
-      font-family: ui-monospace, "SF Mono", monospace;
+      font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
       font-size: 10px; color: var(--text-muted);
       max-width: 200px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2692,7 +2708,7 @@
           pannable: true,
           zoomable: true,
           nodeColor: subwayMiniMapNodeColor,
-          nodeStrokeColor: 'rgba(220, 226, 240, 0.35)',
+          nodeStrokeColor: 'rgba(232, 232, 232, 0.35)',
           nodeStrokeWidth: 1,
           maskColor: 'rgba(0, 0, 0, 0.55)',
         }),
@@ -2723,10 +2739,13 @@
        lines (transfer stations) show no extra decoration — the inbound
        edges already broadcast the line colors visually.
     */
+    /* Line colors drawn from the Trail Runner accent family, ordered so
+       neighbouring indices never land on look-alike hues (sky vs cobalt,
+       purple vs violet are separated). */
     const SUBWAY_PALETTE = [
-      '#FF6B6B', '#4ECDC4', '#FFD166', '#A78BFA',
-      '#06D6A0', '#FF9F1C', '#118AB2', '#EF476F',
-      '#73D2DE', '#F4A261', '#9D4EDD', '#43AA8B',
+      '#00E013', '#3399FF', '#B141FF', '#FF8700',
+      '#FB60C4', '#00C2B8', '#F84752', '#FFC533',
+      '#9752FF', '#3B7FE6', '#A43979', '#CC00FF',
     ];
     function colorForJourney(idx) { return SUBWAY_PALETTE[idx % SUBWAY_PALETTE.length]; }
 
@@ -3989,7 +4008,7 @@
           edgesFocusable: false,
           onInit, onNodeClick, onPaneClick, onNodeDragStart, onNodeDrag, onNodeDragStop,
         },
-          React.createElement(Background, { gap: 24, size: 1, color: 'rgba(220,226,240,0.05)' }),
+          React.createElement(Background, { gap: 24, size: 1, color: 'rgba(232,232,232,0.05)' }),
           React.createElement(Controls, { showInteractive: false }),
           React.createElement(MiniMap, {
             pannable: true,
@@ -4000,7 +4019,7 @@
             // selected in the focal accent, everything else in a soft text
             // tone that still reads on the dark MiniMap backdrop.
             nodeColor: subwayMiniMapNodeColor,
-            nodeStrokeColor: 'rgba(220, 226, 240, 0.35)',
+            nodeStrokeColor: 'rgba(232, 232, 232, 0.35)',
             nodeStrokeWidth: 1,
             maskColor: 'rgba(0, 0, 0, 0.55)',
           }),
@@ -4013,12 +4032,14 @@
     function subwayMiniMapNodeColor(node) {
       // Ghosts are visual hints, not real graph nodes — keep them barely
       // there in the MiniMap so they don't impersonate stations.
-      if (node.type === 'subwayGhost') return 'rgba(220, 226, 240, 0.15)';
-      if (node.type === 'subwayTrailhead' || node.type === 'trailhead') return '#7c3aed';
-      if (node.selected) return '#22c55e';
+      if (node.type === 'subwayGhost') return 'rgba(232, 232, 232, 0.15)';
+      // Trailheads carry the brand green (matches --trailhead); selection and
+      // focal markers use the interactive blue accent so the two never blur.
+      if (node.type === 'subwayTrailhead' || node.type === 'trailhead') return '#00e013';
+      if (node.selected) return '#3399ff';
       const cls = (node && node.className) || '';
-      if (cls.indexOf('subway-focal') >= 0) return '#22c55e';
-      return 'rgba(220, 226, 240, 0.6)';
+      if (cls.indexOf('subway-focal') >= 0) return '#3399ff';
+      return 'rgba(232, 232, 232, 0.6)';
     }
 
     function SubwayStationNode({ data, selected }) {
