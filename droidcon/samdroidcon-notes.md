@@ -206,12 +206,14 @@ not the map render (upstream #202 gap — candidate report, don't file unprompte
    green and FLOWS, camera fits, and a 🥾 walks the route. Line: "the map doesn't
    just show the way in — watch the boot make the trip." (Panel steps back to 25%
    while selected; hover brings it back. Deselect = click empty canvas.)
-3½. NEW — click "Oss Licenses Trail" in the 🗺️ FEATURED TRAILS legend (same panel,
-   below trailheads): the orange route lights END-TO-END, camera fits, and the 🥾
-   runs the WHOLE trail — list → drawer → settings → about → oss-licenses. Line:
-   "trails have names now — watch the boot run one, trailhead to summit." Colored
-   dashes at rest = the 8 marquee trails, park-map style. Re-click the row (or
-   click empty canvas) to deselect. Deep link if needed:
+3½. NEW — ZOOM IN first (2-3 clicks or pinch — the follow-cam honors your zoom),
+   then click "Oss Licenses Trail" in the 🗺️ FEATURED TRAILS legend (same panel,
+   below trailheads): the orange route lights END-TO-END and the CAMERA RIDES
+   ALONG with the 🥾 as it runs the whole trail — list → drawer → settings →
+   about → oss-licenses — a tracking shot at your zoom level (no fit-zoom jump).
+   Line: "trails have names now — ride along while the boot runs one, trailhead
+   to summit." Colored dashes at rest = the 8 marquee trails, park-map style.
+   Re-click the row (or click empty canvas) to deselect. Deep link if needed:
    `#target=contacts&platform=android&trail=discard-customizations-dialog-trail`.
 4. Click a DEEPER card (e.g. delete-contact-dialog): multi-leg walk — trailhead →
    contact-detail → overflow → dialog. "That's the agent's actual route."
@@ -331,6 +333,14 @@ the waypoints when you run a trail"):
 - DEMO SCRIPT UPDATE: insert between beats 3 and 4 — click "Oss Licenses Trail"
   in the panel: "these are named trails now — watch the boot run the whole thing,
   trailhead to summit." Orange route end-to-end + full walk is the wow.
+- FOLLOW-CAM (aa691bf8, Sam's ask "viewport follows the boot, honor the zoom"):
+  trail runs no longer fit-zoom to the route — the camera eases toward the boot
+  every frame (lerp 0.12) at the user's CURRENT zoom, re-read per frame so
+  pinching mid-walk still tracks. Pauses while the pane is dragged; falls back
+  to fit-to-bounds when no walker runs (reduced motion / >24 legs). STAGE TIP:
+  zoom IN before clicking the trail — that's what makes the tracking shot land;
+  at full-fit zoom the camera barely needs to move. Verified in-pane: zoom
+  matrix component identical before/during run, pan gliding toward the boot.
 
 ### 🙋 Ready-to-paste: opening audience poll (no slide needed — just say it)
 Right on the opener (round 10: "AI is supposed to do everything"): *"Quick hands — who's
