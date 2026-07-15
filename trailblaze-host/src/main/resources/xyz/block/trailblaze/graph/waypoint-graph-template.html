@@ -2198,8 +2198,13 @@
     .vista-exits .vista-exit:hover {
       background: color-mix(in srgb, var(--trailhead) 14%, transparent);
     }
+    /* Stars only exist after dark — daytime sky hides them. */
+    :root[data-theme="light"] .vista-stars { display: none; }
+    /* Mountain layers get a whisper of mouse parallax (set imperatively via
+       transform on their <g> wrappers — no React re-render per mousemove). */
+    .vista-backdrop g { transition: transform 0.18s ease-out; }
     @media (prefers-reduced-motion: reduce) {
-      .vista-card, .vista-scene, .vista-trails path { transition: none !important; }
+      .vista-card, .vista-scene, .vista-trails path, .vista-backdrop g { transition: none !important; }
     }
     .vista-you {
       position: absolute;
@@ -4955,6 +4960,12 @@
     const VISTA_RING_S = { 1: 1, 2: 0.6, 3: 0.38, 4: 0.26 };
     const VISTA_RING_CAP = { 1: 7, 2: 9, 3: 12, 4: 14 };
     const VISTA_ORIGIN = { x: 50, y: 90 }; // where "you" stand, in scene %
+    // Hand-placed night-sky stars (sky viewBox is 100 × 32).
+    const VISTA_STARS = [
+      [6, 4], [14, 9], [22, 3], [31, 12], [40, 6], [47, 2], [55, 10], [62, 5],
+      [70, 13], [76, 3], [84, 8], [91, 12], [96, 5], [27, 7], [67, 8], [10, 14],
+      [88, 4], [50, 15],
+    ];
 
     function VistaView({ filtered, selectedWaypoint, onSelectWaypoint }) {
       const trailheads = filtered.trailheads;
@@ -5261,15 +5272,56 @@
       const exitThs = dedupeTrailheadsById(trailheads)
         .filter(th => TRAILHEAD_NODE_PREFIX + th.id !== focalId);
 
-      return React.createElement('div', { className: 'vista-view' },
+      // Mouse parallax on the mountain layers — mutates the <g> transforms
+      // directly so mousemove never triggers a React render.
+      const farRef = useRef(null);
+      const nearRef = useRef(null);
+      const onSceneMouseMove = useCallback((e) => {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (rect.width < 40) return;
+        const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        if (farRef.current) farRef.current.setAttribute('transform', 'translate(' + (nx * -0.9).toFixed(2) + ' 0)');
+        if (nearRef.current) nearRef.current.setAttribute('transform', 'translate(' + (nx * -1.8).toFixed(2) + ' 0)');
+      }, []);
+
+      return React.createElement('div', { className: 'vista-view', onMouseMove: onSceneMouseMove },
         React.createElement('div', { className: 'vista-backdrop' },
-          // Mountain silhouettes — pure scenery, drawn from theme tokens.
+          // Sky + mountains — pure scenery, drawn from theme tokens. Stars
+          // are CSS-hidden in the light theme; polygons are 4% wider than
+          // the viewBox so the parallax shift never exposes an edge.
           React.createElement('svg', {
             viewBox: '0 0 100 32', preserveAspectRatio: 'none',
             style: { position: 'absolute', top: 0, left: 0, width: '100%', height: '32%' },
           },
-            React.createElement('polygon', { points: '0,32 12,14 24,26 38,10 52,28 66,16 80,30 92,20 100,32', fill: 'var(--border-strong)', opacity: 0.35 }),
-            React.createElement('polygon', { points: '0,32 18,22 34,30 50,18 68,31 84,24 100,32', fill: 'var(--border)', opacity: 0.55 }),
+            React.createElement('g', { className: 'vista-stars' },
+              VISTA_STARS.map(([x, y], i) =>
+                React.createElement('circle', {
+                  key: i, cx: x, cy: y, r: i % 3 === 0 ? 0.28 : 0.16,
+                  fill: 'var(--text-muted)', opacity: i % 2 === 0 ? 0.5 : 0.3,
+                }),
+              ),
+            ),
+            React.createElement('g', { ref: farRef },
+              React.createElement('polygon', { points: '-4,32 12,14 24,26 38,10 52,28 66,16 80,30 92,20 104,32', fill: 'var(--border-strong)', opacity: 0.35 }),
+            ),
+            React.createElement('g', { ref: nearRef },
+              React.createElement('polygon', { points: '-4,32 18,22 34,30 50,18 68,31 84,24 104,32', fill: 'var(--border)', opacity: 0.55 }),
+            ),
+          ),
+          // Perspective ground lines — spacing accelerates toward you.
+          React.createElement('svg', {
+            viewBox: '0 0 100 100', preserveAspectRatio: 'none',
+            style: { position: 'absolute', inset: 0, width: '100%', height: '100%' },
+          },
+            [34.5, 37.5, 41.5, 47, 54, 62.5, 72.5, 84].map((y, i) =>
+              React.createElement('line', {
+                key: i, x1: 0, y1: y, x2: 100, y2: y,
+                stroke: 'var(--border)', strokeWidth: 1,
+                opacity: 0.1 + i * 0.012,
+                style: { vectorEffect: 'non-scaling-stroke' },
+              }),
+            ),
           ),
           React.createElement('div', { className: 'vista-horizon' }),
         ),
