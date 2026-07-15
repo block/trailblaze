@@ -210,6 +210,14 @@ glyph is now 🥾 (was ✈) per the iconography rule, (5) header stat renamed
 screens→WAYPOINTS (our vocabulary vs Atlas's "Screens/Transitions/User paths").
 Subway view untouched — already distinctly ours. Deck stills on the ASSET C slide
 predate the restyle; live demo shows the new look.
+TRAIL RUNNER RETHEME (2026-07-15, Sam's call, commit 8d8708d8): second visual pass —
+the whole viewer now wears the Trail Runner design language (trailrunner.css tokens):
+neutral #0f0f0f/#181818/#232323 surfaces + white-alpha hairlines (was blue-dark),
+sky-blue #3399FF accent, trailheads own the ONE high-emphasis green (#00E013 —
+TR's "zero to one green moment per screen" rule), Hanken Grotesk + JetBrains Mono,
+pill toggles/edge-chips, 16px card radius, subway lines rebuilt from the TR accent
+family. Semantics on stage: GREEN = start here (trailheads, reachable-hint),
+BLUE = selection/interaction. Deck stills predate this pass too.
 - The AVD (tb-map-34) carries 8 trail-themed contacts (Amber Alpine → Sage Canyon,
   Casey Trailblaze 555-0134 is the star) so list/search screens look real.
 - GOTCHA the viewer binds TRAILBLAZE_PORT **and PORT+1** (HTTPS). If a run daemon sits

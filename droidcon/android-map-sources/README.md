@@ -140,7 +140,9 @@ example images).
 Open `/waypoints/graph`: Target **contacts** → Platform **android**
 should read **37 WAYPOINTS · 38 SHORTCUTS** with a screenshot in every
 node (the header says "Trailmap", the stat label "waypoints" — renamed
-2026-07-14 in the map-view restyle); SUBWAY view with focal
+2026-07-14 in the map-view restyle; since 2026-07-15 the viewer wears
+the Trail Runner theme — neutral dark surfaces, green trailheads, blue
+accents, Hanken Grotesk/JetBrains Mono); SUBWAY view with focal
 `contacts/android/list-populated` + Fit View is the money shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,
