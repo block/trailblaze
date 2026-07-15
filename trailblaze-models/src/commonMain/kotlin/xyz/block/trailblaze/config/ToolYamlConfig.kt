@@ -341,20 +341,38 @@ data class ToolYamlConfig(
     }
     trailhead?.let { th ->
       // A trailhead is a deterministic bootstrap. Most land on a single known waypoint (`to:`),
-      // but some — e.g. a deep-link launcher whose destination varies by input — have no fixed
-      // destination; those set `dynamic: true` instead of `to:`. The two are mutually exclusive:
+      // cross-platform ones land on one waypoint per platform (`toByPlatform:`), and some —
+      // e.g. a deep-link launcher whose destination varies by input — have no fixed
+      // destination; those set `dynamic: true`. The three forms are mutually exclusive:
       // `dynamic: true` says "destination varies, don't anchor me to a waypoint."
       val dest = th.to
+      val byPlatform = th.toByPlatform
       if (th.dynamic) {
-        require(dest == null) {
+        require(dest == null && byPlatform == null) {
           "Tool '$id' trailhead block sets 'dynamic: true' (destination varies by input), so it " +
-            "must not also declare a 'to:' waypoint. Drop 'to:', or drop 'dynamic:' and name the " +
-            "single destination."
+            "must not also declare a 'to:' or 'toByPlatform:' destination. Drop those, or drop " +
+            "'dynamic:' and name the destination(s)."
+        }
+      } else if (byPlatform != null) {
+        require(dest == null) {
+          "Tool '$id' trailhead block declares both 'to:' and 'toByPlatform:'. Use 'to:' for a " +
+            "single destination or 'toByPlatform:' for per-platform destinations, not both."
+        }
+        require(byPlatform.isNotEmpty()) {
+          "Tool '$id' trailhead block declares an empty 'toByPlatform:' map. Name at least one " +
+            "platform: waypoint-id entry, or use 'to:' / 'dynamic: true'."
+        }
+        byPlatform.forEach { (platform, waypointId) ->
+          require(platform.isNotBlank()) {
+            "Tool '$id' trailhead block has a blank platform key in 'toByPlatform:'."
+          }
+          requireValidWaypointIdShape(id = id, fieldName = "trailhead.toByPlatform.$platform", value = waypointId)
         }
       } else {
         require(!dest.isNullOrBlank()) {
-          "Tool '$id' trailhead block must declare a non-blank 'to:' waypoint id, or set " +
-            "'dynamic: true' for a trailhead whose destination varies by input."
+          "Tool '$id' trailhead block must declare a non-blank 'to:' waypoint id (or " +
+            "'toByPlatform:' per-platform ids), or set 'dynamic: true' for a trailhead whose " +
+            "destination varies by input."
         }
         requireValidWaypointIdShape(id = id, fieldName = "trailhead.to", value = dest)
       }
@@ -456,18 +474,39 @@ data class ShortcutMetadata(
 @Serializable
 data class TrailheadMetadata(
   /**
-   * The single waypoint this trailhead lands on. Required unless [dynamic] is true. Null only for
-   * [dynamic] trailheads, whose destination varies by input (e.g. a deep-link launcher).
+   * The single waypoint this trailhead lands on. Required unless [dynamic] is true or
+   * [toByPlatform] names per-platform destinations. Null only for those two forms.
    */
   val to: String? = null,
   /**
    * Marks a trailhead whose destination is not a single fixed waypoint — it varies by input, so no
-   * `to:` is specified. Mutually exclusive with [to] (enforced in [ToolYamlConfig.validate]). Such a
-   * trailhead is a real bootstrap (the `trailhead:` block's presence is what makes it a trailhead),
-   * it just isn't anchored to a waypoint in the navigation graph.
+   * `to:` is specified. Mutually exclusive with [to] and [toByPlatform] (enforced in
+   * [ToolYamlConfig.validate]). Such a trailhead is a real bootstrap (the `trailhead:` block's
+   * presence is what makes it a trailhead), it just isn't anchored to a waypoint in the
+   * navigation graph.
    */
   val dynamic: Boolean = false,
-)
+  /**
+   * Per-platform destinations for a cross-platform trailhead: one entry tool whose landing
+   * waypoint differs by platform, keyed by platform id —
+   *
+   * ```yaml
+   * trailhead:
+   *   toByPlatform:
+   *     android: contacts/android/list-populated
+   *     ios: contacts/ios/list
+   * ```
+   *
+   * Mutually exclusive with [to] (single-destination form) and [dynamic] (no-destination form).
+   * Each destination anchors the trailhead on that platform's map view, so a single
+   * cross-platform entry tool (e.g. a launcher that delegates by `ctx.device.platform`) draws
+   * an entry edge on every platform it lands on.
+   */
+  val toByPlatform: Map<String, String>? = null,
+) {
+  /** Every fixed destination this trailhead anchors to — empty for [dynamic] trailheads. */
+  fun destinations(): List<String> = toByPlatform?.values?.toList() ?: listOfNotNull(to)
+}
 
 /**
  * Serializes `List<JsonObject>` from kaml (YAML) or kotlinx-json. Routes YAML through

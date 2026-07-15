@@ -1735,6 +1735,14 @@
     const TRAILHEAD_WIDTH = 260;
     const TRAILHEAD_HEIGHT = 42;
     const TRAILHEAD_NODE_PREFIX = 'trailhead-node::';
+    // A cross-platform trailhead (`toByPlatform:`) arrives as one entry per destination
+    // sharing the same tool id. Nodes/pills/picker options render one glyph per tool id
+    // (dedupe below); edges render one per entry, keyed by (id, to).
+    const dedupeTrailheadsById = (ths) => {
+      const seen = new Set();
+      return ths.filter(th => seen.has(th.id) ? false : (seen.add(th.id), true));
+    };
+    const trailheadEdgeKey = (prefix, th) => prefix + th.id + '::' + (th.to || '');
 
     /* ============================================================================
        LABEL HELPERS
@@ -2384,7 +2392,7 @@
           // + the trailhead → destination edge.
           nodes.add(th.to);
           nodes.add(TRAILHEAD_NODE_PREFIX + th.id);
-          edges.add('trailhead::' + th.id);
+          edges.add(trailheadEdgeKey('trailhead::', th));
         });
 
         // Strict path-only focus: nothing else gets added. Off-path edges
@@ -2412,7 +2420,7 @@
             },
           };
         }),
-        ...filtered.trailheads.map(th => {
+        ...dedupeTrailheadsById(filtered.trailheads).map(th => {
           const id = TRAILHEAD_NODE_PREFIX + th.id;
           const dimmed = focusedSet && !focusedSet.nodes.has(id);
           return {
@@ -2507,7 +2515,7 @@
             };
           }),
           ...filtered.trailheads.map(th => {
-            const edgeKey = 'trailhead::' + th.id;
+            const edgeKey = trailheadEdgeKey('trailhead::', th);
             // Same strict path-only rule as shortcut edges — the trailhead
             // edge is focused only when its id is explicitly in the path
             // set. Sharing a landing waypoint with a focused trailhead
@@ -2518,7 +2526,7 @@
             const labelClasses = ['trailhead'];
             if (!isFocused) labelClasses.push('dimmed');
             return {
-              id: 'trailhead::' + th.id,
+              id: edgeKey,
               source: TRAILHEAD_NODE_PREFIX + th.id,
               target: th.to,
               type: 'staggered',
@@ -2866,12 +2874,38 @@
 
     /** Build the canonical hash string from a partial state. Skips empty/null
         values so the URL stays minimal — `#focal=x` is shorter than
-        `#focal=x&depth=&dest=`. Callers pass current state; we serialize. */
+        `#focal=x&depth=&dest=`. Callers pass current state; we serialize.
+
+        App-level keys (`target`, `platform`, `view`) have their own writer in
+        App() — both writers re-read the current hash and preserve the other's
+        keys in a canonical order so neither wipes the other's state and the
+        equality no-op check stays stable. */
+    const APP_HASH_KEYS = ['target', 'platform', 'view'];
     function buildSubwayHash({ focal, depth, dest }) {
+      const keep = parseSubwayHash();
       const parts = [];
+      APP_HASH_KEYS.forEach(k => {
+        if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
+      });
       if (focal) parts.push('focal=' + encodeURIComponent(focal));
       if (depth !== undefined && depth !== null) parts.push('depth=' + depth);
       if (dest) parts.push('dest=' + encodeURIComponent(dest));
+      return parts.length > 0 ? '#' + parts.join('&') : '';
+    }
+
+    /** Counterpart writer for the App-level keys: re-serializes the hash with
+        new target/platform/view values while preserving the subway keys
+        (`focal`, `depth`, `dest`) in the same canonical order as
+        [buildSubwayHash]. */
+    function buildAppHash({ target, platform, view }, current) {
+      const keep = current || parseSubwayHash();
+      const parts = [];
+      if (target) parts.push('target=' + encodeURIComponent(target));
+      if (platform) parts.push('platform=' + encodeURIComponent(platform));
+      if (view && view !== 'map') parts.push('view=' + encodeURIComponent(view));
+      ['focal', 'depth', 'dest'].forEach(k => {
+        if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
+      });
       return parts.length > 0 ? '#' + parts.join('&') : '';
     }
 
@@ -3164,7 +3198,9 @@
           const a = nodes[i];
           const b = nodes[i + 1];
           if (typeof a === 'string' && a.startsWith(TRAILHEAD_NODE_PREFIX)) {
-            edgeIds.add('subway-th::' + a.slice(TRAILHEAD_NODE_PREFIX.length));
+            // Composite key matches the per-destination edge id — `b` is the
+            // landing waypoint this step of the path actually took.
+            edgeIds.add('subway-th::' + a.slice(TRAILHEAD_NODE_PREFIX.length) + '::' + b);
           } else {
             const scId = shortcutByFromTo.get(a + '||' + b);
             if (scId) edgeIds.add('subway::' + scId);
@@ -3287,7 +3323,7 @@
       // Click semantics are the same as station nodes (re-root focal).
       const trailheadNodes = useMemo(() => {
         const arr = [];
-        trailheads.forEach(th => {
+        dedupeTrailheadsById(trailheads).forEach(th => {
           const tid = TRAILHEAD_NODE_PREFIX + th.id;
           if (!visibleIds.has(tid)) return;
           const pos = positions.get(tid) || { x: 0, y: 0 };
@@ -3406,7 +3442,7 @@
           const dTo = tree.depth.get(th.to) || 0;
           const d = Math.max(dFrom, dTo);
           const depthClass = d >= 5 ? 'subway-edge-depth-deep' : ('subway-edge-depth-' + d);
-          const edgeKey = 'subway-th::' + th.id;
+          const edgeKey = trailheadEdgeKey('subway-th::', th);
           const onPath = pathToDest.found && pathToDest.edges.has(edgeKey);
           const classes = [depthClass];
           if (onPath) classes.push('subway-edge-shortest-path');
@@ -3563,7 +3599,7 @@
         const sortedWps = [...filtered.waypoints].sort((a, b) => a.id.localeCompare(b.id));
         const trailheadDests = sortedWps.filter(w => trailheadDestSet.has(w.id));
         const others = sortedWps.filter(w => !trailheadDestSet.has(w.id));
-        const sortedTHs = [...trailheads].sort((a, b) => a.id.localeCompare(b.id));
+        const sortedTHs = dedupeTrailheadsById(trailheads).sort((a, b) => a.id.localeCompare(b.id));
         const groups = [];
         if (sortedTHs.length > 0) {
           groups.push(React.createElement('optgroup', { key: 'trailheads', label: 'Trailheads' },
@@ -4394,9 +4430,15 @@
        APP
        ============================================================================ */
     function App({ data }) {
-      const [mode, setMode] = useState('map');                  // 'map' | 'subway' | 'screens' | 'report'
-      const [selectedTarget, setSelectedTarget] = useState(null);
-      const [selectedPlatform, setSelectedPlatform] = useState(null);
+      // Deep-link support: `#target=contacts&platform=android&view=subway` — read
+      // once on mount as initial state (same pattern as the subway keys), written
+      // back below so the address bar always names the current scope.
+      const initialAppHash = useRef(parseSubwayHash()).current;
+      const [mode, setMode] = useState(
+        ['map', 'subway', 'screens', 'report'].includes(initialAppHash.view) ? initialAppHash.view : 'map',
+      );                                                        // 'map' | 'subway' | 'screens' | 'report'
+      const [selectedTarget, setSelectedTarget] = useState(initialAppHash.target || null);
+      const [selectedPlatform, setSelectedPlatform] = useState(initialAppHash.platform || null);
       const [selectedWaypoint, setSelectedWaypoint] = useState(null);
       const [selectedJourneyId, setSelectedJourneyId] = useState(null);
       const [theme, setTheme] = useState('dark');
@@ -4438,6 +4480,20 @@
       useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
       }, [theme]);
+
+      // Mirror target/platform/view into the hash so the current scope is
+      // always shareable as a URL. Same replaceState-not-pushState rationale
+      // as the subway writer; both writers preserve each other's keys.
+      useEffect(() => {
+        if (typeof window === 'undefined' || !window.history) return;
+        const next = buildAppHash({ target: selectedTarget, platform: selectedPlatform, view: mode });
+        if (next === window.location.hash) return;
+        try {
+          window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
+        } catch (_) {
+          // file:// URLs sometimes refuse history APIs — fall back silently.
+        }
+      }, [mode, selectedTarget, selectedPlatform]);
 
       // ----- target/platform filters -----
       const targets = useMemo(() => {

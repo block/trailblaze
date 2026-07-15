@@ -1,0 +1,15 @@
+# Cross-platform launch trailhead: one entry tool, one waypoint per platform.
+# Wraps `contacts_launchApp` (the TS front door that delegates by ctx.device.platform).
+# Old binaries that predate `toByPlatform:` skip this file with a load warning and
+# lose only this entry — the scalar-`to:` sidecars alongside still load everywhere.
+id: contacts_launch
+description: >
+  Launch the Contacts app fresh on whichever platform the session's device runs,
+  landing on that platform's contacts list, regardless of the current screen.
+trailhead:
+  toByPlatform:
+    android: contacts/android/list-populated
+    ios: contacts/ios/list
+parameters: []
+tools:
+  - contacts_launchApp: {}

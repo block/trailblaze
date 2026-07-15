@@ -171,10 +171,22 @@ are what built the map.
 Regen/extend on ANY machine: `droidcon/android-map-sources/` — README with the full
 pipeline + gotchas, seed-contacts.sh (the 8-contact device DB every screenshot
 assumes), and all 34 replayable micro-trails.
-TRAILHEADS (added 2026-07-14): 4 entry points render as dashed edges from a virtual
-origin — Android launch→list, ACTION_INSERT→editor, ACTION_VIEW→contact card, iOS
-launch→list. Stage line: shortcuts move you WITHIN the map; trailheads get you INTO
-it from anywhere — launch intents are edges too.
+TRAILHEADS (added 2026-07-14): 3 entry points render as dashed edges from a virtual
+origin — `contacts_launch` (CROSS-PLATFORM: one trailhead, `toByPlatform` fans it to
+android list-populated AND ios list), ACTION_INSERT→editor, ACTION_VIEW→contact card.
+Stage line: shortcuts move you WITHIN the map; trailheads get you INTO it from
+anywhere — launch intents are edges too. Bonus beat: ONE trailhead spans BOTH
+platforms — same entry tool, per-platform landing.
+DEEP LINKS (added 2026-07-14): the URL hash now encodes target/platform/view (+
+subway focal/depth/dest) — bookmarkable demo states, no live clicking to set up:
+`#target=contacts&platform=android` (just contacts) and
+`#target=contacts&view=subway&focal=contacts%2Fandroid%2Flist-populated&depth=3`.
+DEMO REQUIREMENT: `toByPlatform` + deep links exist only on this branch — run the
+viewer FROM SOURCE: `TRAILBLAZE_PORT=<port> ./gradlew :trailblaze-desktop:run
+--args="app --foreground --headless"`. `--foreground` is load-bearing: without it
+the CLI execs the INSTALLED ~/.trailblaze jar as a detached daemon (old code, old
+data) and exits. Old binaries skip the toByPlatform sidecar with a warning
+(kaml strictMode=false + per-file error isolation) — degradation, not breakage.
 Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads
 `trailheads/*.trailhead.yaml`; TS-inline `trailhead:` reaches the runner manifest but
 not the map render (upstream #202 gap — candidate report, don't file unprompted).

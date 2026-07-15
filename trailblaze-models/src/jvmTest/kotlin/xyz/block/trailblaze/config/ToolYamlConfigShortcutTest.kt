@@ -372,6 +372,66 @@ class ToolYamlConfigShortcutTest {
   }
 
   @Test
+  fun `trailhead with toByPlatform destinations passes validate and decodes from yaml`() {
+    val source = """
+      id: contacts_launch
+      description: Launch the Contacts app on whichever platform the device runs.
+      trailhead:
+        toByPlatform:
+          android: contacts/android/list-populated
+          ios: contacts/ios/list
+      parameters: []
+      tools:
+        - contacts_launchApp: {}
+    """.trimIndent()
+    val decoded = TrailblazeConfigYaml.instance
+      .decodeFromString(ToolYamlConfig.serializer(), source)
+    decoded.validate() // does not throw
+    val trailhead = assertNotNull(decoded.trailhead)
+    assertNull(trailhead.to)
+    assertEquals(
+      listOf("contacts/android/list-populated", "contacts/ios/list"),
+      trailhead.destinations().sorted(),
+    )
+  }
+
+  @Test
+  fun `trailhead rejects both to and toByPlatform`() {
+    val config = ToolYamlConfig(
+      id = "th_both_forms",
+      trailhead = TrailheadMetadata(
+        to = "app/home",
+        toByPlatform = mapOf("android" to "app/android/home"),
+      ),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("toByPlatform"))
+  }
+
+  @Test
+  fun `trailhead rejects empty toByPlatform map`() {
+    val config = ToolYamlConfig(
+      id = "th_empty_by_platform",
+      trailhead = TrailheadMetadata(toByPlatform = emptyMap()),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("toByPlatform"))
+  }
+
+  @Test
+  fun `dynamic trailhead rejects toByPlatform destinations`() {
+    val config = ToolYamlConfig(
+      id = "th_dynamic_by_platform",
+      trailhead = TrailheadMetadata(
+        dynamic = true,
+        toByPlatform = mapOf("android" to "app/android/home"),
+      ),
+    )
+    val ex = assertFailsWith<IllegalArgumentException> { config.validate() }
+    assertTrue(ex.message!!.contains("dynamic"))
+  }
+
+  @Test
   fun `metadata-only config rejects a body-bearing field (description)`() {
     // Body-bearing fields have nothing to bind to without a class/tools body — they'd be silently
     // ignored, so reject them. description/parameters/flags come from the referenced tool.

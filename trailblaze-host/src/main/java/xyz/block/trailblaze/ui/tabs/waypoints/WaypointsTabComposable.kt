@@ -727,12 +727,17 @@ private fun loadShortcutsAndTrailheads(): Pair<List<ShortcutDisplayItem>, List<T
       )
     }
     config.trailhead?.let { meta ->
-      trailheads += TrailheadDisplayItem(
-        id = toolName.toolName,
-        description = config.description,
-        to = meta.to,
-        dynamic = meta.dynamic,
-      )
+      // One display item per destination — a cross-platform trailhead (`toByPlatform:`)
+      // anchors on each platform's map; dynamic trailheads keep one destination-less item.
+      val destinations = meta.destinations().ifEmpty { listOf(meta.to) }
+      destinations.forEach { dest ->
+        trailheads += TrailheadDisplayItem(
+          id = toolName.toolName,
+          description = config.description,
+          to = dest,
+          dynamic = meta.dynamic,
+        )
+      }
     }
   }
   return shortcuts to trailheads

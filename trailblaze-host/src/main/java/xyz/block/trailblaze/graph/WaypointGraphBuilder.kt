@@ -147,12 +147,18 @@ object WaypointGraphBuilder {
       }
     }
 
-    val trailheads = toolConfigs.mapNotNull { (toolName, config) ->
-      config.trailhead?.let { meta ->
+    val trailheads = toolConfigs.flatMap { (toolName, config) ->
+      val meta = config.trailhead ?: return@flatMap emptyList()
+      // A cross-platform trailhead (`toByPlatform:`) expands to one graph entry per
+      // destination — each platform's scoped view then keeps only the edge whose
+      // destination waypoint survives its filter. Dynamic trailheads keep their single
+      // destination-less entry.
+      val destinations = meta.destinations().ifEmpty { listOf(meta.to) }
+      destinations.map { dest ->
         WaypointGraphTrailhead(
           id = toolName.toolName,
           description = config.description,
-          to = meta.to,
+          to = dest,
           dynamic = meta.dynamic,
         )
       }
