@@ -15,7 +15,7 @@
   <!-- React Flow's stylesheet. Loaded from esm.sh CDN — internal devtool, browser
        will fetch on first load and cache thereafter. For air-gap support a future
        version vendors these assets, but for now we choose the simpler path. -->
-  <link rel="stylesheet" href="https://esm.sh/@xyflow/react@12/dist/style.css">
+  <link rel="stylesheet" href="https://esm.sh/@xyflow/react@12.8.4/dist/style.css">
   <!-- Trail Runner brand fonts — same import the trailrunner surface uses
        (trailblaze-host/.../trailrunner/web/styles/trailrunner.css). -->
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -1937,8 +1937,8 @@
       "react-dom": "https://esm.sh/react-dom@18.3.1",
       "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
       "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
-      "@xyflow/react": "https://esm.sh/@xyflow/react@12?deps=react@18.3.1,react-dom@18.3.1",
-      "@dagrejs/dagre": "https://esm.sh/@dagrejs/dagre@1"
+      "@xyflow/react": "https://esm.sh/@xyflow/react@12.8.4?deps=react@18.3.1,react-dom@18.3.1",
+      "@dagrejs/dagre": "https://esm.sh/@dagrejs/dagre@1.1.8"
     }
   }
   </script>
@@ -1962,7 +1962,7 @@
       ReactFlow, Background, Controls, MiniMap,
       MarkerType, Handle, Position,
       BaseEdge, EdgeLabelRenderer, getSmoothStepPath, getStraightPath,
-      useInternalNode,
+      useInternalNode, useStoreApi,
     } from '@xyflow/react';
     import dagre from '@dagrejs/dagre';
 
@@ -1981,6 +1981,36 @@
       const seen = new Set();
       return ths.filter(th => seen.has(th.id) ? false : (seen.add(th.id), true));
     };
+
+    // ResizeObserver callbacks only deliver when the page actually paints.
+    // In an occluded tab or embedded pane that never paints, React Flow's
+    // nodes stay unmeasured (initially, and again whenever the nodes prop is
+    // rebuilt, e.g. on selection) and it withholds every edge. Timers still
+    // fire without paint and getBoundingClientRect forces layout without
+    // paint, so a persistent watchdog force-measures stragglers through the
+    // store. (Not useUpdateNodeInternals — that hook defers through
+    // requestAnimationFrame, which also never fires without paint.)
+    // The healthy-tab steady state is a ~microseconds no-op scan per tick.
+    function MeasureKick() {
+      const store = useStoreApi();
+      useEffect(() => {
+        const kick = () => {
+          const s = store.getState();
+          const nodes = [...s.nodeLookup.values()];
+          const unmeasured = nodes.filter(n => !(n.measured && n.measured.width));
+          if (!s.domNode || unmeasured.length === 0) return;
+          const updates = new Map();
+          s.domNode.querySelectorAll('.react-flow__node').forEach(el => {
+            const id = el.getAttribute('data-id');
+            updates.set(id, { id, nodeElement: el, force: true });
+          });
+          if (updates.size > 0) s.updateNodeInternals(updates);
+        };
+        const t = setInterval(kick, 250);
+        return () => clearInterval(t);
+      }, []);
+      return null;
+    }
     const trailheadEdgeKey = (prefix, th) => prefix + th.id + '::' + (th.to || '');
 
     /* ============================================================================
@@ -2880,6 +2910,7 @@
       },
         // No dot-grid Background here — the map view's canvas texture is the
         // topo-contour tile from .map-flow (see CSS). Subway keeps its dots.
+        React.createElement(MeasureKick),
         React.createElement(Controls, { showInteractive: false }),
         React.createElement(MiniMap, {
           pannable: true,
@@ -4185,6 +4216,7 @@
           edgesFocusable: false,
           onInit, onNodeClick, onPaneClick, onNodeDragStart, onNodeDrag, onNodeDragStop,
         },
+          React.createElement(MeasureKick),
           React.createElement(Background, { gap: 24, size: 1, color: 'rgba(232,232,232,0.05)' }),
           React.createElement(Controls, { showInteractive: false }),
           React.createElement(MiniMap, {
