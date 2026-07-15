@@ -705,8 +705,17 @@ private fun allRouteRegistrations(
   xyz.block.trailblaze.graph.WaypointGraphEndpoint.register(
     routing = this,
     defaultRootProvider = {
-      val appConfig = settingsRepo.serverStateFlow.value.appConfig
-      java.io.File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
+      // Prefer live workspace resolution — TRAILBLAZE_CONFIG_DIR env override,
+      // then cwd walk-up to `trails/config/trailblaze.yaml` — so the graph's
+      // waypoint walk agrees with how trailmap tools/trailheads already load.
+      // Without this, a daemon whose cwd (or env) names a workspace still
+      // walked the *persisted* trails directory, and the graph rendered
+      // bundled YAMLs with no example screenshots. Falls back to the
+      // persisted setting when no workspace resolves.
+      settingsRepo.getCurrentTrailblazeConfigDir() ?: run {
+        val appConfig = settingsRepo.serverStateFlow.value.appConfig
+        java.io.File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
+      }
     },
   )
   xyz.block.trailblaze.host.recording.rpc.DeviceApiEndpoint.register(

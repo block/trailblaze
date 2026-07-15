@@ -185,12 +185,13 @@ DEMO REQUIREMENT: `toByPlatform` + deep links exist only on this branch — run 
 viewer FROM SOURCE: `TRAILBLAZE_PORT=<port> TRAILBLAZE_CONFIG_DIR=<repo>/trails/config
 ./gradlew :trailblaze-desktop:run --args="app --foreground --headless"`.
 `--foreground` is load-bearing: without it the CLI execs the INSTALLED ~/.trailblaze
-jar as a detached daemon (old code, old data) and exits. AND every demo URL needs
-`?root=<repo>/trails/config` before the hash — gradle's working dir isn't the repo,
-so the default waypoint walk finds nothing and the graph silently falls back to
-classpath-bundled YAMLs = NO SCREENSHOTS in nodes (the exact "no more screenshots!"
-failure). Full demo URL shape:
-`/waypoints/graph?root=<repo>/trails/config#target=contacts&platform=android`.
+jar as a detached daemon (old code, old data) and exits. The graph's default root
+now prefers live workspace resolution (TRAILBLAZE_CONFIG_DIR env, then cwd walk-up)
+over the persisted trails-dir setting — so with that env var set, PLAIN URLs serve
+full data with screenshots; no `?root=` needed (it remains a per-request override).
+Blank screenshots on every node = the root didn't resolve (classpath-bundled YAMLs
+carry no example images). Demo URL shape:
+`/waypoints/graph#target=contacts&platform=android`.
 Old binaries skip the toByPlatform sidecar with a warning
 (kaml strictMode=false + per-file error isolation) — degradation, not breakage.
 Gotcha if asked why they're YAML sidecars AND TS blocks: the viewer only reads

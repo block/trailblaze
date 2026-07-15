@@ -125,27 +125,29 @@ TRAILBLAZE_PORT=<port> ./gradlew :trailblaze-desktop:run --args="app --foregroun
 `~/.trailblaze/install/trailblaze.jar` as a detached daemon and exits, so
 source changes are never served.)
 
-**Always pass `?root=<repo>/trails/config`** when the server runs under
-gradle: the gradle run task's working directory is not the repo root, so
-the default filesystem walk finds no waypoint files — the graph then
-falls back to classpath-bundled trailmap YAMLs, which load *without* the
-example screenshots (every node renders blank). `?root=` overrides the
-walk root per-request; tool/trailhead loading is separately anchored via
-the `TRAILBLAZE_CONFIG_DIR` env var (set it to the same
-`<repo>/trails/config`).
+Setting `TRAILBLAZE_CONFIG_DIR=<repo>/trails/config` matters under
+gradle: the run task's working directory is not the repo root. On this
+branch the graph endpoint's default root prefers live workspace
+resolution (that env var, then a cwd walk-up to
+`trails/config/trailblaze.yaml`) over the persisted trails-directory
+setting, so plain graph URLs serve full waypoint data — screenshots
+included — from wherever the process was launched. A per-request
+`?root=<dir>` query param still overrides everything (useful for
+comparing branches). Symptom of a wrong root: the graph renders all
+nodes but every screenshot is blank (classpath-bundled YAMLs carry no
+example images).
 
-Open `/waypoints/graph?root=<repo>/trails/config`: Target **contacts** →
-Platform **android** should read **37 WAYPOINTS · 38 SHORTCUTS** with a
-screenshot in every node (the header says "Trailmap", the stat label
-"waypoints" — renamed 2026-07-14 in the map-view restyle); SUBWAY view
-with focal `contacts/android/list-populated` + Fit View is the money
-shot.
+Open `/waypoints/graph`: Target **contacts** → Platform **android**
+should read **37 WAYPOINTS · 38 SHORTCUTS** with a screenshot in every
+node (the header says "Trailmap", the stat label "waypoints" — renamed
+2026-07-14 in the map-view restyle); SUBWAY view with focal
+`contacts/android/list-populated` + Fit View is the money shot.
 
 The URL hash deep-links every control (keys: `target`, `platform`, `view`,
-plus subway's `focal`/`depth`/`dest`), and composes with `?root=`, so you
-can bookmark exact demo states:
+plus subway's `focal`/`depth`/`dest`), so you can bookmark exact demo
+states:
 
-- `/waypoints/graph?root=<repo>/trails/config#target=contacts&platform=android`
-  — just the Android contacts map
-- `/waypoints/graph?root=<repo>/trails/config#target=contacts&view=subway&focal=contacts%2Fandroid%2Flist-populated&depth=3`
+- `/waypoints/graph#target=contacts&platform=android` — just the Android
+  contacts map
+- `/waypoints/graph#target=contacts&view=subway&focal=contacts%2Fandroid%2Flist-populated&depth=3`
   — the subway money shot
