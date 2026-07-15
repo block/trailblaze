@@ -2048,13 +2048,28 @@
       opacity: 0.6;
       pointer-events: none;
     }
+    /* The scene wrapper holds trails + signposts + the "you" marker so the
+       walk-forward pulse can zoom them as one unit while the backdrop and UI
+       chrome hold still (cheap parallax). transform-origin is set inline to
+       the clicked signpost so the step goes *toward* it. */
+    .vista-scene {
+      position: absolute; inset: 0;
+      transition: transform 0.42s ease;
+    }
+    .vista-scene.vista-walking { transform: scale(1.5); }
     .vista-trails {
       position: absolute; inset: 0;
       pointer-events: none;
     }
+    /* Chromium transitions the `d` presentation attribute when the path
+       structure matches (ours is always M..Q..) — so the trail lines glide
+       along with the signposts they lead to. */
+    .vista-trails path { transition: d 0.55s ease, stroke-opacity 0.55s ease; }
     .vista-card {
       position: absolute;
-      transform: translate(-50%, -100%) scale(var(--vs, 1));
+      /* Lift the card by the stake height (scaled) so the post below it lands
+         exactly on the trail-line endpoint at every ring scale. */
+      transform: translate(-50%, calc(-100% - 13px * var(--vs, 1))) scale(var(--vs, 1));
       transform-origin: 50% 100%;
       transition: left 0.55s ease, top 0.55s ease, transform 0.55s ease, opacity 0.55s ease;
       display: flex; flex-direction: column; align-items: center; gap: 4px;
@@ -2068,8 +2083,19 @@
       font: inherit; color: var(--text);
       text-align: center;
     }
+    /* Signpost stake — connects the card to where its trail line ends. */
+    .vista-card::after {
+      content: '';
+      position: absolute;
+      top: 100%; left: 50%;
+      transform: translateX(-50%);
+      width: 3px; height: 13px;
+      background: var(--border-strong);
+      border-radius: 0 0 2px 2px;
+    }
     .vista-card:hover {
       border-color: var(--accent);
+      transform: translate(-50%, calc(-100% - 13px * var(--vs, 1))) scale(calc(var(--vs, 1) * 1.06));
       z-index: 200 !important;
     }
     .vista-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
@@ -2093,6 +2119,12 @@
     .vista-card .vista-hops {
       font-size: 9px; color: var(--text-muted);
     }
+    /* One-hop signposts also say what gets you there ("👆 tap Create contact"). */
+    .vista-card .vista-action {
+      font-size: 9px; color: var(--accent);
+      max-width: 106px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     /* Trailhead signposts are green pills, matching the rest of the app. */
     .vista-card.vista-card-th {
       width: auto; max-width: 150px;
@@ -2111,7 +2143,63 @@
       border: 1px dashed var(--border-strong);
       border-radius: 999px;
       font-size: 10px; color: var(--text-muted);
-      pointer-events: auto; cursor: help;
+      font-family: inherit;
+      pointer-events: auto; cursor: pointer;
+    }
+    .vista-more:hover { border-color: var(--accent); color: var(--accent); }
+    /* Breadcrumb of the walk so far — bottom-left, click to jump back. */
+    .vista-crumbs {
+      position: absolute;
+      left: 14px; bottom: 14px;
+      z-index: 160;
+      display: flex; align-items: center; gap: 5px;
+      flex-wrap: wrap;
+      max-width: 46%;
+      padding: 6px 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      font-size: 10px; color: var(--text-muted);
+      box-shadow: var(--shadow-card);
+    }
+    .vista-crumbs .vista-crumb {
+      background: none; border: none; padding: 0;
+      font: inherit; color: var(--text-muted);
+      cursor: pointer;
+    }
+    .vista-crumbs .vista-crumb:hover { color: var(--accent); text-decoration: underline; }
+    .vista-crumbs .vista-crumb-here { color: var(--text); font-weight: 600; }
+    /* Trailhead exits — always invocable from any device state, so they're
+       pinned UI chrome rather than signposts in the scene. */
+    .vista-exits {
+      position: absolute;
+      right: 14px; bottom: 14px;
+      z-index: 160;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+      padding: 6px 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      box-shadow: var(--shadow-card);
+    }
+    .vista-exits .vista-exits-tag {
+      font-size: 9px; letter-spacing: 0.1em; color: var(--text-muted);
+    }
+    .vista-exits .vista-exit {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 9px;
+      background: none;
+      border: 1px solid var(--trailhead);
+      border-radius: 999px;
+      font: inherit; font-size: 10px; font-weight: 600;
+      color: var(--trailhead);
+      cursor: pointer;
+    }
+    .vista-exits .vista-exit:hover {
+      background: color-mix(in srgb, var(--trailhead) 14%, transparent);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .vista-card, .vista-scene, .vista-trails path { transition: none !important; }
     }
     .vista-you {
       position: absolute;
@@ -3626,6 +3714,11 @@
         keys in a canonical order so neither wipes the other's state and the
         equality no-op check stays stable. */
     const APP_HASH_KEYS = ['target', 'platform', 'view', 'trail'];
+    // Three writers share the hash (App, Subway, Vista); each re-reads it and
+    // preserves the others' keys in one canonical order so no writer wipes
+    // another's state and the equality no-op checks stay stable.
+    const SUBWAY_HASH_KEYS = ['focal', 'depth', 'dest'];
+    const VISTA_HASH_KEYS = ['vfocal', 'vdepth'];
     function buildSubwayHash({ focal, depth, dest }) {
       const keep = parseSubwayHash();
       const parts = [];
@@ -3635,13 +3728,15 @@
       if (focal) parts.push('focal=' + encodeURIComponent(focal));
       if (depth !== undefined && depth !== null) parts.push('depth=' + depth);
       if (dest) parts.push('dest=' + encodeURIComponent(dest));
+      VISTA_HASH_KEYS.forEach(k => {
+        if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
+      });
       return parts.length > 0 ? '#' + parts.join('&') : '';
     }
 
     /** Counterpart writer for the App-level keys: re-serializes the hash with
-        new target/platform/view values while preserving the subway keys
-        (`focal`, `depth`, `dest`) in the same canonical order as
-        [buildSubwayHash]. */
+        new target/platform/view values while preserving the subway and vista
+        keys in the same canonical order as [buildSubwayHash]. */
     function buildAppHash({ target, platform, view, trail }, current) {
       const keep = current || parseSubwayHash();
       const parts = [];
@@ -3649,9 +3744,25 @@
       if (platform) parts.push('platform=' + encodeURIComponent(platform));
       if (view && view !== 'map') parts.push('view=' + encodeURIComponent(view));
       if (trail) parts.push('trail=' + encodeURIComponent(trail));
-      ['focal', 'depth', 'dest'].forEach(k => {
+      [...SUBWAY_HASH_KEYS, ...VISTA_HASH_KEYS].forEach(k => {
         if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
       });
+      return parts.length > 0 ? '#' + parts.join('&') : '';
+    }
+
+    /** Vista's writer — same contract: write `vfocal`/`vdepth`, preserve the
+        App and Subway keys in canonical order. */
+    function buildVistaHash({ vfocal, vdepth }) {
+      const keep = parseSubwayHash();
+      const parts = [];
+      APP_HASH_KEYS.forEach(k => {
+        if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
+      });
+      SUBWAY_HASH_KEYS.forEach(k => {
+        if (keep[k]) parts.push(k + '=' + encodeURIComponent(keep[k]));
+      });
+      if (vfocal) parts.push('vfocal=' + encodeURIComponent(vfocal));
+      if (vdepth !== undefined && vdepth !== null) parts.push('vdepth=' + vdepth);
       return parts.length > 0 ? '#' + parts.join('&') : '';
     }
 
@@ -4862,16 +4973,47 @@
         return null;
       }, [trailheads, filtered.waypoints]);
 
-      const [focalId, setFocalId] = useState(defaultFocalId);
-      const [maxDepth, setMaxDepth] = useState(3);
+      // One-time hash read (same pattern as the subway): `vfocal`/`vdepth`
+      // let a shared URL land on the exact spot its author was standing.
+      const initialHash = useRef(parseSubwayHash()).current;
+      const [focalId, setFocalId] = useState(initialHash.vfocal || defaultFocalId);
+      const [maxDepth, setMaxDepth] = useState(() => {
+        const n = parseInt(initialHash.vdepth, 10);
+        if (Number.isNaN(n)) return 3;
+        return Math.min(VISTA_DEPTH_MAX, Math.max(VISTA_DEPTH_MIN, n));
+      });
 
       // Minimal back-stack (subway's history model, without forward).
       const [stack, setStack] = useState([]);
+      // During the step-forward pulse this holds { id, x, y } — the signpost
+      // being walked to and its scene coords (transform-origin for the zoom).
+      const [walking, setWalking] = useState(null);
+      const walkTimerRef = useRef(null);
+      useEffect(() => () => { if (walkTimerRef.current) clearTimeout(walkTimerRef.current); }, []);
+      // Rings the user expanded past their signpost cap via the +N chip.
+      const [expandedRings, setExpandedRings] = useState(() => new Set());
+      useEffect(() => { setExpandedRings(new Set()); }, [focalId]);
+
       const walkTo = useCallback((id) => {
         if (!id || id === focalId) return;
         setStack(prev => [...prev, focalId]);
         setFocalId(id);
       }, [focalId]);
+      // Step-forward pulse: zoom the scene toward the clicked signpost, then
+      // re-root there. The settle-back plays on the new scene, which reads as
+      // arriving and the trail ahead opening up. Reduced motion skips straight
+      // to the re-root.
+      const beginWalk = useCallback((id, x, y) => {
+        if (!id || id === focalId || walking) return;
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduced || x == null) { walkTo(id); return; }
+        setWalking({ id, x, y });
+        walkTimerRef.current = setTimeout(() => {
+          walkTimerRef.current = null;
+          setWalking(null);
+          walkTo(id);
+        }, 400);
+      }, [focalId, walking, walkTo]);
       const walkBack = useCallback(() => {
         setStack(prev => {
           if (prev.length === 0) return prev;
@@ -4880,6 +5022,43 @@
         });
         onSelectWaypoint(null);
       }, [onSelectWaypoint]);
+      // Breadcrumb jump — pop the stack back to entry `idx` and stand there.
+      const jumpBackTo = useCallback((idx) => {
+        setStack(prev => {
+          if (idx < 0 || idx >= prev.length) return prev;
+          setFocalId(prev[idx]);
+          return prev.slice(0, idx);
+        });
+        onSelectWaypoint(null);
+      }, [onSelectWaypoint]);
+
+      // Hash sync — mirror of the subway's writer/listener pair, in the
+      // vista's own key namespace so the two views never fight.
+      useEffect(() => {
+        if (typeof window === 'undefined' || !window.history) return;
+        if (!focalId) return;
+        const next = buildVistaHash({ vfocal: focalId, vdepth: maxDepth });
+        if (next === window.location.hash) return;
+        try {
+          window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
+        } catch (_) { /* file:// may refuse history APIs */ }
+      }, [focalId, maxDepth]);
+      useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handler = () => {
+          const h = parseSubwayHash();
+          if (h.vfocal && h.vfocal !== focalId) setFocalId(h.vfocal);
+          if (h.vdepth != null) {
+            const n = parseInt(h.vdepth, 10);
+            if (!Number.isNaN(n)) {
+              const clamped = Math.min(VISTA_DEPTH_MAX, Math.max(VISTA_DEPTH_MIN, n));
+              if (clamped !== maxDepth) setMaxDepth(clamped);
+            }
+          }
+        };
+        window.addEventListener('hashchange', handler);
+        return () => window.removeEventListener('hashchange', handler);
+      }, [focalId, maxDepth]);
 
       const isTrailheadId = (id) => typeof id === 'string' && id.startsWith(TRAILHEAD_NODE_PREFIX);
       const trailheadFromNodeId = useCallback((id) => {
@@ -4944,7 +5123,9 @@
             const px = (p != null && pos.has(p)) ? pos.get(p).x : VISTA_ORIGIN.x;
             return { id, px };
           }).sort((a, b) => a.px - b.px || a.id.localeCompare(b.id));
-          const cap = VISTA_RING_CAP[d];
+          // The +N chip toggles a ring's cap ×2 — enough to usually reveal
+          // everything without letting a 30-card ring flatten the scene.
+          const cap = VISTA_RING_CAP[d] * (expandedRings.has(d) ? 2 : 1);
           let shown = desired;
           if (desired.length > cap) {
             // Even sample across the sorted arc keeps the fan balanced.
@@ -4953,6 +5134,9 @@
             for (let i = 0; i < cap; i++) keep.add(Math.floor(i * step));
             shown = desired.filter((_, i) => keep.has(i));
             more.set(d, desired.length - shown.length);
+          } else if (expandedRings.has(d)) {
+            // Fully revealed — keep a chip so the ring can be collapsed again.
+            more.set(d, 0);
           }
           const n = shown.length;
           const half = d === 1 ? 38 : d === 2 ? 33 : 28;
@@ -4964,7 +5148,7 @@
           });
         }
         return { pos, more };
-      }, [tree, focalId, maxDepth]);
+      }, [tree, focalId, maxDepth, expandedRings]);
 
       // Trail lines: one quadratic curve per placed node, from its parent's
       // stand (or your feet, for ring 1) up to its signpost base.
@@ -4978,6 +5162,23 @@
         });
         return paths;
       }, [layout.pos, tree.parent]);
+
+      // What action takes you to each 1-hop neighbor — the outgoing
+      // shortcut's description (or "launch" off a trailhead), shown on the
+      // near signposts so the vista answers "how", not just "where".
+      const focalOutDesc = useMemo(() => {
+        const m = new Map();
+        if (!focalId) return m;
+        if (isTrailheadId(focalId)) {
+          const th = trailheadFromNodeId(focalId);
+          if (th && th.to) m.set(th.to, 'launch');
+          return m;
+        }
+        filtered.shortcuts.forEach(sc => {
+          if (sc.from === focalId && !m.has(sc.to)) m.set(sc.to, sc.description || '');
+        });
+        return m;
+      }, [focalId, filtered.shortcuts, trailheadFromNodeId]);
 
       // Focal display bits for the "you are here" signpost.
       const focalTrailhead = trailheadFromNodeId(focalId);
@@ -4999,6 +5200,8 @@
       }, [trailheads, filtered.waypoints]);
 
       const ringStroke = { 1: { w: 2.2, o: 0.5 }, 2: { w: 1.3, o: 0.34 }, 3: { w: 0.9, o: 0.22 }, 4: { w: 0.7, o: 0.15 } };
+      // Atmospheric perspective — distant signposts fade like real haze.
+      const ringOpacity = { 1: 1, 2: 0.92, 3: 0.8, 4: 0.66 };
 
       const cards = [];
       layout.pos.forEach((p, id) => {
@@ -5006,14 +5209,15 @@
         const wp = th ? null : wpById.get(id);
         const label = th ? th.id : id.split('/').pop();
         const hops = p.d === 1 ? '1 hop away' : p.d + ' hops away';
+        const action = p.d === 1 ? (focalOutDesc.get(id) || '') : '';
         cards.push(React.createElement('button', {
           key: id,
           className: 'vista-card' + (th ? ' vista-card-th' : '') + (selectedWaypoint === id ? ' selected' : ''),
-          style: { left: p.x + '%', top: p.y + '%', '--vs': p.s, zIndex: 100 - p.d * 10 },
+          style: { left: p.x + '%', top: p.y + '%', '--vs': p.s, zIndex: 100 - p.d * 10, opacity: ringOpacity[p.d] || 0.6 },
           title: (th ? (th.description || th.id) : ((wp && wp.description) || id)) + ' — click to walk there',
           onClick: () => {
             onSelectWaypoint(th ? null : id);
-            walkTo(id);
+            beginWalk(id, p.x, p.y);
           },
         },
           th
@@ -5025,17 +5229,37 @@
                   : React.createElement('div', { className: 'vista-no-shot' }, '(no screenshot)'),
                 React.createElement('div', { className: 'vista-name' }, label),
                 React.createElement('div', { className: 'vista-hops' }, hops),
+                action ? React.createElement('div', { className: 'vista-action' }, '👆 ' + action) : null,
               ),
         ));
       });
       layout.more.forEach((n, d) => {
-        cards.push(React.createElement('div', {
+        const expanded = expandedRings.has(d);
+        cards.push(React.createElement('button', {
           key: 'more-' + d,
           className: 'vista-more',
           style: { left: '93%', top: VISTA_RING_Y[d] + '%', '--vs': VISTA_RING_S[d], zIndex: 100 - d * 10 },
-          title: n + ' more waypoint' + (n === 1 ? '' : 's') + ' ' + d + ' hop' + (d === 1 ? '' : 's') + ' out — walk closer or raise Depth to see them',
-        }, '+' + n));
+          title: expanded
+            ? 'Collapse this ring back to its usual signpost count' + (n > 0 ? ' (' + n + ' still beyond the expanded cap)' : '')
+            : n + ' more waypoint' + (n === 1 ? '' : 's') + ' ' + d + ' hop' + (d === 1 ? '' : 's') + ' out — click to reveal (or walk closer)',
+          onClick: () => setExpandedRings(prev => {
+            const next = new Set(prev);
+            if (next.has(d)) next.delete(d); else next.add(d);
+            return next;
+          }),
+        }, expanded ? '‹ fewer' : '+' + n));
       });
+
+      // Breadcrumb helpers — long walks show only the last few steps.
+      const crumbLabel = (id) => isTrailheadId(id)
+        ? '🥾 ' + id.slice(TRAILHEAD_NODE_PREFIX.length)
+        : (id || '').split('/').pop();
+      const CRUMB_MAX = 4;
+      const crumbStart = Math.max(0, stack.length - CRUMB_MAX);
+      // Trailheads are invocable from ANY device state, so they're always
+      // valid exits no matter where you stand (minus the one you're on).
+      const exitThs = dedupeTrailheadsById(trailheads)
+        .filter(th => TRAILHEAD_NODE_PREFIX + th.id !== focalId);
 
       return React.createElement('div', { className: 'vista-view' },
         React.createElement('div', { className: 'vista-backdrop' },
@@ -5049,6 +5273,12 @@
           ),
           React.createElement('div', { className: 'vista-horizon' }),
         ),
+        // Scene = trails + signposts + you. Zooms as one unit during the
+        // step-forward pulse while backdrop and UI chrome hold still.
+        React.createElement('div', {
+          className: 'vista-scene' + (walking ? ' vista-walking' : ''),
+          style: { transformOrigin: walking ? (walking.x + '% ' + walking.y + '%') : '50% 62%' },
+        },
         React.createElement('svg', {
           className: 'vista-trails',
           viewBox: '0 0 100 100', preserveAspectRatio: 'none',
@@ -5063,6 +5293,19 @@
               style: { vectorEffect: 'non-scaling-stroke' },
             });
           }),
+        ),
+        cards,
+        React.createElement('button', {
+          className: 'vista-you',
+          title: focalWp ? 'You are standing at ' + focalId + ' — click for details' : 'You are standing at this trailhead',
+          onClick: () => { if (focalWp) onSelectWaypoint(focalId); },
+        },
+          React.createElement('span', { className: 'vista-boot' }, '🥾'),
+          React.createElement('span', { className: 'vista-plaque' },
+            React.createElement('span', { className: 'vista-you-tag' }, 'YOU ARE HERE'),
+            React.createElement('span', { className: 'vista-you-name' }, focalLabel),
+          ),
+        ),
         ),
         React.createElement('div', { className: 'subway-help' },
           React.createElement('strong', { style: { color: 'var(--text)' } }, 'Vista'),
@@ -5079,7 +5322,7 @@
           React.createElement('label', null, 'Standing at'),
           React.createElement('select', {
             value: focalId || '',
-            onChange: (e) => { onSelectWaypoint(null); walkTo(e.target.value); },
+            onChange: (e) => { if (walking) return; onSelectWaypoint(null); walkTo(e.target.value); },
           }, focalOptions),
           React.createElement('label', { title: 'How many forward hops are visible from here' }, 'Depth'),
           React.createElement('div', { className: 'depth-stepper', title: 'Hops visible (' + VISTA_DEPTH_MIN + '–' + VISTA_DEPTH_MAX + ')' },
@@ -5098,21 +5341,33 @@
             }, '+'),
           ),
         ),
-        cards.length === 0 ? React.createElement('div', { className: 'vista-empty' },
+        layout.pos.size === 0 ? React.createElement('div', { className: 'vista-empty' },
           'Nothing ahead from here — this waypoint has no outgoing shortcuts. Walk back (‹) or pick another spot to stand.',
         ) : null,
-        cards,
-        React.createElement('button', {
-          className: 'vista-you',
-          title: focalWp ? 'You are standing at ' + focalId + ' — click for details' : 'You are standing at this trailhead',
-          onClick: () => { if (focalWp) onSelectWaypoint(focalId); },
-        },
-          React.createElement('span', { className: 'vista-boot' }, '🥾'),
-          React.createElement('span', { className: 'vista-plaque' },
-            React.createElement('span', { className: 'vista-you-tag' }, 'YOU ARE HERE'),
-            React.createElement('span', { className: 'vista-you-name' }, focalLabel),
+        // Breadcrumb of the walk — every focal you've stood at, click to jump back.
+        stack.length > 0 ? React.createElement('div', { className: 'vista-crumbs', title: 'Your walk so far — click a stop to jump back there' },
+          crumbStart > 0 ? React.createElement('span', null, '…') : null,
+          stack.slice(crumbStart).map((id, i) =>
+            React.createElement(React.Fragment, { key: id + ':' + (crumbStart + i) },
+              React.createElement('button', {
+                className: 'vista-crumb',
+                onClick: () => jumpBackTo(crumbStart + i),
+              }, crumbLabel(id)),
+              React.createElement('span', null, '→'),
+            ),
           ),
-        ),
+          React.createElement('span', { className: 'vista-crumb-here' }, crumbLabel(focalId)),
+        ) : null,
+        // Trailhead exits — the "helicopter out" moves that work from anywhere.
+        exitThs.length > 0 ? React.createElement('div', { className: 'vista-exits' },
+          React.createElement('span', { className: 'vista-exits-tag' }, 'TRAILHEADS · REACHABLE FROM ANYWHERE'),
+          exitThs.map(th => React.createElement('button', {
+            key: th.id,
+            className: 'vista-exit',
+            title: (th.description || th.id) + ' — launch from any device state',
+            onClick: () => { onSelectWaypoint(null); walkTo(TRAILHEAD_NODE_PREFIX + th.id); },
+          }, '🥾 ' + th.id)),
+        ) : null,
       );
     }
 
