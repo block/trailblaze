@@ -78,9 +78,10 @@ they're what anchors the layout):
   contact id resolved on-device in a single `sh -c` pipeline)
 - `contacts_ios_launch` → `contacts/ios/list` (FORCE_RESTART launch)
 
-Each is implemented as a TS tool in `tools/` with an inline
-`trailhead: { to }` block, PLUS a thin `trailheads/*.trailhead.yaml` sidecar
-aliasing it under a distinct id. Both layers are required today: the runner
+`contacts_launchApp` is the cross-platform front door (delegates to the
+iOS/Android impls by `ctx.device.platform`; bun-tested). Each platform entry
+is a TS tool in `tools/` with an inline `trailhead: { to }` block, PLUS a
+thin `trailheads/*.trailhead.yaml` sidecar aliasing it under a distinct id. Both layers are required today: the runner
 manifest reads the TS-inline block, but the graph viewer discovers
 trailheads only from `trailheads/*.trailhead.yaml` (upstream #202 removed
 the sidecars, which silently emptied the viewer's trailhead layer —
