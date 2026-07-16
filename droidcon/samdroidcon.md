@@ -68,26 +68,22 @@ We're still shipping mobile apps — and we still can't **see** what our tests c
 </div>
 
 <div class="grid grid-cols-2 gap-10 pt-6 max-w-4xl mx-auto">
-  <div class="text-center">
+  <div v-click class="text-center">
     <img src="./public/talk-2016.jpg" class="rounded-lg shadow-lg w-full" />
     <div class="pt-3 text-lg"><b>2016</b> — <i>"A Screenshot is Worth 1,000 Words"</i></div>
   </div>
-  <div class="text-center">
+  <div v-click class="text-center">
     <img src="./public/talk-2025.jpg" class="rounded-lg shadow-lg w-full" />
     <div class="pt-3 text-lg"><b>2025</b> — <i>"AI Driven Mobile Testing"</i> · Brian Gardner</div>
   </div>
-</div>
-
-<div class="pt-6 text-center text-lg opacity-70">
-
-*By the end you'll see what the map is — and that you're already building it.*
-
 </div>
 
 <!--
 THE HOOK (plane review, 2026-07-15 — the reframe). Open COLD on the problem, not on
 credentials. The deck's spine is now VISIBILITY / COMPREHENSION — you can't see what
 you're testing — and the MAP is the destination (it's the title).
+BUILD: intro line is on from the start; click 1 reveals the 2016 card (left), click 2
+the 2025 card (right).
 BEAT: ten years shipping mobile; Espresso is still the fastest way to RUN tests, but we
 still can't SEE what we're testing or trace it to what the product wants.
 2016 CALLBACK: "A Screenshot is Worth 1,000 Words" — Sam couldn't tell what the tests did
@@ -219,6 +215,165 @@ BEATS (Sam's raw points, short bullets):
   to iterate against, not a blank page.
 - WAYPOINTS (experimental) PLANTS the Act 6 payoff — keep it a QUIET forward-look (dim, one
   line); the real reveal is "Your app, as a map." Say it, don't dwell.
+-->
+
+---
+
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
+
+# The trail lifecycle
+
+<div class="flex justify-center pt-10">
+
+```mermaid {scale: 0.9}
+flowchart LR
+  NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail +<br/>recordings"]
+  REC -->|"accept"| GIT[("git")]
+  GIT -->|"replay<br/>zero LLM"| CI["CI run"]
+  CI -->|"archive"| ZIP["📦 last<br/>run"]
+  CI -.->|"app changed:<br/>self-heal 🤖"| GIT
+```
+
+</div>
+
+<!--
+The one-diagram version of the whole talk. Walk it left to right:
+author once with AI → human accepts → git is the source → CI replays free →
+every run archived → when the app changes, recompile and the loop closes.
+"Last successful run" gets its own moment in Act 3.
+-->
+
+---
+layout: center
+---
+
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+
+# The same journey, three ways
+
+<div class="text-xl opacity-70 pb-2">Create a contact · Google Contacts · <b>iOS + Android</b></div>
+
+<div class="grid grid-cols-3 gap-6 pt-4 text-left items-start">
+
+<div>
+<div class="pb-2 text-xl"><b>1 · Just words</b></div>
+<div class="text-base opacity-70 pb-2">any platform, day one</div>
+
+```yaml
+- step: Enter the name
+- step: Enter a phone
+- step: Save
+```
+
+<div class="pt-2 text-lg opacity-80">The agent runs the prose. <b>No recordings.</b></div>
+</div>
+
+<div v-click>
+<div class="pb-2 text-xl"><b>2 · + one recording</b></div>
+<div class="text-base opacity-70 pb-2">iOS earns it first</div>
+
+```yaml
+- step: Enter the name
+  recording:
+    ios:
+      - inputText: Ada Lovelace
+```
+
+<div class="pt-2 text-lg opacity-80"><b>iOS replays</b> · Android via agent</div>
+</div>
+
+<div v-click>
+<div class="pb-2 text-xl"><b>3 · + both</b></div>
+<div class="text-base opacity-70 pb-2">now it's fully pinned</div>
+
+```yaml
+- step: Enter the name
+  recording:
+    ios:
+      - inputText: Ada Lovelace
+    android:
+      - inputText: Ada Lovelace
+```
+
+<div class="pt-2 text-lg opacity-80"><b>Both replay</b> · zero-LLM</div>
+</div>
+
+</div>
+
+<!--
+NEW (plane review, 2026-07-15 — Sam). Show the SAME user journey at three fidelities so the
+audience sees recordings are OPTIONAL and INCREMENTAL — you never start from a blank YAML.
+RUNNING EXAMPLE = CONTACTS (Sam): Google Contacts, the public repo's committed corpus, across
+iOS + Android. Real target ids: com.google.android.contacts / com.apple.MobileAddressBook;
+real trailhead = contacts_android_createContact (ACTION_INSERT → new-contact editor).
+iOS-FIRST (plane review, 2026-07-15): leads with iOS to match the talk's device-agnostic
+framing — don't let Android's on-device driver read as "the real one" and iOS as an
+afterthought.
+THE BUILD (three columns, cols 2–3 on click):
+  1. Just words — pure NL steps, no recording: block. Runs on EVERY platform via the agent,
+     day one. This is the "version with no recorded steps" Sam asked for.
+  2. + one recording — iOS gets a recording and replays deterministically; Android with no
+     slot still runs the prose through the agent. Recordings are earned per platform.
+  3. + both — iOS AND Android recorded → the step replays zero-LLM everywhere.
+LEGIBILITY: deliberately ONE step ("Enter the name") shown across all three so the YAML stays
+big and the diff is obvious from the back. Recordings simplified to a single inputText per
+platform — real recordings also carry the tapOn to focus the field; say that aloud, don't
+crowd the slide.
+HAND-OFF: "And here's the full shape of one of these files." → One file = the user journey.
+-->
+
+---
+
+<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
+
+# One file = the user journey
+
+```yaml
+trailhead:                          # the deterministic start — defined in a minute
+  step: Enter the name
+  recording:
+    ios:
+      - tapOnElementBySelector: { textRegex: First name }
+      - inputText: Casey
+    android:
+      - inputText: Casey
+
+trail:
+  - step: Add the mobile number 555-0134
+    recording:
+      ios:
+        - tapOnElementBySelector: { textRegex: add phone }
+        - inputText: "5550134"
+      android:
+        - tapOnElementBySelector: { inputType: 3 }
+        - inputText: "5550134"
+  - verify: The contact card shows the mobile number 555-0134
+```
+
+The words exist **exactly once** — the two recordings from the flaw slide, now nested under one step.
+
+<!--
+THE RHYME (cold-read fix): the trailhead's two recordings are THE SAME two recordings
+from the design-flaw slide — same step, same platforms, now keyed under ONE
+natural-language step. Act 2's before/after is one continuous artifact; say it:
+"those are the two files you just saw."
+Custom tools (myapp_*) deliberately NOT in this example anymore — they arrive with the
+robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
+Show verify: here — closes the assertions thread from Act 0.
+Q&A UPGRADE (upstream #209 landed on main Jul 12): this shape is now PUBLICLY DOCUMENTED —
+docs/project_layout.md defines the unified trail.yaml (NL steps + per-device recording:
+slots keyed by classifier; a device with a slot replays deterministically, one without
+runs the prose through the agent) and officially labels blaze.yaml + classifier-named
+files LEGACY. Canonical naming: one journey = one <journey>/trail.yaml (a standalone
+<name>.trail.yaml also works, zero-config); sample-app examples already renamed. The
+contacts parity suite (next slide) = the committed corpus, Android + iOS recordings
+both earned — in the legacy materialization, still replayable everywhere.
+verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
+assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
+and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
+kept the LLM judging that assertion every run. Zero-LLM replay is true for recorded steps;
+NL-only steps are a per-step choice, not a leak.
+HAND-OFF: "So what do you actually write these for? The jobs your users must always be able to do."
 -->
 
 ---
@@ -493,32 +648,6 @@ but a human approves before commit. Agent-authored, human-approved.
 This is the answer to "do you just trust the AI?"
 -->
 
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 1</div>
-
-# The trail lifecycle
-
-<div class="flex justify-center pt-10">
-
-```mermaid {scale: 0.9}
-flowchart LR
-  NL["🥾 user journey<br/>(natural language)"] -->|"blaze 🤖"| REC["trail +<br/>recordings"]
-  REC -->|"accept"| GIT[("git")]
-  GIT -->|"replay<br/>zero LLM"| CI["CI run"]
-  CI -->|"archive"| ZIP["📦 last<br/>run"]
-  CI -.->|"app changed:<br/>self-heal 🤖"| GIT
-```
-
-</div>
-
-<!--
-The one-diagram version of the whole talk. Walk it left to right:
-author once with AI → human accepts → git is the source → CI replays free →
-every run archived → when the app changes, recompile and the loop closes.
-"Last successful run" gets its own moment in Act 3.
--->
-
 
 ---
 layout: center
@@ -664,139 +793,6 @@ Unified validation of a user experience. Because it's sourced in git, you can dr
 recordings for one platform (or all) and have the LLM re-materialize — it has the past
 recording and all its context to work from.
 HAND-OFF: "Here's the same journey — and how little you need to start."
--->
-
----
-layout: center
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
-
-# The same journey, three ways
-
-<div class="text-xl opacity-70 pb-2">Create a contact · Google Contacts · <b>iOS + Android</b></div>
-
-<div class="grid grid-cols-3 gap-6 pt-4 text-left items-start">
-
-<div>
-<div class="pb-2 text-xl"><b>1 · Just words</b></div>
-<div class="text-base opacity-70 pb-2">any platform, day one</div>
-
-```yaml
-- step: Enter the name
-- step: Enter a phone
-- step: Save
-```
-
-<div class="pt-2 text-lg opacity-80">The agent runs the prose. <b>No recordings.</b></div>
-</div>
-
-<div v-click>
-<div class="pb-2 text-xl"><b>2 · + one recording</b></div>
-<div class="text-base opacity-70 pb-2">iOS earns it first</div>
-
-```yaml
-- step: Enter the name
-  recording:
-    ios:
-      - inputText: Ada Lovelace
-```
-
-<div class="pt-2 text-lg opacity-80"><b>iOS replays</b> · Android via agent</div>
-</div>
-
-<div v-click>
-<div class="pb-2 text-xl"><b>3 · + both</b></div>
-<div class="text-base opacity-70 pb-2">now it's fully pinned</div>
-
-```yaml
-- step: Enter the name
-  recording:
-    ios:
-      - inputText: Ada Lovelace
-    android:
-      - inputText: Ada Lovelace
-```
-
-<div class="pt-2 text-lg opacity-80"><b>Both replay</b> · zero-LLM</div>
-</div>
-
-</div>
-
-<!--
-NEW (plane review, 2026-07-15 — Sam). Show the SAME user journey at three fidelities so the
-audience sees recordings are OPTIONAL and INCREMENTAL — you never start from a blank YAML.
-RUNNING EXAMPLE = CONTACTS (Sam): Google Contacts, the public repo's committed corpus, across
-iOS + Android. Real target ids: com.google.android.contacts / com.apple.MobileAddressBook;
-real trailhead = contacts_android_createContact (ACTION_INSERT → new-contact editor).
-iOS-FIRST (plane review, 2026-07-15): leads with iOS to match the talk's device-agnostic
-framing — don't let Android's on-device driver read as "the real one" and iOS as an
-afterthought.
-THE BUILD (three columns, cols 2–3 on click):
-  1. Just words — pure NL steps, no recording: block. Runs on EVERY platform via the agent,
-     day one. This is the "version with no recorded steps" Sam asked for.
-  2. + one recording — iOS gets a recording and replays deterministically; Android with no
-     slot still runs the prose through the agent. Recordings are earned per platform.
-  3. + both — iOS AND Android recorded → the step replays zero-LLM everywhere.
-LEGIBILITY: deliberately ONE step ("Enter the name") shown across all three so the YAML stays
-big and the diff is obvious from the back. Recordings simplified to a single inputText per
-platform — real recordings also carry the tapOn to focus the field; say that aloud, don't
-crowd the slide.
-HAND-OFF: "And here's the full shape of one of these files." → One file = the user journey.
--->
-
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
-
-# One file = the user journey
-
-```yaml
-trailhead:                          # the deterministic start — defined in a minute
-  step: Enter the name
-  recording:
-    ios:
-      - tapOnElementBySelector: { textRegex: First name }
-      - inputText: Casey
-    android:
-      - inputText: Casey
-
-trail:
-  - step: Add the mobile number 555-0134
-    recording:
-      ios:
-        - tapOnElementBySelector: { textRegex: add phone }
-        - inputText: "5550134"
-      android:
-        - tapOnElementBySelector: { inputType: 3 }
-        - inputText: "5550134"
-  - verify: The contact card shows the mobile number 555-0134
-```
-
-The words exist **exactly once** — the two recordings from the flaw slide, now nested under one step.
-
-<!--
-THE RHYME (cold-read fix): the trailhead's two recordings are THE SAME two recordings
-from the design-flaw slide — same step, same platforms, now keyed under ONE
-natural-language step. Act 2's before/after is one continuous artifact; say it:
-"those are the two files you just saw."
-Custom tools (myapp_*) deliberately NOT in this example anymore — they arrive with the
-robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
-Show verify: here — closes the assertions thread from Act 0.
-Q&A UPGRADE (upstream #209 landed on main Jul 12): this shape is now PUBLICLY DOCUMENTED —
-docs/project_layout.md defines the unified trail.yaml (NL steps + per-device recording:
-slots keyed by classifier; a device with a slot replays deterministically, one without
-runs the prose through the agent) and officially labels blaze.yaml + classifier-named
-files LEGACY. Canonical naming: one journey = one <journey>/trail.yaml (a standalone
-<name>.trail.yaml also works, zero-config); sample-app examples already renamed. The
-contacts parity suite (next slide) = the committed corpus, Android + iOS recordings
-both earned — in the legacy materialization, still replayable everywhere.
-verify: semantics, if asked "doesn't that need the LLM at replay?": a verify step is an
-assertion — assertion-scoped tool surface, auto-terminates, NEVER self-healed. Record it
-and it replays zero-LLM like any step; leave it NL-only (as shown) and you've deliberately
-kept the LLM judging that assertion every run. Zero-LLM replay is true for recorded steps;
-NL-only steps are a per-step choice, not a leak.
-HAND-OFF: "So what do you actually write these for? The jobs your users must always be able to do."
 -->
 
 ---
