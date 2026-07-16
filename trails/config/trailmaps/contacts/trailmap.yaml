@@ -17,6 +17,14 @@
 id: contacts
 dependencies:
   - trailblaze
+# The `trails/ios-contacts/` trails call the contacts_ios_* scripted tools that live in the
+# SDK-linked `examples/ios-contacts/` workspace, but `trailblaze check` from the repo root
+# validates them against THIS trailmap, which doesn't carry those tools (and can't symlink
+# them in — trailmap-relative paths must resolve inside the trailmap dir). Exempt until the
+# workspace-authority resolution bug is fixed (an explicit TRAILBLAZE_CONFIG_DIR should win
+# id collisions over the CWD walk-up workspace).
+trail_validation:
+  exempt: "ios trails validate against examples/ios-contacts tools this trailmap doesn't carry — workspace-authority collision, handed to monorepo 2026-05-30"
 target:
   display_name: Contacts
   platforms:
