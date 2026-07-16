@@ -649,31 +649,6 @@ the unified-format slide resolves this exact picture.
 
 ---
 
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2 · optional</div>
-
-# The natural language drifted
-
-```yaml
-# android-tablet.trail.yaml
-- step: Sign in as the QE sender
-
-# ios-iphone.trail.yaml
-- step: Log in as the test sender      # ← drifted — and nothing caught it
-```
-
-**Same journey. Two files. The words pulled apart.**
-
-<!--
-OPTIONAL — first to cut if the dry run runs long; the story survives without it.
-Makes "drift" concrete before the fix lands. Real failure mode: the NL diverged
-copy-to-copy ("QE sender" vs "test sender"), each device recorded in isolation, so
-nothing flagged it. This is the picture under the Act 2 opener's "drifted" bullet —
-and the gut-punch that earns the unified format two slides on.
-To cut: delete this whole slide block (--- to ---).
--->
-
----
-
 <div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 2</div>
 
 # Not a test — a user journey
@@ -983,7 +958,7 @@ The 10-year callback — a beat, not the spine. One slide of nostalgia, then the
 
 **Custom tools = robot methods.** &nbsp; `login` · `addItemToCart`
 
-**Your app has its own tools.**
+**Your app has its own tools.** Only the right surface is advertised to the LLM.
 
 </div>
 
@@ -993,6 +968,11 @@ Implementation changes → fix the tool once; the trails on disk never change.
 At hundreds → thousands of trails, this is what makes maintenance survivable.
 (Comments merged 2026-07-12 — Slidev presenter mode only shows a slide's LAST
 comment block; the first block was invisible on stage.)
+FOLDED IN (mechanism-middle trim, plane review 2026-07-15): the cut "Not every
+tool is for the LLM" slide's point — a tool decides whether it's exposed to
+the LLM; utility tools underneath, composed by others, keep the LLM's menu
+small and decisive while the implementation stays factored. Say it as an aside
+if there's time; the slide's line already carries it.
 -->
 
 ---
@@ -1199,29 +1179,6 @@ build was on the device before launching. In the repo, first step of the blaze.
 -->
 
 ---
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
-
-# Where do conditionals go?
-
-- *"If a notification appears, dismiss it"*
-- *"Tablet? Close that panel first"*
-- *"Over $20 → do this · under → expect that"*
-
-<div class="pt-6">
-
-Day one rule: **trails are linear** — logic lives in **tools**
-
-</div>
-
-<!--
-The knee-jerk: NO logic in a trail. A teammate added `runIf` and people use it — fine,
-because it passes the test that governs everything here:
-COULD THE LLM CONSTRUCT IT? If yes, it's allowed in the trail vocabulary.
-Conditionals as computation belong in a TypeScript tool (do the check, branch inside).
--->
-
----
 layout: center
 class: text-center
 ---
@@ -1229,6 +1186,12 @@ class: text-center
 <div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1</div>
 
 # "Could the LLM construct it?"
+
+<div class="pt-2 text-lg opacity-70">
+
+Trails stay **linear** — conditionals live in **tools**.
+
+</div>
 
 <div class="pt-6 text-xl opacity-80">
 
@@ -1243,29 +1206,16 @@ Recordings are **earned**, not written.
 </div>
 
 <!--
-The governing test for the trail vocabulary (runIf passes it).
+The governing test for the trail vocabulary. FOLDED IN (mechanism-middle trim,
+plane review 2026-07-15): the cut "Where do conditionals go?" slide's rule —
+NO logic in a trail, a teammate added `runIf` and it's fine because it still
+passes this test. "*If a notification appears, dismiss it*" / "*tablet? close
+that panel first*" were its spoken examples — say one aloud if asked, don't
+bullet them here. Conditionals as computation belong in a TypeScript tool (do
+the check, branch inside).
 The nuance: "construct" = the LLM selecting tools out of the target's toolbox while
 actually driving. Handwritten YAML would pass validation — but it locks in a recording
 that never actually ran. Recordings come from a successful run, full stop.
--->
-
----
-
-<div class="act-label text-sm opacity-50 absolute top-4 left-4">ACT 4 · Beat 1 · optional</div>
-
-# Not every tool is for the LLM
-
-- Tools have **properties** — LLM visibility is one
-- **Utility tools** underneath · composed by other tools
-- The LLM picks the **what** · no monoliths — small, reusable pieces
-
-<!--
-A tool decides whether it's exposed to the LLM. Only the right surface is advertised —
-keeps the LLM's menu small and decisive while the implementation stays factored.
-Same discipline as any good API: public surface vs. internals.
-OPTIONAL (cut-priority #3 in notes) — Act 4 is the tightest stretch (10 slides,
-6.5 min, incl. the peak + ASSET B). If cut, fold one line into "The LLM twist":
-"only the right surface is advertised to the LLM."
 -->
 
 ---
