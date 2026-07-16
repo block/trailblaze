@@ -608,17 +608,18 @@ HAND-OFF: "That's the mechanism. Production scale is what stress-tested it."
 <div class="grid grid-cols-2 gap-4 pt-2">
 
 ```yaml
-# android-tablet.trail.yaml
-- step: Sign in as the QE sender
+# android.trail.yaml
+- step: Enter the name
   recording:
-    - tapOn: { id: sign_in_button }
+    - inputText: Casey
 ```
 
 ```yaml
-# ios-iphone.trail.yaml
-- step: Sign in as the QE sender
+# ios.trail.yaml
+- step: Enter the name
   recording:
-    - tapOn: { text: "Sign In" }
+    - tapOnElementBySelector: { textRegex: First name }
+    - inputText: Casey
 ```
 
 </div>
@@ -631,6 +632,10 @@ HAND-OFF: "That's the mechanism. Production scale is what stress-tested it."
 
 <!--
 v1 visualized with two real-shaped files: same NL duplicated, per-platform recordings.
+RUNNING EXAMPLE = CONTACTS (plane review, 2026-07-15): step + recordings sourced from
+the committed trails/contacts/create-contact corpus. Same step text, same word — but
+the recordings already diverge (iOS needs a tap to focus the field first, Android's is
+pre-focused). That gap is exactly what invites drift.
 FORMAT ACCURACY (Sam round 5.1): in the old format a tool call is NEVER bare at the
 top level — it always sits under a recording: (or tools:) block beneath its step.
 Say the consequences aloud (don't bullet them): it worked, then — file EXPLOSION
@@ -694,7 +699,7 @@ layout: center
 
 # The same journey, three ways
 
-<div class="text-xl opacity-70 pb-2">Create a contact · Google Contacts · <b>Android + iOS</b></div>
+<div class="text-xl opacity-70 pb-2">Create a contact · Google Contacts · <b>iOS + Android</b></div>
 
 <div class="grid grid-cols-3 gap-6 pt-4 text-left items-start">
 
@@ -713,16 +718,16 @@ layout: center
 
 <div v-click>
 <div class="pb-2 text-xl"><b>2 · + one recording</b></div>
-<div class="text-base opacity-70 pb-2">Android earns it</div>
+<div class="text-base opacity-70 pb-2">iOS earns it first</div>
 
 ```yaml
 - step: Enter the name
   recording:
-    android:
+    ios:
       - inputText: Ada Lovelace
 ```
 
-<div class="pt-2 text-lg opacity-80"><b>Android replays</b> · iOS via agent</div>
+<div class="pt-2 text-lg opacity-80"><b>iOS replays</b> · Android via agent</div>
 </div>
 
 <div v-click>
@@ -732,9 +737,9 @@ layout: center
 ```yaml
 - step: Enter the name
   recording:
-    android:
-      - inputText: Ada Lovelace
     ios:
+      - inputText: Ada Lovelace
+    android:
       - inputText: Ada Lovelace
 ```
 
@@ -747,21 +752,21 @@ layout: center
 NEW (plane review, 2026-07-15 — Sam). Show the SAME user journey at three fidelities so the
 audience sees recordings are OPTIONAL and INCREMENTAL — you never start from a blank YAML.
 RUNNING EXAMPLE = CONTACTS (Sam): Google Contacts, the public repo's committed corpus, across
-Android + iOS. Real target ids: com.google.android.contacts / com.apple.MobileAddressBook;
+iOS + Android. Real target ids: com.google.android.contacts / com.apple.MobileAddressBook;
 real trailhead = contacts_android_createContact (ACTION_INSERT → new-contact editor).
+iOS-FIRST (plane review, 2026-07-15): leads with iOS to match the talk's device-agnostic
+framing — don't let Android's on-device driver read as "the real one" and iOS as an
+afterthought.
 THE BUILD (three columns, cols 2–3 on click):
   1. Just words — pure NL steps, no recording: block. Runs on EVERY platform via the agent,
      day one. This is the "version with no recorded steps" Sam asked for.
-  2. + one recording — Android gets a recording and replays deterministically; iOS with no
+  2. + one recording — iOS gets a recording and replays deterministically; Android with no
      slot still runs the prose through the agent. Recordings are earned per platform.
-  3. + both — Android AND iOS recorded → the step replays zero-LLM everywhere.
+  3. + both — iOS AND Android recorded → the step replays zero-LLM everywhere.
 LEGIBILITY: deliberately ONE step ("Enter the name") shown across all three so the YAML stays
 big and the diff is obvious from the back. Recordings simplified to a single inputText per
 platform — real recordings also carry the tapOn to focus the field; say that aloud, don't
 crowd the slide.
-NOTE / FOLLOW-UP for Sam: the neighbouring legacy slides ("Scale found our design flaw",
-"One file = the user journey") still use the COFFEE example (QE sender / latte). If contacts
-is now THE running example, those two should switch to contacts too — flagged, not done here.
 HAND-OFF: "And here's the full shape of one of these files." → One file = the user journey.
 -->
 
@@ -773,35 +778,35 @@ HAND-OFF: "And here's the full shape of one of these files." → One file = the 
 
 ```yaml
 trailhead:                          # the deterministic start — defined in a minute
-  step: Sign in as the QE sender
+  step: Enter the name
   recording:
-    android-tablet:
-      - tapOn: { id: sign_in_button }
-    ios-iphone:
-      - inputText: { text: "{{account_email}}" }
-      - tapOn: { text: "Sign In" }
+    ios:
+      - tapOnElementBySelector: { textRegex: First name }
+      - inputText: Casey
+    android:
+      - inputText: Casey
 
 trail:
-  - step: Add a latte to the cart and open checkout
+  - step: Add the mobile number 555-0134
     recording:
-      android:          # broad family
-        - tapOn: { text: Latte }
-      android-tablet:   # most-specific wins
-        - tapOn: { id: menu_latte }
-  - verify: The cart shows 1 item
+      ios:
+        - tapOnElementBySelector: { textRegex: add phone }
+        - inputText: "5550134"
+      android:
+        - tapOnElementBySelector: { inputType: 3 }
+        - inputText: "5550134"
+  - verify: The contact card shows the mobile number 555-0134
 ```
 
-The words exist **exactly once** — the two files from the flaw slide, now two **recordings** under one step.
+The words exist **exactly once** — the two recordings from the flaw slide, now nested under one step.
 
 <!--
 THE RHYME (cold-read fix): the trailhead's two recordings are THE SAME two recordings
-from the design-flaw slide — same step, same tapOns, same classifiers (android-tablet /
-ios-iphone), now keyed under ONE natural-language step. Act 2's before/after is one
-continuous artifact; say it: "those are the two files you just saw."
+from the design-flaw slide — same step, same platforms, now keyed under ONE
+natural-language step. Act 2's before/after is one continuous artifact; say it:
+"those are the two files you just saw."
 Custom tools (myapp_*) deliberately NOT in this example anymore — they arrive with the
 robot pattern in Act 3/4; here the core verbs keep the rhyme clean.
-{{account_email}} = a seeded parameter, reverse-substituted into the recording —
-parameterize slide follows; don't name the mechanism here.
 Show verify: here — closes the assertions thread from Act 0.
 Q&A UPGRADE (upstream #209 landed on main Jul 12): this shape is now PUBLICLY DOCUMENTED —
 docs/project_layout.md defines the unified trail.yaml (NL steps + per-device recording:
