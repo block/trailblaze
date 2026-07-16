@@ -1,0 +1,12 @@
+id: droidcon_android_drawerToCodeOfConduct
+description: Open the Code of Conduct page from the navigation drawer.
+shortcut:
+  from: droidcon/android/event-drawer
+  to: droidcon/android/event-code-of-conduct
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open Code of Conduct from the drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Code [Oo]f Conduct"

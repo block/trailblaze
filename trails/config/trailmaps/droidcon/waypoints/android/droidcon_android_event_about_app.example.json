@@ -1,0 +1,298 @@
+{
+  "waypointId": "droidcon/android/event-about-app",
+  "capturedAt": "2026-07-16T04:29:56.745449Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_d_settings_trail_34dc6c97/010_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_about_app.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "accessibilityText": "Codeaamy Private Limited revolutionized DroidCon\u2019s event management by developing a unified app using Flutter technology. Previously, DroidCon managed multiple events through separate applications, leading to inefficiencies. Codeaamy\u2019s solution features a powerful Admin Panel that allows the creation and management of multiple events within a single app, streamlining operations and enhancing user experience. This unified approach ensures attendees have a convenient one-stop platform for accessing event details.Codeaamy chose Flutter for its ability to create high-performance, cross-platform apps with a single codebase, ensuring a consistent user experience across both iOS and Android devices. Additionally, they integrated a secure chat feature, accessible only to authorized attendees through a ticket scanner, ensuring that discussions remain private and relevant. This also simplifies access management and improves security. With Codeaamy\u2019s innovative solution, DroidCon can efficiently manage its events and offer a seamless, secure experience to its attendees\nPowered by",
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1196",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,140",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "accessibilityText": "Back",
+                                        "x1": 14,
+                                        "y1": 98,
+                                        "x2": 182,
+                                        "y2": 266,
+                                        "centerPoint": "98,182",
+                                        "className": "android.widget.Button",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "accessibilityText": "About App",
+                                        "x1": 252,
+                                        "y1": 131,
+                                        "x2": 691,
+                                        "y2": 233,
+                                        "centerPoint": "471,182",
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 12,
+                                    "x1": 192,
+                                    "y1": 2102,
+                                    "x2": 676,
+                                    "y2": 2232,
+                                    "centerPoint": "434,2167",
+                                    "className": "android.widget.ImageView",
+                                    "clickable": true
+                                  },
+                                  {
+                                    "nodeId": 13,
+                                    "x1": 743,
+                                    "y1": 1874,
+                                    "x2": 1248,
+                                    "y2": 2379,
+                                    "centerPoint": "995,2126",
+                                    "className": "android.view.View",
+                                    "clickable": true
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 14,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 14,
+    "children": [
+      {
+        "nodeId": 6,
+        "ref": "k454",
+        "children": [
+          {
+            "nodeId": 1,
+            "ref": "b371",
+            "bounds": {
+              "left": 14,
+              "top": 98,
+              "right": 182,
+              "bottom": 266
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "Back",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "tooltipText": "Back",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 2,
+            "ref": "j733",
+            "bounds": {
+              "left": 252,
+              "top": 131,
+              "right": 691,
+              "bottom": 233
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "About App",
+              "isHeading": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 4,
+            "ref": "k753",
+            "bounds": {
+              "left": 192,
+              "top": 2102,
+              "right": 676,
+              "bottom": 2232
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 5,
+            "ref": "k594",
+            "bounds": {
+              "left": 743,
+              "top": 1874,
+              "right": 1248,
+              "bottom": 2379
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "contentDescription": "Codeaamy Private Limited revolutionized DroidCon\u2019s event management by developing a unified app using Flutter technology. Previously, DroidCon managed multiple events through separate applications, leading to inefficiencies. Codeaamy\u2019s solution features a powerful Admin Panel that allows the creation and management of multiple events within a single app, streamlining operations and enhancing user experience. This unified approach ensures attendees have a convenient one-stop platform for accessing event details.Codeaamy chose Flutter for its ability to create high-performance, cross-platform apps with a single codebase, ensuring a consistent user experience across both iOS and Android devices. Additionally, they integrated a secure chat feature, accessible only to authorized attendees through a ticket scanner, ensuring that discussions remain private and relevant. This also simplifies access management and improves security. With Codeaamy\u2019s innovative solution, DroidCon can efficiently manage its events and offer a seamless, secure experience to its attendees\nPowered by",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

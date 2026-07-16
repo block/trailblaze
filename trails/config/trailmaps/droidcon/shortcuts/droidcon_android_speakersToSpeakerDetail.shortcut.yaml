@@ -1,0 +1,10 @@
+id: droidcon_android_speakersToSpeakerDetail
+description: Open a speaker card from the Speakers list. Speaker cards expose no per-speaker accessible label, so this taps the first card's known position.
+shortcut:
+  from: droidcon/android/event-speakers
+  to: droidcon/android/event-speaker-detail
+parameters: []
+tools:
+  - tapOnPoint:
+      x: 627
+      y: 320

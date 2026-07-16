@@ -1,0 +1,19 @@
+id: "droidcon/android/event-login"
+description: >
+  Event Login screen (bottom bar tab 5). Google sign-in button, email/password
+  fields, Login button, and the "Sign up" link. NOTE: unlike the other event
+  tabs, no bottom tab reports isSelected on this screen.
+android:
+  required:
+    - description: "Google sign-in button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Sign in with Google"
+    - description: "Email/password divider label"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "or use email\\?"
+    - description: "Sign up link"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: " ?Sign up"

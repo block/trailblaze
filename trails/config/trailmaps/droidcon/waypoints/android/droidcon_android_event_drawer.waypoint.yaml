@@ -1,0 +1,19 @@
+id: "droidcon/android/event-drawer"
+description: >
+  Event navigation drawer, open. Menu items Speakers / Code of Conduct /
+  Announcement / Theme / Select Other Event over a "Powered by" footer. The
+  drawer hides the underlying screen's content from accessibility while open.
+android:
+  required:
+    - description: "Select Other Event menu item (drawer-only)"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Select Other Event"
+    - description: "Theme toggle menu item"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Theme"
+    - description: "Powered by footer"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Powered by"

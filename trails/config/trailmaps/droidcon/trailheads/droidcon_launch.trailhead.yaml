@@ -1,0 +1,13 @@
+# Launch trailhead: one entry tool wrapping `droidcon_android_launchApp` (the TS tool
+# that force-stops + relaunches the app via its explicit main activity). Android-only
+# today, so a scalar `to:` — switch to `toByPlatform:` if an iOS build shows up.
+id: droidcon_launch
+description: >
+  Launch the Droidcon events app fresh, landing on the event-list home screen
+  (Upcoming/Past events with the Droidcon/FlutterCon/T3 tab row), regardless of
+  the current screen.
+trailhead:
+  to: droidcon/android/home
+parameters: []
+tools:
+  - droidcon_android_launchApp: {}

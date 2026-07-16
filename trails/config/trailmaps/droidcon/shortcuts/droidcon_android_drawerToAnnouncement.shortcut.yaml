@@ -1,0 +1,12 @@
+id: droidcon_android_drawerToAnnouncement
+description: Open the Announcement page from the navigation drawer.
+shortcut:
+  from: droidcon/android/event-drawer
+  to: droidcon/android/event-announcement
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open Announcement from the drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Announcement"

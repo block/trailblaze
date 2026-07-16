@@ -1,0 +1,533 @@
+{
+  "waypointId": "droidcon/android/event-login",
+  "capturedAt": "2026-07-16T04:29:50.317052Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_d_settings_trail_34dc6c97/033_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_login.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x1": 70,
+                                "y1": 190,
+                                "x2": 1370,
+                                "y2": 2322,
+                                "centerPoint": "720,1256",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x1": 70,
+                                    "y1": 190,
+                                    "x2": 1370,
+                                    "y2": 2322,
+                                    "centerPoint": "720,1256",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "x1": 70,
+                                        "y1": 190,
+                                        "x2": 1370,
+                                        "y2": 2322,
+                                        "centerPoint": "720,1256",
+                                        "children": [
+                                          {
+                                            "nodeId": 11,
+                                            "x1": 70,
+                                            "y1": 190,
+                                            "x2": 1370,
+                                            "y2": 257,
+                                            "centerPoint": "720,223",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 12,
+                                            "x1": 70,
+                                            "y1": 257,
+                                            "x2": 1370,
+                                            "y2": 447,
+                                            "centerPoint": "720,352",
+                                            "children": [
+                                              {
+                                                "nodeId": 13,
+                                                "x1": 1179,
+                                                "y1": 257,
+                                                "x2": 1370,
+                                                "y2": 447,
+                                                "centerPoint": "1274,352",
+                                                "className": "android.widget.Button",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 14,
+                                            "accessibilityText": "Sign in with Google",
+                                            "x1": 70,
+                                            "y1": 447,
+                                            "x2": 1370,
+                                            "y2": 611,
+                                            "centerPoint": "720,529",
+                                            "className": "android.widget.ImageView",
+                                            "clickable": true
+                                          },
+                                          {
+                                            "nodeId": 15,
+                                            "x1": 70,
+                                            "y1": 611,
+                                            "x2": 1370,
+                                            "y2": 779,
+                                            "centerPoint": "720,695",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 16,
+                                            "accessibilityText": "or use email?",
+                                            "x1": 70,
+                                            "y1": 779,
+                                            "x2": 1370,
+                                            "y2": 831,
+                                            "centerPoint": "720,805",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 17,
+                                            "x1": 70,
+                                            "y1": 831,
+                                            "x2": 1370,
+                                            "y2": 899,
+                                            "centerPoint": "720,865",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 18,
+                                            "x1": 70,
+                                            "y1": 899,
+                                            "x2": 1370,
+                                            "y2": 1154,
+                                            "centerPoint": "720,1026",
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Email"
+                                          },
+                                          {
+                                            "nodeId": 19,
+                                            "x1": 70,
+                                            "y1": 1154,
+                                            "x2": 1370,
+                                            "y2": 1409,
+                                            "centerPoint": "720,1281",
+                                            "children": [
+                                              {
+                                                "nodeId": 20,
+                                                "x1": 1202,
+                                                "y1": 1172,
+                                                "x2": 1370,
+                                                "y2": 1340,
+                                                "centerPoint": "1286,1256",
+                                                "className": "android.widget.Button",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Password"
+                                          },
+                                          {
+                                            "nodeId": 21,
+                                            "x1": 70,
+                                            "y1": 1409,
+                                            "x2": 1370,
+                                            "y2": 1718,
+                                            "centerPoint": "720,1563",
+                                            "children": [
+                                              {
+                                                "nodeId": 22,
+                                                "accessibilityText": "Login",
+                                                "x1": 70,
+                                                "y1": 1476,
+                                                "x2": 1370,
+                                                "y2": 1651,
+                                                "centerPoint": "720,1563",
+                                                "className": "android.widget.Button",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 23,
+                                            "x1": 70,
+                                            "y1": 1718,
+                                            "x2": 1370,
+                                            "y2": 1852,
+                                            "centerPoint": "720,1785",
+                                            "children": [
+                                              {
+                                                "nodeId": 24,
+                                                "x1": 346,
+                                                "y1": 1752,
+                                                "x2": 1094,
+                                                "y2": 1818,
+                                                "centerPoint": "720,1785",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 25,
+                                                    "accessibilityText": "Don't have an account?",
+                                                    "x1": 332,
+                                                    "y1": 1745,
+                                                    "x2": 910,
+                                                    "y2": 1829,
+                                                    "centerPoint": "621,1787",
+                                                    "className": "android.view.View"
+                                                  },
+                                                  {
+                                                    "nodeId": 26,
+                                                    "accessibilityText": " Sign up",
+                                                    "x1": 878,
+                                                    "y1": 1741,
+                                                    "x2": 1109,
+                                                    "y2": 1829,
+                                                    "centerPoint": "993,1785",
+                                                    "className": "android.view.View",
+                                                    "clickable": true
+                                                  }
+                                                ],
+                                                "className": "android.view.View"
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          }
+                                        ],
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  }
+                                ],
+                                "className": "android.view.View"
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 27,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 27,
+    "children": [
+      {
+        "nodeId": 2,
+        "ref": "a677",
+        "bounds": {
+          "left": 1179,
+          "top": 257,
+          "right": 1370,
+          "bottom": 447
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.Button",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 4,
+        "ref": "p941",
+        "bounds": {
+          "left": 70,
+          "top": 447,
+          "right": 1370,
+          "bottom": 611
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Sign in with Google",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 6,
+        "ref": "d775",
+        "bounds": {
+          "left": 70,
+          "top": 779,
+          "right": 1370,
+          "bottom": 831
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "contentDescription": "or use email?",
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 8,
+        "ref": "l982",
+        "bounds": {
+          "left": 70,
+          "top": 899,
+          "right": 1370,
+          "bottom": 1154
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.EditText",
+          "resourceId": "",
+          "hintText": "Email",
+          "isClickable": true,
+          "isEditable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 10,
+        "ref": "q606",
+        "children": [
+          {
+            "nodeId": 9,
+            "ref": "d176",
+            "bounds": {
+              "left": 1202,
+              "top": 1172,
+              "right": 1370,
+              "bottom": 1340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 70,
+          "top": 1154,
+          "right": 1370,
+          "bottom": 1409
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.EditText",
+          "resourceId": "",
+          "hintText": "Password",
+          "isClickable": true,
+          "isEditable": true,
+          "isPassword": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 11,
+        "ref": "q509",
+        "bounds": {
+          "left": 70,
+          "top": 1476,
+          "right": 1370,
+          "bottom": 1651
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.Button",
+          "resourceId": "",
+          "contentDescription": "Login",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 13,
+        "ref": "e539",
+        "bounds": {
+          "left": 332,
+          "top": 1745,
+          "right": 910,
+          "bottom": 1829
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "contentDescription": "Don't have an account?",
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 14,
+        "ref": "v913",
+        "bounds": {
+          "left": 878,
+          "top": 1741,
+          "right": 1109,
+          "bottom": 1829
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "contentDescription": " Sign up",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

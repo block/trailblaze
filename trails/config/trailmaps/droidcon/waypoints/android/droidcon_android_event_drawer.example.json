@@ -1,0 +1,620 @@
+{
+  "waypointId": "droidcon/android/event-drawer",
+  "capturedAt": "2026-07-16T04:29:52.745952Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_b2_speakers_trail_b5fa6bdb/004_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_drawer.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 2196,
+                                "centerPoint": "720,1098",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1064,
+                                    "y2": 2196,
+                                    "centerPoint": "532,1098",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "x1": 280,
+                                        "y1": 213,
+                                        "x2": 784,
+                                        "y2": 393,
+                                        "centerPoint": "532,303",
+                                        "className": "android.widget.ImageView"
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "accessibilityText": "Speakers",
+                                        "x1": 67,
+                                        "y1": 444,
+                                        "x2": 997,
+                                        "y2": 640,
+                                        "centerPoint": "532,542",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 12,
+                                        "accessibilityText": "Code of Conduct",
+                                        "x1": 67,
+                                        "y1": 640,
+                                        "x2": 997,
+                                        "y2": 836,
+                                        "centerPoint": "532,738",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 13,
+                                        "accessibilityText": "Announcement",
+                                        "x1": 67,
+                                        "y1": 836,
+                                        "x2": 997,
+                                        "y2": 1032,
+                                        "centerPoint": "532,934",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 14,
+                                        "accessibilityText": "Theme",
+                                        "x1": 67,
+                                        "y1": 1032,
+                                        "x2": 997,
+                                        "y2": 1228,
+                                        "centerPoint": "532,1130",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 15,
+                                        "accessibilityText": "Select Other Event",
+                                        "x1": 67,
+                                        "y1": 1228,
+                                        "x2": 997,
+                                        "y2": 1424,
+                                        "centerPoint": "532,1326",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 16,
+                                        "accessibilityText": "Powered by",
+                                        "x1": 370,
+                                        "y1": 1973,
+                                        "x2": 694,
+                                        "y2": 2054,
+                                        "centerPoint": "532,2013",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 17,
+                                        "x1": 290,
+                                        "y1": 2054,
+                                        "x2": 774,
+                                        "y2": 2183,
+                                        "centerPoint": "532,2118",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              },
+                              {
+                                "nodeId": 18,
+                                "accessibilityText": "Tab 1 of 6",
+                                "y1": 2252,
+                                "x2": 240,
+                                "y2": 2336,
+                                "centerPoint": "120,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true
+                              },
+                              {
+                                "nodeId": 19,
+                                "accessibilityText": "Tab 2 of 6",
+                                "x1": 240,
+                                "y1": 2232,
+                                "x2": 480,
+                                "y2": 2356,
+                                "centerPoint": "360,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true,
+                                "selected": true
+                              },
+                              {
+                                "nodeId": 20,
+                                "accessibilityText": "Tab 3 of 6",
+                                "x1": 480,
+                                "y1": 2263,
+                                "x2": 720,
+                                "y2": 2325,
+                                "centerPoint": "600,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true
+                              },
+                              {
+                                "nodeId": 21,
+                                "accessibilityText": "Tab 4 of 6",
+                                "x1": 720,
+                                "y1": 2257,
+                                "x2": 960,
+                                "y2": 2331,
+                                "centerPoint": "840,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true
+                              },
+                              {
+                                "nodeId": 22,
+                                "accessibilityText": "Tab 5 of 6",
+                                "x1": 960,
+                                "y1": 2255,
+                                "x2": 1200,
+                                "y2": 2333,
+                                "centerPoint": "1080,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true
+                              },
+                              {
+                                "nodeId": 23,
+                                "accessibilityText": "Tab 6 of 6",
+                                "x1": 1200,
+                                "y1": 2252,
+                                "x2": 1440,
+                                "y2": 2336,
+                                "centerPoint": "1320,2294",
+                                "className": "android.widget.ImageView",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 24,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 24,
+    "children": [
+      {
+        "nodeId": 10,
+        "ref": "q525",
+        "children": [
+          {
+            "nodeId": 2,
+            "ref": "d605",
+            "bounds": {
+              "left": 67,
+              "top": 444,
+              "right": 997,
+              "bottom": 640
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Speakers",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 3,
+            "ref": "m18",
+            "bounds": {
+              "left": 67,
+              "top": 640,
+              "right": 997,
+              "bottom": 836
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Code of Conduct",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 4,
+            "ref": "h38",
+            "bounds": {
+              "left": 67,
+              "top": 836,
+              "right": 997,
+              "bottom": 1032
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Announcement",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 5,
+            "ref": "m451",
+            "bounds": {
+              "left": 67,
+              "top": 1032,
+              "right": 997,
+              "bottom": 1228
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Theme",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 6,
+            "ref": "k985",
+            "bounds": {
+              "left": 67,
+              "top": 1228,
+              "right": 997,
+              "bottom": 1424
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Select Other Event",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 7,
+            "bounds": {
+              "left": 370,
+              "top": 1973,
+              "right": 694,
+              "bottom": 2054
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "Powered by",
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 8,
+            "ref": "s135",
+            "bounds": {
+              "left": 290,
+              "top": 2054,
+              "right": 774,
+              "bottom": 2183
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2196
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 11,
+        "ref": "f435",
+        "bounds": {
+          "left": 0,
+          "top": 2252,
+          "right": 240,
+          "bottom": 2336
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 1 of 6",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 12,
+        "ref": "s411",
+        "bounds": {
+          "left": 240,
+          "top": 2232,
+          "right": 480,
+          "bottom": 2356
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 2 of 6",
+          "isClickable": true,
+          "isSelected": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 13,
+        "ref": "k691",
+        "bounds": {
+          "left": 480,
+          "top": 2263,
+          "right": 720,
+          "bottom": 2325
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 3 of 6",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 14,
+        "ref": "x667",
+        "bounds": {
+          "left": 720,
+          "top": 2257,
+          "right": 960,
+          "bottom": 2331
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 4 of 6",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 15,
+        "ref": "h228",
+        "bounds": {
+          "left": 960,
+          "top": 2255,
+          "right": 1200,
+          "bottom": 2333
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 5 of 6",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 16,
+        "ref": "f743",
+        "bounds": {
+          "left": 1200,
+          "top": 2252,
+          "right": 1440,
+          "bottom": 2336
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ImageView",
+          "resourceId": "",
+          "contentDescription": "Tab 6 of 6",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

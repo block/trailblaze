@@ -1,0 +1,502 @@
+{
+  "waypointId": "droidcon/android/event-session-detail",
+  "capturedAt": "2026-07-16T04:29:55.145410Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_a2_feedback_trail_9818f915/008_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_session_detail.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1196",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,140",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "accessibilityText": "Back",
+                                        "x1": 14,
+                                        "y1": 98,
+                                        "x2": 182,
+                                        "y2": 266,
+                                        "centerPoint": "98,182",
+                                        "className": "android.widget.Button",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "accessibilityText": "Session details",
+                                        "x1": 252,
+                                        "y1": 140,
+                                        "x2": 745,
+                                        "y2": 224,
+                                        "centerPoint": "498,182",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 12,
+                                        "x1": 1272,
+                                        "y1": 98,
+                                        "x2": 1440,
+                                        "y2": 266,
+                                        "centerPoint": "1356,182",
+                                        "className": "android.widget.Button",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 13,
+                                    "y1": 280,
+                                    "x2": 1440,
+                                    "y2": 2392,
+                                    "centerPoint": "720,1336",
+                                    "children": [
+                                      {
+                                        "nodeId": 14,
+                                        "accessibilityText": "You are Load Bearing",
+                                        "x1": 67,
+                                        "y1": 332,
+                                        "x2": 642,
+                                        "y2": 398,
+                                        "centerPoint": "354,365",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 15,
+                                        "accessibilityText": "Intermediate",
+                                        "x1": 101,
+                                        "y1": 437,
+                                        "x2": 454,
+                                        "y2": 507,
+                                        "centerPoint": "277,472",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 16,
+                                        "accessibilityText": "16 Jul 2026 | 9:00 AM",
+                                        "x1": 67,
+                                        "y1": 546,
+                                        "x2": 568,
+                                        "y2": 612,
+                                        "centerPoint": "317,579",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 17,
+                                        "accessibilityText": "Description",
+                                        "x1": 67,
+                                        "y1": 638,
+                                        "x2": 379,
+                                        "y2": 704,
+                                        "centerPoint": "223,671",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 18,
+                                        "accessibilityText": "You know the xkcd comic. A teetering tower labeled \"all modern digital infrastructure,\" balanced on one thin pillar: a project some random person in Nebraska has been thanklessly maintaining since 2003. We laughed. We made it into stickers. We did not, mostly, think it was about us.\r\n\r\nIt is now.\r\n\r\nThe systems being built today are less focused on human cognitive load and more about hyper experimentation. It doesn't matter whether someone is running LLM agents in parallel, attempting to thoughtfully review 10x more code, packing decades of experience into tiny resetting context windows, or running deep thoughtful analysis on the largest set of experiments ever done in a product - any of those things are  exhausting. Underneath every plan, every decision, every output that someone has to actually read, is one human nervous system \u2014 increasingly load-bearing. (That em-dash was all me, I promise!)\r\n\r\nThis keynote is about you and our community. I'll talk about a variety of concepts: the algorithm of equal disappointment, setting responsible barriers and expectations, the novel act of reading books, and how we're starting to teach the next generation of software engineers. There is a cognitive burden of a profession reshaping itself underneath us, faster than any of us want it to, and what we can control. I'm going to tell you about my experiences, what I've felt being part of this stack, and what I think we owe each other while the ground shifts.",
+                                        "x1": 67,
+                                        "y1": 730,
+                                        "x2": 1373,
+                                        "y2": 2392,
+                                        "centerPoint": "720,1561",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 19,
+                                        "x1": 74,
+                                        "y1": 3157,
+                                        "x2": 1366,
+                                        "y2": 3715,
+                                        "centerPoint": "720,3436",
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.widget.ScrollView",
+                                    "scrollable": true
+                                  },
+                                  {
+                                    "nodeId": 20,
+                                    "accessibilityText": "Submit Feedback",
+                                    "x1": 798,
+                                    "y1": 2252,
+                                    "x2": 1384,
+                                    "y2": 2392,
+                                    "centerPoint": "1091,2322",
+                                    "className": "android.widget.ImageView",
+                                    "clickable": true
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 21,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 21,
+    "children": [
+      {
+        "nodeId": 13,
+        "ref": "a918",
+        "children": [
+          {
+            "nodeId": 1,
+            "ref": "b371",
+            "bounds": {
+              "left": 14,
+              "top": 98,
+              "right": 182,
+              "bottom": 266
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "Back",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "tooltipText": "Back",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 2,
+            "ref": "d785",
+            "bounds": {
+              "left": 252,
+              "top": 140,
+              "right": 745,
+              "bottom": 224
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "Session details",
+              "isHeading": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 3,
+            "ref": "u232",
+            "bounds": {
+              "left": 1272,
+              "top": 98,
+              "right": 1440,
+              "bottom": 266
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 11,
+            "children": [
+              {
+                "nodeId": 5,
+                "ref": "l497",
+                "bounds": {
+                  "left": 67,
+                  "top": 332,
+                  "right": 642,
+                  "bottom": 398
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "You are Load Bearing",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 6,
+                "ref": "m370",
+                "bounds": {
+                  "left": 101,
+                  "top": 437,
+                  "right": 454,
+                  "bottom": 507
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Intermediate",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 7,
+                "ref": "k609",
+                "bounds": {
+                  "left": 67,
+                  "top": 546,
+                  "right": 568,
+                  "bottom": 612
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "16 Jul 2026 | 9:00 AM",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 8,
+                "ref": "e900",
+                "bounds": {
+                  "left": 67,
+                  "top": 638,
+                  "right": 379,
+                  "bottom": 704
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Description",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 9,
+                "ref": "w346",
+                "bounds": {
+                  "left": 67,
+                  "top": 730,
+                  "right": 1373,
+                  "bottom": 2392
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "You know the xkcd comic. A teetering tower labeled \"all modern digital infrastructure,\" balanced on one thin pillar: a project some random person in Nebraska has been thanklessly maintaining since 2003. We laughed. We made it into stickers. We did not, mostly, think it was about us.\r\n\r\nIt is now.\r\n\r\nThe systems being built today are less focused on human cognitive load and more about hyper experimentation. It doesn't matter whether someone is running LLM agents in parallel, attempting to thoughtfully review 10x more code, packing decades of experience into tiny resetting context windows, or running deep thoughtful analysis on the largest set of experiments ever done in a product - any of those things are  exhausting. Underneath every plan, every decision, every output that someone has to actually read, is one human nervous system \u2014 increasingly load-bearing. (That em-dash was all me, I promise!)\r\n\r\nThis keynote is about you and our community. I'll talk about a variety of concepts: the algorithm of equal disappointment, setting responsible barriers and expectations, the novel act of reading books, and how we're starting to teach the next generation of software engineers. There is a cognitive burden of a profession reshaping itself underneath us, faster than any of us want it to, and what we can control. I'm going to tell you about my experiences, what I've felt being part of this stack, and what I think we owe each other while the ground shifts.",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 280,
+              "right": 1440,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ScrollView",
+              "resourceId": "",
+              "isScrollable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64",
+                "ACTION_SCROLL_FORWARD"
+              ]
+            }
+          },
+          {
+            "nodeId": 12,
+            "ref": "g938",
+            "bounds": {
+              "left": 798,
+              "top": 2252,
+              "right": 1384,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "contentDescription": "Submit Feedback",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

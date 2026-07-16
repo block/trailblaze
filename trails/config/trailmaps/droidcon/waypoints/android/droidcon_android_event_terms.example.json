@@ -1,0 +1,262 @@
+{
+  "waypointId": "droidcon/android/event-terms",
+  "capturedAt": "2026-07-16T04:29:58.331721Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_d_settings_trail_34dc6c97/022_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_terms.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 280,
+                                "centerPoint": "720,140",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "accessibilityText": "Back",
+                                    "x1": 14,
+                                    "y1": 98,
+                                    "x2": 182,
+                                    "y2": 266,
+                                    "centerPoint": "98,182",
+                                    "className": "android.widget.Button",
+                                    "clickable": true
+                                  },
+                                  {
+                                    "nodeId": 10,
+                                    "accessibilityText": "Terms and Conditions",
+                                    "x1": 278,
+                                    "y1": 131,
+                                    "x2": 1162,
+                                    "y2": 233,
+                                    "centerPoint": "720,182",
+                                    "className": "android.view.View"
+                                  }
+                                ],
+                                "className": "android.view.View"
+                              },
+                              {
+                                "nodeId": 11,
+                                "y1": 280,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1336",
+                                "children": [
+                                  {
+                                    "nodeId": 12,
+                                    "accessibilityText": "These terms and conditions (\u201cAgreement\u201d) set forth the general terms and conditions of your use of the \u201cDroidcon conference app\u201d mobile application (\u201cMobile Application\u201d or \u201cService\u201d) and any of its related products and services (collectively, \u201cServices\u201d). \n\nThis Agreement is legally binding between you (\u201cUser\u201d, \u201cyou\u201d or \u201cyour\u201d) and Mobile Seasons GmbH (doing business as \u201cDroidcon/Fluttercon\u201d, \u201cwe\u201d, \u201cus\u201d or \u201cour\u201d). If you are entering into this Agreement on behalf of a business or other legal entity, you represent that you have the authority to bind such entity to this Agreement, in which case the terms \u201cUser\u201d, \u201cyou\u201d or \u201cyour\u201d shall refer to such entity. If you do not have such authority, or if you do not agree with the terms of this Agreement, you must not accept this Agreement and may not access and use the Mobile Application and Services. By accessing and using the Mobile Application and Services, you acknowledge that you have read, understood, and agree to be bound by the terms of this Agreement. \n\nYou acknowledge that this Agreement is a contract between you and Droidcon/Fluttercon, even though it is electronic and is not physically signed by you, and it governs your use of the Mobile Application and Services.\n\nAge requirement\n\nYou must be at least 18 years of age to use the Mobile Application and Services. By using the Mobile Application and Services and by agreeing to this Agreement you warrant and represent that you are at least 18 years of age.\n\nUser content\n\nWe do not own any data, information or material (collectively, \u201cContent\u201d) that you submit in the Mobile Application in the course of using the Service. You shall have sole responsibility for the accuracy, quality, integrity, legality, reliability, appropriateness, and intellectual property ownership or right to use of all submitted Content. We may monitor and review the Content in the Mobile Application submitted or created using our Services by you. You grant us permission to access, copy, distribute, store, transmit, reformat, display and perform the Content of your user account solely as required for the purpose of providing the Services to you. Without limiting any of those representations or warranties, we have the right, though not the obligation, to, in our own sole discretion, refuse or remove any Content that, in our reasonable opinion, violates any of our policies or is in any way harmful or objectionable. You also grant us the license to use, reproduce, adapt, modify, publish or distribute the Content created by you or stored in your user account for commercial, marketing or any similar purpose.\n\nBackups\n\nWe are not responsible for the Content residing in the Mobile Application. In no event shall we be held liable for any loss of any Content. It is your sole responsibility to maintain appropriate backup of your Content. Notwithstanding the foregoing, on some occasions and in certain circumstances, with absolutely no obligation, we may be able to restore some or all of your data that has been deleted as of a certain date and time when we may have backed up data for our own purposes. We make no guarantee that the data you need will be available.\n\nLinks to other resources\n\nAlthough the Mobile Application and Services may link to other resources (such as websites, mobile applications, etc.), we are not, directly or indirectly, implying any approval, association, sponsorship, endorsement, or affiliation with any linked resource, unless specifically stated herein. We are not responsible for examining or evaluating, and we do not warrant the offerings of, any businesses or individuals or the content of their resources. We do not assume any responsibility or liability for the actions, products, services, and content of any other third parties. You should carefully review the legal statements and other conditions of use of any resource which you access through a link in the Mobile Application. Your linking to any other off-site resources is at your own risk.\n\nChanges and amendments\n\nWe reserve the right to modify this Agreement or its terms related to the Mobile Application and Services at any time at our discretion. When we do, we will revise the updated date at the bottom of this page. We may also provide notice to you in other ways at our discretion, such as through the contact information you have provided.\nAn updated version of this Agreement will be effective immediately upon the posting of the revised Agreement unless otherwise specified. Your continued use of the Mobile Application and Services after the effective date of the revised Agreement (or such other act specified at that time) will constitute your consent to those changes.\n\nAcceptance of these terms\n\nYou acknowledge that you have read this Agreement and agree to all its terms and conditions. By accessing and using the Mobile Application and Services you agree to be bound by this Agreement. If you do not agree to abide by the terms of this Agreement, you are not authorized to access or use the Mobile Application and Services.\n\nContacting us\n\nIf you have any questions, concerns, or complaints regarding this Agreement, we encourage you to contact us using the details below:\nglobal@droidcon.de\n\nThis document was last updated on May 29, 2024\n\n\n   ",
+                                    "x1": 67,
+                                    "y1": 280,
+                                    "x2": 1373,
+                                    "y2": 2392,
+                                    "centerPoint": "720,1336",
+                                    "className": "android.view.View"
+                                  }
+                                ],
+                                "className": "android.widget.ScrollView",
+                                "scrollable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 13,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 13,
+    "children": [
+      {
+        "nodeId": 1,
+        "ref": "b371",
+        "bounds": {
+          "left": 14,
+          "top": 98,
+          "right": 182,
+          "bottom": 266
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.Button",
+          "resourceId": "",
+          "contentDescription": "Back",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "tooltipText": "Back",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 2,
+        "ref": "r116",
+        "bounds": {
+          "left": 278,
+          "top": 131,
+          "right": 1162,
+          "bottom": 233
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "contentDescription": "Terms and Conditions",
+          "isHeading": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_64"
+          ]
+        }
+      },
+      {
+        "nodeId": 5,
+        "children": [
+          {
+            "nodeId": 4,
+            "ref": "g223",
+            "bounds": {
+              "left": 67,
+              "top": 280,
+              "right": 1373,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "These terms and conditions (\u201cAgreement\u201d) set forth the general terms and conditions of your use of the \u201cDroidcon conference app\u201d mobile application (\u201cMobile Application\u201d or \u201cService\u201d) and any of its related products and services (collectively, \u201cServices\u201d). \n\nThis Agreement is legally binding between you (\u201cUser\u201d, \u201cyou\u201d or \u201cyour\u201d) and Mobile Seasons GmbH (doing business as \u201cDroidcon/Fluttercon\u201d, \u201cwe\u201d, \u201cus\u201d or \u201cour\u201d). If you are entering into this Agreement on behalf of a business or other legal entity, you represent that you have the authority to bind such entity to this Agreement, in which case the terms \u201cUser\u201d, \u201cyou\u201d or \u201cyour\u201d shall refer to such entity. If you do not have such authority, or if you do not agree with the terms of this Agreement, you must not accept this Agreement and may not access and use the Mobile Application and Services. By accessing and using the Mobile Application and Services, you acknowledge that you have read, understood, and agree to be bound by the terms of this Agreement. \n\nYou acknowledge that this Agreement is a contract between you and Droidcon/Fluttercon, even though it is electronic and is not physically signed by you, and it governs your use of the Mobile Application and Services.\n\nAge requirement\n\nYou must be at least 18 years of age to use the Mobile Application and Services. By using the Mobile Application and Services and by agreeing to this Agreement you warrant and represent that you are at least 18 years of age.\n\nUser content\n\nWe do not own any data, information or material (collectively, \u201cContent\u201d) that you submit in the Mobile Application in the course of using the Service. You shall have sole responsibility for the accuracy, quality, integrity, legality, reliability, appropriateness, and intellectual property ownership or right to use of all submitted Content. We may monitor and review the Content in the Mobile Application submitted or created using our Services by you. You grant us permission to access, copy, distribute, store, transmit, reformat, display and perform the Content of your user account solely as required for the purpose of providing the Services to you. Without limiting any of those representations or warranties, we have the right, though not the obligation, to, in our own sole discretion, refuse or remove any Content that, in our reasonable opinion, violates any of our policies or is in any way harmful or objectionable. You also grant us the license to use, reproduce, adapt, modify, publish or distribute the Content created by you or stored in your user account for commercial, marketing or any similar purpose.\n\nBackups\n\nWe are not responsible for the Content residing in the Mobile Application. In no event shall we be held liable for any loss of any Content. It is your sole responsibility to maintain appropriate backup of your Content. Notwithstanding the foregoing, on some occasions and in certain circumstances, with absolutely no obligation, we may be able to restore some or all of your data that has been deleted as of a certain date and time when we may have backed up data for our own purposes. We make no guarantee that the data you need will be available.\n\nLinks to other resources\n\nAlthough the Mobile Application and Services may link to other resources (such as websites, mobile applications, etc.), we are not, directly or indirectly, implying any approval, association, sponsorship, endorsement, or affiliation with any linked resource, unless specifically stated herein. We are not responsible for examining or evaluating, and we do not warrant the offerings of, any businesses or individuals or the content of their resources. We do not assume any responsibility or liability for the actions, products, services, and content of any other third parties. You should carefully review the legal statements and other conditions of use of any resource which you access through a link in the Mobile Application. Your linking to any other off-site resources is at your own risk.\n\nChanges and amendments\n\nWe reserve the right to modify this Agreement or its terms related to the Mobile Application and Services at any time at our discretion. When we do, we will revise the updated date at the bottom of this page. We may also provide notice to you in other ways at our discretion, such as through the contact information you have provided.\nAn updated version of this Agreement will be effective immediately upon the posting of the revised Agreement unless otherwise specified. Your continued use of the Mobile Application and Services after the effective date of the revised Agreement (or such other act specified at that time) will constitute your consent to those changes.\n\nAcceptance of these terms\n\nYou acknowledge that you have read this Agreement and agree to all its terms and conditions. By accessing and using the Mobile Application and Services you agree to be bound by this Agreement. If you do not agree to abide by the terms of this Agreement, you are not authorized to access or use the Mobile Application and Services.\n\nContacting us\n\nIf you have any questions, concerns, or complaints regarding this Agreement, we encourage you to contact us using the details below:\nglobal@droidcon.de\n\nThis document was last updated on May 29, 2024\n\n\n   ",
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 280,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.ScrollView",
+          "resourceId": "",
+          "isScrollable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_64",
+            "ACTION_SCROLL_FORWARD"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+id: "droidcon/android/fluttercon2026-agenda"
+description: >
+  Fluttercon USA 2026 event — Agenda tab. Structurally identical to
+  droidcon/android/usa2026-agenda; only the event heading differs, which is the
+  discriminator.
+android:
+  required:
+    - description: "Fluttercon Usa 2026 event heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Fluttercon Usa 2026"
+    - description: "Navigation drawer button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation menu"
+    - description: "Agenda bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 1 of 6"
+          isSelected: true

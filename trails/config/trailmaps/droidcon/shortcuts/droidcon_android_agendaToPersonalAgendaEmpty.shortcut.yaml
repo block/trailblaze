@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToPersonalAgendaEmpty
+description: Open the Personal Agenda bottom tab before any session is bookmarked, showing the "No sessions found" empty state.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-personal-agenda-empty
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Personal Agenda bottom tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 2 of 6"

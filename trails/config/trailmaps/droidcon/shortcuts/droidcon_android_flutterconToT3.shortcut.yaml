@@ -1,0 +1,12 @@
+id: droidcon_android_flutterconToT3
+description: Switch the event-list home from FlutterCon to the T3 top-level tab.
+shortcut:
+  from: droidcon/android/home-fluttercon
+  to: droidcon/android/home-t3
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Switch to the T3 events tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)T3.*Tab 3 of 3"

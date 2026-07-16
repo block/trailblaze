@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToSponsors
+description: Open the Sponsors bottom tab from the USA 2026 agenda.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-sponsors
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Sponsors bottom tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 4 of 6"

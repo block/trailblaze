@@ -1,0 +1,16 @@
+id: "droidcon/android/event-terms"
+description: >
+  Terms and Conditions page (opened from Settings). Back button + full
+  "Terms and Conditions" title (the settings row reads "Terms & Condition")
+  over the agreement text.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Terms and Conditions title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Terms and Conditions"

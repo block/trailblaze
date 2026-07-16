@@ -1,0 +1,19 @@
+id: "droidcon/android/event-settings"
+description: >
+  Event Settings tab (bottom bar tab 6). Row list: Login, About App, About
+  Droidcon, Terms & Condition, Privacy Policy, Delete Account.
+android:
+  required:
+    - description: "Delete Account row (settings-only)"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Delete Account"
+    - description: "About App row"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "About App"
+    - description: "Settings bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 6 of 6"
+          isSelected: true

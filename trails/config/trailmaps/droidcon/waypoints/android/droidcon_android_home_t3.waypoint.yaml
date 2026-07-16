@@ -1,0 +1,21 @@
+id: "droidcon/android/home-t3"
+description: >
+  Event-list home, T3 tab selected. Same scaffold as droidcon/android/home but
+  the T3 top-level tab is active (T3 currently lists only past events).
+android:
+  required:
+    - description: "Search field"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+    - description: "T3 top-level tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)T3.*Tab 3 of 3"
+          isSelected: true
+  forbidden:
+    - description: "Focused search field means search-active state"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+          isFocused: true

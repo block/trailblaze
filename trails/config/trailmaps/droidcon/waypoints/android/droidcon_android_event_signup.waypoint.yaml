@@ -1,0 +1,20 @@
+id: "droidcon/android/event-signup"
+description: >
+  Create-account screen reached from Login -> Sign up. "Create New Account"
+  heading, Name/Email/Password/Confirm Password fields, Create Account button,
+  and a Back button.
+android:
+  required:
+    - description: "Create New Account heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Create New Account"
+    - description: "Confirm Password field label"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Confirm Password"
+    - description: "Create Account button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Create Account"
+          classNameRegex: "android.widget.Button"

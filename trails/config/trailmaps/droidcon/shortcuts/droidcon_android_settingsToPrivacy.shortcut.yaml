@@ -1,0 +1,12 @@
+id: droidcon_android_settingsToPrivacy
+description: Open the Privacy Policy page from the Settings list.
+shortcut:
+  from: droidcon/android/event-settings
+  to: droidcon/android/event-privacy
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open Privacy Policy
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Privacy Policy"

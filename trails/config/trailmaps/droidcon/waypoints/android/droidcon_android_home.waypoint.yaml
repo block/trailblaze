@@ -1,0 +1,27 @@
+id: "droidcon/android/home"
+description: >
+  Event-list home, Droidcon tab selected. Search field on top, Upcoming/Past
+  Events lists, and the Droidcon/FlutterCon/T3 tab row at the bottom. This app
+  exposes ALL text via contentDescription (Compose semantics) — text is always
+  null.
+android:
+  required:
+    - description: "Search field (unfocused hint state)"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+    - description: "Upcoming Events section header"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Upcoming Events"
+    - description: "Droidcon top-level tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)Droidcon.*Tab 1 of 3"
+          isSelected: true
+  forbidden:
+    - description: "Focused search field means search-active state, not plain home"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+          isFocused: true

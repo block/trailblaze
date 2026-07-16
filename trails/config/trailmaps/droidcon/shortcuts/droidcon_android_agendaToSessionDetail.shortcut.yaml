@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToSessionDetail
+description: Open a session card from the USA 2026 agenda list, pushing the session detail screen.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-session-detail
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the "You are Load Bearing" session card
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s).*You are Load Bearing.*"

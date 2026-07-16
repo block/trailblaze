@@ -1,0 +1,20 @@
+id: "droidcon/android/event-personal-agenda-empty"
+description: >
+  Event Personal Agenda tab with no bookmarked sessions — shows the
+  "No sessions found" empty state. Separate id from the populated state because
+  the available actions differ (nothing to open or unbookmark here).
+android:
+  required:
+    - description: "Personal Agenda heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Personal Agenda"
+    - description: "Empty-state message"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "No sessions found"
+    - description: "Personal Agenda bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 2 of 6"
+          isSelected: true

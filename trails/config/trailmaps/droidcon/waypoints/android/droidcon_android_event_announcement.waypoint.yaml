@@ -1,0 +1,21 @@
+id: "droidcon/android/event-announcement"
+description: >
+  Announcement page (opened from the drawer). Back button + "Announcement"
+  title; currently shows the "No announcement available yet" empty state. The
+  drawer also lists an Announcement item, but has no Back button.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Announcement title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Announcement"
+  forbidden:
+    - description: "Drawer-only item; present when the drawer is open instead"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Select Other Event"

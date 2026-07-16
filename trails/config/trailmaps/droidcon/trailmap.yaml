@@ -1,0 +1,22 @@
+# Demo trailmap for the Droidcon events app (com.droidcon.droidconapp). Loaded as a
+# workspace trailmap from `trails/config/trailblaze.yaml` — not bundled into the
+# Trailblaze JAR.
+#
+# The app is a conference companion: an event-list home (Droidcon / FlutterCon / T3
+# top-level tabs) that drills into a per-event experience (droidCon USA 2026 is the
+# primary target) with its own bottom navigation (Home / Agenda / Speakers / etc.).
+#
+# Waypoints are auto-discovered from `waypoints/**.waypoint.yaml`; the per-platform
+# `tool_sets` and `drivers` come from the `trailblaze` framework trailmap's `defaults:`
+# map via dependency resolution.
+id: droidcon
+dependencies:
+  - trailblaze
+target:
+  display_name: Droidcon
+  platforms:
+    android:
+      app_ids:
+        - com.droidcon.droidconapp
+      tools:
+        - droidcon_android_launchApp

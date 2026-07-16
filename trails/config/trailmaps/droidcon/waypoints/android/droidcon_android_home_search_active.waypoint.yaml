@@ -1,0 +1,16 @@
+id: "droidcon/android/home-search-active"
+description: >
+  Event-list home with the search field focused (keyboard up, list filtering as
+  you type). Distinct from plain home because the available actions differ:
+  typing edits the query and the event list is live-filtered.
+android:
+  required:
+    - description: "Focused search field"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+          isFocused: true
+    - description: "Top-level event-series tab row (home scaffold)"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s).*Tab 1 of 3"

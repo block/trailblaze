@@ -1,0 +1,21 @@
+id: "droidcon/android/event-about-app"
+description: >
+  About App page (opened from Settings). Back button + "About App" title over
+  the app description text. Settings also shows an "About App" row, so the
+  Back button plus a forbidden settings-only row discriminate.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "About App title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "About App"
+  forbidden:
+    - description: "Settings-only row; present when still on the settings list"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Delete Account"

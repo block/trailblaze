@@ -1,0 +1,646 @@
+{
+  "waypointId": "droidcon/android/home-t3",
+  "capturedAt": "2026-07-16T04:29:43.989947Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_e_home_tabs_trail_5c5bba1b/012_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_home_t3.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1196",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,140",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "x1": 632,
+                                        "y1": 92,
+                                        "x2": 808,
+                                        "y2": 272,
+                                        "centerPoint": "720,182",
+                                        "className": "android.widget.ImageView"
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "x1": 1285,
+                                        "y1": 121,
+                                        "x2": 1390,
+                                        "y2": 243,
+                                        "centerPoint": "1337,182",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 12,
+                                    "y1": 280,
+                                    "x2": 1440,
+                                    "y2": 2013,
+                                    "centerPoint": "720,1146",
+                                    "children": [
+                                      {
+                                        "nodeId": 13,
+                                        "x1": 84,
+                                        "y1": 364,
+                                        "x2": 1356,
+                                        "y2": 493,
+                                        "centerPoint": "720,428",
+                                        "children": [
+                                          {
+                                            "nodeId": 14,
+                                            "x1": 135,
+                                            "y1": 376,
+                                            "x2": 240,
+                                            "y2": 481,
+                                            "centerPoint": "187,428",
+                                            "className": "android.widget.ImageView"
+                                          },
+                                          {
+                                            "nodeId": 15,
+                                            "x1": 290,
+                                            "y1": 394,
+                                            "x2": 1255,
+                                            "y2": 464,
+                                            "centerPoint": "772,429",
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Search"
+                                          }
+                                        ],
+                                        "className": "android.view.View",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 16,
+                                        "accessibilityText": "Past Events",
+                                        "x1": 84,
+                                        "y1": 558,
+                                        "x2": 397,
+                                        "y2": 624,
+                                        "centerPoint": "240,591",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 17,
+                                        "x1": 84,
+                                        "y1": 676,
+                                        "x2": 1356,
+                                        "y2": 1800,
+                                        "centerPoint": "720,1238",
+                                        "children": [
+                                          {
+                                            "nodeId": 18,
+                                            "x1": 84,
+                                            "y1": 676,
+                                            "x2": 1356,
+                                            "y2": 1800,
+                                            "centerPoint": "720,1238",
+                                            "children": [
+                                              {
+                                                "nodeId": 19,
+                                                "accessibilityText": "T3 CTO Summit Berlin\n26 Sep 2025 - 26 Sep 2025\nMessedamm 26, 14055 Berlin",
+                                                "x1": 84,
+                                                "y1": 676,
+                                                "x2": 1356,
+                                                "y2": 1038,
+                                                "centerPoint": "720,857",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 20,
+                                                    "x1": 110,
+                                                    "y1": 702,
+                                                    "x2": 446,
+                                                    "y2": 960,
+                                                    "centerPoint": "278,831",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 21,
+                                                    "x1": 514,
+                                                    "y1": 803,
+                                                    "x2": 577,
+                                                    "y2": 866,
+                                                    "centerPoint": "545,834",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 22,
+                                                    "x1": 514,
+                                                    "y1": 879,
+                                                    "x2": 577,
+                                                    "y2": 942,
+                                                    "centerPoint": "545,910",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              },
+                                              {
+                                                "nodeId": 23,
+                                                "accessibilityText": "T3 NYC 2025\n24 Jun 2025 - 24 Jun 2025\n20 Jay St Suite 218, Brooklyn, NY 11201",
+                                                "x1": 84,
+                                                "y1": 1038,
+                                                "x2": 1356,
+                                                "y2": 1405,
+                                                "centerPoint": "720,1221",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 24,
+                                                    "x1": 110,
+                                                    "y1": 1066,
+                                                    "x2": 446,
+                                                    "y2": 1325,
+                                                    "centerPoint": "278,1195",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 25,
+                                                    "x1": 514,
+                                                    "y1": 1146,
+                                                    "x2": 577,
+                                                    "y2": 1209,
+                                                    "centerPoint": "545,1177",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 26,
+                                                    "x1": 514,
+                                                    "y1": 1222,
+                                                    "x2": 577,
+                                                    "y2": 1285,
+                                                    "centerPoint": "545,1253",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              },
+                                              {
+                                                "nodeId": 27,
+                                                "accessibilityText": "T3 Software Engineering Leadership Summit\n05 Jul 2024 - 05 Jul 2024\nMessedamm 26, 14055 Berlin",
+                                                "x1": 84,
+                                                "y1": 1405,
+                                                "x2": 1356,
+                                                "y2": 1800,
+                                                "centerPoint": "720,1602",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 28,
+                                                    "x1": 110,
+                                                    "y1": 1447,
+                                                    "x2": 446,
+                                                    "y2": 1706,
+                                                    "centerPoint": "278,1576",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 29,
+                                                    "x1": 514,
+                                                    "y1": 1584,
+                                                    "x2": 577,
+                                                    "y2": 1647,
+                                                    "centerPoint": "545,1615",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 30,
+                                                    "x1": 514,
+                                                    "y1": 1659,
+                                                    "x2": 577,
+                                                    "y2": 1722,
+                                                    "centerPoint": "545,1690",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          }
+                                        ],
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 31,
+                                    "accessibilityText": "Droidcon\nTab 1 of 3",
+                                    "y1": 2235,
+                                    "x2": 480,
+                                    "y2": 2354,
+                                    "centerPoint": "240,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true
+                                  },
+                                  {
+                                    "nodeId": 32,
+                                    "accessibilityText": "FlutterCon\nTab 2 of 3",
+                                    "x1": 480,
+                                    "y1": 2235,
+                                    "x2": 960,
+                                    "y2": 2354,
+                                    "centerPoint": "720,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true
+                                  },
+                                  {
+                                    "nodeId": 33,
+                                    "accessibilityText": "T3\nTab 3 of 3",
+                                    "x1": 960,
+                                    "y1": 2235,
+                                    "x2": 1440,
+                                    "y2": 2354,
+                                    "centerPoint": "1200,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true,
+                                    "selected": true
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 34,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 34,
+    "children": [
+      {
+        "nodeId": 26,
+        "ref": "y27",
+        "children": [
+          {
+            "nodeId": 2,
+            "ref": "s125",
+            "bounds": {
+              "left": 1285,
+              "top": 121,
+              "right": 1390,
+              "bottom": 243
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 6,
+            "ref": "g76",
+            "children": [
+              {
+                "nodeId": 5,
+                "ref": "h149",
+                "bounds": {
+                  "left": 290,
+                  "top": 394,
+                  "right": 1255,
+                  "bottom": 464
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.EditText",
+                  "resourceId": "",
+                  "hintText": "Search",
+                  "isClickable": true,
+                  "isEditable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 84,
+              "top": 364,
+              "right": 1356,
+              "bottom": 493
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 7,
+            "bounds": {
+              "left": 84,
+              "top": 558,
+              "right": 397,
+              "bottom": 624
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "Past Events",
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 11,
+            "ref": "j436",
+            "bounds": {
+              "left": 84,
+              "top": 676,
+              "right": 1356,
+              "bottom": 1038
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "T3 CTO Summit Berlin\n26 Sep 2025 - 26 Sep 2025\nMessedamm 26, 14055 Berlin",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 15,
+            "ref": "w435",
+            "bounds": {
+              "left": 84,
+              "top": 1038,
+              "right": 1356,
+              "bottom": 1405
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "T3 NYC 2025\n24 Jun 2025 - 24 Jun 2025\n20 Jay St Suite 218, Brooklyn, NY 11201",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 19,
+            "ref": "y705",
+            "bounds": {
+              "left": 84,
+              "top": 1405,
+              "right": 1356,
+              "bottom": 1800
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "",
+              "contentDescription": "T3 Software Engineering Leadership Summit\n05 Jul 2024 - 05 Jul 2024\nMessedamm 26, 14055 Berlin",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 23,
+            "ref": "p371",
+            "bounds": {
+              "left": 0,
+              "top": 2235,
+              "right": 480,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "Droidcon\nTab 1 of 3",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 24,
+            "ref": "b47",
+            "bounds": {
+              "left": 480,
+              "top": 2235,
+              "right": 960,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "FlutterCon\nTab 2 of 3",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 25,
+            "ref": "v318",
+            "bounds": {
+              "left": 960,
+              "top": 2235,
+              "right": 1440,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "T3\nTab 3 of 3",
+              "isClickable": true,
+              "isSelected": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToFloorPlan
+description: Open the Floor Plan bottom tab from the USA 2026 agenda.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-floor-plan
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Floor Plan bottom tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 3 of 6"

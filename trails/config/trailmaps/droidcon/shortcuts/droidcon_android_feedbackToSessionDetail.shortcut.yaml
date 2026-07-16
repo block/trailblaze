@@ -1,0 +1,10 @@
+id: droidcon_android_feedbackToSessionDetail
+description: Close the feedback sheet with its X button, returning to the session detail screen. The close button exposes no accessible label, so this taps its known position.
+shortcut:
+  from: droidcon/android/event-session-feedback
+  to: droidcon/android/event-session-detail
+parameters: []
+tools:
+  - tapOnPoint:
+      x: 1251
+      y: 393

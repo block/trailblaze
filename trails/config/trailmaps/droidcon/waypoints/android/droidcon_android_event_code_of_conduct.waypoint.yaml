@@ -1,0 +1,17 @@
+id: "droidcon/android/event-code-of-conduct"
+description: >
+  Code of Conduct page (opened from the drawer). Back button + "Code Of
+  Conduct" title (capital O — the drawer item reads "Code of Conduct"). The
+  page body renders as an image, so the title and Back button are the only
+  accessible anchors.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Code Of Conduct title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Code Of Conduct"

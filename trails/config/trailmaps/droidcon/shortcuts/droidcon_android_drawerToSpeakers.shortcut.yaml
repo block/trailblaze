@@ -1,0 +1,12 @@
+id: droidcon_android_drawerToSpeakers
+description: Open the Speakers list from the navigation drawer.
+shortcut:
+  from: droidcon/android/event-drawer
+  to: droidcon/android/event-speakers
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open Speakers from the drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Speakers"

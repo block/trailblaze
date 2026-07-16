@@ -1,0 +1,21 @@
+id: "droidcon/android/event-session-feedback"
+description: >
+  Session feedback bottom sheet (opened from the session detail feedback
+  button). "Write your thoughts!" prompt, rating statement rows, and a Submit
+  button. While open, the sheet fully replaces the session detail in the
+  accessibility tree.
+android:
+  required:
+    - description: "Feedback prompt"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Write your thoughts!"
+    - description: "A rating statement row"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Technical level matched talk description"
+    - description: "Submit button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Submit"
+          classNameRegex: "android.widget.Button"

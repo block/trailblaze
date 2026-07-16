@@ -1,0 +1,12 @@
+id: droidcon_android_homeToFluttercon
+description: Switch the event-list home to the FlutterCon top-level tab.
+shortcut:
+  from: droidcon/android/home
+  to: droidcon/android/home-fluttercon
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Switch to the FlutterCon events tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)FlutterCon.*Tab 2 of 3"

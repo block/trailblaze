@@ -1,0 +1,21 @@
+id: "droidcon/android/home-fluttercon"
+description: >
+  Event-list home, FlutterCon tab selected. Same scaffold as droidcon/android/home
+  (search field, event lists) but the FlutterCon top-level tab is active.
+android:
+  required:
+    - description: "Search field"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+    - description: "FlutterCon top-level tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)FlutterCon.*Tab 2 of 3"
+          isSelected: true
+  forbidden:
+    - description: "Focused search field means search-active state"
+      selector:
+        androidAccessibility:
+          classNameRegex: "android.widget.EditText"
+          isFocused: true

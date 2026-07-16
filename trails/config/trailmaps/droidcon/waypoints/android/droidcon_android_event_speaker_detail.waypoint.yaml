@@ -1,0 +1,20 @@
+id: "droidcon/android/event-speaker-detail"
+description: >
+  Single speaker profile (opened from the Speakers list). Back button,
+  "Speaker" title (singular — full-string match cannot hit the "Speakers"
+  list title), name/affiliation, and an About section.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Speaker title (singular)"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Speaker"
+    - description: "About section header"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "About"

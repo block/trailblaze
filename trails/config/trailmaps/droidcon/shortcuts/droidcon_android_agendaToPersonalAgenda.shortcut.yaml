@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToPersonalAgenda
+description: Open the Personal Agenda bottom tab after bookmarking a session, showing the populated list. Same tap as the empty-state shortcut; the destination depends on bookmark state.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-personal-agenda
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Personal Agenda bottom tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 2 of 6"

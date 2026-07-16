@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToDrawer
+description: Open the navigation drawer from the USA 2026 agenda top bar.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-drawer
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the navigation drawer
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation menu"

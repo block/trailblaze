@@ -1,0 +1,12 @@
+id: droidcon_android_loginToSignup
+description: Open the Create New Account screen from the Login screen's Sign up link.
+shortcut:
+  from: droidcon/android/event-login
+  to: droidcon/android/event-signup
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Sign up screen
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: " ?Sign up"

@@ -1,0 +1,12 @@
+id: droidcon_android_agendaToSettings
+description: Open the Settings bottom tab from the USA 2026 agenda.
+shortcut:
+  from: droidcon/android/usa2026-agenda
+  to: droidcon/android/event-settings
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the Settings bottom tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 6 of 6"

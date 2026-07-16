@@ -1,0 +1,19 @@
+id: "droidcon/android/event-floor-plan"
+description: >
+  Event Floor Plan tab — venue map image with the Floor Plan heading and event
+  bottom bar tab 3 active.
+android:
+  required:
+    - description: "Floor Plan heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Floor Plan"
+    - description: "Navigation drawer button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation menu"
+    - description: "Floor Plan bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 3 of 6"
+          isSelected: true

@@ -1,0 +1,14 @@
+id: droidcon_android_homeToSearchActive
+description: Focus the home search field and type a query, filtering the event list.
+shortcut:
+  from: droidcon/android/home
+  to: droidcon/android/home-search-active
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Focus the search field
+      nodeSelector:
+        androidAccessibility:
+          classNameRegex: android.widget.EditText
+  - inputText:
+      text: droid

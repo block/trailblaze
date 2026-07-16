@@ -1,0 +1,12 @@
+id: droidcon_android_homeToUsa2026Agenda
+description: Open the droidCon USA 2026 event card, entering the per-event experience on its Agenda tab.
+shortcut:
+  from: droidcon/android/home
+  to: droidcon/android/usa2026-agenda
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the droidCon USA 2026 event card
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)droidCon USA 2026.*"

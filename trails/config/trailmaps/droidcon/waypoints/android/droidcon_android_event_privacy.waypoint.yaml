@@ -1,0 +1,21 @@
+id: "droidcon/android/event-privacy"
+description: >
+  Privacy Policy page (opened from Settings). Back button + "Privacy Policy"
+  title. Settings also shows a "Privacy Policy" row, so the Back button plus a
+  forbidden settings-only row discriminate.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Privacy Policy title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Privacy Policy"
+  forbidden:
+    - description: "Settings-only row; present when still on the settings list"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Delete Account"

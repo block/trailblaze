@@ -1,0 +1,757 @@
+{
+  "waypointId": "droidcon/android/event-signup",
+  "capturedAt": "2026-07-16T04:29:51.110128Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_d2_signup_trail_d7eee395/004_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_event_signup.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1196",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,140",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "accessibilityText": "Back",
+                                        "x1": 14,
+                                        "y1": 98,
+                                        "x2": 182,
+                                        "y2": 266,
+                                        "centerPoint": "98,182",
+                                        "className": "android.widget.Button",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 11,
+                                    "x1": 67,
+                                    "y1": 448,
+                                    "x2": 1373,
+                                    "y2": 2392,
+                                    "centerPoint": "720,1420",
+                                    "children": [
+                                      {
+                                        "nodeId": 12,
+                                        "x1": 67,
+                                        "y1": 448,
+                                        "x2": 1373,
+                                        "y2": 2392,
+                                        "centerPoint": "720,1420",
+                                        "children": [
+                                          {
+                                            "nodeId": 13,
+                                            "accessibilityText": "Create New Account",
+                                            "x1": 67,
+                                            "y1": 448,
+                                            "x2": 1036,
+                                            "y2": 567,
+                                            "centerPoint": "551,507",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 14,
+                                            "accessibilityText": "Fill the following details to create new account",
+                                            "x1": 67,
+                                            "y1": 601,
+                                            "x2": 1246,
+                                            "y2": 664,
+                                            "centerPoint": "656,632",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 15,
+                                            "accessibilityText": "Name",
+                                            "x1": 67,
+                                            "y1": 731,
+                                            "x2": 207,
+                                            "y2": 791,
+                                            "centerPoint": "137,761",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 16,
+                                            "x1": 67,
+                                            "y1": 807,
+                                            "x2": 1373,
+                                            "y2": 978,
+                                            "centerPoint": "720,892",
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Full Name"
+                                          },
+                                          {
+                                            "nodeId": 17,
+                                            "accessibilityText": "Email",
+                                            "x1": 67,
+                                            "y1": 1046,
+                                            "x2": 199,
+                                            "y2": 1105,
+                                            "centerPoint": "133,1075",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 18,
+                                            "x1": 67,
+                                            "y1": 1122,
+                                            "x2": 1373,
+                                            "y2": 1293,
+                                            "centerPoint": "720,1207",
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Email"
+                                          },
+                                          {
+                                            "nodeId": 19,
+                                            "accessibilityText": "Create Password",
+                                            "x1": 67,
+                                            "y1": 1360,
+                                            "x2": 453,
+                                            "y2": 1420,
+                                            "centerPoint": "260,1390",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 20,
+                                            "x1": 67,
+                                            "y1": 1437,
+                                            "x2": 1373,
+                                            "y2": 1608,
+                                            "centerPoint": "720,1522",
+                                            "children": [
+                                              {
+                                                "nodeId": 21,
+                                                "x1": 1205,
+                                                "y1": 1438,
+                                                "x2": 1373,
+                                                "y2": 1606,
+                                                "centerPoint": "1289,1522",
+                                                "className": "android.widget.Button",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Password"
+                                          },
+                                          {
+                                            "nodeId": 22,
+                                            "accessibilityText": "Confirm Password",
+                                            "x1": 67,
+                                            "y1": 1675,
+                                            "x2": 489,
+                                            "y2": 1734,
+                                            "centerPoint": "278,1704",
+                                            "className": "android.view.View"
+                                          },
+                                          {
+                                            "nodeId": 23,
+                                            "x1": 67,
+                                            "y1": 1751,
+                                            "x2": 1373,
+                                            "y2": 1922,
+                                            "centerPoint": "720,1836",
+                                            "children": [
+                                              {
+                                                "nodeId": 24,
+                                                "x1": 1205,
+                                                "y1": 1753,
+                                                "x2": 1373,
+                                                "y2": 1921,
+                                                "centerPoint": "1289,1837",
+                                                "className": "android.widget.Button",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Confirm Password"
+                                          },
+                                          {
+                                            "nodeId": 25,
+                                            "accessibilityText": "Create Account",
+                                            "x1": 67,
+                                            "y1": 2057,
+                                            "x2": 1373,
+                                            "y2": 2232,
+                                            "centerPoint": "720,2144",
+                                            "className": "android.widget.Button",
+                                            "clickable": true
+                                          },
+                                          {
+                                            "nodeId": 26,
+                                            "x1": 67,
+                                            "y1": 2299,
+                                            "x2": 235,
+                                            "y2": 2392,
+                                            "centerPoint": "151,2345",
+                                            "className": "android.widget.CheckBox",
+                                            "clickable": true
+                                          },
+                                          {
+                                            "nodeId": 27,
+                                            "accessibilityText": "I agree with the terms and privacy policy of droidcon by creating an account ",
+                                            "x1": 235,
+                                            "y1": 2316,
+                                            "x2": 1373,
+                                            "y2": 2392,
+                                            "centerPoint": "804,2354",
+                                            "className": "android.view.View"
+                                          }
+                                        ],
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.widget.ScrollView",
+                                    "scrollable": true
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 28,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 28,
+    "children": [
+      {
+        "nodeId": 20,
+        "ref": "a918",
+        "children": [
+          {
+            "nodeId": 1,
+            "ref": "b371",
+            "bounds": {
+              "left": 14,
+              "top": 98,
+              "right": 182,
+              "bottom": 266
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "Back",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "tooltipText": "Back",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 19,
+            "children": [
+              {
+                "nodeId": 3,
+                "ref": "t384",
+                "bounds": {
+                  "left": 67,
+                  "top": 448,
+                  "right": 1036,
+                  "bottom": 567
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Create New Account",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 4,
+                "ref": "o537",
+                "bounds": {
+                  "left": 67,
+                  "top": 601,
+                  "right": 1246,
+                  "bottom": 664
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Fill the following details to create new account",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 5,
+                "ref": "p100",
+                "bounds": {
+                  "left": 67,
+                  "top": 731,
+                  "right": 207,
+                  "bottom": 791
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Name",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 6,
+                "ref": "f508",
+                "bounds": {
+                  "left": 67,
+                  "top": 807,
+                  "right": 1373,
+                  "bottom": 978
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.EditText",
+                  "resourceId": "",
+                  "hintText": "Full Name",
+                  "isClickable": true,
+                  "isEditable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 7,
+                "ref": "t288",
+                "bounds": {
+                  "left": 67,
+                  "top": 1046,
+                  "right": 199,
+                  "bottom": 1105
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Email",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 8,
+                "ref": "x910",
+                "bounds": {
+                  "left": 67,
+                  "top": 1122,
+                  "right": 1373,
+                  "bottom": 1293
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.EditText",
+                  "resourceId": "",
+                  "hintText": "Email",
+                  "isClickable": true,
+                  "isEditable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 9,
+                "ref": "d864",
+                "bounds": {
+                  "left": 67,
+                  "top": 1360,
+                  "right": 453,
+                  "bottom": 1420
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Create Password",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 11,
+                "ref": "j710",
+                "children": [
+                  {
+                    "nodeId": 10,
+                    "ref": "v68",
+                    "bounds": {
+                      "left": 1205,
+                      "top": 1438,
+                      "right": 1373,
+                      "bottom": 1606
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.Button",
+                      "resourceId": "",
+                      "isClickable": true,
+                      "packageName": "com.droidcon.droidconapp",
+                      "isFocusable": true,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_CLICK",
+                        "ACTION_64"
+                      ]
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 67,
+                  "top": 1437,
+                  "right": 1373,
+                  "bottom": 1608
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.EditText",
+                  "resourceId": "",
+                  "hintText": "Password",
+                  "isClickable": true,
+                  "isEditable": true,
+                  "isPassword": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 12,
+                "ref": "p0",
+                "bounds": {
+                  "left": 67,
+                  "top": 1675,
+                  "right": 489,
+                  "bottom": 1734
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Confirm Password",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 14,
+                "ref": "v229",
+                "children": [
+                  {
+                    "nodeId": 13,
+                    "ref": "t956",
+                    "bounds": {
+                      "left": 1205,
+                      "top": 1753,
+                      "right": 1373,
+                      "bottom": 1921
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.Button",
+                      "resourceId": "",
+                      "isClickable": true,
+                      "packageName": "com.droidcon.droidconapp",
+                      "isFocusable": true,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_CLICK",
+                        "ACTION_64"
+                      ]
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 67,
+                  "top": 1751,
+                  "right": 1373,
+                  "bottom": 1922
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.EditText",
+                  "resourceId": "",
+                  "hintText": "Confirm Password",
+                  "isClickable": true,
+                  "isEditable": true,
+                  "isPassword": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 15,
+                "ref": "p294",
+                "bounds": {
+                  "left": 67,
+                  "top": 2057,
+                  "right": 1373,
+                  "bottom": 2232
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.Button",
+                  "resourceId": "",
+                  "contentDescription": "Create Account",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 16,
+                "ref": "u438",
+                "bounds": {
+                  "left": 67,
+                  "top": 2299,
+                  "right": 235,
+                  "bottom": 2392
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.CheckBox",
+                  "resourceId": "",
+                  "isClickable": true,
+                  "isCheckable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 17,
+                "ref": "c444",
+                "bounds": {
+                  "left": 235,
+                  "top": 2316,
+                  "right": 1373,
+                  "bottom": 2392
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "I agree with the terms and privacy policy of droidcon by creating an account ",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 67,
+              "top": 448,
+              "right": 1373,
+              "bottom": 2392
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ScrollView",
+              "resourceId": "",
+              "isScrollable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64",
+                "ACTION_SCROLL_FORWARD"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

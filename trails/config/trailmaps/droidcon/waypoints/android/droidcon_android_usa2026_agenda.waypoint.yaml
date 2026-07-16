@@ -1,0 +1,20 @@
+id: "droidcon/android/usa2026-agenda"
+description: >
+  Droidcon USA 2026 event — Agenda tab (event landing screen). Event title
+  heading, day tabs, session cards, drawer button, and the 6-tab event bottom
+  bar with tab 1 active.
+android:
+  required:
+    - description: "Droidcon Usa 2026 event heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Droidcon Usa 2026"
+    - description: "Navigation drawer button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation menu"
+    - description: "Agenda bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 1 of 6"
+          isSelected: true

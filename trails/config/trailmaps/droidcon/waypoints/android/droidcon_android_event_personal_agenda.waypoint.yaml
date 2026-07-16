@@ -1,0 +1,21 @@
+id: "droidcon/android/event-personal-agenda"
+description: >
+  Event Personal Agenda tab with at least one bookmarked session — day tabs and
+  bookmarked session cards are present. Distinct from the empty state (which
+  shows "No sessions found").
+android:
+  required:
+    - description: "Personal Agenda heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Personal Agenda"
+    - description: "Personal Agenda bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 2 of 6"
+          isSelected: true
+  forbidden:
+    - description: "Empty-state message means the empty variant"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "No sessions found"

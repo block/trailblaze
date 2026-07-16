@@ -1,0 +1,19 @@
+id: "droidcon/android/event-sponsors"
+description: >
+  Event Sponsors tab — "Our Sponsors" heading over tiered sponsor logo sections,
+  event bottom bar tab 4 active.
+android:
+  required:
+    - description: "Our Sponsors heading"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Our Sponsors"
+    - description: "Navigation drawer button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Open navigation menu"
+    - description: "Sponsors bottom tab, selected"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Tab 4 of 6"
+          isSelected: true

@@ -1,0 +1,12 @@
+id: droidcon_android_flutterconToFluttercon2026Agenda
+description: Open the flutterCon USA 2026 event card from the FlutterCon home tab.
+shortcut:
+  from: droidcon/android/home-fluttercon
+  to: droidcon/android/fluttercon2026-agenda
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Open the flutterCon USA 2026 event card
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)flutterCon USA 2026.*"

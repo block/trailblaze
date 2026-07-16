@@ -1,0 +1,21 @@
+id: "droidcon/android/event-speakers"
+description: >
+  Speakers list (opened from the drawer). Back button + "Speakers" title over
+  speaker name/bio rows. Discriminated from the drawer (which also shows a
+  Speakers item) by the Back button and the absence of drawer-only items.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Speakers title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Speakers"
+  forbidden:
+    - description: "Drawer-only item; present when the drawer is open instead"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Select Other Event"

@@ -1,0 +1,21 @@
+id: "droidcon/android/event-session-detail"
+description: >
+  Session detail screen (opened from an agenda session card). Back button +
+  "Session details" title over the talk title, level, time, room, speaker, and
+  the feedback button.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "Session details title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Session details"
+  forbidden:
+    - description: "Feedback sheet title; when present the feedback overlay owns the screen"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Write your thoughts!"

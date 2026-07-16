@@ -1,0 +1,790 @@
+{
+  "waypointId": "droidcon/android/home-fluttercon",
+  "capturedAt": "2026-07-16T04:29:43.186394Z",
+  "capturedFrom": "../third-trailblaze-internal/logs/capture_e_home_tabs_trail_5c5bba1b/007_TrailblazeSnapshotLog.json",
+  "deviceClassifier": "android-phone",
+  "screenshotFile": "droidcon_android_home_fluttercon.example.webp",
+  "deviceWidth": 1440,
+  "deviceHeight": 2560,
+  "trailblazeDeviceInfo": {
+    "trailblazeDeviceId": {
+      "instanceId": "emulator-5600",
+      "trailblazeDevicePlatform": "ANDROID"
+    },
+    "trailblazeDriverType": "ANDROID_ONDEVICE_ACCESSIBILITY",
+    "widthPixels": 0,
+    "heightPixels": 0,
+    "classifiers": [
+      "android",
+      "phone"
+    ]
+  },
+  "viewHierarchy": {
+    "x2": 1440,
+    "y2": 2560,
+    "centerPoint": "720,1280",
+    "children": [
+      {
+        "nodeId": 2,
+        "x2": 1440,
+        "y2": 2392,
+        "centerPoint": "720,1196",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 1440,
+            "y2": 2392,
+            "centerPoint": "720,1196",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 1440,
+                "y2": 2392,
+                "centerPoint": "720,1196",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 1440,
+                    "y2": 2392,
+                    "centerPoint": "720,1196",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 1440,
+                        "y2": 2392,
+                        "centerPoint": "720,1196",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 1440,
+                            "y2": 2392,
+                            "centerPoint": "720,1196",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 1440,
+                                "y2": 2392,
+                                "centerPoint": "720,1196",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "x2": 1440,
+                                    "y2": 280,
+                                    "centerPoint": "720,140",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "x1": 468,
+                                        "y1": 144,
+                                        "x2": 972,
+                                        "y2": 220,
+                                        "centerPoint": "720,182",
+                                        "className": "android.widget.ImageView"
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "x1": 1285,
+                                        "y1": 121,
+                                        "x2": 1390,
+                                        "y2": 243,
+                                        "centerPoint": "1337,182",
+                                        "className": "android.widget.ImageView",
+                                        "clickable": true
+                                      }
+                                    ],
+                                    "className": "android.view.View"
+                                  },
+                                  {
+                                    "nodeId": 12,
+                                    "y1": 280,
+                                    "x2": 1440,
+                                    "y2": 2196,
+                                    "centerPoint": "720,1238",
+                                    "children": [
+                                      {
+                                        "nodeId": 13,
+                                        "x1": 84,
+                                        "y1": 364,
+                                        "x2": 1356,
+                                        "y2": 493,
+                                        "centerPoint": "720,428",
+                                        "children": [
+                                          {
+                                            "nodeId": 14,
+                                            "x1": 135,
+                                            "y1": 376,
+                                            "x2": 240,
+                                            "y2": 481,
+                                            "centerPoint": "187,428",
+                                            "className": "android.widget.ImageView"
+                                          },
+                                          {
+                                            "nodeId": 15,
+                                            "x1": 290,
+                                            "y1": 394,
+                                            "x2": 1255,
+                                            "y2": 464,
+                                            "centerPoint": "772,429",
+                                            "className": "android.widget.EditText",
+                                            "clickable": true,
+                                            "hintText": "Search"
+                                          }
+                                        ],
+                                        "className": "android.view.View",
+                                        "clickable": true
+                                      },
+                                      {
+                                        "nodeId": 16,
+                                        "accessibilityText": "Upcoming Events",
+                                        "x1": 84,
+                                        "y1": 558,
+                                        "x2": 566,
+                                        "y2": 624,
+                                        "centerPoint": "325,591",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 17,
+                                        "x1": 84,
+                                        "y1": 676,
+                                        "x2": 1356,
+                                        "y2": 1043,
+                                        "centerPoint": "720,859",
+                                        "children": [
+                                          {
+                                            "nodeId": 18,
+                                            "x1": 84,
+                                            "y1": 676,
+                                            "x2": 1356,
+                                            "y2": 1043,
+                                            "centerPoint": "720,859",
+                                            "children": [
+                                              {
+                                                "nodeId": 19,
+                                                "accessibilityText": "flutterCon USA 2026\n16 Jul 2026 - 17 Jul 2026\n9800 International Drive\nOrlando, FL 32819",
+                                                "x1": 84,
+                                                "y1": 676,
+                                                "x2": 1356,
+                                                "y2": 1043,
+                                                "centerPoint": "720,859",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 20,
+                                                    "x1": 110,
+                                                    "y1": 705,
+                                                    "x2": 446,
+                                                    "y2": 963,
+                                                    "centerPoint": "278,834",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 21,
+                                                    "x1": 514,
+                                                    "y1": 785,
+                                                    "x2": 577,
+                                                    "y2": 848,
+                                                    "centerPoint": "545,816",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 22,
+                                                    "x1": 514,
+                                                    "y1": 861,
+                                                    "x2": 577,
+                                                    "y2": 924,
+                                                    "centerPoint": "545,892",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          }
+                                        ],
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 23,
+                                        "accessibilityText": "Past Events",
+                                        "x1": 84,
+                                        "y1": 1125,
+                                        "x2": 397,
+                                        "y2": 1192,
+                                        "centerPoint": "240,1158",
+                                        "className": "android.view.View"
+                                      },
+                                      {
+                                        "nodeId": 24,
+                                        "x1": 84,
+                                        "y1": 1243,
+                                        "x2": 1356,
+                                        "y2": 2196,
+                                        "centerPoint": "720,1719",
+                                        "children": [
+                                          {
+                                            "nodeId": 25,
+                                            "x1": 84,
+                                            "y1": 1243,
+                                            "x2": 1356,
+                                            "y2": 2196,
+                                            "centerPoint": "720,1719",
+                                            "children": [
+                                              {
+                                                "nodeId": 26,
+                                                "accessibilityText": "Fluttercon India 2025\n14 Dec 2025 - 14 Dec 2025\n25 3, Kensington Road, Ulsoor\nBengaluru, 560008 India",
+                                                "x1": 84,
+                                                "y1": 1243,
+                                                "x2": 1356,
+                                                "y2": 1610,
+                                                "centerPoint": "720,1426",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 27,
+                                                    "x1": 110,
+                                                    "y1": 1272,
+                                                    "x2": 446,
+                                                    "y2": 1530,
+                                                    "centerPoint": "278,1401",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 28,
+                                                    "x1": 514,
+                                                    "y1": 1352,
+                                                    "x2": 577,
+                                                    "y2": 1415,
+                                                    "centerPoint": "545,1383",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 29,
+                                                    "x1": 514,
+                                                    "y1": 1428,
+                                                    "x2": 577,
+                                                    "y2": 1491,
+                                                    "centerPoint": "545,1459",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              },
+                                              {
+                                                "nodeId": 30,
+                                                "accessibilityText": "Fluttercon EU\n24 Sep 2025 - 26 Sep 2025\nMessedamm 25, 14055 Berlin",
+                                                "x1": 84,
+                                                "y1": 1610,
+                                                "x2": 1356,
+                                                "y2": 1972,
+                                                "centerPoint": "720,1791",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 31,
+                                                    "x1": 110,
+                                                    "y1": 1636,
+                                                    "x2": 446,
+                                                    "y2": 1894,
+                                                    "centerPoint": "278,1765",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 32,
+                                                    "x1": 514,
+                                                    "y1": 1737,
+                                                    "x2": 577,
+                                                    "y2": 1800,
+                                                    "centerPoint": "545,1768",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 33,
+                                                    "x1": 514,
+                                                    "y1": 1813,
+                                                    "x2": 577,
+                                                    "y2": 1876,
+                                                    "centerPoint": "545,1844",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              },
+                                              {
+                                                "nodeId": 34,
+                                                "accessibilityText": "Fluttercon USA 2025\n25 Jun 2025 - 26 Jun 2025\nNavy Yard, Building 293\nAssembly Road\nBrooklyn, NY 11205",
+                                                "x1": 84,
+                                                "y1": 1972,
+                                                "x2": 1356,
+                                                "y2": 2196,
+                                                "centerPoint": "720,2084",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 35,
+                                                    "x1": 110,
+                                                    "y1": 2027,
+                                                    "x2": 446,
+                                                    "y2": 2196,
+                                                    "centerPoint": "278,2111",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 36,
+                                                    "x1": 514,
+                                                    "y1": 2081,
+                                                    "x2": 577,
+                                                    "y2": 2144,
+                                                    "centerPoint": "545,2112",
+                                                    "className": "android.widget.ImageView"
+                                                  },
+                                                  {
+                                                    "nodeId": 37,
+                                                    "x1": 514,
+                                                    "y1": 2157,
+                                                    "x2": 577,
+                                                    "y2": 2196,
+                                                    "centerPoint": "545,2176",
+                                                    "className": "android.widget.ImageView"
+                                                  }
+                                                ],
+                                                "className": "android.view.View",
+                                                "clickable": true
+                                              }
+                                            ],
+                                            "className": "android.view.View"
+                                          }
+                                        ],
+                                        "className": "android.view.View"
+                                      }
+                                    ],
+                                    "className": "android.widget.ScrollView",
+                                    "scrollable": true
+                                  },
+                                  {
+                                    "nodeId": 38,
+                                    "accessibilityText": "Droidcon\nTab 1 of 3",
+                                    "y1": 2235,
+                                    "x2": 480,
+                                    "y2": 2354,
+                                    "centerPoint": "240,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true
+                                  },
+                                  {
+                                    "nodeId": 39,
+                                    "accessibilityText": "FlutterCon\nTab 2 of 3",
+                                    "x1": 480,
+                                    "y1": 2235,
+                                    "x2": 960,
+                                    "y2": 2354,
+                                    "centerPoint": "720,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true,
+                                    "selected": true
+                                  },
+                                  {
+                                    "nodeId": 40,
+                                    "accessibilityText": "T3\nTab 3 of 3",
+                                    "x1": 960,
+                                    "y1": 2235,
+                                    "x2": 1440,
+                                    "y2": 2354,
+                                    "centerPoint": "1200,2294",
+                                    "className": "android.widget.Button",
+                                    "clickable": true
+                                  }
+                                ],
+                                "className": "android.view.View",
+                                "clickable": true
+                              }
+                            ],
+                            "className": "android.view.View"
+                          }
+                        ],
+                        "className": "android.view.View"
+                      }
+                    ],
+                    "className": "android.view.View"
+                  }
+                ],
+                "className": "android.widget.FrameLayout"
+              }
+            ],
+            "className": "android.widget.FrameLayout",
+            "resourceId": "android:id/content"
+          }
+        ],
+        "className": "android.widget.LinearLayout"
+      },
+      {
+        "nodeId": 41,
+        "y1": 2392,
+        "x2": 1440,
+        "y2": 2560,
+        "centerPoint": "720,2476",
+        "className": "android.view.View",
+        "resourceId": "android:id/navigationBarBackground"
+      }
+    ],
+    "className": "android.widget.FrameLayout"
+  },
+  "trailblazeNodeTree": {
+    "nodeId": 41,
+    "children": [
+      {
+        "nodeId": 33,
+        "ref": "j105",
+        "children": [
+          {
+            "nodeId": 2,
+            "ref": "s125",
+            "bounds": {
+              "left": 1285,
+              "top": 121,
+              "right": 1390,
+              "bottom": 243
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ImageView",
+              "resourceId": "",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 29,
+            "children": [
+              {
+                "nodeId": 6,
+                "ref": "g76",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "ref": "h149",
+                    "bounds": {
+                      "left": 290,
+                      "top": 394,
+                      "right": 1255,
+                      "bottom": 464
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.EditText",
+                      "resourceId": "",
+                      "hintText": "Search",
+                      "isClickable": true,
+                      "isEditable": true,
+                      "packageName": "com.droidcon.droidconapp",
+                      "isFocusable": true,
+                      "maxTextLength": -1,
+                      "actions": [
+                        "ACTION_CLICK",
+                        "ACTION_64"
+                      ]
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 84,
+                  "top": 364,
+                  "right": 1356,
+                  "bottom": 493
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 7,
+                "ref": "r266",
+                "bounds": {
+                  "left": 84,
+                  "top": 558,
+                  "right": 566,
+                  "bottom": 624
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Upcoming Events",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 11,
+                "ref": "n40",
+                "bounds": {
+                  "left": 84,
+                  "top": 676,
+                  "right": 1356,
+                  "bottom": 1043
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "flutterCon USA 2026\n16 Jul 2026 - 17 Jul 2026\n9800 International Drive\nOrlando, FL 32819",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 14,
+                "ref": "h747",
+                "bounds": {
+                  "left": 84,
+                  "top": 1125,
+                  "right": 397,
+                  "bottom": 1192
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Past Events",
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 18,
+                "ref": "x558",
+                "bounds": {
+                  "left": 84,
+                  "top": 1243,
+                  "right": 1356,
+                  "bottom": 1610
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Fluttercon India 2025\n14 Dec 2025 - 14 Dec 2025\n25 3, Kensington Road, Ulsoor\nBengaluru, 560008 India",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 22,
+                "ref": "g372",
+                "bounds": {
+                  "left": 84,
+                  "top": 1610,
+                  "right": 1356,
+                  "bottom": 1972
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Fluttercon EU\n24 Sep 2025 - 26 Sep 2025\nMessedamm 25, 14055 Berlin",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              },
+              {
+                "nodeId": 26,
+                "ref": "q67",
+                "bounds": {
+                  "left": 84,
+                  "top": 1972,
+                  "right": 1356,
+                  "bottom": 2196
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.view.View",
+                  "resourceId": "",
+                  "contentDescription": "Fluttercon USA 2025\n25 Jun 2025 - 26 Jun 2025\nNavy Yard, Building 293\nAssembly Road\nBrooklyn, NY 11205",
+                  "isClickable": true,
+                  "packageName": "com.droidcon.droidconapp",
+                  "isFocusable": true,
+                  "maxTextLength": -1,
+                  "actions": [
+                    "ACTION_CLICK",
+                    "ACTION_64"
+                  ]
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 280,
+              "right": 1440,
+              "bottom": 2196
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.ScrollView",
+              "resourceId": "",
+              "isScrollable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_64",
+                "ACTION_SCROLL_FORWARD"
+              ]
+            }
+          },
+          {
+            "nodeId": 30,
+            "ref": "p371",
+            "bounds": {
+              "left": 0,
+              "top": 2235,
+              "right": 480,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "Droidcon\nTab 1 of 3",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 31,
+            "ref": "b47",
+            "bounds": {
+              "left": 480,
+              "top": 2235,
+              "right": 960,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "FlutterCon\nTab 2 of 3",
+              "isClickable": true,
+              "isSelected": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          },
+          {
+            "nodeId": 32,
+            "ref": "v318",
+            "bounds": {
+              "left": 960,
+              "top": 2235,
+              "right": 1440,
+              "bottom": 2354
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.Button",
+              "resourceId": "",
+              "contentDescription": "T3\nTab 3 of 3",
+              "isClickable": true,
+              "packageName": "com.droidcon.droidconapp",
+              "isFocusable": true,
+              "maxTextLength": -1,
+              "actions": [
+                "ACTION_CLICK",
+                "ACTION_64"
+              ]
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1440,
+          "bottom": 2392
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.view.View",
+          "resourceId": "",
+          "isClickable": true,
+          "packageName": "com.droidcon.droidconapp",
+          "isFocusable": true,
+          "maxTextLength": -1,
+          "actions": [
+            "ACTION_CLICK",
+            "ACTION_64"
+          ]
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 1440,
+      "bottom": 2560
+    },
+    "driverDetail": {
+      "class": "androidAccessibility",
+      "className": "android.widget.FrameLayout",
+      "packageName": "com.droidcon.droidconapp",
+      "maxTextLength": -1,
+      "actions": [
+        "ACTION_SELECT",
+        "ACTION_CLEAR_SELECTION",
+        "ACTION_64",
+        "ACTION_SHOW_ON_SCREEN"
+      ]
+    }
+  }
+}

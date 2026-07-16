@@ -1,0 +1,12 @@
+id: droidcon_android_t3ToHome
+description: Switch the event-list home from T3 back to the Droidcon top-level tab.
+shortcut:
+  from: droidcon/android/home-t3
+  to: droidcon/android/home
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: Switch back to the Droidcon events tab
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "(?s)Droidcon.*Tab 1 of 3"

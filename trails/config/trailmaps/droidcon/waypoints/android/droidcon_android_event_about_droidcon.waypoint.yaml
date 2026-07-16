@@ -1,0 +1,21 @@
+id: "droidcon/android/event-about-droidcon"
+description: >
+  About DroidCon page (opened from Settings). Back button + "About DroidCon"
+  title (capital C — the settings row reads "About Droidcon") over the
+  community description text.
+android:
+  required:
+    - description: "Back button"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Back"
+          classNameRegex: "android.widget.Button"
+    - description: "About DroidCon title"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "About DroidCon"
+  forbidden:
+    - description: "Settings-only row; present when still on the settings list"
+      selector:
+        androidAccessibility:
+          contentDescriptionRegex: "Delete Account"
