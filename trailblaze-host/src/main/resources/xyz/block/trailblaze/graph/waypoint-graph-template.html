@@ -711,19 +711,6 @@
     /* ============================================================================
        MAP VIEW — node cards
        ============================================================================ */
-    /* Topographic contour backdrop — the MAP canvas should read as a *map*,
-       not a dashboard. Faint concentric contour clusters (like isolated hills
-       on a topo sheet) tile behind the graph; the subway view keeps its own
-       clean dot grid. Drawn inline as an SVG tile so it needs no asset route;
-       stroke color is baked per-theme below because data-URIs can't read CSS
-       vars. Opacity is deliberately whisper-quiet — texture, not content. */
-    .map-flow {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(232,232,232,0.055)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
-      background-size: 520px 520px;
-    }
-    :root[data-theme="light"] .map-flow {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='rgba(20,28,45,0.06)' stroke-width='1'%3E%3Cpath d='M60 150 C55 110 95 85 135 92 C180 100 205 135 195 172 C185 210 135 222 100 208 C68 195 64 178 60 150 Z'/%3E%3Cpath d='M85 148 C82 122 108 105 135 110 C165 116 182 138 175 162 C168 188 133 196 108 186 C88 177 87 164 85 148 Z'/%3E%3Cpath d='M108 146 C107 132 121 123 135 126 C151 130 160 142 156 155 C152 169 133 173 120 167 C110 162 109 155 108 146 Z'/%3E%3Cpath d='M355 60 C350 30 385 12 420 20 C458 29 475 60 464 90 C452 122 405 130 375 115 C352 103 359 84 355 60 Z'/%3E%3Cpath d='M378 62 C376 44 397 33 418 38 C441 44 451 62 444 80 C437 99 409 104 391 95 C377 88 379 74 378 62 Z'/%3E%3Cpath d='M215 400 C208 360 252 335 297 343 C345 352 370 390 358 428 C345 468 290 480 250 465 C218 452 220 430 215 400 Z'/%3E%3Cpath d='M242 398 C238 372 267 356 296 361 C328 367 344 391 336 415 C328 441 292 449 266 439 C245 431 245 415 242 398 Z'/%3E%3Cpath d='M268 396 C266 382 281 373 296 376 C313 380 322 393 318 406 C314 420 294 424 280 418 C270 413 269 405 268 396 Z'/%3E%3C/g%3E%3C/svg%3E");
-    }
     /* Painted trail blaze — the rectangular paint mark real trails use on
        trees/rocks. One mark per platform the waypoint declares, in that
        platform's color; a cross-platform waypoint wears a double blaze
@@ -3476,8 +3463,8 @@
         onNodeClick,
         onPaneClick,
       },
-        // No dot-grid Background here — the map view's canvas texture is the
-        // topo-contour tile from .map-flow (see CSS). Subway keeps its dots.
+        // No dot-grid Background here (Subway keeps its dots) — Map's canvas
+        // stays plain.
         React.createElement(MeasureKick),
         React.createElement(Controls, { showInteractive: false }),
         React.createElement(MiniMap, {
