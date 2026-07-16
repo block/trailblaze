@@ -123,7 +123,6 @@ open class CliReportGenerator {
 
     // Any sessions still pending after the timeout are treated as unknown.
     for (sessionId in pending) {
-      Console.log("Warning: session $sessionId did not reach a terminal status within ${maxWaitMs}ms")
       statuses[sessionId] = SessionStatus.Unknown
     }
 

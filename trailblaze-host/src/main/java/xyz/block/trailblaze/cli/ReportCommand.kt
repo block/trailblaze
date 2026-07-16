@@ -5,6 +5,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
@@ -472,6 +473,8 @@ internal fun generateSessionReport(
     interactiveFile = interactiveHtml
     jsonFile = initialJson
   }
+
+  LogsRepo.drainParseFailureSummary() // tallied but not printed — silenced for now
 
   Console.info("")
   if (htmlFile != null) Console.info("HTML: file://${htmlFile.absolutePath}")

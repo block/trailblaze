@@ -306,7 +306,7 @@ class LogsRepo(
     costEnricher(log)
   } catch (e: Exception) {
     if (!logFile.name.endsWith("trace.json")) {
-      Console.log("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
+      recordParseFailure(logFile, e)
     }
     null
   }
@@ -911,5 +911,30 @@ class LogsRepo(
     }
 
     return null
+  }
+
+  companion object {
+    private val parseFailureCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private var firstParseFailure: String? = null
+
+    private fun recordParseFailure(logFile: File, e: Exception) {
+      parseFailureCount.incrementAndGet()
+      firstParseFailure = firstParseFailure ?: "${logFile.name} (${e::class.simpleName}: ${e.message?.substringBefore('\n')})"
+    }
+
+    /**
+     * Drains the parse-failure count accumulated since the last call and returns a one-line
+     * summary, or null if nothing failed. Malformed/legacy log files are common across large
+     * log directories (old serialization formats, partial writes) — logging a full stack trace
+     * per file floods the console, so failures are tallied silently and reported once instead.
+     */
+    fun drainParseFailureSummary(): String? {
+      val count = parseFailureCount.getAndSet(0)
+      val example = firstParseFailure
+      firstParseFailure = null
+      if (count == 0) return null
+      return "Skipped $count log file(s) that could not be parsed" +
+        (example?.let { " (e.g. $it)" } ?: "") + "."
+    }
   }
 }
