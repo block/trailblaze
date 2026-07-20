@@ -22,6 +22,7 @@ interface DriverInput {
   sessions?: Array<{
     meta?: RunMeta;
     recordingYaml?: string | null;
+    originalYaml?: string | null;
     sessionDir: string;
     logs?: TrailblazeLogRecord[];
   }>;
@@ -246,6 +247,7 @@ function main(): void {
       llmLogs,
       shots,
       recordingYaml: s.recordingYaml || null,
+      originalYaml: s.originalYaml || null,
       deviceLog: readDeviceLog(s.sessionDir),
       network: readNetworkLog(s.sessionDir),
       events: readEvents(s.sessionDir),

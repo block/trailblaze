@@ -263,6 +263,10 @@ abstract class BaseHostTrailblazeTest(
       trailblazeToolRepo = toolRepo,
       resolvedTarget = resolvedTargetForSession,
       appId = resolvedAppIdForSession,
+      // Lets host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
+      // written under this session's on-host log dir. Same wiring the Playwright/MCP set-sites use.
+      // `hostLoggingRule` (not the common-typed `loggingRule`) is the one carrying `logsRepo`.
+      sessionDirProvider = hostLoggingRule.logsRepo::getSessionDir,
     )
   }
 

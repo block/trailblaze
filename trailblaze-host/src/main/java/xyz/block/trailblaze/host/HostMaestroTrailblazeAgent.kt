@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import java.io.File
 import maestro.device.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
@@ -12,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.model.ResolvedTarget
@@ -32,6 +34,7 @@ class HostMaestroTrailblazeAgent(
   trailblazeToolRepo: TrailblazeToolRepo? = null,
   resolvedTarget: ResolvedTarget? = null,
   appId: String? = null,
+  sessionDirProvider: ((SessionId) -> File)? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -40,6 +43,7 @@ class HostMaestroTrailblazeAgent(
   trailblazeToolRepo = trailblazeToolRepo,
   resolvedTarget = resolvedTarget,
   appId = appId,
+  sessionDirProvider = sessionDirProvider,
 ) {
 
   /**

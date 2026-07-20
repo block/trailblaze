@@ -38,6 +38,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
+import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -659,26 +660,40 @@ class TrailblazeDeviceManager(
     // PlaywrightBrowserManager.resetSession(), which is called by TrailblazeHostYamlRunner
     // at session start and recreates the BrowserContext for true newContext-level isolation.
 
-    // Stop the per-session capture stream (video / sprite / logcat) BEFORE writing the
-    // session-end log — capture's stopAll triggers the WebM finalize / sprite-extract
-    // ffmpeg passes which can take a few seconds, and we want any "session ended"
-    // observers reading the directory afterwards to see the final state.
-    sessionCaptureCoordinator.stopForSession(sessionId)
+    // Finish downstream evidence before the session directory appears complete. Hold any
+    // failure until the session-end bookkeeping below completes — throwing here would leave a
+    // zombie session (cleared from the active map but never marked ended).
+    val finalizationFailure =
+      runCatching {
+        finalizeHostSessionResources(listOf(sessionId), sessionCaptureCoordinator::stopForSession)
+      }.exceptionOrNull()
 
     Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
-    // Write session end log
+    // Write session end log. The durable status must tell the same story as the throw below:
+    // a failed finalization means the session's artifacts may be incomplete.
     try {
+      val sessionStatus = if (finalizationFailure == null) {
+        SessionStatus.Ended.Succeeded(durationMs = 0L)
+      } else {
+        SessionStatus.Ended.Failed(
+          durationMs = 0L,
+          exceptionMessage = finalizationFailure.message,
+        )
+      }
       val sessionEndLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
         session = sessionId,
         timestamp = kotlinx.datetime.Clock.System.now(),
-        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 0L),
+        sessionStatus = sessionStatus,
       )
       logsRepo.saveLogToDisk(sessionEndLog)
     } catch (e: Exception) {
       Console.log("Failed to write session end log: ${e.message}")
       // Don't fail session end if log write fails
     }
+
+    // Now that the session is consistently ended, surface incomplete-evidence loudly.
+    finalizationFailure?.let { throw it }
 
     return sessionId
   }
@@ -1241,7 +1256,17 @@ class TrailblazeDeviceManager(
     // a concurrent device-management call (sprite gen is bound by `FFMPEG_TIMEOUT_SECONDS`
     // but seconds is enough to be felt). Idempotent if endSessionForDevice already ran.
     // The caller-supplied id covers the mapping-already-cleared case (see kdoc).
-    setOfNotNull(cancelledSessionId, knownSessionId).forEach { sessionCaptureCoordinator.stopForSession(it) }
+    // Genuinely best-effort: a cancelled run is already reported as cancelled/failed, and
+    // several callers invoke this from their own error paths, so a cleanup failure here is
+    // logged rather than thrown (it must not mask the original failure or break the stop route).
+    runCatching {
+      finalizeHostSessionResources(
+        setOfNotNull(cancelledSessionId, knownSessionId),
+        sessionCaptureCoordinator::stopForSession,
+      )
+    }.onFailure {
+      Console.log("Session cleanup after cancellation failed: ${it.message}")
+    }
     return scopeCancelled || cancelledSessionId != null
   }
 

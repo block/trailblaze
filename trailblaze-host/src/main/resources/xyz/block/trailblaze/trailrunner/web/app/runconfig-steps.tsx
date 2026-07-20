@@ -135,95 +135,6 @@ function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedT
   );
 }
 
-// Parse a trail's optional `trailhead:` (its step 0) out of the trail YAML — the bootstrap that runs
-// before the test. Handles the three V1 forms: bare tool string (`trailhead: myapp_freshInstall`),
-// `{ step, tools }`, and NL-only `{ step }`. Returns { step, tools:[{name,args}] } or null when the
-// trail declares no trailhead.
-function parseTrailhead(yaml) {
-  try {
-    if (!window.jsyaml || !yaml) return null;
-    const doc = window.jsyaml.load(yaml);
-    if (!Array.isArray(doc)) return null;
-    const item = doc.find((it) => it && typeof it === 'object' && Object.prototype.hasOwnProperty.call(it, 'trailhead'));
-    if (!item) return null;
-    const th = item.trailhead;
-    if (typeof th === 'string') return { step: null, tools: [{ name: th, args: null }] };
-    if (!th || typeof th !== 'object') return null;
-    const tools = [];
-    if (Array.isArray(th.tools)) {
-      for (const t of th.tools) {
-        if (t && typeof t === 'object') { const name = Object.keys(t)[0]; tools.push({ name, args: t[name] }); }
-        else if (typeof t === 'string') tools.push({ name: t, args: null });
-      }
-    }
-    return { step: th.step || null, tools };
-  } catch (e) {
-    return null;
-  }
-}
-
-// Read-only view of the trail's `trailhead:` (step 0). The trailhead is authored into the trail
-// (edit it in the trail's YAML), so the run config only surfaces what will bootstrap before the run.
-function TrailheadSection({ trailhead }) {
-  useLucide();
-  if (!trailhead) {
-    return (
-      <div style={{ border: '1px dashed var(--tb-hairline-strong)', borderRadius: 11, background: 'var(--bg-standard)', padding: '16px 15px', display: 'flex', gap: 11, alignItems: 'flex-start' }}>
-        <Ico n="flag-off" s={16} c="var(--text-subtle-variant)" style={{ marginTop: 1, flex: '0 0 auto' }} />
-        <div>
-          <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 3 }}>No trailhead</div>
-          <span className="tb-sub" style={{ fontSize: 12, lineHeight: 1.55 }}>
-            This trail has no step 0 — it starts from the current app state. A trailhead is an optional
-            bootstrap (sign in, deep link, fresh install) that replays first. Add one with a{' '}
-            <span className="tb-mono">trailhead:</span> block in the trail YAML.
-          </span>
-        </div>
-      </div>
-    );
-  }
-  const { step, tools } = trailhead;
-  return (
-    <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 11, background: 'var(--bg-standard)', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 13px', borderBottom: '1px solid var(--tb-hairline)' }}>
-        <Ico n="flag" s={16} c="var(--tb-primary-green)" />
-        <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>Step 0 · Trailhead</span>
-        <span className="tb-sub" style={{ fontSize: 11 }}>replays before the test</span>
-      </div>
-      <div style={{ padding: '13px' }}>
-        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: step ? 'var(--text-standard)' : 'var(--text-subtle)' }}>
-          {step || 'Reach the trailhead starting state'}
-        </div>
-        {tools.length > 0 && (
-          <div style={{ marginTop: 11, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {tools.map((t, j) => {
-              const entries = t.args && typeof t.args === 'object' && !Array.isArray(t.args) ? Object.entries(t.args) : null;
-              return (
-                <div key={j}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <Ico n="wrench" s={12} c="var(--tb-running)" />
-                    <span className="tb-mono" style={{ fontSize: 12.5, fontWeight: 700 }}>{t.name}</span>
-                  </div>
-                  {entries && entries.length > 0 && (
-                    <div style={{ marginTop: 4, marginLeft: 19, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      {entries.map(([k, v]) => (
-                        <div key={k} className="tb-mono" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
-                          <span style={{ color: 'var(--tb-running)' }}>{k}</span>
-                          <span className="tb-sub">: </span>
-                          <span style={{ color: 'var(--text-subtle-variant)' }}>{fmtArgValue(v)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function BehaviorSection(p) {
   return (
     <div>
@@ -313,7 +224,8 @@ function RightRail({ trail, detail, liveYaml, tab, setTab, targetId, driver, pla
               <div className="tb-sub" style={{ fontSize: 12 }}>No recorded steps - the agent will drive from the objective.</div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {steps.map((s, i) => <RailStep key={i} idx={i} step={s} last={i === steps.length - 1} />)}
+              {/* The trailhead (step 0) keeps its own kind and shows unnumbered above the trail steps. */}
+              {(() => { let n = 0; return steps.map((s, i) => <RailStep key={i} idx={s.kind === 'trailhead' ? null : n++} step={s} last={i === steps.length - 1} />); })()}
             </div>
           </>
         ) : tab === 'tools' ? (
@@ -327,14 +239,17 @@ function RightRail({ trail, detail, liveYaml, tab, setTab, targetId, driver, pla
 }
 
 function RailStep({ idx, step, last }) {
+  const isTrailhead = step.kind === 'trailhead';
   const isVerify = step.kind === 'verify';
   const tools = step.tools || [];
   return (
     <div style={{ display: 'flex', gap: 12, paddingBottom: last ? 0 : 18 }}>
-      <span className="tb-mono" style={{ flex: '0 0 auto', minWidth: 14, textAlign: 'right', fontSize: 12, color: 'var(--text-subtle-variant)', lineHeight: '20px' }}>{idx + 1}</span>
+      <span className="tb-mono" style={{ flex: '0 0 auto', minWidth: 14, textAlign: 'right', fontSize: 12, color: 'var(--text-subtle-variant)', lineHeight: '20px' }}>
+        {isTrailhead ? <Ico n="flag" s={12} c="var(--tb-primary-green)" /> : idx + 1}
+      </span>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-          <Chip tone={isVerify ? 'blue' : 'purple'}>{isVerify ? 'VERIFY' : 'STEP'}</Chip>
+          <Chip tone={isTrailhead ? 'green' : isVerify ? 'blue' : 'purple'}>{isTrailhead ? 'TRAILHEAD' : isVerify ? 'VERIFY' : 'STEP'}</Chip>
           <span style={{ fontSize: 13, color: 'var(--text-standard)', lineHeight: 1.4, wordBreak: 'break-word' }}>{step.text || tools[0] || 'step'}</span>
         </div>
         {tools.length > 0 && (
@@ -407,7 +322,6 @@ function ToolSetRow({ ts }) {
 // each; the dialog's scroll-spy highlights the one in view.
 const SECTIONS = [
   ['target', 'Target', 'The device and the app under test on it.', 'crosshair'],
-  ['trailhead', 'Trailhead', 'The step 0 bootstrap that runs before this test.', 'flag'],
   ['behavior', 'Behavior', 'How the agent drives. Defaults replay the recorded steps.', 'bot'],
   ['capture', 'Capture', 'Artifacts recorded during the run. Video and recording on by default.', 'clapperboard'],
 ];
@@ -444,6 +358,6 @@ function SectionNav({ active, onJump, summaries = {} }) {
 
 Object.assign(window, {
   RcInput, RcSelect, Field, CompactField, ToggleRow, ToggleGroup, Section, TargetSection,
-  parseTrailhead, TrailheadSection, BehaviorSection, CaptureSection,
+  BehaviorSection, CaptureSection,
   RightRail, RailStep, RunToolsPanel, ToolSetRow, SECTIONS, SectionNav,
 });

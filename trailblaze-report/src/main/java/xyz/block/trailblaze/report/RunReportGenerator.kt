@@ -14,9 +14,11 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
@@ -46,6 +48,7 @@ import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
  */
 class RunReportGenerator(
   private val bunBinary: File? = BunBinaryResolver.resolveBunBinary(),
+  private val environment: Map<String, String> = System.getenv(),
 ) {
 
   /**
@@ -97,8 +100,10 @@ class RunReportGenerator(
       }
 
       val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }
-      // "interactive" in the name keeps it from colliding with the legacy WASM report, which is
-      // written to the same reports/ dir with the same timestamp pattern in the same run.
+      // The timestamp keeps repeated generate() calls from clobbering each other in reports/; the
+      // "interactive" token distinguishes this from the legacy WASM report, which ReportMain writes
+      // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
+      // canonical trailblaze_report_interactive.html).
       val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
       outputFile.copyTo(dest, overwrite = true)
       Console.log("[RunReportGenerator] report generated at ${dest.absolutePath}")
@@ -110,7 +115,11 @@ class RunReportGenerator(
 
   /** Build one session's payload object: meta + recorded YAML + screenshot dir + raw log array. */
   private fun buildSessionJson(logsRepo: LogsRepo, sessionId: SessionId): JsonObject? {
-    val logs = logsRepo.getLogsForSession(sessionId)
+    val logs = logsRepo.getCachedLogsForSession(sessionId)
+    // Same gate as the legacy WASM report: a session dir with stray logs but no session-status
+    // log isn't a real run (e.g. a one-shot helper session) — without this it would surface as a
+    // GUID-titled "UNKNOWN" entry in the session index.
+    if (logs.none { it is TrailblazeLog.TrailblazeSessionStatusChangeLog }) return null
     val sessionInfo = logs.getSessionInfo() ?: return null
     val status = logs.getSessionStatus()
     val sessionDir = logsRepo.getSessionDir(sessionId)
@@ -122,10 +131,14 @@ class RunReportGenerator(
     val recordingYaml = runCatching {
       logs.generateUnifiedRecordedYaml(createTrailblazeYaml())
     }.getOrNull()?.takeIf { it.isNotBlank() }
+    // Use only the immutable source captured at session start. Reading trailFilePath here would
+    // both expose an arbitrary local file to the report and show edited content for an older run.
+    val originalYaml = logs.getSessionStartedInfo()?.rawYaml?.takeIf { it.isNotBlank() }
 
     return buildJsonObject {
-      put("meta", sessionMetaJson(sessionInfo, status))
+      put("meta", sessionMetaJson(sessionInfo, status, reportProvenanceJson(environment)))
       if (recordingYaml != null) put("recordingYaml", recordingYaml)
+      if (originalYaml != null) put("originalYaml", originalYaml)
       put("sessionDir", sessionDir.absolutePath)
       put("logs", readSessionLogJson(sessionDir))
     }
@@ -145,7 +158,7 @@ class RunReportGenerator(
       }
       .sortedBy { it.name }
       .forEach { f ->
-        runCatching { PARSER.parseToJsonElement(f.readText()) }.getOrNull()?.let { add(it) }
+        runCatching { PARSER.parseToJsonElement(f.readText()) }.getOrNull()?.let { add(stripHeavyLogFields(it)) }
       }
   }
 
@@ -195,6 +208,24 @@ class RunReportGenerator(
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
     private val PARSER = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    // View-hierarchy fields the interactive renderer reads but slims away before embedding. Stripped
+    // at the seam so they never bloat input.json or the bun process-boundary copy. Keep in sync with
+    // the field names run-report-core.ts reads: viewHierarchyFiltered || trailblazeNodeTree || viewHierarchy.
+    private val HEAVY_LOG_FIELDS = setOf("viewHierarchyFiltered", "trailblazeNodeTree", "viewHierarchy")
+
+    /**
+     * Drop the large view-hierarchy fields (hundreds of KB per step) from a raw log record before it
+     * crosses into the bun renderer. The interactive report's extractor reads them onto each trace
+     * row and then slims them away before embedding — carried across the process boundary they only
+     * inflated input.json for no output. Every other field stays byte-identical to the on-disk
+     * record, so the payload keeps parity with what the daemon serves the web app. A non-object
+     * element, or one carrying none of the heavy fields, is returned unchanged (no reallocation).
+     */
+    internal fun stripHeavyLogFields(element: JsonElement): JsonElement =
+      (element as? JsonObject)?.takeIf { obj -> obj.keys.any { it in HEAVY_LOG_FIELDS } }
+        ?.let { obj -> JsonObject(obj.filterKeys { it !in HEAVY_LOG_FIELDS }) }
+        ?: element
+
     /**
      * The run `meta` the viewer renders (title, status badge, device/platform strip, error banner,
      * rerun command). Pure over [SessionInfo]/[SessionStatus] so it's unit-testable without a device
@@ -203,6 +234,7 @@ class RunReportGenerator(
     internal fun sessionMetaJson(
       sessionInfo: xyz.block.trailblaze.logs.model.SessionInfo,
       status: SessionStatus,
+      provenance: JsonObject = JsonObject(emptyMap()),
     ): JsonObject = buildJsonObject {
       put("title", sessionInfo.displayName)
       put("status", statusLabel(status))
@@ -221,18 +253,66 @@ class RunReportGenerator(
       }
       sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase()?.let { put("platform", it) }
       sessionInfo.trailblazeDeviceId?.instanceId?.let { put("device", it) }
+      sessionInfo.trailblazeDeviceInfo?.let { device ->
+        device.classifiers
+          .map { it.classifier }
+          .filterNot { it.equals(device.platform.name, ignoreCase = true) }
+          .takeIf { it.isNotEmpty() }
+          ?.joinToString(" · ")
+          ?.let { put("deviceType", it) }
+      }
       put("duration", formatDuration(sessionInfo.durationMs))
       put("ranAt", LocalDateTime.ofInstant(
         java.time.Instant.ofEpochMilli(sessionInfo.timestamp.toEpochMilliseconds()),
         ZoneId.systemDefault(),
       ).format(HUMAN_TS))
       sessionInfo.trailConfig?.id?.let { put("trailId", it) }
-      sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "trailblaze run $it") }
+      sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
       failureReason(status)?.let { put("error", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
       // badge in the viewer — the legacy report's SelfHealChip distinction.
       if (status is SessionStatus.Ended.SucceededWithSelfHeal || status is SessionStatus.Ended.FailedWithSelfHeal) {
         put("selfHeal", true)
+      }
+      provenance.forEach { (key, value) -> put(key, value) }
+    }
+
+    /** CI/source provenance for shareable report links. Empty for ordinary local runs. */
+    internal fun reportProvenanceJson(environment: Map<String, String>): JsonObject = buildJsonObject {
+      val buildUrl = environment.firstValue("CI_BUILD_URL", "BUILDKITE_BUILD_URL")
+        ?: run {
+          val server = environment["GITHUB_SERVER_URL"]
+          val repo = environment["GITHUB_REPOSITORY"]
+          val run = environment["GITHUB_RUN_ID"]
+          if (server != null && repo != null && run != null) "$server/$repo/actions/runs/$run" else null
+        }
+      val buildNumber = environment.firstValue("CI_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "GITHUB_RUN_NUMBER")
+      val commit = environment.firstValue("GIT_COMMIT", "BUILDKITE_COMMIT", "GITHUB_SHA")
+      val branch = environment.firstValue("GIT_BRANCH", "BUILDKITE_BRANCH", "GITHUB_REF_NAME")
+      val repository = githubRepositoryUrl(environment["BUILDKITE_REPO"])
+        ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
+          "${environment["GITHUB_SERVER_URL"] ?: "https://github.com"}/$repo"
+        }
+
+      buildUrl?.takeIf { it.isNotBlank() }?.let { put("buildUrl", it) }
+      buildNumber?.takeIf { it.isNotBlank() }?.let { put("buildNumber", it) }
+      commit?.takeIf { it.isNotBlank() }?.let { sha ->
+        put("commitSha", sha)
+        repository?.let { put("commitUrl", "$it/commit/$sha") }
+      }
+      branch?.takeIf { it.isNotBlank() }?.let { put("branch", it) }
+    }
+
+    private fun Map<String, String>.firstValue(vararg keys: String): String? =
+      keys.firstNotNullOfOrNull { key -> get(key)?.takeIf { it.isNotBlank() } }
+
+    private fun githubRepositoryUrl(raw: String?): String? {
+      val value = raw?.trim()?.removeSuffix(".git")?.takeIf { it.isNotEmpty() } ?: return null
+      return when {
+        value.startsWith("git@github.com:") -> "https://github.com/${value.removePrefix("git@github.com:")}"
+        value.startsWith("ssh://git@github.com/") -> "https://github.com/${value.removePrefix("ssh://git@github.com/")}"
+        value.startsWith("https://github.com/") -> value
+        else -> null
       }
     }
 

@@ -45,6 +45,9 @@ object DeviceClassifierResolver {
   data class DeviceProbe(
     val widthPixels: Int,
     val heightPixels: Int,
+    // Android display density in dpi (null for iOS or when it couldn't be probed). Feeds the
+    // density-independent smallestWidthDp tablet rule in [TrailblazeHostDeviceClassifier].
+    val densityDpi: Int? = null,
   )
 
   /** Function shape `(platform, instanceId) -> probed dims or null`. Tests inject a stub. */
@@ -307,7 +310,16 @@ object DeviceClassifierResolver {
           heightGrid = dims.heightPixels,
         )
       },
+      androidDensityDpi = dims.densityDpi,
     ).getDeviceClassifiers()
+    // An Android classification computed WITHOUT density fell back to the raw-pixel heuristic, which
+    // misreads a low-density tablet (1920x1080 @160dpi) as a phone. A missing density here is a
+    // *transient* `wm density` failure (timeout / malformed output), so treat it like the dim-probe
+    // failure above: return the best-effort classifier but do NOT cache it, or one hiccup would lock
+    // the device into the wrong `android-phone` slot for the daemon's lifetime. The next call retries.
+    if (platform == TrailblazeDevicePlatform.ANDROID && dims.densityDpi == null) {
+      return classifiers
+    }
     classifierCache[cacheKey] = classifiers
     return classifiers
   }
@@ -372,11 +384,30 @@ object DeviceClassifierResolver {
         args = listOf("wm", "size"),
         timeoutMs = 3_000,
       )?.takeIf { it.isNotBlank() } ?: return null
-      parseWmSize(raw)
+      val size = parseWmSize(raw) ?: return null
+      // Density decides phone-vs-tablet in a density-independent way (smallestWidthDp). A failed
+      // density probe is non-fatal — the classifier falls back to the pixel heuristic.
+      val densityRaw = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+        deviceId = deviceId,
+        args = listOf("wm", "density"),
+        timeoutMs = 3_000,
+      )
+      size.copy(densityDpi = densityRaw?.let { parseWmDensity(it) })
     } catch (e: Exception) {
       Console.log("[DeviceClassifierResolver] android dims probe failed for $instanceId: ${e.message}")
       null
     }
+  }
+
+  /**
+   * Pure parse of `wm density` output. Returns the override density when present (last match wins,
+   * mirroring [parseWmSize]) else the physical density. Extracted so unit tests can pin every shape
+   * — physical-only, override-only, both, malformed — without an adb device.
+   */
+  internal fun parseWmDensity(raw: String): Int? {
+    val regex = Regex("""(?:Override|Physical)\s+density:\s*(\d+)""")
+    val match = regex.findAll(raw).lastOrNull() ?: regex.find(raw) ?: return null
+    return match.groupValues[1].toIntOrNull()
   }
 
   /**

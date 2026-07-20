@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
@@ -11,6 +12,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.model.ResolvedTarget
@@ -99,6 +101,17 @@ abstract class MaestroTrailblazeAgent(
    * different questions.
    */
   val appId: String? = null,
+  /**
+   * Maps a [SessionId] to its on-host session-log directory. Surfaced to tools via
+   * [TrailblazeToolExecutionContext.sessionDirProvider] so host-side tools that read
+   * capture artifacts written under the session dir (e.g. a host-side capture-reading tool that
+   * reads the per-plugin network NDJSON the daemon writes to `<sessionDir>/events/`) can locate them.
+   *
+   * Null for on-device agents (there is no host session dir on the device) and for
+   * target-agnostic tests. Host agents wire this from `LogsRepo::getSessionDir` at construction
+   * — see `BaseHostTrailblazeTest` / `TrailblazeHostYamlRunner`.
+   */
+  val sessionDirProvider: ((SessionId) -> File)? = null,
 ) : BaseTrailblazeAgent(memory = memory) {
 
   override val trailblazeToolRepo: TrailblazeToolRepo? = trailblazeToolRepo
@@ -246,6 +259,7 @@ abstract class MaestroTrailblazeAgent(
       captureNetworkTraffic = captureNetworkTraffic,
       resolvedTarget = resolvedTarget,
       appId = appId,
+      sessionDirProvider = sessionDirProvider,
     )
     return context
   }

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.http.DynamicLlmClient
@@ -253,13 +254,6 @@ class DesktopYamlRunner(
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
 
-      // Tracks the session ID under which we started the host-driven Android network capture
-      // bridge (if any). The bridge starts inside `onSessionStarted` callbacks below — that's
-      // the first moment we know the actual on-device session ID — so we can't pre-compute it
-      // here. Stop is best-effort in the outer finally, keyed by whatever was captured.
-      // Defined out here so the finally block sees it even if start() never ran.
-      var capturedNetworkBridgeSessionId: String? = null
-
       try {
         trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
         prefixedProgressMessage(
@@ -287,14 +281,13 @@ class DesktopYamlRunner(
             options = captureOptionsForRun,
             appId = appIdForCapture,
           )
-          capturedNetworkBridgeSessionId =
-            maybeStartAndroidNetworkCapture(
-              runYamlRequest = runYamlRequest,
-              deviceId = trailblazeDeviceId,
-              sessionIdOverride = sid,
-              targetAppId = appIdForCapture,
-              onProgressMessage = prefixedProgressMessage,
-            )
+          maybeStartAndroidNetworkCapture(
+            runYamlRequest = runYamlRequest,
+            deviceId = trailblazeDeviceId,
+            sessionIdOverride = sid,
+            targetAppId = appIdForCapture,
+            onProgressMessage = prefixedProgressMessage,
+          )
         }
 
         sessionId = when {
@@ -561,29 +554,26 @@ class DesktopYamlRunner(
         // Process.waitFor and Thread.sleep) don't throw InterruptedException.
         // Without this, xcrun/screenrecord get killed before finalizing the video.
         Thread.interrupted()
-        // Tear down the Android network capture bridge if one was started for this session.
-        // Mirrors `TrailblazeMcpBridgeImpl.endSession`'s wiring on the MCP side. Best-effort —
-        // the activator's own stop() handles bridge cleanup, so any throw here is non-fatal.
-        capturedNetworkBridgeSessionId?.let { sid ->
-          AndroidNetworkCaptureRegistry.activator?.let { activator ->
-            runCatching { activator.stop(sid) }
-              .onFailure { Console.log("Android network capture stop failed for $sid: ${it.message}") }
-          }
-        }
         // On cancellation, sessionId may not have been set yet. Find the session
         // that was created during this test run by matching the device ID in the
         // session's first log file. This handles concurrent multi-device runs.
+        var deviceMatched = false
         val resolvedSessionId = sessionId
           ?: run {
             val newSessions = trailblazeDeviceManager.logsRepo.getSessionIds()
               .filter { it !in preExistingSessionIds }
             val deviceInstanceId = trailblazeDeviceId.instanceId
             // Match by checking the first log file for this device's instance ID
-            newSessions.firstOrNull { sid ->
+            val matched = newSessions.firstOrNull { sid ->
               val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sid)
               val firstLog = File(sessionDir, "001_TrailblazeSessionStatusChangeLog.json")
               firstLog.exists() && firstLog.readText().contains(deviceInstanceId)
-            } ?: newSessions.firstOrNull()
+            }
+            deviceMatched = matched != null
+            // The bare fallback may be a concurrent run's session on another device: it only
+            // ever gets the idempotent legacy stopForSession below, never the destructive
+            // finalization barrier (which tombstones the session's capture registries).
+            matched ?: newSessions.firstOrNull()
           }
         // Stop capture for the session if we own it (i.e. the runner's
         // captureSessionStarted callback fired and started it). Idempotent — if the
@@ -591,7 +581,30 @@ class DesktopYamlRunner(
         // the coordinator no-ops. Artifacts are already in the session log dir;
         // no temp-dir move needed.
         if (resolvedSessionId != null) {
-          trailblazeDeviceManager.sessionCaptureCoordinator.stopForSession(resolvedSessionId)
+          // Finalize downstream evidence (plugin-capture sessions, network capture) only when
+          // this run owns the session end. Interactive/MCP sessions span many runYaml calls with
+          // sendSessionEndLog=false; finalizing them here would tombstone the live session's
+          // capture registries mid-conversation. Those sessions are finalized exactly once, by
+          // endSessionForDevice / cancelSessionForDevice.
+          val ownsSessionEnd = sessionId != null || deviceMatched
+          val finalizerFailure =
+            if (runYamlRequest.config.sendSessionEndLog && ownsSessionEnd) {
+              runCatching {
+                finalizeHostSessionResources(
+                  listOf(resolvedSessionId),
+                  trailblazeDeviceManager.sessionCaptureCoordinator::stopForSession,
+                )
+              }.exceptionOrNull()
+            } else {
+              trailblazeDeviceManager.sessionCaptureCoordinator.stopForSession(resolvedSessionId)
+              null
+            }
+          if (finalizerFailure != null && executionResult is TrailExecutionResult.Success) {
+            executionResult =
+              TrailExecutionResult.Failed(
+                finalizerFailure.message ?: "Host session finalization failed; artifacts may be incomplete."
+              )
+          }
         }
         Console.log("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
         onComplete?.invoke(executionResult)
@@ -974,15 +987,19 @@ class DesktopYamlRunner(
     targetAppId: String?,
     onProgressMessage: (String) -> Unit,
   ): String? {
-    // The Android proxy-capture env var is a SELF-CONTAINED opt-in: setting
-    // TRAILBLAZE_ANDROID_PROXY_CAPTURE turns capture on for this Android run without also needing
-    // --capture-network, so `TRAILBLAZE_ANDROID_PROXY_CAPTURE=1 trailblaze run <trail>` just works.
+    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
+    val activator = AndroidNetworkCaptureRegistry.activator ?: return null
+    // Two SELF-CONTAINED opt-ins can turn capture on for this Android run without also needing
+    // --capture-network: the TRAILBLAZE_ANDROID_PROXY_CAPTURE env var (proxy path), and the
+    // registered activator's own per-session opt-in (e.g. a distribution's env-var-driven capture
+    // mode). So `TRAILBLAZE_ANDROID_PROXY_CAPTURE=1 trailblaze run <trail>` just works.
     // (--capture-network / the desktop "Capture Network Traffic" toggle still work too — that's the
     // path for web + the internal in-app capturer.)
     val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
-    if (!runYamlRequest.config.captureNetworkTraffic && !androidProxyOptIn) return null
-    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
-    val activator = AndroidNetworkCaptureRegistry.activator ?: return null
+    val activatorOptIn = activator.isSessionCaptureOptedIn(sessionIdOverride.value)
+    if (!runYamlRequest.config.captureNetworkTraffic && !androidProxyOptIn && !activatorOptIn) {
+      return null
+    }
     val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionIdOverride)
     return runCatching {
         activator.start(

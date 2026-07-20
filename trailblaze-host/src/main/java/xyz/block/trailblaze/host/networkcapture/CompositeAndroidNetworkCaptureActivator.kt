@@ -50,6 +50,16 @@ class CompositeAndroidNetworkCaptureActivator(
     routed.remove(sessionId)?.stop(sessionId)
   }
 
+  /**
+   * Defers to the delegate the session routes to (the recorded one when [start] already ran,
+   * otherwise the one [useProxy] would pick right now) — the opt-in only matters if the delegate
+   * that would actually capture asserts it.
+   */
+  override fun isSessionCaptureOptedIn(sessionId: String): Boolean {
+    val delegate = routed[sessionId] ?: (if (useProxy()) proxy else fallback) ?: return false
+    return delegate.isSessionCaptureOptedIn(sessionId)
+  }
+
   companion object {
     /** Opt-in env flag selecting the mitmproxy MITM capture path. Off unless `1`/`true`. */
     const val ENV_ANDROID_PROXY_CAPTURE: String = "TRAILBLAZE_ANDROID_PROXY_CAPTURE"

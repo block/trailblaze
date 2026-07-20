@@ -80,6 +80,8 @@ import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.utils.NoOpElementComparator
+import xyz.block.trailblaze.cli.DeviceClassifierResolver
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -1659,17 +1661,24 @@ class TrailblazeMcpBridgeImpl(
       // race window where a parallel setSessionTargetForBoundDevice could land
       // between the two reads and the two callers would see different targets.
       val resolvedTargetAppId = getSessionTargetAppIdForDevice(trailblazeDeviceId)
-      // TRAILBLAZE_ANDROID_PROXY_CAPTURE is a self-contained opt-in — it enables Android capture on
-      // its own, without also needing the daemon's captureNetworkTraffic toggle. See the twin gate
-      // in DesktopYamlRunner.maybeStartAndroidNetworkCapture.
+      // TRAILBLAZE_ANDROID_PROXY_CAPTURE and the activator's own per-session opt-in are
+      // self-contained — each enables Android capture on its own, without also needing the
+      // daemon's captureNetworkTraffic toggle. See the twin gate in
+      // DesktopYamlRunner.maybeStartAndroidNetworkCapture.
       val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
       if (
-        (captureNetworkTraffic || androidProxyOptIn) &&
-          trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
+        trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
           resolvedLogsRepoForAndroid != null
       ) {
         val activator = AndroidNetworkCaptureRegistry.activator
-        if (activator != null) {
+        if (
+          activator != null &&
+            (
+              captureNetworkTraffic ||
+                androidProxyOptIn ||
+                activator.isSessionCaptureOptedIn(sessionResolution.sessionId.value)
+              )
+        ) {
           runCatching {
             activator.start(
               sessionId = sessionResolution.sessionId.value,
@@ -1789,20 +1798,11 @@ class TrailblazeMcpBridgeImpl(
       webInitErrors.remove(deviceId.instanceId)
     }
     closePersistentDevice(deviceId)
-    val activeSessionId = trailblazeDeviceManager.getCurrentSessionIdForDevice(deviceId)
+    // endSessionForDevice runs the full finalization barrier (registered finalizers, the
+    // Android network-capture activator, and the capture coordinator) before returning, and
+    // rethrows a finalization failure only after the session is consistently ended — so an
+    // incomplete-evidence failure surfaces to the MCP caller without leaving a zombie session.
     val endedSessionId = trailblazeDeviceManager.endSessionForDevice(deviceId)
-    // Tear down the Android network capture bridge if one was started for this session. We use
-    // the active sessionId captured *before* endSessionForDevice clears it; without that, the
-    // activator can't match the running bridge to a session and would leave the worker thread
-    // and adb-forward port leaked until the JVM exits.
-    if (activeSessionId != null) {
-      AndroidNetworkCaptureRegistry.activator?.let { activator ->
-        runCatching { activator.stop(activeSessionId.value) }
-          .onFailure {
-            Console.log("MCP: Android network capture stop failed: ${it.message}")
-          }
-      }
-    }
     return endedSessionId != null
   }
 
@@ -1872,9 +1872,21 @@ class TrailblazeMcpBridgeImpl(
     // Compute device classifiers using TrailblazeHostDeviceClassifier
     val classifiers = if (maestroDriver != null) {
       try {
+        // Android tablet detection is density-independent (smallestWidthDp); probe density so a
+        // low-density tablet (e.g. 1920x1080 @160dpi, min side 1080px = 1080dp) isn't misread as a
+        // phone by the raw-pixel fallback. Non-fatal — a failed probe degrades to the pixel rule.
+        val androidDensityDpi = if (driverType.platform == TrailblazeDevicePlatform.ANDROID) {
+          runCatching {
+            AndroidHostAdbUtils.execAdbShellCommandWithTimeout(deviceId, listOf("wm", "density"), 3_000)
+              ?.let { DeviceClassifierResolver.parseWmDensity(it) }
+          }.getOrNull()
+        } else {
+          null
+        }
         TrailblazeHostDeviceClassifier(
           trailblazeDriverType = driverType,
           maestroDeviceInfoProvider = { maestroDriver.deviceInfo() },
+          androidDensityDpi = androidDensityDpi,
         ).getDeviceClassifiers()
       } catch (e: Exception) {
         Console.log("[MCP Bridge] Failed to compute classifiers: ${e.message}")

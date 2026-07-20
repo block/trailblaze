@@ -19,6 +19,8 @@ interface RunMeta {
   /** Display version of the app under test, e.g. "5.58.0.0 (67500009)". */
   appVersion?: string;
   device?: string;
+  /** Human-readable device category/classifier, e.g. "phone" or "tablet". */
+  deviceType?: string;
   platform?: string;
   trailId?: string;
   steps?: number;
@@ -31,8 +33,17 @@ interface RunMeta {
   /** True for *WithSelfHeal statuses — renders the separate self-heal marker badge. */
   selfHeal?: boolean;
   generatedAt?: string;
+  /** CI build that produced the run, when the report was generated in CI. */
+  buildUrl?: string;
+  buildNumber?: string;
+  /** Source revision that produced the run. */
+  commitSha?: string;
+  commitUrl?: string;
+  branch?: string;
   /** Legacy single-run payloads carried the YAML on meta; lifted onto the session by the builder. */
   recordingYaml?: string | null;
+  /** Legacy-compatible transport for the authored trail before the run recorded concrete actions. */
+  originalYaml?: string | null;
 }
 
 /** Report-time action overlay on a step's screenshot, in device-pixel coordinates (dw×dh). */
@@ -72,6 +83,16 @@ interface TraceStep {
   screenshotFile: string | null;
   /** True for top-level trail steps (ObjectiveStartLog) — starts a STEP group header. */
   objective: boolean;
+  /** True when the objective is the trail's `trailhead:` (step 0) — rendered as TRAILHEAD, unnumbered. */
+  trailhead: boolean;
+  /** True when recorded actions for this authored objective failed and self-heal took over. */
+  selfHeal?: boolean;
+  /** Recorded tool that triggered self-heal, retained for the recovery summary. */
+  selfHealTool?: string | null;
+  /** Original recording failure, retained separately from the recovered objective outcome. */
+  selfHealError?: string | null;
+  /** True only on the recorded tool row whose failure triggered self-heal. */
+  selfHealSource?: boolean;
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;
@@ -162,6 +183,7 @@ interface SessionPayload {
   /** screenshotFile → data: URI. */
   shots: Record<string, string>;
   recordingYaml: string | null;
+  originalYaml: string | null;
   deviceLog?: string | null;
   network?: NetworkEvent[] | null;
   events?: EventStream[] | null;
@@ -175,6 +197,7 @@ interface SessionInput {
   llmLogs?: RawLlmRow[];
   shots?: Record<string, string>;
   recordingYaml?: string | null;
+  originalYaml?: string | null;
   deviceLog?: string | null;
   network?: NetworkEvent[] | null;
   events?: EventStream[] | null;

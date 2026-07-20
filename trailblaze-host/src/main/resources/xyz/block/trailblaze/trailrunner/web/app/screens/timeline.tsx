@@ -638,13 +638,14 @@ function StepStack({ feed, step, setStep, sessionId }) {
   // Group the flat feed under the trail's steps: each objective row starts a new
   // group; the tool calls / assertions / analytics that follow nest under it. Rows
   // before the first objective (or a run with no objectives) get a headerless group.
+  // The trailhead (step 0) keeps num 0 so the trail steps still read STEP 1..N.
   const groups = React.useMemo(() => {
     const gs = [];
     let cur = null;
     let n = 0;
     for (const item of feed) {
       if (item.kind === 'step' && item.t.objective) {
-        cur = { header: item, num: ++n, items: [] };
+        cur = { header: item, num: item.t.trailhead ? 0 : ++n, items: [] };
         gs.push(cur);
       } else {
         if (!cur) { cur = { header: null, num: 0, items: [] }; gs.push(cur); }
@@ -676,46 +677,69 @@ function StepStack({ feed, step, setStep, sessionId }) {
     );
   }
 
+  const renderGroup = (g, gi, arr) => {
+    const tr = g.header && g.header.t;
+    const sel = tr && step === tr.i;
+    const childActive = g.items.some((it) => it.kind === 'step' && it.t.i === step);
+    const failed = (tr && !tr.ok) || g.items.some((it) => it.kind === 'step' && !it.t.ok);
+    const lastGroup = gi === arr.length - 1;
+    return (
+      <React.Fragment key={g.header ? g.header.key : 'pre-' + gi}>
+        {tr && (
+          <div
+            ref={sel ? selRef : null}
+            data-testid="trace-step-header"
+            onClick={() => onActivate(tr)}
+            onContextMenu={(e) => onContext(e, tr)}
+            style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '10px 13px', cursor: 'pointer',
+              background: sel ? 'rgba(94,155,255,.10)' : 'var(--bg-subtle)',
+              borderLeft: '3px solid ' + (sel ? 'var(--tb-running)' : childActive ? 'rgba(94,155,255,.4)' : 'transparent'),
+              borderTop: gi > 0 ? '1px solid var(--tb-hairline-strong)' : 'none',
+              borderBottom: g.items.length > 0 ? '1px solid var(--tb-hairline)' : (lastGroup ? 'none' : '1px solid var(--tb-hairline)') }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Chip tone="purple">{tr.trailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</Chip>
+              <span title={failed ? 'Step had a failure' : 'Step passed'} style={{ width: 8, height: 8, borderRadius: 99, background: failed ? 'var(--tb-fail)' : 'var(--tb-pass)', flexShrink: 0 }} />
+              {g.items.length > 0 && <span className="tb-sub" style={{ fontSize: 11 }}>{g.items.length} action{g.items.length === 1 ? '' : 's'}</span>}
+              {relS.get(g.header.key) != null ? <span className="tb-mono tb-sub" style={{ fontSize: 11, marginLeft: 'auto' }} title="Time into the run">{relS.get(g.header.key).toFixed(1)}s</span> : null}
+            </div>
+            <span data-selectable style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.45 }}>{tr.label}</span>
+            {!tr.ok && tr.err && <span style={{ fontSize: 11.5, color: 'var(--tb-danger-text)', lineHeight: 1.4 }}>{tr.err}</span>}
+          </div>
+        )}
+        {g.items.map((item, j) => (
+          <TraceRow key={item.key} item={item} {...rowProps} rel={relS.get(item.key)} child last={j === g.items.length - 1} />
+        ))}
+      </React.Fragment>
+    );
+  };
+
+  // The trailhead (step 0) gets its own labelled card above the trail's steps, so the
+  // deterministic setup reads apart from the test itself.
+  const thGroups = groups.filter((g) => g.header && g.header.t.trailhead);
+  const trailGroups = groups.filter((g) => !(g.header && g.header.t.trailhead));
+  const testStepCount = trailGroups.filter((g) => g.header).length;
+  const card = (children, trailheadTint) => (
+    <div style={{ border: '1px solid ' + (trailheadTint ? 'rgba(151,82,255,.38)' : 'var(--tb-hairline)'), borderRadius: 10, overflow: 'hidden', background: 'var(--bg-standard)' }}>
+      {children}
+    </div>
+  );
+  const sectionLabel = (title, sub, purple, top) => (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '0 2px', margin: (top ? '18px' : '0') + ' 0 8px' }}>
+      <span className={'tb-eyebrow' + (purple ? ' trailhead' : '')} style={{ fontSize: 11.5, letterSpacing: '.12em', ...(purple ? {} : { color: 'var(--text-standard)' }) }}>{title}</span>
+      <span className="tb-sub" style={{ fontSize: 12 }}>{sub}</span>
+    </div>
+  );
   return (
     <>
-    <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg-standard)' }}>
-      {groups.map((g, gi) => {
-        const tr = g.header && g.header.t;
-        const sel = tr && step === tr.i;
-        const childActive = g.items.some((it) => it.kind === 'step' && it.t.i === step);
-        const failed = (tr && !tr.ok) || g.items.some((it) => it.kind === 'step' && !it.t.ok);
-        const lastGroup = gi === groups.length - 1;
-        return (
-          <React.Fragment key={g.header ? g.header.key : 'pre-' + gi}>
-            {tr && (
-              <div
-                ref={sel ? selRef : null}
-                data-testid="trace-step-header"
-                onClick={() => onActivate(tr)}
-                onContextMenu={(e) => onContext(e, tr)}
-                style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '10px 13px', cursor: 'pointer',
-                  background: sel ? 'rgba(94,155,255,.10)' : 'var(--bg-subtle)',
-                  borderLeft: '3px solid ' + (sel ? 'var(--tb-running)' : childActive ? 'rgba(94,155,255,.4)' : 'transparent'),
-                  borderTop: gi > 0 ? '1px solid var(--tb-hairline-strong)' : 'none',
-                  borderBottom: g.items.length > 0 ? '1px solid var(--tb-hairline)' : (lastGroup ? 'none' : '1px solid var(--tb-hairline)') }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Chip tone="purple">STEP {g.num}</Chip>
-                  <span title={failed ? 'Step had a failure' : 'Step passed'} style={{ width: 8, height: 8, borderRadius: 99, background: failed ? 'var(--tb-fail)' : 'var(--tb-pass)', flexShrink: 0 }} />
-                  {g.items.length > 0 && <span className="tb-sub" style={{ fontSize: 11 }}>{g.items.length} action{g.items.length === 1 ? '' : 's'}</span>}
-                  {relS.get(g.header.key) != null ? <span className="tb-mono tb-sub" style={{ fontSize: 11, marginLeft: 'auto' }} title="Time into the run">{relS.get(g.header.key).toFixed(1)}s</span> : null}
-                </div>
-                <span data-selectable style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.45 }}>{tr.label}</span>
-                {!tr.ok && tr.err && <span style={{ fontSize: 11.5, color: 'var(--tb-danger-text)', lineHeight: 1.4 }}>{tr.err}</span>}
-              </div>
-            )}
-            {g.items.map((item, j) => (
-              <TraceRow key={item.key} item={item} {...rowProps} rel={relS.get(item.key)} child last={j === g.items.length - 1} />
-            ))}
-          </React.Fragment>
-        );
-      })}
-    </div>
+    {thGroups.length > 0 && (
+      <>
+        {sectionLabel('Trailhead', 'Deterministic setup · step 0', true, false)}
+        {card(thGroups.map(renderGroup), true)}
+        {trailGroups.length > 0 && sectionLabel('Trail', testStepCount + ' test step' + (testStepCount === 1 ? '' : 's'), false, true)}
+      </>
+    )}
+    {trailGroups.length > 0 && card(trailGroups.map(renderGroup), false)}
     {overlays}
     </>
   );

@@ -5,8 +5,9 @@ import java.io.File
 
 /**
  * SPI for "spin up host-driven Android network capture for this session". The MCP bridge calls
- * [start] when an Android session has `TrailblazeConfig.captureNetworkTraffic` enabled, and [stop]
- * when the session ends.
+ * [start] when an Android session has `TrailblazeConfig.captureNetworkTraffic` enabled — or when
+ * the session is opted in another way ([isSessionCaptureOptedIn], or the proxy env opt-in on
+ * [CompositeAndroidNetworkCaptureActivator]) — and [stop] when the session ends.
  *
  * Implementations live out-of-tree because the on-device mechanics — debug-pref seeding,
  * the wire protocol, the abstract-socket name — are app-specific. The host stays engine-agnostic:
@@ -38,6 +39,19 @@ interface AndroidNetworkCaptureActivator {
    * mapping, joins the worker thread. Idempotent.
    */
   fun stop(sessionId: String)
+
+  /**
+   * Whether this activator opts [sessionId] into capture ON ITS OWN, independent of
+   * `TrailblazeConfig.captureNetworkTraffic` and the `TRAILBLAZE_ANDROID_PROXY_CAPTURE` env
+   * opt-in. The bridge-start gates OR this into their capture checks, so a downstream activator
+   * with its own per-run toggle (e.g. an env-var-driven capture mode read by the activator's
+   * distribution) can engage without the operator also turning on network capture.
+   *
+   * Read per-call, not cached: a long-lived daemon dispatches many sessions and the toggle may
+   * differ between them. Default false — activators without a self-contained opt-in never
+   * change behavior.
+   */
+  fun isSessionCaptureOptedIn(sessionId: String): Boolean = false
 }
 
 /**

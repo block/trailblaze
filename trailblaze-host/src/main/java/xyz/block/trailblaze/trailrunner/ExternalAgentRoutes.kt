@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -36,6 +37,25 @@ private suspend fun <T> io.ktor.server.application.ApplicationCall.respondJson(
   body: T,
   status: HttpStatusCode = HttpStatusCode.OK,
 ) = respondText(JSON.encodeToString(serializer, body), ContentType.Application.Json, status)
+
+private suspend fun resolveDemoTargetAppId(deps: TrailRunnerDeps, runId: String): String? {
+  val demo = ExternalAgentSupervisor.runs[runId]?.demo ?: return null
+  if (demo.device.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
+  val targetId = demo.target?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  // Identity resolution is an enhancement to demo capture, not a precondition for the route —
+  // an unreachable device here must not 500 the mark-start call.
+  val installedTargets =
+    runCatching {
+        buildDeviceAppsResponse(
+            deps = deps,
+            platform = demo.device.trailblazeDevicePlatform.name,
+            id = demo.device.instanceId,
+          )
+          .targets
+      }
+      .getOrNull() ?: return null
+  return installedTargets.firstOrNull { it.id.equals(targetId, ignoreCase = true) }?.appId
+}
 
 internal fun Route.externalAgentRoutes(deps: TrailRunnerDeps) {
   get("$PATH_BASE/api/external-agents") {
@@ -113,7 +133,8 @@ internal fun Route.externalAgentRoutes(deps: TrailRunnerDeps) {
     // A missing/empty body means manual positioning (null trailhead), which is valid, so a receive
     // failure defaults to a manual mark-start rather than erroring.
     val body = runCatching { call.receive<DemoMarkStartRequest>() }.getOrDefault(DemoMarkStartRequest())
-    val result = ExternalAgentSupervisor.markDemoStart(id, body.trailhead)
+    val targetAppId = resolveDemoTargetAppId(deps, id)
+    val result = ExternalAgentSupervisor.markDemoStart(id, body.trailhead, targetAppId)
     val response = result.fold(
       onSuccess = { DemoPhaseResponse(ok = true, phase = it) },
       onFailure = { DemoPhaseResponse(ok = false, error = it.message ?: "could not start recording") },

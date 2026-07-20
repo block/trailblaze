@@ -271,9 +271,11 @@ object TrailblazeHostYamlRunner {
     }
     loggingRule.setSession(session)
 
+    var executionFailure: Throwable? = null
     return try {
       execute(session)
     } catch (e: TrailblazeSessionCancelledException) {
+      executionFailure = e
       Console.log("🚫 Session cancelled for $deviceLabel")
       onProgressMessage("Test session cancelled")
       // Re-throw so DesktopYamlRunner.runYaml sees the cancel rather than a
@@ -283,10 +285,12 @@ object TrailblazeHostYamlRunner {
       // and sets TrailExecutionResult.Cancelled.
       throw e
     } catch (e: CancellationException) {
+      executionFailure = e
       Console.log("🚫 Coroutine cancelled for $deviceLabel: ${e.message}")
       onProgressMessage("Test execution cancelled")
       throw e
     } catch (e: Exception) {
+      executionFailure = e
       Console.log("❌ ${e::class.simpleName} in $deviceLabel: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
       loggingRule.captureFailureScreenshot(session, screenshotProvider)
@@ -300,10 +304,24 @@ object TrailblazeHostYamlRunner {
       // saw null and reported Success up the stack, and MCP told the user "✓ Done"
       // while the page was actually blank.
       throw e
+    } catch (t: Throwable) {
+      executionFailure = t
+      throw t
     } finally {
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
       loggingRule.setSession(null)
-      cleanup()
+      try {
+        cleanup()
+      } catch (cleanupFailure: Throwable) {
+        val primaryFailure = executionFailure
+        if (primaryFailure == null) {
+          throw cleanupFailure
+        }
+        if (primaryFailure !== cleanupFailure) primaryFailure.addSuppressed(cleanupFailure)
+        Console.log(
+          "Cleanup also failed for $deviceLabel: ${cleanupFailure.message}; preserving the trail failure"
+        )
+      }
     }
   }
 
@@ -1702,6 +1720,9 @@ object TrailblazeHostYamlRunner {
           // committed account.json) against the trail on disk rather than the daemon's CWD/env,
           // which a persistent daemon doesn't share with the per-run trail-source clone.
           workingDirectory = runYamlRequest.trailFilePath?.let { File(it).parentFile },
+          // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
+          // under this session's on-host log dir.
+          sessionDirProvider = loggingRule.logsRepo::getSessionDir,
         )
       },
       memory = sharedAgentMemory,
@@ -2052,6 +2073,9 @@ object TrailblazeHostYamlRunner {
       trailblazeToolRepo = toolRepo,
       resolvedTarget = resolvedTargetForSession,
       appId = appIdForSession,
+      // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts under
+      // this session's on-host log dir through the context this agent builds.
+      sessionDirProvider = loggingRule.logsRepo::getSessionDir,
     )
 
     // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition

@@ -106,10 +106,6 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   const targetId = targetApp || declaredTarget || currentTarget || null;
 
-  // The trail's optional `trailhead:` (step 0), parsed read-only from the loaded trail YAML and
-  // surfaced in the Trailhead section (it's authored into the trail, not configured per-run).
-  const trailhead = React.useMemo(() => parseTrailhead(detail.data && detail.data.yaml), [detail.data && detail.data.yaml]);
-
   const [selfHeal, setSelfHeal] = React.useState(false);
   const [useRecordedSteps, setUseRecordedSteps] = React.useState(seed && seed.replay ? 'replay' : 'auto');
   const [agent, setAgent] = React.useState('TRAILBLAZE_RUNNER');
@@ -151,14 +147,9 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   // One-line live status per section, surfaced in the left nav so the rail reads
   // as a run summary rather than empty jump links.
-  const thToolCount = trailhead ? trailhead.tools.length : 0;
-  const trailheadSummary = !trailhead
-    ? 'None'
-    : (thToolCount > 0 ? `${thToolCount} tool${thToolCount === 1 ? '' : 's'}` : 'NL only');
   const captureCount = [captureVideo, captureLogcat, captureNetwork, captureIosLogs, captureAnalytics, captureEvents, saveRecording].filter(Boolean).length;
   const sectionSummaries = {
     target: selectedDevice ? selectedDevice.name : 'No device',
-    trailhead: trailheadSummary,
     behavior: (agent === 'TRAILBLAZE_RUNNER' ? 'Default runner' : agent) + (selfHeal ? ' · self-heal' : ''),
     capture: `${captureCount} artifact${captureCount === 1 ? '' : 's'}`,
   };
@@ -281,15 +272,12 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
                 <TargetSection devices={deviceList} deviceId={deviceId} setDeviceId={setDeviceId} connectedId={connectedId}
                   installedTargets={installedTargets} targetApp={targetApp} setTargetApp={setTargetApp} appsLoading={deviceApps.loading} declaredTarget={declaredTarget} />
               </Section>
-              <Section id="trailhead" title="Trailhead" sub={SECTIONS[1][2]} ico={SECTIONS[1][3]} registerRef={registerSection}>
-                <TrailheadSection trailhead={trailhead} />
-              </Section>
-              <Section id="behavior" title="Behavior" sub={SECTIONS[2][2]} ico={SECTIONS[2][3]} registerRef={registerSection}>
+              <Section id="behavior" title="Behavior" sub={SECTIONS[1][2]} ico={SECTIONS[1][3]} registerRef={registerSection}>
                 <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
                   agent={agent} setAgent={setAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
                   verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
               </Section>
-              <Section id="capture" title="Capture" sub={SECTIONS[3][2]} ico={SECTIONS[3][3]} registerRef={registerSection}>
+              <Section id="capture" title="Capture" sub={SECTIONS[2][2]} ico={SECTIONS[2][3]} registerRef={registerSection}>
                 <CaptureSection captureVideo={captureVideo} setCaptureVideo={setCaptureVideo} captureLogcat={captureLogcat} setCaptureLogcat={setCaptureLogcat}
                   captureNetwork={captureNetwork} setCaptureNetwork={setCaptureNetwork} captureIosLogs={captureIosLogs} setCaptureIosLogs={setCaptureIosLogs}
                   captureAnalytics={captureAnalytics} setCaptureAnalytics={setCaptureAnalytics} captureEvents={captureEvents} setCaptureEvents={setCaptureEvents} saveRecording={saveRecording} setSaveRecording={setSaveRecording}

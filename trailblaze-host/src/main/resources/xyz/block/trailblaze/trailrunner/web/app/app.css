@@ -142,6 +142,9 @@ button { font-family: inherit; cursor: pointer; }
 .tb-h1 { font-size: 25px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
 .tb-h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 .tb-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-subtle); }
+/* Timeline section labels: the trailhead's purple must deepen on light (same reason as the chips below). */
+.tb-eyebrow.trailhead { color: #b58cff; }
+html[data-theme="light"] .tb-eyebrow.trailhead { color: #5b21b6; }
 .tb-sub { font-size: 13px; color: var(--text-subtle); }
 .tb-mono { font-family: var(--font-mono); }
 

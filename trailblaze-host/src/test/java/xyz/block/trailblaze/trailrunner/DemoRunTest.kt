@@ -17,6 +17,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureActivator
+import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 
 /**
  * The demonstrate-first Create server slice: a demo run is an agent-less run in demo mode that
@@ -33,10 +35,41 @@ class DemoRunTest {
 
   @AfterTest
   fun cleanup() {
+    AndroidNetworkCaptureRegistry.activator = null
     seededIds.forEach { ExternalAgentSupervisor.runs.remove(it) }
     seededIds.clear()
     tempDirs.forEach { runCatching { it.deleteRecursively() } }
     tempDirs.clear()
+  }
+
+  @Test
+  fun markStartThreadsTheResolvedAppIdentityIntoDemoCapture() = runBlocking {
+    val run = startDemo()
+    var capturedAppId: String? = null
+    AndroidNetworkCaptureRegistry.activator =
+      object : AndroidNetworkCaptureActivator {
+        override fun start(
+          sessionId: String,
+          sessionDir: File,
+          deviceId: TrailblazeDeviceId,
+          targetAppId: String?,
+        ) {
+          capturedAppId = targetAppId
+        }
+
+        override fun stop(sessionId: String) = Unit
+      }
+
+    ExternalAgentSupervisor.markDemoStart(
+        runId = run.id,
+        trailhead = null,
+        targetAppId = "com.example.myapp",
+      )
+      .getOrThrow()
+
+    assertEquals("com.example.myapp", capturedAppId)
+    val demo = assertNotNull(assertNotNull(ExternalAgentSupervisor.runs[run.id]).demo)
+    assertTrue(demo.captureStarted)
   }
 
   private fun tempRoot(): File = Files.createTempDirectory("demo-run").toFile().also { tempDirs += it }

@@ -65,9 +65,10 @@ object TrailDetailBuilder {
       when (item) {
         // A trailhead and a root-level `- tools:` block are real steps (the runners execute them
         // deterministically); skipping them here made recorded trails read as "No recorded steps".
+        // The trailhead keeps its own kind so the UI can render it as step 0 above the trail steps.
         is TrailYamlItem.TrailheadTrailItem -> steps.add(
           TrailStepEntry(
-            kind = "step",
+            kind = "trailhead",
             text = item.trailhead.step?.trim().orEmpty(),
             tools = item.trailhead.tools?.map { it.name }.orEmpty(),
           ),

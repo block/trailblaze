@@ -205,7 +205,7 @@ object WasmReport {
     sessionIds: List<SessionId>,
     sessionToImageFiles: Map<SessionId, List<File>>,
   ): Map<String, PerSessionData> = sessionIds.associate { sessionId ->
-    val logs = logsRepo.getLogsForSession(sessionId)
+    val logs = logsRepo.getCachedLogsForSession(sessionId)
     val imageFiles = sessionToImageFiles[sessionId] ?: emptyList()
     val logsWithKeys = replaceScreenshotPathsWithImageKeys(logs, sessionId.value)
 
@@ -990,7 +990,7 @@ object WasmReport {
   /**
    * Per-session info about the trimmed video window (test execution only, not full capture).
    */
-  private data class TrimmedVideoInfo(
+  internal data class TrimmedVideoInfo(
     val trimmedStartMs: Long,
     val trimmedEndMs: Long,
   )
@@ -1011,43 +1011,108 @@ object WasmReport {
    */
   private val imageAliases = LinkedHashMap<String, String>()
 
+  /** One session's extracted video frames, ready to merge into the report-wide maps. */
+  internal data class SessionVideoFrames(
+    val frames: Map<String, ByteArray>,
+    val aliases: Map<String, String>,
+    val trim: TrimmedVideoInfo?,
+    val degenerate: Boolean,
+  ) {
+    companion object {
+      val EMPTY = SessionVideoFrames(emptyMap(), emptyMap(), null, degenerate = false)
+    }
+  }
+
+  /** Deterministic result of folding per-session [SessionVideoFrames] together. */
+  internal data class MergedVideoFrames(
+    val frames: Map<String, ByteArray>,
+    val aliases: Map<String, String>,
+    val trimInfo: Map<String, TrimmedVideoInfo>,
+    val degenerateSpriteSessions: Set<String>,
+  )
+
+  /**
+   * Folds per-session extraction results together in the given (session) order. Pure: same inputs
+   * produce the same output regardless of which session's decode finished first, which is what makes
+   * the concurrent [extractVideoFrames] fan-out safe. Frame/alias keys are session-namespaced
+   * upstream, so ordering only affects iteration order — pinned here to [perSession] order.
+   */
+  internal fun mergeSessionVideoFrames(
+    perSession: List<Pair<SessionId, SessionVideoFrames>>,
+  ): MergedVideoFrames {
+    val frames = LinkedHashMap<String, ByteArray>()
+    val aliases = LinkedHashMap<String, String>()
+    val trimInfo = LinkedHashMap<String, TrimmedVideoInfo>()
+    val degenerateSpriteSessions = LinkedHashSet<String>()
+    for ((sessionId, result) in perSession) {
+      frames.putAll(result.frames)
+      aliases.putAll(result.aliases)
+      result.trim?.let { trimInfo[sessionId.value] = it }
+      if (result.degenerate) degenerateSpriteSessions.add(sessionId.value)
+    }
+    return MergedVideoFrames(frames, aliases, trimInfo, degenerateSpriteSessions)
+  }
+
+  /**
+   * Extracts per-session video frames (sprite crop or ffmpeg) for WASM embedding. Each session is
+   * fully independent — its own `capture_metadata.json`, its own ffmpeg/ImageIO decode, its own
+   * session-namespaced frame keys — so sessions decode concurrently (bounded by
+   * [resolveImageCompressionParallelism]) and are merged back in the original session order to keep
+   * output deterministic. This is the heaviest stage of report generation; it used to be a serial
+   * loop of blocking ffmpeg subprocesses.
+   */
   private fun extractVideoFrames(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
   ): Triple<Map<String, ByteArray>, Map<String, TrimmedVideoInfo>, Set<String>> {
-    val frames = LinkedHashMap<String, ByteArray>()
-    val trimInfo = LinkedHashMap<String, TrimmedVideoInfo>()
-    val degenerateSpriteSessions = LinkedHashSet<String>()
-    for (sessionId in sessionIds) {
-      val sessionDir = File(logsRepo.logsDir, sessionId.value)
-      val metadataFile = File(sessionDir, "capture_metadata.json")
-      if (!metadataFile.exists()) continue
-
-      try {
-        val metadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
-        val artifacts = metadata.jsonObject["artifacts"]?.jsonArray ?: continue
-
-        // Prefer sprite sheet (VIDEO_FRAMES) over raw video (VIDEO)
-        val spritesArtifact = artifacts.firstOrNull { entry ->
-          entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO_FRAMES"
+    val dispatcher = Dispatchers.IO.limitedParallelism(resolveImageCompressionParallelism())
+    val perSession: List<Pair<SessionId, SessionVideoFrames>> = runBlocking {
+      sessionIds.map { sessionId ->
+        async(dispatcher) {
+          sessionId to try {
+            extractFramesForSession(logsRepo, sessionId)
+          } catch (e: Exception) {
+            Console.log("  WARNING: Failed to extract video frames for ${sessionId.value}: ${e.message}")
+            SessionVideoFrames.EMPTY
+          }
         }
-        if (spritesArtifact != null) {
-          val degenerate =
-            extractFromSpriteSheet(sessionId, sessionDir, spritesArtifact, logsRepo, frames, trimInfo)
-          if (degenerate) degenerateSpriteSessions.add(sessionId.value)
-          continue
-        }
-
-        val videoArtifact = artifacts.firstOrNull { entry ->
-          entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO"
-        } ?: continue
-        extractFromVideo(sessionId, sessionDir, videoArtifact, logsRepo, frames, trimInfo)
-      } catch (e: Exception) {
-        Console.log("  WARNING: Failed to extract video frames for ${sessionId.value}: ${e.message}")
-      }
+      }.awaitAll()
     }
-    Console.log("  Total video frames: ${frames.size} unique + ${imageAliases.size} aliased (${frames.size + imageAliases.size} logical)")
-    return Triple(frames, trimInfo, degenerateSpriteSessions)
+
+    // Merge in the original session order so the output is deterministic regardless of which
+    // session's decode finished first.
+    val merged = mergeSessionVideoFrames(perSession)
+    // Reset the shared alias table for this run (also stops aliases leaking across multiple
+    // generate() calls in one JVM), then republish the merged aliases for
+    // generateFromTemplate/generateRaw to embed.
+    imageAliases.clear()
+    imageAliases.putAll(merged.aliases)
+
+    Console.log("  Total video frames: ${merged.frames.size} unique + ${imageAliases.size} aliased (${merged.frames.size + imageAliases.size} logical)")
+    return Triple(merged.frames, merged.trimInfo, merged.degenerateSpriteSessions)
+  }
+
+  /** Parses a session's capture metadata and extracts its frames (sprite crop preferred over raw video). */
+  private fun extractFramesForSession(logsRepo: LogsRepo, sessionId: SessionId): SessionVideoFrames {
+    val sessionDir = File(logsRepo.logsDir, sessionId.value)
+    val metadataFile = File(sessionDir, "capture_metadata.json")
+    if (!metadataFile.exists()) return SessionVideoFrames.EMPTY
+
+    val metadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
+    val artifacts = metadata.jsonObject["artifacts"]?.jsonArray ?: return SessionVideoFrames.EMPTY
+
+    // Prefer sprite sheet (VIDEO_FRAMES) over raw video (VIDEO)
+    val spritesArtifact = artifacts.firstOrNull { entry ->
+      entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO_FRAMES"
+    }
+    if (spritesArtifact != null) {
+      return extractFromSpriteSheet(sessionId, sessionDir, spritesArtifact, logsRepo)
+    }
+
+    val videoArtifact = artifacts.firstOrNull { entry ->
+      entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO"
+    } ?: return SessionVideoFrames.EMPTY
+    return extractFromVideo(sessionId, sessionDir, videoArtifact, logsRepo)
   }
 
   /** Count of per-step screenshots the slideshow would show — one per screenshot-bearing log. */
@@ -1069,32 +1134,32 @@ object WasmReport {
     sessionDir: File,
     artifact: JsonElement,
     logsRepo: LogsRepo,
-    frames: MutableMap<String, ByteArray>,
-    trimInfo: MutableMap<String, TrimmedVideoInfo>,
-  ): Boolean {
-    val filename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return false
-    val startMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return false
-    val endMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return false
+  ): SessionVideoFrames {
+    val frames = LinkedHashMap<String, ByteArray>()
+    val aliases = LinkedHashMap<String, String>()
+    val filename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return SessionVideoFrames.EMPTY
+    val startMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return SessionVideoFrames.EMPTY
+    val endMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return SessionVideoFrames.EMPTY
     val spriteFile = File(sessionDir, filename)
-    if (!spriteFile.exists()) return false
+    if (!spriteFile.exists()) return SessionVideoFrames.EMPTY
 
     // Parse sprite metadata
     val metaFile = File(sessionDir, "video_sprites.txt")
-    if (!metaFile.exists()) return false
+    if (!metaFile.exists()) return SessionVideoFrames.EMPTY
     val props = metaFile.readLines().associate {
       val (k, v) = it.split("=", limit = 2)
       k.trim() to v.trim()
     }
-    val fps = props["fps"]?.toIntOrNull() ?: return false
-    val frameCount = props["frames"]?.toIntOrNull() ?: return false
-    val frameHeight = props["height"]?.toIntOrNull() ?: return false
+    val fps = props["fps"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
+    val frameCount = props["frames"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
+    val frameHeight = props["height"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
     val columns = props["columns"]?.toIntOrNull() ?: 1
     val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }
     val uniqueFrameCount = props["uniqueFrames"]?.toIntOrNull()
     val rows = props["rows"]?.toIntOrNull() ?: (uniqueFrameCount ?: frameCount)
 
     // Trim to test execution window
-    val logs = logsRepo.getLogsForSession(sessionId)
+    val logs = logsRepo.getCachedLogsForSession(sessionId)
     val steps = stepScreenshotCount(logs)
     if (isSpriteDegenerate(uniqueFrameCount, frameCount, steps)) {
       Console.log(
@@ -1102,7 +1167,7 @@ object WasmReport {
           "($uniqueFrameCount unique of $frameCount total frames, $steps step screenshots); " +
           "timeline will use per-step screenshots.",
       )
-      return true
+      return SessionVideoFrames(emptyMap(), emptyMap(), null, degenerate = true)
     }
 
     Console.log("  Loading sprite sheet for ${sessionId.value}/$filename ($frameCount frames at ${fps}fps)")
@@ -1128,7 +1193,7 @@ object WasmReport {
       decodeSpriteSheetWebP(spriteFile, sessionId)
     } else {
       javax.imageio.ImageIO.read(spriteFile)
-    } ?: return false
+    } ?: return SessionVideoFrames.EMPTY
     val spriteWidth = spriteImage.width
 
     // Crop each frame and write as JPEG bytes, deduplicating via frameMap.
@@ -1145,7 +1210,7 @@ object WasmReport {
       val existingKey = physicalToCropKey[physicalIndex]
       if (existingKey != null) {
         // This logical frame is identical to a previously cropped frame — alias it.
-        imageAliases[imageKey] = existingKey
+        aliases[imageKey] = existingKey
         aliasCount++
       } else {
         // Crop this physical frame from the sprite grid.
@@ -1164,13 +1229,12 @@ object WasmReport {
       }
       outputIndex++
     }
-    trimInfo[sessionId.value] = TrimmedVideoInfo(trimStartMs, trimEndMs)
     val totalCropped = outputIndex - 1
     Console.log(
       "    Cropped $totalCropped frames from sprite sheet (frames $firstFrameIndex..$lastFrameIndex)" +
         if (aliasCount > 0) ", $aliasCount aliased as duplicates" else ""
     )
-    return false
+    return SessionVideoFrames(frames, aliases, TrimmedVideoInfo(trimStartMs, trimEndMs), degenerate = false)
   }
 
   /**
@@ -1209,14 +1273,13 @@ object WasmReport {
     sessionDir: File,
     artifact: JsonElement,
     logsRepo: LogsRepo,
-    frames: MutableMap<String, ByteArray>,
-    trimInfo: MutableMap<String, TrimmedVideoInfo>,
-  ) {
-    val videoFilename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return
-    val videoStartMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
-    val videoEndMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+  ): SessionVideoFrames {
+    val frames = LinkedHashMap<String, ByteArray>()
+    val videoFilename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return SessionVideoFrames.EMPTY
+    val videoStartMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return SessionVideoFrames.EMPTY
+    val videoEndMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return SessionVideoFrames.EMPTY
     val videoFile = File(sessionDir, videoFilename)
-    if (!videoFile.exists()) return
+    if (!videoFile.exists()) return SessionVideoFrames.EMPTY
 
     // Don't re-process a video the capture-time sprite extractor already declared broken.
     // The marker file is the canonical signal; without this guard we'd extract a few sparse
@@ -1229,10 +1292,10 @@ object WasmReport {
           "${VideoSpriteExtractor.MP4_BROKEN_MARKER_FILENAME} present — " +
           "underlying mp4 is known to be broken; timeline will fall back to screenshots.",
       )
-      return
+      return SessionVideoFrames.EMPTY
     }
 
-    val logs = logsRepo.getLogsForSession(sessionId)
+    val logs = logsRepo.getCachedLogsForSession(sessionId)
     val sortedLogs = logs.sortedBy { it.timestamp }
     val firstLogMs = sortedLogs.firstOrNull()?.timestamp?.toEpochMilliseconds()
     val lastLogMs = sortedLogs.lastOrNull()?.timestamp?.toEpochMilliseconds()
@@ -1267,8 +1330,8 @@ object WasmReport {
         val imageKey = "${sessionId.value}/${frameFile.name}"
         frames[imageKey] = frameFile.readBytes()
       }
-      trimInfo[sessionId.value] = TrimmedVideoInfo(trimStartMs, trimEndMs)
       Console.log("    Extracted ${frameFiles.size} frames")
+      return SessionVideoFrames(frames, emptyMap(), TrimmedVideoInfo(trimStartMs, trimEndMs), degenerate = false)
     } finally {
       tempDir.deleteRecursively()
     }

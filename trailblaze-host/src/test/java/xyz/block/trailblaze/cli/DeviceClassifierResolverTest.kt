@@ -145,6 +145,50 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
+  fun `low-density 1080p emulator is a tablet by smallestWidthDp not raw pixels`() {
+    // Regression: the CI android-tablet emulator is 1920x1080 @160dpi. Shortest side is 1080px —
+    // BELOW the 1536px legacy pixel threshold — but smallestWidthDp = 1080*160/160 = 1080dp ≥ 600,
+    // so it must classify as a tablet. Pins the density-independent rule (matches on-device).
+    val classifiers = DeviceClassifierResolver.resolveFromSpec(
+      "android/emulator-5556",
+      probeOf(
+        mapOf(
+          (TrailblazeDevicePlatform.ANDROID to "emulator-5556") to
+            DeviceClassifierResolver.DeviceProbe(1920, 1080, densityDpi = 160),
+        ),
+      ),
+    )
+    assertEquals(listOf("android", "tablet"), classifiers.map { it.classifier })
+  }
+
+  @Test
+  fun `high-density 1080-wide phone stays a phone despite identical shortest-side pixels`() {
+    // Same 1080px shortest side as the tablet above, but 400dpi → smallestWidthDp = 1080*160/400 =
+    // 432dp < 600 → phone. Proves the classifier keys on dp, not raw pixels.
+    val classifiers = DeviceClassifierResolver.resolveFromSpec(
+      "android/emulator-5554",
+      probeOf(
+        mapOf(
+          (TrailblazeDevicePlatform.ANDROID to "emulator-5554") to
+            DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400),
+        ),
+      ),
+    )
+    assertEquals(listOf("android", "phone"), classifiers.map { it.classifier })
+  }
+
+  @Test
+  fun `parseWmDensity reads physical, prefers override, and rejects malformed`() {
+    assertEquals(160, DeviceClassifierResolver.parseWmDensity("Physical density: 160"))
+    // Override wins when both are present (last match), mirroring wm size parsing.
+    assertEquals(
+      240,
+      DeviceClassifierResolver.parseWmDensity("Physical density: 160\nOverride density: 240"),
+    )
+    assertEquals(null, DeviceClassifierResolver.parseWmDensity("garbage"))
+  }
+
+  @Test
   fun `null and blank specs return empty`() {
     assertEquals(emptyList(), DeviceClassifierResolver.resolveFromSpec(null, probeOf(emptyMap())))
     assertEquals(emptyList(), DeviceClassifierResolver.resolveFromSpec("", probeOf(emptyMap())))
@@ -204,6 +248,45 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
+  fun `android classification without density is not cached - a later probe with density corrects it`() {
+    // A transient `wm density` failure yields densityDpi=null, so the classifier falls back to the
+    // raw-pixel heuristic, which misreads a 1920x1080 @160dpi tablet (min side 1080px < 1536) as a
+    // phone. That density-less verdict must NOT be cached, or one hiccup would lock the device into
+    // the wrong `android-phone` slot for the daemon's lifetime — the next probe (with density) must
+    // be able to correct it to tablet.
+    val calls = AtomicInteger(0)
+    val probe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      // First probe: no density (transient failure). Subsequent probes: density present.
+      if (calls.incrementAndGet() == 1) {
+        DeviceClassifierResolver.DeviceProbe(1920, 1080, densityDpi = null)
+      } else {
+        DeviceClassifierResolver.DeviceProbe(1920, 1080, densityDpi = 160)
+      }
+    }
+    val first = DeviceClassifierResolver.classifiersFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "emulator-5556",
+      dimensionsProbe = probe,
+    )
+    assertEquals(
+      listOf("android", "phone"),
+      first.map { it.classifier },
+      "no density -> pixel fallback classifies the low-density tablet as phone (best effort)",
+    )
+    val second = DeviceClassifierResolver.classifiersFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "emulator-5556",
+      dimensionsProbe = probe,
+    )
+    assertEquals(
+      listOf("android", "tablet"),
+      second.map { it.classifier },
+      "density-less result must not be cached; the retry (with density) corrects it to tablet",
+    )
+    assertEquals(2, calls.get(), "the density-less first result must not be cached, so the probe re-runs")
+  }
+
+  @Test
   fun `cache key is per device - different instanceIds probe independently`() {
     // Two devices, one iPhone-sized and one iPad-sized — the cache must key on instanceId
     // so adding a second device doesn't poison the first device's entry.
@@ -240,7 +323,9 @@ class DeviceClassifierResolverTest {
       when (platform to instanceId) {
         TrailblazeDevicePlatform.IOS to "phone-udid" -> DeviceClassifierResolver.DeviceProbe(1206, 2622)
         TrailblazeDevicePlatform.IOS to "tablet-udid" -> DeviceClassifierResolver.DeviceProbe(2048, 2732)
-        TrailblazeDevicePlatform.ANDROID to "emulator-5554" -> DeviceClassifierResolver.DeviceProbe(1080, 2400)
+        // Density present (as the real `wm density` probe returns) so the Android result is cached;
+        // 1080px @420dpi = 411dp < 600 → phone.
+        TrailblazeDevicePlatform.ANDROID to "emulator-5554" -> DeviceClassifierResolver.DeviceProbe(1080, 2400, densityDpi = 420)
         else -> null
       }
     }

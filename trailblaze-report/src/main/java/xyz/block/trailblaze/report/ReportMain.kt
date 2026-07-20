@@ -12,6 +12,7 @@ import xyz.block.trailblaze.report.snapshot.SnapshotCollector
 import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
+import java.util.concurrent.CompletableFuture
 import xyz.block.trailblaze.util.Console
 
 open class GenerateReportCliCommand :
@@ -33,8 +34,15 @@ open class GenerateReportCliCommand :
     default = false,
   )
 
+  private val noWasmReportFlag = FlagOption(
+    longName = "no-wasm-report",
+    help = "Skip the legacy WASM report (trailblaze_report.html); emit only the interactive report.",
+    default = false,
+  )
+
   private val logsDir: File get() = logsDirArg.value
   private val useRelativeImageUrls: Boolean get() = useRelativeImageUrlsFlag.value
+  private val skipWasmReport: Boolean get() = noWasmReportFlag.value
 
   override fun parseArgs(args: Array<String>) {
     val positionalArgs = mutableListOf<String>()
@@ -44,6 +52,7 @@ open class GenerateReportCliCommand :
       val arg = args[i]
       when {
         useRelativeImageUrlsFlag.matches(arg) -> useRelativeImageUrlsFlag.set()
+        noWasmReportFlag.matches(arg) -> noWasmReportFlag.set()
         arg.startsWith("--") -> parseError("Unknown option: $arg")
         else -> positionalArgs.add(arg)
       }
@@ -66,7 +75,7 @@ open class GenerateReportCliCommand :
   }
 
   override fun printUsage() {
-    Console.error("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()}")
+    Console.error("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()} ${noWasmReportFlag.getUsage()}")
     Console.error("")
     Console.error("Generate Trailblaze HTML report from logs directory")
     Console.error("")
@@ -75,18 +84,22 @@ open class GenerateReportCliCommand :
     Console.error("")
     Console.error("Options:")
     Console.error("  ${useRelativeImageUrlsFlag.getUsage()}  ${useRelativeImageUrlsFlag.getHelp()}")
+    Console.error("  ${noWasmReportFlag.getUsage()}  ${noWasmReportFlag.getHelp()}")
   }
 
   override fun run() {
     Console.log("logsDir: ${logsDir.canonicalPath}")
     Console.log("useRelativeImageUrls: $useRelativeImageUrls")
 
-    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
-    val logsRepo = LogsRepo(logsDir, watchFileSystem = false, costEnricher = costEnricher::enrich)
-
-    // Move the files into session directories.  This is needed after an adb pull
+    // Reorganize adb-pulled files into per-session directories BEFORE constructing LogsRepo.
+    // LogsRepo's single-read cache is built at construction, so doing the moves first means that
+    // cache captures the final on-disk layout. Every emitter below can then share ONE parse per
+    // session (via getCachedLogsForSession) instead of re-reading each session off disk.
     moveJsonFilesToSessionDirs(logsDir)
     moveScreenshotsToSessionDirs(logsDir)
+
+    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false, costEnricher = costEnricher::enrich)
 
     val standaloneFileReport = true
     val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
@@ -99,38 +112,58 @@ open class GenerateReportCliCommand :
     val rootWorkingDir = System.getProperty("trailblaze.rootDir")?.let { File(it) }
       ?: logsRepo.logsDir.parentFile
 
-    val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
-    Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
-
-    // Trailblaze supports two layouts: standalone (`trailblaze-ui/` next to the
-    // working dir) and nested (Trailblaze embedded under a sibling subdirectory
-    // of a larger repo, where the embedding parent re-exports the framework).
-    val standaloneUiDir = File(rootWorkingDir, "trailblaze-ui")
-    val nestedUiDir = File(File(rootWorkingDir, "opensource"), "trailblaze-ui")
-    val trailblazeUiProjectDir = (if (standaloneUiDir.exists()) standaloneUiDir else nestedUiDir).also {
-      Console.log("Using project directory: ${it.canonicalPath}")
+    // Every run produces the lightweight, self-contained interactive report — the same artifact
+    // `trailblaze report` (the CLI/daemon path) emits. The legacy WASM report is emitted ALONGSIDE
+    // it unless --no-wasm-report was passed.
+    //
+    // The WASM report is CPU-bound (image/log compression + video-frame decode); the interactive
+    // report spends most of its time waiting on an external bun subprocess. They are independent
+    // readers of the same parsed sessions (LogsRepo's cache is read-only once built) that write
+    // distinct files, so run them concurrently — overlapping the bun wait with the WASM build is
+    // nearly-free wall-clock. Best-effort (bun may be missing, the subprocess may fail), so the
+    // async task captures and logs failures and resolves to null instead of aborting the run.
+    val interactiveHtmlFile = File(logsDir, "trailblaze_report_interactive.html")
+    val interactiveReport: CompletableFuture<File?> = CompletableFuture.supplyAsync {
+      runCatching { RunReportGenerator().generate(logsRepo, logsRepo.getSessionIds()) }
+        .onFailure { Console.error("Warning: interactive report generation threw: ${it.message}") }
+        .getOrNull()
     }
 
-    WasmReport.generate(
-      logsRepo = logsRepo,
-      trailblazeUiProjectDir = trailblazeUiProjectDir,
-      outputFile = trailblazeReportHtmlFile,
-      reportTemplateFile = File(rootWorkingDir, "trailblaze_report_template.html"),
-      useRelativeImageUrls = useRelativeImageUrls,
-    )
+    try {
+      if (skipWasmReport) {
+        Console.log("Skipping legacy WASM report (--no-wasm-report); emitting the interactive report only.")
+      } else {
+        val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
+        Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
 
-    // Every run also produces the lightweight, self-contained interactive report ALONGSIDE the
-    // legacy WASM report above — the same artifact `trailblaze report` (the CLI/daemon path)
-    // emits. Either can individually be unavailable (`bun` missing, subprocess failure); this
-    // is a best-effort addition and never fails the overall report generation.
-    val interactiveHtmlFile = File(logsDir, "trailblaze_report_interactive.html")
-    val generatedInteractiveHtml = RunReportGenerator().generate(logsRepo, logsRepo.getSessionIds())
-    if (generatedInteractiveHtml != null) {
-      generatedInteractiveHtml.copyTo(interactiveHtmlFile, overwrite = true)
-      generatedInteractiveHtml.delete()
-      Console.log("file://${interactiveHtmlFile.absolutePath}")
-    } else {
-      Console.error("Warning: could not generate the interactive report (bun unavailable or subprocess failure).")
+        // Trailblaze supports two layouts: standalone (`trailblaze-ui/` next to the
+        // working dir) and nested (Trailblaze embedded under a sibling subdirectory
+        // of a larger repo, where the embedding parent re-exports the framework).
+        val standaloneUiDir = File(rootWorkingDir, "trailblaze-ui")
+        val nestedUiDir = File(File(rootWorkingDir, "opensource"), "trailblaze-ui")
+        val trailblazeUiProjectDir = (if (standaloneUiDir.exists()) standaloneUiDir else nestedUiDir).also {
+          Console.log("Using project directory: ${it.canonicalPath}")
+        }
+
+        WasmReport.generate(
+          logsRepo = logsRepo,
+          trailblazeUiProjectDir = trailblazeUiProjectDir,
+          outputFile = trailblazeReportHtmlFile,
+          reportTemplateFile = File(rootWorkingDir, "trailblaze_report_template.html"),
+          useRelativeImageUrls = useRelativeImageUrls,
+        )
+      }
+    } finally {
+      // Always harvest the interactive report, even if the WASM build above threw — it's now the
+      // primary artifact, so a WASM failure must not discard it or orphan its timestamped temp file.
+      val generatedInteractiveHtml = interactiveReport.join()
+      if (generatedInteractiveHtml != null) {
+        generatedInteractiveHtml.copyTo(interactiveHtmlFile, overwrite = true)
+        generatedInteractiveHtml.delete()
+        Console.log("file://${interactiveHtmlFile.absolutePath}")
+      } else {
+        Console.error("Warning: could not generate the interactive report (bun unavailable or subprocess failure).")
+      }
     }
 
     afterReportGenerated(logsRepo, rootWorkingDir)
@@ -166,15 +199,13 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
   try {
     val snapshotViewerFile = File(logsRepo.logsDir, "snapshot_viewer.html")
 
-    // Re-read session IDs from disk here (not from cache) because LogsRepo may have
-    // been created before moveJsonFilesToSessionDirs/moveScreenshotsToSessionDirs
-    // reorganized adb-pulled files into session directories.
     val sessionIds = logsRepo.getSessionIds()
     Console.log("📸 Collecting snapshots from ${sessionIds.size} session(s)...")
 
-    // Build maps for the collector
+    // Reuse the single parse LogsRepo cached at construction (the file moves ran before it was
+    // built), so the snapshot viewer doesn't re-read every session off disk.
     val logsBySession = sessionIds.associateWith { sessionId ->
-      logsRepo.getLogsForSession(sessionId)
+      logsRepo.getCachedLogsForSession(sessionId)
     }
 
     val sessionInfoBySession = sessionIds.associateWith { sessionId ->
@@ -222,8 +253,10 @@ fun main(args: Array<String>) {
   val reportArgs = args.filterNot { it == "--dedup" || it == "--triage" }.toTypedArray()
   GenerateReportCliCommand().main(reportArgs)
   // The test-results command dropped --dedup and doesn't know the HTML-only
-  // --use-relative-image-urls; --triage is still a valid flag here and must pass through.
-  val filteredArgs = args.filterNot { it == "--use-relative-image-urls" || it == "--dedup" }
+  // --use-relative-image-urls / --no-wasm-report; --triage is still a valid flag here and must
+  // pass through.
+  val filteredArgs = args
+    .filterNot { it == "--use-relative-image-urls" || it == "--no-wasm-report" || it == "--dedup" }
     .toTypedArray()
   GenerateTestResultsCliCommand().main(argv = filteredArgs)
 }
@@ -349,7 +382,7 @@ private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, String> 
 }
 
 fun renderSummary(logsRepo: LogsRepo, isStandaloneFileReport: Boolean): LogsSummary {
-  val map = logsRepo.getSessionIds().associateWith { logsRepo.getLogsForSession(it) }
+  val map = logsRepo.getSessionIds().associateWith { logsRepo.getCachedLogsForSession(it) }
   val logsSummary = LogsSummary.fromLogs(map.mapKeys { it.key.value }, isStandaloneFileReport)
   return logsSummary
 }

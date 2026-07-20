@@ -55,9 +55,42 @@ async function fetchRecordingYaml(sessionId) {
   } catch (e) { return null; }
 }
 
+async function fetchOriginalYaml(sessionId) {
+  try {
+    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/logs`);
+    if (!res.ok) return null;
+    return originalYamlFromLogs(await res.json());
+  } catch (e) { return null; }
+}
+
+// Normalize the live route's generic event-stream DTO into the compact standalone-report shape.
+// This carries generic plugin event streams from any producer into Share-as-HTML exports.
+async function fetchReportEvents(sessionId) {
+  try {
+    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/events`);
+    if (!res.ok) return null;
+    const raw = await res.json();
+    const streams = (raw.streams || []).map((s) => ({
+      name: s.label || s.streamId,
+      style: s.style || '',
+      total: s.count || (s.events || []).length,
+      truncated: !!s.truncated,
+      events: (s.events || []).map((e) => ({
+        t: e.timeMs == null ? null : e.timeMs,
+        d: JSON.stringify(e.data == null ? e : e.data),
+      })),
+    }));
+    return streams.length ? streams : null;
+  } catch (e) { return null; }
+}
+
 async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress }) {
   const shots = await collectScreenshots(trace, sessionId, onProgress);
-  const recordingYaml = await fetchRecordingYaml(sessionId);
+  const [recordingYaml, originalYaml, events] = await Promise.all([
+    fetchRecordingYaml(sessionId),
+    fetchOriginalYaml(sessionId),
+    fetchReportEvents(sessionId),
+  ]);
   const meta = {
     title: s.title || s.id || 'Trailblaze run',
     status: s.status || 'unknown',
@@ -76,9 +109,10 @@ async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress
     cmd: cmd || null,
     error: s.err || null,
     recordingYaml,
+    originalYaml,
     generatedAt: new Date().toLocaleString(),
   };
-  return buildRunReportHtml({ meta, trace, llmLogs, shots });
+  return buildRunReportHtml({ meta, trace, llmLogs, shots, events });
 }
 
 // POST the built HTML to the daemon, which writes it into the run's folder and returns the filename.

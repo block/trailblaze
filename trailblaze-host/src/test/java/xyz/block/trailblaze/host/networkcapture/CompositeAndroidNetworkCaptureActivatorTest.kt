@@ -18,7 +18,9 @@ import kotlin.test.assertTrue
  */
 class CompositeAndroidNetworkCaptureActivatorTest {
 
-  private class RecordingActivator : AndroidNetworkCaptureActivator {
+  private class RecordingActivator(
+    private val optedInSessions: Set<String> = emptySet(),
+  ) : AndroidNetworkCaptureActivator {
     val started = mutableListOf<String>()
     val stopped = mutableListOf<String>()
 
@@ -34,6 +36,9 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     override fun stop(sessionId: String) {
       stopped += sessionId
     }
+
+    override fun isSessionCaptureOptedIn(sessionId: String): Boolean =
+      sessionId in optedInSessions
   }
 
   private val deviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID)
@@ -98,6 +103,37 @@ class CompositeAndroidNetworkCaptureActivatorTest {
 
     assertTrue(proxy.stopped.isEmpty())
     assertTrue(fallback.stopped.isEmpty())
+  }
+
+  @Test
+  fun `isSessionCaptureOptedIn defers to the delegate the session would route to`() {
+    val proxy = RecordingActivator()
+    val fallback = RecordingActivator(optedInSessions = setOf("s1"))
+    val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { false }
+
+    assertTrue(composite.isSessionCaptureOptedIn("s1"))
+    assertTrue(!composite.isSessionCaptureOptedIn("s2"))
+  }
+
+  @Test
+  fun `isSessionCaptureOptedIn asks the recorded delegate for an already-routed session`() {
+    val proxy = RecordingActivator()
+    val fallback = RecordingActivator(optedInSessions = setOf("s1"))
+    var optIn = false
+    val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { optIn }
+
+    composite.start("s1", dir, deviceId, null) // routes to fallback and is recorded
+    optIn = true // a later flip must not re-route the opt-in question to proxy
+
+    assertTrue(composite.isSessionCaptureOptedIn("s1"))
+  }
+
+  @Test
+  fun `isSessionCaptureOptedIn is false when the opt-in is off and there is no fallback (OSS layout)`() {
+    val proxy = RecordingActivator(optedInSessions = setOf("s1"))
+    val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback = null) { false }
+
+    assertTrue(!composite.isSessionCaptureOptedIn("s1"))
   }
 
   @Test

@@ -604,7 +604,11 @@ internal object ExternalAgentSupervisor {
    * capture (when available), and move the demo from positioning to recording. Only valid from the
    * positioning phase. Returns the new phase's wire value.
    */
-  suspend fun markDemoStart(runId: String, trailhead: DemoTrailheadDto?): Result<String> = runCatching {
+  suspend fun markDemoStart(
+    runId: String,
+    trailhead: DemoTrailheadDto?,
+    targetAppId: String? = null,
+  ): Result<String> = runCatching {
     val run = runs[runId] ?: error("demonstration run not found: $runId")
     val demo = run.demo ?: error("this run is not a demonstration: $runId")
     require(demo.phase == DemoPhase.POSITIONING) {
@@ -613,7 +617,7 @@ internal object ExternalAgentSupervisor {
     demo.trailhead = trailhead
     demo.startedAtMs = System.currentTimeMillis()
     captureStartState(run)
-    startDemoCapture(run)
+    startDemoCapture(run, targetAppId)
     writeDemoManifest(run)
     writeDraftManifest(run)
     demo.phase = DemoPhase.RECORDING
@@ -993,15 +997,26 @@ internal object ExternalAgentSupervisor {
    * when no activator is registered or the device is not Android; its absence must not degrade the
    * flow (the bundle simply lacks the events/ streams).
    */
-  private fun startDemoCapture(run: MutableExternalAgentRun) {
+  private fun startDemoCapture(run: MutableExternalAgentRun, targetAppId: String?) {
     val demo = run.demo ?: return
     if (demo.captureStarted) return
     val activator = AndroidNetworkCaptureRegistry.activator ?: return
     if (demo.device.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return
+    // The activator refuses a null target app id loudly (incomplete marker + retained failure);
+    // for this capture-optional flow an unknown target just means "no capture", not failure.
+    if (targetAppId.isNullOrBlank()) {
+      Console.log("[demo] network capture skipped: target app id unknown")
+      return
+    }
     val dir = evidenceDir(run.id) ?: return
     runCatching {
       dir.mkdirs()
-      activator.start(sessionId = run.id, sessionDir = dir, deviceId = demo.device, targetAppId = null)
+      activator.start(
+        sessionId = run.id,
+        sessionDir = dir,
+        deviceId = demo.device,
+        targetAppId = targetAppId,
+      )
       demo.captureStarted = true
     }.onFailure { Console.log("[demo] network capture start failed: ${it.message}") }
   }

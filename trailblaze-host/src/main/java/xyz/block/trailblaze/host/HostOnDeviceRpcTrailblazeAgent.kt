@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host
 
+import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -20,6 +21,7 @@ import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
@@ -108,6 +110,13 @@ class HostOnDeviceRpcTrailblazeAgent(
    * downstream with a clearer message). Threaded identically to [resolvedTarget].
    */
   appId: String? = null,
+  /**
+   * Maps this session's [SessionId] to its on-host log dir, so host-side `requiresHost` tools
+   * (e.g. a capture-reading tool) dispatched through this agent can resolve capture artifacts under
+   * `<sessionDir>/`. Wired from `LogsRepo::getSessionDir` by the host runner; null in back-compat
+   * callers that don't yet supply it.
+   */
+  sessionDirProvider: ((SessionId) -> File)? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -115,6 +124,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   trailblazeToolRepo = trailblazeToolRepo,
   resolvedTarget = resolvedTarget,
   appId = appId,
+  sessionDirProvider = sessionDirProvider,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
