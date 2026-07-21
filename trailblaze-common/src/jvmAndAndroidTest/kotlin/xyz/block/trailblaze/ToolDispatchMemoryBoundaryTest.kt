@@ -147,7 +147,10 @@ class ToolDispatchMemoryBoundaryTest {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = FixtureAgent(logger = capturingLogger(captured))
     agent.memory.remember("user", "sam")
-    agent.memory.rememberSensitive("pin", "9999")
+    // The canary must stay non-numeric: the whole-log doesNotContain assertions scan the
+    // serialized entry, and a digits-only value collides with timestamp microseconds /
+    // durationMs (a bare "9999" matched `…50.599998Z`).
+    agent.memory.rememberSensitive("pin", "9999zq")
 
     val result = agent.runTrailblazeTools(
       tools = listOf(InputTextTrailblazeTool(text = "{{user}}:{{pin}}")),
@@ -156,7 +159,7 @@ class ToolDispatchMemoryBoundaryTest {
 
     // The driver got the real secret — that's the whole point of the pass-through.
     val typed = agent.executedCommands.filterIsInstance<InputTextCommand>().single()
-    assertThat(typed.text).isEqualTo("sam:9999")
+    assertThat(typed.text).isEqualTo("sam:9999zq")
     // The executed-tools ledger (feeds LLM chat history) keeps the authored token form.
     val executed = result.executedTools.single() as InputTextTrailblazeTool
     assertThat(executed.text).isEqualTo("{{user}}:{{pin}}")
@@ -166,14 +169,14 @@ class ToolDispatchMemoryBoundaryTest {
     assertThat(log.trailblazeTool.raw["text"]).isEqualTo(JsonPrimitive("sam:{{pin}}"))
     assertThat(log.rawTrailblazeTool!!.raw["text"]).isEqualTo(JsonPrimitive("{{user}}:{{pin}}"))
     // The whole persisted log entry — payloads, messages, everything — is secret-free.
-    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999")
+    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999zq")
   }
 
   @Test
   fun `a fully sensitive arg elides the raw payload and logs only the token`() {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = FixtureAgent(logger = capturingLogger(captured))
-    agent.memory.rememberSensitive("pin", "9999")
+    agent.memory.rememberSensitive("pin", "9999zq")
 
     agent.runTrailblazeTools(
       tools = listOf(InputTextTrailblazeTool(text = "{{pin}}")),
@@ -181,20 +184,20 @@ class ToolDispatchMemoryBoundaryTest {
     )
 
     assertThat(agent.executedCommands.filterIsInstance<InputTextCommand>().single().text)
-      .isEqualTo("9999")
+      .isEqualTo("9999zq")
     // Scrubbing put the token back, making resolved == raw — so the split is elided and the
     // single payload is the token-bearing form.
     val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
     assertThat(log.trailblazeTool.raw["text"]).isEqualTo(JsonPrimitive("{{pin}}"))
     assertThat(log.rawTrailblazeTool).isNull()
-    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999")
+    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999zq")
   }
 
   @Test
   fun `failure metadata carries the authored tool identity`() {
     val captured = mutableListOf<TrailblazeLog>()
     val agent = FixtureAgent(logger = capturingLogger(captured))
-    agent.memory.rememberSensitive("pin", "9999")
+    agent.memory.rememberSensitive("pin", "9999zq")
     val authored = FailingEchoTool(secret = "{{pin}}")
 
     val result = agent.runTrailblazeTools(
@@ -213,13 +216,13 @@ class ToolDispatchMemoryBoundaryTest {
     // the RAW result (before the loop's return-value scrub) and so is scrubbed at the log boundary.
     val log = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
     assertThat(log.exceptionMessage).isEqualTo("deliberate failure on {{pin}}")
-    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999")
+    assertThat(TrailblazeJsonInstance.encodeToString(log)).doesNotContain("9999zq")
   }
 
   @Test
   fun `a remember-tool failure scrubs the resolved secret from its error message`() {
     val agent = FixtureAgent()
-    agent.memory.rememberSensitive("pin", "9999")
+    agent.memory.rememberSensitive("pin", "9999zq")
 
     // The prompt carries a sensitive token; the boundary resolves it before execute() runs, and
     // the comparator always misses (getElementValue → null), so the tool throws
@@ -236,7 +239,7 @@ class ToolDispatchMemoryBoundaryTest {
     // Command identity is swapped back to the authored, token-bearing instance.
     assertThat((error.command as RememberTextTrailblazeTool).prompt).isEqualTo("the field showing {{pin}}")
     // The free-form error message no longer carries the resolved secret — it's back to the token.
-    assertThat(error.errorMessage).doesNotContain("9999")
+    assertThat(error.errorMessage).doesNotContain("9999zq")
     assertThat(error.errorMessage).contains("{{pin}}")
   }
 }

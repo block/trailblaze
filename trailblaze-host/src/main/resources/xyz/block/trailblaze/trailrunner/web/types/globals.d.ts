@@ -78,6 +78,31 @@ declare global {
   }
   const TBMonaco: TBMonacoApi | undefined;
 
+  type TrailblazeDeviceId = Parameters<TbRpcApi["connectToDevice"]>[0];
+  interface TbLiveDeviceFrame {
+    screenshotBase64?: string;
+    deviceWidth?: number;
+    deviceHeight?: number;
+    mime?: string;
+    ok?: boolean;
+    error?: string;
+  }
+  interface TbLiveDeviceStreamOptions {
+    deviceId: TrailblazeDeviceId;
+    deviceWidth?: number;
+    deviceHeight?: number;
+    img: HTMLImageElement;
+    canvas: HTMLCanvasElement;
+    onFrame?: () => void;
+    onDims?: (width: number, height: number) => void;
+    onError?: (message: string) => void;
+    onNotConnected?: () => Promise<void>;
+    pollFrame?: (deviceId: TrailblazeDeviceId) => Promise<TbLiveDeviceFrame>;
+  }
+  interface TbLiveDeviceStreamApi {
+    openLiveDeviceStream(options: TbLiveDeviceStreamOptions): { close(): void };
+  }
+
   // The consolidated data/UI namespace published by app/data-extract.jsx via `window.TB = {…}`.
   // There is no top-level `const TB`, so TS needs this ambient. Left as `any` for now — it aggregates
   // ~200 hooks/helpers whose shapes will firm up as the data layer is typed. Prefer narrowing this to
@@ -117,6 +142,7 @@ declare global {
   interface Window {
     TbRpc: TbRpcApi;
     TB: typeof TB;
+    TbLiveDeviceStream?: TbLiveDeviceStreamApi;
     TBMonaco?: TBMonacoApi;
     /** Optional native bridge for the desktop file picker (absent in a plain browser). */
     trailblazePickDirectory?: (initial?: string) => Promise<string | null>;

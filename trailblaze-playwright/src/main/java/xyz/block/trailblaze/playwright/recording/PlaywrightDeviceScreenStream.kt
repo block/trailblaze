@@ -1,11 +1,22 @@
 package xyz.block.trailblaze.playwright.recording
 
+import com.google.gson.JsonObject
+import com.microsoft.playwright.CDPSession
 import io.ktor.util.decodeBase64Bytes
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import java.util.function.Consumer
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -33,13 +44,34 @@ class PlaywrightDeviceScreenStream(
 
   private val provider = PlaywrightScreenStateProvider(pageManager)
 
+  // Most-recent JPEG frame from a live screencast + when it was captured, and a refcount of active
+  // screencasts. Lets the mirror's HTTP poll ([getMirrorScreenshot]) and the JPEG frame stream
+  // ([frames]) serve the live frame for free instead of a `page.screenshot()` that would contend
+  // with the screencast on Playwright's single connection thread. Cleared when the last screencast
+  // ends (see [streamScreencastJpegFrames]).
+  private val latestScreencastFrame = AtomicReference<TimedScreencastFrame?>(null)
+  private val activeScreencasts = AtomicInteger(0)
+
+  private class TimedScreencastFrame(val bytes: ByteArray, val capturedAtMs: Long)
+
+  /**
+   * The cached screencast frame if a screencast is live and the frame is recent, else null so the
+   * caller falls back to a fresh screenshot. While a screencast is active its last frame already IS
+   * the current screen; the age cap only guards against a wedged pump serving a frozen image.
+   */
+  private fun freshCachedScreencastFrame(): ByteArray? =
+    latestScreencastFrame.get()
+      ?.takeIf { System.currentTimeMillis() - it.capturedAtMs <= SCREENCAST_MIRROR_FRAME_MAX_AGE_MS }
+      ?.bytes
+
   override val deviceWidth: Int get() = pageManager.currentPage.viewportSize().width
   override val deviceHeight: Int get() = pageManager.currentPage.viewportSize().height
 
   override fun frames(): Flow<ByteArray> = flow {
     while (currentCoroutineContext().isActive) {
-      val response = provider.getScreenState(includeScreenshot = true)
-      response?.screenshotBase64?.decodeBase64Bytes()?.let { emit(it) }
+      val frame = freshCachedScreencastFrame()
+        ?: provider.getScreenState(includeScreenshot = true)?.screenshotBase64?.decodeBase64Bytes()
+      frame?.let { emit(it) }
       delay(frameIntervalMs)
     }
   }
@@ -113,6 +145,116 @@ class PlaywrightDeviceScreenStream(
       ?.screenshotBase64
       ?.decodeBase64Bytes()
       ?: ByteArray(0)
+
+  /**
+   * Serves the web mirror's HTTP poll fallback from the live screencast's most-recent frame
+   * instead of a fresh [getScreenshot]. Playwright Java funnels the screencast pump, screenshots,
+   * and interactions through one connection thread, so a `page.screenshot()` (~700ms headless) on
+   * the poll path freezes the concurrent stream — a stray `/devices` tab stuck polling this sabotages
+   * every fast-stream viewer. While a screencast is active its last frame already IS the current
+   * screen, so returning it keeps the poll path off the Playwright thread. Falls back to a real
+   * screenshot when no screencast is running (nothing to contend with) or the cache is stale.
+   */
+  override suspend fun getMirrorScreenshot(): ByteArray =
+    freshCachedScreencastFrame() ?: getScreenshot()
+
+  /**
+   * Streams the page as JPEG frames via a Chromium CDP screencast (`Page.startScreencast`) —
+   * the high-frame-rate source the web device mirror uses instead of polling
+   * [getMirrorScreenshot]. Each composited frame is delivered to [onFrame] as decoded JPEG
+   * bytes; the caller frames them onto the wire (the `/devices` viewer sends them as binary
+   * WebSocket messages).
+   *
+   * **Why the pump loop.** Playwright Java has no autonomous event thread — CDP events are
+   * dispatched only while its single connection thread is blocked inside an API call
+   * ([com.microsoft.playwright.impl.Connection.processOneMessage] runs from within blocking
+   * waits). So a loop parks on [com.microsoft.playwright.Page.waitForTimeout] to keep
+   * `screencastFrame` events flowing. The loop hops on and off [PlaywrightPageManager.playwrightDispatcher]
+   * each interval rather than monopolizing it, so taps / navigation / other Playwright work
+   * still interleave (the dispatcher is single-threaded).
+   *
+   * **Why acking in the handler is safe.** Chrome emits at most one un-acked frame at a time,
+   * so acking from inside the `screencastFrame` handler (which runs on the Playwright thread
+   * mid-pump) both keeps frames coming and bounds the handler's re-entrancy to the current
+   * frame — the next frame isn't sent until this ack lands.
+   *
+   * The one-frame drop-oldest channel decouples the WebSocket sender from the encoder: a slow
+   * consumer drops stale frames rather than backing up Playwright's event thread. Never returns
+   * normally — cancel the calling coroutine to stop the screencast (which tears the CDP session
+   * down on the finally path).
+   */
+  suspend fun streamScreencastJpegFrames(onFrame: suspend (ByteArray) -> Unit): Nothing =
+    coroutineScope {
+      val outbound =
+        Channel<ByteArray>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+      val sender = launch {
+        for (frame in outbound) onFrame(frame)
+      }
+      // Bind to the page present when streaming starts. Popups reassign currentPage, but a CDP
+      // session is page-scoped; the mirror follows the page it began on for this connection.
+      val page = pageManager.currentPage
+      val cdpRef = AtomicReference<CDPSession?>()
+      // Fatal error observed inside the frame handler (which runs on the Playwright pump thread, so
+      // it can't throw out of the pump directly). The pump loop checks this each interval and fails
+      // the stream, so a dead CDP session tears the WebSocket down (→ client demotes) instead of
+      // spinning silently behind a still-beating heartbeat.
+      val pumpFailure = AtomicReference<Throwable?>(null)
+      val handler = Consumer<JsonObject> { event ->
+        val frame = PlaywrightScreencast.parseScreencastFrame(event) ?: return@Consumer
+        // A malformed / non-base64 payload is a bad single frame, not a dead stream — skip it
+        // rather than letting the decode throw out of the Playwright event pump.
+        val bytes = runCatching { frame.dataBase64.decodeBase64Bytes() }.getOrNull() ?: return@Consumer
+        outbound.trySend(bytes)
+        // Publish the frame so the poll fallback / JPEG stream serve it instead of a screenshot.
+        latestScreencastFrame.set(TimedScreencastFrame(bytes, System.currentTimeMillis()))
+        // Ack so Chrome emits the next frame. Runs on the Playwright thread inside the pump;
+        // Chrome's one-in-flight throttling keeps this from recursing past the current frame. An
+        // ack failure means the CDP session is gone — record it so the pump loop fails the stream.
+        runCatching {
+          cdpRef.get()?.send("Page.screencastFrameAck", PlaywrightScreencast.ackParams(frame.sessionId))
+        }.onFailure { pumpFailure.compareAndSet(null, it) }
+      }
+      activeScreencasts.incrementAndGet()
+      try {
+        withContext(pageManager.playwrightDispatcher) {
+          val session = page.context().newCDPSession(page)
+          cdpRef.set(session)
+          session.on("Page.screencastFrame", handler)
+          session.send(
+            "Page.startScreencast",
+            PlaywrightScreencast.startScreencastParams(deviceWidth, deviceHeight),
+          )
+        }
+        while (isActive) {
+          // Surface a fatal handler error (dead CDP session) so the stream fails and the client
+          // demotes, rather than pumping an empty loop forever.
+          pumpFailure.get()?.let { throw it }
+          // Park on the Playwright thread so processOneMessage keeps dispatching
+          // screencastFrame events in real time; the bounded interval lets cancellation land
+          // within one window and yields the dispatcher between pumps for interactions.
+          val pumped = withContext(pageManager.playwrightDispatcher) {
+            runCatching { page.waitForTimeout(SCREENCAST_PUMP_INTERVAL_MS) }
+          }
+          // The page/context is gone (closed popup, navigation teardown). Fail the stream so the
+          // WebSocket closes and the client demotes to the JPEG fallback instead of freezing on the
+          // last frame behind a still-beating heartbeat.
+          pumped.exceptionOrNull()?.let { throw it }
+        }
+        awaitCancellation()
+      } finally {
+        withContext(NonCancellable + pageManager.playwrightDispatcher) {
+          cdpRef.getAndSet(null)?.let { session ->
+            runCatching { session.off("Page.screencastFrame", handler) }
+            runCatching { session.send("Page.stopScreencast", JsonObject()) }
+            runCatching { session.detach() }
+          }
+        }
+        // Last screencast out clears the cache so the poll path stops serving a now-frozen frame.
+        if (activeScreencasts.decrementAndGet() == 0) latestScreencastFrame.set(null)
+        outbound.close()
+        sender.cancel()
+      }
+    }
 
   override suspend fun navigate(url: String) = withContext(pageManager.playwrightDispatcher) {
     pageManager.currentPage.navigate(url)
@@ -491,6 +633,22 @@ class PlaywrightDeviceScreenStream(
   }
 
   companion object {
+    /**
+     * How long each screencast pump parks on `waitForTimeout` before yielding the Playwright
+     * thread. Short enough that taps/navigation interleave with sub-100ms latency, long enough
+     * that per-iteration dispatcher hop overhead stays negligible. Frames still arrive in real
+     * time *within* each window — this only bounds interaction latency and teardown latency.
+     */
+    internal const val SCREENCAST_PUMP_INTERVAL_MS: Double = 100.0
+
+    /**
+     * How stale a cached screencast frame may be before the mirror poll ([getMirrorScreenshot]) and
+     * JPEG stream ([frames]) fall back to a real screenshot. While a screencast is live its last
+     * frame IS the current screen, so this only bridges normal inter-frame gaps yet stays short
+     * enough that a wedged pump (frames stopped, refcount still held) can't serve a frozen image.
+     */
+    internal const val SCREENCAST_MIRROR_FRAME_MAX_AGE_MS: Long = 2_000L
+
     /**
      * Escapes [value] for use inside a CSS double-quoted attribute string (e.g.
      * `[data-testid="..."]`). Only the two characters that can break a `"..."` scalar in CSS

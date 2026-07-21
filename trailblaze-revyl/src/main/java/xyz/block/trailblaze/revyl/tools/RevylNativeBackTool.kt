@@ -21,7 +21,7 @@ import xyz.block.trailblaze.util.Console
   "Press the device back button to go to the previous screen. " +
     "On Android, triggers the system back. On iOS, navigates back using the app's UI navigation.",
 )
-class RevylNativeBackTool(
+data class RevylNativeBackTool(
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {
 

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.report
 
+import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -234,6 +235,16 @@ class RunReportGeneratorTest {
         ),
       )
 
+      // Session events: one stream owned by the test-classpath formatter
+      // (event-formatters/test-sample.formatter.ts), one with no formatter (generic fallback).
+      val eventsDir = File(logsRepo.getSessionDir(sessionId), "events").apply { mkdirs() }
+      File(eventsDir, "com.example.tests.network.ndjson").writeText(
+        """{"timeMs":1700000001000,"data":{"request":{"method":"POST","path":"/2.0/pay"}}}""" + "\n",
+      )
+      File(eventsDir, "com.example.tests.analytics.ndjson").writeText(
+        """{"timeMs":1700000002000,"data":{"event":"screen_view"}}""" + "\n",
+      )
+
       val report = RunReportGenerator(bunBinary = bun).generate(logsRepo, listOf(sessionId, straySessionId))
 
       assertNotNull(report, "generate() should produce a report file")
@@ -245,6 +256,68 @@ class RunReportGeneratorTest {
       assertTrue(html.contains("\"status\":\"passed\""), "succeeded session maps to a passed badge")
       assertTrue(!html.contains(straySessionId.value), "status-less helper session should be excluded")
       assertTrue(html.contains("Open the app"), "authored YAML captured at session start is embedded")
+      // The formatter-owned stream embeds rows built by the staged module; the other stays generic.
+      assertTrue(html.contains("POST /2.0/pay"), "formatter-produced row label should be embedded")
+      assertTrue(html.contains("formatted-by-test-sample"), "formatter-produced badge should be embedded")
+      assertTrue(html.contains("screen_view"), "non-formatted stream keeps its generic events")
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun discoverEventFormatterResources_findsFormattersAndSupportFilesInDirsAndJars() {
+    val tmp = Files.createTempDirectory("rrg-fmt-").toFile()
+    try {
+      // Directory-shaped classpath entry (dev/test classpath), with a support file in a subdir.
+      val dirRoot = File(tmp, "cp-dir")
+      val fmtDir = File(dirRoot, RunReportGenerator.EVENT_FORMATTERS_RESOURCE_DIR).apply { mkdirs() }
+      File(fmtDir, "dir-sample.formatter.ts").writeText("export default {}")
+      File(fmtDir, "notes.txt").writeText("a support file, staged but never require()d")
+      File(fmtDir, "lib").mkdirs()
+      File(fmtDir, "lib/dir-helpers.ts").writeText("export const x = 1")
+
+      // JAR-shaped classpath entry (packaged distribution). Directory entries included, matching
+      // how Gradle packages resource JARs — discovery resolves the dir URL through them.
+      val jarFile = File(tmp, "formatters.jar")
+      java.util.jar.JarOutputStream(jarFile.outputStream()).use { jar ->
+        var path = ""
+        for (segment in RunReportGenerator.EVENT_FORMATTERS_RESOURCE_DIR.split('/')) {
+          path += "$segment/"
+          jar.putNextEntry(java.util.jar.JarEntry(path))
+          jar.closeEntry()
+        }
+        for ((entry, body) in listOf(
+          "jar-sample.formatter.js" to "module.exports = {}",
+          "lib/jar-helpers.js" to "module.exports.y = 2",
+          // Unsafe segments (traversal, hidden dirs) must be ignored, not staged.
+          "../escape.formatter.js" to "nope",
+          ".hidden/sneaky.js" to "nope",
+        )) {
+          jar.putNextEntry(java.util.jar.JarEntry("$path$entry"))
+          jar.write(body.toByteArray())
+          jar.closeEntry()
+        }
+      }
+
+      val classLoader = java.net.URLClassLoader(
+        arrayOf(dirRoot.toURI().toURL(), jarFile.toURI().toURL()),
+        null,
+      )
+      val found = RunReportGenerator.discoverEventFormatterResources(classLoader)
+
+      assertEquals(
+        setOf(
+          "dir-sample.formatter.ts",
+          "notes.txt",
+          "lib/dir-helpers.ts",
+          "jar-sample.formatter.js",
+          "lib/jar-helpers.js",
+        ),
+        found.keys,
+      )
+      // Every discovered URL is directly readable (the staging pass streams from it).
+      found.values.forEach { url -> url.openStream().use { assertTrue(it.readBytes().isNotEmpty()) } }
     } finally {
       tmp.deleteRecursively()
     }

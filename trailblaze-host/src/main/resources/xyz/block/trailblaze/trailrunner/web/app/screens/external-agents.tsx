@@ -130,7 +130,9 @@ function ExternalAgentsScreen({ go, agents, sel, onSel, initSel, active = true }
   const setSel = onSel;
   const [notice, setNotice] = React.useState(null);
 
-  const runs = (agentsHook.data && agentsHook.data.runs) || [];
+  // Companion runs (driven by an agent CLI outside Trail Runner) have their own read-only screen;
+  // this screen's chat/composer only makes sense for runs the daemon spawned and can talk back to.
+  const runs = ((agentsHook.data && agentsHook.data.runs) || []).filter((r) => !r.companion);
   const supported = (agentsHook.data && agentsHook.data.supportedAgents) || [];
   const cur = sel !== 'new' ? runs.find((r) => r.id === sel) || null : null;
 
@@ -222,8 +224,12 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
   // One live device connection, owned at the conversation level: the stage is a permanent surface
   // of every session, so the mirror holds for the session's whole life.
   const mirror = useAgentDeviceMirror(active && !!run);
-  const frameRef = React.useRef(null);
-  frameRef.current = mirror.frame;
+  // Screenshot pins snapshot the LIVE frame to a self-contained data URL (mirror.captureFrame):
+  // streamed frames are blob URLs revoked on the next frame, so pinning the raw URL would leave
+  // broken images in the transcript. A ref holds the latest capture fn so onLiveEvent (below)
+  // needn't re-subscribe the event stream on every render.
+  const captureFrameRef = React.useRef(null);
+  captureFrameRef.current = mirror.captureFrame;
   // Screenshot pins: seq -> frame data URL captured the moment a trailblaze tool event streamed
   // in. Transient by design (frames aren't persisted server-side) — they exist to let you follow
   // along live and scroll back within this page load.
@@ -240,9 +246,9 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
     const isTbCall = event.kind === 'tool_call' && String(event.toolName || '').startsWith('mcp__trailblaze__');
     const isTbResult = event.kind === 'tool_result' && event.toolCallId && trailblazeCallIdsRef.current.has(event.toolCallId);
     if (isTbCall && event.toolCallId) trailblazeCallIdsRef.current.add(event.toolCallId);
-    if ((isTbCall || isTbResult) && frameRef.current) {
-      const url = frameRef.current;
-      setPins((p) => ({ ...p, [event.seq]: url }));
+    if (isTbCall || isTbResult) {
+      const url = captureFrameRef.current?.();
+      if (url) setPins((p) => ({ ...p, [event.seq]: url }));
     }
   }, [go]);
 
@@ -2391,16 +2397,48 @@ function useAgentDeviceMirror(active) {
   const [selectedId, setSelectedId] = useStickyState('tb-agent-device', null);
   const [conn, setConn] = React.useState(null);
   const [connecting, setConnecting] = React.useState(false);
-  const [frame, setFrame] = React.useState(null);
+  const [frame, setFrame] = React.useState(false); // true once the live stream has rendered ≥1 frame
   const [err, setErr] = React.useState(null);
   const [tapBusy, setTapBusy] = React.useState(false);
   const connDeviceRef = React.useRef(null);
+  const mirrorImgRef = React.useRef(null); // JPEG/poll fallback surface
+  const mirrorCanvasRef = React.useRef(null); // H.264 (WebCodecs) surface
+  const firstFrameSeen = React.useRef(false); // gate the one-time first-frame setState
   const [rawById, setRawById] = React.useState({});
   // Bumping the nonce tears the connect effect down and back up: a user-facing "Reconnect" for a
   // wedged capture channel (frozen frames / no-op taps) that previously had no recovery control -
   // the device chip is only a picker, so the user could only wait and hope.
   const [reconnectNonce, setReconnectNonce] = React.useState(0);
-  const reconnect = () => { setErr(null); setConn(null); setFrame(null); setReconnectNonce((n) => n + 1); };
+  // Reset to the pre-frame state: the shared live-stream helper (openLiveDeviceStream) owns the
+  // <img>/<canvas> pixels while connected, so clearing is just dropping the first-frame gate and
+  // wiping any leftover src on teardown/reconnect.
+  const clearFrame = () => {
+    firstFrameSeen.current = false;
+    setFrame(false);
+    if (mirrorImgRef.current) mirrorImgRef.current.removeAttribute('src');
+  };
+  // Snapshot the currently-displayed frame as a self-contained data URL. Screenshot pins must
+  // outlive the live view (the H.264 canvas repaints in place; the JPEG <img>'s blob URL is revoked
+  // on the next frame), so we always copy the active surface into a detached canvas rather than
+  // pinning a live URL. Prefer the H.264 canvas when it's the one on screen, else the <img>.
+  const captureFrame = () => {
+    const canvas = mirrorCanvasRef.current;
+    if (canvas && canvas.style.display !== 'none' && canvas.width > 0 && canvas.height > 0) {
+      try { return canvas.toDataURL('image/jpeg', 0.85); } catch { /* tainted — fall through */ }
+    }
+    const img = mirrorImgRef.current;
+    if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        return c.toDataURL('image/jpeg', 0.85);
+      } catch { /* tainted/undecoded — fall through */ }
+    }
+    return null;
+  };
+  const reconnect = () => { setErr(null); setConn(null); clearFrame(); setReconnectNonce((n) => n + 1); };
 
   // A click maps to device coordinates: the <img> hugs the rendered frame, so its box IS the
   // device viewport. Null when the connection isn't ready or the box has no size.
@@ -2505,43 +2543,49 @@ function useAgentDeviceMirror(active) {
     });
     return () => {
       stale = true;
-      if (connDeviceRef.current === tbId) { connDeviceRef.current = null; setConn(null); setFrame(null); }
+      if (connDeviceRef.current === tbId) { connDeviceRef.current = null; setConn(null); clearFrame(); }
       queueMirrorOp(() => TB.recordDisconnect(tbId));
     };
   }, [active, selectedId, rawById[selectedId] ? 1 : 0, reconnectNonce]);
 
-  // Self-scheduling frame poll (same shape as the Interact screen): never lets requests pile up.
+  // Live mirror: consume the shared /devices/api/stream transport (H.264 for Android/iOS via
+  // WebCodecs, CDP JPEG for Web, layered JPEG/poll fallback) — the same stack the standalone
+  // /devices viewer uses. The recorder connection was already published into the shared session
+  // registry by recordConnect, so the stream resolves this device with no second physical connect.
   React.useEffect(() => {
     if (!conn || !active) return;
-    let stop = false;
-    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-    const loop = async () => {
-      while (!stop) {
-        const id = connDeviceRef.current;
-        if (!id) { await sleep(200); continue; }
-        try {
-          const r = await TB.recordScreen(id);
-          if (!stop && r.ok && r.screenshotBase64) setFrame(`data:${r.mime || 'image/png'};base64,${r.screenshotBase64}`);
-          // Self-heal: the daemon can lose the connection out from under us (daemon restart,
-          // an external disconnect). Quietly re-open it instead of polling a dead stream forever.
-          if (!stop && r && !r.ok && /not connected/i.test(r.error || '')) {
-            await queueMirrorOp(() => TB.recordConnect(id));
-          }
-          // Back off on failure: a degraded device fails instantly, and spinning at full request
-          // rate churns the embedded webview's renderer hard enough to kill the page.
-          if (!r || !r.ok) await sleep(250);
-        } catch (_) { await sleep(250); }
-      }
-    };
-    loop();
-    return () => { stop = true; };
+    const id = connDeviceRef.current;
+    if (!id || !window.TbLiveDeviceStream) return;
+    firstFrameSeen.current = false;
+    setFrame(false);
+    const handle = window.TbLiveDeviceStream.openLiveDeviceStream({
+      deviceId: id,
+      deviceWidth: conn.w,
+      deviceHeight: conn.h,
+      img: mirrorImgRef.current,
+      canvas: mirrorCanvasRef.current,
+      onFrame: () => { if (!firstFrameSeen.current) { firstFrameSeen.current = true; setFrame(true); } },
+      pollFrame: async (deviceId) => {
+        const result = await TB.recordScreen(deviceId);
+        if (!result.ok) throw new Error(result.error || 'Could not capture the device screen.');
+        return result;
+      },
+      // Self-heal: the daemon can lose the connection (restart, external disconnect). Re-open it
+      // rather than poll a dead stream forever — mirrors the old poll-loop's reconnect.
+      onNotConnected: async () => {
+        if (connDeviceRef.current !== id) return;
+        const result = await queueMirrorOp(() => TB.recordConnect(id));
+        if (!result.ok) throw new Error(result.error || 'Could not reconnect to the device.');
+      },
+    });
+    return () => handle.close();
   }, [conn, active]);
 
   // The structured device id of the LIVE connection (null until connected) - for callers that
   // address the device outside the gesture channel (tree inspector, trailhead replay).
   const tbId = () => connDeviceRef.current;
 
-  return { deviceList, selectedId, setSelectedId, conn, connecting, frame, err, tapBusy, tapAt, swipeAt, longPressAt, toDeviceCoords, sendGesture, reconnect, tbId };
+  return { deviceList, selectedId, setSelectedId, conn, connecting, frame, imgRef: mirrorImgRef, canvasRef: mirrorCanvasRef, captureFrame, err, tapBusy, tapAt, swipeAt, longPressAt, toDeviceCoords, sendGesture, reconnect, tbId };
 }
 
 // The mirror's pre-frame states, told honestly. The Android connect brings up on-device
@@ -2749,7 +2793,9 @@ function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe,
   // (default), the demonstrate-first Position phase NAVIGATES to the starting screen (setup), and
   // its Demonstrate phase RECORDS every tap immediately. Only the copy changes - the routing is
   // identical (a plain tap carries runId; Drive / ⌘ still navigates without recording).
-  const copy = mode === 'position'
+  const copy = mode === 'companion'
+    ? { badge: 'Drive - taps go to the device', badgeTitle: 'Taps drive the device and record nothing - the agent arms a recording when it wants steps', alt: 'Live device screen (tap to drive the device)', title: 'Tap to drive the device - nothing is recorded until the agent arms a recording' }
+    : mode === 'position'
     ? { badge: 'Setup - taps navigate', badgeTitle: 'Taps navigate to the starting screen and are captured as setup', alt: 'Live device screen (tap to navigate to the starting screen)', title: 'Tap the device to navigate to the starting screen' }
     : mode === 'record'
     ? { badge: 'Recording - taps become steps', badgeTitle: 'Every tap on the device is recorded as a step', alt: 'Live device screen (tap to record a step)', title: 'Tap the device - every tap is recorded as a step' }
@@ -2815,7 +2861,9 @@ function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe,
     // minWidth floor: the stage is the subject of the screen - without it the two resizable
     // rails can crush the mirror to a sliver on narrow windows (dominance inverted, ch06).
     <div style={{ flex: 1, minWidth: 240, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '14px 18px', background: 'var(--bg-standard)' }}>
-      <div style={{ width: '100%', maxWidth: 460, display: 'flex', alignItems: 'center', gap: 10 }}>
+      {/* wrap: on a narrow stage (companion's three-pane layout) the row must fold rather than
+          run the Drive control and lane badge under the neighboring rail. */}
+      <div style={{ width: '100%', maxWidth: 460, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {deviceList.length > 0 && (
           <Select compact value={selectedId || ''} options={deviceList.map((d) => [d.id, `${d.name || d.id} (${d.platform || '?'})`])} label={selectedId || 'device'} onChange={(e) => setSelectedId(e.target.value)} />
         )}
@@ -2848,16 +2896,30 @@ function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe,
       </div>
       <AgentDeviceError err={err} onReconnect={mirror.reconnect} />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 12, overflow: 'hidden' }}>
-        {frame ? (
+        {deviceList.length === 0 ? (
+          <EmptyState ico="smartphone" title="Connect a device to demonstrate" sub="Taps you perform on a live device or emulator become the trail's steps. Connect one to begin." />
+        ) : (
           /* The wrapper shrink-wraps the frame so the inspector's percentage boxes land exactly on
-             the device pixels they describe. */
+             the device pixels they describe. The <img> (JPEG/poll) and <canvas> (H.264) are both
+             mounted persistently; the live-stream helper toggles their `display` to pick the active
+             surface. Before the first frame the placeholder gives the wrapper its size. */
+          (() => {
+            const surfaceStyle = { maxWidth: '100%', maxHeight: 'min(78vh, 900px)', objectFit: 'contain', borderRadius: 10, border: (driving && !readOnly) ? '1px solid var(--tb-running)' : '1px solid var(--tb-hairline-stronger)', boxShadow: '0 12px 40px rgba(0,0,0,.45)', background: '#000', touchAction: 'none', userSelect: 'none', cursor: readOnly ? 'default' : busy ? 'wait' : driving ? 'pointer' : 'crosshair', display: 'none' };
+            const surfaceTitle = readOnly ? 'The agent is running a trail on this device - watch only' : driving ? 'Driving: taps land immediately and are not recorded' : copy.title;
+            const surfaceAlt = readOnly ? 'Live device screen (the agent is running a trail)' : driving ? 'Live device screen (driving - taps are not recorded)' : copy.alt;
+          return (
           <div style={{ position: 'relative', display: 'flex', maxWidth: '100%', maxHeight: 'min(78vh, 900px)', minWidth: 0 }}>
-            <img src={frame} alt={readOnly ? 'Live device screen (the agent is running a trail)' : driving ? 'Live device screen (driving - taps are not recorded)' : copy.alt}
+            <img ref={mirror.imgRef} alt={surfaceAlt}
               draggable={false} onPointerDown={onStagePointerDown} onPointerUp={onStagePointerUp}
-              title={readOnly ? 'The agent is running a trail on this device - watch only' : driving ? 'Driving: taps land immediately and are not recorded' : copy.title}
-              style={{ maxWidth: '100%', maxHeight: 'min(78vh, 900px)', objectFit: 'contain', borderRadius: 10, border: (driving && !readOnly) ? '1px solid var(--tb-running)' : '1px solid var(--tb-hairline-stronger)', boxShadow: '0 12px 40px rgba(0,0,0,.45)', background: '#000', touchAction: 'none', userSelect: 'none', cursor: readOnly ? 'default' : busy ? 'wait' : driving ? 'pointer' : 'crosshair' }} />
+              title={surfaceTitle} style={surfaceStyle} />
+            <canvas ref={mirror.canvasRef}
+              onPointerDown={onStagePointerDown} onPointerUp={onStagePointerUp}
+              title={surfaceTitle} aria-label={surfaceAlt} style={surfaceStyle} />
+            {/* In-flow (not absolute) so it gives the wrapper its size while both surfaces are
+                display:none; once a frame lands it unmounts and the visible surface sizes the wrapper. */}
+            {!frame && <MirrorPlaceholder mirror={mirror} />}
             {/* View-tree toggle - labeled boxes to see the structure and aim taps. */}
-            {inspect && (
+            {frame && inspect && (
               <button onClick={(e) => { e.stopPropagation(); inspect.toggle(); }}
                 title="Show the view tree (labeled boxes) on the device"
                 style={{ position: 'absolute', top: 10, left: 10, zIndex: 4, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 9px', borderRadius: 8, cursor: 'pointer',
@@ -2889,13 +2951,11 @@ function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe,
               );
             })}
             {/* The Elements list's hovered row, and the pending step's resolved element. */}
-            {inspect && inspect.hoverEl && <div style={{ ...boxPct(inspect.hoverEl), position: 'absolute', border: '2px solid var(--tb-link)', background: 'rgba(94,155,255,.14)', borderRadius: 3, pointerEvents: 'none' }} />}
-            {inspect && inspect.pendingEl && <div style={{ ...boxPct(inspect.pendingEl), position: 'absolute', border: '2px solid #c4a8ff', background: 'rgba(168,130,255,.14)', borderRadius: 3, pointerEvents: 'none' }} />}
+            {frame && inspect && inspect.hoverEl && <div style={{ ...boxPct(inspect.hoverEl), position: 'absolute', border: '2px solid var(--tb-link)', background: 'rgba(94,155,255,.14)', borderRadius: 3, pointerEvents: 'none' }} />}
+            {frame && inspect && inspect.pendingEl && <div style={{ ...boxPct(inspect.pendingEl), position: 'absolute', border: '2px solid #c4a8ff', background: 'rgba(168,130,255,.14)', borderRadius: 3, pointerEvents: 'none' }} />}
           </div>
-        ) : deviceList.length === 0 ? (
-          <EmptyState ico="smartphone" title="Connect a device to demonstrate" sub="Taps you perform on a live device or emulator become the trail's steps. Connect one to begin." />
-        ) : (
-          <MirrorPlaceholder mirror={mirror} />
+          );
+          })()
         )}
       </div>
       {/* One-time hint: after the first captured step, the trail rail itself teaches. The demo

@@ -162,7 +162,10 @@ class BaseComposeTest(
         sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
       )
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+    // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
+    // bare `- <toolName>:` envelope (single-tool dispatch) additionally decodes to one ToolTrailItem.
+    // Kept consistent with the other host runner-rule decoders that receive dispatched YAML.
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
       yaml,
       deviceClassifiers = trailblazeDeviceInfo.classifiers,
     )

@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Trailblaze Device Mirror</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0e12;
+      --panel: #12171e;
+      --panel-2: #181e27;
+      --line: #2a3340;
+      --text: #ecf1f7;
+      --muted: #97a4b4;
+      --accent: #5de2a7;
+      --danger: #ff8f8f;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+    header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(12px); }
+    h1 { margin: 0; font-size: 16px; }
+    .muted { color: var(--muted); }
+    .spacer { flex: 1; }
+    button, select, input, textarea { color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
+    button { cursor: pointer; }
+    button:hover { border-color: #48586d; }
+    button.primary { border-color: #2b8a67; background: #164d3a; }
+    button:disabled { opacity: .5; cursor: default; }
+    a { color: var(--accent); text-decoration: none; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+    .controls label { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+    .controls select { min-width: 190px; max-width: 340px; }
+    #status { min-height: 20px; padding: 0 18px 10px; color: var(--muted); }
+    #status.error { color: var(--danger); }
+    main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 16px; padding: 16px; align-items: start; }
+    main.single { display: flex; justify-content: center; }
+    .device { min-width: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+    main.single .device { width: min(520px, 100%); }
+    .device-head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    .device-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 650; }
+    .badge { padding: 2px 7px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 11px; }
+    .fps { margin-left: auto; font: 12px ui-monospace, monospace; color: var(--accent); }
+    .screen { position: relative; display: grid; place-items: center; min-height: 280px; max-height: calc(100vh - 245px); background: #000; overflow: hidden; }
+    .screen img, .screen canvas { display: none; max-width: 100%; max-height: calc(100vh - 245px); object-fit: contain; touch-action: none; user-select: none; cursor: crosshair; }
+    .placeholder { padding: 30px; text-align: center; color: var(--muted); }
+    .device-actions { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px; border-top: 1px solid var(--line); }
+    .device-actions input { flex: 1 1 140px; min-width: 0; }
+    .web-navigation { display: flex; gap: 7px; padding: 10px; border-top: 1px solid var(--line); }
+    .web-navigation input { flex: 1; min-width: 0; }
+    .tool-runner { border-top: 1px solid var(--line); }
+    .tool-runner summary { cursor: pointer; padding: 10px; color: var(--muted); }
+    .tool-body { display: grid; gap: 8px; padding: 0 10px 10px; }
+    .tool-picker { display: flex; gap: 7px; }
+    .tool-picker select { flex: 1; min-width: 0; }
+    .tool-description, .tool-status { color: var(--muted); font-size: 12px; }
+    .tool-status.error { color: var(--danger); }
+    .tool-params { display: grid; gap: 7px; }
+    .tool-param { display: grid; grid-template-columns: minmax(110px, .45fr) 1fr; gap: 7px; align-items: center; }
+    .tool-param label { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+    .tool-param input, .tool-param select { min-width: 0; width: 100%; }
+    .tool-yaml { width: 100%; min-height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, monospace; }
+    .tool-actions { display: flex; align-items: center; gap: 8px; }
+    .device-error { display: none; padding: 8px 11px; color: var(--danger); border-top: 1px solid var(--line); font-size: 12px; }
+    @media (max-width: 700px) {
+      header { align-items: flex-start; flex-wrap: wrap; }
+      .controls { align-items: stretch; }
+      .controls label { width: 100%; justify-content: space-between; }
+      .controls select { flex: 1; min-width: 0; }
+      .screen, .screen img, .screen canvas { max-height: calc(100vh - 310px); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Device Mirror</h1>
+    <span class="muted">Standalone Trailblaze viewer</span>
+    <span class="spacer"></span>
+    <a id="modeLink" href="/devices/all"></a>
+  </header>
+  <div class="controls">
+    <label>Target app <select id="target"></select></label>
+    <label id="devicePicker">Device <select id="device"></select></label>
+    <button class="primary" id="connect"></button>
+    <button id="refresh">Refresh</button>
+  </div>
+  <div id="status"></div>
+  <main id="devices"></main>
+
+  <script>
+    (() => {
+      'use strict';
+      const allMode = location.pathname.replace(/\/$/, '').endsWith('/all');
+      const els = {
+        target: document.getElementById('target'),
+        device: document.getElementById('device'),
+        devicePicker: document.getElementById('devicePicker'),
+        connect: document.getElementById('connect'),
+        refresh: document.getElementById('refresh'),
+        status: document.getElementById('status'),
+        devices: document.getElementById('devices'),
+        modeLink: document.getElementById('modeLink'),
+      };
+      const state = { devices: [], entries: new Map(), targetId: null };
+      // Auto-upgrade cadence for a WEB mirror stuck on the JPEG/poll fallback: retry the fast CDP
+      // screencast this often, treating a probe with no frame within the timeout as still-down.
+      const WEB_UPGRADE_RETRY_MS = 4000;
+      const WEB_UPGRADE_PROBE_TIMEOUT_MS = 4000;
+
+      els.modeLink.textContent = allMode ? 'Single device' : 'All devices';
+      els.modeLink.href = allMode ? '/devices' : '/devices/all';
+      els.devicePicker.style.display = allMode ? 'none' : 'flex';
+      els.connect.textContent = allMode ? 'Connect all' : 'Connect';
+      els.devices.className = allMode ? '' : 'single';
+
+      function setStatus(message, error = false) {
+        els.status.textContent = message || '';
+        els.status.className = error ? 'error' : '';
+      }
+
+      async function rpc(name, body = {}) {
+        const response = await fetch(`/rpc/${name}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const raw = await response.text();
+        let json = {};
+        try { json = raw ? JSON.parse(raw) : {}; } catch (_) { /* keep raw error */ }
+        if (!response.ok) throw new Error(json.message || json.error || raw || `HTTP ${response.status}`);
+        return json;
+      }
+
+      const deviceId = (device) => device.trailblazeDeviceId || {
+        instanceId: device.instanceId,
+        trailblazeDevicePlatform: device.platform,
+      };
+      const deviceKey = (device) => `${deviceId(device).trailblazeDevicePlatform}:${deviceId(device).instanceId}`;
+      const deviceLabel = (device) => device.description || device.instanceId || deviceKey(device);
+
+      function fillSelect(select, items, valueOf, labelOf, selected) {
+        select.replaceChildren();
+        for (const item of items) {
+          const option = document.createElement('option');
+          option.value = valueOf(item);
+          option.textContent = labelOf(item);
+          option.selected = option.value === selected;
+          select.appendChild(option);
+        }
+      }
+
+      function createCard(device) {
+        const key = deviceKey(device);
+        const isWeb = (device.platform || deviceId(device).trailblazeDevicePlatform) === 'WEB';
+        const card = document.createElement('section');
+        card.className = 'device';
+        card.innerHTML = `
+          <div class="device-head">
+            <span class="device-name"></span><span class="badge"></span><span class="fps">-- fps</span>
+          </div>
+          <div class="screen"><div class="placeholder">Press Connect to start mirroring.</div><canvas aria-label="Live device video"></canvas><img draggable="false" alt="Live device screen"></div>
+          <div class="device-actions">
+            <input type="text" placeholder="Type text on device" aria-label="Text to type on device">
+            <button data-key="type">Type</button><button data-key="Back">Back</button><button data-key="Home">Home</button><button data-key="Enter">Enter</button>
+          </div>
+          ${isWeb ? `<div class="web-navigation">
+            <input class="web-url" type="url" placeholder="https://example.com" aria-label="URL to open">
+            <button class="web-open" type="button">Open URL</button>
+          </div>` : ''}
+          <details class="tool-runner">
+            <summary>Run a tool or trail</summary>
+            <div class="tool-body">
+              <div class="tool-picker"><select aria-label="Available tool"><option value="">Load available tools…</option></select></div>
+              <div class="tool-description"></div>
+              <div class="tool-params"></div>
+              <textarea class="tool-yaml" spellcheck="false" aria-label="Trail YAML" placeholder="- tools:\n    - tapOnPoint:\n        x: 100\n        y: 200"></textarea>
+              <div class="tool-actions"><button class="primary tool-run" type="button">Run on device</button><span class="tool-status"></span></div>
+            </div>
+          </details>
+          <div class="device-error"></div>`;
+        card.querySelector('.device-name').textContent = deviceLabel(device);
+        card.querySelector('.badge').textContent = device.platform || deviceId(device).trailblazeDevicePlatform;
+        const entry = {
+          device, key, card,
+          screen: card.querySelector('.screen'),
+          canvas: card.querySelector('canvas'),
+          image: card.querySelector('img'),
+          placeholder: card.querySelector('.placeholder'),
+          fps: card.querySelector('.fps'),
+          error: card.querySelector('.device-error'),
+          input: card.querySelector('input'),
+          webUrl: card.querySelector('.web-url'),
+          webOpen: card.querySelector('.web-open'),
+          toolRunner: card.querySelector('.tool-runner'),
+          toolSelect: card.querySelector('.tool-picker select'),
+          toolDescription: card.querySelector('.tool-description'),
+          toolParams: card.querySelector('.tool-params'),
+          toolYaml: card.querySelector('.tool-yaml'),
+          toolRun: card.querySelector('.tool-run'),
+          toolStatus: card.querySelector('.tool-status'),
+          tools: [], toolCatalogLoaded: false,
+          socket: null, decoder: null, decoderConfigured: false, fallback: false, stopped: false, objectUrl: null,
+          width: 0, height: 0, frameCount: 0, frameWindowAt: performance.now(), lastFrameAt: 0, stallTimer: null,
+          pointer: null, onStall: null, webDemoted: false,
+        };
+        state.entries.set(key, entry);
+        wireCard(entry);
+        return entry;
+      }
+
+      function wireCard(entry) {
+        entry.card.querySelector('[data-key="type"]').onclick = () => {
+          if (entry.input.value) sendInteraction(entry, { type: 'inputText', text: entry.input.value });
+        };
+        for (const button of entry.card.querySelectorAll('[data-key]:not([data-key="type"])')) {
+          button.onclick = () => sendInteraction(entry, { type: 'pressKey', key: button.dataset.key });
+        }
+        entry.input.onkeydown = (event) => {
+          if (event.key === 'Enter') entry.card.querySelector('[data-key="type"]').click();
+        };
+        for (const surface of [entry.image, entry.canvas]) {
+          surface.onpointerdown = (event) => {
+            surface.setPointerCapture(event.pointerId);
+            entry.pointer = { x: event.clientX, y: event.clientY, at: performance.now() };
+          };
+          surface.onpointerup = (event) => {
+            if (!entry.pointer || !entry.width || !entry.height) return;
+            const start = toDevicePoint(entry, entry.pointer.x, entry.pointer.y);
+            const end = toDevicePoint(entry, event.clientX, event.clientY);
+            const distance = Math.hypot(event.clientX - entry.pointer.x, event.clientY - entry.pointer.y);
+            const durationMs = Math.round(performance.now() - entry.pointer.at);
+            entry.pointer = null;
+            if (distance < 8) sendInteraction(entry, { type: 'tap', x: end.x, y: end.y });
+            else sendInteraction(entry, { type: 'swipe', startX: start.x, startY: start.y, endX: end.x, endY: end.y, durationMs });
+          };
+          surface.oncontextmenu = (event) => {
+            event.preventDefault();
+            const point = toDevicePoint(entry, event.clientX, event.clientY);
+            sendInteraction(entry, { type: 'longPress', x: point.x, y: point.y });
+          };
+        }
+        if (entry.webOpen) {
+          entry.webOpen.onclick = () => navigateWeb(entry);
+          entry.webUrl.onkeydown = (event) => {
+            if (event.key === 'Enter') navigateWeb(entry);
+          };
+        }
+        entry.toolRunner.ontoggle = () => {
+          if (entry.toolRunner.open && !entry.toolCatalogLoaded) loadToolCatalog(entry);
+        };
+        entry.toolSelect.onchange = () => selectTool(entry);
+        entry.toolRun.onclick = () => runTrailYaml(entry);
+      }
+
+      async function navigateWeb(entry) {
+        const url = entry.webUrl.value.trim();
+        if (!url) return;
+        entry.webOpen.disabled = true;
+        try {
+          await rpc('NavigateWebUrlRequest', { trailblazeDeviceId: deviceId(entry.device), url });
+          showError(entry, null);
+        } catch (error) { showError(entry, error.message); }
+        finally { entry.webOpen.disabled = false; }
+      }
+
+      async function loadToolCatalog(entry) {
+        entry.toolSelect.disabled = true;
+        entry.toolStatus.textContent = 'Loading tools…';
+        entry.toolStatus.className = 'tool-status';
+        try {
+          if (state.targetId) await rpc('SetCurrentTargetAppRequest', { targetAppId: state.targetId });
+          const response = await rpc('GetToolCatalogRequest', { trailblazeDriverType: entry.device.trailblazeDriverType });
+          entry.tools = (response.tools || []).sort((a, b) => a.name.localeCompare(b.name));
+          fillSelect(entry.toolSelect, entry.tools, (tool) => tool.name, (tool) => tool.name, '');
+          entry.toolSelect.insertBefore(new Option('Choose a tool…', '', true, true), entry.toolSelect.firstChild);
+          entry.toolCatalogLoaded = true;
+          entry.toolStatus.textContent = `${entry.tools.length} tool${entry.tools.length === 1 ? '' : 's'} available`;
+        } catch (error) {
+          entry.toolStatus.textContent = error.message;
+          entry.toolStatus.className = 'tool-status error';
+        } finally { entry.toolSelect.disabled = false; }
+      }
+
+      function selectTool(entry) {
+        const tool = entry.tools.find((candidate) => candidate.name === entry.toolSelect.value);
+        entry.toolParams.replaceChildren();
+        entry.toolDescription.textContent = tool?.description || '';
+        if (!tool) return;
+        for (const parameter of [...(tool.requiredParameters || []), ...(tool.optionalParameters || [])]) {
+          const row = document.createElement('div');
+          row.className = 'tool-param';
+          const label = document.createElement('label');
+          const optional = (tool.optionalParameters || []).some((candidate) => candidate.name === parameter.name);
+          label.textContent = `${parameter.name}${optional ? ' (optional)' : ''}`;
+          label.title = parameter.description || parameter.type || '';
+          let input;
+          if (parameter.validValues?.length) {
+            input = document.createElement('select');
+            fillSelect(input, parameter.validValues, (value) => value, (value) => value, parameter.validValues[0]);
+          } else {
+            input = document.createElement('input');
+            input.type = parameter.type === 'Boolean' ? 'text' : /Int|Long|Float|Double|Number/i.test(parameter.type) ? 'number' : 'text';
+            input.placeholder = parameter.type || '';
+          }
+          input.dataset.parameter = parameter.name;
+          input.dataset.parameterType = parameter.type || 'String';
+          input.dataset.optional = optional ? 'true' : 'false';
+          input.oninput = () => updateToolYaml(entry, tool);
+          row.append(label, input);
+          entry.toolParams.appendChild(row);
+        }
+        updateToolYaml(entry, tool);
+      }
+
+      function yamlScalar(value, type) {
+        if (/Boolean/i.test(type) && /^(true|false)$/i.test(value)) return value.toLowerCase();
+        if (/Int|Long|Float|Double|Number/i.test(type) && value !== '' && Number.isFinite(Number(value))) return value;
+        return JSON.stringify(value);
+      }
+
+      function updateToolYaml(entry, tool) {
+        const lines = ['- tools:', `    - ${tool.name}:`];
+        const values = [...entry.toolParams.querySelectorAll('[data-parameter]')].filter((input) =>
+          input.dataset.optional !== 'true' || input.value.trim()
+        );
+        const nestedParents = new Set();
+        for (const input of values) {
+          const name = input.dataset.parameter;
+          if (!name.includes('.')) {
+            lines.push(`        ${name}: ${yamlScalar(input.value, input.dataset.parameterType)}`);
+            continue;
+          }
+          const parent = name.split('.')[0];
+          if (nestedParents.has(parent)) continue;
+          nestedParents.add(parent);
+          lines.push(`        ${parent}:`);
+          for (const child of values.filter((candidate) => candidate.dataset.parameter.startsWith(`${parent}.`))) {
+            lines.push(`          ${child.dataset.parameter.slice(parent.length + 1)}: ${yamlScalar(child.value, child.dataset.parameterType)}`);
+          }
+        }
+        entry.toolYaml.value = `${lines.join('\n')}\n`;
+      }
+
+      async function runTrailYaml(entry) {
+        const yaml = entry.toolYaml.value.trim();
+        if (!yaml) {
+          entry.toolStatus.textContent = 'Enter a tool or trail YAML first.';
+          entry.toolStatus.className = 'tool-status error';
+          return;
+        }
+        entry.toolRun.disabled = true;
+        entry.toolStatus.textContent = 'Running…';
+        entry.toolStatus.className = 'tool-status';
+        try {
+          const response = await rpc('RunTrailYamlRequest', { trailblazeDeviceId: deviceId(entry.device), yaml });
+          entry.toolStatus.textContent = response.success ? 'Completed' : 'Run did not complete';
+          entry.toolStatus.className = response.success ? 'tool-status' : 'tool-status error';
+        } catch (error) {
+          entry.toolStatus.textContent = error.message;
+          entry.toolStatus.className = 'tool-status error';
+        } finally { entry.toolRun.disabled = false; }
+      }
+
+      function toDevicePoint(entry, clientX, clientY) {
+        const surface = entry.canvas.style.display === 'block' ? entry.canvas : entry.image;
+        const rect = surface.getBoundingClientRect();
+        return {
+          x: Math.max(0, Math.min(entry.width - 1, Math.round(((clientX - rect.left) / rect.width) * entry.width))),
+          y: Math.max(0, Math.min(entry.height - 1, Math.round(((clientY - rect.top) / rect.height) * entry.height))),
+        };
+      }
+
+      async function sendInteraction(entry, interaction) {
+        try {
+          await rpc('DeviceInteractionRequest', { trailblazeDeviceId: deviceId(entry.device), interaction });
+          showError(entry, null);
+        } catch (error) { showError(entry, error.message); }
+      }
+
+      function showError(entry, message) {
+        entry.error.textContent = message || '';
+        entry.error.style.display = message ? 'block' : 'none';
+      }
+
+      function base64ToBlob(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const mime = base64.startsWith('/9j/') ? 'image/jpeg' : base64.startsWith('iVBOR') ? 'image/png' : base64.startsWith('UklGR') ? 'image/webp' : 'application/octet-stream';
+        return new Blob([bytes], { type: mime });
+      }
+
+      function showFrame(entry, frame) {
+        if (entry.stopped || !frame.screenshotBase64) return;
+        entry.width = frame.deviceWidth || entry.width;
+        entry.height = frame.deviceHeight || entry.height;
+        const url = URL.createObjectURL(base64ToBlob(frame.screenshotBase64));
+        entry.image.src = url;
+        entry.image.style.display = 'block';
+        entry.canvas.style.display = 'none';
+        entry.placeholder.style.display = 'none';
+        if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+        entry.objectUrl = url;
+        frameRendered(entry);
+        if (!entry.fallback) armStallFallback(entry);
+      }
+
+      function showVideoFrame(entry, frame) {
+        if (entry.stopped) {
+          frame.close();
+          return;
+        }
+        const width = frame.displayWidth || frame.codedWidth;
+        const height = frame.displayHeight || frame.codedHeight;
+        if (entry.canvas.width !== width || entry.canvas.height !== height) {
+          entry.canvas.width = width;
+          entry.canvas.height = height;
+        }
+        entry.canvas.getContext('2d', { alpha: false, desynchronized: true }).drawImage(frame, 0, 0, width, height);
+        frame.close();
+        entry.canvas.style.display = 'block';
+        entry.image.style.display = 'none';
+        entry.placeholder.style.display = 'none';
+        frameRendered(entry);
+        armStallFallback(entry);
+      }
+
+      function frameRendered(entry) {
+        entry.frameCount++;
+        const now = performance.now();
+        entry.lastFrameAt = now;
+        if (entry.fps.textContent === '-- fps' || entry.fps.textContent === 'idle') entry.fps.textContent = 'live';
+        const elapsed = now - entry.frameWindowAt;
+        if (elapsed >= 1000) {
+          entry.fps.textContent = `${(entry.frameCount * 1000 / elapsed).toFixed(1)} fps`;
+          entry.frameCount = 0;
+          entry.frameWindowAt = now;
+        }
+      }
+
+      function streamHeartbeat(entry) {
+        const now = performance.now();
+        if (entry.lastFrameAt && now - entry.lastFrameAt >= 1000) {
+          entry.fps.textContent = 'idle';
+          entry.frameCount = 0;
+          entry.frameWindowAt = now;
+        }
+        // A heartbeat only proves the stream is alive AFTER at least one frame has decoded — then a
+        // static screen legitimately keeps sending heartbeats and we keep showing the last frame.
+        // Before the first decoded frame, a heartbeat must NOT re-arm the watchdog: a decoder that
+        // receives access units but never produces output (e.g. never gets a usable keyframe) would
+        // otherwise be kept alive forever by 1 Hz heartbeats and never fall back to JPEG polling,
+        // leaving a permanent black canvas.
+        if (entry.lastFrameAt) armStallFallback(entry);
+      }
+
+      function h264NalHeaders(bytes) {
+        const headers = [];
+        for (let index = 0; index <= bytes.length - 4; index++) {
+          if (bytes[index] !== 0 || bytes[index + 1] !== 0) continue;
+          if (bytes[index + 2] === 1) {
+            headers.push(index + 3);
+            index += 2;
+          } else if (bytes[index + 2] === 0 && bytes[index + 3] === 1) {
+            headers.push(index + 4);
+            index += 3;
+          }
+        }
+        return headers;
+      }
+
+      function h264Codec(bytes) {
+        const sps = h264NalHeaders(bytes).find((header) => (bytes[header] & 0x1f) === 7);
+        if (sps == null || sps + 3 >= bytes.length) return null;
+        const hex = (value) => value.toString(16).padStart(2, '0').toUpperCase();
+        return `avc1.${hex(bytes[sps + 1])}${hex(bytes[sps + 2])}${hex(bytes[sps + 3])}`;
+      }
+
+      function decodeH264AccessUnit(entry, data) {
+        if (entry.stopped || !entry.decoder || entry.decoder.state === 'closed') return;
+        const bytes = new Uint8Array(data);
+        const keyFrame = h264NalHeaders(bytes).some((header) => (bytes[header] & 0x1f) === 5);
+        if (!entry.decoderConfigured) {
+          if (!keyFrame) return;
+          const codec = h264Codec(bytes);
+          // A keyframe without an in-band SPS can't configure the decoder. Rather than fail the
+          // whole stream, skip it and wait for the next keyframe that carries its parameter sets;
+          // the stall watchdog demotes to the JPEG poll if none arrives.
+          if (!codec) return;
+          // Match ws-scrcpy's proven WebCodecs configuration. Omitting
+          // `hardwareAcceleration` lets Chrome choose hardware when available and software in
+          // headless/virtualized environments; `prefer-hardware` rejects otherwise-valid H.264
+          // configurations on some Linux builds instead of falling back.
+          entry.decoder.configure({ codec, optimizeForLatency: true });
+          entry.decoderConfigured = true;
+        }
+        entry.decoder.decode(new EncodedVideoChunk({
+          type: keyFrame ? 'key' : 'delta',
+          timestamp: entry.videoTimestamp,
+          duration: 40_000,
+          data: bytes,
+        }));
+        entry.videoTimestamp += 40_000;
+      }
+
+      function armStallFallback(entry) {
+        clearTimeout(entry.stallTimer);
+        // `onStall` lets a stream pick a softer fallback than the terminal snapshot poll — the
+        // web fast path demotes to the SubscribeFrames JPEG stream before poll-of-last-resort.
+        entry.stallTimer = setTimeout(() => (entry.onStall || startFallback)(entry), 3500);
+      }
+
+      async function connect(entry) {
+        cleanupEntry(entry, false);
+        entry.stopped = false;
+        entry.image.removeAttribute('src');
+        entry.image.style.display = 'none';
+        entry.canvas.style.display = 'none';
+        entry.fps.textContent = '-- fps';
+        entry.frameCount = 0;
+        entry.frameWindowAt = performance.now();
+        entry.lastFrameAt = 0;
+        entry.placeholder.style.display = 'block';
+        entry.placeholder.textContent = 'Connecting…';
+        showError(entry, null);
+        try {
+          if (state.targetId) await rpc('SetCurrentTargetAppRequest', { targetAppId: state.targetId });
+          const connected = await rpc('ConnectToDeviceRequest', { trailblazeDeviceId: deviceId(entry.device) });
+          entry.width = connected.deviceWidth;
+          entry.height = connected.deviceHeight;
+          entry.placeholder.textContent = 'Connected. Waiting for the first frame…';
+          openStream(entry);
+        } catch (error) {
+          entry.placeholder.textContent = 'Could not connect.';
+          showError(entry, error.message);
+        }
+      }
+
+      function openStream(entry) {
+        const platform = deviceId(entry.device).trailblazeDevicePlatform;
+        // Both Android and iOS stream Annex-B H.264 over /devices/api/stream (iOS via a baguette
+        // subprocess on the daemon). If the daemon can't stream iOS (baguette not installed) it
+        // closes the socket and onclose falls back to JPEG polling automatically.
+        const supportsH264 = platform === 'ANDROID' || platform === 'IOS';
+        if (supportsH264 && 'VideoDecoder' in window && 'EncodedVideoChunk' in window) {
+          openH264Stream(entry);
+        } else if (platform === 'WEB') {
+          openWebStream(entry);
+        } else {
+          openJpegStream(entry);
+        }
+      }
+
+      function webStreamUrl(entry) {
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const id = deviceId(entry.device);
+        const params = new URLSearchParams({ instanceId: id.instanceId, platform: id.trailblazeDevicePlatform });
+        return `${scheme}//${location.host}/devices/api/stream?${params}`;
+      }
+
+      // Wires a live CDP-screencast socket as the entry's active fast stream. Shared by the initial
+      // openWebStream and the auto-upgrade path so a recovered stream behaves identically to a fresh one.
+      function adoptWebStreamSocket(entry, socket) {
+        entry.socket = socket;
+        entry.webDemoted = false;
+        entry.fallback = false;
+        entry.onStall = demoteWebToJpeg;
+        socket.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            let message;
+            try { message = JSON.parse(event.data); } catch (_) { return; }
+            if (message.type === 'configuration') {
+              entry.width = message.deviceWidth || entry.width;
+              entry.height = message.deviceHeight || entry.height;
+            }
+            if (message.type === 'heartbeat') streamHeartbeat(entry);
+            else armStallFallback(entry);
+            return;
+          }
+          showBinaryFrame(entry, event.data);
+        };
+        socket.onerror = () => demoteWebToJpeg(entry);
+        socket.onclose = () => demoteWebToJpeg(entry);
+      }
+
+      // Web fast path: binary JPEG frames from a Chromium CDP screencast over the same
+      // /devices/api/stream socket the Android H.264 path uses. On stall/error it demotes to
+      // the SubscribeFrames JPEG stream (openJpegStream), which itself degrades to snapshot
+      // polling — so the mirror always shows something, just slower as each layer gives out.
+      function openWebStream(entry) {
+        const socket = new WebSocket(webStreamUrl(entry));
+        socket.binaryType = 'arraybuffer';
+        adoptWebStreamSocket(entry, socket);
+        armStallFallback(entry);
+      }
+
+      // Falls the web mirror back from the CDP screencast to the SubscribeFrames JPEG stream.
+      // Guarded so a burst of error+close+stall only demotes once. Schedules a background probe to
+      // upgrade back to the fast stream once it's healthy — a demoted tab left polling forever runs
+      // a page.screenshot() per poll that sabotages every other viewer's fast stream.
+      function demoteWebToJpeg(entry) {
+        if (entry.stopped || entry.webDemoted) return;
+        entry.webDemoted = true;
+        entry.onStall = null;
+        clearTimeout(entry.stallTimer);
+        if (entry.socket) { entry.socket.onclose = null; entry.socket.onerror = null; entry.socket.close(); entry.socket = null; }
+        openJpegStream(entry);
+        scheduleWebUpgrade(entry);
+      }
+
+      // Periodically probes the fast CDP screencast while a WEB mirror is degraded (JPEG stream or
+      // poll fallback) and swaps back to it the moment a real frame arrives.
+      function scheduleWebUpgrade(entry) {
+        if (entry.stopped || deviceId(entry.device).trailblazeDevicePlatform !== 'WEB') return;
+        clearTimeout(entry.upgradeTimer);
+        entry.upgradeTimer = setTimeout(() => tryWebUpgrade(entry), WEB_UPGRADE_RETRY_MS);
+      }
+
+      function tryWebUpgrade(entry) {
+        // Only meaningful while still degraded; a healthy fast stream needs no probe.
+        if (entry.stopped || (!entry.webDemoted && !entry.fallback)) return;
+        const probe = new WebSocket(webStreamUrl(entry));
+        probe.binaryType = 'arraybuffer';
+        entry.upgradeProbe = probe;
+        let settled = false;
+        const retryLater = () => {
+          if (settled) return;
+          settled = true;
+          probe.onmessage = probe.onerror = probe.onclose = null;
+          try { probe.close(); } catch (_) {}
+          if (entry.upgradeProbe === probe) entry.upgradeProbe = null;
+          scheduleWebUpgrade(entry);
+        };
+        // Give up if no real frame proves the fast path healthy within the window.
+        const probeTimer = setTimeout(retryLater, WEB_UPGRADE_PROBE_TIMEOUT_MS);
+        probe.onmessage = (event) => {
+          // Wait for a binary frame — text (heartbeat/configuration) alone doesn't prove frames flow.
+          if (settled || typeof event.data === 'string') return;
+          settled = true;
+          clearTimeout(probeTimer);
+          entry.upgradeProbe = null;
+          // Tear down the degraded path and adopt this socket as the live fast stream.
+          entry.fallback = false;
+          if (entry.socket && entry.socket !== probe) {
+            entry.socket.onclose = null; entry.socket.onerror = null; entry.socket.onmessage = null;
+            try { entry.socket.close(); } catch (_) {}
+          }
+          adoptWebStreamSocket(entry, probe);
+          showBinaryFrame(entry, event.data);
+        };
+        probe.onerror = retryLater;
+        probe.onclose = retryLater;
+      }
+
+      function showBinaryFrame(entry, buffer) {
+        if (entry.stopped) return;
+        const url = URL.createObjectURL(new Blob([buffer], { type: 'image/jpeg' }));
+        entry.image.src = url;
+        entry.image.style.display = 'block';
+        entry.canvas.style.display = 'none';
+        entry.placeholder.style.display = 'none';
+        if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+        entry.objectUrl = url;
+        frameRendered(entry);
+        if (!entry.fallback) armStallFallback(entry);
+      }
+
+      function openH264Stream(entry) {
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const id = deviceId(entry.device);
+        const params = new URLSearchParams({ instanceId: id.instanceId, platform: id.trailblazeDevicePlatform });
+        const socket = new WebSocket(`${scheme}//${location.host}/devices/api/stream?${params}`);
+        socket.binaryType = 'arraybuffer';
+        entry.socket = socket;
+        entry.videoTimestamp = 0;
+        entry.decoderConfigured = false;
+        entry.decoder = new VideoDecoder({
+          output: (frame) => showVideoFrame(entry, frame),
+          error: (error) => {
+            showError(entry, `Video decode failed: ${error.message}`);
+            startFallback(entry);
+          },
+        });
+        armStallFallback(entry);
+        socket.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            let message;
+            try { message = JSON.parse(event.data); } catch (_) { return; }
+            if (message.type === 'configuration') {
+              entry.width = message.deviceWidth || entry.width;
+              entry.height = message.deviceHeight || entry.height;
+            }
+            // Only heartbeats and decoded frames re-arm the watchdog. A 'configuration' message
+            // (arrives once at stream head) is not proof frames are flowing, so it must not reset
+            // the stall timer — otherwise a stream that configures but never decodes would hang.
+            if (message.type === 'heartbeat') streamHeartbeat(entry);
+            return;
+          }
+          try {
+            decodeH264AccessUnit(entry, event.data);
+          } catch (error) {
+            showError(entry, error.message);
+            startFallback(entry);
+          }
+        };
+        socket.onerror = () => startFallback(entry);
+        socket.onclose = () => startFallback(entry);
+      }
+
+      function openJpegStream(entry) {
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(`${scheme}//${location.host}/rpc-ws`);
+        entry.socket = socket;
+        armStallFallback(entry);
+        socket.onopen = () => {
+          socket.send(JSON.stringify({
+            type: 'request', id: `frames-${entry.key}-${Date.now()}`,
+            path: '/rpc/SubscribeFramesRequest',
+            body: { trailblazeDeviceId: deviceId(entry.device), intervalMs: 40 },
+          }));
+          armStallFallback(entry);
+        };
+        socket.onmessage = (event) => {
+          let envelope;
+          try { envelope = JSON.parse(event.data); } catch (_) { return; }
+          if (envelope.type === 'event' && envelope.path === '/event/frame') {
+            const frame = envelope.body || {};
+            if (frame.trailblazeDeviceId?.instanceId === deviceId(entry.device).instanceId) showFrame(entry, frame);
+          } else if (envelope.type === 'response' && envelope.ok === false) {
+            showError(entry, envelope.error?.message || 'Frame subscription failed.');
+            startFallback(entry);
+          }
+        };
+        socket.onerror = () => startFallback(entry);
+        socket.onclose = () => startFallback(entry);
+      }
+
+      async function startFallback(entry) {
+        if (entry.stopped || entry.fallback) return;
+        entry.fallback = true;
+        clearTimeout(entry.stallTimer);
+        if (entry.socket) { entry.socket.onclose = null; entry.socket.close(); entry.socket = null; }
+        if (entry.decoder) {
+          if (entry.decoder.state !== 'closed') entry.decoder.close();
+          entry.decoder = null;
+          entry.decoderConfigured = false;
+        }
+        entry.fps.textContent = 'polling fallback';
+        while (!entry.stopped && entry.fallback) {
+          try {
+            const frame = await rpc('GetHostDeviceScreenRequest', { trailblazeDeviceId: deviceId(entry.device), includeTree: false });
+            showFrame(entry, frame);
+          } catch (error) {
+            showError(entry, error.message);
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+      }
+
+      function cleanupEntry(entry, disconnect = true) {
+        entry.stopped = true;
+        entry.fallback = false;
+        entry.onStall = null;
+        entry.webDemoted = false;
+        clearTimeout(entry.stallTimer);
+        clearTimeout(entry.upgradeTimer);
+        if (entry.upgradeProbe) { entry.upgradeProbe.onclose = null; entry.upgradeProbe.onerror = null; entry.upgradeProbe.onmessage = null; try { entry.upgradeProbe.close(); } catch (_) {} entry.upgradeProbe = null; }
+        if (entry.socket) { entry.socket.onclose = null; entry.socket.close(); entry.socket = null; }
+        if (entry.decoder) {
+          if (entry.decoder.state !== 'closed') entry.decoder.close();
+          entry.decoder = null;
+          entry.decoderConfigured = false;
+        }
+        if (entry.objectUrl) { URL.revokeObjectURL(entry.objectUrl); entry.objectUrl = null; }
+        if (disconnect) {
+          fetch('/rpc/DisconnectDeviceRequest', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trailblazeDeviceId: deviceId(entry.device) }), keepalive: true,
+          }).catch(() => {});
+        }
+      }
+
+      function cleanupAll(disconnect = true) {
+        for (const entry of state.entries.values()) cleanupEntry(entry, disconnect);
+        state.entries.clear();
+      }
+
+      function renderDevices() {
+        cleanupAll();
+        els.devices.replaceChildren();
+        const selected = allMode ? state.devices : state.devices.filter((device) => deviceKey(device) === els.device.value);
+        for (const device of selected) els.devices.appendChild(createCard(device).card);
+      }
+
+      async function load() {
+        cleanupAll();
+        setStatus('Loading devices…');
+        try {
+          const [deviceResponse, targetResponse] = await Promise.all([
+            rpc('GetConnectedDevicesRequest'), rpc('GetTargetAppsRequest'),
+          ]);
+          state.devices = deviceResponse.devices || [];
+          state.targetId = targetResponse.currentTargetAppId || targetResponse.targetApps?.[0]?.id || null;
+          fillSelect(els.target, targetResponse.targetApps || [], (target) => target.id, (target) => target.displayName || target.id, state.targetId);
+          fillSelect(els.device, state.devices, deviceKey, deviceLabel, state.devices[0] ? deviceKey(state.devices[0]) : null);
+          renderDevices();
+          setStatus(state.devices.length ? `${state.devices.length} device${state.devices.length === 1 ? '' : 's'} available.` : 'No devices found. Start an emulator or connect a device, then refresh.');
+          els.connect.disabled = state.devices.length === 0;
+        } catch (error) { setStatus(error.message, true); }
+      }
+
+      els.target.onchange = () => {
+        state.targetId = els.target.value || null;
+        for (const entry of state.entries.values()) {
+          entry.toolCatalogLoaded = false;
+          entry.tools = [];
+          entry.toolSelect.replaceChildren(new Option('Load available tools…', ''));
+          entry.toolParams.replaceChildren();
+          entry.toolDescription.textContent = '';
+          if (entry.toolRunner.open) loadToolCatalog(entry);
+        }
+      };
+      els.device.onchange = renderDevices;
+      els.connect.onclick = async () => {
+        const entries = [...state.entries.values()];
+        if (!entries.length) return;
+        els.connect.disabled = true;
+        setStatus(allMode ? 'Connecting devices…' : 'Connecting device…');
+        await Promise.allSettled(entries.map(connect));
+        els.connect.disabled = false;
+        setStatus('Streaming. Tap, drag, right-click, or use the input controls to interact.');
+      };
+      els.refresh.onclick = load;
+      window.addEventListener('beforeunload', () => cleanupAll(true));
+      load();
+    })();
+  </script>
+</body>
+</html>

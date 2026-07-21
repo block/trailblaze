@@ -20,7 +20,7 @@ import xyz.block.trailblaze.util.Console
   "Type text into an input field. Optionally specify a target field " +
     "(e.g. 'email field', 'password input').",
 )
-class RevylNativeTypeTool(
+data class RevylNativeTypeTool(
   @param:LLMDescription("The text to type into the field.")
   val text: String,
   @param:LLMDescription("Optional target field, described in natural language.")

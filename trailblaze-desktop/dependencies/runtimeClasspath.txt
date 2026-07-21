@@ -166,6 +166,8 @@ com.squareup.okhttp3:okhttp-jvm:5.3.2
 com.squareup.okhttp3:okhttp:5.3.2
 com.squareup.okio:okio-jvm:3.17.0
 com.squareup.okio:okio:3.17.0
+com.squareup.wire:wire-runtime-jvm:5.3.3
+com.squareup.wire:wire-runtime:5.3.3
 com.typesafe:config:1.4.8
 commons-io:commons-io:2.16.1
 de.upb.cs.swt:axml:2.1.2

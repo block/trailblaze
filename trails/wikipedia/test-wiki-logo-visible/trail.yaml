@@ -1,0 +1,10 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: Globe logo / wordmark visible on every page'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+  - step: Verify the Wikipedia wordmark text "Wikipedia" is visible in the top-left area of the page (the site name shown next to the puzzle-globe logo).
+  - step: Verify the tagline text "The Free Encyclopedia" is visible near the wordmark.

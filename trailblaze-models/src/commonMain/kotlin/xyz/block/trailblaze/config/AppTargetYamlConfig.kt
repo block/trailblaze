@@ -104,6 +104,19 @@ data class AppTargetYamlConfig(
    * [TrailmapTargetConfig.toAppTargetYamlConfig][xyz.block.trailblaze.config.project.TrailmapTargetConfig.toAppTargetYamlConfig].
    */
   val icon: String? = null,
+  /**
+   * Launch configuration for a [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] target — the app
+   * executable, env, and CDP settings the framework uses to start the desktop app before any
+   * trail step runs. This is the **target-level home** for what a v1 trail expressed per-trail
+   * under `config.electron`: an Electron launch is a property of the app under test, not of an
+   * individual test, so it belongs on the target. A unified trail selects the target
+   * (`config.target`) and picks the driver (`devices: {web: PLAYWRIGHT_ELECTRON}`); the host
+   * runner resolves this config from the target, so no per-trail launch block is needed.
+   *
+   * Appended at the end so existing positional component accessors (component1..N) and
+   * binary-compatibility baselines for earlier fields stay stable.
+   */
+  val electron: xyz.block.trailblaze.yaml.ElectronAppConfig? = null,
 )
 
 /**

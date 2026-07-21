@@ -10,6 +10,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -84,7 +85,8 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK }, // unlimited, no restart
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
     )
 
     val consumerA = tee.attach(ringBufferBytes = 64 * 1024)
@@ -124,6 +126,7 @@ class H264TeeTest {
       bitRate = "4000000",
       producerFactory = singleShotProducer(pipeIn),
       sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
     )
 
     val fastConsumer = tee.attach(ringBufferBytes = 512 * 1024) // plenty of room
@@ -183,6 +186,208 @@ class H264TeeTest {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Keyframe seeding — a consumer that joins mid-stream gets a decodable start point
+  // ──────────────────────────────────────────────────────────────────────────
+
+  @Test
+  fun `consumer joining mid-stream is seeded with the last keyframe`() {
+    // Reproduces the bug where a session's MP4 recording started while the live viewer already
+    // held the tee: the recorder joined after screenrecord's only IDR and captured pure P-slices,
+    // producing an undecodable file. With keyframe seeding, the late joiner's first bytes carry
+    // the SPS/PPS/IDR even though it attached after they were sent.
+    val pipeOut = PipedOutputStream()
+    val pipeIn = PipedInputStream(pipeOut, 1 shl 16)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = singleShotProducer(pipeIn),
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
+    )
+
+    // Early consumer attaches first and receives the live stream head.
+    val early = tee.attach(ringBufferBytes = 64 * 1024)
+
+    // Producer emits one keyframe (SPS+PPS+IDR) then P-slices. The trailing P-slice start code is
+    // what lets the splitter close the IDR picture and populate the cache.
+    val keyframe = nal(7, byteArrayOf(0x42, 0xC0.toByte(), 0x20)) +
+      nal(8, byteArrayOf(0x01)) +
+      nal(5, byteArrayOf(0x80.toByte()))
+    val pSlice = nal(1, byteArrayOf(0x80.toByte()))
+    val head = keyframe + pSlice + pSlice
+    pipeOut.write(head)
+    pipeOut.flush()
+
+    // Draining the early consumer of the whole head guarantees the reader thread processed those
+    // bytes, so the keyframe cache is populated before the late consumer attaches.
+    val earlyBytes = drainConsumer(early, expected = head.size)
+    assertEquals(head.size, earlyBytes.size, "early consumer should receive the full live head")
+
+    // Late consumer joins AFTER the IDR was already sent.
+    val late = tee.attach(ringBufferBytes = 64 * 1024)
+    pipeOut.write(pSlice) // one more live P-slice so the late consumer also has post-seed bytes
+    pipeOut.flush()
+
+    val lateBytes = drainConsumer(late, expected = keyframe.size + pSlice.size)
+
+    early.detach()
+    late.detach()
+    runCatching { pipeOut.close() }
+
+    assertTrue(containsNalType(lateBytes, 7), "late consumer's seed should include SPS")
+    assertTrue(containsNalType(lateBytes, 8), "late consumer's seed should include PPS")
+    assertTrue(containsNalType(lateBytes, 5), "late consumer's seed should include the IDR keyframe")
+    // The seed precedes the live P-slice, so the very first NAL the late consumer sees is the SPS.
+    assertEquals(7, firstNalType(lateBytes), "seed must come before live bytes")
+  }
+
+  @Test
+  fun `first consumer is not seeded and receives the live head verbatim`() {
+    // The first consumer must get exactly the producer's bytes — no duplicated keyframe from a
+    // previous session's cache. Guards the refCount>0 gate in attach().
+    val pipeOut = PipedOutputStream()
+    val pipeIn = PipedInputStream(pipeOut, 1 shl 16)
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = singleShotProducer(pipeIn),
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
+    )
+
+    val only = tee.attach(ringBufferBytes = 64 * 1024)
+    val head = nal(7, byteArrayOf(0x42, 0xC0.toByte(), 0x20)) +
+      nal(8, byteArrayOf(0x01)) +
+      nal(5, byteArrayOf(0x80.toByte())) +
+      nal(1, byteArrayOf(0x80.toByte()))
+    pipeOut.write(head)
+    pipeOut.flush()
+
+    val got = drainConsumer(only, expected = head.size)
+    only.detach()
+    runCatching { pipeOut.close() }
+
+    assertTrue(got.contentEquals(head), "first consumer must receive the head with no injected seed")
+  }
+
+  @Test
+  fun `cached keyframe is retained across a producer restart and seeds a gap joiner`() {
+    // A consumer that attaches during the restart gap (after one screenrecord exits, before the
+    // next delivers its own IDR) must still get a decodable start point. The tee keeps the last
+    // keyframe across the generation boundary precisely so this joiner isn't stranded on P-slices.
+    val keyframe = nal(7, byteArrayOf(0x42, 0xC0.toByte(), 0x20)) +
+      nal(8, byteArrayOf(0x01)) +
+      nal(5, byteArrayOf(0x80.toByte()))
+    val pSlice = nal(1, byteArrayOf(0x80.toByte()))
+    // Generation 0 delivers the only IDR then EOFs, triggering a restart. Generation 1 is a pipe we
+    // leave un-written so the reader blocks there, holding the tee in the post-restart state long
+    // enough to attach the gap joiner deterministically.
+    val gen1Out = PipedOutputStream()
+    val gen1In = PipedInputStream(gen1Out, 1 shl 16)
+    val callCount = AtomicInteger(0)
+    val factory = H264Tee.ProducerFactory { _, _, _, _ ->
+      if (callCount.getAndIncrement() == 0) {
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = ByteArrayInputStream(keyframe + pSlice)
+          override fun close() {}
+        }
+      } else {
+        object : H264Tee.ProducerHandle {
+          override val input: InputStream = gen1In
+          override fun close() = runCatching { gen1In.close() }.let { Unit }
+        }
+      }
+    }
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = factory,
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+    )
+
+    val early = tee.attach(ringBufferBytes = 64 * 1024)
+    // Draining to the restart boundary guarantees the reader parsed the IDR into the cache and
+    // generation 1 has spawned.
+    val gen0 = readBytesUntilRestart(early, timeoutMs = 2_000L)
+    assertTrue(gen0.contentEquals(keyframe + pSlice), "early consumer should receive generation 0 verbatim")
+
+    // Gap joiner attaches after the restart but before generation 1 delivers any keyframe.
+    val gap = tee.attach(ringBufferBytes = 64 * 1024)
+    gen1Out.write(pSlice) // one live P-slice on generation 1 so the joiner also has post-seed bytes
+    gen1Out.flush()
+    val gapBytes = drainConsumer(gap, expected = keyframe.size + pSlice.size)
+
+    early.detach()
+    gap.detach()
+    runCatching { gen1Out.close() }
+
+    assertTrue(containsNalType(gapBytes, 7), "gap joiner should be seeded with the retained SPS")
+    assertTrue(containsNalType(gapBytes, 5), "gap joiner should be seeded with the retained IDR")
+    assertEquals(7, firstNalType(gapBytes), "retained seed must precede generation 1 live bytes")
+  }
+
+  @Test
+  fun `keyframe cache is cleared when a new producer session starts`() {
+    // After a detach-to-zero ends a session, the next attach starts a fresh producer that must
+    // discard the previous session's cached keyframe — otherwise a joiner in the new session would
+    // be seeded with a stale IDR that references parameter sets the new stream never sent.
+    val keyframe = nal(7, byteArrayOf(0x42, 0xC0.toByte(), 0x20)) +
+      nal(8, byteArrayOf(0x01)) +
+      nal(5, byteArrayOf(0x80.toByte()))
+    val pSlice = nal(1, byteArrayOf(0x80.toByte()))
+    // Session 1 carries a keyframe; session 2 carries only P-slices. Fresh pipes per session because
+    // a detach-to-zero closes the producer handle.
+    val s1Out = PipedOutputStream()
+    val s1In = PipedInputStream(s1Out, 1 shl 16)
+    val s2Out = PipedOutputStream()
+    val s2In = PipedInputStream(s2Out, 1 shl 16)
+    val callCount = AtomicInteger(0)
+    val factory = H264Tee.ProducerFactory { _, _, _, _ ->
+      val stream = if (callCount.getAndIncrement() == 0) s1In else s2In
+      object : H264Tee.ProducerHandle {
+        override val input: InputStream = stream
+        override fun close() = runCatching { stream.close() }.let { Unit }
+      }
+    }
+    val tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = "720x1280",
+      bitRate = "4000000",
+      producerFactory = factory,
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
+    )
+
+    // Session 1: populate the cache with a keyframe, then detach to zero to end the session.
+    val a = tee.attach(ringBufferBytes = 64 * 1024)
+    s1Out.write(keyframe + pSlice) // trailing pSlice start code closes the IDR picture into the cache
+    s1Out.flush()
+    drainConsumer(a, expected = keyframe.size + pSlice.size)
+    a.detach()
+    runCatching { s1Out.close() }
+    Thread.sleep(100) // let the session-1 reader observe shutdown and exit
+
+    // Session 2: first attach starts a new producer, which must clear the stale cache.
+    val b = tee.attach(ringBufferBytes = 64 * 1024)
+    // Joiner attaches while session 2 is running but before it emits any keyframe.
+    val c = tee.attach(ringBufferBytes = 64 * 1024)
+    s2Out.write(pSlice)
+    s2Out.flush()
+    val cBytes = drainConsumer(c, expected = pSlice.size)
+
+    b.detach()
+    c.detach()
+    runCatching { s2Out.close() }
+
+    assertFalse(containsNalType(cBytes, 7), "session-2 joiner must NOT be seeded with session-1's SPS")
+    assertFalse(containsNalType(cBytes, 5), "session-2 joiner must NOT be seeded with session-1's IDR")
+    assertTrue(containsNalType(cBytes, 1), "session-2 joiner should still receive live P-slices")
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Restart signal — when one screenrecord subprocess exits before shutdown
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -226,6 +431,50 @@ class H264TeeTest {
     assertTrue(callCount.get() >= 2, "producer factory should be invoked at least twice (got ${callCount.get()})")
   }
 
+  @Test
+  fun `unexpected producer exit restarts an unlimited Android stream`() {
+    val first = byteArrayOf(1, 2, 3, 4)
+    val second = byteArrayOf(5, 6, 7, 8)
+    val pipeOut = PipedOutputStream()
+    val pipeIn = PipedInputStream(pipeOut, 64)
+    val callCount = AtomicInteger(0)
+    val factory = H264Tee.ProducerFactory { _, _, _, unlimited ->
+      assertTrue(unlimited, "API 30+ restarts should preserve the unlimited time limit")
+      when (callCount.getAndIncrement()) {
+        0 ->
+          object : H264Tee.ProducerHandle {
+            override val input: InputStream = ByteArrayInputStream(first)
+            override fun close() {}
+          }
+        else ->
+          object : H264Tee.ProducerHandle {
+            override val input: InputStream = pipeIn
+            override fun close() = runCatching { pipeIn.close() }.let { Unit }
+          }
+      }
+    }
+    val tee =
+      H264Tee(
+        deviceId = deviceId,
+        videoSize = "720x1280",
+        bitRate = "4000000",
+        producerFactory = factory,
+        sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      )
+    val consumer = tee.attach(ringBufferBytes = 64 * 1024)
+
+    val firstChunk = readBytesUntilRestart(consumer, timeoutMs = 2_000L)
+    pipeOut.write(second)
+    pipeOut.flush()
+    val secondChunk = readBytesUntilEmpty(consumer, expected = second.size, timeoutMs = 2_000L)
+
+    consumer.detach()
+    runCatching { pipeOut.close() }
+    assertTrue(firstChunk.contentEquals(first))
+    assertTrue(secondChunk.contentEquals(second))
+    assertEquals(2, callCount.get())
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Lifecycle — ref-counted start/stop
   // ──────────────────────────────────────────────────────────────────────────
@@ -256,7 +505,7 @@ class H264TeeTest {
       videoSize = "720x1280",
       bitRate = "4000000",
       producerFactory = factory,
-      sdkLevelProvider = { H264Tee.ANDROID_R_SDK }, // unlimited so no auto-restart
+      sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
     )
 
     assertEquals(0, spawns.get())
@@ -314,6 +563,7 @@ class H264TeeTest {
       bitRate = "4000000",
       producerFactory = factory,
       sdkLevelProvider = { H264Tee.ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
     )
 
     // First attach throws — recovery happens silently in the tee, but `attach` rethrows so
@@ -352,6 +602,34 @@ class H264TeeTest {
   // ──────────────────────────────────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────────────────────────────────
+
+  /** Builds an Annex-B NAL (4-byte start code + header byte + payload) of the given type. */
+  private fun nal(type: Int, payload: ByteArray): ByteArray =
+    byteArrayOf(0, 0, 0, 1, type.toByte()) + payload
+
+  /** True if [bytes] contains at least one Annex-B NAL of [type]. */
+  private fun containsNalType(bytes: ByteArray, type: Int): Boolean {
+    for (i in 0..bytes.size - 5) {
+      if (bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() && bytes[i + 2] == 0.toByte() &&
+        bytes[i + 3] == 1.toByte() && (bytes[i + 4].toInt() and 0x1f) == type
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** NAL type of the first Annex-B NAL in [bytes], or -1 if none. */
+  private fun firstNalType(bytes: ByteArray): Int {
+    for (i in 0..bytes.size - 5) {
+      if (bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() && bytes[i + 2] == 0.toByte() &&
+        bytes[i + 3] == 1.toByte()
+      ) {
+        return bytes[i + 4].toInt() and 0x1f
+      }
+    }
+    return -1
+  }
 
   /** Producer factory that returns the same single InputStream once and then EOFs. */
   private fun singleShotProducer(stream: InputStream): H264Tee.ProducerFactory =

@@ -612,7 +612,11 @@ abstract class BaseHostTrailblazeTest(
     // Resolve device classifiers BEFORE decoding so a v3 trail lowers with the
     // right closest-wins recording for this device. v1 inputs ignore the list.
     val classifiers = loggingRule.trailblazeDeviceInfoProvider().classifiers
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = classifiers)
+    // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
+    // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch on host Maestro / iOS-host)
+    // additionally decodes to one ToolTrailItem. Host-runner single-tool dispatch now sends the bare
+    // envelope, not the legacy `- tools:` list shape.
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight

@@ -33,6 +33,37 @@ class GetScreenStateRequestHandler(
 ) : RpcHandler<GetScreenStateRequest, GetScreenStateResponse> {
 
   override suspend fun handle(request: GetScreenStateRequest): RpcResult<GetScreenStateResponse> {
+    return when (val captured = capture(request)) {
+      is RpcResult.Failure -> captured
+      is RpcResult.Success -> RpcResult.Success(
+        buildResponse(
+          request = request,
+          screenState = captured.data.screenState,
+          deviceClassifiers = deviceClassifiers,
+          driverMigrationTreeNode = captured.data.driverMigrationTreeNode,
+          capturedAtDeviceMs = captured.data.capturedAtDeviceMs,
+        ),
+      )
+    }
+  }
+
+  /** Binary twin of [handle] that keeps screenshot bytes raw instead of base64 encoding them. */
+  internal suspend fun handleBinary(request: GetScreenStateRequest): RpcResult<GetScreenStateResponse> {
+    return when (val captured = capture(request)) {
+      is RpcResult.Failure -> captured
+      is RpcResult.Success -> RpcResult.Success(
+        buildBinaryResponse(
+          request = request,
+          screenState = captured.data.screenState,
+          deviceClassifiers = deviceClassifiers,
+          driverMigrationTreeNode = captured.data.driverMigrationTreeNode,
+          capturedAtDeviceMs = captured.data.capturedAtDeviceMs,
+        ),
+      )
+    }
+  }
+
+  private suspend fun capture(request: GetScreenStateRequest): RpcResult<CapturedScreenState> {
     return try {
       val useAccessibility = TrailblazeAccessibilityService.isServiceRunning()
       if (request.requireAndroidAccessibilityService && !useAccessibility) {
@@ -86,6 +117,11 @@ class GetScreenStateRequestHandler(
         )
       }
 
+      // Stamped as soon as the ScreenState constructor returns — i.e. when the (screenshot,
+      // tree) pair is final. Device epoch, same clock as on-device session logs, so the host
+      // can correlate this capture against other device-clock timestamps.
+      val capturedAtDeviceMs = System.currentTimeMillis()
+
       Console.log("📱 GetScreenStateRequestHandler: Screen captured (${screenState.deviceWidth}x${screenState.deviceHeight})")
 
       // Side-channel migration tree. Captured separately from [screenState] so the primary
@@ -102,7 +138,7 @@ class GetScreenStateRequestHandler(
           null
         }
 
-      RpcResult.Success(buildResponse(request, screenState, deviceClassifiers, driverMigrationTreeNode))
+      RpcResult.Success(CapturedScreenState(screenState, driverMigrationTreeNode, capturedAtDeviceMs))
     } catch (e: Exception) {
       Console.log("❌ GetScreenStateRequestHandler: Failed to capture screen state: ${e.message}")
       e.printStackTrace()
@@ -113,6 +149,13 @@ class GetScreenStateRequestHandler(
       )
     }
   }
+
+  private data class CapturedScreenState(
+    val screenState: ScreenState,
+    val driverMigrationTreeNode: TrailblazeNode?,
+    /** Device-epoch stamp taken when the (screenshot, tree) pair was final. */
+    val capturedAtDeviceMs: Long,
+  )
 
   companion object {
     /**
@@ -128,6 +171,7 @@ class GetScreenStateRequestHandler(
       screenState: ScreenState,
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
       driverMigrationTreeNode: TrailblazeNode? = null,
+      capturedAtDeviceMs: Long? = null,
     ): GetScreenStateResponse {
       val screenshotBase64 = if (request.includeScreenshot) {
         screenState.screenshotBytes?.encodeBase64()
@@ -153,7 +197,40 @@ class GetScreenStateRequestHandler(
         driverMigrationTreeNode = driverMigrationTreeNode,
         pageContextSummary = screenState.pageContextSummary,
         deviceClassifiers = classifierStrings,
+        capturedAtDeviceMs = capturedAtDeviceMs,
       )
+    }
+
+    /** Builds the same domain response without the JSON transport's base64 conversion. */
+    internal fun buildBinaryResponse(
+      request: GetScreenStateRequest,
+      screenState: ScreenState,
+      deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      driverMigrationTreeNode: TrailblazeNode? = null,
+      capturedAtDeviceMs: Long? = null,
+    ): GetScreenStateResponse {
+      val screenshotBytes = if (request.includeScreenshot) screenState.screenshotBytes else null
+      val annotatedScreenshotBytes =
+        if (request.includeScreenshot && request.includeAnnotatedScreenshot) {
+          screenState.annotatedScreenshotBytes
+        } else {
+          null
+        }
+      return GetScreenStateResponse(
+        viewHierarchy = screenState.viewHierarchy,
+        screenshotBase64 = null,
+        annotatedScreenshotBase64 = null,
+        deviceWidth = screenState.deviceWidth,
+        deviceHeight = screenState.deviceHeight,
+        trailblazeNodeTree = screenState.trailblazeNodeTree,
+        driverMigrationTreeNode = driverMigrationTreeNode,
+        pageContextSummary = screenState.pageContextSummary,
+        deviceClassifiers = deviceClassifiers.map { it.classifier }.takeIf { it.isNotEmpty() },
+        capturedAtDeviceMs = capturedAtDeviceMs,
+      ).apply {
+        this.screenshotBytes = screenshotBytes
+        this.annotatedScreenshotBytes = annotatedScreenshotBytes
+      }
     }
   }
 }

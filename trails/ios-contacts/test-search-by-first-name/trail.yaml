@@ -1,0 +1,31 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - smoke
+  - search
+  title: 'Contacts (iOS): Search by first name'
+
+trail:
+  - step: "Open the iOS Contacts app, search Contacts for \"John\", and open the resulting \"John Appleseed\" contact. Verify its detail screen renders the name \"John Appleseed\"."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - tapOnElementBySelector:
+            reason: The contact 'John Appleseed' is already visible in the contacts list. Tapping on this contact will open its detail screen, which is the next step in the objective.
+            nodeSelector:
+              iosMaestro:
+                textRegex: John Appleseed
+              index: 1
+        - assertVisibleBySelector:
+            reason: Guard that the tap actually navigated to the contact detail card rather than staying on the list (where the same "John Appleseed" row is still visible). "Contact Photo & Poster" is a row unique to a contact's detail screen and is present across the iOS runtimes these trails target, unlike the iOS-26-only ContactCardHeaderView identifier.
+            nodeSelector:
+              iosMaestro:
+                accessibilityTextRegex: Contact Photo & Poster
+        - assertVisibleBySelector:
+            reason: Verify the detail screen renders the contact name. The "John Appleseed" title is visible at the top of the card; no index is pinned because the name renders as a single title node here.
+            nodeSelector:
+              iosMaestro:
+                textRegex: John Appleseed

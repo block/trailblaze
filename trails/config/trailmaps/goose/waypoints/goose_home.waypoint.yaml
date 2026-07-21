@@ -1,0 +1,10 @@
+# Goose desktop home / chat screen — the landing state the `goose_launchDesktop` trailhead
+# bootstraps to.
+#
+# Selectors are intentionally left off until Goose's real accessibility / DOM tree is captured
+# on-device. The trailhead's post-condition (`to: goose/home`) resolves to this named landing
+# state, while the concrete "app is up" verification comes from `playwright_desktop_launchGoose`
+# reading the connected page's URL + title. Add a `web.required` selector (e.g. the chat composer
+# textbox) once the DOM is confirmed, to tighten the landing assertion.
+id: goose/home
+description: "Goose desktop home / chat screen — the app is launched and the chat composer is ready for input."

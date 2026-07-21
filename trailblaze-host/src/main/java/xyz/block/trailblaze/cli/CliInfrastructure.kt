@@ -1418,14 +1418,20 @@ fun cliReusableWithDevice(
  */
 fun cliWithDaemon(
   verbose: Boolean,
+  sessionScope: String? = null,
+  targetAppId: String? = null,
   action: suspend (CliMcpClient) -> Int,
 ): Int {
   if (!verbose) Console.enableQuietMode()
   val port = CliConfigHelper.resolveEffectiveHttpPort()
-  val targetAppId = CliConfigHelper.getOrCreateConfig().selectedTargetAppId
+  val effectiveTargetAppId = targetAppId ?: CliConfigHelper.getOrCreateConfig().selectedTargetAppId
 
   return runBlocking {
-    val mcpClient = connectOrStartDaemonReusable(port, targetAppId = targetAppId)
+    val mcpClient = connectOrStartDaemonReusable(
+      port,
+      targetAppId = effectiveTargetAppId,
+      sessionScope = sessionScope,
+    )
       ?: return@runBlocking INFRA_FAILED.code
     mcpClient.use { client -> runActionWithIoEnvelope(target = null, action = { action(client) }) }
   }
@@ -1726,6 +1732,32 @@ private fun loadTargetIds(anchorFile: File): Set<String> = try {
 }
 
 /**
+ * What to do about a daemon whose version may not match the CLI's.
+ *
+ *  - [KEEP_OK] — versions match (or the daemon didn't report a version). Nothing to do.
+ *  - [RESTART] — version mismatch AND the daemon is idle. Safe to stop and restart.
+ *  - [KEEP_BUSY] — version mismatch BUT the daemon has in-flight runs. Leave it running;
+ *    stopping it would sever those runs (the daemon may be mid-run for another
+ *    shell/checkout — the port is machine-global, version staleness is per-checkout).
+ *    The restart happens once it goes idle.
+ */
+internal enum class StaleDaemonAction { KEEP_OK, RESTART, KEEP_BUSY }
+
+/**
+ * Pure decision for [checkAndRestartStaleDaemon] — separated from the daemon I/O so the
+ * three-way matrix (match / mismatch-idle / mismatch-busy) is unit-testable without a
+ * live daemon. See `StaleDaemonActionTest`.
+ */
+internal fun staleDaemonAction(
+  cliVersion: String,
+  daemonVersion: String?,
+  activeRuns: Int,
+): StaleDaemonAction {
+  if (daemonVersion == null || daemonVersion == cliVersion) return StaleDaemonAction.KEEP_OK
+  return if (activeRuns > 0) StaleDaemonAction.KEEP_BUSY else StaleDaemonAction.RESTART
+}
+
+/**
  * Check if the running daemon has a different version than the CLI.
  * If so, stop it so it gets restarted with the current version.
  *
@@ -1740,18 +1772,32 @@ private fun checkAndRestartStaleDaemon(port: Int): Boolean {
     DaemonClient(port = port).use { daemon ->
       val status = daemon.getStatusBlocking() ?: return true
       val daemonVersion = status.version
-      if (daemonVersion != null && daemonVersion != cliVersion) {
-        Console.log(
-          "Restarting daemon (version mismatch: daemon=$daemonVersion, cli=$cliVersion)..."
-        )
-        daemon.shutdownBlocking()
-        // Wait for daemon to stop
-        repeat(20) {
-          if (!daemon.isRunningBlocking()) return true
-          Thread.sleep(500)
+      when (staleDaemonAction(cliVersion, daemonVersion, status.activeRuns)) {
+        StaleDaemonAction.KEEP_OK -> return true
+        StaleDaemonAction.KEEP_BUSY -> {
+          // Console.info (not Console.log) so the developer actually sees WHY their newer
+          // CLI is talking to an older daemon — this line is the only explanation, and
+          // Console.log is suppressed in CLI quiet mode.
+          Console.info(
+            "Daemon version mismatch (daemon=$daemonVersion, cli=$cliVersion) but it has " +
+              "${status.activeRuns} in-flight run(s) — leaving it running; it restarts once idle:" +
+              status.activeRunSummaries.joinToString("") { "\n  - $it" },
+          )
+          return true
         }
-        // Timed out — stale daemon is still running
-        return false
+        StaleDaemonAction.RESTART -> {
+          Console.log(
+            "Restarting daemon (version mismatch: daemon=$daemonVersion, cli=$cliVersion)..."
+          )
+          daemon.shutdownBlocking()
+          // Wait for daemon to stop
+          repeat(20) {
+            if (!daemon.isRunningBlocking()) return true
+            Thread.sleep(500)
+          }
+          // Timed out — stale daemon is still running
+          return false
+        }
       }
     }
   } catch (_: Exception) {

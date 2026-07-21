@@ -1,0 +1,24 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - crud
+  - slow
+  title: 'Contacts (iOS): Edit a contact to add a phone number'
+
+trail:
+  - step: |
+      Call the `contacts_ios_deleteContact` tool with name="Trailblaze Demo"
+      as a defensive teardown of any prior-run state.
+  - step: |
+      Call the `contacts_ios_createContact` tool with firstName="Trailblaze",
+      lastName="Demo", phoneNumber="".
+  - step: |
+      Call the `contacts_ios_addPhoneNumber` tool with name="Trailblaze Demo",
+      phoneNumber="5557654321".
+  - step: |
+      Call the `contacts_ios_verifyContactStructure` tool with
+      name="Trailblaze Demo", requireFields=["phone"].
+  - step: |
+      Call the `contacts_ios_deleteContact` tool with name="Trailblaze Demo".

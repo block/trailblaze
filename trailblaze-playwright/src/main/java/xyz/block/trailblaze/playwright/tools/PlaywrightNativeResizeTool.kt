@@ -38,7 +38,7 @@ pages that UA-sniff still see desktop Chrome. For full mobile emulation set
 the device's profile at creation time, not via this tool.
 """,
 )
-class PlaywrightNativeResizeTool(
+data class PlaywrightNativeResizeTool(
   @param:LLMDescription("Width of the viewport in CSS pixels. Must be positive.")
   val width: Int,
   @param:LLMDescription("Height of the viewport in CSS pixels. Must be positive.")

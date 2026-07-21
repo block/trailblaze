@@ -1,0 +1,19 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - article
+  - slow
+  title: 'Wikipedia: Article structure verification (heading, body, References)'
+
+trail:
+  # Exercises the full path of `wikipedia_web_verifyArticleStructure`:
+  # - non-empty `expectedHeading` (text-match branch)
+  # - `requireReferences: true` (scroll-and-find branch — what makes this
+  #   trail "slow")
+  - step: |
+      Open the Wikipedia article for "Albert Einstein" and verify the
+      article is well-formed: first heading is "Albert Einstein", body
+      content is present, and a References section is reachable by
+      scrolling.

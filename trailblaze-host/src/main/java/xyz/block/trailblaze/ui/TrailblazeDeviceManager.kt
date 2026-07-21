@@ -66,7 +66,7 @@ import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
@@ -210,6 +210,15 @@ class TrailblazeDeviceManager(
   val connectionService = xyz.block.trailblaze.host.recording.DeviceConnectionService(this)
 
   /**
+   * Shared registry of live [xyz.block.trailblaze.recording.DeviceScreenStream] instances, keyed by
+   * device. It's what the `/devices/api/stream` live-video socket and the `/rpc` screen-poll /
+   * SubscribeFrames handlers resolve a device against. Owned here (one per daemon) so every surface
+   * that connects a device — the `/rpc` device viewer and Trail Runner's interactive recorder — can
+   * publish into the same registry, and the shared streaming endpoint can serve any of them.
+   */
+  val hostDeviceSessionManager = xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager()
+
+  /**
    * Exposes the web browser state for UI observation.
    */
   val webBrowserStateFlow: StateFlow<WebBrowserState> = webBrowserManager.browserStateFlow
@@ -324,6 +333,12 @@ class TrailblazeDeviceManager(
 
   // Mutex to coalesce concurrent loadDevices calls — if one is running, others wait for it.
   private val loadDevicesMutex = kotlinx.coroutines.sync.Mutex()
+
+  // Short-TTL cache so the several *sequential* discovery passes one CLI command fans out into
+  // (LIST, platform-select, connect fallback, session pin) share ONE real enumeration instead of
+  // each re-running `adb devices` + `pm list packages` (and, on macOS, `xcrun simctl` + `plutil`).
+  // See [DeviceDiscoveryCache] for the freshness/invalidation contract.
+  private val discoveryCache = DeviceDiscoveryCache(ttlMs = resolveDiscoveryCacheTtlMs())
 
   // Track session IDs we've already processed to detect new sessions
   private val knownSessionIds = mutableSetOf<SessionId>()
@@ -703,11 +718,10 @@ class TrailblazeDeviceManager(
     trailblazeTool: TrailblazeTool,
     referrer: TrailblazeReferrer
   ) {
-    val yaml = createTrailblazeYaml().encodeToString(
-      TrailblazeYamlBuilder()
-        .tools(listOf(trailblazeTool))
-        .build()
-    )
+    // Single-tool dispatch encodes a bare tool-wrapper envelope (`- <toolName>:`), decoded by the
+    // runners via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
+    // parser. Same resulting trail item (one ToolTrailItem) the old `- tools:` synthesis produced.
+    val yaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(trailblazeTool)))
     val session = getOrCreateSessionResolution(trailblazeDeviceId, sessionIdPrefix = "tool")
 
     runYaml(
@@ -810,7 +824,7 @@ class TrailblazeDeviceManager(
       when (val result = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           val response = result.data
-          val screenshotBytes = response.screenshotBase64?.let { 
+          val screenshotBytes = response.screenshotBytes ?: response.screenshotBase64?.let {
             Base64.getDecoder().decode(it)
           }
           
@@ -871,21 +885,63 @@ class TrailblazeDeviceManager(
    * Load available devices from the system (suspend version).
    * This will update the deviceStateFlow with the discovered devices and cache installed app IDs.
    */
-  suspend fun loadDevicesSuspend(applyDriverFilter: Boolean = true): List<TrailblazeConnectedDeviceSummary> {
-    // Coalesce concurrent calls: if a load is already running, wait for it instead of starting another.
-    if (!loadDevicesMutex.tryLock()) {
-      loadDevicesMutex.withLock { /* wait for the running call to finish */ }
-      return if (applyDriverFilter) {
-        deviceStateFlow.value.devices.values.map { it.device }
-      } else {
-        _allDiscoveredDevicesFlow.value
-      }
+  suspend fun loadDevicesSuspend(
+    applyDriverFilter: Boolean = true,
+    forceRefresh: Boolean = false,
+  ): List<TrailblazeConnectedDeviceSummary> {
+    // Fast path: a discovery pass finished within the TTL — reuse its result without touching
+    // adb/simctl. This is what collapses one command's several sequential passes to a single
+    // real enumeration.
+    if (!forceRefresh && discoveryCache.isFresh()) {
+      return cachedDevices(applyDriverFilter)
     }
 
-    try {
-      return loadDevicesSuspendImpl(applyDriverFilter)
-    } finally {
-      loadDevicesMutex.unlock()
+    // Miss: serialize on the mutex. This also coalesces genuinely concurrent callers — whoever
+    // loses the race re-checks freshness under the lock and returns the winner's cached result
+    // instead of starting a second enumeration.
+    return loadDevicesMutex.withLock {
+      if (!forceRefresh && discoveryCache.isFresh()) {
+        cachedDevices(applyDriverFilter)
+      } else {
+        // markRefreshed only on success — a thrown discovery must not leave the cache "fresh".
+        loadDevicesSuspendImpl(applyDriverFilter).also { discoveryCache.markRefreshed() }
+      }
+    }
+  }
+
+  /**
+   * Returns the last discovered device list without re-running discovery, from the unfiltered
+   * [_allDiscoveredDevicesFlow] that [loadDevicesSuspendImpl] refreshes on every pass.
+   *
+   * Mirrors a real pass exactly. [targetDeviceFilter] depends on `testingEnvironment` and the
+   * enabled driver types, which can change (e.g. the user selects Web) between the discovery pass
+   * and a cached read within the TTL, so the filter is (re-)applied *here* against the current
+   * config rather than serving a pre-filtered snapshot. And like a real pass — which always writes
+   * the filtered set to [deviceStateFlow] regardless of [applyDriverFilter] — a cache hit
+   * republishes it too, so callers that read [deviceStateFlow] after `loadDevicesSuspend()` for
+   * its side effect (e.g. `GetConnectedDevicesHandler`) see the current-config set, not a stale
+   * variant. Republishing an unchanged set is a no-op emission ([DeviceManagerState] is a data
+   * class, so [MutableStateFlow] dedupes equal values).
+   */
+  private fun cachedDevices(applyDriverFilter: Boolean): List<TrailblazeConnectedDeviceSummary> {
+    val all = _allDiscoveredDevicesFlow.value
+    val filtered = targetDeviceFilter(all)
+    publishFilteredDeviceState(filtered)
+    return if (applyDriverFilter) filtered else all
+  }
+
+  /**
+   * Publish [filtered] (an already driver-filtered device list) as the current [deviceStateFlow]
+   * device set, marking discovery complete. Shared by a real discovery pass and by a filtered
+   * cache hit so both leave the state flow reflecting the current config.
+   */
+  private fun publishFilteredDeviceState(filtered: List<TrailblazeConnectedDeviceSummary>) {
+    updateDeviceState { currState ->
+      currState.copy(
+        devices = filtered.associate { it.trailblazeDeviceId to DeviceState(device = it) },
+        isLoading = false,
+        error = null,
+      )
     }
   }
 
@@ -1101,17 +1157,7 @@ class TrailblazeDeviceManager(
       _appVersionInfoByDeviceFlow.value = appVersionInfoByDevice
 
       withContext(Dispatchers.Default) {
-        updateDeviceState { currState ->
-          val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = devicesForState.associate { device ->
-            device.trailblazeDeviceId to DeviceState(device = device)
-          }
-
-          currState.copy(
-            devices = newDeviceStates,
-            isLoading = false,
-            error = null
-          )
-        }
+        publishFilteredDeviceState(devicesForState)
       }
 
       return devicesToReturn
@@ -1131,7 +1177,14 @@ class TrailblazeDeviceManager(
    * Load available devices from the system.
    * This will update the deviceStateFlow with the discovered devices.
    */
-  fun loadDevices() = loadDevicesScope.launch { loadDevicesSuspend() }
+  fun loadDevices() = run {
+    // The fire-and-forget entry point is only ever called to *refresh* — UI refresh buttons,
+    // app init, and post-topology-change hooks (browser launch/close). Invalidate synchronously
+    // here so a concurrent cached read racing the async pass below can't serve a device list that
+    // predates the change, then force a fresh pass (bypassing the TTL) inside the coroutine.
+    discoveryCache.invalidate()
+    loadDevicesScope.launch { loadDevicesSuspend(forceRefresh = true) }
+  }
 
   fun updateDeviceState(deviceStateUpdater: (DeviceManagerState) -> DeviceManagerState) {
     _deviceStateFlow.value = deviceStateUpdater(_deviceStateFlow.value)
@@ -1543,6 +1596,32 @@ class TrailblazeDeviceManager(
     // reconnect-on-timeout in AndroidHostAdbUtils means a wedged probe can cost up to 2x this before
     // falling back, which is why naming runs in parallel under its own budget below.
     internal const val DEVICE_NAME_RESOLUTION_TIMEOUT_MS = 2_000L
+
+    // Default TTL for [discoveryCache]. Long enough that one CLI command's several sequential
+    // discovery passes reuse a single enumeration, short enough that a device plugged/unplugged
+    // between two user commands is picked up on the next command (human command cadence >> TTL).
+    internal const val DEFAULT_DISCOVERY_CACHE_TTL_MS = 1_500L
+
+    /**
+     * Resolves the discovery-cache TTL from the environment (read once at construction, like the
+     * other daemon knobs):
+     *  - `TRAILBLAZE_DISABLE_DEVICE_DISCOVERY_CACHE=1|true` → `0` (cache disabled; every pass
+     *    re-enumerates, restoring the pre-cache behavior as a one-line kill switch).
+     *  - `TRAILBLAZE_DEVICE_DISCOVERY_CACHE_TTL_MS=<ms>` → that value (`0` also disables).
+     *  - unset / malformed / negative → [DEFAULT_DISCOVERY_CACHE_TTL_MS].
+     *
+     * [env] is injectable so the parse/precedence logic is unit-testable without real env vars.
+     */
+    internal fun resolveDiscoveryCacheTtlMs(env: (String) -> String? = { System.getenv(it) }): Long {
+      val disabled = env("TRAILBLAZE_DISABLE_DEVICE_DISCOVERY_CACHE")?.trim()?.lowercase()
+      if (disabled == "1" || disabled == "true") return 0L
+      val parsed = env("TRAILBLAZE_DEVICE_DISCOVERY_CACHE_TTL_MS")?.trim()?.toLongOrNull()
+      return when {
+        parsed == null -> DEFAULT_DISCOVERY_CACHE_TTL_MS
+        parsed < 0L -> DEFAULT_DISCOVERY_CACHE_TTL_MS
+        else -> parsed
+      }
+    }
 
     // Total wall-clock budget discovery spends WAITING for display-name resolution across ALL
     // devices — a single shared deadline (see listConnectedAdbDevices), NOT a per-device cap. It does

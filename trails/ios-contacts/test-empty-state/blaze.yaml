@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Contacts navbar visible on cold start"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [smoke]
-- prompts:
-    - step: Launch the iOS Contacts app from a cold start. Verify the navbar shows "Contacts" and the list root surface is visible. Do not tap anything.

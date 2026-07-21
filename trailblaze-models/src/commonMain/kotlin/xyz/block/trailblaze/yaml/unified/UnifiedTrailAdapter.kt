@@ -223,22 +223,14 @@ object UnifiedTrailAdapter {
    * per-classifier maps (`devices`, `skip`) and the trail-level `tags` are left null for the
    * caller to fill from every contributing file/recording — a single v1 config can't express
    * them. v1's `platform` is dropped (retired — the device set derives from the classifier
-   * slots), and a v1 `electron:` block is REFUSED (fail loud, never silently dropped): it is
-   * driver-specific structured launch config with zero corpus usage, and its unified home
-   * (likely target-level, not per-trail) is deferred until a real Electron trail needs one.
+   * slots). Electron launch config has no per-trail home in either format — it lives on the
+   * target (`target.electron:` / [xyz.block.trailblaze.config.AppTargetYamlConfig.electron]),
+   * reached by selecting the target.
    *
-   * Single source of truth for the v1→unified identity mapping, shared by the recorder's
-   * [mergeRecordedClassifier] first-write seed and [xyz.block.trailblaze.migration.UnifiedTrailMigrator],
-   * so adding a config field can't silently drift the two apart.
+   * Single source of truth for the target-identity mapping, seeded first-write by the recorder's
+   * [mergeRecordedClassifier], so adding a config field can't silently drift consumers apart.
    */
   fun v1ConfigToUnifiedConfig(v1: TrailConfig): UnifiedTrailConfig {
-    require(v1.electron == null) {
-      "Refusing to convert a v1 config with an `electron:` block to the unified format: the " +
-        "unified config deliberately has no electron field (driver-specific launch config, " +
-        "zero corpus usage — its home is deferred until a real Electron trail needs one). " +
-        "Silently dropping it would change how the trail launches. Keep this trail in the v1 " +
-        "format, or move the launch config out of the trail file."
-    }
     return UnifiedTrailConfig(
       id = v1.id,
       target = v1.target,
@@ -446,7 +438,7 @@ object UnifiedTrailAdapter {
    * recording is overlaid — so re-recording the same device on the same trail updates its slot in
    * place instead of duplicating tools.
    *
-   * **Step alignment is by index** (like [xyz.block.trailblaze.migration.UnifiedTrailMigrator]).
+   * **Step alignment is by index.**
    * Existing NL wins where a step already exists — it is the device-agnostic canonical intent, so a
    * re-record on one device never rewrites the shared prose; a recorded NL that disagrees at the
    * same index is logged as drift, not applied. Recorded steps beyond [existing]'s length are

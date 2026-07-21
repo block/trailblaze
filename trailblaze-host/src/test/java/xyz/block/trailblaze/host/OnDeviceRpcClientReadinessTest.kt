@@ -13,10 +13,15 @@ import org.junit.After
 import org.junit.Before
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.DrainSessionResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /**
  * Pins the behavior of [OnDeviceRpcClient.waitForReady]. The method is load-bearing: every host
@@ -67,6 +72,19 @@ class OnDeviceRpcClientReadinessTest {
     // One probe only — verifies the warm path doesn't sleep unnecessarily.
     assertThat(mockServer.requestLog["/rpc/GetScreenStateRequest"]?.size ?: 0)
       .isGreaterThanOrEqualTo(1)
+  }
+
+  @Test
+  fun `generic RPC falls back to HTTP when the runner has no WebSocket route`() {
+    mockServer.onPost("/rpc/DrainSessionRequest") {
+      HttpStatusCode.OK to "{\"uiAutomationCleared\":true}"
+    }
+
+    val result = runBlocking {
+      rpcClient.rpcCall<DrainSessionResponse, DrainSessionRequest>(DrainSessionRequest("test"))
+    }
+
+    assertTrue(assertIs<RpcResult.Success<DrainSessionResponse>>(result).data.uiAutomationCleared)
   }
 
   @Test

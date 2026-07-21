@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.android.ondevice.rpc
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -139,4 +140,28 @@ data class GetScreenStateResponse(
    * Null when the on-device server doesn't provide classifiers (older versions).
    */
   val deviceClassifiers: List<String>? = null,
-)
+
+  /**
+   * Device-epoch milliseconds (`System.currentTimeMillis()` on the device) recorded when the
+   * on-device capture finished — i.e. when the (screenshot, tree) pair in this response was
+   * final. Lives on the same clock as on-device session logs and
+   * `AndroidHostAdbUtils.getDeviceEpochMs`, so the host can correlate this capture against
+   * other device-clock timestamps (e.g. mapping live screenrecord stream frames onto the tree
+   * capture instant). Null when the on-device server predates this field.
+   */
+  val capturedAtDeviceMs: Long? = null,
+) {
+  /**
+   * Raw clean screenshot bytes received over the binary WebSocket transport. Transient so the
+   * legacy JSON/HTTP contract remains byte-for-byte compatible. Callers should prefer this value
+   * and fall back to decoding [screenshotBase64]. This lives outside the primary constructor so
+   * adding the transport optimization does not change existing constructors, copies, or
+   * destructuring order.
+   */
+  @Transient
+  var screenshotBytes: ByteArray? = null
+
+  /** Raw annotated screenshot bytes from the binary transport; see [screenshotBytes]. */
+  @Transient
+  var annotatedScreenshotBytes: ByteArray? = null
+}

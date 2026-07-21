@@ -428,6 +428,61 @@ class DeviceManagerToolSetTest {
   }
 
   @Test
+  fun `session-only device INFO does not leak another session's globally selected device`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice, iosDevice))
+    val sessionContext = createSessionContext()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = sessionContext,
+      mcpBridge = bridge,
+    )
+
+    // Simulate another MCP session selecting Android on the shared bridge while this session
+    // remains unbound.
+    bridge.selectDevice(
+      TrailblazeDeviceId(
+        instanceId = androidDevice.instanceId,
+        trailblazeDevicePlatform = androidDevice.platform,
+      ),
+    )
+
+    val processWideResult = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+      sessionOnly = true,
+    )
+
+    assertContains(processWideResult, androidDevice.instanceId)
+    assertContains(result, "No device connected")
+  }
+
+  @Test
+  fun `session-only device INFO keeps this session's device when global selection changes`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice, iosDevice))
+    val sessionContext = createSessionContext()
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = sessionContext,
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    // Another session moves the process-wide bridge selection to iOS.
+    bridge.selectDevice(
+      TrailblazeDeviceId(
+        instanceId = iosDevice.instanceId,
+        trailblazeDevicePlatform = iosDevice.platform,
+      ),
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+      sessionOnly = true,
+    )
+
+    assertContains(result, androidDevice.instanceId)
+    assertTrue(iosDevice.instanceId !in result)
+  }
+
+  @Test
   fun `device INFO APPS returns installed apps`() = runTest {
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),
@@ -680,12 +735,14 @@ class DeviceManagerToolSetTest {
       driverConnectionStatus =
         "Playwright browser installing (12s elapsed, timeout in 888s): [42%] Downloading Chromium",
     )
-    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+    val selectedDeviceId = TrailblazeDeviceId(
       instanceId = "playwright-chromium",
       trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
     )
+    bridge.lastSelectedDeviceId = selectedDeviceId
+    val sessionContext = createSessionContext().apply { setAssociatedDevice(selectedDeviceId) }
     val toolSet = DeviceManagerToolSet(
-      sessionContext = createSessionContext(),
+      sessionContext = sessionContext,
       mcpBridge = bridge,
     )
 
@@ -708,12 +765,14 @@ class DeviceManagerToolSetTest {
       driverConnectionStatus =
         "Device driver failed to create: adb connection refused",
     )
-    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+    val selectedDeviceId = TrailblazeDeviceId(
       instanceId = "emulator-5554",
       trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     )
+    bridge.lastSelectedDeviceId = selectedDeviceId
+    val sessionContext = createSessionContext().apply { setAssociatedDevice(selectedDeviceId) }
     val toolSet = DeviceManagerToolSet(
-      sessionContext = createSessionContext(),
+      sessionContext = sessionContext,
       mcpBridge = bridge,
     )
 
@@ -731,12 +790,14 @@ class DeviceManagerToolSetTest {
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       driverConnectionStatus = null,
     )
-    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+    val selectedDeviceId = TrailblazeDeviceId(
       instanceId = "emulator-5554",
       trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     )
+    bridge.lastSelectedDeviceId = selectedDeviceId
+    val sessionContext = createSessionContext().apply { setAssociatedDevice(selectedDeviceId) }
     val toolSet = DeviceManagerToolSet(
-      sessionContext = createSessionContext(),
+      sessionContext = sessionContext,
       mcpBridge = bridge,
     )
 

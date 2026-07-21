@@ -364,7 +364,44 @@ class AgentLogEndpointTest {
     Console.log("Invalid JSON response status: ${response.status}")
     Console.log("Invalid JSON response body: ${response.bodyAsText()}")
 
-    assertEquals(HttpStatusCode.InternalServerError, response.status)
+    assertEquals(HttpStatusCode.BadRequest, response.status)
+  }
+
+  @Test
+  fun `server keeps serving after a truncated log body`() = testApplication {
+    // Regression pin: a truncated /agentlog upload (device connection severed mid-body, e.g. the
+    // daemon shut down while a run was in flight) must be that one request's failure — 400, not an
+    // unhandled exception — and the very next well-formed log must still be accepted.
+    val logsRepo = createTestLogsRepo()
+    application {
+      logsServerKtorEndpoints(logsRepo)
+    }
+
+    val validLog = TrailblazeLog.MaestroCommandLog(
+      maestroCommandJsonObj = JsonObject(mapOf("command" to JsonPrimitive("tap"))),
+      traceId = TraceId.generate(TraceOrigin.MAESTRO),
+      successful = true,
+      trailblazeToolResult = TrailblazeToolResult.Success(),
+      session = xyz.block.trailblaze.logs.model.SessionId("test-session"),
+      timestamp = Clock.System.now(),
+      durationMs = 300L,
+    )
+    val validJson = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), validLog)
+    val truncatedJson = validJson.substring(0, validJson.length / 2)
+
+    val truncatedResponse = client.post("/agentlog") {
+      contentType(ContentType.Application.Json)
+      setBody(truncatedJson)
+    }
+    assertEquals(HttpStatusCode.BadRequest, truncatedResponse.status)
+    assertTrue(truncatedResponse.bodyAsText().contains("Failed to decode log event"))
+
+    val followUpResponse = client.post("/agentlog") {
+      contentType(ContentType.Application.Json)
+      setBody(validJson)
+    }
+    assertEquals(HttpStatusCode.OK, followUpResponse.status)
+    assertTrue(followUpResponse.bodyAsText().contains("Log received and saved"))
   }
 
   @Test
@@ -403,7 +440,7 @@ class AgentLogEndpointTest {
     Console.log("No type discriminator response body: ${response.bodyAsText()}")
 
     // This should fail with the serialization error we found
-    assertEquals(HttpStatusCode.InternalServerError, response.status)
+    assertEquals(HttpStatusCode.BadRequest, response.status)
     assertTrue(response.bodyAsText().contains("Class discriminator was missing"))
   }
 }

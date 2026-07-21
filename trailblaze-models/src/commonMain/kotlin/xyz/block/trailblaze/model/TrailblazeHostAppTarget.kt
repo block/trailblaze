@@ -186,6 +186,18 @@ abstract class TrailblazeHostAppTarget(
   open fun getSystemPromptTemplate(): String? = null
 
   /**
+   * Electron launch configuration for a [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] run against
+   * this target — the app executable, env, and CDP settings the host runner uses to start the
+   * desktop app before any trail step executes. Default null; YAML-backed targets return
+   * [xyz.block.trailblaze.config.AppTargetYamlConfig.electron].
+   *
+   * This is the sole home for Electron launch config — a property of the app under test, not of
+   * an individual trail. A trail carries no launch block: it selects the target and the
+   * `PLAYWRIGHT_ELECTRON` driver, and the runner resolves the launch config from here.
+   */
+  open fun getElectronAppConfig(): xyz.block.trailblaze.yaml.ElectronAppConfig? = null
+
+  /**
    * When `true`, on-device app-id resolution falls back to the configured app id even when the
    * package isn't installed on the device. Use this for targets whose configured id is a stand-in
    * (e.g. the generic default target) rather than a real product package — the absence of the

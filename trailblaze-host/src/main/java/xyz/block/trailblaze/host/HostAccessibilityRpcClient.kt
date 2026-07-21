@@ -26,7 +26,6 @@ import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgBinder
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 
@@ -169,8 +168,9 @@ class HostAccessibilityRpcClient(
       // dispatch boundary resolves {{var}}/${var} against the memorySnapshot below, so the
       // device-side tool log carries both the raw and resolved forms and a recording
       // regenerated from it keeps its tokens.
-      val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(tool))))
-      val yaml = trailblazeYaml.encodeToString(toolItems)
+      // Bare tool-wrapper list (`- <toolName>:`), decoded on-device via decodeTrailOrToolEnvelope
+      // → decodeTools — never the legacy list-shape trail parser.
+      val yaml = trailblazeYaml.encodeTools(listOf(fromTrailblazeTool(tool)))
 
       // Reuse the host's top-level session ID so every per-tool RunYamlRequest writes
       // into the same on-device session directory. When pulled back to the host via

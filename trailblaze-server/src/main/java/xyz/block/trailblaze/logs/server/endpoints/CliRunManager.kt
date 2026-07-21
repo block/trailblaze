@@ -28,12 +28,16 @@ class CliRunManager(
     var job: Job? = null,
     val createdAt: Long = System.currentTimeMillis(),
     var completedAt: Long = 0L,
+    /** Human-readable name for "who is using this daemon" surfaces (status/shutdown logs). */
+    val runLabel: String? = null,
   )
 
   /** Submit a run request. Returns the runId immediately. */
   fun submitRun(request: CliRunRequest): String {
     val runId = UUID.randomUUID().toString()
-    val runState = MutableRunState()
+    val runState = MutableRunState(
+      runLabel = request.trailFilePath ?: request.testName,
+    )
     runs[runId] = runState
 
     runState.job = scope.launch {
@@ -80,6 +84,35 @@ class CliRunManager(
         progressMessage = run.progressMessage,
         result = run.result,
       )
+    }
+  }
+
+  /**
+   * Number of runs currently PENDING or RUNNING. Exposed on `/cli/status` (and logged by the
+   * shutdown endpoint) so external tooling — e.g. the dev launcher's stale-JAR daemon restart —
+   * can tell a busy daemon from an idle one before deciding to stop it.
+   */
+  fun activeRunCount(): Int = runs.values.count {
+    synchronized(it) { it.state == RunState.PENDING || it.state == RunState.RUNNING }
+  }
+
+  /**
+   * One human-readable line per in-flight run — trail name, state, age, session, latest
+   * progress — so the surfaces that refuse to (or are about to) stop a busy daemon can say
+   * exactly WHO is using it, not just how many.
+   */
+  fun activeRunSummaries(): List<String> {
+    val now = System.currentTimeMillis()
+    return runs.values.mapNotNull { run ->
+      synchronized(run) {
+        if (run.state != RunState.PENDING && run.state != RunState.RUNNING) return@mapNotNull null
+        buildString {
+          append(run.runLabel ?: "unnamed run")
+          append(" — ${run.state.name.lowercase()} for ${(now - run.createdAt) / 1000}s")
+          run.sessionId?.let { append(", session $it") }
+          run.progressMessage?.let { append(" — $it") }
+        }
+      }
     }
   }
 

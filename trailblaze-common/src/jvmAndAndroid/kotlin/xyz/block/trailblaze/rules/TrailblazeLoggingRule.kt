@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.rules
 
-import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -46,6 +45,9 @@ abstract class TrailblazeLoggingRule(
 ) : SimpleTestRule() {
 
   abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
+
+  /** Android runners override this to use the persistent protobuf upload socket. */
+  protected open val useBinaryLogTransport: Boolean = false
 
   /**
    * Current session for this test.
@@ -121,16 +123,16 @@ abstract class TrailblazeLoggingRule(
       runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {
           try {
-            val httpResult = trailblazeLogServerClient.postAgentLog(log)
-            if (httpResult.status.value != 200) {
-              // A non-200 means the server rejected the log — fall back to disk just like the
+            val sent = trailblazeLogServerClient.sendAgentLog(log)
+            if (!sent) {
+              // A rejected upload falls back to disk just like the
               // exception path below, so the log still lands somewhere durable. Without this, a
               // reachable-but-erroring log server silently drops the log. That matters for the
               // on-device tool-log count (#3818): the device counts a `TrailblazeToolLog` at
               // emit time and the host skips its own catch-all emit on the strength of that
               // count, so a dropped persist here would leave the tool absent from the report.
               // The disk fallback keeps "counted" ⇒ "persisted (server or disk)" true.
-              Console.log("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
+              Console.log("Error while uploading agent log; falling back to disk")
               writeLogToDisk(sessionId, log)
             }
           } catch (e: Exception) {
@@ -169,6 +171,7 @@ abstract class TrailblazeLoggingRule(
         timeoutInSeconds = 2,
       ),
       baseUrl = logsBaseUrl,
+      useBinaryTransport = useBinaryLogTransport,
     )
   }
 
@@ -341,13 +344,14 @@ private class ServerScreenStateLogger(
     return runBlocking(Dispatchers.IO) {
       if (isServerAvailable) {
         try {
-          val logResult = trailblazeLogServerClient.postScreenshot(
+          val sent = trailblazeLogServerClient.sendScreenshot(
             screenshotFilename = screenState.fileName,
             sessionId = screenState.sessionId,
             screenshotBytes = screenState.screenState.screenshotBytes ?: ByteArray(0),
           )
-          if (logResult.status.value != 200) {
-            Console.log("Error while posting screenshot: ${logResult.status.value}")
+          if (!sent) {
+            Console.log("Error while uploading screenshot; falling back to disk")
+            writeScreenshotToDisk(screenState)
           }
         } catch (e: Exception) {
           Console.log("Failed to post screenshot to server: ${e.message}")

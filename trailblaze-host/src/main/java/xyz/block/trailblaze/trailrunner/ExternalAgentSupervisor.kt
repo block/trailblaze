@@ -12,6 +12,7 @@ import com.charleskorn.kaml.YamlConfiguration
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -29,6 +30,7 @@ import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.nio.file.Files
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -63,6 +65,56 @@ private const val DEMO_GENERATE_CONTINUE_PROMPT =
 // same watchdog-not-wall-clock policy as TRAILBLAZE_RUN_POLL_TIMEOUT_MS).
 private const val EXTERNAL_AGENT_IDLE_TIMEOUT_ENV = "TRAILRUNNER_EXTERNAL_AGENT_IDLE_TIMEOUT_MS"
 private const val EXTERNAL_AGENT_IDLE_TIMEOUT_DEFAULT_MS = 600_000L
+
+// Companion sessions have no child process, so nothing ever exits them on its own: an agent CLI
+// that crashes without disconnecting would stay RUNNING (and exempt from pruning) for the daemon's
+// lifetime. A slow idle clock reaps them - companion agents legitimately go quiet while they work,
+// so this is hours where the process watchdog is minutes. The session cap bounds a caller that
+// loops `companion start` without ever disconnecting.
+private const val COMPANION_MAX_SESSIONS = 8
+private const val COMPANION_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000L
+private const val COMPANION_IDLE_POLL_MS = 60_000L
+
+// The save-recording yaml is the one companion input that legitimately exceeds the 32k payload
+// bound, but "no bound at all" would let a buggy client push arbitrary heap and disk per request.
+// Recorded trails are small YAML; 4M chars is orders of magnitude of headroom.
+private const val COMPANION_MAX_RECORDING_CHARS = 4_000_000
+
+// Companion journals are crash-recovery state living (gitignored) in the user's repo; kept forever
+// they grow .companion/ without bound. Swept at CONNECT, not deleted at disconnect: the sessions
+// that need their journal (a crashed or idle-reaped agent resuming with --after) are exactly the
+// ones that never ran a clean disconnect.
+private const val COMPANION_JOURNAL_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+
+// Where the journal lives inside the declared folder. Named because the demo-files tree must
+// hide exactly this directory - it is the daemon's own state, not something the agent authored.
+private const val COMPANION_JOURNAL_DIR_NAME = ".companion"
+
+// The demo-files tree is a polled listing of an agent-authored folder; a runaway session (or a
+// folder declared over something huge) must not turn every poll into a full-disk walk.
+private const val COMPANION_TREE_MAX_ENTRIES = 500
+
+// The companion directive vocabulary: how the attached agent steers what the companion window
+// shows. Closed on purpose - the UI reduces these into view state, so an unknown directive would
+// silently render nothing; rejecting it tells the agent immediately.
+private val COMPANION_DIRECTIVES = setOf(
+  "navigate", "banner", "checklist", "actions", "select-device", "select-app-target", "arm-recording",
+)
+
+// What the companion window may report back about the human. Closed like the directive vocabulary:
+// the agent scripts against these names (`companion listen`), so a typo'd type must fail loudly at
+// the poster, not vanish into the stream. `recording-saved` is deliberately absent: only the
+// daemon's own save path emits it, so an agent hearing it knows the write really landed - a
+// postable version would make that signal forgeable.
+private val COMPANION_USER_ACTIONS = setOf("user-action", "handback", "device-connected")
+
+// LIFECYCLE receipts the daemon mints itself. The narration surface shares the LIFECYCLE kind, so
+// without this blocklist a posted `companion event --kind lifecycle` could wear one of these
+// titles in the transcript (it still couldn't carry a payload or touch the requests map).
+private val COMPANION_RESERVED_TITLES = setOf(
+  "agent-request", "request-responded", "run-started", "run-finished",
+  "recording-saved", "Companion session connected", "Companion session ended",
+)
 
 private val TRAILRUNNER_UI_CONTRACT = """
 You are running as an external coding-agent CLI supervised by Trail Runner, helping a human author
@@ -160,6 +212,22 @@ internal object ExternalAgentSupervisor {
   // vendor CLI process. Compile-time visibility widening only — zero runtime behavior change.
   internal val runs = ConcurrentHashMap<String, MutableExternalAgentRun>()
 
+  // Live agent-tagged SSE consumers per run (`companion listen` marks its stream `consumer=agent`;
+  // the SPA narration stream doesn't, so an open window never reads as a listening agent). This is
+  // the "is anyone actually going to answer" signal the shared-brain defer checks - a count, not a
+  // flag, because an agent may legitimately run several listens (e.g. one resuming with --after).
+  private val agentStreamConsumers = ConcurrentHashMap<String, Int>()
+
+  fun addAgentConsumer(runId: String) {
+    agentStreamConsumers.merge(runId, 1, Int::plus)
+  }
+
+  fun removeAgentConsumer(runId: String) {
+    agentStreamConsumers.compute(runId) { _, n -> if (n == null || n <= 1) null else n - 1 }
+  }
+
+  fun hasAgentConsumer(runId: String): Boolean = (agentStreamConsumers[runId] ?: 0) > 0
+
   // The provider registry. Adding a provider in a later PR means: a new ExternalAgentType enum
   // value, one entry here (display + executable + setup hints), a commandFor branch in
   // externalAgentCommand, and a stream parser in parseExternalAgentLine. The UI (picker, setup
@@ -244,6 +312,13 @@ internal object ExternalAgentSupervisor {
   fun cancel(id: String): Boolean {
     val run = runs[id] ?: return false
     run.cancelRequested = true
+    // A companion run has no process to kill: Stop is just a disconnect. Routed through
+    // endCompanion so it serializes with companionEvent and finishes idempotently - a bare
+    // finish here could append past a racing disconnect's terminal events or flip its status.
+    if (run.companion != null) {
+      endCompanion(run, "stopped from Trail Runner")
+      return true
+    }
     run.process?.let { process ->
       run.emit(
         kind = ExternalAgentEventKind.LIFECYCLE,
@@ -386,15 +461,24 @@ internal object ExternalAgentSupervisor {
    * into an external-agent conversation as a [ExternalAgentEventKind.HUMAN_ACTION] event. Goes
    * through the same [MutableExternalAgentRun.emit] path as every other event, so seq assignment,
    * retention capping, and SSE flush all apply identically. Works regardless of run status.
+   * Holds the run lock like the companion emitters, so seq order in the events list (and the
+   * companion journal) matches assignment order even against lock-held emits.
    */
   fun emitHumanAction(runId: String, title: String, input: JsonElement?, output: JsonElement?): Boolean {
     val run = runs[runId] ?: return false
-    run.emit(
-      kind = ExternalAgentEventKind.HUMAN_ACTION,
-      title = title,
-      input = input,
-      output = output,
-    )
+    // Companion runs are off-limits: their HUMAN_ACTION vocabulary is a closed contract the
+    // attached agent scripts against, and this path's title is caller-controlled - it could mint
+    // `recording-saved` without a file ever landing. No legitimate caller passes a companion
+    // runId (the guided-recording surface never hands gestures this run), so refuse them all.
+    if (run.companion != null) return false
+    synchronized(run) {
+      run.emit(
+        kind = ExternalAgentEventKind.HUMAN_ACTION,
+        title = title,
+        input = input,
+        output = output,
+      )
+    }
     return true
   }
 
@@ -597,6 +681,494 @@ internal object ExternalAgentSupervisor {
       text = cwd.canonicalPath,
     )
     run.dto()
+  }
+
+  /**
+   * A companion session: the inverse of [start]. The agent process already exists OUTSIDE Trail
+   * Runner (the human's own CLI session, in their own repo) and attaches here so the human can
+   * follow the collaboration in Trail Runner. No child process is spawned; the run is born RUNNING
+   * because an external agent is attached and may stream more events - that keeps the live SSE
+   * stream and run-list polling open. [disconnectCompanion] (or Stop) finishes it.
+   */
+  fun startCompanion(request: CompanionConnectRequest, trailsRoot: File): Result<ExternalAgentRunDto> = runCatching {
+    val agentType = request.agentType ?: ExternalAgentType.CLAUDE
+    require(agentType != ExternalAgentType.SOLO) { "a companion session needs a real external agent type (claude or codex)" }
+    val folder = normalizeCompanionFolder(request.folder, trailsRoot)
+    val id = "agent-" + UUID.randomUUID().toString()
+    val title = request.title?.trim()?.takeIf { it.isNotEmpty() } ?: "Companion session"
+    val run = MutableExternalAgentRun(
+      id = id,
+      request = ExternalAgentRunRequest(agentType = agentType, prompt = "", title = title, cwd = trailsRoot.path),
+      title = title,
+      prompt = "",
+      cwd = trailsRoot.canonicalFile,
+    )
+    run.companion = CompanionRunState(
+      agentLabel = request.agentLabel?.trim()?.takeIf { it.isNotEmpty() },
+      folder = folder,
+      journalRoot = folder?.let { trailsRoot.canonicalFile },
+    )
+    // Check-then-insert under one lock, so N concurrent connects can't all pass the count at
+    // MAX-1 and land past the cap together.
+    synchronized(runs) {
+      require(runs.values.count { it.companion != null && it.status == ExternalAgentSessionStatus.RUNNING } < COMPANION_MAX_SESSIONS) {
+        "too many active companion sessions (max $COMPANION_MAX_SESSIONS) - disconnect one first (trailblaze companion disconnect <runId>)"
+      }
+      runs[id] = run
+    }
+    pruneFinishedRuns()
+    // Sweep stale sibling journals while root+folder are resolved and off the event hot path. A
+    // live session's journal is touched on every append, so only long-dead ones age out.
+    folder?.let { pruneCompanionJournals(trailsRoot.canonicalFile, it) }
+    run.emit(
+      kind = ExternalAgentEventKind.LIFECYCLE,
+      status = ExternalAgentSessionStatus.RUNNING,
+      title = "Companion session connected",
+      text = run.companion?.agentLabel ?: agentType.displayName(),
+    )
+    // No child process means no exit to observe: an agent that dies without disconnecting would
+    // stay "Live" forever. Reap on idleness, measured from the last emitted event like the
+    // process watchdog, just on a much longer clock.
+    scope.launch {
+      while (run.status == ExternalAgentSessionStatus.RUNNING) {
+        delay(COMPANION_IDLE_POLL_MS)
+        reapCompanionIfIdle(run, System.currentTimeMillis())
+      }
+    }
+    run.dto()
+  }
+
+  /**
+   * One watchdog poll: ends the companion session when it has been idle past the timeout.
+   * Extracted (and internal) so the reap decision is testable without the 60s clock.
+   * The whole decision holds the run lock: companionEvent refreshes the activity clock under
+   * the same lock, so an event that lands while the watchdog is deciding spares the session
+   * instead of being reaped over.
+   */
+  internal fun reapCompanionIfIdle(run: MutableExternalAgentRun, nowMs: Long): Boolean = synchronized(run) {
+    if (run.status != ExternalAgentSessionStatus.RUNNING) return false
+    val idle = nowMs - run.lastActivityAtMs
+    if (idle < COMPANION_IDLE_TIMEOUT_MS) return false
+    endCompanion(run, "auto-disconnected: no events for ${idle / 60_000} minutes")
+    true
+  }
+
+  /**
+   * One narration event from an attached external agent. The kind vocabulary is deliberately
+   * small - the companion surface is a narration channel, not a raw event injector; everything
+   * else about the run (tool activity, file writes) is visible through the folder it authors.
+   */
+  fun companionEvent(runId: String, kind: String?, title: String?, text: String?): Result<Unit> = runCatching {
+    val run = companionRun(runId)
+    require(!title.isNullOrBlank() || !text.isNullOrBlank()) { "title or text is required" }
+    val eventKind = when (kind?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }) {
+      null, "assistant_message" -> ExternalAgentEventKind.ASSISTANT_MESSAGE
+      "lifecycle" -> ExternalAgentEventKind.LIFECYCLE
+      "error" -> ExternalAgentEventKind.ERROR
+      else -> error("unsupported event kind: $kind (use assistant_message, lifecycle, or error)")
+    }
+    // The HUMAN_ACTION receipts are structurally unpostable here (the kind vocabulary above),
+    // but the daemon's LIFECYCLE receipts share a kind with agent narration - refuse their
+    // titles so a posted lifecycle event can't cosplay as one in the transcript.
+    require(title?.trim() !in COMPANION_RESERVED_TITLES) { "reserved event title: $title (the daemon emits it)" }
+    // Serialized against disconnect: an event racing the terminal events would append after them
+    // (and past the SSE loop's final flush, so live subscribers would never see it).
+    synchronized(run) {
+      require(run.status == ExternalAgentSessionStatus.RUNNING) { "this companion session has ended" }
+      run.emit(kind = eventKind, title = title?.trim()?.takeIf { it.isNotEmpty() }, text = text)
+    }
+    Unit
+  }
+
+  /**
+   * One UI directive from the attached agent: what the companion window should show (a banner, a
+   * checklist, quick replies, an armed recording). Rides the event stream as UI_COMMAND with the
+   * directive as title and the payload as input - so `companion listen` echoes the agent's own
+   * directives back in order with everything else - and, except for navigate, also lands in the
+   * run's standing directive state, which is what the window renders: latest per name, survives
+   * reloads and event retention, retracted by an empty payload.
+   */
+  fun companionDirective(runId: String, directive: String?, payload: JsonElement?): Result<Unit> = runCatching {
+    val run = companionRun(runId)
+    val name = directive?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: error("directive is required")
+    require(name in COMPANION_DIRECTIVES) { "unsupported directive: $directive (use ${COMPANION_DIRECTIVES.sorted().joinToString(", ")})" }
+    val body = payload?.let { it as? JsonObject ?: error("payload must be a JSON object") }
+    validateCompanionPayload(name, body)
+    // An armed recording on a folderless session is un-fulfillable: the window's Start button
+    // would sit permanently disabled and the save would refuse anyway. Tell the agent now.
+    if (name == "arm-recording") {
+      require(run.companion?.folder != null) { "this session declared no trail folder - arm-recording has nowhere to save" }
+    }
+    if (name == "navigate") {
+      // The one directive with no meaning without its field: an empty payload RETRACTS a standing
+      // directive, but "navigate nowhere" is always an agent mistake worth surfacing at the caller.
+      val route = (body?.get("route") as? JsonPrimitive)?.contentOrNull?.trim()
+      require(!route.isNullOrEmpty()) { "navigate needs a route in the payload" }
+    }
+    // Serialized against disconnect, like companionEvent: a directive racing the terminal events
+    // would land after the SSE loop's final flush and never reach a live window. The standing
+    // state mutates under the same lock, so it can never disagree with the transcript's order.
+    synchronized(run) {
+      require(run.status == ExternalAgentSessionStatus.RUNNING) { "this companion session has ended" }
+      val event = run.emit(kind = ExternalAgentEventKind.UI_COMMAND, title = name, input = body)
+      val state = run.companion ?: return@synchronized
+      when {
+        // navigate is live-only: it moves the window NOW, it isn't a standing instruction a
+        // reloaded window should re-apply (that would trap the user on the agent's last route).
+        name == "navigate" -> {}
+        // Empty or absent payload retracts: the card disappears and a reload won't resurrect it.
+        body.isNullOrEmpty() -> state.directives.remove(name)
+        else -> state.directives[name] = CompanionDirectiveDto(seq = event.seq, payload = body.toString())
+      }
+    }
+    Unit
+  }
+
+  /**
+   * Type-checks the fields the companion window renders, so a malformed agent payload fails at
+   * the poster (400) instead of surfacing as a blank or broken card. Oversize payloads are also
+   * rejected here: past the retention bound the emitted `input` would be truncated to invalid
+   * JSON - a 200 whose directive renders as nothing (or clears standing state) is a lie.
+   */
+  private fun validateCompanionPayload(name: String, body: JsonObject?) {
+    require((body?.toString()?.length ?: 0) <= EXTERNAL_AGENT_MAX_FIELD_CHARS) {
+      "payload too large (max $EXTERNAL_AGENT_MAX_FIELD_CHARS chars)"
+    }
+    // An empty payload is a retract; the shape rules below apply only to payloads that render.
+    if (body.isNullOrEmpty()) return
+    fun stringField(key: String) {
+      val v = body[key] ?: return
+      require(v is JsonPrimitive && v.isString) { "$key must be a string" }
+    }
+    when (name) {
+      "navigate" -> stringField("route")
+      "banner" -> {
+        // The card renders `text` and nothing else, and the window trims it: a 200 for a banner
+        // with missing, mistyped, or whitespace-only text (--title mistaken for --text) would
+        // leave the agent believing a banner is up when nothing shows.
+        val text = body["text"]
+        require(text is JsonPrimitive && text.isString && text.content.isNotBlank()) {
+          "banner needs non-blank text (an empty payload retracts)"
+        }
+      }
+      "checklist", "actions" -> {
+        stringField("title")
+        val items = body["items"]
+        // Blank items are rejected too: the window drops them, so all-blank items would leave
+        // standing state with no card - the same invisible-directive lie the shape checks stop.
+        require(items is JsonArray && items.isNotEmpty() && items.all { it is JsonPrimitive && it.isString && it.content.isNotBlank() }) {
+          "$name needs items: a non-empty array of non-blank strings (an empty payload retracts)"
+        }
+      }
+      "select-device" -> stringField("platform")
+      "select-app-target" -> {
+        stringField("app")
+        stringField("label")
+      }
+      "arm-recording" -> {
+        stringField("variant")
+        stringField("platform")
+        stringField("text")
+      }
+    }
+  }
+
+  /**
+   * Something the human did in the companion window, reported back to the attached agent (which
+   * tails the run's SSE stream or journal). HUMAN_ACTION with the type as title, mirroring how
+   * demonstrated gestures already land on a run.
+   */
+  fun companionUserAction(runId: String, type: String?, payload: JsonElement?): Result<Unit> = runCatching {
+    val run = companionRun(runId)
+    val name = type?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: error("type is required")
+    require(name in COMPANION_USER_ACTIONS) { "unsupported user-action type: $type (use ${COMPANION_USER_ACTIONS.sorted().joinToString(", ")})" }
+    val body = payload?.let { it as? JsonObject ?: error("payload must be a JSON object") }
+    require((body?.toString()?.length ?: 0) <= EXTERNAL_AGENT_MAX_FIELD_CHARS) {
+      "payload too large (max $EXTERNAL_AGENT_MAX_FIELD_CHARS chars)"
+    }
+    synchronized(run) {
+      require(run.status == ExternalAgentSessionStatus.RUNNING) { "this companion session has ended" }
+      run.emit(kind = ExternalAgentEventKind.HUMAN_ACTION, title = name, input = body)
+      // The device pick the select-device card asked for has happened; retract it here (not in
+      // the UI) so every window - including one opened later - agrees the ask is satisfied. An
+      // ask that named a platform is only satisfied by a matching connect: plugging in an
+      // Android phone doesn't answer "connect an iOS simulator".
+      if (name == "device-connected") {
+        val state = run.companion
+        val asked = state?.directives?.get("select-device")?.payload
+          ?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+          ?.let { (it["platform"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { p -> p.isNotEmpty() } }
+        val connected = (body?.get("platform") as? JsonPrimitive)?.contentOrNull?.trim()
+        if (asked == null || asked.equals(connected, ignoreCase = true)) state?.directives?.remove("select-device")
+      }
+    }
+    Unit
+  }
+
+  /**
+   * The attached agent settles a shared-brain request (see [deferToCompanion]). Like every
+   * companion receipt, request-responded is daemon-titled with the settled entry written here
+   * only - the UI resolves its "sent to your agent" spinner off the requests map and trusts it.
+   */
+  fun companionRespond(runId: String, requestId: String?, status: String?, note: String?): Result<Unit> = runCatching {
+    val run = companionRun(runId)
+    val state = run.companion ?: error("not a companion session: $runId")
+    val id = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: error("requestId is required")
+    val outcome = status?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: error("status is required")
+    require(outcome == "done" || outcome == "error") { "unsupported status: $status (use done or error)" }
+    val message = note?.trim()?.takeIf { it.isNotEmpty() }
+    require((message?.length ?: 0) <= EXTERNAL_AGENT_MAX_FIELD_CHARS) { "note too large (max $EXTERNAL_AGENT_MAX_FIELD_CHARS chars)" }
+    synchronized(run) {
+      require(run.status == ExternalAgentSessionStatus.RUNNING) { "this companion session has ended" }
+      val req = state.requests[id] ?: error("unknown request: $id")
+      require(req.status == "pending") { "request $id is already ${req.status}" }
+      state.requests[id] = req.copy(status = outcome, note = message)
+      run.emit(
+        kind = ExternalAgentEventKind.LIFECYCLE,
+        title = "request-responded",
+        input = JsonObject(
+          buildMap {
+            put("requestId", JsonPrimitive(id))
+            put("status", JsonPrimitive(outcome))
+            message?.let { put("note", JsonPrimitive(it)) }
+          },
+        ),
+      )
+    }
+    Unit
+  }
+
+  /**
+   * Writes one recorded variant (`<variant>.trail.yaml`) into the companion session's declared
+   * folder - the single sanctioned UI write in companion mode (the agent owns every other file).
+   * The daemon resolves the destination itself from the folder validated at connect, and emits the
+   * recording-saved user action only after the atomic write landed, so the agent hears about the
+   * save from the same authority that performed it. Returns the written file's path.
+   */
+  fun companionSaveRecording(runId: String, variant: String?, yaml: String?, trailsRoot: File, platform: String? = null): Result<String> = runCatching {
+    val run = companionRun(runId)
+    val folder = run.companion?.folder ?: error("this companion session declared no trail folder")
+    val name = variant?.trim()?.takeIf { it.isNotEmpty() } ?: error("variant is required")
+    require(!yaml.isNullOrBlank()) { "yaml is required" }
+    require(yaml.length <= COMPANION_MAX_RECORDING_CHARS) { "yaml too large (max $COMPANION_MAX_RECORDING_CHARS chars)" }
+    // Re-anchor under the CURRENT root: connect validated the relative path, but the write must
+    // still refuse a root swap or a symlink introduced since (same re-check as the folder view).
+    val rootCanon = trailsRoot.canonicalFile
+    val dir = File(rootCanon, folder).canonicalFile
+    require(dir.path.startsWith(rootCanon.path + File.separator)) { "folder must be inside the trails root: $folder" }
+    val written = synchronized(run) {
+      require(run.status == ExternalAgentSessionStatus.RUNNING) { "this companion session has ended" }
+      dir.mkdirs()
+      val file = BundleStore.writeVariant(dir, name, yaml) ?: error("could not write the recording into $folder")
+      run.emit(
+        kind = ExternalAgentEventKind.HUMAN_ACTION,
+        title = "recording-saved",
+        input = recordingSavedInput(file.name, folder, platform),
+      )
+      retractArmRecordingIfFulfilled(run, name)
+      file
+    }
+    // Sibling sessions on the same folder hear the save too - outside this run's lock (the
+    // fan-out takes other runs' locks, and run locks must never nest).
+    announceRecordingSavedForFolder(folder, written.name, platform, excludeRunId = run.id)
+    written.path
+  }
+
+  /**
+   * Announces a recorded variant that landed in [relFolder] (relative to the primary root) to
+   * every OTHER running companion session that declared that folder - the design allows several
+   * sessions on one folder ("last save wins"), and each attached agent needs the receipt.
+   * recording-saved stays an unforgeable daemon receipt: the title is hard-coded here and in
+   * [companionSaveRecording], the only two emitters, both daemon-internal. [excludeRunId] skips
+   * the session whose own save already announced inline, so no run hears its receipt twice.
+   */
+  internal fun announceRecordingSavedForFolder(relFolder: String, file: String, platform: String?, excludeRunId: String? = null) {
+    val folder = relFolder.trim().trim('/')
+    if (folder.isEmpty()) return
+    for (run in runs.values) {
+      if (run.id == excludeRunId || run.companion?.folder != folder) continue
+      synchronized(run) {
+        if (run.status != ExternalAgentSessionStatus.RUNNING) return@synchronized
+        run.emit(
+          kind = ExternalAgentEventKind.HUMAN_ACTION,
+          title = "recording-saved",
+          input = recordingSavedInput(file, folder, platform),
+        )
+        // The written file name is already slugged; variantSlug is idempotent, so it matches an
+        // armed raw variant ("iOS Phone") the same way the inline retract does.
+        retractArmRecordingIfFulfilled(run, file.removeSuffix(".trail.yaml"))
+      }
+    }
+  }
+
+  /**
+   * Announces a trail-run lifecycle transition to every running companion session whose declared
+   * folder contains [relPath] (the run's trail or bundle path, relative to the primary root).
+   * Emitted only from the daemon's run-dispatch seam - agents read run-started/run-finished as
+   * "the human pressed Run in Trail Runner", so the titles are constants here, never caller text.
+   */
+  internal fun announceRunStatusForFolder(relPath: String, started: Boolean, sessionId: String, status: String? = null) {
+    val rel = relPath.trim().trim('/')
+    if (rel.isEmpty()) return
+    for (run in runs.values) {
+      val folder = run.companion?.folder ?: continue
+      if (rel != folder && !rel.startsWith("$folder/")) continue
+      synchronized(run) {
+        if (run.status != ExternalAgentSessionStatus.RUNNING) return@synchronized
+        run.emit(
+          kind = ExternalAgentEventKind.LIFECYCLE,
+          title = if (started) "run-started" else "run-finished",
+          input = JsonObject(
+            buildMap {
+              put("sessionId", JsonPrimitive(sessionId))
+              put("folder", JsonPrimitive(folder))
+              status?.let { put("status", JsonPrimitive(it)) }
+            },
+          ),
+        )
+      }
+    }
+  }
+
+  /**
+   * Tries to route an LLM-shaped ask ("review this trail", "propose steps") to an attached
+   * companion agent - the shared-brain seam: when the human's own agent CLI sits on the folder,
+   * it answers instead of the daemon's wired provider. Target selection: running companion
+   * sessions whose declared folder contains [folderRel] (newest wins when several match); when the
+   * caller has no folder to key on, the sole running companion session, else [DeferOutcome.None].
+   * A matched session with no agent-tagged stream open is [DeferOutcome.Degraded] - queueing there
+   * would spin forever, so the caller tells the human to ask in their CLI instead. The enqueue is
+   * a daemon receipt like recording-saved: the agent-request title and the requests-map entry are
+   * minted here only. An identical still-pending ask (same kind + payload) returns the existing
+   * requestId instead of spamming the agent.
+   */
+  fun deferToCompanion(kind: String, folderRel: String?, payload: JsonObject): DeferOutcome {
+    val folder = folderRel?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
+    val candidates = runs.values.filter { run ->
+      val rel = run.companion?.folder
+      run.status == ExternalAgentSessionStatus.RUNNING && run.companion != null &&
+        (folder == null || (rel != null && (rel == folder || folder.startsWith("$rel/"))))
+    }
+    val target = when {
+      folder != null -> candidates.maxByOrNull { it.startedAtMs }
+      candidates.size == 1 -> candidates.single()
+      else -> null
+    } ?: return DeferOutcome.None
+    if (!hasAgentConsumer(target.id)) return DeferOutcome.Degraded(target.id)
+    return synchronized(target) {
+      // The RUNNING filter above was advisory; the session may have ended while we selected it.
+      if (target.status != ExternalAgentSessionStatus.RUNNING) return@synchronized DeferOutcome.None
+      val state = target.companion ?: return@synchronized DeferOutcome.None
+      val payloadJson = payload.toString()
+      state.requests.values.firstOrNull { it.status == "pending" && it.kind == kind && it.payload == payloadJson }
+        ?.let { return@synchronized DeferOutcome.Deferred(target.id, it.requestId) }
+      val requestId = "r_${state.requestCounter.incrementAndGet()}"
+      target.emit(
+        kind = ExternalAgentEventKind.HUMAN_ACTION,
+        title = "agent-request",
+        input = JsonObject(
+          buildMap {
+            put("requestId", JsonPrimitive(requestId))
+            put("kind", JsonPrimitive(kind))
+            put("payload", payload)
+          },
+        ),
+      )
+      state.requests[requestId] = CompanionRequestDto(
+        requestId = requestId,
+        kind = kind,
+        payload = payloadJson,
+        status = "pending",
+      )
+      DeferOutcome.Deferred(target.id, requestId)
+    }
+  }
+
+  private fun recordingSavedInput(file: String, folder: String, platform: String?): JsonObject = JsonObject(
+    buildMap {
+      put("file", JsonPrimitive(file))
+      put("folder", JsonPrimitive(folder))
+      // Which device platform recorded it - the variant is just a file name and may not say
+      // (an agent can arm a custom variant), so the receipt carries it explicitly.
+      platform?.trim()?.takeIf { it.isNotEmpty() }?.let { put("platform", JsonPrimitive(it.lowercase())) }
+    },
+  )
+
+  // Must run with the run's lock held. The armed recording is fulfilled; retract it daemon-side
+  // so every window agrees. Only the variant it asked for fulfills it - saving android.trail.yaml
+  // doesn't answer "record the ios variant" (same rule as the platform-matched select-device
+  // retract).
+  private fun retractArmRecordingIfFulfilled(run: MutableExternalAgentRun, savedVariant: String) {
+    val armedVariant = run.companion?.directives?.get("arm-recording")?.payload
+      ?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+      ?.let { (it["variant"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { v -> v.isNotEmpty() } }
+    if (armedVariant == null || BundleStore.variantSlug(armedVariant) == BundleStore.variantSlug(savedVariant)) {
+      run.companion?.directives?.remove("arm-recording")
+    }
+  }
+
+  // Best-effort: a failed sweep must never block a connect.
+  private fun pruneCompanionJournals(root: File, folder: String) {
+    runCatching {
+      val dir = companionJournalDir(root, folder)
+      val cutoff = System.currentTimeMillis() - COMPANION_JOURNAL_MAX_AGE_MS
+      dir.listFiles { f -> f.isFile && f.name.startsWith("journal-") && f.name.endsWith(".jsonl") }
+        // lastModified() == 0 means "couldn't stat" - skip rather than treat as ancient.
+        ?.filter { it.lastModified() in 1 until cutoff }
+        ?.forEach { stale ->
+          if (stale.delete()) Console.log("[companion] pruned stale journal ${stale.name} in $folder")
+        }
+    }.onFailure { Console.log("[companion] journal prune failed: ${it.message}") }
+  }
+
+  /** Ends a companion session. Idempotent; the run keeps its transcript and folder view. */
+  fun disconnectCompanion(runId: String, note: String?): Result<Unit> = runCatching {
+    endCompanion(companionRun(runId), note)
+  }
+
+  // Serialized with companionEvent (see there); the status re-check under the lock makes every
+  // end path (disconnect, UI Stop, idle reap) idempotent - the terminal events emit exactly once.
+  private fun endCompanion(run: MutableExternalAgentRun, note: String?) {
+    synchronized(run) {
+      if (run.status != ExternalAgentSessionStatus.RUNNING) return
+      // Nobody is left to answer: settle every pending shared-brain request so the UI's spinner
+      // resolves from the requests map instead of waiting on a respond that can never come.
+      run.companion?.requests?.let { requests ->
+        for ((id, req) in requests) {
+          if (req.status == "pending") requests[id] = req.copy(status = "cancelled")
+        }
+      }
+      run.emit(
+        kind = ExternalAgentEventKind.LIFECYCLE,
+        title = "Companion session ended",
+        text = note?.trim()?.takeIf { it.isNotEmpty() },
+      )
+      run.finishIfNeeded(ExternalAgentSessionStatus.COMPLETED, exitCode = null, error = null)
+    }
+    // Like every other run-ending path: a permission request somehow registered against this run
+    // must not leave its HTTP handler suspended on a decision that can never come.
+    run.permissions.failAllPending("The run ended before this was approved").forEach { emitPermissionDecision(run, it) }
+  }
+
+  /** Unknown run distinguishes itself (404 at the route) from a run that exists but isn't a companion (400). */
+  private fun companionRun(runId: String): MutableExternalAgentRun {
+    val run = runs[runId] ?: throw NoSuchElementException("companion run not found: $runId")
+    requireNotNull(run.companion) { "not a companion session: $runId" }
+    return run
+  }
+
+  /**
+   * Normalizes a caller-supplied companion folder to a clean relative path under [trailsRoot], or
+   * null when absent. The folder need not exist yet (the agent may attach before its first write),
+   * but a path that escapes the root is rejected - the trail rail will read files from it.
+   */
+  private fun normalizeCompanionFolder(folder: String?, trailsRoot: File): String? {
+    val rel = folder?.trim()?.trim('/')?.takeIf { it.isNotEmpty() } ?: return null
+    require(!rel.contains("..") && !rel.contains("\\") && rel.none { it.isISOControl() }) { "invalid folder: $folder" }
+    val rootCanon = trailsRoot.canonicalFile
+    val canon = File(rootCanon, rel).canonicalFile
+    require(canon.path.startsWith(rootCanon.path + File.separator)) { "folder must be inside the trails root: $folder" }
+    return rel
   }
 
   /**
@@ -976,6 +1548,85 @@ internal object ExternalAgentSupervisor {
   }
 
   /**
+   * The files of the trail folder a companion session declared, for the live trail rail. Same
+   * shape and caps as [demoTrailContent]. The folder is re-resolved and containment-checked
+   * against the CURRENT primary root on every read, so a workspace switch after connect can't
+   * turn a once-valid relative path into a read outside the active root. Null for an unknown or
+   * non-companion run; an empty file list while the folder doesn't exist yet.
+   */
+  fun companionFolderContent(runId: String, trailsRoot: File): DemoTrailContentResult? {
+    val run = runs[runId] ?: return null
+    val comp = run.companion ?: return null
+    val rel = comp.folder ?: return DemoTrailContentResult(trailId = null, files = emptyList())
+    val rootCanon = runCatching { trailsRoot.canonicalFile }.getOrNull()
+      ?: return DemoTrailContentResult(trailId = rel, files = emptyList())
+    val dirCanon = companionFolderDir(comp, rootCanon)
+      ?: return DemoTrailContentResult(trailId = rel, files = emptyList())
+    val files = (dirCanon.listFiles()?.toList().orEmpty())
+      .filter { it.isFile && (it.extension.equals("yaml", ignoreCase = true) || it.extension.equals("md", ignoreCase = true)) }
+      .sortedBy { it.name }
+      .mapNotNull { readContainedTrailFile(rootCanon, it) }
+    return DemoTrailContentResult(trailId = rel, files = files)
+  }
+
+  /**
+   * The declared trail folder as a canonical, containment-checked directory - the single resolve
+   * the folder-content/tree/reveal/open surfaces all share. Null when the run isn't a companion,
+   * no folder was declared, or the folder is missing/escapes the trails root.
+   */
+  fun companionFolderDir(runId: String, trailsRoot: File): File? {
+    val comp = runs[runId]?.companion ?: return null
+    val rootCanon = runCatching { trailsRoot.canonicalFile }.getOrNull() ?: return null
+    return companionFolderDir(comp, rootCanon)
+  }
+
+  private fun companionFolderDir(comp: CompanionRunState, rootCanon: File): File? {
+    val rel = comp.folder ?: return null
+    val dirCanon = runCatching { File(rootCanon, rel).canonicalFile }.getOrNull() ?: return null
+    if (!dirCanon.isDirectory || !dirCanon.path.startsWith(rootCanon.path + File.separator)) return null
+    return dirCanon
+  }
+
+  /**
+   * Recursive listing of the declared folder (the demo-files tree): every file and directory the
+   * agent's session has produced, paths relative to the folder. Names and sizes only - contents
+   * stay behind per-file affordances (open in editor). Entries whose canonical path escapes the
+   * folder (a symlink pointing out) are dropped, same containment paranoia as every read, and
+   * symlinked directories are never descended (escape and cycle guard - their targets, when
+   * contained, already appear at their real paths). Capped so a runaway folder can't melt the
+   * poll loop; the UI shows what fits.
+   */
+  fun companionFolderTree(runId: String, trailsRoot: File): List<CompanionFolderEntryDto>? {
+    val run = runs[runId] ?: return null
+    val comp = run.companion ?: return null
+    val rootCanon = runCatching { trailsRoot.canonicalFile }.getOrNull() ?: return emptyList()
+    val dirCanon = companionFolderDir(comp, rootCanon) ?: return emptyList()
+    val entries = mutableListOf<CompanionFolderEntryDto>()
+    // The .companion journal dir is the daemon's own crash-recovery state (created at connect,
+    // gitignored) - it is not part of what the agent authored, so the tree hides it.
+    val walk = dirCanon.walkTopDown().onEnter {
+      it == dirCanon || (it.name != COMPANION_JOURNAL_DIR_NAME && !Files.isSymbolicLink(it.toPath()))
+    }
+    for (f in walk) {
+      if (f == dirCanon) continue
+      // Finder litter, not content - revealing the folder (the tab's own button) would otherwise
+      // make it appear in the very tree the human is looking at.
+      if (f.name == ".DS_Store") continue
+      if (entries.size >= COMPANION_TREE_MAX_ENTRIES) break
+      val canon = runCatching { f.canonicalFile }.getOrNull() ?: continue
+      if (!canon.path.startsWith(dirCanon.path + File.separator)) continue
+      entries.add(
+        CompanionFolderEntryDto(
+          path = f.relativeTo(dirCanon).invariantSeparatorsPath,
+          dir = f.isDirectory,
+          size = if (f.isFile) f.length() else 0,
+        ),
+      )
+    }
+    return entries.sortedBy { it.path }
+  }
+
+  /**
    * Captures the start-state screenshot + view hierarchy into the tape dir, using the same live
    * connection the gesture path drives (via [TrailRunnerRecordingHolder]). Best-effort: a daemon
    * without a recording service, or a transient capture miss, simply leaves the frame out.
@@ -1041,6 +1692,7 @@ internal object ExternalAgentSupervisor {
     val run = runs[id]
     requireNotNull(run) { "external agent run not found: $id" }
     require(run.agentType != ExternalAgentType.SOLO) { "this is a solo session - there is no agent to reply to" }
+    require(run.companion == null) { "this session is driven by an external agent outside Trail Runner - reply in that agent's own CLI" }
     val text = prompt.trim()
     require(text.isNotEmpty()) { "prompt is required" }
     require(run.status != ExternalAgentSessionStatus.RUNNING) {
@@ -1286,6 +1938,15 @@ private const val DEMO_MANIFEST_NAME = "demo.yaml"
 
 /** File name of the cross-platform draft manifest at the draft dir root. */
 private const val DRAFT_MANIFEST_NAME = "draft.yaml"
+
+// Re-resolved and containment-checked per use (same discipline as companionSaveRecording): a
+// symlink swapped in under the root after connect must not aim journal writes - or the sweep's
+// deletes - outside it. Top-level so both the supervisor's sweep and the run's append path reach it.
+private fun companionJournalDir(root: File, folder: String): File {
+  val dir = File(File(root, folder), COMPANION_JOURNAL_DIR_NAME).canonicalFile
+  require(dir.path.startsWith(root.path + File.separator)) { "journal dir escapes the trails root" }
+  return dir
+}
 
 /**
  * Ensures the drafts root exists and carries a self-ignoring `*` `.gitignore`, so demonstration
@@ -1834,6 +2495,62 @@ internal data class ExternalAgentEventDraft(
   val raw: JsonElement? = null,
 )
 
+/**
+ * Companion-session state: an external agent CLI (running in the human's own terminal, outside
+ * Trail Runner) attached to this run. The daemon owns no process for it - the agent streams its
+ * narration through the companion routes, and [folder] names the trail folder (relative to the
+ * primary trails root) it is authoring on disk, which the live trail rail watches.
+ */
+internal class CompanionRunState(
+  val agentLabel: String?,
+  val folder: String?,
+  /**
+   * Canonical trails root captured at connect; the journal dir (`<folder>/.companion`) is
+   * re-resolved and containment-checked under it on every append, so a symlink introduced after
+   * connect can't route journal writes outside the root. Deliberately NOT re-read from settings:
+   * emit has no route context, and a workspace root swapped mid-session just leaves a stale
+   * best-effort journal behind (the save path, which matters, does re-anchor per request).
+   * Null when no folder was declared.
+   */
+  val journalRoot: File? = null,
+) {
+  /**
+   * The standing directives (latest per name; never `navigate`). Mutated only under the run lock
+   * so it can't disagree with the transcript's order; a ConcurrentHashMap so [dto] snapshots it
+   * safely without that lock. Daemon-owned so directives survive event retention and reloads.
+   */
+  val directives: MutableMap<String, CompanionDirectiveDto> = ConcurrentHashMap()
+
+  /**
+   * The shared-brain request queue, keyed by requestId - same lock discipline as [directives]
+   * (mutated only under the run lock, ConcurrentHashMap so [dto] snapshots without it). Only the
+   * daemon's defer path enqueues; the agent settles entries via respond.
+   */
+  val requests: MutableMap<String, CompanionRequestDto> = ConcurrentHashMap()
+
+  /**
+   * Mints requestIds ("r_1", "r_2", ...). A dedicated counter rather than the event seq: the
+   * requestId must ride INSIDE the agent-request event's input, which is sealed before emit
+   * assigns the seq.
+   */
+  val requestCounter = AtomicInteger(0)
+}
+
+/** Outcome of trying to hand an LLM-shaped ask to an attached companion agent instead of the wired provider. */
+internal sealed class DeferOutcome {
+  /** No running companion session claims this work - the caller proceeds with its normal path. */
+  object None : DeferOutcome()
+
+  /** A session matched, but no agent is listening on its stream - queueing would hang the human. */
+  data class Degraded(val runId: String) : DeferOutcome()
+
+  /** The ask is queued on companion session [runId] as [requestId]; the agent settles it via respond. */
+  data class Deferred(val runId: String, val requestId: String) : DeferOutcome()
+}
+
+/** What the human sees on a [DeferOutcome.Degraded] ask - shared by every route that defers. */
+internal const val COMPANION_AGENT_NOT_LISTENING = "agent not listening - ask it in your CLI"
+
 // Widened from `private` to `internal` (Task B testability seam): ExternalAgentSupervisorTest
 // constructs a MutableExternalAgentRun directly to seed a run without spawning a real vendor CLI
 // process. Compile-time visibility widening only — zero runtime behavior change.
@@ -1867,6 +2584,9 @@ internal class MutableExternalAgentRun(
 
   /** Generation-agent state, when this run authors a trail from a demonstration (else null). */
   @Volatile var generation: GenerationRunState? = null
+
+  /** Companion state, when an external agent CLI drives this run from outside Trail Runner (else null). */
+  @Volatile var companion: CompanionRunState? = null
 
   /**
    * Human-approvable permissions for this run's spawned CLI. A `val` (never reset by [beginTurn]),
@@ -1946,6 +2666,7 @@ internal class MutableExternalAgentRun(
     },
     // Present only on a generation run; the web hides it from the sidebar and embeds its transcript.
     demoRunId = generation?.demoRunId,
+    companion = companion?.let { c -> CompanionStateDto(agentLabel = c.agentLabel, folder = c.folder, directives = c.directives.toMap(), requests = c.requests.toMap()) },
     pendingPermissions = permissions.pendingSnapshot(),
     autoApprove = permissions.autoApprove,
   )
@@ -2014,7 +2735,30 @@ internal class MutableExternalAgentRun(
     }
     lastActivityAtMs = event.timeMs
     raw?.let { captureExternalThreadId(it) }
+    // Mirror EVERY event of a companion run - whichever path emitted it - into the on-disk
+    // journal, so a crashed agent recovers the same stream `companion listen` would have shown
+    // it. Best-effort, like actions.ndjson.
+    companion?.let { appendCompanionJournal(it, event) }
     return event
+  }
+
+  private fun appendCompanionJournal(state: CompanionRunState, event: ExternalAgentEventDto) {
+    val root = state.journalRoot ?: return
+    val folder = state.folder ?: return
+    runCatching {
+      val dir = companionJournalDir(root, folder)
+      val gitignore = File(dir, ".gitignore")
+      if (!gitignore.isFile) {
+        dir.mkdirs()
+        // Self-ignoring, like the drafts dir: the journal is ephemeral daemon state living inside
+        // the user's own repo, and must never show up as an untracked surprise.
+        gitignore.writeText("*\n")
+      }
+      // One file per run (concurrent sessions on the same folder must not interleave), encoded
+      // with the same compact instance as the SSE frames, so a journal line and a
+      // `companion listen` line are byte-identical for the same event.
+      File(dir, "journal-${event.runId}.jsonl").appendText(JSON.encodeToString(ExternalAgentEventDto.serializer(), event) + "\n")
+    }.onFailure { Console.log("[companion] journal append failed: ${it.message}") }
   }
 
   // Truncated payloads stop being valid JSON; the UI's JsonBlock already falls back to plain-text

@@ -6,6 +6,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
+import io.ktor.client.plugins.websocket.WebSockets
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import java.security.SecureRandom
@@ -64,11 +65,16 @@ object TrailblazeHttpClientFactory {
     }
   }
 
+  private fun HttpClientConfig<*>.enableWebSockets() {
+    install(WebSockets)
+  }
+
   fun createInsecureTrustAllCertsHttpClient(
     timeoutInSeconds: Long,
   ) = HttpClient(OkHttp) {
     enablePerfettoTracing()
     enableNetworkLogging()
+    enableWebSockets()
     engine {
       config {
         configureOkHttpClient(timeoutInSeconds, true)
@@ -82,6 +88,7 @@ object TrailblazeHttpClientFactory {
   ) = HttpClient(OkHttp) {
     enablePerfettoTracing()
     enableNetworkLogging()
+    enableWebSockets()
     if (reverseProxyUrl != null) {
       install(ReverseProxyPlugin) {
         this.reverseProxyEnabled = true // Disable reverse proxy for this client

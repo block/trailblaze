@@ -609,7 +609,12 @@ open class AndroidTrailblazeRule(
     // the list. The guard in decodeTrail throws if we ever lose classifiers and
     // a v3 file has recordings, so the silent-LLM-fallback can't happen here.
     val classifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers
-    val trailItems = trailblazeYaml.decodeTrail(testYaml, deviceClassifiers = classifiers)
+    // `testYaml` is either a full trail document (CLI/desktop "run this trail on device") or a
+    // per-tool dispatch envelope (host-drives-the-loop RPC). decodeTrailOrToolEnvelope decodes the
+    // per-tool envelope via decodeTools, so a single-tool RPC never depends on the legacy
+    // list-shape trail parser; a trail document still lowers via decodeTrail.
+    val trailItems =
+      trailblazeYaml.decodeTrailOrToolEnvelope(testYaml, deviceClassifiers = classifiers)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     // Honor `config.skip:` before sending SessionStarted — matches the CLI's pre-flight

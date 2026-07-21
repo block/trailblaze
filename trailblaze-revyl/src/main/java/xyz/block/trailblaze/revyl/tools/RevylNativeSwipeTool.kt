@@ -19,7 +19,7 @@ import xyz.block.trailblaze.util.Console
   "Swipe on the device screen in a direction (up, down, left, right). " +
     "Optionally start from a specific element.",
 )
-class RevylNativeSwipeTool(
+data class RevylNativeSwipeTool(
   @param:LLMDescription("Swipe direction: 'up', 'down', 'left', or 'right'.")
   val direction: String,
   @param:LLMDescription("Optional element to start the swipe from.")

@@ -58,7 +58,7 @@ Available detail types:
   and you want to see what's underneath before deciding whether to dismiss the overlay.
 """,
 )
-class PlaywrightNativeRequestDetailsTool(
+data class PlaywrightNativeRequestDetailsTool(
   @param:LLMDescription(
     "List of detail types to include in the next view hierarchy. " +
       "Supported: BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS, OCCLUDED_ELEMENTS (or any combination). " +

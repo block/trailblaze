@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
@@ -39,6 +41,7 @@ import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -98,6 +101,26 @@ class DesktopYamlRunner(
           UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(log.exceptionMessage)
       }
     }
+
+    /**
+     * The driver [trailYaml] pins for the device described by [deviceClassifiers], or null when
+     * it pins none reachable from that device's classifier chain. Covers both formats: a v1
+     * `driver:` scalar (classifier-independent) and a unified per-classifier `devices:` map
+     * (closest-wins). A YAML that fails to parse resolves to null — the trail decode inside the
+     * run surfaces the real error.
+     *
+     * This is the runner's own read of the pin because upstream request builders (the daemon's
+     * `/cli/run` handler, the desktop Run path) extract trail config without a device and so
+     * send `RunYamlRequest.driverType = null` for every unified trail; the connected device is
+     * only concrete here.
+     */
+    internal fun trailPinnedDriverType(
+      trailYaml: String,
+      deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    ): TrailblazeDriverType? = runCatching {
+      createTrailblazeYaml().extractTrailConfig(trailYaml, deviceClassifiers)
+        ?.driver?.let { TrailblazeDriverType.fromString(it) }
+    }.getOrNull()
   }
 
   /**
@@ -215,14 +238,32 @@ class DesktopYamlRunner(
         MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
       }
 
-      // Resolve driver type: request (CLI --driver / trail config) > app setting > connected device default.
+      // Resolve driver type: request (CLI --driver / trail config) > the trail's own driver pin
+      // resolved against THIS device > app setting > connected device default. The trail-pin rung
+      // matches the CLI in-process precedence (trail config over app setting) — see
+      // [trailPinnedDriverType] for why unified pins can only resolve here.
       val appConfig = trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
       val appSettingDriverType = appConfig.selectedTrailblazeDriverTypes[
         trailblazeDeviceId.trailblazeDevicePlatform
       ]
       val trailblazeDriverType = runYamlRequest.driverType
+        ?: trailPinnedDriverType(
+          trailYaml = runYamlRequest.yaml,
+          deviceClassifiers = DeviceClassifierResolver.classifiersFor(
+            platform = connectedTrailblazeDevice.platform,
+            instanceId = connectedTrailblazeDevice.instanceId,
+          ),
+        )
         ?: appSettingDriverType
         ?: connectedTrailblazeDevice.trailblazeDriverType
+
+      // The host runner selects its driver from `RunOnHostParams.trailblazeDriverType`, which
+      // derives from the device summary — so a host-side pin (e.g. a unified trail pinning iOS
+      // Axe over the simulator's default IOS_HOST) is only honored if the device carries the
+      // resolved driver. Tag it here; the on-device branches propagate the same value via
+      // `runYamlRequest.copy(driverType = …)`. The swap is same-platform (resolution is
+      // platform-scoped), so instanceId / platform / deviceId are unchanged.
+      val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
 
       // Per-session video / sprite / logcat capture used to be started here against a
       // temp dir and moved into the session log dir in the finally block. That worked
@@ -327,7 +368,7 @@ class DesktopYamlRunner(
               dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
               runOnHostParams = RunOnHostParams(
                 runYamlRequest = runYamlRequest,
-                device = connectedTrailblazeDevice,
+                device = hostRunDevice,
                 onProgressMessage = prefixedProgressMessage,
                 forceStopTargetApp = forceStopTargetApp,
                 targetTestApp = targetTestApp,
@@ -463,7 +504,7 @@ class DesktopYamlRunner(
               dynamicLlmClient = dynamicLlmClientProvider(desktopAppRunYamlParams.runYamlRequest.trailblazeLlmModel),
               runOnHostParams = RunOnHostParams(
                 runYamlRequest = runYamlRequest,
-                device = connectedTrailblazeDevice,
+                device = hostRunDevice,
                 onProgressMessage = prefixedProgressMessage,
                 forceStopTargetApp = forceStopTargetApp,
                 targetTestApp = targetTestApp,

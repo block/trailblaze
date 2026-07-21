@@ -1,0 +1,461 @@
+syntax = "proto3";
+
+package trailblaze.ondevice.rpc.v1;
+
+option java_package = "xyz.block.trailblaze.ondevice.rpc.proto";
+option java_multiple_files = true;
+
+// Multiplexed binary WebSocket envelope. Exactly one request/response payload is populated.
+message RpcRequestEnvelope {
+  uint64 request_id = 1;
+  GetScreenStateRequest get_screen_state = 2;
+  RunYamlRequest run_yaml = 3;
+  DrainSessionRequest drain_session = 4;
+  SubscribeToProgressRequest subscribe_to_progress = 5;
+  GetExecutionStatusRequest get_execution_status = 6;
+  ListActiveSessionsRequest list_active_sessions = 7;
+}
+
+message RpcResponseEnvelope {
+  uint64 request_id = 1;
+  GetScreenStateResponse get_screen_state = 2;
+  RunYamlResponse run_yaml = 3;
+  DrainSessionResponse drain_session = 4;
+  SubscribeToProgressResponse subscribe_to_progress = 5;
+  GetExecutionStatusResponse get_execution_status = 6;
+  ListActiveSessionsResponse list_active_sessions = 7;
+  RpcFailure failure = 8;
+}
+
+message RpcFailure {
+  string error_type = 1;
+  string message = 2;
+  optional string details = 3;
+}
+
+// Device-to-host log transport. The host acknowledges each upload only after it is durable.
+message LogUploadEnvelope {
+  uint64 upload_id = 1;
+  AgentLogUpload agent_log = 2;
+  ScreenshotUpload screenshot = 3;
+  TraceUpload trace = 4;
+}
+
+message LogUploadAck {
+  uint64 upload_id = 1;
+  bool success = 2;
+  optional string error_message = 3;
+}
+
+message AgentLogUpload {
+  string log_type = 1;
+  string session_id = 2;
+  int64 timestamp_epoch_millis = 3;
+  // The polymorphic log metadata. Tree-shaped fields are removed and carried below.
+  bytes metadata_json = 4;
+  ViewHierarchyNode view_hierarchy = 5;
+  ViewHierarchyNode view_hierarchy_filtered = 6;
+  TrailblazeNode trailblaze_node_tree = 7;
+  TrailblazeNode driver_migration_tree_node = 8;
+}
+
+message ScreenshotUpload {
+  string filename = 1;
+  string session_id = 2;
+  bytes image = 3;
+}
+
+message TraceUpload {
+  string session_id = 1;
+  bytes trace_json = 2;
+}
+
+message RunYamlRequest {
+  string test_name = 1;
+  string yaml = 2;
+  optional string trail_file_path = 3;
+  optional string target_app_name = 4;
+  bool use_recorded_steps = 5;
+  DeviceId device_id = 6;
+  LlmModel llm_model = 7;
+  TrailblazeConfig config = 8;
+  Referrer referrer = 9;
+  optional string trace_id = 10;
+  optional string driver_type = 11;
+  string agent_implementation = 12;
+  bool await_completion = 13;
+  map<string, string> memory_snapshot = 14;
+  optional int32 max_llm_calls = 15;
+  map<string, string> initial_memory_seeds = 16;
+  map<string, string> initial_memory_sensitive_seeds = 17;
+  repeated string sensitive_memory_keys = 18;
+  map<string, string> initial_args = 19;
+  map<string, string> args_snapshot = 20;
+  repeated string sensitive_arg_names = 21;
+}
+
+message RunYamlResponse {
+  string session_id = 1;
+  optional bool success = 2;
+  optional string error_message = 3;
+  map<string, string> memory_snapshot = 4;
+  repeated string memory_deletions = 5;
+  optional string tool_message = 6;
+  optional bytes tool_structured_content_json = 7;
+  int32 on_device_tool_log_count = 8;
+  bool non_recoverable_wedge = 9;
+  repeated string sensitive_memory_keys = 10;
+}
+
+message DeviceId {
+  string instance_id = 1;
+  string platform = 2;
+}
+
+message LlmModel {
+  LlmProvider provider = 1;
+  string model_id = 2;
+  double input_cost_per_one_million_tokens = 3;
+  double output_cost_per_one_million_tokens = 4;
+  double cached_input_cost_per_one_million_tokens = 5;
+  string image_token_formula = 6;
+  int64 context_length = 7;
+  int64 max_output_tokens = 8;
+  repeated string capability_ids = 9;
+  optional double default_temperature = 10;
+  ScreenshotScalingConfig screenshot_scaling_config = 11;
+}
+
+message LlmProvider {
+  string id = 1;
+  string display = 2;
+  optional string description = 3;
+}
+
+message ScreenshotScalingConfig {
+  int32 max_dimension_1 = 1;
+  int32 max_dimension_2 = 2;
+  string image_format = 3;
+  float compression_quality = 4;
+}
+
+message TrailblazeConfig {
+  bool send_session_start_log = 1;
+  bool send_session_end_log = 2;
+  optional string override_session_id = 3;
+  bool self_heal = 4;
+  bool browser_headless = 5;
+  string node_selector_mode = 6;
+  bool prefer_host_agent = 7;
+  bool capture_network_traffic = 8;
+}
+
+message Referrer {
+  string id = 1;
+  string display = 2;
+}
+
+message DrainSessionRequest {
+  string reason = 1;
+}
+
+message DrainSessionResponse {
+  bool ui_automation_cleared = 1;
+}
+
+message SubscribeToProgressRequest {
+  optional string session_id = 1;
+  bool include_history = 2;
+}
+
+message SubscribeToProgressResponse {
+  repeated ProgressEvent events = 1;
+  bool has_more = 2;
+  optional int64 last_event_timestamp = 3;
+}
+
+message GetExecutionStatusRequest {
+  string session_id = 1;
+}
+
+message GetExecutionStatusResponse {
+  ExecutionStatus status = 1;
+  bool found = 2;
+}
+
+message ListActiveSessionsRequest {
+  bool include_completed = 1;
+}
+
+message ListActiveSessionsResponse {
+  repeated ExecutionStatus sessions = 1;
+}
+
+message ExecutionStatus {
+  string session_id = 1;
+  DeviceId device_id = 2;
+  string state = 3;
+  string objective = 4;
+  string agent_implementation = 5;
+  int32 progress_percent = 6;
+  optional string current_step = 7;
+  int32 completed_steps = 8;
+  int32 total_steps = 9;
+  int32 actions_executed = 10;
+  int64 elapsed_ms = 11;
+  optional int64 estimated_remaining_ms = 12;
+  int32 exceptions_handled = 13;
+  int32 memory_fact_count = 14;
+  optional string error_message = 15;
+  int64 last_updated = 16;
+}
+
+message ProgressEvent {
+  int64 timestamp = 1;
+  string session_id = 2;
+  DeviceId device_id = 3;
+  StepStarted step_started = 4;
+  StepCompleted step_completed = 5;
+  SubtaskProgress subtask_progress = 6;
+  SubtaskCompleted subtask_completed = 7;
+  TaskReplanned task_replanned = 8;
+  ReflectionTriggered reflection_triggered = 9;
+  BacktrackPerformed backtrack_performed = 10;
+  ExceptionHandled exception_handled = 11;
+  FactStored fact_stored = 12;
+  FactRecalled fact_recalled = 13;
+  ExecutionStarted execution_started = 14;
+  ExecutionCompleted execution_completed = 15;
+}
+
+message StepStarted {
+  int32 step_index = 1;
+  string step_prompt = 2;
+  int64 estimated_duration_ms = 3;
+  int32 total_steps = 4;
+}
+
+message StepCompleted {
+  int32 step_index = 1;
+  bool used_recording = 2;
+  int64 duration_ms = 3;
+  bool success = 4;
+  optional string error_message = 5;
+}
+
+message SubtaskProgress {
+  int32 subtask_index = 1;
+  string subtask_name = 2;
+  int32 total_subtasks = 3;
+  int32 percent_complete = 4;
+  int32 actions_in_subtask = 5;
+}
+
+message SubtaskCompleted {
+  int32 subtask_index = 1;
+  string subtask_name = 2;
+  int64 duration_ms = 3;
+  int32 actions_taken = 4;
+}
+
+message TaskReplanned {
+  string original_subtask = 1;
+  string block_reason = 2;
+  int32 new_subtasks_count = 3;
+  int32 replan_number = 4;
+}
+
+message ReflectionTriggered {
+  string reason = 1;
+  string assessment = 2;
+  optional string suggested_action = 3;
+  bool is_on_track = 4;
+}
+
+message BacktrackPerformed {
+  int32 steps_backtracked = 1;
+  string reason = 2;
+}
+
+message ExceptionHandled {
+  string exception_type = 1;
+  string recovery_action = 2;
+  bool success = 3;
+}
+
+message FactStored {
+  string key = 1;
+  string value_preview = 2;
+}
+
+message FactRecalled {
+  string key = 1;
+  bool found = 2;
+}
+
+message ExecutionStarted {
+  string objective = 1;
+  string agent_implementation = 2;
+  bool has_task_plan = 3;
+}
+
+message ExecutionCompleted {
+  bool success = 1;
+  int64 total_duration_ms = 2;
+  int32 total_actions = 3;
+  optional string error_message = 4;
+}
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  IMAGE_FORMAT_PNG = 1;
+  IMAGE_FORMAT_JPEG = 2;
+  IMAGE_FORMAT_WEBP = 3;
+}
+
+message GetScreenStateRequest {
+  bool include_screenshot = 1;
+  int32 screenshot_max_dimension_1 = 2;
+  int32 screenshot_max_dimension_2 = 3;
+  ImageFormat screenshot_image_format = 4;
+  float screenshot_compression_quality = 5;
+  bool include_annotated_screenshot = 6;
+  bool include_all_elements = 7;
+  bool require_android_accessibility_service = 8;
+  bool include_tree = 9;
+}
+
+message GetScreenStateResponse {
+  ViewHierarchyNode view_hierarchy = 1;
+  bytes screenshot = 2;
+  bytes annotated_screenshot = 3;
+  int32 device_width = 4;
+  int32 device_height = 5;
+  TrailblazeNode trailblaze_node_tree = 6;
+  TrailblazeNode driver_migration_tree_node = 7;
+  optional string page_context_summary = 8;
+  repeated string device_classifiers = 9;
+  // Device-epoch stamp taken when the (screenshot, tree) pair was final; absent on older
+  // on-device servers. Consumed by the host's stream-screenshot frame/tree matching gate.
+  optional int64 captured_at_device_ms = 10;
+}
+
+message ViewHierarchyNode {
+  int64 node_id = 1;
+  optional string accessibility_text = 2;
+  int32 x1 = 3;
+  int32 y1 = 4;
+  int32 x2 = 5;
+  int32 y2 = 6;
+  optional string center_point = 7;
+  bool checked = 8;
+  repeated ViewHierarchyNode children = 9;
+  optional string class_name = 10;
+  bool clickable = 11;
+  optional string dimensions = 12;
+  bool enabled = 13;
+  bool focusable = 14;
+  bool focused = 15;
+  optional string hint_text = 16;
+  bool ignore_bounds_filtering = 17;
+  bool password = 18;
+  optional string resource_id = 19;
+  bool scrollable = 20;
+  bool selected = 21;
+  optional string text = 22;
+}
+
+message TrailblazeNode {
+  int64 node_id = 1;
+  optional string ref = 2;
+  repeated TrailblazeNode children = 3;
+  Bounds bounds = 4;
+  AndroidAccessibilityDetail android_accessibility = 5;
+  AndroidMaestroDetail android_maestro = 6;
+}
+
+message Bounds {
+  int32 left = 1;
+  int32 top = 2;
+  int32 right = 3;
+  int32 bottom = 4;
+}
+
+message AndroidAccessibilityDetail {
+  optional string class_name = 1;
+  optional string resource_id = 2;
+  optional string unique_id = 3;
+  optional string text = 4;
+  optional string content_description = 5;
+  optional string hint_text = 6;
+  optional string labeled_by_text = 7;
+  optional string state_description = 8;
+  optional string pane_title = 9;
+  optional string role_description = 10;
+  optional string compose_test_tag = 11;
+  bool is_enabled = 12;
+  bool is_clickable = 13;
+  bool is_checkable = 14;
+  bool is_checked = 15;
+  bool is_selected = 16;
+  bool is_focused = 17;
+  bool is_editable = 18;
+  bool is_scrollable = 19;
+  bool is_password = 20;
+  bool is_heading = 21;
+  bool is_multi_line = 22;
+  int32 input_type = 23;
+  CollectionItemInfo collection_item_info = 24;
+  optional string package_name = 25;
+  optional string tooltip_text = 26;
+  optional string error = 27;
+  bool is_showing_hint_text = 28;
+  bool is_content_invalid = 29;
+  bool is_visible_to_user = 30;
+  bool is_long_clickable = 31;
+  bool is_focusable = 32;
+  bool is_text_selectable = 33;
+  bool is_important_for_accessibility = 34;
+  int32 drawing_order = 35;
+  int32 max_text_length = 36;
+  repeated string actions = 37;
+  CollectionInfo collection_info = 38;
+  RangeInfo range_info = 39;
+}
+
+message CollectionInfo {
+  int32 row_count = 1;
+  int32 column_count = 2;
+  bool is_hierarchical = 3;
+}
+
+message CollectionItemInfo {
+  int32 row_index = 1;
+  int32 row_span = 2;
+  int32 column_index = 3;
+  int32 column_span = 4;
+  bool is_heading = 5;
+}
+
+message RangeInfo {
+  int32 type = 1;
+  float min = 2;
+  float max = 3;
+  float current = 4;
+}
+
+message AndroidMaestroDetail {
+  optional string text = 1;
+  optional string resource_id = 2;
+  optional string accessibility_text = 3;
+  optional string class_name = 4;
+  optional string hint_text = 5;
+  bool clickable = 6;
+  bool enabled = 7;
+  bool focused = 8;
+  bool checked = 9;
+  bool selected = 10;
+  bool focusable = 11;
+  bool scrollable = 12;
+  bool password = 13;
+}

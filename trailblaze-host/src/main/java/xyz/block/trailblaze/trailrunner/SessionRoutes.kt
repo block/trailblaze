@@ -376,7 +376,6 @@ internal fun Route.sessionRoutes(deps: TrailRunnerDeps) {
         SessionEventStreamDto(
           streamId = stream.name,
           label = eventStreamLabel(stream.name),
-          style = stream.style,
           count = stream.count,
           truncated = stream.truncated,
           events =

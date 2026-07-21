@@ -1,0 +1,29 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - search
+  title: 'Contacts (iOS): Search query that returns no results'
+
+trail:
+  - step: "Open Contacts and search for \"ZzZzNoSuchContact\". Verify \"No Results\" is visible. Do not tap any rows."
+    recording:
+      ios-iphone:
+        - launchApp:
+            appId: com.apple.MobileAddressBook
+            launchMode: FORCE_RESTART
+            reasoning: The objective is to open Contacts. Launch it from a cold start by its bundle identifier so the trail begins from the contacts list root regardless of what state a prior run (or a pre-launch) left the app in.
+        - tapOnElementBySelector:
+            reason: The next step is to search for the contact 'ZzZzNoSuchContact'. The search field is visible at the bottom of the screen and should be tapped to focus it before entering text.
+            nodeSelector:
+              iosMaestro:
+                hintTextRegex: Search
+        - inputText:
+            text: ZzZzNoSuchContact
+            reasoning: The search field is now focused, so the next step is to enter 'ZzZzNoSuchContact' to search for this contact. This will allow us to proceed to verifying that 'No Results' is visible.
+        - assertVisibleBySelector:
+            reason: The text 'No Results for “ZzZzNoSuchContact”' is visible as expected after searching for the nonexistent contact. Verifying its visibility confirms the objective is met.
+            nodeSelector:
+              iosMaestro:
+                accessibilityTextRegex: No Results for “ZzZzNoSuchContact”

@@ -1,8 +1,0 @@
-- config:
-    title: "Wikipedia: Article has a table of contents"
-    platform: web
-    driver: PLAYWRIGHT_NATIVE
-- prompts:
-    - step: Navigate to https://en.wikipedia.org/wiki/Albert_Einstein
-    - step: Verify the heading "Albert Einstein" is visible.
-    - step: Verify a "Contents" element (the article's table of contents) is visible somewhere on the page.

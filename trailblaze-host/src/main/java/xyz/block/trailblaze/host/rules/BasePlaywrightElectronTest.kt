@@ -262,7 +262,10 @@ class BasePlaywrightElectronTest(
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+    // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
+    // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch) additionally decodes to one
+    // ToolTrailItem. Host-runner single-tool dispatch now sends the bare envelope, not `- tools:`.
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
       yaml,
       deviceClassifiers = trailblazeDeviceInfo.classifiers,
     )

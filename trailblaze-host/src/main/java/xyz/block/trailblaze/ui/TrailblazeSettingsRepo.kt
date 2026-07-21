@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
+import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -351,6 +352,7 @@ class TrailblazeSettingsRepo(
         // Pass null when nothing is overridden so the web path can fall back to its own default
         // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
         EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
+        EffectiveStreamScreenshotConfig.androidEnabled = it.androidStreamScreenshotsEnabled ?: false
       },
     ),
   ).also { serverStateFlow ->
@@ -387,6 +389,8 @@ class TrailblazeSettingsRepo(
           EffectiveScreenshotScalingConfig.setEffectiveDefault(
             newState.appConfig.screenshotScalingConfigOrNull(),
           )
+          EffectiveStreamScreenshotConfig.androidEnabled =
+            newState.appConfig.androidStreamScreenshotsEnabled ?: false
         }
     }
   }

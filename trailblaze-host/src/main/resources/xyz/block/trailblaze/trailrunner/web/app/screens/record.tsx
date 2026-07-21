@@ -549,6 +549,65 @@ function RecordScreen({ go, active, yamlSeed }) {
   const toolMap = React.useMemo(() => new Set((tools.data || []).map((t) => t.id)), [tools.data]);
   const deviceList = (devices.data || []).filter((d) => d.connected);
 
+  // Companion guided recording: `go('interact', { companion })` from the companion screen arms
+  // this surface for an agent-directed demonstration - the save destination is FIXED to the
+  // companion session's declared folder (the one sanctioned UI write in companion mode) and the
+  // device connect / save are reported back to the attached agent as user actions. LATCHED, not
+  // read live: the shell's payload is scoped to the visible route, so it goes null on any
+  // navigation (including the agent's own live navigate directive) - and losing it mid-recording
+  // would silently reopen the unsanctioned library-save path. Released on save success, or on a
+  // terminal save failure (session gone) so the demonstrated steps aren't stranded.
+  const [companion, setCompanion] = React.useState((yamlSeed && yamlSeed.companion) || null);
+  // Guards re-delivery of ANY previously adopted payload (the history stack stores payload
+  // objects and replays them on back/forward - an old cycle's payload must never re-arm a stale
+  // destination or wipe current steps) and re-entry into the SAME cycle (re-clicking Start
+  // recording makes a fresh object; so does re-arming after Cancel, which nulls the latch - hence
+  // same-cycle is judged against the last ADOPTED payload, not the live latch). Only a genuinely
+  // new cycle resets.
+  const adoptedCompanionRef = React.useRef(null); // the last adopted payload, for same-cycle detection
+  const adoptedSeenRef = React.useRef(null); // every payload ever adopted (WeakSet)
+  if (!adoptedSeenRef.current) adoptedSeenRef.current = new WeakSet();
+  // The live latch for async resolvers: a connect can be 120s in flight, and reporting to the
+  // click-time closure would announce a device for a cycle that was cancelled meanwhile. Kept in
+  // lockstep IN THE SAME TICK as the state (not via an effect): a resolver landing between
+  // setCompanion and React's commit must not read a one-render-stale latch.
+  const companionRef = React.useRef(companion);
+  const latchCompanion = (v) => { companionRef.current = v; setCompanion(v); };
+  React.useEffect(() => {
+    const c = (yamlSeed && yamlSeed.companion) || null;
+    if (!c || !c.runId || adoptedSeenRef.current.has(c)) return;
+    adoptedSeenRef.current.add(c);
+    const prev = adoptedCompanionRef.current;
+    const sameCycle = prev && prev.runId === c.runId && (prev.variant || null) === (c.variant || null);
+    // Steps recorded OUTSIDE any companion cycle are unsaved library work sitting on this
+    // mounted-but-hidden screen; destroying them for the agent's cycle needs the human's say-so.
+    // Declining leaves the latch unarmed - the agent's ask stays standing on the companion view.
+    if (!sameCycle && !companionRef.current && steps.length > 0 &&
+        !window.confirm(`Discard ${steps.length} unsaved recorded step${steps.length === 1 ? '' : 's'} and start the agent-directed recording?`)) {
+      return;
+    }
+    // Adopting over a DIFFERENT session's live cycle abandons that cycle: tell its agent, or it
+    // tails for a recording-saved that can never come (its destination was just replaced).
+    const old = companionRef.current;
+    if (old && old.runId !== c.runId) {
+      TB.companionUserAction(old.runId, 'user-action', { actionId: 'recording-cancelled' });
+    }
+    adoptedCompanionRef.current = c;
+    latchCompanion(c);
+    if (!sameCycle) {
+      // A new companion cycle starts from a clean slate: steps demonstrated for a previous
+      // variant/session must not leak into this save (screens stay mounted when hidden), and the
+      // device dedupe rescopes so this cycle's connect re-announces to the agent.
+      deviceReportedRef.current = null;
+      setSteps([]); setPending(null); setPendingPrompt(''); setTestStatus({}); setSaveErr(null); setSaveOpen(false);
+    }
+    // A device connected earlier is this cycle's answer too - conn survives screen hides, so
+    // connect() (the only other announcer) may never run again. Same-cycle re-entry announces
+    // too: Cancel cleared the dedupe, so re-arming the same variant answers a re-posted
+    // select-device ask instead of leaving it standing against a connected device.
+    if (conn && connDeviceRef.current) reportCompanionDevice(c, connDeviceRef.current);
+  }, [yamlSeed]);
+
   // The raw connected devices carry the structured trailblazeDeviceId the record API needs;
   // useDevices() normalizes that away, so keep an id → trailblazeDeviceId map.
   const [rawById, setRawById] = React.useState({});
@@ -679,7 +738,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   const [conn, setConn] = React.useState(null); // { deviceWidth, deviceHeight } when connected
   const [connecting, setConnecting] = React.useState(false);
   const [connErr, setConnErr] = React.useState(null);
-  const [frame, setFrame] = React.useState(null); // data URL
+  const [frame, setFrame] = React.useState(false); // true once the live stream has rendered ≥1 frame
   const [busy, setBusy] = React.useState(false); // a gesture is dispatching
   const [steps, setSteps] = React.useState([]);
   const [saving, setSaving] = React.useState(false);
@@ -759,6 +818,16 @@ function RecordScreen({ go, active, yamlSeed }) {
   const prevStageRef = React.useRef(null);
   const connectAbortRef = React.useRef(null); // AbortController for the in-flight connect
   const connDeviceRef = React.useRef(null); // the tbId we're connected to, for cleanup
+  const deviceReportedRef = React.useRef(null); // "<runId>|<instanceId>" last announced to a companion agent
+  const mirrorImgRef = React.useRef(null); // JPEG/poll fallback surface
+  const mirrorCanvasRef = React.useRef(null); // H.264 (WebCodecs) surface
+  const firstFrameSeen = React.useRef(false); // gate the one-time first-frame setState
+  const mirrorOpChainRef = React.useRef(Promise.resolve());
+  const queueMirrorOp = (fn) => {
+    const run = mirrorOpChainRef.current.then(fn, fn);
+    mirrorOpChainRef.current = run.then(() => {}, () => {});
+    return run;
+  };
   // Measured height of the screen root, so the device sizes to fit the viewport (no scrollbar).
   const rootRef = React.useRef(null);
   const [rootH, setRootH] = React.useState(0);
@@ -785,6 +854,14 @@ function RecordScreen({ go, active, yamlSeed }) {
   };
 
   const appendStep = (s) => setSteps((prev) => [...prev, { id: stepId.current++, ...s }]);
+
+  // Reset the mirror surfaces + first-frame gate (on disconnect / device switch). The live-stream
+  // handle owns object-URL lifecycle and hides the surfaces itself; this just clears our React gate.
+  const clearFrame = () => {
+    firstFrameSeen.current = false;
+    setFrame(false);
+    if (mirrorImgRef.current) mirrorImgRef.current.removeAttribute('src');
+  };
 
   // Keep the newest item in view: when a step is added or a proposal appears at the bottom, scroll there.
   React.useEffect(() => {
@@ -813,6 +890,28 @@ function RecordScreen({ go, active, yamlSeed }) {
     if (!r.ok) { setConnErr(r.error || 'Could not connect to the device.'); return; }
     connDeviceRef.current = id;
     setConn({ deviceWidth: r.deviceWidth, deviceHeight: r.deviceHeight });
+    // The agent asked for this demonstration: tell it the device is up. Read the latch through
+    // the ref, not the click-time closure - a connect can be 120s in flight, and the cycle that
+    // was current at click time may have been cancelled or replaced by now.
+    reportCompanionDevice(companionRef.current, id);
+  }
+
+  // Tell the attached agent a device is up, so its select-device ask resolves. Fire-and-forget -
+  // a failed report must not block the human's recording. Deduped against the LAST announced
+  // session+device (a reconnect hiccup doesn't re-announce; switching A→B→A announces A again,
+  // which is harmless - the daemon-side retract is idempotent).
+  function reportCompanionDevice(comp, id) {
+    if (!comp || !id || !id.instanceId) return;
+    const key = comp.runId + '|' + id.instanceId;
+    if (deviceReportedRef.current === key) return;
+    deviceReportedRef.current = key;
+    TB.companionUserAction(comp.runId, 'device-connected', {
+      device: id.instanceId, platform: (id.trailblazeDevicePlatform || '').toLowerCase(),
+    }).then((r) => {
+      // A failed announce must not burn the dedupe: free the key so a later connect or adopt can
+      // retry - unless a newer announce owns it by now.
+      if (!r.ok && deviceReportedRef.current === key) deviceReportedRef.current = null;
+    });
   }
 
   // Cancel an in-flight connect. The daemon may finish the install in the background; a later
@@ -827,8 +926,8 @@ function RecordScreen({ go, active, yamlSeed }) {
   async function disconnect() {
     const id = connDeviceRef.current;
     connDeviceRef.current = null;
-    setConn(null); setFrame(null); setAppendArm(null);
-    if (id) await TB.recordDisconnect(id);
+    setConn(null); clearFrame(); setAppendArm(null);
+    if (id) await queueMirrorOp(() => TB.recordDisconnect(id));
   }
 
   // Switch the connected device from the in-frame dropdown: disconnect, select, reconnect.
@@ -841,34 +940,43 @@ function RecordScreen({ go, active, yamlSeed }) {
     await connect(tbIdFor(v));
   }
 
-  // Mirror frames only while connected AND this screen is the visible tab (screens stay mounted when
-  // hidden). Self-scheduling rather than a fixed interval, so requests never pile up behind one in flight.
+  // Live device mirror, only while connected AND this screen is the visible tab (screens stay mounted
+  // when hidden). Uses the shared /devices/api/stream transport: H.264 via WebCodecs on Android/iOS,
+  // CDP JPEG on Web, degrading through the SubscribeFrames JPEG stream to a snapshot poll. The device
+  // is already connected (recordConnect published it into the shared session registry), so the
+  // transport streams without re-connecting and never disconnects it — this screen owns that.
   React.useEffect(() => {
     if (!conn || !active) return;
-    let stop = false;
-    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-    const loop = async () => {
-      while (!stop) {
-        const id = connDeviceRef.current;
-        if (!id) { await sleep(150); continue; }
-        try {
-          const r = await TB.recordScreen(id);
-          if (!stop && r.ok && r.screenshotBase64) setFrame(`data:${r.mime || 'image/png'};base64,${r.screenshotBase64}`);
-          // Back off on failure: a degraded device fails instantly, and spinning at full request
-          // rate churns the embedded webview's renderer hard enough to kill the page.
-          if (!r || !r.ok) await sleep(250);
-        } catch (_) { await sleep(250); }
-      }
-    };
-    loop();
-    return () => { stop = true; };
+    const id = connDeviceRef.current;
+    if (!id || !window.TbLiveDeviceStream) return;
+    firstFrameSeen.current = false;
+    setFrame(false);
+    const handle = window.TbLiveDeviceStream.openLiveDeviceStream({
+      deviceId: id,
+      deviceWidth: conn.deviceWidth,
+      deviceHeight: conn.deviceHeight,
+      img: mirrorImgRef.current,
+      canvas: mirrorCanvasRef.current,
+      onFrame: () => { if (!firstFrameSeen.current) { firstFrameSeen.current = true; setFrame(true); } },
+      pollFrame: async (deviceId) => {
+        const result = await TB.recordScreen(deviceId);
+        if (!result.ok) throw new Error(result.error || 'Could not capture the device screen.');
+        return result;
+      },
+      onNotConnected: async () => {
+        if (connDeviceRef.current !== id) return;
+        const result = await queueMirrorOp(() => TB.recordConnect(id));
+        if (!result.ok) throw new Error(result.error || 'Could not reconnect to the device.');
+      },
+    });
+    return () => handle.close();
   }, [conn, active]);
 
   // Release the live connection (and abort any in-flight connect) when the screen actually unmounts.
   React.useEffect(() => () => {
     if (connectAbortRef.current) connectAbortRef.current.abort('unmount');
     const id = connDeviceRef.current;
-    if (id) TB.recordDisconnect(id);
+    if (id) queueMirrorOp(() => TB.recordDisconnect(id));
   }, []);
 
   // Map a pointer event to device coordinates (the frame is drawn at the device aspect, 1:1).
@@ -1171,9 +1279,48 @@ function RecordScreen({ go, active, yamlSeed }) {
     const recorded = steps.filter((s) => (s.text || '').trim() || (s.yaml || '').trim());
     const blocker = trailSaveBlocker({ hasSteps: recorded.length > 0, availTrailheads, selectedTh, thMissingRequired });
     if (blocker) { setSaveErr(blocker); return; }
-    // All checks passed: ask where in the library the trail should live.
     setSaveErr(null);
+    // Companion mode has no destination to ask for - the session's folder is the destination.
+    if (companion) { doCompanionSave(); return; }
+    // All checks passed: ask where in the library the trail should live.
     setSaveOpen(true);
+  }
+
+  // Companion save: the write goes through the daemon's companion route, which alone may announce
+  // recording-saved to the agent. No blaze.yaml is written - the agent owns every non-recording
+  // file in its folder; the UI contributes only the demonstrated <variant>.trail.yaml.
+  async function doCompanionSave() {
+    if (saving) return;
+    setSaving(true); setSaveErr(null);
+    const recorded = steps.filter((s) => (s.text || '').trim() || (s.yaml || '').trim());
+    const leadStep = trailheadLeadStep(selectedTh, thDetail, thFilledArgs());
+    const all = leadStep ? [leadStep, ...recorded] : recorded;
+    const nm = (companion.folder || '').split('/').filter(Boolean).pop() || 'recording';
+    const trailYaml = buildRecordedTrailYaml(nm, target, platform, all);
+    // The variant fallback must match what the armed card and the footer PROMISED - 'recording',
+    // never the live platform, or the two screens would name different files for the same save.
+    const saved = await TB.companionSaveRecording(companion.runId, companion.variant || 'recording', trailYaml, platform || null);
+    setSaving(false);
+    if (!saved.ok) {
+      const msg = saved.error || 'Could not save the recording.';
+      if (/has ended|not found/i.test(msg)) {
+        // The session is gone (disconnected, idle-reaped): release the latch so the demonstrated
+        // steps aren't stranded - the normal library save takes over.
+        latchCompanion(null);
+        setSaveErr("Your agent's session has ended, so the recording could not be delivered to it. Save the trail into your library instead.");
+      } else {
+        setSaveErr(msg);
+      }
+      return;
+    }
+    // Delivered: the companion cycle is complete, so the latch and the demonstrated steps clear -
+    // this mounted-but-hidden surface must not still be armed if reopened later. The adopted
+    // marker clears too: a post-save re-arm of the same variant is a NEW cycle (fresh confirm
+    // gate, clean slate), not a re-entry into this finished one.
+    adoptedCompanionRef.current = null;
+    latchCompanion(null);
+    setSteps([]); setPending(null); setPendingPrompt(''); setTestStatus({});
+    go('companion', { runId: companion.runId });
   }
 
   // The dialog's confirm: write the bundle folder straight into the trail library at `dest`
@@ -1425,7 +1572,10 @@ function RecordScreen({ go, active, yamlSeed }) {
                 style={{ width: '100%', height: frameH, borderRadius: 18, background: '#000',
                   position: 'relative', overflow: 'hidden', touchAction: 'none', transition: frameAnim,
                   cursor: busy ? 'progress' : 'crosshair', userSelect: 'none' }}>
-                {frame && <img src={frame} alt="device" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'fill', display: 'block', pointerEvents: 'none' }} />}
+                {/* Both surfaces are always mounted while connected so the live-stream transport can
+                    write into them and toggle their display (canvas for H.264, img for JPEG/poll). */}
+                <img ref={mirrorImgRef} alt="device" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', display: 'none', pointerEvents: 'none' }} />
+                <canvas ref={mirrorCanvasRef} aria-label="device" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', display: 'none', pointerEvents: 'none' }} />
                 {!frame && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'var(--text-subtle)', fontSize: 13 }}><Ico n="loader-2" s={20} spin /> </div>}
                 {busy && <div style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(0,0,0,.62)', color: '#fff', fontSize: 11, padding: '4px 8px', borderRadius: 8, display: 'flex', gap: 6, alignItems: 'center' }}><Ico n="loader-2" s={12} spin /> capturing</div>}
                 {/* Armed to append a tap/verify tool to the open step on the next tap. */}
@@ -1590,15 +1740,33 @@ function RecordScreen({ go, active, yamlSeed }) {
 
             {rightTab === 'runyaml' ? runYamlFooter : (
             <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{steps.length === 0 ? 'Record or add a step to save this trail.' : (testing ? 'Running every step on the device…' : 'Test replays the steps on the device. Save writes the trail into your library.')}</span>
+              {/* The companion destination shows even with zero steps: the latch silently redirecting
+                  a save is exactly the surprise this line (and its escape hatch) exists to prevent. */}
+              <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{companion ? (testing ? 'Running every step on the device…' : <>Save writes <span className="tb-mono">{TB.variantSlug(companion.variant || 'recording')}.trail.yaml</span> into <span className="tb-mono">{companion.folder}</span> for your agent.</>) : (steps.length === 0 ? 'Record or add a step to save this trail.' : (testing ? 'Running every step on the device…' : 'Test replays the steps on the device. Save writes the trail into your library.'))}</span>
               {saveErr && <span role="alert" style={{ color: 'var(--tb-danger-text)', fontSize: 12 }}>{saveErr}</span>}
+              {companion && (
+                /* The abandoned-cycle exit: drops the agent's save destination (steps stay) so a
+                   later unrelated recording can't silently land in the agent's folder. Announced
+                   to the agent - otherwise it tails for recording-saved forever. */
+                <Btn sm ico="x" title="Stop recording for your agent - Save goes back to your library"
+                  onClick={() => {
+                    TB.companionUserAction(companion.runId, 'user-action', { actionId: 'recording-cancelled' });
+                    // Cancel frees the device dedupe: the agent will likely re-ask, and a re-arm
+                    // of the SAME variant is same-cycle (no reset), so the adopt-time announce
+                    // must be allowed to answer the re-posted select-device.
+                    deviceReportedRef.current = null;
+                    latchCompanion(null);
+                  }}>
+                  Cancel agent recording
+                </Btn>
+              )}
               {/* Test the whole trail — runs each step on the device, highlighting it inline. */}
               <Btn sm kind={testing ? 'danger' : 'ghost'} ico={testing ? 'square' : 'play'} onClick={testing ? stopTest : testTrail}
                 disabled={!conn || steps.length === 0} title={!conn ? 'Connect a device first' : 'Run every step on the device'}>
                 {testing ? 'Stop' : 'Test trail'}
               </Btn>
               <Btn kind="primary" ico={saving ? 'loader-2' : 'save'} spin={saving} onClick={save} disabled={saving || steps.length === 0}>
-                {saving ? 'Saving…' : 'Save trail'}
+                {saving ? 'Saving…' : (companion ? 'Save recording' : 'Save trail')}
               </Btn>
             </div>
             )}

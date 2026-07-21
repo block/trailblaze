@@ -20,6 +20,7 @@ import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class HomeEndpointTest {
@@ -51,6 +52,32 @@ class HomeEndpointTest {
     assertTrue("Passed" in body, "expected status pill for passing session")
     assertTrue("Failed" in body, "expected status pill for failing session")
     assertTrue("/report\"" in body || "href=\"/report\"" in body, "expected unfiltered /report fallback link")
+  }
+
+  @Test
+  fun `home page makes Trail Runner prominent while preserving daemon utilities`() = testApplication {
+    val logsRepo = createTestLogsRepo()
+    application { logsServerKtorEndpoints(logsRepo, trailRunnerPath = "/trailrunner/") }
+
+    val body = client.get("/").bodyAsText()
+
+    assertTrue("href=\"/trailrunner/\"" in body, "expected a direct Trail Runner link")
+    assertTrue("Open Trail Runner" in body, "expected Trail Runner to be the primary action")
+    assertTrue("href=\"/report\"" in body, "expected the all-session report link")
+    assertTrue("href=\"/devices\"" in body, "expected the devices link")
+    assertTrue("href=\"/ping\"" in body, "expected the health-check link")
+  }
+
+  @Test
+  fun `home page only links Trail Runner when its route is registered`() = testApplication {
+    val logsRepo = createTestLogsRepo()
+    application { logsServerKtorEndpoints(logsRepo) }
+
+    val body = client.get("/").bodyAsText()
+
+    assertFalse("href=\"/trailrunner/\"" in body, "must not link an unavailable Trail Runner route")
+    assertTrue("href=\"/report\"" in body, "expected the report to remain the primary destination")
+    assertFalse("fonts.googleapis.com" in body, "daemon home must not depend on an external font request")
   }
 
   @Test

@@ -18,7 +18,7 @@ or by existing text content.
 By default this clears the field first. Set clearFirst to false to append text instead.
 """,
 )
-class ComposeTypeTool(
+data class ComposeTypeTool(
   @param:LLMDescription("The text to type into the element.")
   val text: String,
   @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e3'. Preferred method.")

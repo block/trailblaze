@@ -17,7 +17,7 @@ JSON string in Playwright's standard format. Callers typically persist this to d
 later session can be replayed via web_applyCookies instead of running a full login flow.
 """,
 )
-class PlaywrightNativeGetStorageStateTool : PlaywrightExecutableTool {
+object PlaywrightNativeGetStorageStateTool : PlaywrightExecutableTool {
 
   override suspend fun executeWithPlaywright(
     page: Page,

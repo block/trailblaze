@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.android.ondevice.rpc
 
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -12,6 +13,8 @@ import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils.HttpRpcException
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
+import xyz.block.trailblaze.transport.AndroidWireTransport
+import xyz.block.trailblaze.transport.AndroidWireTransportMode
 import java.io.IOException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -102,6 +105,9 @@ class OnDeviceRpcClient(
     baseUrl = baseUrl,
   )
 
+  @PublishedApi
+  internal val webSocketClient = OnDeviceRpcWebSocketClient(baseUrl)
+
   /**
    * Generic RPC call function that handles request serialization, routing, and response deserialization.
    * Wraps the result in RpcResult to handle errors gracefully.
@@ -132,6 +138,14 @@ class OnDeviceRpcClient(
     val methodName = TRequest::class.simpleName
 
     return try {
+      if (AndroidWireTransport.mode != AndroidWireTransportMode.JSON) {
+        tryBinaryRpc<TResponse>(
+          request = request,
+          urlPath = urlPath,
+        )?.let { binaryResult ->
+          return binaryResult
+        }
+      }
       val jsonInputString = TrailblazeJsonInstance.encodeToString(request)
       val responseJson = httpRequestUtils.postRequest(
         urlPath = urlPath,
@@ -140,6 +154,8 @@ class OnDeviceRpcClient(
       )
       val response: TResponse = TrailblazeJsonInstance.decodeFromString(responseJson)
       RpcResult.Success(response)
+    } catch (e: CancellationException) {
+      throw e
     } catch (e: HttpRpcException) {
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.HTTP_ERROR,
@@ -178,6 +194,53 @@ class OnDeviceRpcClient(
         method = methodName,
         url = fullUrl
       ).also { noteIfNonRecoverableWedge(it.message, it.details) }
+    }
+  }
+
+  /**
+   * Uses the persistent, typed protobuf WebSocket for every on-device RPC. `null` means no bytes
+   * were sent and the caller may safely fall back to HTTP/JSON (older runner or not-yet-listening
+   * server).
+   */
+  @PublishedApi
+  internal suspend fun <TResponse : Any> tryBinaryRpc(
+    request: RpcRequest<*>,
+    urlPath: String,
+  ): RpcResult<TResponse>? {
+    val timeoutMs = request.requestTimeoutMs ?: DEFAULT_REQUEST_TIMEOUT_MS
+    val attempt = try {
+      webSocketClient.call(request, timeoutMs)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      return RpcResult.Failure(
+        errorType = RpcResult.ErrorType.NETWORK_ERROR,
+        message = "Binary RPC failed: ${e.message}",
+        details = e.stackTraceToString(),
+        method = request::class.simpleName,
+        url = "$baseUrl$urlPath",
+      ).also { noteIfNonRecoverableWedge(it.message, it.details) }
+    }
+
+    return when (attempt) {
+      is OnDeviceRpcWebSocketClient.Attempt.FallbackToHttp -> {
+        if (AndroidWireTransport.mode == AndroidWireTransportMode.AUTO) {
+          null
+        } else {
+          RpcResult.Failure(
+            errorType = RpcResult.ErrorType.NETWORK_ERROR,
+            message = "Protobuf RPC transport is unavailable",
+            method = request::class.simpleName,
+            url = "$baseUrl$urlPath",
+          )
+        }
+      }
+      is OnDeviceRpcWebSocketClient.Attempt.Failure ->
+        attempt.failure.also { noteIfNonRecoverableWedge(it.message, it.details) }
+      is OnDeviceRpcWebSocketClient.Attempt.Success<*> -> {
+        @Suppress("UNCHECKED_CAST")
+        RpcResult.Success(attempt.value as TResponse)
+      }
     }
   }
 
@@ -336,6 +399,7 @@ class OnDeviceRpcClient(
   }
 
   private companion object {
+    const val DEFAULT_REQUEST_TIMEOUT_MS = 300_000L
     /** How often to emit a "still waiting" progress message while polling for readiness. */
     const val PROGRESS_REPORT_INTERVAL_MS = 5_000L
 
@@ -349,6 +413,7 @@ class OnDeviceRpcClient(
   }
 
   override fun close() {
+    webSocketClient.close()
     httpRequestUtils.close()
   }
 }

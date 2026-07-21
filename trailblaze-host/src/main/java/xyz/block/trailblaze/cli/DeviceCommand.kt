@@ -341,7 +341,17 @@ class DeviceConnectCommand : Callable<Int> {
   val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
-    return cliWithDaemon(verbose = false) { client ->
+    val resolvedTarget = normalizeTargetId(target)
+    val effectiveTarget = resolvedTarget ?: CliConfigHelper.getOrCreateConfig().selectedTargetAppId
+    // Warm the same device-scoped session that snapshot/tool/step will reuse. Previously this
+    // command warmed the unscoped session, so the first follow-up command created another MCP
+    // session and paid the full target + scripted-tool registration cost.
+    val provisionalSessionScope = cliDeviceSessionScope(platform)
+    return cliWithDaemon(
+      verbose = false,
+      sessionScope = provisionalSessionScope,
+      targetAppId = effectiveTarget,
+    ) { client ->
       // 1. Bind the device (existing daemon-side machinery via TrailblazeDeviceManager).
       val deviceError = client.ensureDevice(
         platform,
@@ -364,18 +374,10 @@ class DeviceConnectCommand : Callable<Int> {
       //    the user's shell without the daemon-side lookup failing on the
       //    unintentional whitespace.
       //
-      //    The "announcing" variant is the key piece. When the user re-runs
-      //    `device connect <same-device> --target Y` after a prior connect
-      //    with `--target X`, [connectReusable]'s file-tier target check
-      //    matches (both reflect the config-tier value, NOT the --target arg
-      //    — see [cliWithDaemon]'s `targetAppId = config.selectedTargetAppId`
-      //    above) and the session is reused. The daemon then hot-swaps the
-      //    per-device override silently, leaving the user with a "Reusing
-      //    session …" line and no notice that their target changed. The
-      //    announcing helper closes that gap by emitting `Target app changed
-      //    (X -> Y) -- pinned on existing session.` to stderr when a prior
-      //    session-override is being replaced.
-      val resolvedTarget = normalizeTargetId(target)
+      //    Passing the effective target into [cliWithDaemon] lets [connectReusable] create a fresh
+      //    session when the saved target differs, since its driver and custom tool registry can
+      //    differ too. The announcing setter still covers legacy target-less session files and a
+      //    daemon-side override that changed independently of the reusable-session pointer.
       if (resolvedTarget != null) {
         val targetError = client.setSessionTargetForBoundDeviceAnnouncingChange(resolvedTarget)
         if (targetError != null) {
@@ -398,6 +400,16 @@ class DeviceConnectCommand : Callable<Int> {
       //    the user typed. Falls back to the user's spec if the lookup fails.
       val boundId = client.getBoundDeviceId()
       val deviceIdString = boundId?.toFullyQualifiedDeviceId() ?: platform
+
+      // A platform-only spec (for example, `android`) learns its concrete instance only after
+      // binding. Move the reusable-session pointer to the resolved per-device scope so the first
+      // bare `snapshot` attaches to this already-hydrated session. A fully-qualified input is
+      // already in the final scope, making this a no-op.
+      CliMcpClient.migrateSessionFile(
+        port = CliConfigHelper.resolveEffectiveHttpPort(),
+        fromSessionScope = provisionalSessionScope,
+        toSessionScope = cliDeviceSessionScope(deviceIdString),
+      )
 
       // 4b. If a real MCP client (Claude Desktop, Cursor, Goose) is open and
       //    hasn't picked a device yet, adopt it into the same device + target

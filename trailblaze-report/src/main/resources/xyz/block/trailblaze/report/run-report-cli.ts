@@ -15,10 +15,14 @@
 import { createRequire } from "module";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
+import { gzipSync } from "zlib";
+import { buildEventStream, resolveFormatterModule } from "./run-report-events";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
 interface DriverInput {
   generatedAt?: string;
+  /** File names of event-formatter modules staged beside this driver (see run-report-events.ts). */
+  formatters?: string[];
   sessions?: Array<{
     meta?: RunMeta;
     recordingYaml?: string | null;
@@ -94,58 +98,75 @@ function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
   }
 }
 
-// Generic session events (`<sessionDir>/events/<name>.<style>.ndjson`) — the producer-agnostic
+// Generic session events (`<sessionDir>/events/<name>.ndjson`) — the producer-agnostic
 // artifact `xyz.block.trailblaze.events.SessionEvents` writes: any producer drops NDJSON streams
-// here and they surface without report-side per-producer code. Mirrors the JVM `SessionEventsReader`:
-// one stream per file, `{ timeMs, data }` (or richer `timestampMs`) per line. We keep the LAST
-// MAX_EVENTS_PER_STREAM per stream and pre-truncate each event's serialized `data` so a chatty
-// producer can't balloon the self-contained report; a `total` count preserves the real volume for
-// the "showing last N of M" note.
-const MAX_EVENTS_PER_STREAM = 100;
-const MAX_EVENT_PREVIEW_CHARS = 2000;
-// Events streams are bounded in the PAYLOAD by last-N + per-event truncation below, so the file
-// size doesn't drive report size (unlike the wholesale-inlined device/network logs gated by
-// MAX_LOG_BYTES). A network stream that captures large response bodies is legitimately tens of MB on
-// disk; this higher cap keeps it while still refusing a pathologically huge file we'd choke reading.
+// here and they surface without report-side per-producer code. The line-level decode, the optional
+// per-stream formatter pass, and every payload budget live in run-report-events.ts (shared with its
+// raw-line tests); this wrapper only owns the filesystem walk.
+//
+// Event payloads are embedded IN FULL (no last-N window, no preview truncation — see
+// run-report-events.ts), so stream size is managed here instead: a per-file read cap and a loud
+// per-session total budget bound the worst case, and anything past a small inline threshold is
+// embedded gzipped (the viewer inflates lazily via DecompressionStream). A network stream that
+// captures large response bodies is legitimately tens of MB on disk and gzips ~10-20x.
 const MAX_EVENTS_FILE_BYTES = 64 * 1024 * 1024;
-function readEvents(sessionDir: string): EventStream[] | null {
+const MAX_EVENTS_TOTAL_CHARS = 256 * 1024 * 1024;
+// Below this, embed plain JSON: a small events payload stays greppable in the HTML and skips the
+// async inflate; only genuinely heavy sessions pay for compression.
+const EVENTS_INLINE_MAX_CHARS = 1024 * 1024;
+
+function readEvents(sessionDir: string, formatters: EventStreamFormatter[]): EventStream[] | null {
   try {
     const dir = join(sessionDir, "events");
     if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
     const streams: EventStream[] = [];
+    let totalChars = 0;
     for (const file of readdirSync(dir).filter((n) => n.endsWith(".ndjson")).sort()) {
       try {
         const path = join(dir, file);
-        if (statSync(path).size > MAX_EVENTS_FILE_BYTES) continue; // refuse a pathologically large stream
-        const all = readFileSync(path, "utf8").split("\n").filter((l) => l.trim());
-        const events: SessionEvent[] = [];
-        for (const line of all.slice(-MAX_EVENTS_PER_STREAM)) {
-          try {
-            const o = JSON.parse(line);
-            const t = typeof o.timeMs === "number" ? o.timeMs
-              : (typeof o.timestampMs === "number" ? o.timestampMs : null);
-            let d = JSON.stringify(o.data ?? o);
-            if (d.length > MAX_EVENT_PREVIEW_CHARS) d = d.slice(0, MAX_EVENT_PREVIEW_CHARS) + "…";
-            events.push({ t, d });
-          } catch { /* skip malformed line */ }
+        if (statSync(path).size > MAX_EVENTS_FILE_BYTES) {
+          console.error(`events: skipping ${file} — exceeds the ${MAX_EVENTS_FILE_BYTES / 1024 / 1024}MB per-stream cap`);
+          continue;
         }
-        if (!events.length) continue;
-        // `<name>.<style>.ndjson` → name is everything before the final `.style`.
-        const base = file.replace(/\.ndjson$/, "");
-        const dot = base.lastIndexOf(".");
-        streams.push({
-          name: dot > 0 ? base.slice(0, dot) : base,
-          style: dot > 0 ? base.slice(dot + 1) : "",
-          total: all.length,
-          truncated: all.length > events.length,
-          events,
-        });
+        const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters);
+        if (!stream) continue;
+        totalChars += JSON.stringify(stream).length;
+        if (totalChars > MAX_EVENTS_TOTAL_CHARS) {
+          console.error(`events: skipping ${file} and later streams — session events exceed the ${MAX_EVENTS_TOTAL_CHARS / 1024 / 1024}MB total budget`);
+          break;
+        }
+        streams.push(stream);
       } catch { /* skip this stream */ }
     }
     return streams.length ? streams : null;
   } catch {
     return null;
   }
+}
+
+/** Splits a session's streams into inline `events` vs compressed `eventsGz` at the threshold. */
+function packEvents(streams: EventStream[] | null): { events: EventStream[] | null; eventsGz: string | null } {
+  if (!streams) return { events: null, eventsGz: null };
+  const json = JSON.stringify(streams);
+  if (json.length <= EVENTS_INLINE_MAX_CHARS) return { events: streams, eventsGz: null };
+  return { events: null, eventsGz: gzipSync(json).toString("base64") };
+}
+
+// Event-formatter modules staged beside this driver by RunReportGenerator. A module that fails to
+// load or doesn't export the EventStreamFormatter shape is skipped with a note — formatting is a
+// rendering upgrade, never a reason to lose the report.
+function loadFormatters(names: string[]): EventStreamFormatter[] {
+  const formatters: EventStreamFormatter[] = [];
+  for (const name of names) {
+    try {
+      const formatter = resolveFormatterModule(require(`./${name}`));
+      if (formatter) formatters.push(formatter);
+      else console.error(`skipping event formatter ${name}: not an EventStreamFormatter module`);
+    } catch (e) {
+      console.error(`skipping event formatter ${name}: ${e}`);
+    }
+  }
+  return formatters;
 }
 
 // Video frames as a CSS sprite scrubber (parity with the old report's video tab, but pure-DOM — no
@@ -216,7 +237,7 @@ function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreensh
 
     const sprite = dataUri(spritePath);
     if (!sprite) return null;
-    return { sprite, fps, frames, columns, rows, frameHeight, frameMap, startFrame, endFrame };
+    return { sprite, fps, frames, columns, rows, frameHeight, frameMap, startFrame, endFrame, startMs };
   } catch {
     return null;
   }
@@ -229,6 +250,7 @@ function main(): void {
     process.exit(2);
   }
   const input: DriverInput = JSON.parse(readFileSync(inputPath, "utf8"));
+  const formatters = loadFormatters(input.formatters || []);
   const sessions: SessionInput[] = (input.sessions || []).map((s) => {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
@@ -241,6 +263,7 @@ function main(): void {
       const uri = screenshotDataUri(s.sessionDir, f);
       if (uri) shots[f] = uri;
     }
+    const { events, eventsGz } = packEvents(readEvents(s.sessionDir, formatters));
     return {
       meta: s.meta || {},
       trace,
@@ -250,7 +273,8 @@ function main(): void {
       originalYaml: s.originalYaml || null,
       deviceLog: readDeviceLog(s.sessionDir),
       network: readNetworkLog(s.sessionDir),
-      events: readEvents(s.sessionDir),
+      events,
+      eventsGz,
       video: readVideo(s.sessionDir, logs, files.length),
     };
   });

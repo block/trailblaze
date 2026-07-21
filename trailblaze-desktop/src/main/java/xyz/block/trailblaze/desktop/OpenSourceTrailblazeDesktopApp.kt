@@ -57,6 +57,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       deviceManager = deviceManager,
       headless = headless,
       daemonAlreadyRunning = daemonAlreadyRunning,
+      trailRunnerPath = "/trailrunner/",
       // Serve the Trail Runner web UI (/trailrunner/) on the daemon. The open-source build runs it
       // with the config's extension (DefaultTrailRunnerExtension unless a downstream build
       // overrides it): no integrations, no analytics, no LLM authoring assists — the UI degrades

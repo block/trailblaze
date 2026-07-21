@@ -1,8 +1,0 @@
-- config:
-    title: "Wikipedia: Main page loads"
-    platform: web
-    driver: PLAYWRIGHT_NATIVE
-    target: wikipedia
-    tags: [smoke, main-page]
-- prompts:
-    - step: Open Wikipedia and verify the main page loaded ("Welcome to Wikipedia" is visible somewhere on the page).

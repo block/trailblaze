@@ -1,8 +1,0 @@
-- config:
-    title: "Wikipedia: First paragraph of an article is readable"
-    platform: web
-    driver: PLAYWRIGHT_NATIVE
-- prompts:
-    - step: Navigate to https://en.wikipedia.org/wiki/Wikipedia
-    - step: Verify the heading "Wikipedia" is visible.
-    - step: Verify the article body text contains the phrase "free content" somewhere near the top of the page.

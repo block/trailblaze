@@ -17,6 +17,7 @@ import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.ui.getVersionInfo
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -203,6 +204,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
         File(dir, ".trailrunner-trail-id").writeText(trailId)
       }
     }
+    val companionRel = companionRelFor(body.bundleId, body.trailId)
     deviceManager.runYaml(
       yamlToRun = yaml,
       trailblazeDeviceId = id,
@@ -218,14 +220,27 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       initialMemorySeeds = body.memory,
       initialMemorySensitiveSeeds = body.secrets,
       captureNetworkTrafficOverride = if (captureEventsOn) true else body.captureNetworkTraffic,
-      onComplete = {
+      onComplete = { result ->
         analyticsCapture?.let { c -> runCatching { c.close() } }
         eventCapture?.let { c -> runCatching { c.close() } }
         // When this run was a bundle recording (bundleId + variant set), write the recorded
         // <variant>.trail.yaml back into the bundle folder. No-op for ordinary runs.
         maybeWriteBundleVariant(deps, body, sessionId)
+        companionRel?.let {
+          ExternalAgentSupervisor.announceRunStatusForFolder(
+            relPath = it,
+            started = false,
+            sessionId = sessionId,
+            status = runFinishedStatus(result),
+          )
+        }
       },
     )
+    // Companion sessions watching this trail's folder hear the dispatch. Only after runYaml
+    // accepts it - a dispatch that throws above never announces a start it didn't make. The
+    // fan-out appends each listener's journal synchronously, but it's bounded by the companion
+    // session cap, so the dispatch response is delayed by at most a handful of small file writes.
+    companionRel?.let { ExternalAgentSupervisor.announceRunStatusForFolder(it, started = true, sessionId = sessionId) }
     // Dispatch is async: the caller gets the sessionId immediately and follows the
     // run through the session status; failures surface there, not on this response.
     RunResponse(success = true, sessionId = sessionId)
@@ -265,6 +280,27 @@ internal fun Route.runRoutes(deps: TrailRunnerDeps) {
   }
 }
 
+// The run's library path relative to the primary root, when the dispatch named one - the key that
+// routes run-started/run-finished to companion sessions. "0/<rel>" is the primary-root marker in
+// both trailId and bundleId (bundleId wins: it names the folder, not a variant file); extras roots
+// (1/, 2/, ...) are outside companion scope, so runs from them never announce. Raw-YAML dispatches
+// (no id at all) stay silent too - there's no folder to attribute them to. trailId is a
+// caller-claimed field (unlike the @Transient bundleId), so a local caller can aim these events at
+// any folder - accepted: the events are advisory LIFECYCLE only (title and payload stay
+// daemon-built), and anyone who can POST /api/run could generate the same events genuinely by
+// running a real trail there. Same trust stance as the caller-claimed .trailrunner-trail-id marker.
+internal fun companionRelFor(bundleId: String?, trailId: String?): String? = sequenceOf(bundleId, trailId)
+  .mapNotNull { id -> id?.takeIf { it.startsWith("0/") }?.substringAfter('/')?.takeIf { it.isNotEmpty() } }
+  .firstOrNull()
+
+// The run-finished status vocabulary the companion contract promises agents; exhaustive over
+// [TrailExecutionResult] so a new outcome is a compile error here, not a silent contract gap.
+internal fun runFinishedStatus(result: TrailExecutionResult): String = when (result) {
+  is TrailExecutionResult.Success -> "succeeded"
+  is TrailExecutionResult.Failed -> "failed"
+  is TrailExecutionResult.Cancelled -> "cancelled"
+}
+
 // Materialize a finished bundle-recording run into its bundle folder. No-op unless the run carried
 // both [RunRequest.bundleId] and [RunRequest.variant] - @Transient fields only the server-side
 // `/api/folder/record` dispatch can set, so a raw REST/RPC caller can never land a recorded
@@ -281,6 +317,17 @@ private fun maybeWriteBundleVariant(deps: TrailRunnerDeps, body: RunRequest, ses
       return Console.log("[BlazeRoutes] no logs for session $sessionId; variant '$variant' not written")
     }
     val yaml = logs.generateRecordedYaml(createTrailblazeYaml())
-    BundleStore.writeVariant(resolved.dir, variant, yaml)
+    val written = BundleStore.writeVariant(resolved.dir, variant, yaml)
+    // A recording landing in the folder is the same fact whether a human saved it from the
+    // companion view or the board's record flow wrote it here - companion sessions watching the
+    // folder hear both. Primary root only: companion folders resolve against rootIdx 0. On this
+    // path the variant IS the recording device's platform name (see /api/folder/record).
+    if (written != null && resolved.rootIdx == 0) {
+      ExternalAgentSupervisor.announceRecordingSavedForFolder(
+        relFolder = resolved.home,
+        file = written.name,
+        platform = variant,
+      )
+    }
   }.onFailure { Console.log("[BlazeRoutes] bundle variant write failed: ${it.message}") }
 }

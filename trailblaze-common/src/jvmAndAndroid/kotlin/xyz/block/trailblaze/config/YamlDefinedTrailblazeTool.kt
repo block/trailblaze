@@ -60,7 +60,7 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  * `InstanceNamedTrailblazeTool` check.
  */
 @TrailblazeToolClass(name = "_yaml_defined")
-class YamlDefinedTrailblazeTool(
+data class YamlDefinedTrailblazeTool(
   val config: ToolYamlConfig,
   val params: Map<String, JsonElement>,
 ) : DelegatingTrailblazeTool, InstanceNamedTrailblazeTool {

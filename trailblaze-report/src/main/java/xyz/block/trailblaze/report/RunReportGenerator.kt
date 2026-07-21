@@ -81,15 +81,20 @@ class RunReportGenerator(
     }
 
     val generatedAt = LocalDateTime.now().format(HUMAN_TS)
-    val inputJson = buildJsonObject {
-      put("generatedAt", generatedAt)
-      put("sessions", sessionsJson)
-    }
 
     val workDir = Files.createTempDirectory("trailblaze-run-report-").toFile()
     try {
       copyResource(CORE_RESOURCE, File(workDir, "run-report-core.js"))
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
+      copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
+      val formatterNames = stageEventFormatters(workDir)
+      val inputJson = buildJsonObject {
+        put("generatedAt", generatedAt)
+        if (formatterNames.isNotEmpty()) {
+          put("formatters", buildJsonArray { formatterNames.forEach { add(it) } })
+        }
+        put("sessions", sessionsJson)
+      }
       val inputFile = File(workDir, "input.json").apply { writeText(inputJson.toString()) }
       val outputFile = File(workDir, "report.html")
 
@@ -168,6 +173,25 @@ class RunReportGenerator(
     stream.use { input -> dest.outputStream().use { input.copyTo(it) } }
   }
 
+  /**
+   * Stage every classpath-provided event-formatter file beside the driver (preserving relative
+   * paths, so formatter modules can import shared support files like `lib/…`) and return the
+   * formatter module names (listed in input.json; the driver `require`s each one — see
+   * run-report-events.ts). Formatters are an optional rendering upgrade, so any discovery/copy
+   * failure only logs.
+   */
+  private fun stageEventFormatters(workDir: File): List<String> = try {
+    discoverEventFormatterResources(javaClass.classLoader).mapNotNull { (path, url) ->
+      val dest = File(workDir, path)
+      dest.parentFile.mkdirs()
+      url.openStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
+      path.takeIf { isFormatterModule(it) }
+    }
+  } catch (e: Exception) {
+    Console.log("[RunReportGenerator] skipping event formatters: $e")
+    emptyList()
+  }
+
   /** Run `bun run-report-cli.ts <input> <output>`, draining output, bounded by a timeout. */
   private fun runBun(bun: File, workDir: File, input: File, output: File): Int {
     val proc = ProcessBuilder(
@@ -203,6 +227,72 @@ class RunReportGenerator(
     // app can keep serving run-report-core.js at the same URL/classpath path it always has.
     private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/run-report-core.js"
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
+    private const val EVENTS_RESOURCE = "xyz/block/trailblaze/report/run-report-events.ts"
+
+    /**
+     * Classpath directory scanned for event-formatter modules. Any module on the runtime classpath
+     * (this JAR, a downstream distribution's JARs, a plain resources dir) can contribute per-stream
+     * formatters for the report's Events rendering by dropping `<name>.formatter.ts|js` files here —
+     * the OSS generator stays producer-agnostic while distributions add their own formatters without
+     * code changes (see EventStreamFormatter in run-report-types.d.ts for the module contract).
+     * Files in subdirectories (e.g. `lib/…`) are staged alongside the modules so a formatter can
+     * `import` shared support code; only top-level `*.formatter.ts|js` files are loaded as modules.
+     */
+    const val EVENT_FORMATTERS_RESOURCE_DIR: String = "xyz/block/trailblaze/report/event-formatters"
+
+    /**
+     * Staged files become paths under the driver's working directory, so every relative-path
+     * segment must be a plain, path-safe name (no leading dot, so no `.`/`..` traversal); anything
+     * else is ignored rather than staged.
+     */
+    private val SAFE_PATH_SEGMENT = Regex("""[A-Za-z0-9][A-Za-z0-9._-]*""")
+    private val FORMATTER_FILE_NAME = Regex("""[A-Za-z0-9][A-Za-z0-9._-]*\.formatter\.(ts|js)""")
+
+    private fun isSafeRelativePath(path: String): Boolean =
+      path.split('/').all { SAFE_PATH_SEGMENT.matches(it) }
+
+    /** A top-level `*.formatter.ts|js` — the `require()` entry points among the staged files. */
+    private fun isFormatterModule(relativePath: String): Boolean =
+      '/' !in relativePath && FORMATTER_FILE_NAME.matches(relativePath)
+
+    /**
+     * Find every path-safe file under [EVENT_FORMATTERS_RESOURCE_DIR] across the classpath
+     * (formatter modules at the top level plus their support files in subdirectories), keyed by
+     * relative path, deduplicated (first classpath occurrence wins), sorted for a deterministic
+     * driver load order. Handles both resource-URL shapes: a plain directory (dev/test classpath)
+     * and a JAR entry (packaged distribution).
+     */
+    internal fun discoverEventFormatterResources(classLoader: ClassLoader): Map<String, java.net.URL> {
+      val found = sortedMapOf<String, java.net.URL>()
+      for (dirUrl in classLoader.getResources(EVENT_FORMATTERS_RESOURCE_DIR)) {
+        when (dirUrl.protocol) {
+          "file" -> {
+            val base = File(dirUrl.toURI())
+            base.walkTopDown()
+              .filter { it.isFile }
+              .forEach { file ->
+                val path = file.relativeTo(base).invariantSeparatorsPath
+                if (isSafeRelativePath(path)) found.putIfAbsent(path, file.toURI().toURL())
+              }
+          }
+          "jar" -> {
+            val connection = dirUrl.openConnection() as java.net.JarURLConnection
+            connection.useCaches = false
+            connection.jarFile.use { jar ->
+              jar.entries().asSequence()
+                .filter { !it.isDirectory && it.name.startsWith("$EVENT_FORMATTERS_RESOURCE_DIR/") }
+                .forEach { entry ->
+                  val path = entry.name.removePrefix("$EVENT_FORMATTERS_RESOURCE_DIR/")
+                  if (isSafeRelativePath(path)) {
+                    found.putIfAbsent(path, java.net.URL("jar:${connection.jarFileURL}!/${entry.name}"))
+                  }
+                }
+            }
+          }
+        }
+      }
+      return found
+    }
     private const val SUBPROCESS_TIMEOUT_SECONDS = 120L
     private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")

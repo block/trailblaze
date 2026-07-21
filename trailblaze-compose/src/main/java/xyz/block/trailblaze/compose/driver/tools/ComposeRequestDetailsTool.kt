@@ -35,7 +35,7 @@ Available detail types:
   or disambiguating visually similar elements by location.
 """,
 )
-class ComposeRequestDetailsTool(
+data class ComposeRequestDetailsTool(
   @param:LLMDescription(
     "List of detail types to include in the next view hierarchy. " +
       "Supported: [\"BOUNDS\"]. " +

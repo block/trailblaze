@@ -7,7 +7,7 @@ Native driver. The trailmap ships:
 - **9 scripted tools** (in TypeScript) covering search, language switching,
   random article, main-page section verification, banner dismissal, article
   structure assertions, plus a composition example.
-- **28 trails** under `trails/wikipedia/` exercising those tools
+- **30 trails** under `trails/wikipedia/` exercising those tools
   + the built-in `web_*` toolset, with `tags` for selective runs and one
   `skip:` example for opting out gracefully.
 - **A target-scoped system prompt** that teaches the LLM when to reach for
@@ -253,20 +253,23 @@ watching which tool the agent chose for each step.
 
 ## What a trail actually looks like
 
-A trail directory's `blaze.yaml` is the source of truth — a natural-language
+A trail directory's `trail.yaml` is the source of truth — a natural-language
 step the agent resolves against the live page. Here's
-[`test-search-einstein/blaze.yaml`](../../trails/wikipedia/test-search-einstein/blaze.yaml)
+[`test-search-einstein/trail.yaml`](../../trails/wikipedia/test-search-einstein/trail.yaml)
 verbatim:
 
 ```yaml
-- config:
-    title: "Wikipedia: Search for Albert Einstein"
-    platform: web
-    driver: PLAYWRIGHT_NATIVE
-    target: wikipedia
-    tags: [smoke, search]
-- prompts:
-    - step: Search Wikipedia for "Albert Einstein" and verify the resulting article page shows the heading "Albert Einstein".
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - smoke
+  - search
+  title: 'Wikipedia: Search for Albert Einstein'
+
+trail:
+  - step: Search Wikipedia for "Albert Einstein" and verify the resulting article page shows the heading "Albert Einstein".
 ```
 
 The agent sees the trailmap's `target.tools:` (which includes the scripted
@@ -278,22 +281,23 @@ tools when a step matches their task patterns. Run it:
 trailblaze run trails/wikipedia/test-search-einstein --device web/playwright-native
 ```
 
-After a passing run, the CLI auto-saves a fresh `<device>.trail.yaml`
-alongside the `blaze.yaml` — that's the recording artifact you commit for
-deterministic replay. **One caveat for this example specifically:**
-scripted-tool calls (`wikipedia_web_*`) currently don't dispatch from a
-saved `web.trail.yaml` recording — the Playwright agent rejects them at
-replay (tracked under [Known issues](#known-issues)). 5/28 trails here
-carry recordings — the ones that exercise pure `web_*` built-ins; the
-rest stay NL.
+After a passing run, the CLI folds a fresh recording into the trail's
+`trail.yaml` — a `recording:` block nested under each step, keyed by device
+classifier (`web`) — that's the artifact you commit for deterministic replay.
+**One caveat for this example specifically:** scripted-tool calls
+(`wikipedia_web_*`) currently don't dispatch from a saved `web` recording —
+the Playwright agent rejects them at replay (tracked under
+[Known issues](#known-issues)). 5/30 trails here carry recordings — the ones
+that exercise pure `web_*` built-ins; the rest stay NL.
 
 ## Recording vs natural-language: when to use which
 
-Each trail directory has a `blaze.yaml` (the source of truth). If a
-`web.trail.yaml` is also present, the CLI replays it deterministically
-instead of going through the LLM. **Use the decision tree:**
+Each trail directory has a `trail.yaml` (the source of truth). If a step
+carries an embedded `recording:` block for the device under test, the CLI
+replays those tools deterministically instead of going through the LLM.
+**Use the decision tree:**
 
-| Property of the trail                                  | NL (`blaze.yaml` only) | Recorded (`+ web.trail.yaml`) |
+| Property of the trail                                  | NL (no recording)      | Recorded (embedded `recording:`) |
 |--------------------------------------------------------|------------------------|-------------------------------|
 | Should pass on any reasonable Wikipedia state          | ✅ preferred           | risky — recording fixes one DOM |
 | You want zero LLM cost on every run                    | ❌ ~$0.02-0.05/run     | ✅ free after recording      |
@@ -305,9 +309,9 @@ The 5 recorded trails in this repo are the ones that hit structural
 anchors stable across days (`test-article-shakespeare`,
 `test-language-switch-spanish`, the 3 main-page section trails).
 
-**To re-record a trail**: delete its `web.trail.yaml` and re-run the
-`blaze.yaml`. The CLI auto-saves a fresh recording next to the source on
-a passing run.
+**To re-record a trail**: delete the step's `recording:` block(s) from its
+`trail.yaml` and re-run it. The CLI folds a fresh recording back into the
+trail file on a passing run.
 
 ---
 
@@ -341,22 +345,28 @@ Conventions used in this example:
 
 ### Skipping a trail with a written reason
 
-A trail's `config:` block can carry `skip: "reason..."` to opt out of every
-run until the reason is removed. Better than commenting trails out or
-maintaining a separate exclusion list — the reason is committed alongside
-the trail and shows up in `--verbose` output.
+A trail's `config:` block can carry a `skip:` map — keyed by device classifier
+— to opt out until the reason is removed. Listing every device the trail
+targets skips it entirely; keying a single device skips just that one while the
+trail still runs on the others. Better than commenting trails out or
+maintaining a separate exclusion list — the reason is committed alongside the
+trail and shows up in `--verbose` output.
 
 ```yaml
-- config:
-    title: "Wikipedia: Autocomplete suggestions visible while typing search"
-    tags: [search, flaky]
-    skip: "Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands."
-- prompts:
-    - step: …
+config:
+  title: "Wikipedia: Autocomplete suggestions visible while typing search"
+  tags: [search, flaky]
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  skip:
+    web: "Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands."
+
+trail:
+  - step: …
 ```
 
-To run a skipped trail anyway, delete its `skip:` line (or set it to an
-empty string). The CLI treats blank values as "not skipped".
+To run a skipped trail anyway, delete the device's entry from `skip:` (or set
+its reason to an empty string). The CLI treats blank values as "not skipped".
 
 ---
 
@@ -372,10 +382,10 @@ when you're authoring new tools or trails for your own target:
 | Direct scripted-tool dispatch | `test-custom-search` | Trail prompts name the tool explicitly + pass typed args. Maximum determinism short of a recording. |
 | Composition (tool calls tool) | `test-search-multi-topic` | Exercises `wikipedia_web_searchAndVerify`, which internally calls two other scripted tools. |
 | Data-driven shape | `test-search-multi-topic` | Same workflow across multiple queries — copy-paste the prompt block + change the data. |
-| Recorded deterministic replay | `test-article-shakespeare` | `blaze.yaml` + `web.trail.yaml` — replay path skips the LLM entirely. |
+| Recorded deterministic replay | `test-article-shakespeare` | `trail.yaml` with an embedded `recording:` block — replay path skips the LLM entirely. |
 | Conditional UI (banner present?) | `test-main-page-featured-article` | Exercises `dismissBannerIfPresent`, which no-ops cleanly when no banner is shown. |
 | Branch coverage on a feature flag | `test-article-short-no-refs` + `test-article-references-section` | Pair covers both branches of `verifyArticleStructure`'s `requireReferences` flag. |
-| Graceful skip | `test-search-autocomplete` | Shows the `skip: "reason..."` config field. |
+| Graceful skip | `test-search-autocomplete` | Shows the per-device `skip:` config map. |
 
 ---
 
@@ -468,7 +478,7 @@ daemon writes the SDK + `trailblaze-client.d.ts` on every restart.
 flake on long agent rounds. See **Known issues** below.
 
 **Tool calls that worked live now fail on replay** — `wikipedia_web_*`
-scripted tools currently don't dispatch from a `web.trail.yaml` recording.
+scripted tools currently don't dispatch from an embedded `web` recording.
 See **Known issues** below.
 
 ---
@@ -478,11 +488,11 @@ See **Known issues** below.
 These are tracked framework gaps. The example works around them today; the
 canonical shape will improve when these land.
 
-- **Scripted-tool replay-dispatch gap.** When a `web.trail.yaml` recording
+- **Scripted-tool replay-dispatch gap.** When an embedded `web` recording
   captures a call to `wikipedia_web_*`, the Playwright agent rejects it at
   replay as `OtherTrailblazeTool` (the dispatcher only handles `web_*`
   built-ins). Until fixed, only trails that exercise pure `web_*` tools
-  get useful recordings. That's why 23/28 trails here stay NL-only.
+  get useful recordings. That's why 25/30 trails here stay NL-only.
 - **CLI poll-timeout on long LLM rounds.** `trailblaze run …` can
   return `FAILED: Daemon unreachable after 30 consecutive poll failures`
   while the daemon is still healthy and the session is making progress.

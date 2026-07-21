@@ -6,6 +6,7 @@ import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -340,6 +341,23 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
       }
     },
   ),
+  ConfigKey(
+    // Experimental. Tri-state like `unified-recordings`: `null` (default) is off; an explicit
+    // true/false is the user's persisted choice. The `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` /
+    // `_AB` env vars still win (env = one-off / CI / A/B validation; this = discoverable
+    // persistent toggle). Only the host-driven Android accessibility agent-loop reads it.
+    name = "android-stream-screenshots",
+    description = "Experimental: serve Android agent-loop screenshots from the live device stream (default: off)",
+    validValues = "true, false, or 'unset' to inherit the default (off)",
+    get = { config -> config.androidStreamScreenshotsEnabled?.toString() ?: "(not set)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(androidStreamScreenshotsEnabled = null)
+      } else {
+        value.toBooleanStrictOrNull()?.let { config.copy(androidStreamScreenshotsEnabled = it) }
+      }
+    },
+  ),
 ).associateBy { it.name }
 
 /**
@@ -431,6 +449,7 @@ object CliConfigHelper {
       // Pass null when nothing is overridden so the web path can fall back to its own default
       // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
       EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
+      EffectiveStreamScreenshotConfig.androidEnabled = it.androidStreamScreenshotsEnabled ?: false
     }
 
   /**

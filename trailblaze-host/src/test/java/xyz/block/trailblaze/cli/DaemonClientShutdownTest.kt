@@ -55,7 +55,7 @@ class DaemonClientShutdownTest {
     private val server = embeddedServer(CIO, port = port) {
       install(ContentNegotiation) { json(TrailblazeJsonInstance) }
       routing {
-        CliShutdownEndpoint.register(this) { shutdownCalled.set(true) }
+        CliShutdownEndpoint.register(this, onShutdownRequest = { shutdownCalled.set(true) })
       }
     }
 
@@ -120,6 +120,27 @@ class DaemonClientShutdownTest {
       .firstOrNull { it.contains("curl") && it.contains("POST") && it.contains("shutdown") }
       ?: fail("dev-jar-cache.sh has no curl ... POST ... shutdown line — script structure changed.")
     assertThat(curlLine).contains(CliEndpoints.SHUTDOWN)
+  }
+
+  @Test
+  fun devJarCacheShellHelperChecksActiveRunsBeforeStopping() {
+    // Guards the busy-daemon protection: before stopping a stale-code daemon, the dev
+    // shell helper must consult `/cli/status` and read `activeRuns` (stamped from
+    // CliRunManager.activeRunCount) so a rebuild in one checkout can't kill a run in
+    // flight from another — the root cause of a mid-run daemon death
+    // (severed /agentlog upload, then "Daemon unreachable" for the victim CLI).
+    val text = locateDevJarCacheScript().readText()
+    val statusLineIndex = text.lineSequence()
+      .indexOfFirst { it.contains("curl") && it.contains(CliEndpoints.STATUS) }
+    check(statusLineIndex >= 0) {
+      "dev-jar-cache.sh no longer queries ${CliEndpoints.STATUS} — busy-daemon guard removed?"
+    }
+    assertThat(text).contains("\"activeRuns\"")
+    val shutdownLineIndex = text.lineSequence()
+      .indexOfFirst { it.contains("curl") && it.contains(CliEndpoints.SHUTDOWN) }
+    check(statusLineIndex < shutdownLineIndex) {
+      "dev-jar-cache.sh must check ${CliEndpoints.STATUS} BEFORE posting ${CliEndpoints.SHUTDOWN}"
+    }
   }
 
   /**

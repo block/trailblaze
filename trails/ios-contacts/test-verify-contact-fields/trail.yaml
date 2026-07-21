@@ -1,0 +1,34 @@
+# Branch coverage: exercises `contacts_ios_verifyContactStructure` with a
+# non-empty `requireFields` list. Pair with `test-verify-contact-no-extras`
+# (empty `requireFields`) for full branch coverage of that tool.
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - contact
+  - slow
+  title: 'Contacts (iOS): Verify a contact has required fields'
+
+trail:
+  - step: "Open the \"John Appleseed\" contact in Contacts."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - tapOnElementBySelector:
+            reason: The objective is to open the 'John Appleseed' contact, which is visible in the list. Tapping on it will display its details.
+            nodeSelector:
+              iosMaestro:
+                textRegex: John Appleseed
+              index: 1
+
+  - step: |
+      Call the `contacts_ios_verifyContactStructure` tool with
+      name="John Appleseed", requireFields=["mobile"].
+    recording:
+      ios-iphone:
+        - contacts_ios_verifyContactStructure:
+            name: John Appleseed
+            requireFields:
+            - mobile

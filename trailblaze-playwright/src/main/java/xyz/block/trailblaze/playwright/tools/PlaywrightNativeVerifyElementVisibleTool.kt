@@ -19,7 +19,7 @@ Verify that an element identified by its element ID, ARIA descriptor, or CSS sel
 This is a test assertion — it will fail the test if the element is not visible.
 """,
 )
-class PlaywrightNativeVerifyElementVisibleTool(
+data class PlaywrightNativeVerifyElementVisibleTool(
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button \"Submit\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-element').",

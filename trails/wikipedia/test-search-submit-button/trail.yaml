@@ -1,0 +1,11 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: Search via the search submit button'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+  - step: Type "Trailblazer" into the Wikipedia search input in the header.
+  - step: Click the search submit button (the magnifying glass / "Search" button next to the input).
+  - step: Verify that an article or search results page has loaded by checking that the page heading area shows either "Trailblazer" or "Search results".

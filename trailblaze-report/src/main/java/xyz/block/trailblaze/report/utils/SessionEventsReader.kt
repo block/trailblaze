@@ -13,8 +13,8 @@ import xyz.block.trailblaze.events.SessionEvents
  * Reads the generic, pluggable session-events artifacts written under `<sessionDir>/events/` (see
  * `xyz.block.trailblaze.events.SessionEvents`) back into memory for the timeline / report.
  *
- * The reader is entirely producer-agnostic: it discovers every `<name>.<style>.ndjson` file, derives
- * the stream `name` + `style` from the file name, and returns the decoded payloads. It knows nothing
+ * The reader is entirely producer-agnostic: it discovers every `<name>.ndjson` file, derives the
+ * stream `name` from the file name, and returns the decoded payloads. It knows nothing
  * about any specific integration — adding a new event producer is purely a matter of dropping
  * correctly-named NDJSON files into the folder.
  *
@@ -36,13 +36,12 @@ class SessionEventsReader(
   private val maxStreams: Int = DEFAULT_MAX_STREAMS,
 ) {
 
-  /** One decoded record: the order key plus the style-specific payload. */
+  /** One decoded record: the order key plus the producer-specific payload. */
   data class EventEntry(val timeMs: Long, val data: JsonElement)
 
-  /** All records for one `(name, style)` stream, in arrival order. */
+  /** All records for one named stream, in arrival order. */
   data class EventStream(
     val name: String,
-    val style: String,
     val count: Int,
     val truncated: Boolean,
     val events: List<EventEntry>,
@@ -63,10 +62,10 @@ class SessionEventsReader(
       // arbitrarily many event files, and the route reads them on every poll.
       .take(maxStreams)
       .toList()
-      .mapNotNull { (file, id) -> readStream(file, id.name, id.style) }
+      .mapNotNull { (file, name) -> readStream(file, name) }
   }
 
-  private fun readStream(file: File, name: String, style: String): EventStream? {
+  private fun readStream(file: File, name: String): EventStream? {
     val events = ArrayList<EventEntry>()
     var truncated = false
     file.bufferedReader(Charsets.UTF_8).use { reader ->
@@ -99,7 +98,7 @@ class SessionEventsReader(
       }
     }
     if (events.isEmpty()) return null
-    return EventStream(name = name, style = style, count = events.size, truncated = truncated, events = events)
+    return EventStream(name = name, count = events.size, truncated = truncated, events = events)
   }
 
   /**
@@ -113,6 +112,9 @@ class SessionEventsReader(
    * rich schema that happens to carry its own top-level `data` field keeps all of its fields rather
    * than being unwrapped down to `data` alone. By the format contract, a top-level `timeMs` is
    * RESERVED for the envelope; a bare rich schema orders on its own `timestampMs` instead.
+   *
+   * Locked against the TS `decodeEventLine` (run-report-events.ts) by
+   * `session-events-parity-fixtures.json` — see `SessionEventsParityFixturesTest`.
    */
   private fun parseLine(line: String): EventEntry? {
     val obj = runCatching { JSON.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: return null

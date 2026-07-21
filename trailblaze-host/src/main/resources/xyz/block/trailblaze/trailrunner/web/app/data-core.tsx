@@ -489,6 +489,20 @@ async function proposeSteps(objective, opts = {}) {
   } catch (e) { return { steps: [], error: String(e) }; }
 }
 
+// "Review my trail" for a run's session. Normally answered by the daemon's wired LLM; when the
+// human's own agent CLI is attached to the trail's folder (companion mode), the daemon defers to
+// it instead and the response carries {deferred, requestId, runId} - the companion screen then
+// follows the request to completion on the run's stream. {degraded} means a session matched but
+// no agent is listening, so the human should ask in their CLI.
+async function reviewSession(sessionId) {
+  try {
+    const r = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/review`, { method: 'POST' });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return { ok: !body.error, ...body };
+  } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
+}
+
 // ─── Library trail folder editing (/api/folder/*) ──────────────────────────────────────────────
 // The bundle surface: a trail folder in the library (`blaze.yaml` + `<platform>.trail.yaml`
 // siblings), identified by its folder id `<rootIdx>/<relPath>` (e.g. `0/sample/login`). Create
@@ -568,18 +582,6 @@ async function deleteTrailFolderFile(folderId, name) {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
-// Convert a legacy per-platform bundle folder into a single unified `<folder>.trail.yaml` (deleting
-// the per-platform files + blaze.yaml it folds in). The server runs the Kotlin UnifiedTrailMigrator;
-// on refusal (a trailhead / top-level tools / already migrated) it returns { success:false, error }.
-async function migrateTrailFolder(folderId) {
-  try {
-    const r = await fetch(`/trailrunner/api/folder/migrate-unified?id=${encodeURIComponent(folderId)}`, { method: 'POST' });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok || body.success === false) return { success: false, error: body.error || (r.ok ? 'the server refused the migration' : `HTTP ${r.status}`) };
-    return body;
-  } catch (e) { return { success: false, error: String(e) }; }
-}
-
 // Record one variant per device into a committed trail folder. The recorded <platform>.trail.yaml
 // lands back in the bundle on completion. Requires the folder to carry a blaze.yaml to drive the run.
 async function recordTrailFolder(folderId, deviceIds, options) {
@@ -624,6 +626,33 @@ async function recordScreen(trailblazeDeviceId) {
     if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
     return body;
   } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// Continuous Android mirror. The daemon sends one complete JPEG per binary WebSocket message;
+// callers own rendering and fall back to recordScreen when the socket closes or stalls. Keeping the
+// fallback in the screen component means iOS/Playwright retain their existing polling behavior.
+function recordFrameStream(trailblazeDeviceId, handlers) {
+  if (!trailblazeDeviceId || !trailblazeDeviceId.instanceId) throw new Error('trailblazeDeviceId is required');
+  const platform = trailblazeDeviceId.trailblazeDevicePlatform || '';
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = new URL(`${scheme}//${window.location.host}/trailrunner/api/record/stream`);
+  url.searchParams.set('instanceId', trailblazeDeviceId.instanceId);
+  url.searchParams.set('platform', platform);
+  const socket = new WebSocket(url.toString());
+  socket.binaryType = 'arraybuffer';
+  socket.onopen = () => handlers?.onOpen?.();
+  socket.onmessage = (event) => {
+    if (event.data instanceof ArrayBuffer) handlers?.onFrame?.(event.data);
+  };
+  socket.onerror = () => handlers?.onError?.();
+  socket.onclose = (event) => handlers?.onClose?.(event);
+  return {
+    close: () => {
+      socket.onclose = null;
+      socket.onerror = null;
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close();
+    },
+  };
 }
 
 // `gesture`: { type: 'tap'|'longPress'|'swipe'|'inputText'|'pressKey', ...fields }.
@@ -925,18 +954,99 @@ async function setExternalAgentAutoApprove(id, enabled) {
   } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e) }; }
 }
 
-// The trail file(s) the generation agent is writing, polled while it works so the live trail rail can
-// stream them in as they appear. Files fill progressively (empty until the agent creates the trail);
+// One fetcher for both live trail-folder views (they share a response shape by design).
 // 404-graceful so a daemon build without the endpoint yet just yields no files rather than erroring.
-async function demoTrailContent(id) {
-  if (!id) return { ok: false, files: [] };
+async function fetchTrailContent(url) {
   try {
-    const r = await fetch(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/trail-content`);
+    const r = await fetch(url);
     const raw = await r.text().catch(() => '');
     let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch (_) {}
     if (!r.ok || body.ok === false) return { ok: false, error: externalAgentErrorDetail(r.status, raw, body), status: r.status, files: [] };
     return { files: [], ...body };
   } catch (e) { return { ok: false, error: 'the daemon could not be reached: ' + String(e && e.message || e), files: [] }; }
+}
+
+// The trail file(s) the generation agent is writing, polled while it works so the live trail rail
+// can stream them in as they appear. Files fill progressively (empty until the agent creates them).
+async function demoTrailContent(id) {
+  if (!id) return { ok: false, files: [] };
+  return fetchTrailContent(`/trailrunner/api/external-agent/${encodeURIComponent(id)}/demo/trail-content`);
+}
+
+// The files of the trail folder a COMPANION session declared (an external agent CLI authoring the
+// trail from its own repo). Same response shape as demoTrailContent, so the same rail renders both;
+// polled while the session runs so external edits stream into the read-only view.
+async function companionFolderContent(id) {
+  if (!id) return { ok: false, files: [] };
+  return fetchTrailContent(`/trailrunner/api/companion/${encodeURIComponent(id)}/folder-content`);
+}
+
+// The demo-files tree: the declared folder's recursive listing (names and sizes only), for the
+// folder rail's DEMO FILES tab. Polled while that tab is open on a running session.
+async function companionFolderTree(id) {
+  if (!id) return { ok: false, entries: [] };
+  return await safeJson(`/trailrunner/api/companion/${encodeURIComponent(id)}/folder-tree`) || { ok: false, entries: [] };
+}
+
+// "Open in Finder" on the demo-files tab: reveal the session's declared folder.
+async function companionRevealFolder(id) {
+  try {
+    const r = await fetch(`/trailrunner/api/companion/${encodeURIComponent(id)}/reveal-folder`, { method: 'POST' });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return body;
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// Right-click on a demo file: open it in the user's editor. The daemon resolves the path strictly
+// inside the session's declared folder.
+async function companionOpenFile(id, path) {
+  try {
+    const r = await fetch(`/trailrunner/api/companion/${encodeURIComponent(id)}/open-file`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return body;
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// The UI reporting what the human did in a companion session (a quick reply, a handback, a
+// connected device). The attached agent hears it on the run's event stream / journal.
+async function companionUserAction(id, type, payload) {
+  try {
+    const r = await fetch(`/trailrunner/api/companion/${encodeURIComponent(id)}/user-action`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, payload: payload || null }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return body;
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// Mirror of the daemon's BundleStore.variantSlug: the filename a variant ACTUALLY writes as.
+// Any card or footer that promises "<x>.trail.yaml" must show this slug, not the raw variant
+// name, or the promise and the written file diverge for names like "iOS Phone".
+function variantSlug(variant) {
+  const s = String(variant || '').toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  return s || 'variant';
+}
+
+// The one sanctioned UI write in companion mode: save a recorded variant into the session's
+// declared folder. The daemon resolves the destination itself and emits recording-saved to the
+// agent only after the atomic write lands.
+async function companionSaveRecording(id, variant, yaml, platform) {
+  try {
+    const r = await fetch(`/trailrunner/api/companion/${encodeURIComponent(id)}/save-recording`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variant, yaml, platform: platform || null }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || body.ok === false) return { ok: false, error: body.error || `HTTP ${r.status}` };
+    return body;
+  } catch (e) { return { ok: false, error: String(e) }; }
 }
 
 // `afterSeq`: only deliver events strictly newer than this — pass the max seq already fetched so
@@ -1035,16 +1145,18 @@ Object.assign(window, {
   WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded,
   recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, setPendingRunSession,
   API, safeJson, safeText, useFetched, fileUrl,
-  recordConnect, recordScreen, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
+  recordConnect, recordScreen, recordFrameStream, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
   resolveRunDevice, connectDevice, connectDeviceDetailed, fetchTrailYaml, dispatchRun, retrySession, withTimeout,
   getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   pickDirectoryViaShell, addTrailRoot, removeTrailRoot, updateSetting, runIntegrationAction,
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
   fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
-  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder, migrateTrailFolder,
+  fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,
   fetchExternalAgents, startExternalAgent, fetchExternalAgentEvents, cancelExternalAgent, streamExternalAgentEvents, fetchAgentSkills,
   replyExternalAgent, applyTrailRunnerUiCommand, mergeExternalAgentEvents,
   startDemo, demoMarkStart, demoFinish, demoGenerate, demoAddPlatform, demoDeleteStep, demoRevealBundle,
-  decideExternalAgentPermission, setExternalAgentAutoApprove, demoTrailContent,
+  decideExternalAgentPermission, setExternalAgentAutoApprove, demoTrailContent, companionFolderContent,
+  companionUserAction, companionSaveRecording, variantSlug, reviewSession,
+  companionFolderTree, companionRevealFolder, companionOpenFile,
 });

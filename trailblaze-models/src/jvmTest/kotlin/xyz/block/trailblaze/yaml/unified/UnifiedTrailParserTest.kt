@@ -339,15 +339,56 @@ class UnifiedTrailParserTest {
   }
 
   @Test
-  fun `unified missing top-level trail key is a parse error`() {
+  fun `a config-only doc (config, no trail, no trailhead) decodes as a stepless metadata doc`() {
+    // The ONE stepless shape that's allowed: a `config:` block with no `trail:` and no `trailhead:`.
+    // It preserves case metadata (e.g. a test case with no runnable steps yet) and is not meant
+    // to run as a test.
+    val decoded = yaml.decodeUnifiedTrail(
+      """
+      config:
+        id: x
+        target: y
+      """.trimIndent(),
+    )
+    assertEquals("x", decoded.config.id)
+    assertTrue(decoded.trail.isEmpty(), "config-only doc has no trail steps")
+    assertNull(decoded.trailhead)
+  }
+
+  @Test
+  fun `a config-only doc with an explicit empty trail list decodes as stepless`() {
+    val decoded = yaml.decodeUnifiedTrail(
+      """
+      config:
+        id: x
+        target: y
+      trail: []
+      """.trimIndent(),
+    )
+    assertEquals("x", decoded.config.id)
+    assertTrue(decoded.trail.isEmpty())
+  }
+
+  @Test
+  fun `a stepless doc with a fully-default config emits config braces and round-trips`() {
+    // A blank test-case step lowers to zero steps with a default config. The
+    // emitter must NOT produce an empty document for this — it anchors on a minimal `config: {}` so
+    // the result decodes as a stepless config-only doc rather than failing to parse.
+    val trail = UnifiedTrail(config = UnifiedTrailConfig(), trail = emptyList())
+    val emitted = yaml.encodeUnifiedTrailToString(trail)
+    assertTrue(emitted.contains("config:"), "stepless default-config doc must anchor on config:, got:\n$emitted")
+    assertTrue(emitted.isNotBlank(), "must not emit an empty document")
+    val decoded = yaml.decodeUnifiedTrail(emitted)
+    assertEquals(UnifiedTrailConfig(), decoded.config)
+    assertTrue(decoded.trail.isEmpty())
+    assertNull(decoded.trailhead)
+  }
+
+  @Test
+  fun `a stepless doc with neither config nor trail is rejected`() {
+    // Nothing to preserve and nothing to run — not a valid trail nor a config-only metadata doc.
     val ex = assertFailsWith<IllegalArgumentException> {
-      yaml.decodeUnifiedTrail(
-        """
-        config:
-          id: x
-          target: y
-        """.trimIndent(),
-      )
+      yaml.decodeUnifiedTrail("trail: []")
     }
     assertTrue(
       ex.message?.contains("non-empty top-level `trail:`") == true,
@@ -356,22 +397,43 @@ class UnifiedTrailParserTest {
   }
 
   @Test
-  fun `an empty trail list is rejected — trail must be non-empty`() {
-    // `trail:` is required AND non-empty: a trailhead-only / empty trail would run its bootstrap
-    // and then pass with no real test steps (a vacuous always-pass).
+  fun `a trailhead-only doc (no trail steps) is rejected — a bootstrap alone is a vacuous pass`() {
+    // A trailhead + no trail would run its bootstrap and then pass with no real test steps. Only a
+    // pure config-only doc (no trailhead) is allowed to be stepless.
     val ex = assertFailsWith<IllegalArgumentException> {
       yaml.decodeUnifiedTrail(
         """
         config:
           id: x
           target: y
-        trail: []
+        trailhead:
+          step: launch the app
         """.trimIndent(),
       )
     }
     assertTrue(
       ex.message?.contains("non-empty top-level `trail:`") == true,
       "expected non-empty-trail error, got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `emitting a trailhead-only trail is rejected — stays symmetric with decode`() {
+    // decode rejects a trailhead-only stepless doc (above); the emitter must reject the same shape,
+    // otherwise it would produce config+trailhead YAML with no `trail:` that can no longer be
+    // re-decoded — a silent round-trip break.
+    val ex = assertFailsWith<IllegalArgumentException> {
+      yaml.encodeUnifiedTrailToString(
+        UnifiedTrail(
+          config = UnifiedTrailConfig(id = "x"),
+          trailhead = UnifiedTrailStep(step = "launch the app"),
+          trail = emptyList(),
+        ),
+      )
+    }
+    assertTrue(
+      ex.message?.contains("trailhead-only") == true,
+      "expected trailhead-only rejection, got: ${ex.message}",
     )
   }
 

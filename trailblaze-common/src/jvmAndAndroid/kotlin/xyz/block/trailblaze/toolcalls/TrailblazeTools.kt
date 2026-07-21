@@ -104,8 +104,16 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  * common-main canonical encoder [toOtherTrailblazeToolPayload], which is also what
  * [TrailblazeToolJsonSerializer] uses for `@Contextual TrailblazeTool` JSON encoding so
  * both paths produce identical wire formats.
+ *
+ * A [SensitiveArgsTrailblazeTool] instance gets its declared arg values masked in the returned
+ * payload — this is the LOG encode, so secrets (credentials, session seeds) must not survive it.
+ * The wire/execution encode ([toOtherTrailblazeToolPayload] called directly) stays unredacted.
  */
-fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool {
+fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted().let { payload ->
+  if (this is SensitiveArgsTrailblazeTool) payload.withSensitiveArgsRedacted(sensitiveArgNames) else payload
+}
+
+private fun TrailblazeTool.toLogPayloadUnredacted(): OtherTrailblazeTool {
   if (this is OtherTrailblazeTool) return this
   if (this is RawArgumentTrailblazeTool) {
     return OtherTrailblazeTool(instanceToolName, rawToolArguments)

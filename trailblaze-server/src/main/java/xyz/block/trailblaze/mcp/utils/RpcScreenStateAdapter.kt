@@ -46,11 +46,13 @@ class RpcScreenStateAdapter(
   }
 
   private val _screenshotBytes: ByteArray? by lazy {
-    response.screenshotBase64?.decodeBase64Bytes()
+    response.screenshotBytes ?: response.screenshotBase64?.decodeBase64Bytes()
   }
 
   private val _annotatedScreenshotBytes: ByteArray? by lazy {
-    response.annotatedScreenshotBase64?.decodeBase64Bytes() ?: _screenshotBytes
+    response.annotatedScreenshotBytes
+      ?: response.annotatedScreenshotBase64?.decodeBase64Bytes()
+      ?: _screenshotBytes
   }
 
   override val screenshotBytes: ByteArray?

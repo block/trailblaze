@@ -1,0 +1,37 @@
+# Data-driven pattern: one trail exercises the composition tool
+# (`contacts_ios_searchAndVerify`) across several different contacts. Each
+# step is a separate tool call; the prompts vary only in the query +
+# expected name, so a downstream team can copy this shape and swap in
+# their own list of contacts without writing new tools or new trails.
+#
+# Why this pattern is interesting:
+#   * The work each step does (search + verify contact shape) is identical;
+#     only the data changes. Keeping the workflow in one tool keeps the
+#     trail readable and the per-step cost predictable.
+#   * Trailblaze trails are linear by design — no `for` loop in YAML. The
+#     "data-driven" shape is "one tool call per case", which is also what
+#     keeps each case independently retriable and easy to triage when it
+#     fails.
+#   * Adding a new contact is a 3-line diff. Removing one is a 3-line diff.
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - search
+  - contact
+  - slow
+  title: 'Contacts (iOS) (data-driven): search + verify across contacts'
+
+trail:
+  - step: |
+      Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+  - step: |
+      Call the `contacts_ios_searchAndVerify` tool with query="John",
+      expectedName="John Appleseed", requireFields=[].
+  - step: |
+      Call the `contacts_ios_searchAndVerify` tool with query="Kate",
+      expectedName="Kate Bell", requireFields=[].
+  - step: |
+      Call the `contacts_ios_searchAndVerify` tool with query="Anna",
+      expectedName="Anna Haro", requireFields=[].

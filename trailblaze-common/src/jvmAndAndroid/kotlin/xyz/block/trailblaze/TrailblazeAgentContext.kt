@@ -10,9 +10,11 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
 import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
+import xyz.block.trailblaze.toolcalls.withSensitiveArgsRedacted
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
@@ -76,7 +78,14 @@ fun TrailblazeAgentContext.logToolExecution(
   // generator a name/args mismatch. Without an override, `trailblazeTool` is the log-safe
   // RESOLVED form (sensitive tokens kept literal — see [buildLogSafeResolvedPayload]) and
   // `rawTrailblazeTool` the authored form, elided when scrubbing left them identical.
-  val rawPayload = if (recordedToolOverride == null) rawTool?.toLogPayload() else null
+  // The authored form may be a raw-args wrapper that doesn't itself implement
+  // [SensitiveArgsTrailblazeTool], so its payload is additionally masked with the EXECUTED
+  // instance's declared sensitive args (`toLogPayload()` only self-redacts).
+  val rawPayload = if (recordedToolOverride == null) {
+    rawTool?.toLogPayload()?.withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
+  } else {
+    null
+  }
   val resolvedPayload = if (rawPayload != null) {
     buildLogSafeResolvedPayload(rawPayload, memory)
   } else {
@@ -114,6 +123,15 @@ fun TrailblazeAgentContext.logToolExecution(
   val session = sessionProvider.invoke()
   trailblazeLogger.log(session, toolLog)
 }
+
+/**
+ * The sensitive-arg names the EXECUTED tool declares, for masking the authored (`rawTool`)
+ * payload. The authored form is often a raw-args wrapper (name + JSON) that doesn't implement
+ * [SensitiveArgsTrailblazeTool] itself, so `toLogPayload()`'s self-redaction can't fire for it —
+ * the executed class instance is the source of truth for which args are secret.
+ */
+private fun TrailblazeTool.sensitiveArgNamesOrEmpty(): Set<String> =
+  (this as? SensitiveArgsTrailblazeTool)?.sensitiveArgNames ?: emptySet()
 
 /**
  * Kill-switch for the nested-dispatch recording filter: forces `isRecordable` back to the tool's
@@ -171,7 +189,9 @@ fun TrailblazeAgentContext.logToolExecution(
   rawTool: TrailblazeTool? = null,
 ) {
   val session = sessionProvider.invoke()
-  val rawPayload = rawTool?.toLogPayload()
+  // Same masking rationale as the context-carrying overload: the authored wrapper doesn't
+  // implement [SensitiveArgsTrailblazeTool], so apply the executed instance's declared args.
+  val rawPayload = rawTool?.toLogPayload()?.withSensitiveArgsRedacted(tool.sensitiveArgNamesOrEmpty())
   val resolvedPayload = if (rawPayload != null) {
     buildLogSafeResolvedPayload(rawPayload, memory)
   } else {

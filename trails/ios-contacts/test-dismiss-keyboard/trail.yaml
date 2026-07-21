@@ -1,0 +1,37 @@
+# Conditional UI handling: the `contacts_ios_dismissKeyboardIfPresent` tool
+# no-ops cleanly when no keyboard is showing, so this trail exercises both
+# branches in one run (no-op on cold start, then real dismiss after typing).
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - nav
+  - flaky
+  # iOS 26.4's Contacts dismisses the soft keyboard automatically after typing
+  # into the search field (verified live 2026-05-22). The trail's step 2
+  # assumption ("This leaves the keyboard up with text in the field") doesn't
+  # hold there, so step 3 finds no keyboard to dismiss and the trail's stated
+  # outcome can't be reached. The tool itself (`contacts_ios_dismissKeyboardIfPresent`)
+  # is exercised correctly in both branches by other trails — this composition
+  # exists for documentation. Skipped until either (a) iOS keyboard behavior
+  # stabilizes across the runtimes this trailmap targets, or (b) the trail's
+  # second step is replaced with something that demonstrably leaves the
+  # keyboard up on iOS 26.4+.
+  skip:
+    ios-iphone: "iOS 26.4 auto-dismisses the keyboard after search input — step 3 has no keyboard to dismiss. Remove `skip:` once we have a reliable keyboard-up state on the target runtime."
+  title: 'Contacts (iOS): Dismiss keyboard no-ops then dismisses'
+
+trail:
+  - step: |
+      Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+      Expected: returns "no keyboard shown" suffix because the app
+      just cold-launched.
+  - step: |
+      Call the `contacts_ios_searchContacts` tool with query="John",
+      rowText="John Appleseed", openFirstResult=false.
+      This leaves the keyboard up with text in the field.
+  - step: |
+      Call the `contacts_ios_dismissKeyboardIfPresent` tool.
+      Expected: returns the "Dismissed iOS keyboard" string because
+      the keyboard is now visible.

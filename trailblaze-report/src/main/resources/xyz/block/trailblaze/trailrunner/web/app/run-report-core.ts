@@ -474,10 +474,118 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null }: { me
 // straight on that run's detail (mirroring the old WASM report's single-session auto-advance); with
 // several it opens on a pass/fail session index that drills into each run. Pure: callers supply
 // already-derived data; no fetch, no DOM — identical in the browser and in bun.
+// Parse a possibly-multiply-JSON-encoded generic event payload, one quoting layer at a time.
+// Manually replacing escape sequences instead can double-unescape producer-controlled text and
+// change its meaning.
+function parseEventJsonish(value, depth = 0) {
+  if (depth > 8 || value == null) return value;
+  if (typeof value !== 'string') {
+    if (Array.isArray(value)) return value.map((v) => parseEventJsonish(v, depth + 1));
+    if (typeof value === 'object') {
+      const out = {};
+      Object.keys(value).forEach((k) => { out[k] = parseEventJsonish(value[k], depth + 1); });
+      return out;
+    }
+    return value;
+  }
+  const raw = value.trim();
+  if (!raw) return value;
+  const candidates = [raw];
+  if (raw.indexOf('\\"') >= 0 || raw.indexOf('\\\\') >= 0) candidates.push(`"${raw}"`);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      return parseEventJsonish(parsed, depth + 1);
+    } catch (_) {}
+  }
+  return value;
+}
+
+function eventValueText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
+// Summary metadata (semantic label + headline fields) for one generic event. The cache and the
+// field table live on the function object so the declaration stays fully self-contained when its
+// source is serialized into the standalone viewer (see VIEWER_HELPERS).
+function normalizeEventPayload(event) {
+  const self = normalizeEventPayload as any;
+  const cache: WeakMap<object, any> = self.cache || (self.cache = new WeakMap());
+  const cached = cache.get(event);
+  if (cached) return cached;
+  const kinds: Array<[string, string[]]> = [
+    ['Event', ['event', 'eventname', 'eventvalue', 'name', 'label', 'title', 'message']],
+    ['Action', ['action', 'actiontext', 'blockeraction', 'cdfaction']],
+    ['Entity', ['entity', 'cdfentity', 'namespace']],
+    ['Path', ['path', 'urlpath', 'finalpath', 'uniquefinalpath']],
+    ['Status', ['status', 'statuscode', 'code']],
+    ['Method', ['method']],
+    ['Journey', ['journey', 'journeyname', 'flow', 'clientscenario']],
+    ['ID', ['id', 'messageuuid', 'blockerid', 'flowtoken']],
+  ];
+  const raw = String(event.d == null ? '' : event.d);
+  const parsed = parseEventJsonish(raw);
+  const found = new Map();
+  const queue = [{ value: parsed, depth: 0 }];
+  let visited = 0;
+  while (queue.length && visited++ < 240) {
+    const current = queue.shift();
+    const value = current.value;
+    if (current.depth > 6 || value == null || typeof value !== 'object') continue;
+    if (Array.isArray(value)) {
+      value.slice(0, 40).forEach((item) => queue.push({ value: item, depth: current.depth + 1 }));
+      continue;
+    }
+    Object.keys(value).slice(0, 80).forEach((key) => {
+      const child = value[key];
+      const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!found.has(normalized) && child != null && child !== '') found.set(normalized, child);
+      if (child && typeof child === 'object') queue.push({ value: child, depth: current.depth + 1 });
+    });
+  }
+  const fields = [];
+  kinds.forEach(([label, names]) => {
+    const name = names.find((candidate) => found.has(candidate));
+    const text = name ? eventValueText(found.get(name)) : '';
+    if (text && !fields.some((field) => field.value === text)) fields.push({ label, value: text });
+  });
+  const labelField = kinds[0][1].find((name) => found.has(name));
+  const normalized = { raw, parsed, fields: fields.slice(0, 8), semanticLabel: labelField ? eventValueText(found.get(labelField)) : '' };
+  cache.set(event, normalized);
+  return normalized;
+}
+
+// Full pretty-printed payload for one generic event. Payloads are embedded untruncated and can be
+// huge, so the viewer only calls this when a payload expando is actually opened (lazy-body wiring).
+function eventPrettyText(event) {
+  const { raw, parsed } = normalizeEventPayload(event);
+  try { return parsed !== raw ? JSON.stringify(parsed, null, 2) : raw; } catch (_) { return raw; }
+}
+
+// Inflate a session's compressed events payload (SessionPayload.eventsGz: gzip'd EventStream[]
+// JSON as base64 — see packEvents in run-report-cli.ts). Null when the blob is malformed or the
+// runtime lacks DecompressionStream, so callers can fall back to a "can't decompress" note
+// instead of a broken tab.
+async function inflateEventsGz(b64: string): Promise<EventStream[] | null> {
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const parsed = JSON.parse(await new Response(stream).text());
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Module-level helpers RUN_REPORT_VIEWER calls. They must be plain top-level `function`
 // declarations (their .toString() is embedded into the standalone export's script, where the
 // declaration name is what the serialized viewer resolves).
-const VIEWER_HELPERS = [yamlRootSection, localRunAgentPrompt];
+const VIEWER_HELPERS = [yamlRootSection, localRunAgentPrompt, parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, inflateEventsGz];
 
 function buildMultiReportHtml({ generatedAt, sessions }: { generatedAt?: string; sessions: SessionInput[] }): string {
   const list: SessionPayload[] = (sessions || []).map((s) => {
@@ -492,6 +600,7 @@ function buildMultiReportHtml({ generatedAt, sessions }: { generatedAt?: string;
       deviceLog: s.deviceLog || null,
       network: s.network || null,
       events: s.events || null,
+      eventsGz: s.eventsGz || null,
       video: s.video || null,
     };
   });
@@ -620,8 +729,8 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .detailfootermeta::-webkit-scrollbar { display: none; }
 .detailfooteritem { display: grid; gap: 1px; white-space: nowrap; }
 .detailfooteritem.runon { margin-left: auto; text-align: right; }
-.detailfooteritem .k { color: var(--sub); font-size: var(--type-micro); font-weight: 650; letter-spacing: .09em; line-height: 1.2; text-transform: uppercase; }
-.detailfooteritem .v { color: var(--sub2); font-size: var(--type-caption); font-weight: 600; line-height: 1.25; }
+.detailfooteritem .k { color: var(--neutral-10); font-size: var(--type-micro); font-weight: 650; letter-spacing: .09em; line-height: 1.2; text-transform: uppercase; }
+.detailfooteritem .v { color: var(--sub); font-size: var(--type-caption); font-weight: 600; line-height: 1.25; }
 .indexshell { width: 100%; max-width: var(--content-wide); margin-inline: auto; }
 .indexfootercontent { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .indexmetrics { display: flex; align-items: center; gap: var(--space-5); margin-left: auto; }
@@ -734,7 +843,8 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .deviceplayer { width: fit-content; max-width: 100%; display: grid; grid-template-rows: minmax(0,1fr) auto; overflow: hidden; border: 2px solid var(--player-line); border-radius: 22px; background: var(--raised); box-shadow: var(--shadow-raised); }
 .deviceplayer.empty { width: min(360px,100%); grid-template-rows: auto auto; }
 .shotwrap { width: fit-content; max-width: 100%; margin: 0; }
-.shot { max-width: 100%; max-height: calc(100vh - 290px); background: #000; border: 0; display: block; cursor: zoom-in; }
+.shot { max-width: 100%; max-height: calc(100vh - 334px); background: #000; border: 0; display: block; cursor: zoom-in; }
+.tlvframe { max-width: 100%; height: calc(100vh - 386px); min-height: 240px; aspect-ratio: 1/2; background-color: #000; background-repeat: no-repeat; display: block; }
 .noshot { width: 100%; aspect-ratio: 1/2; border: 0; display: flex; align-items: center; justify-content: center; color: var(--sub); font-size: 12px; text-align: center; padding: 20px; }
 .pvctl { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 0; margin: 0; border-top: 2px solid var(--player-line); overflow: hidden; }
 .pvctl button.btn { width: 100%; min-width: 0; min-height: 42px; border: 0; border-left: 2px solid var(--player-line); border-radius: 0; background: transparent; }
@@ -978,15 +1088,15 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .vctl { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .vctl .count { font-variant-numeric: tabular-nums; }
 .vctl input[type=range] { flex: 1; accent-color: var(--run); }
-.scrub { position: sticky; top: 18px; height: calc(100vh - 238px); min-height: 300px; display: none; flex-direction: column; user-select: none; }
+.scrub { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
 .scrubclock { color: var(--sub); font-size: 9.5px; text-align: center; font-variant-numeric: tabular-nums; }
-.scrubtrack { position: relative; flex: 1; width: 32px; margin: 5px auto; cursor: pointer; }
-.scrubline { position: absolute; left: 50%; width: 1px; transform: translateX(-50%); pointer-events: none; }
-.scrubline.setup { top: 0; border-left: 1px dashed color-mix(in srgb,var(--purple) 62%,var(--line2)); }
-.scrubline.trail { bottom: 0; background: var(--line2); }
-.scrubphasebreak { position: absolute; left: 50%; width: 11px; height: 11px; border: 2px solid var(--bg); border-radius: 99px; background: var(--purple); box-shadow: 0 0 0 1px color-mix(in srgb,var(--purple) 55%,var(--line2)); transform: translate(-50%,-50%); pointer-events: none; }
-.scrubtick { position: absolute; left: 0; right: 0; height: 3px; border: 0; padding: 0; border-radius: 2px; opacity: .72; pointer-events: none; }
-.scrubhead { position: absolute; left: 50%; width: 10px; height: 10px; border-radius: 99px; transform: translate(-50%,-50%); background: #fff; border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 5px rgba(0,0,0,.6); pointer-events: none; }
+.scrubtrack { position: relative; flex: 1; height: 28px; cursor: pointer; }
+.scrubline { position: absolute; top: 50%; height: 1px; transform: translateY(-50%); pointer-events: none; }
+.scrubline.setup { left: 0; height: 0; border-top: 1px dashed color-mix(in srgb,var(--purple) 62%,var(--line2)); }
+.scrubline.trail { right: 0; background: var(--line2); }
+.scrubphasebreak { position: absolute; top: 50%; width: 11px; height: 11px; border: 2px solid var(--bg); border-radius: 99px; background: var(--purple); box-shadow: 0 0 0 1px color-mix(in srgb,var(--purple) 55%,var(--line2)); transform: translate(-50%,-50%); pointer-events: none; }
+.scrubtick { position: absolute; top: 4px; bottom: 4px; width: 3px; border: 0; padding: 0; border-radius: 2px; opacity: .72; pointer-events: none; }
+.scrubhead { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 99px; transform: translate(-50%,-50%); background: #fff; border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 5px rgba(0,0,0,.6); pointer-events: none; }
 .streamrow { border-top: 1px solid var(--line); padding: 8px 14px 8px 22px; background: color-mix(in oklab, var(--stream-color) 5%, transparent); }
 .streamrow summary { cursor: pointer; display: flex; align-items: center; gap: 8px; list-style: none; font-size: 11.5px; }
 .streamrow summary::-webkit-details-marker { display: none; }
@@ -1024,6 +1134,34 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .eventdetails summary::before { content: '›'; font-size: 15px; line-height: 1; transform: rotate(90deg); }
 .eventdetails[open] summary::before { transform: rotate(-90deg); }
 .eventdetails pre { border: 0; border-top: 1px solid var(--line); border-radius: 0; max-height: 280px; background: var(--code-surface); color: var(--code-text); }
+.fmtrow { min-width: 0; overflow: hidden; border: 1px solid var(--line2); border-radius: 8px; background: var(--bg2); }
+.fmtrow > summary { min-height: 38px; display: grid; grid-template-columns: 62px minmax(0,1fr) auto 10px; align-items: center; gap: 8px; padding: 7px 9px; cursor: pointer; list-style: none; }
+.fmtrow > summary::-webkit-details-marker { display: none; }
+.fmtrow > summary:hover { background: var(--button-hover); }
+.fmtrow.e { border-left: 3px solid var(--fail); }
+.fmtrow.w { border-left: 3px solid var(--amber); }
+.fmtrow .streamtime { margin: 0; padding: 0; color: var(--sub); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.fmtrow > summary .timelineeventchev { justify-self: end; }
+.fmtlabel { min-width: 0; color: var(--txt); font-size: 11.5px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.fmtbadges { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.rowbadge { padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line2); background: var(--bg3); color: var(--sub2); font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rowbadge.ok { color: var(--pass); border-color: color-mix(in srgb,var(--pass) 45%,var(--line2)); }
+.rowbadge.warn { color: var(--amber); border-color: color-mix(in srgb,var(--amber) 45%,var(--line2)); }
+.rowbadge.error { color: var(--fail); border-color: color-mix(in srgb,var(--fail) 45%,var(--line2)); }
+.fmtbody { border-top: 1px solid var(--line); }
+.fmtbody.tl { margin: 0 9px 9px 79px; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.fmtbody.tl:first-child, .fmtbody .eventfields:first-child { border-top: 0; }
+.rowsection { border-top: 1px solid var(--line); }
+.rowsection:first-child { border-top: 0; }
+.rowsection > summary { display: flex; align-items: center; gap: 6px; padding: 6px 9px; color: var(--sub); background: var(--bg3); font-size: 10.5px; font-weight: 650; cursor: pointer; list-style: none; }
+.rowsection > summary::-webkit-details-marker { display: none; }
+.rowsection > summary::before { content: '›'; font-size: 15px; line-height: 1; transform: rotate(90deg); }
+.rowsection[open] > summary::before { transform: rotate(-90deg); }
+.rowsection pre { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; max-height: 320px; background: var(--code-surface); color: var(--code-text); }
+.rowkv .r { display: grid; grid-template-columns: minmax(120px,220px) minmax(0,1fr); gap: 10px; padding: 5px 10px; border-top: 1px solid var(--line); font-size: 11px; }
+.rowkv .r:first-child { border-top: 0; }
+.rowkv .k { color: var(--sub); overflow-wrap: anywhere; }
+.rowkv .v { color: var(--txt); overflow-wrap: anywhere; }
 .yamlcompare { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
 .yamlcol { min-width: 0; }
 .yamlcolhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
@@ -1033,14 +1171,13 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 @media (min-width: 820px) { .yamlcompare { grid-template-columns: repeat(2,minmax(0,1fr)); } .llm { grid-template-columns: 300px 1fr; } }
 @media (min-width: 960px) {
   main.timelinemain { overflow: hidden; }
-  .timelinemain .tl { height: 100%; min-height: 0; grid-template-columns: minmax(320px,1fr) 44px minmax(340px,42%); grid-template-rows: minmax(0,1fr); gap: 24px; align-items: stretch; }
+  .timelinemain .tl { height: 100%; min-height: 0; grid-template-columns: minmax(320px,1fr) minmax(340px,42%); grid-template-rows: minmax(0,1fr); gap: 24px; align-items: stretch; }
   .timelinemain .timeline-list { grid-row: auto; min-height: 0; overflow: auto; padding-right: 3px; }
   .timelinemain .preview { position: static; grid-row: auto; min-height: 0; height: 100%; display: flex; align-items: center; justify-content: center; }
   .timelinemain .deviceplayer { max-height: 100%; min-height: 0; align-self: center; }
-  .timelinemain .shotwrap { max-height: calc(100vh - 286px); min-height: 0; }
-  .timelinemain .shot { width: auto; height: auto; max-height: calc(100vh - 286px); object-fit: contain; }
+  .timelinemain .shotwrap { max-height: calc(100vh - 330px); min-height: 0; }
+  .timelinemain .shot { width: auto; height: auto; max-height: calc(100vh - 330px); object-fit: contain; }
   .timelinemain .noshot { height: auto; min-height: 0; aspect-ratio: 1/2; }
-  .timelinemain .scrub { display: flex; position: static; height: 100%; min-height: 0; }
 }
 @media (max-width: 760px) { .indexcontext { align-items: flex-start; flex-direction: column; } .idxrow, .idxattemptrow { grid-template-columns: 12px minmax(0,1fr) 20px; gap: 10px 12px; } .idxretryrow { grid-template-columns: auto minmax(0,1fr) 20px; } .idxretrychev { grid-column: 3; grid-row: 1; } .idxattemptrow { padding-left: 28px; } .idxstatus { grid-row: 1 / span 2; } .idxfacts { grid-column: 2 / -1; } .idxrow .arr, .idxattemptrow .arr { grid-column: 3; grid-row: 1; } .idxfilter { grid-template-columns: minmax(0,1fr) auto 120px; } .idxsort { width: 120px; } .indexfootercontent { flex-wrap: wrap; } .indexmetrics { order: 2; width: 100%; margin-left: 0; } .indexrundate { margin-left: auto; } .streamselect summary { width: 100%; } .streammenu { left: 0; right: auto; } }
 @media (max-width: 560px) { .idxfilter { grid-template-columns: minmax(0,1fr) 120px; } .idxfilter input { grid-column: 1 / -1; } .idxhealedfilter { justify-content: center; } }
@@ -1055,7 +1192,7 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .zoom .zoomwrap { position: relative; }
 .zoom .zoomwrap img { display: block; }
 button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { width: 44px; } }
+@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } }
 @media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back { animation: none; } }
 @media (max-width: 640px) {
   :root { --page-x: 18px; --page-y: 20px; }
@@ -1136,14 +1273,36 @@ function RUN_REPORT_VIEWER(): void {
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>body{margin:0;padding:24px;background:#0b0e11;color:#f4f5f7;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}h1{font-size:20px}.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px}figure{margin:0;padding:12px;border:1px solid #2a3038;border-radius:10px;background:#14181d}img{display:block;width:100%;height:auto;border-radius:6px;background:#000}figcaption{margin-top:8px;color:#a8b0bc;font-size:12px;word-break:break-word}</style></head><body><h1>${esc(title)}</h1><div class="gallery">${cells}</div></body></html>`;
     downloadBlob([html], 'text/html;charset=utf-8', `trailblaze_run_${fileSlug(session.meta.title)}_screenshots.html`);
   };
+  // Sessions past the driver's inline threshold embed their events gzipped (eventsGz). Inflated
+  // streams are cached OUTSIDE the session object so exportReport re-embeds the compact form;
+  // everything below reads events via sessionEvents(). Inflation kicks off when a session opens
+  // and re-renders on completion — until then renderers see null and show a decompressing note.
+  const eventsCache = new Map();
+  const eventsPending = new Set();
+  const eventsFailed = new Set();
+  const sessionEvents = (session) => session.events || eventsCache.get(session) || null;
+  // The session has events to show: inflated (or inline) streams, or a compressed payload that
+  // will inflate once the session opens.
+  const hasEvents = (session) => Boolean((sessionEvents(session) || []).length || session.eventsGz);
+  const ensureEventsInflated = (session) => {
+    if (!session.eventsGz || session.events || eventsCache.has(session) || eventsPending.has(session) || eventsFailed.has(session)) return;
+    eventsPending.add(session);
+    inflateEventsGz(session.eventsGz).then((streams) => {
+      eventsPending.delete(session);
+      if (streams) eventsCache.set(session, streams); else eventsFailed.add(session);
+      if (st.view === 'detail' && D === session) render();
+    });
+  };
+
   const logPayload = (session) => ({
     run: session.meta || {},
     deviceLog: session.deviceLog || null,
     network: session.network || [],
-    events: session.events || [],
+    events: sessionEvents(session) || [],
     llm: session.llm || [],
   });
-  const hasLogs = (session) => Boolean(session.deviceLog || (session.network && session.network.length) || (session.events && session.events.length) || (session.llm && session.llm.length));
+  const hasLogs = (session) =>
+    Boolean(session.deviceLog || (session.network && session.network.length) || hasEvents(session) || (session.llm && session.llm.length));
   const exportLogs = (session) => {
     if (!hasLogs(session)) return;
     downloadBlob([JSON.stringify(logPayload(session), null, 2)], 'application/json;charset=utf-8', `trailblaze_run_${fileSlug(session.meta.title)}_logs.json`);
@@ -1154,16 +1313,22 @@ function RUN_REPORT_VIEWER(): void {
   let D: SessionPayload = SESSIONS[0];
   const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, llmSel: 0, evStream: 0, tlStreams: [], tlMenuOpen: false, trailheadOpen: true, trailOpen: true, collapsedGroups: [], lightboxAll: false, runSort: 'grouped', runFilter: '', playing: false, vSpeed: 1, pageTransition: '' };
   const TIMELINE_PLAY_MS = 900; // per-step dwell when auto-playing the screenshot timeline
-  // Timeline screenshot-playback timer. Declared up here (before openSession, which stops it) so the
+  const TIMELINE_VIDEO_TICK_MS = 100; // playback-clock granularity when the timeline plays real video
+  // Timeline playback timer. Declared up here (before openSession, which stops it) so the
   // init-time openSession() call for a single-session report doesn't hit a temporal-dead-zone ref.
   let timelineTimer = null;
   const stopTimeline = () => { if (timelineTimer) { clearInterval(timelineTimer); timelineTimer = null; } st.playing = false; };
+  // Per-frame aspect ratio of the current session's video sprite (`w / h`). The sprite layout
+  // carries frame height but not width, so it's measured once from the sprite's natural size
+  // (measureSpriteAspect) and inlined by every later render of a frame box.
+  let spriteAspect = null;
 
   // Open a session's detail. Failed runs lead with the actionable tool; passing runs start at the
   // authored trail so any recovery summary remains the first thing visible above it. Incidental
   // failed polling rows in a passing run are intentionally ignored.
   const openSession = (i) => {
-    stopTimeline(); st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.llmSel = 0; st.evStream = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.collapsedGroups = []; st.lightboxAll = false;
+    stopTimeline(); spriteAspect = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.llmSel = 0; st.evStream = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.collapsedGroups = []; st.lightboxAll = false;
+    ensureEventsInflated(D);
     const runFailed = ['failed', 'error'].indexOf(String((D.meta && D.meta.status) || '').toLowerCase()) >= 0;
     const failedTool = runFailed ? D.trace.findIndex((t) => !t.objective && !t.ok) : -1;
     const firstFail = failedTool >= 0 ? failedTool : (runFailed ? D.trace.findIndex((t) => !t.ok) : -1);
@@ -1223,8 +1388,11 @@ function RUN_REPORT_VIEWER(): void {
     if (allowed.indexOf(requestedTab) >= 0) st.tab = requestedTab;
     if (r.step != null && Number.isFinite(r.step) && D.trace.some((t) => t.i === r.step)) { st.step = r.step; revealTimelineStep(st.step); }
     if (Number.isFinite(r.llm) && r.llm >= 0 && r.llm < D.llm.length) st.llmSel = r.llm;
-    if (Number.isFinite(r.stream) && r.stream >= 0 && r.stream < (D.events || []).length) st.evStream = r.stream;
-    if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0 && i < (D.events || []).length);
+    // No upper-bound check here: stream counts may be unknown while a compressed events payload
+    // is still inflating, so the consumers own the clamp (renderEvents clamps st.evStream;
+    // streamEvents ignores unknown tlStreams indices).
+    if (Number.isFinite(r.stream) && r.stream >= 0) st.evStream = r.stream;
+    if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0);
   };
   const writeRoute = (replace) => {
     if (typeof history === 'undefined' || typeof location === 'undefined') return;
@@ -1368,6 +1536,39 @@ function RUN_REPORT_VIEWER(): void {
     return null;
   };
 
+  // The session's video, but only when it can be mapped onto the run clock (its capture-start
+  // timestamp and at least one step timestamp exist). Otherwise the timeline keeps screenshots.
+  const tlVideo = () => (D.video && D.video.startMs != null && traceT0() != null) ? D.video : null;
+  // Wall-clock ms a step represents on the run clock: its own timestamp, else the nearest earlier
+  // (then next) timed row — mirroring shotForStep's never-empty fallback. Non-null whenever
+  // tlVideo() is non-null (its traceT0 gate guarantees a timed row exists).
+  const stepClockMs = (i) => {
+    const at = idxOf(i);
+    for (let k = at; k >= 0; k--) { if (D.trace[k].ts != null) return D.trace[k].ts; }
+    for (let k = at + 1; k < D.trace.length; k++) { if (D.trace[k].ts != null) return D.trace[k].ts; }
+    return null;
+  };
+  const videoFrameAt = (v, clockMs) => Math.max(v.startFrame, Math.min(v.endFrame, Math.floor(((clockMs - v.startMs) * v.fps) / 1000)));
+  const videoEndMs = (v) => v.startMs + ((v.endFrame + 1) * 1000) / v.fps;
+  // CSS background geometry for one logical sprite frame (shared by the timeline preview and the
+  // Video tab player): frames are laid out column-major, shown via background-position.
+  const spriteFrameCss = (v, logical) => {
+    const physical = (v.frameMap[logical] != null) ? v.frameMap[logical] : logical;
+    const col = Math.floor(physical / v.rows);
+    const row = physical % v.rows;
+    return {
+      size: `${v.columns * 100}% ${v.rows * 100}%`,
+      position: `${v.columns > 1 ? (col / (v.columns - 1)) * 100 : 0}% ${v.rows > 1 ? (row / (v.rows - 1)) * 100 : 0}%`,
+    };
+  };
+  // One-shot measurement backing `spriteAspect` (frame boxes are background-image divs with no
+  // intrinsic size); `done` runs on first resolution so the caller can apply it to the live box.
+  const measureSpriteAspect = (v, done) => {
+    const img = new Image();
+    img.onload = () => { const fw = img.naturalWidth / v.columns; if (fw > 0 && v.frameHeight > 0 && spriteAspect == null) { spriteAspect = `${fw} / ${v.frameHeight}`; done(); } };
+    img.src = v.sprite;
+  };
+
   // The report-time action overlay on a step's screenshot: a tap/long-press dot, a swipe arrow, an
   // assertion ok-dot, or a failed-assertion red border. Positioned by device-pixel ratio over an
   // <img> that's width:100% and preserves the screenshot's aspect, so percentages map directly.
@@ -1442,10 +1643,15 @@ function RUN_REPORT_VIEWER(): void {
 
   // Match Trail Runner's high-volume stream behavior: streams are opt-in on the timeline. The
   // selected indices live in the URL so a filtered timeline can be shared exactly as viewed.
-  const streamEvents = () => (D.events || []).flatMap((stream, streamIndex) =>
-    st.tlStreams.indexOf(streamIndex) < 0 ? []
-      : (stream.events || []).map((e, n) => ({ ...e, stream: stream.name, streamIndex, key: `${stream.name}-${n}` })),
-  ).sort((a, b) => (a.t || 0) - (b.t || 0));
+  const streamEvents = () => (sessionEvents(D) || []).flatMap((stream, streamIndex): Array<{ t: number | null; d?: string; row?: FormattedRow; stream: string; streamIndex: number; key: string }> => {
+    if (st.tlStreams.indexOf(streamIndex) < 0) return [];
+    // A formatted stream contributes its formatter-produced rows to the timeline; a generic one
+    // contributes its raw events. Both carry the same clock + stream identity downstream.
+    if (stream.rows && stream.rows.length) {
+      return stream.rows.map((row, n) => ({ t: row.t, row, stream: stream.name, streamIndex, key: `${stream.name}-${n}` }));
+    }
+    return (stream.events || []).map((e, n) => ({ ...e, stream: stream.name, streamIndex, key: `${stream.name}-${n}` }));
+  }).sort((a, b) => (a.t || 0) - (b.t || 0));
 
   const eventBuckets = (events) => {
     const buckets = D.trace.map(() => []);
@@ -1469,98 +1675,35 @@ function RUN_REPORT_VIEWER(): void {
   // status color; the producer name and diamond remain redundant cues when color is unavailable.
   const streamColor = (index) => `oklch(74% .14 ${(70 + index * 137.508) % 360})`;
 
-  const eventPayloadCache = new WeakMap();
-  const parseEventJsonish = (value, depth = 0) => {
-    if (depth > 8 || value == null) return value;
-    if (typeof value !== 'string') {
-      if (Array.isArray(value)) return value.map((v) => parseEventJsonish(v, depth + 1));
-      if (typeof value === 'object') {
-        const out = {};
-        Object.keys(value).forEach((k) => { out[k] = parseEventJsonish(value[k], depth + 1); });
-        return out;
-      }
-      return value;
-    }
-    const raw = value.trim();
-    if (!raw) return value;
-    const candidates = [raw];
-    if (raw.indexOf('\\"') >= 0 || raw.indexOf('\\\\') >= 0) {
-      // Let the JSON parser decode one quoting layer at a time. Manually replacing escape
-      // sequences here can double-unescape producer-controlled text and change its meaning.
-      candidates.push(`"${raw}"`);
-    }
-    for (const candidate of candidates) {
-      try {
-        const parsed = JSON.parse(candidate);
-        return parseEventJsonish(parsed, depth + 1);
-      } catch (_) {}
-    }
-    return value;
-  };
-
-  const eventValueText = (value) => {
-    if (value == null) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    return JSON.stringify(value);
-  };
-
-  const eventFieldKinds: Array<[string, string[]]> = [
-    ['Event', ['event', 'eventname', 'eventvalue', 'name', 'label', 'title', 'message']],
-    ['Action', ['action', 'actiontext', 'blockeraction', 'cdfaction']],
-    ['Entity', ['entity', 'cdfentity', 'namespace']],
-    ['Path', ['path', 'urlpath', 'finalpath', 'uniquefinalpath']],
-    ['Status', ['status', 'statuscode', 'code']],
-    ['Method', ['method']],
-    ['Journey', ['journey', 'journeyname', 'flow', 'clientscenario']],
-    ['ID', ['id', 'messageuuid', 'blockerid', 'flowtoken']],
-  ];
-
-  const normalizeEventPayload = (event, source) => {
-    const cached = eventPayloadCache.get(event);
-    if (cached) return cached;
-    const raw = String(event.d == null ? '' : event.d);
-    const parsed = parseEventJsonish(raw);
-    const found = new Map();
-    const queue = [{ value: parsed, depth: 0 }];
-    let visited = 0;
-    while (queue.length && visited++ < 240) {
-      const current = queue.shift();
-      const value = current.value;
-      if (current.depth > 6 || value == null || typeof value !== 'object') continue;
-      if (Array.isArray(value)) {
-        value.slice(0, 40).forEach((item) => queue.push({ value: item, depth: current.depth + 1 }));
-        continue;
-      }
-      Object.keys(value).slice(0, 80).forEach((key) => {
-        const child = value[key];
-        const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (!found.has(normalized) && child != null && child !== '') found.set(normalized, child);
-        if (child && typeof child === 'object') queue.push({ value: child, depth: current.depth + 1 });
-      });
-    }
-    const fields = [];
-    eventFieldKinds.forEach(([label, names]) => {
-      const name = names.find((candidate) => found.has(candidate));
-      const text = name ? eventValueText(found.get(name)) : '';
-      if (text && !fields.some((field) => field.value === text)) fields.push({ label, value: text });
-    });
-    const labelField = eventFieldKinds[0][1].find((name) => found.has(name));
-    const label = (labelField && eventValueText(found.get(labelField))) || source || 'Event';
-    let pretty = raw;
-    try { if (parsed !== raw) pretty = JSON.stringify(parsed, null, 2); } catch (_) {}
-    const normalized = { raw, parsed, fields: fields.slice(0, 8), semanticLabel: labelField ? eventValueText(found.get(labelField)) : '', pretty };
-    eventPayloadCache.set(event, normalized);
-    return normalized;
-  };
-
-  const renderEventPayload = (event, source) => {
-    const { fields, semanticLabel, pretty } = normalizeEventPayload(event, source);
+  // Payload bodies stay EMPTY at render time (data-lazyevent marks the expando); wireLazyEventBodies
+  // fills them on first open. Rendering 8k+ events with multi-MB payloads inline would freeze the tab.
+  const renderEventPayload = (event, source, lazyIdx) => {
+    const { fields, semanticLabel } = normalizeEventPayload(event);
     const label = semanticLabel || source || 'Event';
     const fieldHtml = fields.length ? `<div class="eventfields">${fields.map((f) => `<div class="eventfield"><div class="k">${esc(f.label)}</div><div class="v">${esc(f.value)}</div></div>`).join('')}</div>` : '';
-    return `<div class="eventcard"><div class="eventsummary"><span class="eventlabel">${esc(label)}</span>${source ? `<span class="eventsource">${esc(source)}</span>` : ''}</div>${fieldHtml}<details class="eventdetails"><summary>Raw JSON</summary><pre class="mono">${esc(pretty)}</pre></details></div>`;
+    return `<div class="eventcard"><div class="eventsummary"><span class="eventlabel">${esc(label)}</span>${source ? `<span class="eventsource">${esc(source)}</span>` : ''}</div>${fieldHtml}<details class="eventdetails" data-lazyevent="${lazyIdx}"><summary>Raw JSON</summary><pre class="mono"></pre></details></div>`;
   };
 
+  // Formatter-produced rows (EventStream.rows): the netlog-style rendering. Rows are pure data
+  // built at report-generation time (see run-report-events.ts) — the viewer owns ALL markup, so a
+  // formatter can never inject HTML or depend on the report's internals.
+  const rowToneClass = (tone) => tone === 'error' ? ' e' : tone === 'warn' ? ' w' : '';
+  const rowBadgesHtml = (row) => (row.badges || []).map((b) => `<span class="rowbadge ${b.tone || ''}">${esc(b.text)}</span>`).join('');
+  const formattedRowBody = (row) => {
+    const fields = (row.fields || []).length ? `<div class="eventfields">${row.fields.map((f) => `<div class="eventfield"><div class="k">${esc(f.k)}</div><div class="v">${esc(f.v)}</div></div>`).join('')}</div>` : '';
+    const kvHtml = (kv) => `<div class="rowkv">${kv.map((f) => `<div class="r"><span class="k">${esc(f.k)}</span><span class="v">${esc(f.v)}</span></div>`).join('')}</div>`;
+    const sections = (row.sections || []).map((s) =>
+      `<details class="rowsection"><summary>${esc(s.title)}</summary>${s.kv ? kvHtml(s.kv) : `<pre class="mono">${esc(s.text || '')}</pre>`}</details>`).join('');
+    const raw = (row.raw || []).length ? `<details class="rowsection"><summary>Raw JSON</summary>${row.raw.map((r) => `<pre class="mono">${esc(r)}</pre>`).join('')}</details>` : '';
+    return `${fields}${sections}${raw}`;
+  };
+  const formattedRowSummary = (rel, row) =>
+    `<span class="streamtime">${esc(rel)}</span><span class="fmtlabel">${esc(row.label)}</span><span class="fmtbadges">${rowBadgesHtml(row)}</span><span class="timelineeventchev" aria-hidden="true"></span>`;
+
+  // Timeline event bodies are lazy like the Events tab's (payloads are untruncated): each
+  // rendered <details> carries a data-lazykey resolved through this map by wireLazyTimelineBodies.
+  // Rebuilt on every timeline render (streamGroupHtml runs per step bucket within one render pass).
+  const tlEventByKey = new Map();
   const streamGroupHtml = (events) => {
     if (!events.length) return '';
     const t0 = traceT0();
@@ -1573,36 +1716,41 @@ function RUN_REPORT_VIEWER(): void {
     return groups.map((group) => {
       const rel = (e) => e.t != null && t0 != null ? `+${((e.t - t0) / 1000).toFixed(2)}s` : '';
       const items = group.events.map((e) => {
-        const { semanticLabel, pretty } = normalizeEventPayload(e, 'Event');
+        tlEventByKey.set(e.key, e);
+        if (e.row) {
+          const badges = rowBadgesHtml(e.row);
+          return `<details class="timelineevent" data-lazykey="${esc(e.key)}"><summary><span class="streamtime">${esc(rel(e))}</span><span class="timelineeventlabel">${esc(e.row.label)}${badges ? ` <span class="fmtbadges">${badges}</span>` : ''}</span><span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tl"></div></details>`;
+        }
+        const { semanticLabel } = normalizeEventPayload(e);
         const label = semanticLabel || 'Event';
-        return `<details class="timelineevent"><summary><span class="streamtime">${esc(rel(e))}</span><span class="timelineeventlabel">${esc(label)}</span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono">${esc(pretty)}</pre></details>`;
+        return `<details class="timelineevent" data-lazykey="${esc(e.key)}"><summary><span class="streamtime">${esc(rel(e))}</span><span class="timelineeventlabel">${esc(label)}</span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
       }).join('');
       return `<details class="streamrow" style="--stream-color:${streamColor(group.streamIndex)}" open><summary><span class="streamdot"></span><span class="streamtype">${esc(group.stream)}</span><span class="streamtime">${group.events.length} event${group.events.length === 1 ? '' : 's'}</span></summary><div class="streamitems timelineeventitems">${items}</div></details>`;
     }).join('');
   };
 
   const scrubberHtml = (axis, events, pos) => {
-    const ticks = D.trace.map((t, i) => `<span class="scrubtick" aria-hidden="true" style="top:calc(${(axis.stepFrac[i] || 0) * 100}% - 1px);background:${catColor[stepCat(t)]}"></span>`).join('');
+    const ticks = D.trace.map((t, i) => `<span class="scrubtick" aria-hidden="true" style="left:calc(${(axis.stepFrac[i] || 0) * 100}% - 1px);background:${catColor[stepCat(t)]}"></span>`).join('');
     const eventTicks = events.map((e) => {
       const f = axis.tsFrac(e.t); if (f == null) return '';
-      return `<span class="scrubtick" aria-hidden="true" title="${esc(e.stream)}" style="top:calc(${f * 100}% - 1px);background:${streamColor(e.streamIndex)}"></span>`;
+      return `<span class="scrubtick" aria-hidden="true" title="${esc(e.stream)}" style="left:calc(${f * 100}% - 1px);background:${streamColor(e.streamIndex)}"></span>`;
     }).join('');
     const frac = axis.stepFrac[pos] || 0;
     const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
     const hasTrailhead = D.trace.some((t) => t.objective && t.trailhead);
     const trailFrac = trailStart >= 0 ? (axis.stepFrac[trailStart] || 0) : 1;
     const rail = hasTrailhead && trailStart < 0
-      ? `<div class="scrubline setup" style="height:100%"></div>`
+      ? `<div class="scrubline setup" style="width:100%"></div>`
       : hasTrailhead
-      ? `<div class="scrubline setup" style="height:${trailFrac * 100}%"></div><div class="scrubline trail" style="top:${trailFrac * 100}%"></div><span class="scrubphasebreak" style="top:${trailFrac * 100}%" title="Trail begins" aria-hidden="true"></span>`
-      : `<div class="scrubline trail" style="top:0"></div>`;
+      ? `<div class="scrubline setup" style="width:${trailFrac * 100}%"></div><div class="scrubline trail" style="left:${trailFrac * 100}%"></div><span class="scrubphasebreak" style="left:${trailFrac * 100}%" title="Trail begins" aria-hidden="true"></span>`
+      : `<div class="scrubline trail" style="left:0"></div>`;
     const phaseLabel = hasTrailhead && trailStart < 0 ? 'Timeline for Trailhead setup. The dotted rail marks deterministic setup.'
       : hasTrailhead ? 'Timeline. Dotted segment is Trailhead setup; solid segment is the authored Trail.'
       : 'Timeline for the authored Trail.';
     const current = D.trace[pos];
     const phase = hasTrailhead && (trailStart < 0 || pos < trailStart) ? 'Trailhead' : 'Trail';
     const valueText = `${phase}, item ${pos + 1} of ${D.trace.length}: ${(current && current.label) || 'Timeline item'}`;
-    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${D.trace.length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(valueText)}">${rail}${ticks}${eventTicks}<div class="scrubhead" style="top:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div></div>`;
+    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${D.trace.length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(valueText)}">${rail}${ticks}${eventTicks}<div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div></div>`;
   };
 
   const stepRowHtml = (t, child) => {
@@ -1633,7 +1781,8 @@ function RUN_REPORT_VIEWER(): void {
     const failureSummary = renderFailureSummary(groups);
     const selfHealSummary = renderSelfHealSummary(groups);
     if (!D.trace.length) return `${failureSummary}${selfHealSummary}<div class="empty">This run didn't emit any agent-task steps.</div>`;
-    const streams = D.events || [];
+    const streams = sessionEvents(D) || [];
+    tlEventByKey.clear();
     const events = streamEvents();
     const buckets = eventBuckets(events);
     const streamChooser = streams.length ? `<details class="streamselect" data-streamselect${st.tlMenuOpen ? ' open' : ''}><summary><span class="streamselectoricon" aria-hidden="true"></span><span>Event streams</span><span class="selection">${st.tlStreams.length} of ${streams.length}</span><span class="chevron" aria-hidden="true"></span></summary><div class="streammenu"><div class="streammenuhead"><span>Include in timeline</span><span class="streammenuactions"><button type="button" data-tlstreams="all">Select all</button><button type="button" data-tlstreams="none">Clear</button></span></div>${streams.map((stream, i) => `<label class="streamoption" style="--stream-color:${streamColor(i)}"><input type="checkbox" data-tlstream="${i}"${st.tlStreams.indexOf(i) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${esc(stream.name)}</span><span class="streamcount">${stream.total || (stream.events || []).length}</span></label>`).join('')}</div></details>` : '';
@@ -1682,13 +1831,20 @@ function RUN_REPORT_VIEWER(): void {
     const cur = D.trace.find((t) => t.i === st.step) || D.trace[0];
     const shot = shotForStep(st.step);
     const pos = idxOf(st.step);
-    const axis = timelineAxis();
+    // Prefer the captured video over per-step screenshots: show the video frame at this step's
+    // run-clock time. Screenshot (then the empty note) remains the fallback.
+    const v = tlVideo();
+    const cell = v ? spriteFrameCss(v, videoFrameAt(v, stepClockMs(st.step))) : null;
+    const pane = cell
+      ? `<div class="shotwrap"><div class="tlvframe" id="tlvframe" role="img" aria-label="Video frame at ${esc(cur.label)}, step ${pos + 1}" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-image:url('${v.sprite}');background-size:${cell.size};background-position:${cell.position}"></div>${markHtml(cur)}</div>`
+      : shot
+      ? `<div class="shotwrap"><img class="shot" id="shot" src="${shot}" role="button" tabindex="0" alt="${esc(cur.label)} at step ${pos + 1}" />${cur.screenshotFile ? markHtml(cur) : ''}</div>`
+      : `<div class="noshot">No screenshot captured before this step.</div>`;
     return `<div class="tl">
       <div class="timeline-list">${failureSummary}${selfHealSummary}${streamChooser ? `<div class="timelinecontrols">${streamChooser}</div>` : ''}${hasSteps ? stepsHtml : `<div class="steps">${stepsHtml}</div>`}</div>
-      ${scrubberHtml(axis, events, pos)}
       <div class="preview">
-        <div class="deviceplayer${shot ? '' : ' empty'}">
-          ${shot ? `<div class="shotwrap"><img class="shot" id="shot" src="${shot}" role="button" tabindex="0" alt="${esc(cur.label)} at step ${pos + 1}" />${cur.screenshotFile ? markHtml(cur) : ''}</div>` : `<div class="noshot">No screenshot captured before this step.</div>`}
+        <div class="deviceplayer${(cell || shot) ? '' : ' empty'}">
+          ${pane}
           <div class="pvctl" aria-label="Frame controls">
             <button class="btn transport" id="prev" aria-label="Previous frame" title="Previous frame"${pos <= 0 ? ' disabled' : ''}><span class="transporticon direction" aria-hidden="true"></span></button>
             <button class="btn play transport" id="tlplay" aria-label="${st.playing ? 'Pause' : 'Play'} timeline" title="${st.playing ? 'Pause' : 'Play'} timeline">${st.playing ? '<span class="transporticon pauseicon" aria-hidden="true"></span>' : '<svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.7 5.8c0-1.25 1.37-2.02 2.44-1.38l9.18 5.52c1.03.62 1.03 2.11 0 2.73l-9.18 5.52c-1.07.64-2.44-.13-2.44-1.38Z" fill="currentColor"/></svg>'}</button>
@@ -1829,27 +1985,100 @@ function RUN_REPORT_VIEWER(): void {
     apply();
   };
 
-  // Generic session-events tab: one selectable stream per `events/<name>.<style>.ndjson` producer,
+  // Event payloads are embedded untruncated, so their bodies are rendered EMPTY and filled the
+  // first time their <details> opens — building tens of MB of payload HTML up front would freeze
+  // the tab. 'toggle' doesn't bubble, so the wire* functions below listen in the capture phase on
+  // their pane; panes are recreated on every render, so listeners never stack. A consequence: the
+  // text filter above matches row summaries only (labels, badges, fields), not unopened bodies.
+  //
+  // fillLazyBody is the shared fill: a formatted row gets its full row body (.fmtbody), a generic
+  // event gets its pretty-printed payload (pre).
+  const fillLazyBody = (el, row, event) => {
+    if (row) {
+      const body = el.querySelector('.fmtbody');
+      if (!body) return;
+      body.innerHTML = formattedRowBody(row);
+    } else if (event) {
+      const pre = el.querySelector('pre');
+      if (!pre) return;
+      pre.textContent = eventPrettyText(event);
+    } else {
+      return;
+    }
+    el.dataset.lazyfilled = '1';
+  };
+
+  const wireLazyEventBodies = () => {
+    const pane = document.getElementById('evpane');
+    if (!pane || !pane.addEventListener) return;
+    const streams = sessionEvents(D) || [];
+    const cur = streams[Math.min(Math.max(st.evStream || 0, 0), streams.length - 1)];
+    if (!cur) return;
+    pane.addEventListener('toggle', (e) => {
+      const el = e.target as any;
+      if (!el || !el.open || !el.dataset || el.dataset.lazyfilled) return;
+      if (el.dataset.lazyrow != null) fillLazyBody(el, (cur.rows || [])[+el.dataset.lazyrow], null);
+      else if (el.dataset.lazyevent != null) fillLazyBody(el, null, (cur.events || [])[+el.dataset.lazyevent]);
+    }, true);
+  };
+
+  const wireLazyTimelineBodies = () => {
+    const list = root.querySelector('.timeline-list') as any;
+    if (!list || !list.addEventListener) return;
+    list.addEventListener('toggle', (e) => {
+      const el = e.target as any;
+      if (!el || !el.open || !el.dataset || el.dataset.lazyfilled || el.dataset.lazykey == null) return;
+      const entry = tlEventByKey.get(el.dataset.lazykey);
+      if (entry) fillLazyBody(el, entry.row, entry);
+    }, true);
+  };
+
+  // Generic session-events tab: one selectable stream per `events/<name>.ndjson` producer,
   // each event shown at its offset from the stream's first event so a producer's activity reads on
   // the run clock. Mirrors the producer-agnostic JVM SessionEventsReader; the renderer knows nothing
   // about any specific producer.
   const renderEvents = () => {
-    const streams = D.events;
-    if (!streams || !streams.length) return viewPage('Events', '', `<div class="empty">No events captured.</div>`);
+    ensureEventsInflated(D);
+    const streams = sessionEvents(D);
+    if (!streams || !streams.length) {
+      if (eventsFailed.has(D)) return viewPage('Events', '', `<div class="empty">Events are embedded compressed, and this browser can't decompress them.</div>`);
+      if (D.eventsGz) return viewPage('Events', '', `<div class="empty">Decompressing events…</div>`);
+      return viewPage('Events', '', `<div class="empty">No events captured.</div>`);
+    }
     const sel = Math.min(Math.max(st.evStream || 0, 0), streams.length - 1);
     const cur = streams[sel];
     const options = streams.map((s, i) =>
       `<button class="evstreamoption" type="button" role="option" aria-selected="${i === sel}" data-evstream="${i}"><span>${esc(s.name)}</span><span class="evstreamoptioncount">${s.total}</span></button>`).join('');
-    const t0 = cur.events.length && cur.events[0].t != null ? cur.events[0].t : null;
-    const rows = cur.events.map((e) => {
-      const rel = (e.t != null && t0 != null) ? `+${((e.t - t0) / 1000).toFixed(2)}s` : '';
-      return `<div class="streamitem"><span class="streamtime">${esc(rel)}</span>${renderEventPayload(e, cur.name)}</div>`;
-    }).join('');
+    const chooser = `<details class="streamselect evstreamselect" data-evstreamselect><summary><span class="evstreamlabel">${esc(cur.name)}</span><span class="evstreamcount">${cur.total}</span><span class="chevron" aria-hidden="true"></span></summary><div class="streammenu" role="listbox" aria-label="Event stream">${options}</div></details>`;
     const totalEvents = streams.reduce((a, s) => a + (s.total || 0), 0);
-    const trunc = cur.truncated ? ` · showing last ${cur.events.length} of ${cur.total}` : '';
-    return viewPage('Events', `${streams.length} stream${streams.length === 1 ? '' : 's'} · ${totalEvents} total${trunc}`, `
-      <details class="streamselect evstreamselect" data-evstreamselect><summary><span class="evstreamlabel">${esc(cur.name)}</span><span class="evstreamcount">${cur.total}</span><span class="chevron" aria-hidden="true"></span></summary><div class="streammenu" role="listbox" aria-label="Event stream">${options}</div></details>
-      <div class="eventlist">${rows}</div>`, 'eventview');
+    const fmtRows = cur.rows || [];
+    const shown = fmtRows.length || cur.events.length;
+    const trunc = cur.truncated ? ` · showing last ${shown} of ${cur.total}` : '';
+    const sub = `${streams.length} stream${streams.length === 1 ? '' : 's'} · ${totalEvents} total${trunc}`;
+    if (fmtRows.length) {
+      const t0 = fmtRows[0].t != null ? fmtRows[0].t : null;
+      // Row bodies (headers, full payloads) stay empty until opened — see wireLazyEventBodies.
+      const items = fmtRows.map((row, i) => {
+        const rel = (row.t != null && t0 != null) ? `+${((row.t - t0) / 1000).toFixed(2)}s` : '';
+        return `<details class="fmtrow${rowToneClass(row.tone)}" data-lazyrow="${i}"><summary>${formattedRowSummary(rel, row)}</summary><div class="fmtbody"></div></details>`;
+      }).join('');
+      return viewPage('Events', sub, `
+        ${chooser}
+        <div class="lfilter" id="evbar"><input id="evq" type="search" placeholder="Filter events…" />
+          <button class="evchip on" data-lvl="">All</button>
+          <button class="evchip" data-lvl="w">Warn+</button>
+          <button class="evchip" data-lvl="e">Errors</button>
+          <span class="count" id="evcount"></span></div>
+        <div class="eventlist" id="evpane">${items}</div>`, 'eventview');
+    }
+    const t0 = cur.events.length && cur.events[0].t != null ? cur.events[0].t : null;
+    const rows = cur.events.map((e, i) => {
+      const rel = (e.t != null && t0 != null) ? `+${((e.t - t0) / 1000).toFixed(2)}s` : '';
+      return `<div class="streamitem"><span class="streamtime">${esc(rel)}</span>${renderEventPayload(e, cur.name, i)}</div>`;
+    }).join('');
+    return viewPage('Events', sub, `
+      ${chooser}
+      <div class="eventlist" id="evpane">${rows}</div>`, 'eventview');
   };
 
   // Video playback over the embedded sprite sheet — pure CSS background-position scrubbing, no decode
@@ -1868,7 +2097,7 @@ function RUN_REPORT_VIEWER(): void {
         <span class="count" id="vpos">0.0s / ${(total / v.fps).toFixed(1)}s</span>
         <button class="btn" id="vspeed" title="Playback speed">${st.vSpeed}×</button>
       </div>
-      <div class="vframe" id="vframe" style="background-image:url('${v.sprite}')"></div>
+      <div class="vframe" id="vframe" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-image:url('${v.sprite}')"></div>
     </div>`);
   };
 
@@ -2164,7 +2393,7 @@ function RUN_REPORT_VIEWER(): void {
       ...(D.recordingYaml || D.originalYaml ? [['recording', 'YAML']] : []),
       ...(D.deviceLog ? [['device', 'Device logs']] : []),
       ...(D.network && D.network.length ? [['network', 'Network']] : []),
-      ...(D.events && D.events.length ? [['events', 'Events']] : []),
+      ...(hasEvents(D) ? [['events', 'Events']] : []),
       ['info', 'Info'],
     ];
     const body = st.tab === 'timeline' ? renderTimeline()
@@ -2190,6 +2419,7 @@ function RUN_REPORT_VIEWER(): void {
         <nav aria-label="Report views">${tabs.map(([id, l]) => `<button class="${st.tab === id ? 'active' : ''}" data-tab="${id}">${l}</button>`).join('')}</nav>
       </header>
       <main class="${st.tab === 'timeline' ? 'timelinemain' : ''}">${body}</main>
+      ${st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), idxOf(st.step)) : ''}
       <footer class="detailfooter"><div class="detailfootermeta">${footerItems}${runOn}</div></footer>`;
     wire();
     if (previousTimelineScroll != null) {
@@ -2266,6 +2496,40 @@ function RUN_REPORT_VIEWER(): void {
     };
     if (typeof requestAnimationFrame === 'undefined') center();
     else requestAnimationFrame(() => requestAnimationFrame(center));
+  };
+  // Select the trace row at index `p`: the shared landing sequence for every explicit timeline
+  // navigation (transport buttons, scrubber, arrow keys).
+  const gotoStep = (p) => { stopTimeline(); st.step = D.trace[p].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); };
+  // Auto-play with a run-clock-mappable video: play in real time. The clock derives from elapsed
+  // wall time (not counted ticks, so browser timer throttling can't slow playback down); each tick
+  // paints the matching sprite frame and scrubber head directly (no re-render) and advances the
+  // step selection as the clock passes each row's timestamp — untimed rows ride along with the
+  // last timed one.
+  const playTimelineVideo = (v) => {
+    const axis = timelineAxis();
+    const clock0 = stepClockMs(st.step);
+    const played0 = performance.now();
+    timelineTimer = setInterval(() => {
+      const clock = clock0 + (performance.now() - played0);
+      let p = idxOf(st.step);
+      let moved = false;
+      while (p < D.trace.length - 1 && (D.trace[p + 1].ts == null || D.trace[p + 1].ts <= clock)) { p++; moved = true; }
+      if (moved) { st.step = D.trace[p].i; revealTimelineStep(st.step); writeRoute(true); render(true); }
+      const frame = document.getElementById('tlvframe');
+      if (frame) { const cell = spriteFrameCss(v, videoFrameAt(v, clock)); frame.style.backgroundSize = cell.size; frame.style.backgroundPosition = cell.position; }
+      const head = root.querySelector<HTMLElement>('.scrubhead');
+      const f = axis.tsFrac(clock);
+      if (head && f != null) head.style.left = `${f * 100}%`;
+      if (p >= D.trace.length - 1 && clock >= videoEndMs(v)) { stopTimeline(); render(true); }
+    }, TIMELINE_VIDEO_TICK_MS);
+  };
+  // Auto-play without video: dwell TIMELINE_PLAY_MS on each step's screenshot.
+  const playTimelineSteps = () => {
+    timelineTimer = setInterval(() => {
+      const p = idxOf(st.step);
+      if (p >= D.trace.length - 1) { stopTimeline(); render(true); return; }
+      st.step = D.trace[p + 1].i; revealTimelineStep(st.step); writeRoute(true); render(true);
+    }, TIMELINE_PLAY_MS);
   };
   const wire = () => {
     stopVideo(); // a re-render replaces the video element; drop any running playback timer.
@@ -2350,7 +2614,7 @@ function RUN_REPORT_VIEWER(): void {
       st.tlMenuOpen = true; writeRoute(true); render(true);
     });
     root.querySelectorAll<HTMLElement>('[data-tlstreams]').forEach((el) => el.onclick = () => {
-      st.tlStreams = el.dataset.tlstreams === 'all' ? (D.events || []).map((_, i) => i) : [];
+      st.tlStreams = el.dataset.tlstreams === 'all' ? (sessionEvents(D) || []).map((_, i) => i) : [];
       st.tlMenuOpen = true; writeRoute(true); render(true);
     });
     root.querySelectorAll<HTMLElement>('[data-phase]').forEach((control) => control.onclick = () => {
@@ -2372,6 +2636,14 @@ function RUN_REPORT_VIEWER(): void {
     });
     const streamSelect = root.querySelector<HTMLDetailsElement>('[data-streamselect]');
     if (streamSelect) streamSelect.ontoggle = () => { st.tlMenuOpen = streamSelect.open; };
+    // Dismiss either stream dropdown on a tap/click outside it. Assignment (not addEventListener)
+    // so each re-render replaces the handler instead of stacking stale ones; closing the timeline
+    // chooser fires its ontoggle above, keeping st.tlMenuOpen in sync.
+    document.onpointerdown = (e) => {
+      for (const menu of [streamSelect, eventStreamSelect]) {
+        if (menu && menu.open && !menu.contains(e.target as Node | null)) menu.open = false;
+      }
+    };
     root.querySelectorAll<HTMLElement>('[data-yaml-step]').forEach((el) => el.onclick = () => {
       stopTimeline();
       st.step = +el.dataset.yamlStep;
@@ -2397,32 +2669,31 @@ function RUN_REPORT_VIEWER(): void {
     });
     const previewShot = root.querySelector<HTMLImageElement>('.preview .shot');
     if (previewShot && !previewShot.complete) previewShot.addEventListener('load', centerTimelineSelection, { once: true });
+    // First timeline render with a video: measure the sprite so the frame box gets its true aspect.
+    if (document.getElementById('tlvframe') && spriteAspect == null) measureSpriteAspect(tlVideo(), () => render(true));
     const prev = document.getElementById('prev'); const next = document.getElementById('next');
-    if (prev) prev.onclick = () => { stopTimeline(); const p = idxOf(st.step); if (p > 0) { st.step = D.trace[p - 1].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); } };
-    if (next) next.onclick = () => { stopTimeline(); const p = idxOf(st.step); if (p < D.trace.length - 1) { st.step = D.trace[p + 1].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); } };
+    if (prev) prev.onclick = () => { stopTimeline(); const p = idxOf(st.step); if (p > 0) gotoStep(p - 1); };
+    if (next) next.onclick = () => { stopTimeline(); const p = idxOf(st.step); if (p < D.trace.length - 1) gotoStep(p + 1); };
     const scrub = root.querySelector<HTMLElement>('[data-scrub]');
     if (scrub) scrub.onclick = (e) => {
       const r = scrub.getBoundingClientRect();
-      const f = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+      const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
       const axis = timelineAxis(); let best = 0; let dist = Infinity;
       axis.stepFrac.forEach((sf, i) => { const d = Math.abs(sf - f); if (d < dist) { dist = d; best = i; } });
-      if (D.trace[best]) { stopTimeline(); st.step = D.trace[best].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); }
+      if (D.trace[best]) gotoStep(best);
     };
     if (scrub) scrub.onkeydown = (e) => {
       const p = idxOf(st.step);
       const target = e.key === 'Home' ? 0 : e.key === 'End' ? D.trace.length - 1 : (e.key === 'ArrowUp' || e.key === 'ArrowLeft') ? p - 1 : (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? p + 1 : -1;
-      if (target >= 0 && target < D.trace.length) { e.preventDefault(); e.stopPropagation(); stopTimeline(); st.step = D.trace[target].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); }
+      if (target >= 0 && target < D.trace.length) { e.preventDefault(); e.stopPropagation(); gotoStep(target); }
     };
     const tlplay = document.getElementById('tlplay');
     if (tlplay) tlplay.onclick = () => {
       if (timelineTimer) { stopTimeline(); render(true); return; }
       if (idxOf(st.step) >= D.trace.length - 1) st.step = D.trace[0].i; // restart from the top if parked at the end
       st.playing = true;
-      timelineTimer = setInterval(() => {
-        const p = idxOf(st.step);
-        if (p >= D.trace.length - 1) { stopTimeline(); render(true); return; }
-        st.step = D.trace[p + 1].i; revealTimelineStep(st.step); writeRoute(true); render(true);
-      }, TIMELINE_PLAY_MS);
+      const v = tlVideo();
+      if (v) playTimelineVideo(v); else playTimelineSteps();
       render(true);
     };
     // While playing, keep the advancing step in view in the step list.
@@ -2438,6 +2709,8 @@ function RUN_REPORT_VIEWER(): void {
     if (st.tab === 'video') wireVideo();
     if (st.tab === 'device') wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
     if (st.tab === 'network') wireLogFilter('nlpane', 'nlq', 'nlbar', 'nlcount');
+    if (st.tab === 'events') { wireLogFilter('evpane', 'evq', 'evbar', 'evcount'); wireLazyEventBodies(); }
+    if (st.tab === 'timeline') wireLazyTimelineBodies();
     const copycmd = document.getElementById('copycmd');
     if (copycmd) copycmd.onclick = () => { try { navigator.clipboard.writeText(D.meta.cmd); copycmd.textContent = 'Copied'; setTimeout(() => { copycmd.textContent = 'Copy'; }, 1500); } catch (e) {} };
     const wireCopyYaml = (id, text) => {
@@ -2451,8 +2724,8 @@ function RUN_REPORT_VIEWER(): void {
   };
 
   // Drive the video sprite scrubber: map the logical-frame index to a grid cell and show it via CSS
-  // background-position (no per-frame image fetch). Per-frame width comes from the sprite's natural
-  // width / columns, read once on load to set the frame box aspect ratio.
+  // background-position (no per-frame image fetch). The frame box aspect comes from the shared
+  // spriteAspect measurement (renderVideo inlines it once cached).
   const wireVideo = () => {
     const v = D.video;
     const box = document.getElementById('vframe');
@@ -2464,18 +2737,13 @@ function RUN_REPORT_VIEWER(): void {
     const speedBtn = document.getElementById('vspeed');
     const show = (k) => {
       const kk = Math.max(0, Math.min(total - 1, k));
-      const logical = v.startFrame + kk;
-      const physical = (v.frameMap[logical] != null) ? v.frameMap[logical] : logical;
-      const col = Math.floor(physical / v.rows);
-      const row = physical % v.rows;
-      box.style.backgroundSize = `${v.columns * 100}% ${v.rows * 100}%`;
-      box.style.backgroundPosition = `${v.columns > 1 ? (col / (v.columns - 1)) * 100 : 0}% ${v.rows > 1 ? (row / (v.rows - 1)) * 100 : 0}%`;
+      const cell = spriteFrameCss(v, v.startFrame + kk);
+      box.style.backgroundSize = cell.size;
+      box.style.backgroundPosition = cell.position;
       if (posEl) posEl.textContent = `${(kk / v.fps).toFixed(1)}s / ${(total / v.fps).toFixed(1)}s`;
       if (seek && +seek.value !== kk) seek.value = String(kk);
     };
-    const img = new Image();
-    img.onload = () => { const fw = img.naturalWidth / v.columns; if (fw > 0 && v.frameHeight > 0) box.style.aspectRatio = `${fw} / ${v.frameHeight}`; show(seek ? +seek.value : 0); };
-    img.src = v.sprite;
+    if (spriteAspect == null) measureSpriteAspect(v, () => { box.style.aspectRatio = spriteAspect; });
     show(seek ? +seek.value : 0);
     const startPlayback = () => {
       stopVideo();
@@ -2513,8 +2781,8 @@ function RUN_REPORT_VIEWER(): void {
     // Space toggles playback on the video tab too (parity with the legacy player's spacebar).
     if (st.view === 'detail' && st.tab === 'video' && e.key === ' ') { e.preventDefault(); const b = document.getElementById('vplay'); if (b) b.click(); return; }
     if (st.view !== 'detail' || st.tab !== 'timeline' || !D.trace.length) return;
-    if (e.key === 'ArrowLeft') { stopTimeline(); const p = idxOf(st.step); if (p > 0) { e.preventDefault(); st.step = D.trace[p - 1].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); } }
-    if (e.key === 'ArrowRight') { stopTimeline(); const p = idxOf(st.step); if (p < D.trace.length - 1) { e.preventDefault(); st.step = D.trace[p + 1].i; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); } }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { stopTimeline(); const p = idxOf(st.step); if (p > 0) { e.preventDefault(); gotoStep(p - 1); } }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { stopTimeline(); const p = idxOf(st.step); if (p < D.trace.length - 1) { e.preventDefault(); gotoStep(p + 1); } }
     if (e.key === ' ') { e.preventDefault(); const b = document.getElementById('tlplay'); if (b) b.click(); } // space toggles play/pause
   });
 
@@ -2534,7 +2802,7 @@ function RUN_REPORT_VIEWER(): void {
 const RUN_REPORT_EXPORTS = {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs,
   stepText, toolDetail, summarizeToolArgs, describeSelector,
-  slimTraceForShare, slimLlmForShare, buildRunReportHtml, buildMultiReportHtml, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  slimTraceForShare, slimLlmForShare, buildRunReportHtml, buildMultiReportHtml, inflateEventsGz, normalizeEventPayload, eventPrettyText, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
 };
 if (typeof window !== 'undefined') Object.assign(window, RUN_REPORT_EXPORTS);
 if (typeof module !== 'undefined' && module.exports) module.exports = RUN_REPORT_EXPORTS;

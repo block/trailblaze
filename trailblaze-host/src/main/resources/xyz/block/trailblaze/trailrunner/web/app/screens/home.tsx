@@ -154,20 +154,22 @@ function HomePipeline({ go, vertical }) {
   );
 }
 
-// The way to start a test: one Create door, mirroring the sidebar's Create group. The card lands
-// on a blank Create session (sel: 'new') where the author drives a live device by hand, describes
-// a flow to an agent, or both.
-function CreateOptions({ go }) {
+// The ways to start a test: draft inside Trail Runner, or bring your own coding agent (companion
+// mode - the agent authors the trail from its own CLI session while Trail Runner mirrors the
+// folder live). The first door lands on a blank Create session (sel: 'new'); the second opens the
+// paste-a-prompt drawer instead of navigating - the actual session appears once the agent attaches.
+function CreateOptions({ go, onCompanion }) {
   const opts = [
-    { key: 'create', payload: { sel: 'new' }, ico: 'sparkles', color: 'var(--tb-ai)', bg: 'rgba(181,140,255,.16)', kicker: 'Create', title: 'Create a trail', sub: 'Drive a live device yourself or describe the flow to an agent - every action becomes an editable step.', cta: 'New session' },
+    { key: 'create', onClick: () => go('create', { sel: 'new' }), ico: 'sparkles', color: 'var(--tb-ai)', bg: 'rgba(181,140,255,.16)', kicker: 'Create', title: 'Draft in Trail Runner', sub: 'Drive a live device yourself or describe the flow to an agent - every action becomes an editable step.', cta: 'New session' },
+    { key: 'companion', onClick: onCompanion, ico: 'satellite-dish', color: 'var(--tb-running)', bg: 'rgba(94,155,255,.16)', kicker: 'Companion', title: 'Work with your own agent', sub: 'Already pairing with Claude Code or Codex? Paste one prompt there and your agent authors the trail while Trail Runner mirrors it live.', cta: 'Get the prompt' },
   ];
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', flexWrap: 'wrap' }}>
       {opts.map((o) => {
         return (
           <div key={o.key} className="tb-card" role="button" tabIndex={0}
-            onClick={() => go(o.key, o.payload)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(o.key, o.payload); } }}
+            onClick={o.onClick}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); o.onClick(); } }}
             style={{ flex: '1 1 210px', minWidth: 0, padding: 16, display: 'flex', flexDirection: 'column', gap: 11, cursor: 'pointer', background: 'var(--bg-subtle)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: 10, background: o.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
@@ -187,6 +189,89 @@ function CreateOptions({ go }) {
   );
 }
 
+// The statement seed mirrors Record's Context card: the trail's intent line always reads
+// "Validates that a user can …", so the on-ramp asks for exactly that sentence.
+const COMPANION_STATEMENT_SEED = 'Validates that a user can ';
+
+// The one prompt the developer pastes into their own agent CLI. Regenerated on every keystroke of
+// the statement; the clarifying-questions ask comes FIRST so the agent gathers context in the
+// thread before it attaches or writes anything.
+function companionAgentPrompt(statement, root) {
+  return [
+    "Help me author a Trailblaze trail - a natural-language UI test that gets recorded into deterministic YAML - using Trail Runner's companion mode.",
+    '',
+    'Trail intent: ' + statement.trim(),
+    '',
+    'Before touching any files, ask me 5 clarifying questions in this thread to pin down the context for this trail - things like the app target and platforms, the account and starting data state, what each step should assert, edge cases worth covering, and where the trail folder should live. Wait for my answers.',
+    '',
+    'Then:',
+    '1. Run `trailblaze companion --agent-help` and follow that contract.',
+    '2. From the workspace root (' + (root || '<your workspace root>') + '), attach with `trailblaze companion start --folder <trail-folder> --title "<short title>"`.',
+    '3. Author the trail folder on disk, narrating with companion events as you go - I will follow along in the Trail Runner window and record steps on a device when you arm a recording.',
+    '4. Disconnect when the trail is done.',
+  ].join('\n');
+}
+
+// The companion on-ramp behind the "Work with your own agent" door: ask for the trail's
+// "Validates that a user can …" statement, then hand over the paste-ready prompt. Copy stays
+// locked until the statement says something - shipping the seed verbatim would brief the agent
+// with a blank intent.
+function CompanionPromptDrawer({ onClose }) {
+  const status = TB.useStatus();
+  const [statement, setStatement] = React.useState(COMPANION_STATEMENT_SEED);
+  const [copied, setCopied] = React.useState(false);
+  const [copyErr, setCopyErr] = React.useState(false);
+  const inputRef = React.useRef(null);
+  React.useEffect(() => {
+    const el = inputRef.current;
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, []);
+  const done = statement.trim() !== '' && statement.trim() !== COMPANION_STATEMENT_SEED.trim();
+  const prompt = companionAgentPrompt(statement, status.data && status.data.trailsDirectory);
+  const copy = () => {
+    setCopyErr(false);
+    navigator.clipboard.writeText(prompt)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => setCopyErr(true));
+  };
+  return (
+    <HelpOverlay
+      title="Work with your own agent"
+      sub="Your coding agent authors the trail from its own CLI session; Trail Runner mirrors the folder live and lends you a device for recordings. One paste sets it up."
+      onClose={onClose}
+    >
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <Ico n="target" s={15} c="var(--tb-ai)" />
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>What should this trail prove?</span>
+        </div>
+        <textarea ref={inputRef} value={statement} onChange={(e) => setStatement(e.target.value)} spellCheck={false}
+          aria-label="What should this trail prove?"
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur(); } }}
+          placeholder="e.g. Validates that a user can send $5 to a friend"
+          style={{ width: '100%', boxSizing: 'border-box', minHeight: 46, resize: 'vertical', background: '#0a0a0a', border: '1px solid var(--tb-hairline)', borderRadius: 8, outline: 'none', color: 'var(--text-standard)', padding: '8px 10px', font: 'inherit', fontSize: 13.5, lineHeight: 1.5 }} />
+        <div className="tb-sub" style={{ fontSize: 11, lineHeight: 1.5, marginTop: 6, color: done ? undefined : 'var(--tb-amber)' }}>
+          {done ? 'This becomes the trail’s intent line - the agent uses it to recover when a screen looks unexpected.' : 'Finish the sentence - it becomes the trail’s intent line and briefs your agent.'}
+        </div>
+      </div>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <Ico n="clipboard" s={15} c="var(--tb-running)" />
+          <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1 }}>Prompt for your agent</span>
+          <Btn sm ico={copied ? 'check' : 'copy'} disabled={!done} onClick={copy}>{copied ? 'Copied!' : 'Copy'}</Btn>
+        </div>
+        {copyErr && <div role="alert" style={{ fontSize: 11, color: 'var(--tb-danger-text)', marginBottom: 6 }}>Couldn’t copy automatically - select the prompt above and copy it manually.</div>}
+        <pre data-selectable style={{ margin: 0, background: '#0a0a0a', border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '10px 12px', overflowX: 'auto', fontSize: 11, lineHeight: 1.6 }}>
+          <code className="tb-mono" style={{ color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>{prompt}</code>
+        </pre>
+        <div className="tb-sub" style={{ fontSize: 11, lineHeight: 1.5, marginTop: 8 }}>
+          Paste it into Claude Code, Codex, or any agent CLI running in this workspace. It will ask its five questions right in that thread; once it attaches, the live session appears in the sidebar under Create.
+        </div>
+      </div>
+    </HelpOverlay>
+  );
+}
+
 function ReadinessPanel({ go }) {
   const status = TB.useStatus();
   const devices = TB.useDevices();
@@ -197,6 +282,8 @@ function ReadinessPanel({ go }) {
   const selectedDevices = selectedIds.map((id) => deviceList.find((d) => d.id === id)).filter(Boolean);
   const selectedConnected = selectedDevices.filter((d) => d.connected !== false).length;
   const totalTrails = TB.countTrailBundles(trails.data || []);
+  const targetSelected = window.TargetPickerModel.hasTargetSelection(gt);
+  const targetLabel = targetSelected ? (gt.label || gt.target) : null;
   // One compact segment per check; the short value renders inline, the full guidance rides on hover.
   // Before the first /status response, the daemon row is genuinely unknown - painting
   // "not running" for that beat reads as a broken app. After the first response, "not running"
@@ -212,9 +299,9 @@ function ReadinessPanel({ go }) {
     },
     {
       label: 'Target',
-      value: gt && gt.target ? (gt.label || gt.target) : 'none',
-      hint: gt && gt.target ? (gt.label || gt.target) : 'Choose the app or web target under test.',
-      ok: !!(gt && gt.target),
+      value: targetLabel || 'none',
+      hint: targetLabel || 'Choose the app or web target under test.',
+      ok: targetSelected,
       action: 'home',
     },
     {
@@ -271,15 +358,14 @@ function HomeSection({ ico, color, bg, title, sub, first, headerRight, children 
 }
 
 // "Browse tests" entry for the Run section: a clickable card into the Trails library, captioned
-// with how many saved trails are in the workspace. Pairs with Recent runs as the two ways to
-// re-run something that already exists.
+// with how many saved trails are in the workspace.
 function BrowseTests({ go }) {
   const trails = TB.useTrails();
   const count = TB.countTrailBundles(trails.data || []);
   return (
     <div className="tb-card" role="button" tabIndex={0} data-testid="browse-tests"
       onClick={() => go('trails')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('trails'); } }}
-      style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 13, cursor: 'pointer', marginBottom: 22, background: 'var(--bg-subtle)' }}>
+      style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 13, cursor: 'pointer', background: 'var(--bg-subtle)' }}>
       <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(94,155,255,.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
         <Ico n="route" s={19} c="var(--tb-running)" />
       </div>
@@ -292,39 +378,98 @@ function BrowseTests({ go }) {
   );
 }
 
-// Recent runs list for the Run section. Was a standalone block at the bottom of Home; now lives
-// under "Run an existing test" beside Browse tests.
-function RecentRuns({ go }) {
-  const sessions = TB.useSessions();
-  const recent = (sessions.data || []).slice(0, 4);
-  // Hide the whole section on Home when there are no runs (and loading is done) — no empty-state
-  // clutter; it reappears the moment a run lands.
-  if (!sessions.loading && recent.length === 0) return null;
+// The Workspace section: which checkout the daemon is rooted at - worktrees make this genuinely
+// non-obvious, so the full path is shown selectable - what's inside it (trails, app targets), and
+// the controls to re-point or reveal it. Same change flow as the sidebar's WorkspaceChip popover:
+// pickDirectoryViaShell then switchWorkspace, which broadcasts tb:workspace-changed so every
+// list (and this panel's own counts) re-resolves against the new folder.
+function WorkspacePanel({ go }) {
+  useLucide();
+  const status = TB.useStatus();
+  const trails = TB.useTrails();
+  const [targetCount, setTargetCount] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const [notice, setNotice] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const r = await Promise.resolve(TB.getTargetApps()).catch(() => null);
+      if (alive) setTargetCount(r && Array.isArray(r.targetApps) ? r.targetApps.length : null);
+    };
+    load();
+    window.addEventListener('tb:workspace-changed', load);
+    window.addEventListener('tb:daemon-recovered', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('tb:workspace-changed', load);
+      window.removeEventListener('tb:daemon-recovered', load);
+    };
+  }, []);
+  const dir = status.data && status.data.trailsDirectory;
+  if (!dir) return null;
+  const name = workspaceRepoName(dir);
+  const branch = status.data.workspaceBranch;
+  const isWorktree = !!status.data.workspaceIsWorktree;
+  const trailCount = trails.data ? TB.countTrailBundles(trails.data) : null;
+  const change = async () => {
+    setBusy(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const path = await TB.pickDirectoryViaShell(dir);
+      if (!path) return; // cancelled - finally still clears busy
+      const res = await TB.switchWorkspace(path);
+      if (!res.ok) { setErr(res.error || 'Could not switch to that folder. It may not be a readable directory.'); return; }
+      if (res.empty) setNotice(TB.WORKSPACE_EMPTY_NOTICE);
+    } catch (e) {
+      setErr('Could not change the workspace: ' + (e && e.message ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 11 }}>
-        <div className="tb-eyebrow">Recent runs</div>
-        <span role="button" tabIndex={0} style={{ fontSize: 12.5, color: 'var(--tb-running)', fontWeight: 600, cursor: 'pointer' }} onClick={() => go('completed')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('completed'); } }}>All runs →</span>
-      </div>
-      {sessions.loading && !sessions.data && <Skeleton rows={3} />}
-      {recent.map((s) => (
-        <div className="tb-row tb-enter" key={s.id} {...clickable(() => go('completed', { sel: s.id }))} style={{ marginBottom: 8, cursor: 'pointer' }}>
-          <Dot c={STATUS[s.status][1]} s={9} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</div>
-            <div className="tb-sub" style={{ fontSize: 11.5, marginTop: 2 }}>{[s.target, s.device, s.dur].filter(Boolean).join(' · ')}</div>
-          </div>
-          <StatusChip s={s.status} />
-          <span className="tb-sub" style={{ fontSize: 11.5, width: 60, textAlign: 'right' }}>{s.ago}</span>
+    <div className="tb-card" style={{ padding: '14px 16px', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+        <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(0,224,19,.13)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
+          <Ico n="folder-git-2" s={19} c="var(--tb-pass)" />
         </div>
-      ))}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+          {branch && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--text-subtle)', marginTop: 2, overflow: 'hidden' }}>
+              <Ico n="git-branch" s={11} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{branch}</span>
+              {isWorktree && <Chip>git worktree</Chip>}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flex: '0 0 auto' }}>
+          <Btn sm ico={busy ? 'loader-2' : 'folder-open'} spin={busy} onClick={change} disabled={busy}>Change…</Btn>
+          <Btn sm kind="ghost" ico="external-link" onClick={() => TB.revealTrailsRoot()}>Reveal in Finder</Btn>
+        </div>
+      </div>
+      <div className="tb-mono" data-selectable style={{ fontSize: 11, lineHeight: 1.5, color: '#94a3b8', padding: '8px 10px', background: '#0a0a0a', border: '1px solid var(--tb-hairline)', borderRadius: 8, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{dir}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <span role="button" tabIndex={0} onClick={() => go('trails')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('trails'); } }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-standard)', cursor: 'pointer' }}>
+          <Ico n="route" s={13} c="var(--tb-running)" />{trailCount == null ? '…' : trailCount} trail{trailCount === 1 ? '' : 's'}
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600 }}>
+          <Ico n="package" s={13} c="var(--text-subtle)" />{targetCount == null ? '…' : targetCount} target{targetCount === 1 ? '' : 's'}
+        </span>
+      </div>
+      {err && <div role="alert" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--tb-danger-text)' }}>{err}</div>}
+      {notice && <div role="status" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-subtle)' }}>{notice}</div>}
     </div>
   );
 }
 
-function HomeContent({ go, openRun }) {
+function HomeContent({ go }) {
   useLucide();
   const [showHelp, setShowHelp] = React.useState(false);
+  const [showCompanion, setShowCompanion] = React.useState(false);
 
   return (
     <div style={{ maxWidth: 940, margin: '0 auto', padding: '28px 30px' }}>
@@ -343,14 +488,21 @@ function HomeContent({ go, openRun }) {
             <HomePipeline go={go} vertical />
           </HelpButton>
         }>
-        <CreateOptions go={go} />
+        <CreateOptions go={go} onCompanion={() => setShowCompanion(true)} />
       </HomeSection>
 
-      {/* Section 2 — re-run something that already exists: browse the library or revisit a run. */}
+      {/* Section 2 — re-run something that already exists: browse the library. */}
       <HomeSection ico="circle-play" color="var(--tb-running)" bg="rgba(94,155,255,.16)"
         title="Run an existing test">
         <BrowseTests go={go} />
-        <RecentRuns go={go} />
+      </HomeSection>
+
+      {/* Section 3 — where everything lives: the active workspace (checkout/worktree), its
+          contents at a glance, and the controls to re-point it. */}
+      <HomeSection ico="folder-git-2" color="var(--tb-pass)" bg="rgba(0,224,19,.13)"
+        title="Workspace"
+        sub="Every trail, tool, and recording resolves against this folder.">
+        <WorkspacePanel go={go} />
       </HomeSection>
 
       {/* First-run status — mirrors the native app's environment status without duplicating the
@@ -358,6 +510,8 @@ function HomeContent({ go, openRun }) {
       <div style={{ marginTop: 26, paddingTop: 14, borderTop: '1px solid var(--tb-hairline)' }}>
         <ReadinessPanel go={go} />
       </div>
+
+      {showCompanion && <CompanionPromptDrawer onClose={() => setShowCompanion(false)} />}
 
       {showHelp && (
         <HelpOverlay
@@ -398,7 +552,7 @@ function workspaceRepoName(dir) {
   return last;
 }
 
-function HomeScreen({ go, openRun }) {
+function HomeScreen({ go }) {
   useLucide();
   // Home and the old standalone Targets screen are now one screen: the target/device
   // picker is the left rail (like the other tabs), the informational content is on the right.
@@ -411,7 +565,7 @@ function HomeScreen({ go, openRun }) {
       <Splitter onDown={startDrag} />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-          <HomeContent go={go} openRun={openRun} />
+          <HomeContent go={go} />
         </div>
       </div>
     </div>

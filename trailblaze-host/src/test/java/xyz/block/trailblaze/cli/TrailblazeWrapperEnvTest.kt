@@ -33,12 +33,12 @@ import org.junit.Assume.assumeTrue
  * and only surfaces at runtime when a user actually runs the wrapper. A
  * subprocess-driven test catches the regression at PR-check time.
  *
- * **Static-form regression guard.** The wrapper's bash logic is checked AS-IS
- * via [`wrapperPath`] — the same script that ships to users. We avoid copying
- * the prelude into a test fixture (which would silently drift from the real
- * script). The wrapper's [`tb_run` family is overridable](trailblaze:171-194)
- * with `if ! declare -f tb_run`, so the test pre-defines no-op overrides
- * before sourcing — keeps the wrapper from spawning a JVM during the test.
+ * The wrapper's bash logic is exercised AS-IS via [`wrapperPath`] — the same
+ * script that ships to users. We avoid copying the prelude into a test fixture
+ * (which would silently drift from the real script). The wrapper's [`tb_run`
+ * family is overridable](trailblaze:171-194) with `if ! declare -f tb_run`, so
+ * the test pre-defines no-op overrides before sourcing — keeps the wrapper
+ * from spawning a JVM during the test.
  *
  * Filed as follow-up coverage from PR #3611 lead-dev review #6.
  */
@@ -227,32 +227,59 @@ class TrailblazeWrapperEnvTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Static-form regression guard: the env-forwarding allowlist in
-  // `ipc_try_forward` is the daemon-bridge half of the contract. If a future
-  // refactor drops `TRAILBLAZE_SHELL_PID` or `TRAILBLAZE_INTERACTIVE` from the
-  // jq-built env_json payload, the bash logic above still passes (it tests the
-  // wrapper's prelude exports) — but the daemon's `CliCallerContext.callerEnv`
-  // never sees the values, and every forwarded subcommand silently degrades to
-  // older-wrapper behavior. This static check anchors the bridge.
+  // The env-forwarding allowlist in `ipc_try_forward` is the daemon-bridge half
+  // of the contract. The tests above cover the wrapper prelude; this one captures
+  // the actual `/cli/exec` payload so implementation refactors remain free to
+  // change how that JSON is assembled.
   // ---------------------------------------------------------------------------
 
   @Test
   fun `wrapper allowlist in ipc_try_forward forwards TRAILBLAZE_SHELL_PID and TRAILBLAZE_INTERACTIVE`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue(
+      "jq required for wrapper IPC test",
+      ProcessBuilder("bash", "-c", "command -v jq >/dev/null 2>&1").start().waitFor() == 0,
+    )
     val wrapper = locateWrapperScript()
-    val body = wrapper.readText()
-    // Match the literal jq line that builds the env_json payload for each var.
-    // Anchoring on the `+ {TRAILBLAZE_*: $v}` token is robust to formatting
-    // changes around it (whitespace, comments) while still failing if the
-    // entry is dropped from the allowlist.
-    assertTrue(
-      "+ {TRAILBLAZE_SHELL_PID: \$v}" in body,
-      "ipc_try_forward must forward TRAILBLAZE_SHELL_PID through env_json — " +
-        "without it, the JVM-side file-pin tier is invisible from the daemon path",
-    )
-    assertTrue(
-      "+ {TRAILBLAZE_INTERACTIVE: \$v}" in body,
-      "ipc_try_forward must forward TRAILBLAZE_INTERACTIVE through env_json — " +
-        "without it, the non-tty warning never fires from a forwarded subcommand",
-    )
+    val capturedPayload = File.createTempFile("trailblaze-cli-exec-payload", ".json")
+    try {
+      val script = """
+        set -e
+        tb_run() { :; }
+        tb_run_quiet() { :; }
+        tb_run_background() { :; }
+        tb_run_background_quiet() { :; }
+        tb_run_exec_quiet() { :; }
+        curl() {
+          case "${'$'}*" in
+            *"/ping"*) return 0 ;;
+          esac
+          while [ "${'$'}#" -gt 0 ]; do
+            if [ "${'$'}1" = "-d" ]; then
+              shift
+              printf '%s' "${'$'}1" > '${capturedPayload.absolutePath}'
+            fi
+            shift
+          done
+          printf '%s' '{"stdout":"","stderr":"","exitCode":0,"forwarded":true}'
+        }
+        ( source '${wrapper.absolutePath}' snapshot )
+        jq -r '[.env.TRAILBLAZE_SHELL_PID, .env.TRAILBLAZE_INTERACTIVE] | @tsv' \
+          '${capturedPayload.absolutePath}'
+      """.trimIndent()
+
+      val (exitCode, stdout, stderr) = runBash(
+        script,
+        mapOf(
+          "TRAILBLAZE_SHELL_PID" to "424242",
+          "TRAILBLAZE_INTERACTIVE" to "1",
+        ),
+      )
+
+      assertEquals(0, exitCode, "bash harness must exit cleanly; stderr=\n$stderr")
+      assertEquals("424242\t1", stdout.trim())
+    } finally {
+      capturedPayload.delete()
+    }
   }
 }

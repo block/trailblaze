@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Search query that returns no results"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [search]
-- prompts:
-    - step: Open Contacts and search for "ZzZzNoSuchContact". Verify "No Results" is visible. Do not tap any rows.

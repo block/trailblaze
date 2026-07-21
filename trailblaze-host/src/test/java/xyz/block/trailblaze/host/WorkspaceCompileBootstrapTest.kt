@@ -41,6 +41,20 @@ class WorkspaceCompileBootstrapTest {
     )
   }
 
+  private fun writeLibraryTrailmap(trailmapsDir: File, id: String) {
+    val trailmapDir = File(trailmapsDir, id).apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: $id
+      platforms:
+        android:
+          tool_sets:
+            - core_interaction
+      exports: []
+      """.trimIndent(),
+    )
+  }
+
   private fun targetsDir(configDir: File): File =
     File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH)
 
@@ -48,6 +62,24 @@ class WorkspaceCompileBootstrapTest {
     File(
       configDir,
       "${TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR}/${WorkspaceCompileBootstrap.HASH_FILENAME}",
+    )
+
+  private fun targetsManifest(configDir: File): File =
+    File(
+      configDir,
+      "${TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR}/${WorkspaceCompileBootstrap.TARGETS_FILENAME}",
+    )
+
+  private fun codegenManifest(configDir: File): File =
+    File(
+      configDir,
+      "${TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR}/${WorkspaceCompileBootstrap.CODEGEN_FILES_FILENAME}",
+    )
+
+  private fun codegenHash(configDir: File): File =
+    File(
+      configDir,
+      "${TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR}/${WorkspaceCompileBootstrap.CODEGEN_HASH_FILENAME}",
     )
 
   @Test
@@ -134,6 +166,7 @@ class WorkspaceCompileBootstrapTest {
     assertTrue(File(targetsDir(configDir), "alpha.yaml").isFile)
     assertTrue(File(targetsDir(configDir), "beta.yaml").isFile)
     assertTrue(hashFile(configDir).isFile)
+    assertEquals(listOf("alpha.yaml", "beta.yaml"), targetsManifest(configDir).readLines())
   }
 
   @Test
@@ -154,11 +187,29 @@ class WorkspaceCompileBootstrapTest {
   }
 
   @Test
+  fun `library trailmaps do not force every unchanged startup to recompile`() {
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+    writeLibraryTrailmap(trailmapsDir, "shared")
+
+    assertEquals(
+      WorkspaceCompileBootstrap.BootstrapResult.Recompiled(emitted = 1),
+      WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0"),
+    )
+    assertEquals(listOf("alpha.yaml"), targetsManifest(configDir).readLines())
+
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.UpToDate, result)
+  }
+
+  @Test
   fun `UpToDate path regenerates a deleted client_d_ts and re-extracts a deleted SDK`() {
-    // Regression guard for the round-1+2 codegen-outside-hash-gate invariant. A user
-    // who manually deletes their per-trailmap `trailblaze-client.d.ts` or the workspace SDK shouldn't
-    // need to invalidate the hash to get them back — the next daemon start regenerates
-    // them. Both ops are idempotent so the cost on the UpToDate path is small.
+    // A user who manually deletes their per-trailmap `trailblaze-client.d.ts` or the workspace SDK
+    // shouldn't need to edit an input to get them back — the next daemon start regenerates them.
+    // SDK setup is idempotent; typed bindings use the generated-files manifest as the missing-output
+    // half of their cache contract.
     //
     // Also covers the legacy-tsconfig-base prune on the UpToDate path: a user
     // upgrading from the extends-style era who then lands on the UpToDate branch
@@ -174,6 +225,8 @@ class WorkspaceCompileBootstrapTest {
     val sdkBundle = File(configDir.parentFile, ".trailblaze/sdk/dist/index.d.ts")
     assertTrue(clientDts.isFile, "expected per-trailmap trailblaze-client.d.ts emitted on first run")
     assertTrue(sdkBundle.isFile, "expected SDK declaration bundle extracted on first run")
+    assertTrue(codegenManifest(configDir).isFile, "expected generated-file manifest on first run")
+    assertTrue(codegenHash(configDir).isFile, "expected typed-bindings input hash on first run")
 
     // User wipes the per-trailmap typed bindings + workspace SDK between runs. The hash
     // file is untouched — same input manifests, same framework version. Also
@@ -196,6 +249,24 @@ class WorkspaceCompileBootstrapTest {
       staleTsconfigBase.exists(),
       "expected stale tsconfig.base.json to be pruned on UpToDate path; still present at $staleTsconfigBase",
     )
+  }
+
+  @Test
+  fun `typed bindings cache invalidates for workspace config outside bundle inputs`() {
+    val configDir = tempFolder.newFolder("trails", "config")
+    val trailmapsDir = File(configDir, "trailmaps").apply { mkdirs() }
+    writeFixtureTrailmap(trailmapsDir, "alpha")
+
+    WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+    val initialCodegenHash = codegenHash(configDir).readText()
+
+    // Workspace defaults participate in project resolution even though they do not affect the
+    // narrower dist/targets bundle hash.
+    File(configDir, "trailblaze.yaml").writeText("defaults:\n  target: alpha\n")
+    val result = WorkspaceCompileBootstrap.bootstrap(configDir = configDir, version = "1.0.0")
+
+    assertEquals(WorkspaceCompileBootstrap.BootstrapResult.UpToDate, result)
+    assertNotEquals(initialCodegenHash, codegenHash(configDir).readText())
   }
 
   @Test

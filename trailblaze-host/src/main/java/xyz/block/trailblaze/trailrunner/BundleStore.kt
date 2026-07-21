@@ -116,20 +116,29 @@ internal object BundleStore {
   /** Recursively deletes the bundle folder. Returns false if the OS reports the delete didn't fully succeed. */
   fun delete(dir: File): Boolean = dir.deleteRecursively()
 
+  /** The file-name slug a variant writes as: `<variantSlug(v)>.trail.yaml`. */
+  fun variantSlug(variant: String): String =
+    variant.lowercase().replace(Regex("[^a-z0-9_-]"), "-").trim('-').ifEmpty { "variant" }
+
   /** Writes a recorded variant produced from a finished run into the bundle folder. Writes to a temp
    *  sibling then atomically moves it into place, so a concurrent reader (the board reload, an inline
-   *  edit) never observes a partially-written YAML and a re-record can't interleave a half file. */
-  fun writeVariant(dir: File, variant: String, yaml: String) {
-    val safe = variant.lowercase().replace(Regex("[^a-z0-9_-]"), "-").trim('-').ifEmpty { "variant" }
+   *  edit) never observes a partially-written YAML and a re-record can't interleave a half file.
+   *  Returns the written file, or null when the write failed (callers that must announce the save -
+   *  the companion recording-saved event - gate on it; the run paths ignore it). */
+  fun writeVariant(dir: File, variant: String, yaml: String): File? {
+    val safe = variantSlug(variant)
     // Unique tmp name per write so two concurrent re-records of the same platform each own their own
     // scratch file (a shared `.<safe>.trail.yaml.tmp` would let them interleave bytes before the move).
     val tmp = File(dir, ".$safe.trail.yaml.${java.util.UUID.randomUUID()}.tmp")
-    runCatching {
+    return runCatching {
       tmp.writeText(yaml)
-      Files.move(tmp.toPath(), File(dir, "$safe.trail.yaml").toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-    }.onFailure {
+      val target = File(dir, "$safe.trail.yaml")
+      Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+      target
+    }.getOrElse {
       runCatching { tmp.delete() } // don't leak the scratch file if the move fails (e.g. cross-device workspace)
       Console.log("[BundleStore] failed to write variant $safe into ${dir.name}: ${it.message}")
+      null
     }
   }
 

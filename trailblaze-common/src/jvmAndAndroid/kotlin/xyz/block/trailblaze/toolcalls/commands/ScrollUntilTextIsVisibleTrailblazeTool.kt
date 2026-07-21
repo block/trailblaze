@@ -45,7 +45,7 @@ every element). If both 'text' and 'textRegex' are given, 'textRegex' takes prec
 additional disambiguation fields (e.g. 'index') when multiple elements match the same target.
 """,
 )
-class ScrollUntilTextIsVisibleTrailblazeTool(
+data class ScrollUntilTextIsVisibleTrailblazeTool(
   @param:LLMDescription("Text to search for while scrolling (substring match). Provide this OR 'textRegex'.")
   val text: String = "",
   @param:LLMDescription(

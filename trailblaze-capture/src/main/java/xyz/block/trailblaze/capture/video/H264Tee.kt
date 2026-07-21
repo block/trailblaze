@@ -18,6 +18,15 @@ import xyz.block.trailblaze.util.Console
  * tee logs a warning and uses whichever attached first — last-writer-wins would silently swap
  * the live viewer's resolution mid-stream.
  *
+ * **Mid-stream joins.** The tee caches the most recent keyframe (SPS+PPS+IDR) and seeds it into
+ * every consumer that attaches while a producer is already running. screenrecord emits an IDR
+ * essentially only at stream start, so a late joiner would otherwise receive only P-slices that
+ * reference parameter sets it never saw — undecodable. This is what lets an MP4 recording that
+ * starts while the live viewer already holds the tee produce a valid file, and lets a browser
+ * WebCodecs decoder configure without waiting for a fresh IDR that may never come on a static
+ * screen. The first consumer is not seeded: it receives the live stream head, which already
+ * begins with SPS/PPS/IDR.
+ *
  * **Consumers and back-pressure.** Each consumer ([Consumer]) gets a non-blocking ring buffer
  * sized at construction time. A slow consumer drops *bytes* (not whole frames — the H.264 NAL
  * stream is self-synchronizing on the next IDR / start code, so a downstream decoder can
@@ -25,10 +34,10 @@ import xyz.block.trailblaze.util.Console
  * consumer.
  *
  * **Restarts.** screenrecord caps invocations at 3 minutes on Android < 11 (API < 30); on
- * Android 11+, `--time-limit 0` lets one invocation run indefinitely. When the subprocess
- * exits, all consumers receive [RestartSignal] *before* the next subprocess's SPS/PPS arrives.
- * The MP4 consumer rolls to a new segment file on that signal; the live consumer just keeps
- * pushing the new SPS/PPS into its decoder.
+ * Android 11+, `--time-limit 0` lets one invocation run indefinitely. A capped or unexpectedly
+ * exited subprocess is restarted. All consumers receive [RestartSignal] *before* the next
+ * subprocess's SPS/PPS arrives. The MP4 consumer rolls to a new segment file on that signal; live
+ * consumers reset their parsers and continue with the new SPS/PPS.
  *
  * **Lifecycle.** Ref-counted via [attach] / [Consumer.detach]. The first attach spawns the
  * subprocess and reader thread; the last detach reaps both. The instance is reusable across
@@ -54,6 +63,8 @@ class H264Tee internal constructor(
    * exercise the unlimited-time-limit path and < 30 to exercise the restart-on-exit chain.
    */
   private val sdkLevelProvider: () -> Int = { sdkLevelFromDevice(deviceId) },
+  /** Test seam for canned finite streams. Production always recovers an unexpected EOF. */
+  private val restartOnUnexpectedExit: Boolean = true,
 ) {
 
   // Synchronized on this Object for refCount/state transitions only — never held across a
@@ -70,6 +81,19 @@ class H264Tee internal constructor(
   // Set true when the last consumer detaches; the reader thread checks this to know that an
   // exit is intentional rather than a screenrecord 3-min cap that needs a restart.
   private val shuttingDown = AtomicBoolean(false)
+
+  // Latest decodable keyframe (SPS+PPS+IDR in Annex-B) seen on the current producer session,
+  // used to seed a consumer that attaches mid-stream. screenrecord emits an IDR essentially only
+  // at stream start, so without this a late joiner — e.g. the MP4 recording that begins while the
+  // live viewer already holds the tee open — would receive only P-slices referencing parameter
+  // sets it never saw, i.e. an undecodable stream. Written by the reader thread and by
+  // startProducer (which runs before the reader thread starts), read under refCountLock in attach;
+  // volatile guarantees the late joiner sees a complete array reference. The splitter is touched
+  // only by the reader thread (and by startProducer before that thread exists). Ordering
+  // invariant: the reader updates this cache BEFORE fanning a chunk out, so once any consumer
+  // has observed a keyframe, every later attach is seeded with it (or a fresher one).
+  @Volatile private var cachedKeyframe: ByteArray? = null
+  private val gopSplitter = AnnexBAccessUnitSplitter()
 
   /**
    * Attach a new consumer with the given ring-buffer capacity. If this is the first consumer,
@@ -90,6 +114,14 @@ class H264Tee internal constructor(
       tee = this,
     )
     synchronized(refCountLock) {
+      // Seed a mid-stream joiner with the last keyframe so its decoder has parameter sets and an
+      // IDR to start from. Only when a producer is already running (refCount > 0) — the first
+      // consumer receives the live stream head, which begins with SPS/PPS/IDR, and startProducer
+      // clears any stale cache. The seed is written before the consumer enters the map so it
+      // precedes any live fanOut bytes for this consumer. Trade-off: the seeded keyframe predates
+      // the following live P-slices, so the very first GOP can show a brief artifact until the
+      // next IDR — decodable-with-glitch beats the undecodable stream a late joiner got before.
+      if (refCount > 0) cachedKeyframe?.let { consumer.seed(it) }
       // Register the consumer in the map BEFORE starting the producer/reader thread. The
       // reader thread doesn't take refCountLock when iterating consumers in fanOut(); if we
       // started it first, it could read the very first chunk and fan it out to an empty map
@@ -134,6 +166,11 @@ class H264Tee internal constructor(
   // ────────────────────────────────────────────────────────────────────────────
 
   private fun startProducer() {
+    // Fresh producer session — discard any keyframe cached from a previous session so the first
+    // consumer isn't seeded with a stale one. Safe to touch the splitter here: startProducer runs
+    // under refCountLock on the first attach, before the reader thread that owns it exists.
+    cachedKeyframe = null
+    gopSplitter.reset()
     val sdk = runCatching { sdkLevelProvider() }.getOrDefault(0)
     val unlimited = sdk >= ANDROID_R_SDK
     Console.log(
@@ -144,7 +181,7 @@ class H264Tee internal constructor(
     producerHandle = handle
     readerThread = Thread(
       {
-        runReaderLoop(handle, restartUntilShutdown = !unlimited)
+        runReaderLoop(handle, unlimited = unlimited)
       },
       "h264-tee-reader-${deviceId.instanceId}",
     ).apply {
@@ -164,10 +201,17 @@ class H264Tee internal constructor(
     readerThread = null
   }
 
-  private fun runReaderLoop(initialHandle: ProducerHandle, restartUntilShutdown: Boolean) {
+  private fun runReaderLoop(initialHandle: ProducerHandle, unlimited: Boolean) {
     var handle: ProducerHandle = initialHandle
     val buf = ByteArray(READ_CHUNK_BYTES)
+    // Consecutive generations that spawned but delivered zero bytes. A device whose screenrecord
+    // spawns then instantly EOFs (encoder unavailable, transport reset on every attempt) would
+    // otherwise respawn at a fixed 250ms — ~4 adb invocations/sec indefinitely. Escalate the delay
+    // on repeated empty exits; a generation that actually delivers bytes (a healthy stream, or a
+    // normal 3-min-cap restart) resets it, so normal restarts keep the fast 250ms turnaround.
+    var consecutiveEmptyExits = 0
     while (true) {
+      var bytesThisGeneration = 0L
       try {
         while (true) {
           val n = try {
@@ -176,12 +220,19 @@ class H264Tee internal constructor(
             -1
           }
           if (n <= 0) break
+          bytesThisGeneration += n
+          // Cache before fan-out: once any consumer has observed a byte, a consumer attaching
+          // afterwards is guaranteed a seed at least as fresh as that byte. The reverse order
+          // left a window where a joiner missed both the fanned-out keyframe and the seed —
+          // an undecodable stream. (The joiner can now be seeded with a keyframe from a chunk
+          // it also receives live — a duplicated keyframe is decodable, a missing one is not.)
+          updateKeyframeCache(buf, n)
           fanOut(buf, n)
         }
       } catch (e: Exception) {
         Console.log("[H264Tee] reader thread for ${deviceId.instanceId}: ${e.message}")
       }
-      if (shuttingDown.get() || !restartUntilShutdown) {
+      if (shuttingDown.get() || (unlimited && !restartOnUnexpectedExit)) {
         // Don't close the handle here — stopProducer() (called from the detach path) handles
         // it, and on EOF a second close would be redundant. If we exited because the
         // subprocess died on its own with no restart policy, leaving close to the next
@@ -189,14 +240,43 @@ class H264Tee internal constructor(
         Console.log("[H264Tee] producer exited (shuttingDown=${shuttingDown.get()}); reader stopping")
         return
       }
-      // screenrecord hit its 3-min cap; tell consumers to splice and start a new subprocess.
-      // Close the now-finished handle ourselves so the subprocess is reaped before we spawn
-      // the next one (encoder contention again).
+      // Pre-Android-11 screenrecord normally reaches its 3-minute cap. Newer screenrecord is
+      // unlimited, so any EOF there is unexpected (adb transport reset, encoder process death,
+      // device sleep, etc.) and must recover too; otherwise subscribers receive heartbeats but
+      // never another frame until every viewer disconnects and reconnects.
       runCatching { handle.close() }
-      Console.log("[H264Tee] screenrecord exited (likely 3-min cap); signaling restart and respawning")
+      // Flush the trailing NAL of the ending generation into the cache, then reset the splitter so
+      // the next generation parses from its own SPS/PPS. cachedKeyframe is intentionally kept — a
+      // consumer attaching during the restart gap still gets the last good keyframe until the new
+      // generation delivers a fresh one.
+      finishKeyframeGeneration()
+      Console.log(
+        "[H264Tee] screenrecord exited " +
+          (if (unlimited) "unexpectedly" else "at its time limit") +
+          "; signaling restart and respawning",
+      )
       broadcastRestart()
+      // Exponential backoff on repeated empty exits, capped; a productive generation resets it.
+      consecutiveEmptyExits = if (bytesThisGeneration > 0) 0 else consecutiveEmptyExits + 1
+      val backoffMillis = minOf(
+        RESPAWN_DELAY_MILLIS shl minOf(consecutiveEmptyExits, RESPAWN_MAX_BACKOFF_SHIFT),
+        RESPAWN_MAX_DELAY_MILLIS,
+      )
+      if (consecutiveEmptyExits > 0) {
+        Console.log(
+          "[H264Tee] ${deviceId.instanceId} produced no bytes " +
+            "($consecutiveEmptyExits in a row); backing off ${backoffMillis}ms before respawn",
+        )
+      }
+      try {
+        Thread.sleep(backoffMillis)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return
+      }
+      if (shuttingDown.get()) return
       handle = try {
-        producerFactory.spawn(deviceId, videoSize, bitRate, unlimited = false)
+        producerFactory.spawn(deviceId, videoSize, bitRate, unlimited = unlimited)
       } catch (e: Exception) {
         Console.log("[H264Tee] respawn failed: ${e.message}; reader stopping")
         return
@@ -225,6 +305,25 @@ class H264Tee internal constructor(
     for (consumer in consumers.values) {
       consumer.signalRestart()
     }
+  }
+
+  /**
+   * Feeds the just-read chunk into the keyframe splitter and records the newest IDR access unit.
+   * The splitter prepends the retained SPS/PPS to each IDR picture, so [cachedKeyframe] is a
+   * self-contained, decodable start point. Runs only on the reader thread.
+   */
+  private fun updateKeyframeCache(buf: ByteArray, len: Int) {
+    gopSplitter.feed(buf, 0, len) { accessUnit ->
+      if (accessUnit.isKeyFrame) cachedKeyframe = accessUnit.bytes
+    }
+  }
+
+  /** Flushes the ending generation's pending picture into the cache and resets the splitter. */
+  private fun finishKeyframeGeneration() {
+    gopSplitter.finish { accessUnit ->
+      if (accessUnit.isKeyFrame) cachedKeyframe = accessUnit.bytes
+    }
+    gopSplitter.reset()
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -298,6 +397,17 @@ class H264Tee internal constructor(
 
     internal fun markDetached() {
       detached.set(true)
+    }
+
+    /**
+     * Pre-loads bytes into this consumer's current generation before it starts receiving live
+     * fanOut. Used by [attach] to seed a mid-stream joiner with the cached keyframe so its
+     * downstream decoder has parameter sets and an IDR to start from.
+     */
+    internal fun seed(bytes: ByteArray) {
+      synchronized(generationsLock) {
+        generations.last().writeOrDrop(bytes, 0, bytes.size)
+      }
     }
 
     internal fun writeBytes(src: ByteArray, off: Int, len: Int) {
@@ -486,6 +596,14 @@ class H264Tee internal constructor(
 
     /** Android 11. `screenrecord --time-limit 0` works on this and later. */
     internal const val ANDROID_R_SDK: Int = 30
+
+    private const val RESPAWN_DELAY_MILLIS: Long = 250L
+
+    /** Upper bound for the respawn backoff (a wedged device tops out at one respawn / 5s). */
+    private const val RESPAWN_MAX_DELAY_MILLIS: Long = 5_000L
+
+    /** Cap the left-shift so `RESPAWN_DELAY_MILLIS shl n` can't overflow before the delay cap. */
+    private const val RESPAWN_MAX_BACKOFF_SHIFT: Int = 5
 
     /** Reader thread chunk size. 256 KB ≈ ~250 ms of 8 Mbps H.264, well below ring sizes. */
     internal const val READ_CHUNK_BYTES: Int = 256 * 1024

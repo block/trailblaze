@@ -1115,6 +1115,7 @@ trailblaze config reset
 | `screenshot-format` | Image format used for screenshots sent to the LLM and shown in the timeline | png, jpeg, webp, or 'unset' to use the framework default (webp) |
 | `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
 | `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
+| `android-stream-screenshots` | Experimental: serve Android agent-loop screenshots from the live device stream (default: off) | true, false, or 'unset' to inherit the default (off) |
 
 **Examples:**
 

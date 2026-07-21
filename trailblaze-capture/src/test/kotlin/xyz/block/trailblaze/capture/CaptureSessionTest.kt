@@ -3,6 +3,7 @@ package xyz.block.trailblaze.capture
 import xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture
 import xyz.block.trailblaze.capture.logcat.IosLogCapture
 import xyz.block.trailblaze.capture.video.AndroidVideoCapture
+import xyz.block.trailblaze.capture.video.IosVideoCapture
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -79,8 +80,7 @@ class CaptureSessionTest {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // captureVideo × platform — Android wires up; iOS is intentionally disabled
-  // until the WebP migration noted in CaptureSession's TODO comment lands.
+  // captureVideo × platform
   // ──────────────────────────────────────────────────────────────────────────
 
   @Test
@@ -95,14 +95,14 @@ class CaptureSessionTest {
   }
 
   @Test
-  fun `captureVideo true on IOS produces no video stream (intentionally disabled)`() {
+  fun `captureVideo true on IOS adds IosVideoCapture`() {
     val session = CaptureSession.fromOptions(
       // Disable the log streams (now on by default) so this isolates the video-on-iOS case.
       CaptureOptions(captureVideo = true, captureLogcat = false, captureIosLogs = false),
       TrailblazeDevicePlatform.IOS,
     )
-    // iOS video capture is gated by the TODO in CaptureSession — no stream selected.
-    assertNull(session)
+    assertNotNull(session)
+    assertTrue(streamsOf(session).any { it is IosVideoCapture })
   }
 
   // ──────────────────────────────────────────────────────────────────────────

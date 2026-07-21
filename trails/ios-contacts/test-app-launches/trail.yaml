@@ -1,0 +1,24 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - smoke
+  title: 'Contacts (iOS): App launches to a contacts list'
+
+trail:
+  - step: "Launch the iOS Contacts app (com.apple.MobileAddressBook) with a clean state, and verify the contacts list root rendered — the \"Contacts\" navbar title should be visible."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - assertVisibleBySelector:
+            reason: Verify the contacts list root rendered by asserting the "Contacts" navbar title is visible. The contacts_ios_openApp trailhead already cold-starts Contacts and lands on the list root, so no home-screen icon tap is needed.
+            nodeSelector:
+              iosMaestro:
+                textRegex: Contacts
+        - assertVisibleBySelector:
+            reason: Also assert the list-only "Add" button is visible to confirm this is the contacts list root specifically (not some other screen that happens to show the text "Contacts" — e.g. a detail screen's back button also carries the label "Contacts"). The list root shows "Add"; a contact detail screen shows "Edit" there instead.
+            nodeSelector:
+              iosMaestro:
+                accessibilityTextRegex: Add

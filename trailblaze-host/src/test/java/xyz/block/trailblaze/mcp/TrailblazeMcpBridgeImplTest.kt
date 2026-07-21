@@ -33,6 +33,25 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 class TrailblazeMcpBridgeImplTest {
 
   @Test
+  fun `androidDisconnectStatus reports only a missing Android serial`() {
+    val android = TrailblazeDeviceId(
+      instanceId = "emulator-5554",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val ios = TrailblazeDeviceId(
+      instanceId = "SIM-UUID",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+    )
+
+    assertEquals(null, TrailblazeMcpBridgeImpl.androidDisconnectStatus(android, listOf(android)))
+    assertTrue(
+      TrailblazeMcpBridgeImpl.androidDisconnectStatus(android, emptyList())
+        ?.contains("emulator-5554") == true,
+    )
+    assertEquals(null, TrailblazeMcpBridgeImpl.androidDisconnectStatus(ios, emptyList()))
+  }
+
+  @Test
   fun `expandDelegatingToolHostSide flattens YAML composed tool into executable primitives`() {
     // A typical workspace pure-YAML composed tool: `requires_host: true` (added by
     // `AppTargetDiscovery.registerWorkspaceYamlTools` when null), `tools:` body that

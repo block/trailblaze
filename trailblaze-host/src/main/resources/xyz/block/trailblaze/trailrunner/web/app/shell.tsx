@@ -84,6 +84,8 @@ function TargetPicker({ go, route, collapsed }) {
     : 'var(--tb-pass)';
   const platLabel = (p) => (p === 'ios' ? 'iOS' : p === 'android' ? 'Android' : p === 'web' ? 'Web' : (p || ''));
   const selPlatforms = [...new Set(selectedDevices.map((d) => d.platform).filter(Boolean))];
+  const genericWeb = !!(gt && !gt.target && gt.label === 'Web');
+  const genericWebIcon = genericWeb ? <Ico n="globe" s={17} c="var(--tb-pass)" /> : undefined;
   // 0 → none; 1 → the device name; 2+ → both platforms ("iOS · Android") when every selected device
   // resolved to a distinct platform, otherwise just the count so the number is always right.
   const deviceSummary = selCount === 0 ? 'No devices selected'
@@ -98,7 +100,7 @@ function TargetPicker({ go, route, collapsed }) {
         <div role="button" tabIndex={0} onClick={() => go('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('home'); } }}
           title={(gt ? (gt.label || gt.target) + ' · ' + deviceSummary : 'Select a target') + ' - open Home'}
           style={{ position: 'relative', display: 'inline-flex', cursor: 'pointer', padding: 3, borderRadius: 8, background: on ? 'var(--bg-standard)' : 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)' }}>
-          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />
+          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} fallbackNode={genericWebIcon} />
           <span style={{ position: 'absolute', right: -2, bottom: -2, width: 9, height: 9, borderRadius: 99, background: dot, border: '2px solid var(--bg-sheet)' }} />
         </div>
       </div>
@@ -111,7 +113,7 @@ function TargetPicker({ go, route, collapsed }) {
         <div role="button" tabIndex={0} onClick={() => go('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('home'); } }}
           title="Open Home (choose the target app and its devices)" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 1, minWidth: 0, cursor: 'pointer' }}>
           {/* Size the icon to the two-line text block so its top/bottom line up with the words. */}
-          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />
+          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} fallbackNode={genericWebIcon} />
           <div style={{ flex: 1, minWidth: 0 }}>
             {/* Always render both lines so selecting a target doesn't change the row height. */}
             <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gt ? (gt.label || gt.target) : 'Select Target'}</div>
@@ -320,7 +322,7 @@ function RailGroupHeader({ label, plusTitle, onPlus, plusOn }) {
 // retains up to 50 finished conversations - the rail must not become a 50-row scroll by default).
 const RAIL_AGENT_SESSIONS_VISIBLE = 6;
 
-function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSel, goStudio, interactSession, goInteract }) {
+function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSel, companionSel, goStudio, interactSession, goInteract }) {
   const [collapsed, setCollapsed] = useStickyState('tb-rail-collapsed', false);
   const [showAllAgents, setShowAllAgents] = useState(false);
   const agentVisible = showAllAgents ? agentRuns : agentRuns.slice(0, RAIL_AGENT_SESSIONS_VISIBLE);
@@ -363,7 +365,7 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
             return (
               <SessionNavRow key={run.id} ico={ico} color={color} spin={run.status === 'running'}
                 label={run.title || run.id} title={(run.title || run.id) + ' · ' + (solo ? 'solo' : run.status)}
-                on={route === 'create' && studioSel === run.id} onClick={() => goStudio(run.id)} />
+                on={(route === 'create' && studioSel === run.id) || companionSel === run.id} onClick={() => goStudio(run.id)} />
             );
           })}
           {!collapsed && (agentHidden > 0 || showAllAgents) && (
@@ -577,12 +579,25 @@ function DaemonDownBanner({ retry }) {
   );
 }
 
+// The one deep link the SPA honors: #companion/<runId>, set by `trailblaze companion start` so
+// the window opens straight onto that companion session. Read once at boot - there is no hash
+// router; in-app navigation stays go()-driven.
+const companionDeepLink = (() => {
+  const m = /^#companion\/([^/?#]+)/.exec(window.location.hash || '');
+  if (!m) return null;
+  // A malformed percent-escape must not throw at module eval - that would abort this whole
+  // script and boot a blank app. Run ids are plain `agent-<uuid>`, so the raw match is fine.
+  try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+})();
+
 function App() {
-  const [route, setRoute] = useState('home');
-  const [payload, setPayload] = useState({});
+  const initialRoute = companionDeepLink ? 'companion' : 'home';
+  const initialPayload = companionDeepLink ? { for: 'companion', data: { runId: companionDeepLink } } : {};
+  const [route, setRoute] = useState(initialRoute);
+  const [payload, setPayload] = useState(initialPayload);
   // Browser-style view history: a stack of {route, payload} with a pointer.
   // go() pushes (dropping any forward entries); ⌘[ / ⌘] move the pointer.
-  const histRef = React.useRef([{ route: 'home', payload: {} }]);
+  const histRef = React.useRef([{ route: initialRoute, payload: initialPayload }]);
   const histIdxRef = React.useRef(0);
   const [palette, setPalette] = useState(false);
   const [paletteClosing, setPaletteClosing] = useState(false);
@@ -688,7 +703,13 @@ function App() {
     window.addEventListener('tb:interact-session', h);
     return () => window.removeEventListener('tb:interact-session', h);
   }, []);
-  const goStudio = (id) => { setStudioSel(id); go('create'); };
+  // A companion run's rail entry opens its read-only companion view; the Create screen's chat
+  // (composer, permissions) is only for runs this daemon spawned and can talk back to.
+  const goStudio = (id) => {
+    const target = (externalAgents.data && externalAgents.data.runs || []).find((r) => r.id === id);
+    if (target && target.companion) { go('companion', { runId: id }); return; }
+    setStudioSel(id); go('create');
+  };
   // Sidebar "Trails" count = trail bundles, scoped to the active target AND its platform when
   // the selected devices all share one. Mirrors the Trails list's target/platform filter so the
   // badge matches the scoped list (a target with iOS-only and Android-only trails counts only
@@ -726,7 +747,7 @@ function App() {
   }, [devices.data]);
   const device = deviceList.find((d) => d.id === pinnedId) || deviceList[0] || null;
   const screens = {
-    home: <HomeScreen go={go} openRun={openRun} />,
+    home: <HomeScreen go={go} />,
     prompt: <BlazeScreen pinnedId={pinnedId} go={go} />,
     create: <ExternalAgentsScreen go={go} agents={externalAgents} sel={studioSel} onSel={setStudioSel} initSel={pf('create').sel} />,
     agents: <RedirectScreen go={go} to="create" params={pf('agents')} />,
@@ -740,6 +761,11 @@ function App() {
     runs: <SessionsScreen view="all" initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
     integrations: <IntegrationsScreen />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
+    // Deep-link only (#companion/<runId>, opened by `trailblaze companion start`): the read-only
+    // window onto a session an external agent CLI drives from the user's own repo. The boot deep
+    // link arrives through the initial payload; the screen latches the id itself, so no fallback
+    // here (a live one would flip the hidden screen back to the boot id on every navigation).
+    companion: <CompanionScreen agents={externalAgents} initRunId={pf('companion').runId} go={go} />,
   };
   // Fall back to Home for any route that no longer maps to a screen, so an upgrade can't strand the
   // main pane blank.
@@ -752,6 +778,7 @@ function App() {
       <div className="tb-body">
         <NavRail route={activeRoute} go={go} badges={navBadges} openPalette={() => setPalette(true)}
           agentRuns={createSidebarRuns} studioSel={studioSel} goStudio={goStudio}
+          companionSel={activeRoute === 'companion' ? pf('companion').runId : null}
           interactSession={interactSession} goInteract={() => go('interact')} />
         <div className="tb-main">
           {/* Visited screens stay mounted and just hide, so every tab keeps its

@@ -29,6 +29,7 @@
   },
   "include": [
     "report/run-report-cli.ts",
+    "report/run-report-events.ts",
     "trailrunner/web/app/run-report-core.ts",
     "trailrunner/web/app/run-report-types.d.ts"
   ]

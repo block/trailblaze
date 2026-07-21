@@ -50,7 +50,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
     "expect isn't in the current screen view, when you need surrounding static text for context, " +
     "or to discover what's reachable by scrolling — BEFORE blindly scrolling or guessing.",
 )
-class RequestDetailedViewHierarchyTrailblazeTool(
+data class RequestDetailedViewHierarchyTrailblazeTool(
   override val reasoning: String? = null,
 ) : ExecutableTrailblazeTool, ReadOnlyTrailblazeTool, ReasoningTrailblazeTool {
 

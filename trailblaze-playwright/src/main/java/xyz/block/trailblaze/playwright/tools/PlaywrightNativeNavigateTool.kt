@@ -21,7 +21,7 @@ Use action BACK or FORWARD to move through browser history.
 Relative file paths (e.g., 'sample-app/index.html') are resolved from the working directory.
 """,
 )
-class PlaywrightNativeNavigateTool(
+data class PlaywrightNativeNavigateTool(
   @param:LLMDescription(
     "GOTO navigates to a URL, BACK/FORWARD moves through browser history.",
   )

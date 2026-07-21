@@ -17,7 +17,7 @@ Identify the element using its element ID from the view hierarchy.
 This is a test assertion — it will fail if the element is not found.
 """,
 )
-class ComposeVerifyElementVisibleTool(
+data class ComposeVerifyElementVisibleTool(
   @param:LLMDescription("Accessibility identifier of the element to verify.")
   val testTag: String? = null,
   @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e5'.")

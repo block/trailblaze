@@ -1,0 +1,25 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - search
+  title: 'Contacts (iOS) (scripted): trailhead + search the contacts list'
+
+trail:
+  - step: |
+      Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+
+  - step: |
+      Call the `contacts_ios_searchContacts` tool with query="John",
+      rowText="John Appleseed", openFirstResult=true.
+    recording:
+      ios-iphone:
+        - contacts_ios_searchContacts:
+            query: John
+            rowText: John Appleseed
+            openFirstResult: true

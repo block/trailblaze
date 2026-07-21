@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.tracing
 
-import io.ktor.http.HttpStatusCode
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.util.Console
@@ -29,11 +28,11 @@ object TrailblazeTraceExporter {
     val traceJson = TrailblazeTracer.exportJson()
     try {
       if (isServerAvailable) {
-        val response = client.postTrace(sessionId, traceJson)
-        if (response.status == HttpStatusCode.OK) {
+        val sent = client.sendTrace(sessionId, traceJson)
+        if (sent) {
           Console.info("Trace posted to server for session ${sessionId.value}")
         } else {
-          Console.log("Trace POST returned ${response.status} for session ${sessionId.value}, falling back to disk")
+          Console.log("Trace upload failed for session ${sessionId.value}, falling back to disk")
           writeToDisk?.invoke(traceJson)
         }
       } else {

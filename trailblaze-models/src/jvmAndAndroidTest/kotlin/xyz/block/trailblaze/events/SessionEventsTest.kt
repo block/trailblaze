@@ -4,6 +4,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
@@ -16,36 +17,41 @@ class SessionEventsTest {
 
   @Test
   fun `fileName round-trips through parseFileName`() {
-    val fileName = SessionEvents.fileName("network", EventStyle.NETWORK)
-    assertEquals("network.network.ndjson", fileName)
-    assertEquals(EventStreamId("network", "network"), SessionEvents.parseFileName(fileName))
+    val fileName = SessionEvents.fileName("network")
+    assertEquals("network.ndjson", fileName)
+    assertEquals("network", SessionEvents.parseFileName(fileName))
   }
 
   @Test
-  fun `dotted name round-trips because style is the dot-free final segment`() {
-    val fileName = SessionEvents.fileName("com.x.plugin.network", EventStyle.JSON)
-    assertEquals("com.x.plugin.network.json.ndjson", fileName)
-    val id = SessionEvents.parseFileName(fileName)
-    assertEquals("com.x.plugin.network", id?.name)
-    assertEquals("json", id?.style)
+  fun `dotted name round-trips`() {
+    val fileName = SessionEvents.fileName("com.x.plugin.network")
+    assertEquals("com.x.plugin.network.ndjson", fileName)
+    assertEquals("com.x.plugin.network", SessionEvents.parseFileName(fileName))
+  }
+
+  @Test
+  fun `parseFileName strips the legacy json style segment`() {
+    assertEquals("com.x.plugin.network", SessionEvents.parseFileName("com.x.plugin.network.json.ndjson"))
+    assertEquals("analytics", SessionEvents.parseFileName("analytics.json.ndjson"))
   }
 
   @Test
   fun `parseFileName rejects non-events files`() {
-    assertNull(SessionEvents.parseFileName("network.ndjson")) // no style segment
     assertNull(SessionEvents.parseFileName("video.mp4"))
     assertNull(SessionEvents.parseFileName("notes.txt"))
+    assertNull(SessionEvents.parseFileName(".ndjson"))
+    assertNull(SessionEvents.parseFileName(".json.ndjson"))
   }
 
   @Test
   fun `append writes one envelope line per record under events dir`() {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)
-    sink.append("analytics", EventStyle.ANALYTICS, 1000L, buildJsonObject { put("name", JsonPrimitive("tap")) })
-    sink.append("analytics", EventStyle.ANALYTICS, 2000L, buildJsonObject { put("name", JsonPrimitive("scroll")) })
+    sink.append("analytics", 1000L, buildJsonObject { put("name", JsonPrimitive("tap")) })
+    sink.append("analytics", 2000L, buildJsonObject { put("name", JsonPrimitive("scroll")) })
     sink.close()
 
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/analytics.analytics.ndjson")
+    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/analytics.ndjson")
     assertTrue(file.isFile, "expected $file to exist")
     val lines = file.readLines().filter { it.isNotBlank() }
     assertEquals(2, lines.size)
@@ -59,10 +65,10 @@ class SessionEventsTest {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)
     val raw = """{"id":"r1","timestampMs":1234,"phase":"REQUEST_START"}"""
-    sink.appendRaw("network", EventStyle.NETWORK, raw)
+    sink.appendRaw("network", raw)
     sink.close()
 
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/network.network.ndjson")
+    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/network.ndjson")
     assertEquals(raw, file.readLines().first())
   }
 
@@ -71,11 +77,11 @@ class SessionEventsTest {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)
     // A newline would split one record into multiple NDJSON lines; such input is dropped, not written.
-    sink.appendRaw("net", EventStyle.NETWORK, "{\"timestampMs\":1}\n{\"injected\":true}")
-    sink.appendRaw("net", EventStyle.NETWORK, """{"timestampMs":2}""")
+    sink.appendRaw("net", "{\"timestampMs\":1}\n{\"injected\":true}")
+    sink.appendRaw("net", """{"timestampMs":2}""")
     sink.close()
 
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/net.network.ndjson")
+    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/net.ndjson")
     val lines = file.readLines().filter { it.isNotBlank() }
     assertEquals(1, lines.size, "only the clean single-record line is written")
     assertTrue(lines.first().contains("\"timestampMs\":2"))
@@ -85,10 +91,10 @@ class SessionEventsTest {
   fun `appendRaw also rejects a carriage return`() {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)
-    sink.appendRaw("net", EventStyle.NETWORK, "{\"timestampMs\":1}\r{\"injected\":true}")
+    sink.appendRaw("net", "{\"timestampMs\":1}\r{\"injected\":true}")
     sink.close()
 
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/net.network.ndjson")
+    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/net.ndjson")
     assertFalse(file.exists() && file.readLines().any { it.isNotBlank() }, "a line with \\r is dropped")
   }
 
@@ -96,12 +102,23 @@ class SessionEventsTest {
   fun `writes after close are dropped`() {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)
-    sink.append("x", EventStyle.JSON, 1L, JsonPrimitive("a"))
+    sink.append("x", 1L, JsonPrimitive("a"))
     sink.close()
-    sink.append("x", EventStyle.JSON, 2L, JsonPrimitive("b"))
+    sink.append("x", 2L, JsonPrimitive("b"))
 
-    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/x.json.ndjson")
+    val file = File(sessionDir, "${SessionEvents.DIR_NAME}/x.ndjson")
     assertEquals(1, file.readLines().filter { it.isNotBlank() }.size)
+  }
+
+  @Test
+  fun `checked writes after close surface incomplete evidence`() {
+    val sessionDir = createTempDir()
+    val sink = FileEventSink(sessionDir)
+    sink.close()
+
+    assertFailsWith<IllegalStateException> {
+      sink.appendChecked("x", 1L, JsonPrimitive("must-not-drop"))
+    }
   }
 
   private fun createTempDir(): File =

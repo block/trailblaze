@@ -13,6 +13,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import xyz.block.trailblaze.AgentMemory
@@ -76,9 +77,25 @@ class OnDeviceRpcServer(
       factory = CIO,
       port = port,
     ) {
+      install(WebSockets)
       install(ContentNegotiation) {
         json(TrailblazeJsonInstance)
       }
+
+      val runYamlHandler = RunYamlRequestHandler(
+        loggingRule = loggingRule,
+        backgroundScope = backgroundScope,
+        getCurrentJob = { currPromptJob },
+        setCurrentJob = { job -> currPromptJob = job },
+        runTrailblazeYaml = runTrailblazeYaml,
+        trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
+        progressManager = progressManager,
+      )
+      val screenStateHandler = GetScreenStateRequestHandler(deviceClassifiers)
+      val drainSessionHandler = DrainSessionRequestHandler()
+      val subscribeToProgressHandler = SubscribeToProgressRequestHandler(progressManager)
+      val getExecutionStatusHandler = GetExecutionStatusRequestHandler(progressManager)
+      val listActiveSessionsHandler = ListActiveSessionsRequestHandler(progressManager)
 
       routing {
         get("/ping") {
@@ -87,36 +104,40 @@ class OnDeviceRpcServer(
         }
 
         // Register unified request handler that routes based on agentImplementation
-        registerRpcHandler(
-          RunYamlRequestHandler(
-            loggingRule = loggingRule,
-            backgroundScope = backgroundScope,
-            getCurrentJob = { currPromptJob },
-            setCurrentJob = { job -> currPromptJob = job },
-            runTrailblazeYaml = runTrailblazeYaml,
-            trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
-            progressManager = progressManager,
-          )
-        )
+        registerRpcHandler(runYamlHandler)
 
         // Register GetScreenState handler for MCP subagent screen state queries.
         // Host readiness polling via OnDeviceRpcClient.waitForReady uses this endpoint —
         // a successful GetScreenState proves HTTP server is up, accessibility service is
         // bound, and the window is populated, subsuming the old EnsureAccessibilityReady RPC.
         // Pass device classifiers so the host can learn the actual device type.
-        registerRpcHandler(GetScreenStateRequestHandler(deviceClassifiers))
+        registerRpcHandler(screenStateHandler)
+
+        // Preferred host transport: one persistent binary channel carrying typed Wire-generated
+        // protobuf messages for every RPC. The HTTP/JSON routes remain for compatibility and the
+        // explicit rollback mode.
+        registerOnDeviceRpcWebSocket(
+          handlers = OnDeviceProtoRpcHandlers(
+            getScreenState = screenStateHandler::handleBinary,
+            runYaml = runYamlHandler::handle,
+            drainSession = drainSessionHandler::handle,
+            subscribeToProgress = subscribeToProgressHandler::handle,
+            getExecutionStatus = getExecutionStatusHandler::handle,
+            listActiveSessions = listActiveSessionsHandler::handle,
+          ),
+        )
 
         // DrainSession lets the host proactively clear UiAutomation cache before tearing down
         // its persistent driver — prevents the system_server-wedge pattern from build 5463
         // where stale Instrumentation.mUiAutomation kept yielding DeadObjectException across
         // session re-connects. Host-old/APK-new: handler unused. Host-new/APK-old: hits the
         // catch-all 404 below and the host treats it as a no-op.
-        registerRpcHandler(DrainSessionRequestHandler())
+        registerRpcHandler(drainSessionHandler)
 
         // Register progress-related handlers for MCP clients (Phase 6)
-        registerRpcHandler(SubscribeToProgressRequestHandler(progressManager))
-        registerRpcHandler(GetExecutionStatusRequestHandler(progressManager))
-        registerRpcHandler(ListActiveSessionsRequestHandler(progressManager))
+        registerRpcHandler(subscribeToProgressHandler)
+        registerRpcHandler(getExecutionStatusHandler)
+        registerRpcHandler(listActiveSessionsHandler)
 
         // Catch-all for unregistered RPC endpoints
         post("/rpc/{...}") {

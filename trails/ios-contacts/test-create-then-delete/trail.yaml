@@ -1,0 +1,38 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - crud
+  - slow
+  title: 'Contacts (iOS): Create a contact then delete it'
+
+trail:
+  - step: "Remove any leftover \"Trailblaze Demo\" contact so we start from a clean slate."
+    recording:
+      ios-iphone:
+        - contacts_ios_deleteContact:
+            name: Trailblaze Demo
+
+  - step: "Create a new contact named Trailblaze Demo with the phone number 555-123-4567."
+    recording:
+      ios-iphone:
+        - contacts_ios_createContact:
+            firstName: Trailblaze
+            lastName: Demo
+            phoneNumber: "5551234567"
+
+  - step: "Verify the new \"Trailblaze Demo\" contact was saved."
+    recording:
+      ios-iphone:
+        - assertVisibleBySelector:
+            reason: Verify the contacts list now shows a 'Trailblaze Demo' row by asserting its visible text — the same shape sibling passing trails (e.g. test-open-known-contact) use to assert a contact name is visible.
+            nodeSelector:
+              iosMaestro:
+                textRegex: Trailblaze Demo
+
+  - step: "Delete the \"Trailblaze Demo\" contact."
+    recording:
+      ios-iphone:
+        - contacts_ios_deleteContact:
+            name: Trailblaze Demo

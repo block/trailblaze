@@ -59,6 +59,33 @@ object WorkspaceCompileBootstrap {
   internal const val HASH_FILENAME = ".bundle.hash"
 
   /**
+   * Filename storing the target YAML filenames emitted by the last successful compile.
+   *
+   * A trailmap manifest is not necessarily an app target: library-only trailmaps contribute
+   * dependencies and exports but intentionally emit no `dist/targets/<id>.yaml`. The old cache
+   * validator treated every manifest id as an expected target file, so any workspace containing a
+   * library trailmap recompiled on every daemon start. Persisting the compiler's actual output set
+   * lets the hot path validate missing files without guessing from manifest shape.
+   */
+  internal const val TARGETS_FILENAME = ".bundle.targets"
+
+  /**
+   * Filename storing workspace-relative generated typed-binding paths from the last successful
+   * codegen pass. The typed-bindings input hash covers authored workspace config and the framework
+   * version; this file adds the other half of the cache contract by detecting a user who deleted
+   * one generated artifact while leaving the inputs unchanged.
+   */
+  internal const val CODEGEN_FILES_FILENAME = ".typed-bindings.files"
+
+  /**
+   * Filename storing the full workspace-content hash from the last successful typed-bindings
+   * pass. Typed surfaces depend on more than `trailmap.yaml` + local scripted tools: project
+   * config, toolsets, providers, and exported dependency metadata can all change their output.
+   * Keeping a separate broad hash avoids both stale bindings and analyzer work on every startup.
+   */
+  internal const val CODEGEN_HASH_FILENAME = ".typed-bindings.hash"
+
+  /**
    * Filename of the inter-process lock that serializes concurrent daemon-init
    * compiles in the same workspace. Grabbed via [FileLock] so the OS handles
    * cross-process coordination — required because two `trailblaze` invocations
@@ -145,19 +172,19 @@ object WorkspaceCompileBootstrap {
   internal fun bootstrap(configDir: File, version: String): BootstrapResult {
     val trailmapsDir = File(configDir, TrailblazeConfigPaths.TRAILMAPS_SUBDIR)
 
-    // Typed-bindings + SDK extraction live OUTSIDE the workspace-trailmaps gate below and
-    // OUTSIDE the hash-skip gate inside it. Two regeneration invariants ride on this:
-    //   1. A deleted `<trailmapDir>/tools/trailblaze-client.d.ts` regenerates on the next
-    //      daemon start without needing the input hash to invalidate first.
+    // SDK extraction lives outside the workspace-trailmaps gate below. Two regeneration
+    // invariants ride on the bootstrap ordering:
+    //   1. A deleted `<trailmapDir>/tools/trailblaze-client.d.ts` is detected by the generated
+    //      files manifest and regenerates on the next daemon start.
     //   2. The workspace SDK declaration bundle exists as soon as the daemon sees a
     //      workspace, even when there are no workspace trailmaps yet (a fresh clone or a
     //      classpath-only consumer). Without this, the very first trailmap a user authors
     //      would point at a non-existent `.trailblaze/sdk/dist/index.d.ts`.
     //
-    // Both helpers are idempotent (skip-write-if-content-matches) so re-running them
-    // every bootstrap is sub-millisecond on the common case. Failures downgrade to
-    // `Console.error` rather than aborting the daemon; the CLI path (`trailblaze
-    // compile`) elevates the same failures to non-zero exit.
+    // SDK setup is idempotent (skip-write-if-content-matches). Typed-bindings generation is
+    // analyzer-backed and can be expensive, so the full workspace-content hash plus generated
+    // files manifest gates it below. Failures downgrade to `Console.error` rather than aborting
+    // the daemon; the CLI path (`trailblaze compile`) elevates the same failures to non-zero exit.
     // Order matters: per-trailmap codegen asserts the SDK bundle exists (so it
     // doesn't write per-trailmap tsconfigs pointing at a missing `paths` target), and
     // that file is written by `runWorkspaceTypeScriptSetup`. If setup fails,
@@ -165,15 +192,6 @@ object WorkspaceCompileBootstrap {
     // would produce a misleading second "codegen failed" diagnostic that masks
     // the SDK-extraction root cause.
     val workspaceSetupOk = runWorkspaceTypeScriptSetup(configDir)
-    if (workspaceSetupOk) {
-      runPerTrailmapTypedBindingsCodegen(configDir)
-    } else {
-      Console.error(
-        "Per-trailmap typed-bindings codegen skipped because workspace TypeScript setup " +
-          "failed above (see prior error). Restart the daemon after fixing the SDK " +
-          "extraction failure to regenerate per-trailmap trailblaze-client.d.ts / tsconfig.json / .gitignore.",
-      )
-    }
 
     if (!trailmapsDir.isDirectory) return BootstrapResult.NoWorkspaceTrailmaps
 
@@ -183,9 +201,11 @@ object WorkspaceCompileBootstrap {
     val outputDir = File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH)
     val distDir = File(configDir, TrailblazeConfigPaths.WORKSPACE_DIST_SUBDIR)
     val hashFile = File(distDir, HASH_FILENAME)
+    val targetsFile = File(distDir, TARGETS_FILENAME)
+    val codegenFilesFile = File(distDir, CODEGEN_FILES_FILENAME)
+    val codegenHashFile = File(distDir, CODEGEN_HASH_FILENAME)
 
     val expectedHash = computeWorkspaceHash(trailmapManifests, version)
-    val expectedTargetIds = trailmapManifests.map { it.id }
 
     // Cross-process serialization. Two daemons starting at once in the same workspace
     // would both observe a stale hash, both call TrailblazeCompiler.compile() against
@@ -195,7 +215,49 @@ object WorkspaceCompileBootstrap {
     // is fresh and the hash check below short-circuits.
     return withDistLock(distDir) {
       val storedHash = readStoredHash(hashFile)
-      if (storedHash == expectedHash && allTargetsPresent(outputDir, expectedTargetIds)) {
+      val inputsUnchanged = storedHash == expectedHash
+      val expectedCodegenHash =
+        xyz.block.trailblaze.config.project.WorkspaceContentHasher.compute(configDir, version)
+      val codegenInputsUnchanged = readStoredHash(codegenHashFile) == expectedCodegenHash
+
+      // Analyzer-backed typed bindings are expensive in a large workspace. The input hash already
+      // invalidates them on every authored config/tool/framework change, so only re-resolve and
+      // re-analyze when those inputs changed or a path recorded by the previous pass disappeared.
+      // WorkspaceTypeScriptSetup remains outside this gate: its cheap idempotent extraction must
+      // still restore a deleted SDK bundle and prune legacy files on every daemon start.
+      if (workspaceSetupOk) {
+        if (!codegenInputsUnchanged || !allGeneratedFilesPresent(configDir.parentFile, codegenFilesFile)) {
+          val generatedFiles = runPerTrailmapTypedBindingsCodegen(configDir)
+          if (generatedFiles != null) {
+            writeGeneratedFilesManifest(
+              workspaceRoot = configDir.parentFile,
+              manifestFile = codegenFilesFile,
+              generatedFiles = generatedFiles,
+            )
+            // Compute after emission because the framework-owned tools/tsconfig.json participates
+            // in the broad workspace hash. This makes the freshly generated state the cache key;
+            // the next unchanged startup compares equal instead of paying one extra regeneration.
+            writeHash(
+              codegenHashFile,
+              xyz.block.trailblaze.config.project.WorkspaceContentHasher.compute(configDir, version),
+            )
+          } else {
+            // A manifest from an older successful pass must not make this failed pass appear
+            // current on the next startup. Codegen is best-effort, but it should keep retrying.
+            codegenFilesFile.delete()
+            codegenHashFile.delete()
+          }
+        }
+      } else {
+        codegenHashFile.delete()
+        Console.error(
+          "Per-trailmap typed-bindings codegen skipped because workspace TypeScript setup " +
+            "failed above (see prior error). Restart the daemon after fixing the SDK " +
+            "extraction failure to regenerate per-trailmap trailblaze-client.d.ts / tsconfig.json / .gitignore.",
+        )
+      }
+
+      if (inputsUnchanged && allTargetsPresent(outputDir, targetsFile)) {
         return@withDistLock BootstrapResult.UpToDate
       }
 
@@ -252,6 +314,10 @@ object WorkspaceCompileBootstrap {
         hashFile.delete()
         throw WorkspaceCompileException(result.errors)
       }
+      // Write the output manifest before the hash commit marker. If the process dies between the
+      // writes, the absent/stale hash forces a clean compile next time; the inverse order could
+      // incorrectly bless an incomplete output manifest as current.
+      writeTargetManifest(targetsFile, result.emittedTargets)
       writeHash(hashFile, expectedHash)
       BootstrapResult.Recompiled(emitted = result.emittedTargets.size)
     }
@@ -287,8 +353,8 @@ object WorkspaceCompileBootstrap {
    * Zero-trailmap pools no-op cleanly inside the emitters. Failures downgrade to a
    * warning for the same daemon-must-come-up reason as [runWorkspaceTypeScriptSetup].
    */
-  private fun runPerTrailmapTypedBindingsCodegen(configDir: File) {
-    try {
+  private fun runPerTrailmapTypedBindingsCodegen(configDir: File): List<java.nio.file.Path>? {
+    return try {
       val loaded = LoadedTrailblazeProjectConfig(
         raw = TrailblazeProjectConfig(),
         sourceFile = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME),
@@ -300,22 +366,31 @@ object WorkspaceCompileBootstrap {
           scriptedToolEnrichment = resolveScriptedToolEnrichment(),
         )
         .resolvedTrailmaps
-      PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
-      PerTrailmapTsconfigEmitter.emit(
+      val clientDtsFiles = PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
+      val configFiles = PerTrailmapTsconfigEmitter.emit(
         workspaceRoot = configDir.parentFile.toPath(),
         resolvedTrailmaps = resolvedTrailmaps,
       )
+      // The client emitter writes a validation sidecar next to each d.ts but returns only the d.ts
+      // paths. Record sidecars that were actually created so deleting one invalidates the codegen
+      // cache without turning a best-effort sidecar write failure into a permanent startup loop.
+      val sidecarFiles = clientDtsFiles.map { dts ->
+        dts.parent.resolve(TrailValidationDescriptorSidecar.FILE_NAME)
+      }.filter { java.nio.file.Files.isRegularFile(it) }
+      (clientDtsFiles + sidecarFiles + configFiles).distinct()
     } catch (e: TrailblazeProjectConfigException) {
       Console.error(
         "Typed-bindings codegen skipped — trailmap re-resolution failed " +
           "(daemon will continue without per-trailmap trailblaze-client.d.ts / tsconfig.json / .gitignore files): " +
           "${e.message ?: e.javaClass.simpleName}",
       )
+      null
     } catch (e: Exception) {
       Console.error(
         "Typed-bindings codegen failed (daemon will continue without per-trailmap " +
           "trailblaze-client.d.ts / tsconfig.json / .gitignore files): ${e.message ?: e.javaClass.simpleName}",
       )
+      null
     }
   }
 
@@ -466,15 +541,48 @@ object WorkspaceCompileBootstrap {
    * even though the input hash matches. We don't try to distinguish "user-deleted the
    * file" from "compile never produced it"; either way the right answer is recompile.
    *
-   * Note: [TrailblazeCompiler] only writes a YAML file for *app* trailmaps (those with a
-   * `target:` block). Library trailmaps contribute defaults but produce no output. We can't
-   * tell the two apart cheaply here — and adding the parse step would defeat the
-   * point of the hash-skip — so we err on the side of running compile when ANY expected
-   * id is missing. The compile itself is fast on an unchanged input set.
+   * [targetsFile] records the compiler's actual prior output set. This matters because library
+   * trailmaps intentionally produce no target YAML; deriving expected filenames from every
+   * manifest id would make a valid library look like a missing output forever.
    */
-  private fun allTargetsPresent(outputDir: File, expectedIds: List<String>): Boolean {
-    if (!outputDir.isDirectory) return false
-    return expectedIds.all { id -> File(outputDir, "$id.yaml").isFile }
+  private fun allTargetsPresent(outputDir: File, targetsFile: File): Boolean {
+    val expectedFiles = readManifestLines(targetsFile) ?: return false
+    return expectedFiles.all { name -> File(outputDir, name).isFile }
+  }
+
+  private fun allGeneratedFilesPresent(workspaceRoot: File, manifestFile: File): Boolean {
+    val expectedFiles = readManifestLines(manifestFile) ?: return false
+    return expectedFiles.all { relativePath -> File(workspaceRoot, relativePath).isFile }
+  }
+
+  private fun readManifestLines(file: File): List<String>? = try {
+    if (!file.isFile) null else file.readLines().map { it.trim() }.filter { it.isNotEmpty() }
+  } catch (_: Exception) {
+    null
+  }
+
+  private fun writeTargetManifest(file: File, emittedTargets: List<File>) {
+    writeManifestLines(file, emittedTargets.map { it.name })
+  }
+
+  private fun writeGeneratedFilesManifest(
+    workspaceRoot: File,
+    manifestFile: File,
+    generatedFiles: List<java.nio.file.Path>,
+  ) {
+    val root = workspaceRoot.toPath().toAbsolutePath().normalize()
+    val relativePaths = generatedFiles.mapNotNull { path ->
+      val normalized = path.toAbsolutePath().normalize()
+      if (normalized.startsWith(root)) root.relativize(normalized).toString().replace(File.separatorChar, '/')
+      else null
+    }
+    writeManifestLines(manifestFile, relativePaths)
+  }
+
+  private fun writeManifestLines(file: File, lines: List<String>) {
+    file.parentFile?.mkdirs()
+    val content = lines.distinct().sorted().joinToString(separator = "\n", postfix = if (lines.isEmpty()) "" else "\n")
+    file.writeText(content)
   }
 
   private fun readStoredHash(hashFile: File): String? = try {

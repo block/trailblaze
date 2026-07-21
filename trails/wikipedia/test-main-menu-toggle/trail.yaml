@@ -1,0 +1,14 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: Open the main menu and verify a sidebar link is visible'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+  - step: |
+      If the "Main menu" / hamburger button is visible in the page header, click it to expand the
+      sidebar navigation. (On a wide viewport the sidebar may already be open — in that case
+      no click is needed.)
+  - step: Verify the link text "Main page" is visible in the sidebar / navigation area.
+  - step: Verify the link text "Random article" is visible in the sidebar / navigation area.

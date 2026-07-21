@@ -17,7 +17,7 @@ Wait for a specified number of seconds before continuing.
 Use this when you need to wait for animations, network requests, or page transitions to complete.
 """,
 )
-class PlaywrightNativeWaitTool(
+data class PlaywrightNativeWaitTool(
   @param:LLMDescription("Number of seconds to wait (e.g., 1, 2, 5). Maximum 30 seconds.")
   val seconds: Int = 1,
   override val reasoning: String? = null,

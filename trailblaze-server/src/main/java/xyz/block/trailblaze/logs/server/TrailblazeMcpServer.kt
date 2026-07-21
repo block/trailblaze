@@ -21,8 +21,6 @@ import io.ktor.server.routing.routing
 import io.ktor.server.sse.SSE
 import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
-import io.ktor.server.websocket.WebSockets
-import io.ktor.server.websocket.pingPeriod
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import io.modelcontextprotocol.kotlin.sdk.server.Server
@@ -1783,6 +1781,8 @@ class TrailblazeMcpServer(
     port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
     httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
     wait: Boolean = false,
+    /** Trail Runner route registered by [additionalRouteRegistration], or null when unavailable. */
+    trailRunnerPath: String? = null,
     /**
      * Optional hook to register additional Ktor routes alongside the daemon's
      * built-ins. Used by host-layer modules (e.g. trailblaze-host's waypoint graph
@@ -1974,18 +1974,10 @@ class TrailblazeMcpServer(
       // Install SSE plugin for the legacy SSE transport (supports notifications!)
       install(SSE)
 
-      // Install WebSockets plugin so the host module can expose the multiplexed `/rpc-ws`
-      // endpoint alongside the HTTP `/rpc/...` POST routes (see
-      // xyz.block.trailblaze.compose.driver.rpc.registerRpcWebSocket). The web `/devices`
-      // viewer prefers WS to eliminate the 200 ms `GetHostDeviceScreenRequest` poll cadence,
-      // but the HTTP routes remain registered so MCP / CLI / curl smoke-tests keep working.
-      install(WebSockets) {
-        pingPeriod = 15.seconds
-      }
-
       logsServerKtorEndpoints(
         logsRepo = logsRepo,
         homeCallbackHandler = homeCallbackHandler,
+        trailRunnerPath = trailRunnerPath,
         installContentNegotiation = false,
         // Always register CLI callbacks - onShowWindowRequest is checked dynamically
         cliCallbacks = CliEndpointCallbacks(

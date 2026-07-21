@@ -86,6 +86,9 @@ class CliMcpClient(
   var hasExistingDevice: Boolean = false
     internal set
 
+  /** Device binding verified by the reusable-session INFO probe. */
+  private var existingDeviceId: TrailblazeDeviceId? = null
+
   val isInitialized: Boolean get() = sessionId != null
 
   /**
@@ -506,44 +509,34 @@ class CliMcpClient(
     deviceSpec: String? = null,
     webHeadless: Boolean = true,
   ): String? {
-    // When reusing a session that already has a device, we still issue a lightweight
-    // device(action=PLATFORM, deviceId=ID) call via [rebindDeviceQuiet] to refresh the
-    // daemon's per-session `associatedDeviceId`. A previous CLI invocation in the same
-    // MCP session (e.g. `tool` before `step`) leaves `selectedDeviceId` set on the
-    // bridge, but the per-session `associatedDeviceId` — which the screen-state provider
-    // reads — can drift out of sync. When that happens, the next `step` call sees
-    // "No device connected" from inside the daemon even though INFO still reports the
-    // device as bound. The rebind is a single MCP roundtrip (no LIST, no banners) and
-    // is cheap on the daemon side when a persistent driver already exists.
+    // connectReusable already validated the persisted MCP session with device(INFO). For Android,
+    // a parsed session-scoped device is enough to skip the platform rebind that walks all host
+    // discovery and waits for CoreSimulator. Web still needs the lightweight rebind: its session
+    // association can outlive the process-wide browser selection used by screen-state tools.
     if (hasExistingDevice) {
-      val infoResult = callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
-      val currentPlatform = if (!infoResult.isError) parseDevicePlatform(infoResult) else null
-      val currentInstanceId = if (!infoResult.isError) parseConnectedInstanceId(infoResult) else null
-      val currentSpec = currentPlatform?.let {
-        "${it.name.lowercase()}${if (currentInstanceId != null) "/$currentInstanceId" else ""}"
-      }
+      val currentDevice = existingDeviceId
+        ?: return "Session reports an existing device but device(INFO) returned no device ID. " +
+          "Reconnect explicitly with --device <platform>[/<instance>]."
+      val currentPlatform = currentDevice.trailblazeDevicePlatform
+      val currentSpec = currentDevice.toFullyQualifiedDeviceId()
 
       if (deviceSpec == null) {
-        if (currentPlatform != null) {
-          logSessionReuse(currentSpec)
-          return rebindDeviceQuiet(currentPlatform, currentInstanceId, webHeadless = webHeadless)
-        }
-        // Reused session reports `hasExistingDevice` yet INFO returned no platform —
-        // an inconsistent daemon state. Return a clear error instead of silently
-        // falling through to LIST/auto-select, which could bind to an unrelated device.
-        return "Session reports an existing device but device(INFO) returned no platform. " +
-          "Reconnect explicitly with --device <platform>[/<instance>]."
+        logSessionReuse(currentSpec)
+        return reuseExistingDevice(currentDevice, webHeadless)
       }
-      if (currentPlatform != null) {
-        // Explicit device spec — check if it matches what's already connected
-        val platformName = currentPlatform.name.lowercase()
-        val specMatchesFull = currentInstanceId != null && deviceSpec.equals(currentSpec, ignoreCase = true)
-        val specMatchesPlatformOnly = deviceSpec.equals(platformName, ignoreCase = true)
-        if (specMatchesFull || specMatchesPlatformOnly) {
-          logSessionReuse(currentSpec)
-          return rebindDeviceQuiet(currentPlatform, currentInstanceId, webHeadless = webHeadless)
-        }
+      // Explicit device spec — check if it matches what's already connected.
+      val platformName = currentPlatform.name.lowercase()
+      val specMatchesFull = deviceSpec.equals(currentSpec, ignoreCase = true)
+      val specMatchesPlatformOnly = deviceSpec.equals(platformName, ignoreCase = true)
+      if (specMatchesFull || specMatchesPlatformOnly) {
+        logSessionReuse(currentSpec)
+        return reuseExistingDevice(currentDevice, webHeadless)
       }
+      // The next connection targets a different device. Drop the probe cache before switching so
+      // another ensureDevice call on this client cannot mistake the old association for the new
+      // one if the switch fails or the caller retries.
+      hasExistingDevice = false
+      existingDeviceId = null
       // Routed to stderr (not stdout) so it doesn't poison `eval $(trailblaze device connect …)`:
       // any non-`export` byte on stdout before the export lines makes the shell try to execute
       // it as a command. Also: em-dashes get replaced with `--` and Unicode `→` with `->` so a
@@ -593,6 +586,22 @@ class CliMcpClient(
     }
   }
 
+  /** Keep Android's hot path discovery-free; refresh other platforms' runtime selection. */
+  private suspend fun reuseExistingDevice(
+    deviceId: TrailblazeDeviceId,
+    webHeadless: Boolean,
+  ): String? {
+    if (deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+      hasConnectedDevice = true
+      return null
+    }
+    return rebindDeviceQuiet(
+      platform = deviceId.trailblazeDevicePlatform,
+      instanceId = deviceId.instanceId,
+      webHeadless = webHeadless,
+    )
+  }
+
   /**
    * Returns the daemon's currently-bound device as a typed [TrailblazeDeviceId], or
    * `null` if no device is bound (or the daemon's response is missing either platform
@@ -616,24 +625,9 @@ class CliMcpClient(
   }
 
   /**
-   * Lightweight re-select used on session reuse: issues `device(action=PLATFORM, deviceId=…)`
-   * and nothing else — no LIST/validation roundtrip, no "Connecting to…" / "Connected:…"
-   * banners, no session-command menu. The full [connectToDevice] would re-spam the
-   * connection banner on every reused-session invocation; this path keeps the user-visible
-   * output to the single `Reusing session …` line that [logSessionReuse] just emitted.
-   *
-   * Refreshing the daemon-side per-session `associatedDeviceId` is the only behavioral
-   * goal here — the device list, validation, busy-error block, Playwright install waiter,
-   * and session-id printout are all relevant only on cold-start `connectToDevice`.
-   *
-   * Idempotency: `device(action=PLATFORM, deviceId=…)` on the daemon side calls
-   * (a) `DeviceClaimRegistry.claim` — for a same-session re-claim this just refreshes
-   * the timestamp and returns null (no displacement, no on-device teardown),
-   * (b) `mcpBridge.selectDevice` — for an already-selected device the persistent driver
-   * is reused (no new driver creation), and
-   * (c) `sessionContext.startImplicitRecording` — guarded by `if (!isRecording)` so it's
-   * a no-op when recording is already in progress.
-   * All three are safe to re-run on every reused-session invocation.
+   * Lightweight re-select for explicit recovery workflows after a session action cleared its
+   * associated device. Ordinary reusable commands trust their session-scoped INFO probe and do
+   * not call this path.
    */
   private suspend fun rebindDeviceQuiet(
     platform: TrailblazeDevicePlatform,
@@ -738,12 +732,10 @@ class CliMcpClient(
       args[DeviceManagerToolSet.PARAM_HEADLESS] = webHeadless
     }
     val result = callTool("device", args)
-    // Server emits the rich device-busy block (`DeviceBusyException`) as a
-    // successful tool response with an "Error:"-prefixed body. Pass it through
-    // verbatim — the daemon already formatted it for end-user consumption.
-    if (result.content.trimStart().startsWith("Error:") &&
-      "is busy" in result.content
-    ) {
+    // Device selection failures are user-facing `Error:` strings rather than MCP protocol
+    // errors. Pass them through so a stale explicit pin is rejected and evicted instead of being
+    // announced as connected. The daemon already formats busy errors and not-found errors.
+    if (result.content.trimStart().startsWith("Error:")) {
       return result.content
     }
     if (result.isError) {
@@ -1007,6 +999,8 @@ class CliMcpClient(
     private const val DEVICE_TOOL_NAME = "device"
     private const val DEVICE_ACTION_INFO = "INFO"
     private const val ACTION_KEY = "action"
+    private const val SESSION_ONLY_KEY = "sessionOnly"
+    private const val DRIVER_STATUS_PREFIX = "Driver status:"
     private const val TMP_DIR_PROPERTY = "java.io.tmpdir"
 
     /**
@@ -1185,11 +1179,31 @@ class CliMcpClient(
         } else {
           client.sessionId = savedSessionId
           try {
-            val result = client.callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
+            val result = client.callTool(
+              DEVICE_TOOL_NAME,
+              mapOf(ACTION_KEY to DEVICE_ACTION_INFO, SESSION_ONLY_KEY to true),
+            )
             val sessionIsAlive = !result.isError || result.content.contains("No device connected")
             if (sessionIsAlive) {
               // Session is alive — reuse it
-              client.hasExistingDevice = !result.isError
+              val reportsNoDevice = result.content.contains("No device connected")
+              // A driver status means the stored association is not ready. This includes the
+              // Android direct-ADB liveness status emitted when the serial disappeared. Reuse the
+              // MCP session, but make ensureDevice take the normal reconnect path.
+              val reportsDriverStatus = result.content.contains(DRIVER_STATUS_PREFIX)
+              val platform = if (!result.isError && !reportsNoDevice && !reportsDriverStatus) {
+                client.parseDevicePlatform(result)
+              } else null
+              val instanceId = if (!result.isError && !reportsNoDevice && !reportsDriverStatus) {
+                client.parseConnectedInstanceId(result)
+              } else null
+              client.existingDeviceId = if (platform != null && instanceId != null) {
+                TrailblazeDeviceId(
+                  instanceId = instanceId,
+                  trailblazeDevicePlatform = platform,
+                )
+              } else null
+              client.hasExistingDevice = client.existingDeviceId != null
               return client
             }
             // Daemon responded but doesn't recognize our session — it was restarted
@@ -1226,6 +1240,34 @@ class CliMcpClient(
         sessionFile(port, sessionScope).delete()
       } catch (_: Exception) {
         // Ignore
+      }
+    }
+
+    /**
+     * Moves a reusable-session pointer from a provisional scope to its resolved scope.
+     *
+     * `device connect android` only learns the concrete instance id after binding, while
+     * device-driving commands use `cli-android/<instance>` from the outset. Preserving the same
+     * MCP session across that resolution step keeps its target/tool registry warm for the first
+     * follow-up command. The destination is written before the source is removed, so a failed
+     * write leaves the still-usable provisional pointer intact.
+     */
+    internal fun migrateSessionFile(
+      port: Int,
+      fromSessionScope: String,
+      toSessionScope: String,
+    ) {
+      if (fromSessionScope == toSessionScope) return
+      val source = sessionFile(port, fromSessionScope)
+      val (savedSessionId, savedTargetAppId) = readSessionFile(source)
+      if (savedSessionId == null) return
+      val destination = sessionFile(port, toSessionScope)
+      writeSessionFile(destination, savedSessionId, savedTargetAppId)
+      try {
+        source.delete()
+      } catch (_: Exception) {
+        // Best effort. Both files pointing at the same session is safe; a later connect can
+        // overwrite either scope normally.
       }
     }
 

@@ -30,9 +30,9 @@ private const val EVIDENCE_FILE_MAX_BYTES = 25L * 1024 * 1024
 /** Hand-encoded error body with real JSON escaping for caller-supplied fragments. */
 private fun errorJson(message: String): String = buildJsonObject { put("error", message) }.toString()
 
-// This server has no ContentNegotiation plugin: a `call.respond(status, <object>)` throws at
-// serialization time and reaches the client as a naked HTTP 500. Every DTO body goes through this.
-private suspend fun <T> io.ktor.server.application.ApplicationCall.respondJson(
+// Response bodies are hand-encoded (rather than relying on content negotiation) so error paths
+// reach the client as structured JSON, never a naked 500. `internal` so CompanionRoutes shares it.
+internal suspend fun <T> io.ktor.server.application.ApplicationCall.respondJson(
   serializer: kotlinx.serialization.KSerializer<T>,
   body: T,
   status: HttpStatusCode = HttpStatusCode.OK,
@@ -474,6 +474,10 @@ internal fun Route.externalAgentRoutes(deps: TrailRunnerDeps) {
       }
     }
 
+    // `companion listen` tags its stream so the shared-brain defer can tell "an agent is actually
+    // going to answer" from "only browser windows are watching" (the SPA stream carries no marker).
+    val agentConsumer = call.request.queryParameters["consumer"] == "agent"
+    if (agentConsumer) ExternalAgentSupervisor.addAgentConsumer(id)
     try {
       while (true) {
         flushNew()
@@ -487,6 +491,8 @@ internal fun Route.externalAgentRoutes(deps: TrailRunnerDeps) {
       }
     } catch (e: Throwable) {
       Console.log("[ExternalAgentRoutes] stream for $id closed: ${e.message}")
+    } finally {
+      if (agentConsumer) ExternalAgentSupervisor.removeAgentConsumer(id)
     }
   }
 }

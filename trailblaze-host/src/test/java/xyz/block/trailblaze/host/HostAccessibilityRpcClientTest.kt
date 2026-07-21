@@ -486,8 +486,10 @@ class HostAccessibilityRpcClientTest {
     ).jsonObject
     val yaml = request["yaml"]!!.jsonPrimitive.content
     // Round-trip through the YAML decoder: the on-device parser recovers the authored token,
-    // and the tricky value arrives verbatim through the JSON snapshot field.
-    val toolItems = xyz.block.trailblaze.yaml.createTrailblazeYaml().decodeTrail(yaml)
+    // and the tricky value arrives verbatim through the JSON snapshot field. The per-tool RPC wire
+    // shape is a bare tool-wrapper envelope, decoded via decodeTrailOrToolEnvelope.
+    val toolItems =
+      xyz.block.trailblaze.yaml.createTrailblazeYaml().decodeTrailOrToolEnvelope(yaml)
     val toolItem =
       toolItems.single() as xyz.block.trailblaze.yaml.TrailYamlItem.ToolTrailItem
     val recovered = toolItem.tools.single().trailblazeTool as

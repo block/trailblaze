@@ -73,11 +73,18 @@ class TrailblazeExitCodePolicyTest {
     // arg triggers picocli's MissingParameterException path. With our
     // handlers installed, that exit code should be MISUSE.code (3), not
     // picocli's default USAGE = 2.
-    val cmd = MigrateTrailsCommand()
-    val commandLine = CommandLine(cmd)
+    val commandLine = CommandLine(RequiresArgTestCommand())
     installTrailblazeExceptionHandlers(commandLine)
     val exit = commandLine.execute()
     assertEquals(TrailblazeExitCode.MISUSE.code, exit)
+  }
+
+  @CommandLine.Command(name = "requires-arg-test")
+  private class RequiresArgTestCommand : java.util.concurrent.Callable<Int> {
+    @CommandLine.Parameters(index = "0", description = ["a required positional arg"])
+    lateinit var required: String
+
+    override fun call(): Int = TrailblazeExitCode.SUCCESS.code
   }
 
   @Test
@@ -235,12 +242,4 @@ class TrailblazeExitCodePolicyTest {
     val unknown = 99
     assertEquals(unknown, chooseWorseExitCode(TrailblazeExitCode.ASSERTION_FAILED.code, unknown))
   }
-
-  // Note: An earlier reflection-based `MigrateTrailsCommand EXIT_FAILURE aliases
-  // ASSERTION_FAILED` test lived here, but its `getOrElse` fallback returned the
-  // expected value unconditionally — so a broken reflection lookup would never
-  // fail the assertion (the lead-dev review flagged this). Removed in favor of
-  // the behavior tests in `MigrateTrailsCommandTest` and `CompileCommandTest`,
-  // which already exercise the full command paths end-to-end and would catch a
-  // future change to the EXIT_FAILURE constant.
 }

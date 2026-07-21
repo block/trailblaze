@@ -1,0 +1,22 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - i18n
+  - article
+  title: 'Wikipedia: Switch the Albert Einstein article to Spanish'
+
+trail:
+  - step: "Open the Wikipedia article for \"Albert Einstein\" in Spanish and verify the article page rendered with the heading \"Albert Einstein\"."
+    recording:
+      web:
+        - web_navigate:
+            url: https://es.wikipedia.org/wiki/Albert_Einstein
+            reasoning: The current screen is blank with no interactive elements. To open the Wikipedia article for Albert Einstein in Spanish, I will directly navigate to the correct URL for the Spanish Wikipedia article.
+        - web_verifyElementVisible:
+            reasoning: The objective is to verify that the article page rendered with the heading 'Albert Einstein.' The view hierarchy shows that element [e32] is a heading with the text 'Albert Einstein,' which matches the requirement. I will verify its visibility to confirm the page loaded correctly.
+            nodeSelector:
+              web:
+                ariaRole: heading
+                ariaNameRegex: Albert Einstein

@@ -72,7 +72,6 @@ async function fetchReportEvents(sessionId) {
     const raw = await res.json();
     const streams = (raw.streams || []).map((s) => ({
       name: s.label || s.streamId,
-      style: s.style || '',
       total: s.count || (s.events || []).length,
       truncated: !!s.truncated,
       events: (s.events || []).map((e) => ({

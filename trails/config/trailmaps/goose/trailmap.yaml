@@ -1,0 +1,30 @@
+# Goose Desktop target trailmap.
+#
+# Goose is an Electron desktop app, driven through the PLAYWRIGHT_ELECTRON driver: the framework
+# launches the app executable and connects to it over CDP *before* any trail step runs. The
+# `target.electron:` block below is that launch config's home — it is what a v1 trail used to carry
+# per-trail under `config.electron`. Because an Electron launch is a property of the app under test
+# (not of an individual test), it belongs on the target: a unified trail just selects
+# `config.target: goose` + `devices: {web: PLAYWRIGHT_ELECTRON}` and needs no per-trail launch block.
+#
+# Web tool sets and the playwright-electron driver are inherited from the bundled `trailblaze`
+# framework trailmap via `dependencies: [trailblaze]`; `platforms.web: {}` opts the web platform in
+# and fills its `drivers:` / `tool_sets:` from those defaults. Loaded as a workspace trailmap from
+# this repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR.
+id: goose
+dependencies:
+  - trailblaze
+target:
+  display_name: Goose Desktop
+  # Electron launch config. `command` is the default local macOS install path; point at a
+  # different install (or a CI build) with the TRAILBLAZE_ELECTRON_* env vars, or attach to an
+  # already-running instance by setting `cdpUrl` instead of `command`.
+  electron:
+    command: /Applications/Goose.app/Contents/MacOS/Goose
+    env:
+      ENABLE_PLAYWRIGHT: "true"
+    cdpTimeoutSeconds: 60
+  platforms:
+    web: {}
+# Waypoint YAMLs are auto-discovered from `waypoints/**.waypoint.yaml`; trailheads from
+# `trailheads/**.trailhead.yaml`.

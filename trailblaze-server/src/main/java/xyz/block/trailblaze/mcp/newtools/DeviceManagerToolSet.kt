@@ -20,7 +20,9 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 
 /**
  * Minimal MCP tool for device connection.
@@ -147,6 +149,8 @@ class DeviceManagerToolSet(
     headless: Boolean? = null,
     @LLMDescription("For CREATE_WEB action: Playwright `devices` preset name (e.g. 'iPhone 14', 'Pixel 7', 'iPad Pro 11') OR raw '<width>x<height>' viewport like '375x812'. Sets the slot's viewport / emulation profile. Pass null to clear.")
     viewport: String? = null,
+    @LLMDescription("For INFO action: inspect only this MCP session's device binding. Internal CLI reuse probe; default false preserves the current process-wide device view.")
+    sessionOnly: Boolean = false,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -183,7 +187,13 @@ class DeviceManagerToolSet(
       }
 
       DeviceAction.INFO -> {
-        val currentDeviceId = mcpBridge.getCurrentlySelectedDeviceId()
+        // Ordinary INFO retains its process-wide behavior for existing lifecycle commands. The
+        // reusable CLI session probe opts into the session-only view so another MCP session's
+        // selected device cannot be mistaken for this session's intact association.
+        val currentDeviceId = when {
+          sessionOnly && sessionContext != null -> sessionContext.associatedDeviceId
+          else -> mcpBridge.getCurrentlySelectedDeviceId()
+        }
           ?: return "Error: No device connected. Use device(action=LIST) to see available devices, then connect with ANDROID, IOS, WEB, or CONNECT."
 
         // Driver status (non-null means the driver is installing, initializing, or failed
@@ -637,14 +647,13 @@ class DeviceManagerToolSet(
         "or drive the device directly with step(tools=[...]) / the primitive device tools."
     }
 
-    val yaml = createTrailblazeYaml().encodeToString(
-      TrailblazeYamlBuilder()
-        .apply {
-          steps.forEach { promptLine ->
-            this.prompt(promptLine)
-          }
-        }
-        .build()
+    // Emit the unified format (a `trail:` of `step:` entries), not the legacy v1 list shape, so the
+    // dispatched YAML decodes without the v1 parser.
+    val yaml = createTrailblazeYaml().encodeUnifiedTrailToString(
+      UnifiedTrail(
+        config = UnifiedTrailConfig(),
+        trail = steps.map { promptLine -> UnifiedTrailStep(step = promptLine) },
+      ),
     )
 
     val sessionId = mcpBridge.runYaml(

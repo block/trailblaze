@@ -1,0 +1,13 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - search
+  - flaky
+  skip:
+    web: 'Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands.'
+  title: 'Wikipedia: Autocomplete suggestions visible while typing search'
+
+trail:
+  - step: Open Wikipedia and start typing "Albert" into the header search box without submitting. Verify an autocomplete suggestion containing "Albert Einstein" appears.

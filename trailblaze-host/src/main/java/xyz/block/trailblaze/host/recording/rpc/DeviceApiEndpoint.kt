@@ -1,7 +1,11 @@
 package xyz.block.trailblaze.host.recording.rpc
 
 import io.ktor.server.routing.Routing
+import io.ktor.server.websocket.webSocket
 import io.ktor.util.encodeBase64
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -17,6 +21,8 @@ import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import xyz.block.trailblaze.compose.driver.rpc.RpcWsHandlerRegistry
 import xyz.block.trailblaze.compose.driver.rpc.WsSessionContext
 import xyz.block.trailblaze.compose.driver.rpc.registerRpcWebSocket
@@ -47,10 +53,15 @@ import xyz.block.trailblaze.host.rpc.ws.SubscribeFramesRequest
 import xyz.block.trailblaze.host.rpc.ws.SubscribeFramesResponse
 import xyz.block.trailblaze.host.rpc.ws.UnsubscribeFramesRequest
 import xyz.block.trailblaze.host.rpc.ws.UnsubscribeFramesResponse
-import xyz.block.trailblaze.capture.video.AndroidVideoCapture
+import xyz.block.trailblaze.capture.video.H264AccessUnit
 import xyz.block.trailblaze.capture.video.H264Tee
 import xyz.block.trailblaze.capture.video.LiveFrameConsumer
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.host.recording.IosBaguetteServer
+import xyz.block.trailblaze.host.recording.streamAndroidLiveJpegFrames
+import xyz.block.trailblaze.host.recording.streamAndroidLiveH264AccessUnits
+import xyz.block.trailblaze.host.recording.streamIosLiveH264AccessUnits
+import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
@@ -87,6 +98,8 @@ import xyz.block.trailblaze.util.Console
  *
  * WebSocket (single connection, dispatches all the above + the streaming RPCs):
  *   /rpc-ws — multiplexed RPC channel. See [RpcWsEnvelope] for the wire format.
+ *   /devices/api/stream — fast binary frames: Android Annex-B H.264 (browser WebCodecs) or
+ *                         Web JPEG (Chromium CDP screencast). Falls back to SubscribeFrames.
  *   /rpc/SubscribeFramesRequest     — start server-pushed frames (WS-only — no HTTP route).
  *   /rpc/UnsubscribeFramesRequest   — stop server-pushed frames (WS-only — no HTTP route).
  */
@@ -157,6 +170,117 @@ object DeviceApiEndpoint {
         registry = wsRegistry,
         json = RPC_WS_JSON,
       )
+
+      // Fast mirror path, Trailblaze-owned end to end. Live streaming is the default for every
+      // primary platform over this one socket; no ws-scrcpy process, external proxy, or second
+      // service port is required. Three encoders feed it:
+      //   - Android: the shared `screenrecord` H.264 encoder → binary Annex-B access units.
+      //   - iOS: a `baguette` subprocess whose avcc output is converted to the identical Annex-B wire
+      //     (see streamIosLiveH264AccessUnits), so it shares Android's exact browser WebCodecs path.
+      //   - Web (Playwright/Chromium): binary JPEG frames from a CDP screencast.
+      // The generic RPC socket above stays available for controls and the JPEG-poll fallback
+      // (SubscribeFrames). iOS streaming is optional: when baguette isn't installed the endpoint
+      // declines here and the browser falls back to JPEG polling.
+      webSocket("/devices/api/stream") {
+        val instanceId = call.request.queryParameters["instanceId"]?.takeIf { it.isNotBlank() }
+        val platform =
+          call.request.queryParameters["platform"]
+            // Locale.ROOT: the platform param is a protocol enum, not user-facing text; a
+            // Turkish-locale default would lowercase-fold "I" to a dotless "ı" and break valueOf.
+            ?.uppercase(java.util.Locale.ROOT)
+            ?.let { runCatching { TrailblazeDevicePlatform.valueOf(it) }.getOrNull() }
+        if (instanceId == null || platform == null) {
+          close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "instanceId and platform are required"))
+          return@webSocket
+        }
+        when (platform) {
+          TrailblazeDevicePlatform.ANDROID,
+          TrailblazeDevicePlatform.WEB -> Unit
+          TrailblazeDevicePlatform.IOS ->
+            if (!IosBaguetteServer.isAvailable()) {
+              // No baguette binary: decline so the browser degrades to the JPEG poll rather than
+              // hang. `brew install baguette` (macOS + Apple Silicon) enables the live H.264 path.
+              Console.log(
+                "[devices-stream] iOS live stream declined for $instanceId; baguette not installed — " +
+                  "browser will fall back to JPEG polling",
+              )
+              close(
+                CloseReason(
+                  CloseReason.Codes.CANNOT_ACCEPT,
+                  "iOS H.264 streaming requires baguette (brew install baguette)",
+                ),
+              )
+              return@webSocket
+            }
+          else -> {
+            close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "live stream not supported for $platform"))
+            return@webSocket
+          }
+        }
+        val deviceId = xyz.block.trailblaze.devices.TrailblazeDeviceId(instanceId, platform)
+        val stream = sessionManager.get(deviceId)
+        if (stream == null) {
+          close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "device is not connected"))
+          return@webSocket
+        }
+        // The web fast path needs a Playwright-backed page to drive the CDP screencast; any
+        // other web stream shape has to use the JPEG-poll fallback, so refuse here cleanly.
+        val webStream = if (platform == TrailblazeDevicePlatform.WEB) {
+          stream as? PlaywrightDeviceScreenStream
+            ?: run {
+              close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "web stream is not Playwright-backed"))
+              return@webSocket
+            }
+        } else {
+          null
+        }
+
+        val format = if (platform == TrailblazeDevicePlatform.WEB) "jpeg" else "annexb"
+        outgoing.send(
+          Frame.Text(
+            buildJsonObject {
+                put("type", "configuration")
+                put("deviceWidth", stream.deviceWidth)
+                put("deviceHeight", stream.deviceHeight)
+                put("format", format)
+              }
+              .toString(),
+          ),
+        )
+        val heartbeat = launch {
+          while (isActive) {
+            delay(H264_HEARTBEAT_INTERVAL_MS)
+            outgoing.send(Frame.Text("{\"type\":\"heartbeat\"}"))
+          }
+        }
+        val onAccessUnit: suspend (H264AccessUnit) -> Unit = { accessUnit ->
+          outgoing.send(Frame.Binary(fin = true, data = accessUnit.bytes))
+        }
+        try {
+          when {
+            webStream != null ->
+              webStream.streamScreencastJpegFrames { jpegBytes ->
+                outgoing.send(Frame.Binary(fin = true, data = jpegBytes))
+              }
+            platform == TrailblazeDevicePlatform.IOS ->
+              streamIosLiveH264AccessUnits(deviceId = deviceId, onAccessUnit = onAccessUnit)
+            else ->
+              streamAndroidLiveH264AccessUnits(
+                deviceId = deviceId,
+                deviceWidth = stream.deviceWidth,
+                deviceHeight = stream.deviceHeight,
+                onAccessUnit = onAccessUnit,
+              )
+          }
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          Console.log("[devices-stream] $format stream failed for ${deviceId.toFullyQualifiedDeviceId()}: ${e.message}")
+          close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "device stream failed"))
+        } finally {
+          heartbeat.cancel()
+        }
+      }
     }
   }
 
@@ -190,8 +314,9 @@ object DeviceApiEndpoint {
  *    `xcrun simctl io recordVideo` and Playwright to `Page.startScreencast` to match the
  *    Android shape; not done in this change.
  *
- * Common to both branches: content-hash dedup against the last hash sent to *this* subscriber,
- * so a still screen produces no wire traffic.
+ * Both branches content-deduplicate unchanged frames. The Android stream emits a lightweight
+ * periodic repeat so the browser can distinguish a still screen from a stalled decoder; the
+ * polling branch relies on its existing activity-aware cadence and browser fallback.
  *
  * The producer is registered with the session context under `"frames:<fqDeviceId>"`, so:
  *  - re-subscribing the same device replaces the prior producer (no leak), and
@@ -220,23 +345,26 @@ private fun startFrameSubscription(
   val deviceHeight = stream.deviceHeight
   val key = req.trailblazeDeviceId.toFullyQualifiedDeviceId()
 
-  // All platforms currently use the polling subscription path. The H.264 streaming
-  // alternative (see [launchAndroidH264JpegSubscription]) is structurally blocked by
-  // ffmpeg-as-subprocess output buffering on live pipes — frames never flush from the
-  // mjpeg muxer until clean EOF, so JPEGs accumulate in ffmpeg's mux buffer indefinitely
-  // and the wasm watchdog gives up before any frame arrives. The polling path with the
-  // recent `getMirrorScreenshot` (tree-less) fast path delivers ~15-25 fps on Android
-  // without any of the H.264 subprocess complexity. We keep [launchAndroidH264JpegSubscription]
-  // around as a reference for when a JCodec or on-device-server approach replaces ffmpeg.
-  val job = launchLegacyPollingSubscription(
-    stream = stream,
-    req = req,
-    ctx = ctx,
-    deviceManager = deviceManager,
-    deviceWidth = deviceWidth,
-    deviceHeight = deviceHeight,
-    key = key,
-  )
+  val job =
+    if (req.trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+      launchAndroidH264JpegSubscription(
+        req = req,
+        ctx = ctx,
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+        key = key,
+      )
+    } else {
+      launchLegacyPollingSubscription(
+        stream = stream,
+        req = req,
+        ctx = ctx,
+        deviceManager = deviceManager,
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+        key = key,
+      )
+    }
   ctx.replacePushTask("frames:$key", job)
 
   return RpcResult.Success(
@@ -254,8 +382,8 @@ private fun startFrameSubscription(
  *
  * No polling cadence on this path — the screenrecord encoder produces frames at its own rate
  * and we emit them as they arrive. The activity-driven idle clamp (PR #3018) is moot here
- * because there's no poll loop to clamp; dedup-via-SHA-256 in [LiveFrameConsumer] already
- * suppresses identical frames so a still screen produces no wire traffic.
+ * because there's no poll loop to clamp; dedup-via-SHA-256 in [LiveFrameConsumer] suppresses
+ * identical frames between periodic proof-of-life repeats.
  */
 private fun launchAndroidH264JpegSubscription(
   req: SubscribeFramesRequest,
@@ -264,40 +392,15 @@ private fun launchAndroidH264JpegSubscription(
   deviceHeight: Int,
   key: String,
 ): kotlinx.coroutines.Job {
-  // Use the same encoder params AndroidVideoCapture uses, so a concurrent MP4 capture shares
-  // the same tee instance. If sizes diverge between callers, H264Tee.forDevice logs and uses
-  // whichever attached first.
-  val videoSize = AndroidVideoCapture.scaleToRecordingSize(deviceWidth, deviceHeight)
-  val tee = H264Tee.forDevice(req.trailblazeDeviceId, videoSize = videoSize, bitRate = "4000000")
   return ctx.pushScope.launch {
     var sentFrames = 0L
     var lastLogMillis = 0L
-    // Single bounded queue between the decoder's drain thread (producer) and the WS sender
-    // coroutine (consumer). Capacity 1 + DROP_OLDEST: at most one frame waits to go on the
-    // wire; if a new frame arrives while the wire is still busy, we drop the older queued
-    // one. The user sees the freshest frame the device produced, not a backlog.
-    //
-    // Replaces a previous `ctx.pushScope.launch { ctx.emit(event) }` per frame, which would
-    // spawn unbounded coroutines (each holding ~base64-of-1080p bytes) when the socket
-    // writer fell behind, and orphan stale frames after a subscription replace because
-    // those launches weren't children of the subscription job. Review feedback on PR #3021
-    // caught both. Channel + sender below is owned by *this* job, so cancel propagates.
-    val outbound = Channel<RpcWsEnvelope.Event>(
-      capacity = 1,
-      onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
-    )
-    val senderJob = launch {
-      try {
-        for (event in outbound) {
-          ctx.emit(event)
-        }
-      } catch (_: CancellationException) {
-        // normal teardown
-      }
-    }
-    val consumer = LiveFrameConsumer(
-      tee = tee,
-      onFrame = { jpegBytes ->
+    try {
+      streamAndroidLiveJpegFrames(
+        deviceId = req.trailblazeDeviceId,
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+      ) { jpegBytes ->
         val cycleStart = System.currentTimeMillis()
         val event = RpcWsEnvelope.Event(
           path = FrameEvent.EVENT_PATH,
@@ -312,30 +415,20 @@ private fun launchAndroidH264JpegSubscription(
             ),
           ),
         )
-        // trySend never suspends — drops oldest queued frame if the channel is full. The
-        // drain thread is non-coroutine, so we couldn't suspend here even if we wanted to.
-        outbound.trySend(event)
+        ctx.emit(event)
         sentFrames++
         if (cycleStart - lastLogMillis >= 1000L) {
           Console.log("[FrameProducer/android-h264] device=$key sent=$sentFrames")
           lastLogMillis = cycleStart
         }
-      },
-    )
-    consumer.start()
-    try {
-      // Park until the coroutine is cancelled (socket close, re-subscribe).
-      while (isActive) {
-        delay(1_000)
       }
     } catch (_: CancellationException) {
       // normal teardown
-    } finally {
-      withContext(NonCancellable) {
-        runCatching { consumer.stop() }
-        outbound.close()
-        senderJob.cancel()
-      }
+    } catch (e: Exception) {
+      // Keep the multiplexed RPC socket alive if screenrecord or ffmpeg cannot start. The
+      // browser's frame-stall watchdog will fall back to snapshot polling, while controls
+      // and unrelated RPCs continue using the existing WebSocket.
+      Console.log("[FrameProducer/android-h264] stream failed for $key: ${e.message}")
     }
   }
 }
@@ -530,6 +623,9 @@ private fun launchLegacyPollingSubscription(
  * wire) without blowing CPU; the loop snaps back to the active cadence as soon as bytes change.
  */
 private const val IDLE_INTERVAL_MS = 1000L
+
+/** Keeps the browser's stall watchdog alive while Android suppresses unchanged video frames. */
+private const val H264_HEARTBEAT_INTERVAL_MS = 1_000L
 
 /**
  * Consecutive duplicate hashes before the loop slows down. 5 dedups at the 200 ms active

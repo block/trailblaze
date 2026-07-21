@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mcp.handlers
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertContentEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import xyz.block.trailblaze.api.DriverNodeDetail
@@ -12,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler.Companion.buildResponse
+import xyz.block.trailblaze.mcp.handlers.GetScreenStateRequestHandler.Companion.buildBinaryResponse
 
 /**
  * JVM-only tests for the pure response-builder extracted from
@@ -54,6 +56,36 @@ class GetScreenStateRequestHandlerTest {
 
     assertNotNull(response.screenshotBase64)
     assertNotNull(response.annotatedScreenshotBase64)
+  }
+
+  @Test
+  fun `buildBinaryResponse keeps screenshots raw and leaves base64 empty`() {
+    val screenState = FixedBytesScreenState(clean = byteArrayOf(1, 2), annotated = byteArrayOf(9, 9))
+    val request = GetScreenStateRequest(
+      includeScreenshot = true,
+      includeAnnotatedScreenshot = true,
+    )
+
+    val response = buildBinaryResponse(request, screenState)
+
+    assertContentEquals(byteArrayOf(1, 2), response.screenshotBytes)
+    assertContentEquals(byteArrayOf(9, 9), response.annotatedScreenshotBytes)
+    assertNull(response.screenshotBase64)
+    assertNull(response.annotatedScreenshotBase64)
+  }
+
+  @Test
+  fun `both builders carry the capture timestamp onto the wire`() {
+    val screenState = FixedBytesScreenState(clean = byteArrayOf(1), annotated = byteArrayOf(2))
+    val request = GetScreenStateRequest(includeScreenshot = false)
+
+    // The stream-screenshot gate reads this stamp on whichever transport served the response,
+    // so the JSON and binary builders must both forward it.
+    assertEquals(1_234L, buildResponse(request, screenState, capturedAtDeviceMs = 1_234L).capturedAtDeviceMs)
+    assertEquals(1_234L, buildBinaryResponse(request, screenState, capturedAtDeviceMs = 1_234L).capturedAtDeviceMs)
+
+    // Back-compat default: callers that don't stamp produce a null (older-server) response.
+    assertNull(buildResponse(request, screenState).capturedAtDeviceMs)
   }
 
   @Test

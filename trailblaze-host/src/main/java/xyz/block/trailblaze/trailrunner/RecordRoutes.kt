@@ -6,6 +6,11 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +34,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.recording.RecordedInteraction
 import xyz.block.trailblaze.recording.RecordingYamlCodec
+import xyz.block.trailblaze.host.recording.streamAndroidLiveJpegFrames
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
@@ -64,6 +70,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Routes (all POST; the device id rides in the JSON body since [TrailblazeDeviceId] is structured):
  *   /api/record/connect    — open a live connection, hold the stream for subsequent calls
+ *   /api/record/stream     — push Android mirror frames as binary JPEG WebSocket messages
  *   /api/record/screen     — poll one mirror frame (base64) for the live view
  *   /api/record/gesture    — dispatch a tap/longPress/swipe/inputText/pressKey AND record it as a tool
  *   /api/record/disconnect — release the connection
@@ -109,6 +116,53 @@ internal fun Route.recordRoutes(deps: TrailRunnerDeps) {
       text = JSON.encodeToString(RecordConnectResponse.serializer(), resp),
       contentType = ContentType.Application.Json,
     )
+  }
+
+  webSocket("$PATH_BASE/api/record/stream") {
+    if (service == null) {
+      close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "deviceManager not available"))
+      return@webSocket
+    }
+    val instanceId = call.request.queryParameters["instanceId"]?.takeIf { it.isNotBlank() }
+    val platform =
+      call.request.queryParameters["platform"]
+        // Fixed locale: this is protocol parsing, and a locale-sensitive uppercase (e.g. Turkish
+        // "ios" -> "İOS") would fail TrailblazeDevicePlatform.valueOf and reject valid requests.
+        ?.uppercase(java.util.Locale.ROOT)
+        ?.let { runCatching { TrailblazeDevicePlatform.valueOf(it) }.getOrNull() }
+    if (instanceId == null || platform == null) {
+      close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "instanceId and platform are required"))
+      return@webSocket
+    }
+    val deviceId = TrailblazeDeviceId(instanceId, platform)
+    val connection = service.connection(deviceId)
+    if (connection == null) {
+      close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "recording device is not connected"))
+      return@webSocket
+    }
+    if (platform != TrailblazeDevicePlatform.ANDROID) {
+      // The browser falls back to /record/screen polling for iOS and Playwright. Keeping this
+      // socket Android-only avoids changing those capture paths as part of the H.264 rollout.
+      close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "continuous stream is Android-only"))
+      return@webSocket
+    }
+
+    try {
+      streamAndroidLiveJpegFrames(
+        deviceId = deviceId,
+        deviceWidth = connection.stream.deviceWidth,
+        deviceHeight = connection.stream.deviceHeight,
+      ) { jpeg ->
+        // Binary frames avoid the 33% base64 expansion paid by the generic JSON RPC envelope.
+        // One WebSocket message is one complete JPEG, so the browser can hand it directly to img.
+        outgoing.send(Frame.Binary(fin = true, data = jpeg))
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.log("[record-stream] stream failed for ${deviceId.toFullyQualifiedDeviceId()}: ${e.message}")
+      close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "device stream failed"))
+    }
   }
 
   post("$PATH_BASE/api/record/screen") {
@@ -668,8 +722,14 @@ internal class TrailRunnerRecordingService(
   private val connections = ConcurrentHashMap<TrailblazeDeviceId, RecordingDeviceConnection>()
   private val connectMutexes = ConcurrentHashMap<TrailblazeDeviceId, Mutex>()
 
+  fun connection(deviceId: TrailblazeDeviceId): RecordingDeviceConnection? = connections[deviceId]
+
   suspend fun connect(deviceId: TrailblazeDeviceId): RecordConnectResponse {
     connections[deviceId]?.let {
+      // Re-publish into the shared registry (no-op while an entry exists) — a `/devices` viewer
+      // disconnect may have dropped the entry while this recorder connection stayed live, and the
+      // mirror's "not connected" self-heal lands back here to restore it.
+      deviceManager.hostDeviceSessionManager.attach(deviceId, it.stream)
       return RecordConnectResponse(ok = true, deviceWidth = it.stream.deviceWidth, deviceHeight = it.stream.deviceHeight)
     }
     val device = resolveDevice(deviceId)
@@ -683,6 +743,11 @@ internal class TrailRunnerRecordingService(
       when (val state = deviceManager.connectionService.connectToDevice(device)) {
         is ConnectionState.Connected -> {
           connections[deviceId] = state.connection
+          // Publish the SAME live stream into the shared session registry so the `/devices/api/stream`
+          // H.264/CDP live-video socket (and its `/rpc` SubscribeFrames + screen-poll fallbacks) can
+          // serve this recorder-owned connection — no second physical connection. This service stays
+          // the lifecycle owner and detaches (without closing) on disconnect.
+          deviceManager.hostDeviceSessionManager.attach(deviceId, state.connection.stream)
           RecordConnectResponse(ok = true, deviceWidth = state.connection.stream.deviceWidth, deviceHeight = state.connection.stream.deviceHeight)
         }
         is ConnectionState.Error -> RecordConnectResponse(ok = false, error = state.message)
@@ -1027,6 +1092,9 @@ internal class TrailRunnerRecordingService(
 
   fun disconnect(deviceId: TrailblazeDeviceId) {
     val conn = connections.remove(deviceId) ?: return
+    // Detach (without closing) before we close it ourselves — this service owns the stream's
+    // lifecycle; the shared registry only held a published view of it (see [connect]).
+    deviceManager.hostDeviceSessionManager.detach(deviceId)
     (conn.stream as? AutoCloseable)?.let { runCatching { it.close() } }
   }
 

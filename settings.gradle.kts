@@ -73,6 +73,7 @@ include(
   ":trailblaze-desktop",
   ":trailblaze-host",
   ":trailblaze-models",
+  ":trailblaze-ondevice-rpc-proto",
   ":trailblaze-trailmap-bundler",
   ":trailblaze-compose",
   ":trailblaze-playwright",

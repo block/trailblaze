@@ -28,7 +28,7 @@ Call this tool as the first step when testing the Goose desktop app.
 Returns the current page URL and title confirming the app is ready for interaction.
 """,
 )
-class PlaywrightDesktopLaunchGooseTool(
+data class PlaywrightDesktopLaunchGooseTool(
   override val reasoning: String? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
 

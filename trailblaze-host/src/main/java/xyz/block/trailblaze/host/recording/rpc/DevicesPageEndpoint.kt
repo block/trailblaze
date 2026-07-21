@@ -1,30 +1,20 @@
 package xyz.block.trailblaze.host.recording.rpc
 
 import io.ktor.http.ContentType
-import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpHeaders
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
-import xyz.block.trailblaze.report.ReportTemplateResolver
 
 /**
- * Serves the Compose/WASM device viewer at the `/devices` URL (and every sub-path).
+ * Serves the lightweight standalone device mirror at `/devices` (and every sub-path).
  *
- * The page reuses the bundled report template ([ReportTemplateResolver.resolveTemplate])
- * — a single self-contained HTML file with `composeApp.js` and every `.wasm` binary
- * inlined as gzip+base64 strings, plus a runtime loader that intercepts the WASM
- * bundle's `fetch` / `XMLHttpRequest` / `WebAssembly.instantiateStreaming` calls and
- * serves them from memory. The browser never fetches anything else under `/devices`,
- * so no separate JS/WASM routes are needed.
- *
- * The Compose entry point ([xyz.block.trailblaze.ui.main]) branches on
- * `window.location.pathname`: bare `/devices` renders the single-device picker
- * ([xyz.block.trailblaze.ui.devices.WebDevicesPage]), and `/devices/all` renders the
- * multi-device live grid ([xyz.block.trailblaze.ui.devices.WebDevicesGridPage]). Both
- * sub-paths get the same HTML bundle — the routing branch is client-side. The empty
- * `window.trailblaze_report_compressed` placeholder shipped in the template is fine —
- * the devices views don't read session data.
+ * This deliberately does not depend on the report/Compose WASM bundle. The self-contained HTML
+ * resource talks directly to the daemon's existing host-device RPC API: HTTP for discovery,
+ * connect, and input; `/rpc-ws` for server-pushed frames. That makes mirroring available from a
+ * source build without `-Ptrailblaze.wasm=true` and keeps it outside the main Trail Runner UX.
+ * Bare `/devices` renders a single-device picker; `/devices/all` renders the connected-device grid.
  *
  * Registration mirrors [xyz.block.trailblaze.graph.WaypointGraphEndpoint] — lives in
  * trailblaze-host and is injected into the server via `additionalRouteRegistration`.
@@ -34,31 +24,22 @@ object DevicesPageEndpoint {
   private const val PATH = "/devices"
 
   /**
-   * Sub-path matcher that lets the client-side router (`main.kt`) own URLs like
-   * `/devices/all`. Ktor matches the longer pattern in addition to the bare `/devices`,
-   * so a direct hit on either form serves the same WASM bundle and the in-bundle
-   * pathname branch decides which page to render.
+   * Sub-path matcher that lets the page own URLs like `/devices/all`. Ktor matches the longer
+   * pattern in addition to bare `/devices`; the page chooses its layout from `location.pathname`.
    *
    * **Ordering hazard:** this wildcard catches *every* `/devices/<anything>`. If a future
    * HTTP-layer route like `/devices/api/...` or `/devices/rpc/...` is ever added under the
    * same routing tree, declare it **before** this wildcard or it will be shadowed.
-   * Routes under `/devices/` that only need client-side rendering should keep adding their
-   * paths to the in-bundle pathname branch in `main.kt` — they don't need new HTTP routes
-   * here.
+   * Routes under `/devices/` that only need client-side rendering do not need new HTTP routes.
    */
   private const val SUBPATH = "/devices/{...}"
 
   fun register(routing: Routing) {
-    // Single handler body, called from both routes — the only difference between the bare
-    // `/devices` and the `/devices/{...}` wildcard registration is the pattern. Pulling the
-    // body out keeps future template/error changes applying uniformly.
+    // Single handler body for bare `/devices` and `/devices/{...}`. The resource is packaged in
+    // trailblaze-host, so the endpoint works identically from the source launcher and release JAR.
     val serveBundle: suspend ApplicationCall.() -> Unit = {
-      val template = ReportTemplateResolver.resolveTemplate()
-      if (template == null) {
-        respondText(missingBundleMessage(), ContentType.Text.Plain, HttpStatusCode.NotFound)
-      } else {
-        respondText(text = template.readText(), contentType = ContentType.Text.Html)
-      }
+      response.headers.append(HttpHeaders.CacheControl, "no-store")
+      respondText(text = standaloneMirrorHtml, contentType = ContentType.Text.Html)
     }
     routing.apply {
       get(PATH) { call.serveBundle() }
@@ -66,8 +47,10 @@ object DevicesPageEndpoint {
     }
   }
 
-  private fun missingBundleMessage(): String =
-    "WASM bundle not found. Rebuild with `-Ptrailblaze.wasm=true` (or " +
-      "`BUNDLE_WASM=true ./scripts/install-trailblaze-source.sh`) so the report " +
-      "template is bundled into the uber JAR."
+  private val standaloneMirrorHtml: String by lazy {
+    requireNotNull(DevicesPageEndpoint::class.java.getResource("/xyz/block/trailblaze/devices/index.html")) {
+        "Missing standalone device mirror resource"
+      }
+      .readText()
+  }
 }

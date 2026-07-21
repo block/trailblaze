@@ -14,8 +14,11 @@ import xyz.block.trailblaze.util.Console
  * Pipes the raw H.264 NAL stream into a long-running `ffmpeg ... -c:v mjpeg -f image2pipe -`
  * sidecar process; reads JPEG frames out of the sidecar's stdout by splitting on the JPEG
  * Start-of-Image (`0xFFD8`) / End-of-Image (`0xFFD9`) markers. Each completed frame is
- * SHA-256-hashed and compared against the last emitted hash; identical frames are suppressed
- * so a still screen produces no wire traffic.
+ * SHA-256-hashed and compared against the last emitted hash. Identical frames are suppressed
+ * between periodic heartbeats, so a still screen produces at most one frame per second.
+ * Heartbeats fire only while the decoder keeps producing frames — a damage-driven encoder
+ * (the emulator's `screenrecord`) emits nothing at all for a static screen, so subscribers
+ * that need to distinguish "static screen" from "dead pipeline" use [onFeedAlive].
  *
  * **Why JPEG?** WebP would require either a per-frame ffmpeg subprocess (high latency) or a
  * native encoder dependency. JPEG is browser-native, ffmpeg's mjpeg encoder is the fastest
@@ -31,8 +34,24 @@ import xyz.block.trailblaze.util.Console
  */
 class LiveFrameConsumer(
   private val tee: H264Tee,
-  /** Callback invoked once per *distinct* completed JPEG frame. Runs on the drain thread. */
-  private val onFrame: (ByteArray) -> Unit,
+  /**
+   * Callback invoked for changed frames and periodic still-screen heartbeats. Runs on the
+   * drain thread. `isContentChange` is false for a heartbeat re-emit of an unchanged frame —
+   * exposed so subscribers that care about the distinction (e.g. stream-quiet detection)
+   * don't have to re-hash every frame this consumer already hashed.
+   */
+  private val onFrame: (jpeg: ByteArray, isContentChange: Boolean) -> Unit,
+  /**
+   * Optional out-of-band liveness signal, invoked (throttled to ~2 Hz) from the tee drain
+   * loop while the capture pipeline stays attached — including when no bytes flow at all.
+   * Damage-driven encoders (the emulator's `screenrecord`) emit nothing for a static screen,
+   * so heartbeat re-emits via [onFrame] only prove liveness while frames keep decoding; this
+   * callback proves it when they don't. Runs on the tee drain thread. Note it attests to the
+   * tee attachment being drained, not to the ffmpeg sidecar's health — a dead sidecar is
+   * detected on the next write, i.e. the next content change, so a stale-accept window is
+   * bounded by the stall threshold.
+   */
+  private val onFeedAlive: (() -> Unit)? = null,
   /** Ring-buffer capacity for this consumer. Default sized for live-viewer drop tolerance. */
   private val ringBufferBytes: Int = DEFAULT_RING_BUFFER_BYTES,
   /** Test seam: ffmpeg binary path. */
@@ -49,14 +68,22 @@ class LiveFrameConsumer(
 
   fun start() {
     consumer = tee.attach(ringBufferBytes)
-    process = spawnFfmpeg()
-    teeToFfmpegThread = Thread(::pumpTeeIntoFfmpeg, "live-frame-tee-to-ffmpeg").apply {
-      isDaemon = true
-      start()
-    }
-    ffmpegToFramesThread = Thread(::pumpFfmpegIntoFrames, "live-frame-ffmpeg-to-frames").apply {
-      isDaemon = true
-      start()
+    try {
+      process = spawnFfmpeg()
+      teeToFfmpegThread = Thread(::pumpTeeIntoFfmpeg, "live-frame-tee-to-ffmpeg").apply {
+        isDaemon = true
+        start()
+      }
+      ffmpegToFramesThread = Thread(::pumpFfmpegIntoFrames, "live-frame-ffmpeg-to-frames").apply {
+        isDaemon = true
+        start()
+      }
+    } catch (e: Exception) {
+      // An attached tee owns the screenrecord producer. If the decoder cannot start, tear
+      // the attachment down immediately instead of leaving screenrecord running until the
+      // WebSocket eventually closes.
+      stop()
+      throw e
     }
   }
 
@@ -78,17 +105,24 @@ class LiveFrameConsumer(
   private fun spawnFfmpeg(): Process {
     val pb = ProcessBuilder(
       ffmpegBinary,
-      // Decode the H.264 elementary stream from stdin.
-      "-fflags", "+nobuffer",
+      // Decode the H.264 elementary stream from stdin. Do not pass `-fflags nobuffer` here:
+      // despite its name, that input flag drops the packets ffmpeg needs to probe a live raw
+      // H.264 pipe, so no decoded frame is emitted until EOF. The screenrecord stream already
+      // arrives without a container-level buffer; low_delay is sufficient on this path.
       "-flags", "+low_delay",
-      // Tell ffmpeg the input is roughly 25 fps. Without this hint, the image2pipe muxer
-      // refuses to emit decoded frames (timestamps end up unspecified → "Output file is
-      // empty, nothing was encoded"). Verified by reproducing locally with a captured
-      // screenrecord sample.
+      // Raw H.264 has no container metadata to probe. The defaults may wait for megabytes of
+      // input before starting the decoder; SPS/PPS at the head of screenrecord's Annex-B stream
+      // is enough to identify it immediately.
+      "-probesize", "32",
+      "-analyzeduration", "0",
+      // Tell ffmpeg the input is roughly 25 fps. This assigns each decoded frame a constant-rate
+      // PTS, which the image2pipe muxer needs to emit frames at all (without it, timestamps are
+      // unspecified → "Output file is empty, nothing was encoded"). Do NOT also pass
+      // `-use_wallclock_as_timestamps 1`: screenrecord delivers a frame's bytes in a tight burst,
+      // so timestamping by arrival wallclock collapses a burst into near-identical PTS and the
+      // muxer withholds those frames until the pipe closes — a live viewer then sees nothing until
+      // the stream ends. The CFR hint alone keeps frames flowing while the pipe stays open.
       "-framerate", "25",
-      // Use wallclock for timestamps so a slow / bursty input (screenrecord emits little
-      // when the screen is static) still gets monotonic PTS the muxer accepts.
-      "-use_wallclock_as_timestamps", "1",
       "-f", "h264",
       "-i", "pipe:0",
       // Encode every decoded frame as JPEG and write the concatenated JPEGs to stdout.
@@ -131,6 +165,7 @@ class LiveFrameConsumer(
     val proc = process ?: return
     val sink: OutputStream = proc.outputStream
     val buf = ByteArray(64 * 1024)
+    var lastAlivePingMs = Long.MIN_VALUE
     try {
       while (!stopped.get()) {
         val n = cons.read(buf)
@@ -152,6 +187,16 @@ class LiveFrameConsumer(
           n == H264Tee.READ_RESULT_DETACHED -> return
           n == 0 -> Thread.sleep(IDLE_SLEEP_MS)
         }
+        // Reaching here means the attachment is alive and being drained (a detached tee or a
+        // dead ffmpeg pipe returned above) — including the n == 0 idle case, which is exactly
+        // the state a static screen leaves us in.
+        if (onFeedAlive != null) {
+          val nowMs = System.nanoTime() / NANOS_PER_MILLISECOND
+          if (nowMs - lastAlivePingMs >= FEED_ALIVE_PING_INTERVAL_MS) {
+            lastAlivePingMs = nowMs
+            runCatching { onFeedAlive?.invoke() }
+          }
+        }
       }
     } finally {
       runCatching { sink.flush() }
@@ -164,7 +209,7 @@ class LiveFrameConsumer(
     val input: InputStream = proc.inputStream
     val splitter = JpegFrameSplitter()
     val readBuf = ByteArray(64 * 1024)
-    var lastSentHash: ByteArray? = null
+    val emissionGate = FrameEmissionGate(MAX_IDENTICAL_FRAME_SILENCE_MS)
     try {
       while (!stopped.get()) {
         val n = try {
@@ -175,10 +220,10 @@ class LiveFrameConsumer(
         if (n <= 0) break
         splitter.feed(readBuf, 0, n) { jpeg ->
           val hash = sha256(jpeg)
-          if (!hash.contentEquals(lastSentHash)) {
-            lastSentHash = hash
+          val emission = emissionGate.admit(hash, System.nanoTime() / NANOS_PER_MILLISECOND)
+          if (emission != null) {
             try {
-              onFrame(jpeg)
+              onFrame(jpeg, emission == FrameEmissionGate.Emission.CONTENT_CHANGE)
             } catch (e: Exception) {
               Console.log("[LiveFrameConsumer] onFrame callback threw: ${e.message}")
             }
@@ -248,8 +293,34 @@ class LiveFrameConsumer(
     }
   }
 
+  /**
+   * Content-dedup policy for the live wire. Changed frames pass immediately; an unchanged
+   * screen passes only after [maxSilenceMillis] so the browser's stall watchdog keeps seeing
+   * proof of life without paying full frame rate for a static display.
+   */
+  internal class FrameEmissionGate(private val maxSilenceMillis: Long) {
+    enum class Emission { CONTENT_CHANGE, HEARTBEAT }
+
+    private var lastSentHash: ByteArray? = null
+    private var lastSentAtMillis: Long = Long.MIN_VALUE
+
+    /** Returns how this frame should be emitted, or null to suppress it. */
+    fun admit(hash: ByteArray, nowMillis: Long): Emission? {
+      val changed = !hash.contentEquals(lastSentHash)
+      val heartbeatDue =
+        lastSentAtMillis == Long.MIN_VALUE || nowMillis - lastSentAtMillis >= maxSilenceMillis
+      if (!changed && !heartbeatDue) return null
+      lastSentHash = hash.copyOf()
+      lastSentAtMillis = nowMillis
+      return if (changed) Emission.CONTENT_CHANGE else Emission.HEARTBEAT
+    }
+  }
+
   companion object {
     private const val IDLE_SLEEP_MS: Long = 2L
+    private const val MAX_IDENTICAL_FRAME_SILENCE_MS: Long = 1_000L
+    private const val FEED_ALIVE_PING_INTERVAL_MS: Long = 500L
+    private const val NANOS_PER_MILLISECOND: Long = 1_000_000L
 
     /**
      * 20 MB ring at 4 Mbps screenrecord ≈ ~40 s of slack. Generous because if the live

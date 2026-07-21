@@ -22,7 +22,6 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 
@@ -104,7 +103,7 @@ class OnDeviceRpcDeviceScreenStream(
       includeScreenshot = true,
       includeTree = false,
     ) ?: return null
-    return response.screenshotBase64?.decodeBase64Bytes()
+    return response.screenshotBytes ?: response.screenshotBase64?.decodeBase64Bytes()
   }
 
   /**
@@ -121,7 +120,7 @@ class OnDeviceRpcDeviceScreenStream(
       includeTree = true,
     ) ?: return null
     lastResponse = response
-    return response.screenshotBase64?.decodeBase64Bytes()
+    return response.screenshotBytes ?: response.screenshotBase64?.decodeBase64Bytes()
   }
 
   override suspend fun tap(x: Int, y: Int) {
@@ -235,8 +234,9 @@ class OnDeviceRpcDeviceScreenStream(
   }
 
   private suspend fun dispatchTool(tool: TrailblazeTool) {
-    val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(tool))))
-    val yaml = trailblazeYaml.encodeToString(toolItems)
+    // Bare tool-wrapper list (`- <toolName>:`), decoded on-device via decodeTrailOrToolEnvelope
+    // → decodeTools — never the legacy list-shape trail parser.
+    val yaml = trailblazeYaml.encodeTools(listOf(fromTrailblazeTool(tool)))
     val request = runYamlRequestTemplate.copy(
       yaml = yaml,
       // TRAILBLAZE_RUNNER dispatches a fixed tool list directly — no LLM call, no agent

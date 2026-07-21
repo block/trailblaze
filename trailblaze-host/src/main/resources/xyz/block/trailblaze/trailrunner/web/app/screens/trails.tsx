@@ -66,9 +66,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   const [viewFile, setViewFile] = React.useState(null); // { name, content, highlight, platform }
   const [pushShown, setPushShown] = React.useState(false); // false while parked off-screen right
   const [boardReloadKey, setBoardReloadKey] = React.useState(0); // bump to remount the folder board after a pushed-editor save
-  // "Migrate to unified" flow for the selected legacy bundle folder. `migrate` is the modal phase:
-  // null (closed) | 'confirm' | 'busy' | a result { ok, outputName?, steps?, drift?, error? }.
-  const [migrate, setMigrate] = React.useState(null);
   const editorDirty = React.useRef(false); // set by the editor; guards close-on-discard
   const reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   useLucide();
@@ -201,14 +198,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   );
   const fvBlaze = React.useMemo(() => folderEntries.find((t) => (t.kind || 'trail') === 'blaze') || null, [folderEntries]);
   const fvVariants = React.useMemo(() => folderEntries.filter((t) => (t.kind || 'trail') !== 'blaze'), [folderEntries]);
-  // "Migrate to unified" applies ONLY to a legacy per-platform bundle — every file must be v1. The
-  // folder view is also reachable (via the back-arrow) for a directory of already-unified trails;
-  // offering migrate there would merge + delete distinct trails, so gate the button on all-v1. (The
-  // server enforces the same guard; this just hides an action that would only ever error/harm.)
-  const fvAllV1 = React.useMemo(
-    () => folderEntries.length > 0 && folderEntries.every((t) => (t.format || 'v1') === 'v1'),
-    [folderEntries],
-  );
   // /api/folder/* folder id = a member trail's id minus its file segment ("0/sample/login/x" -> "0/sample/login").
   // NOT `folder` (the display path with the "trails/…" workspace-root prefix the id scheme omits).
   const fvFolderId = folderEntries.length ? folderEntries[0].id.split('/').slice(0, -1).join('/') : '';
@@ -227,30 +216,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   // per-cell "Edit … jump to this step", the header "Edit YAML" link, the off-blaze "open to view")
   // is a view/edit-this-file intent. An optional `highlight` ({text, kind}) jumps the editor to that
   // step's YAML block. Content is fetched from the bundle folder, not the workspace index.
-  // Convert the selected legacy bundle folder into a single unified `<folder>.trail.yaml` via the
-  // server-side migrator, then jump to the new file. The per-platform files (+ blaze.yaml) are folded
-  // in and deleted (git-recoverable). On refusal (trailhead / top-level tools / already migrated) the
-  // server returns a reason we surface in the modal without touching any files.
-  const doMigrate = async () => {
-    // Cheap early-out; the real double-submit protection is the button's `disabled={busy}` (React
-    // disables it between click events) plus the server-side idempotent "already migrated" guard.
-    if (migrate === 'busy') return;
-    setMigrate('busy');
-    const r = await TB.migrateTrailFolder(fvFolderId);
-    if (r && r.success) {
-      // The migration itself succeeded — a reload failure must not strand the busy spinner (Cancel
-      // and the backdrop are disabled while busy), so degrade to the success modal either way.
-      try { await trails.reload(); } catch (e) { /* index refetches on next navigation */ }
-      // Index id of the written file = folderId + its stem (server's authoritative outputName minus
-      // the .trail.yaml suffix), NOT the client's folder name — trust what the server actually wrote.
-      const stem = String(r.outputName || `${fvName}.trail.yaml`).replace(/\.trail\.yaml$/, '');
-      const newId = `${fvFolderId}/${stem}`;
-      setMigrate({ ok: true, outputName: r.outputName, steps: r.steps, drift: r.drift || [], removed: r.removed || [], newId });
-    } else {
-      setMigrate({ ok: false, error: (r && r.error) || 'Migration failed' });
-    }
-  };
-
   // Whole-folder delete (the trash button in the folder-view header). Deliberate and loud: the
   // native confirm names the folder and its file count; recovery is git-only for committed files.
   const doDeleteFolder = async () => {
@@ -427,71 +392,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
           </div>
         </div>
       )}
-      {migrate && (
-        <div className="tb-overlay" onClick={() => { if (migrate !== 'busy') setMigrate(null); }} style={{ alignItems: 'center', padding: 24 }}>
-          <div className="tb-card" onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 94vw)', padding: 24 }}>
-            {(() => {
-              const fileCount = fvVariants.length + (fvBlaze ? 1 : 0);
-              const result = typeof migrate === 'object' ? migrate : null;
-              if (result && result.ok) {
-                return (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <Ico n="circle-check" s={18} c="var(--tb-pass)" />
-                      <h2 className="tb-h2" style={{ fontSize: 17, margin: 0 }}>Migrated to unified</h2>
-                    </div>
-                    <div className="tb-sub" style={{ fontSize: 12.5, marginBottom: 14 }}>
-                      Wrote <span className="tb-mono">{result.outputName}</span> ({result.steps} step{result.steps === 1 ? '' : 's'}).
-                      {result.removed && result.removed.length
-                        ? <> Removed: <span className="tb-mono">{result.removed.join(', ')}</span></>
-                        : <> No input files were removed — check the folder before re-running.</>}
-                    </div>
-                    {result.drift && result.drift.length > 0 && (
-                      <div style={{ marginBottom: 14, padding: '9px 11px', background: 'color-mix(in srgb, var(--tb-amber) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--tb-amber) 40%, transparent)', borderRadius: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                          <Ico n="triangle-alert" s={13} c="var(--tb-amber)" /> Review these drift warnings
-                        </div>
-                        <div className="tb-mono tb-sub" style={{ fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>{result.drift.join('\n')}</div>
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                      <Btn kind="primary" ico="arrow-right" onClick={() => { const id = result.newId; setMigrate(null); setFolderView(null); setSelected(id); }}>Open unified trail</Btn>
-                    </div>
-                  </>
-                );
-              }
-              if (result && !result.ok) {
-                return (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <Ico n="circle-x" s={18} c="var(--tb-danger-text)" />
-                      <h2 className="tb-h2" style={{ fontSize: 17, margin: 0 }}>Couldn’t migrate</h2>
-                    </div>
-                    <div className="tb-sub" style={{ fontSize: 12.5, marginBottom: 16 }}>{result.error}</div>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                      <Btn onClick={() => setMigrate(null)}>Close</Btn>
-                    </div>
-                  </>
-                );
-              }
-              // 'confirm' or 'busy'
-              const busy = migrate === 'busy';
-              return (
-                <>
-                  <h2 className="tb-h2" style={{ fontSize: 17, margin: '0 0 4px' }}>Migrate to unified</h2>
-                  <div className="tb-sub" style={{ fontSize: 12.5, marginBottom: 16 }}>
-                    Combine the <b>{fileCount}</b> file{fileCount === 1 ? '' : 's'} in <span className="tb-mono">{fvName}</span> into a single unified <span className="tb-mono">{fvName}.trail.yaml</span> — one file, every platform’s recording inline. The per-platform files{fvBlaze ? ' and blaze.yaml' : ''} are deleted — recoverable via git only if they were committed; uncommitted recordings are lost.
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                    <Btn onClick={() => setMigrate(null)} disabled={busy}>Cancel</Btn>
-                    <Btn kind="primary" ico={busy ? 'loader-2' : 'layers'} spin={busy} disabled={busy} onClick={doMigrate}>{busy ? 'Migrating…' : 'Migrate to unified'}</Btn>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
       <Splitter onDown={startTreeDrag} />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         {trails.loading && (
@@ -522,9 +422,6 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 )}
                 right={(
                   <>
-                    {/* Fold this legacy per-platform bundle into a single unified .trail.yaml — the
-                        format trails are moving toward. Only for all-v1 bundles (see fvAllV1). */}
-                    {fvAllV1 && <Btn sm ico="layers" onClick={() => setMigrate('confirm')} title="Combine these per-platform files into one unified trail">Migrate to unified</Btn>}
                     <Btn sm ico="folder-symlink" onClick={() => TB.revealTrailFolder(fvFolderId)} title="Reveal this trail's folder in Finder" />
                     <Btn sm ico="trash-2" onClick={doDeleteFolder} title="Delete this trail's folder and every file in it" />
                     <button

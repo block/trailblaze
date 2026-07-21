@@ -20,7 +20,7 @@ When ref is provided, scrolls within that container (e.g., a sidebar or panel) b
 mouse to its center first. When ref is omitted, scrolls the full page.
 """,
 )
-class PlaywrightNativeScrollTool(
+data class PlaywrightNativeScrollTool(
   @param:LLMDescription("Direction to scroll. UP/DOWN for vertical, LEFT/RIGHT for horizontal.")
   val direction: ScrollDirection = ScrollDirection.DOWN,
   @param:LLMDescription("Number of pixels to scroll. Defaults to 500.")

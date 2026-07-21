@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Open a known contact by name"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [smoke, contact]
-- prompts:
-    - step: Open the "John Appleseed" contact in Contacts and verify its detail screen renders the name "John Appleseed".

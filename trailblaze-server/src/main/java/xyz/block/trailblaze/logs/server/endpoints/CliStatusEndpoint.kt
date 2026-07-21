@@ -49,6 +49,20 @@ data class CliStatusResponse(
    * exist.
    */
   val workspaceContentHash: String? = null,
+  /**
+   * Number of trail runs currently pending or executing on this daemon (submitted via
+   * `/cli/run-async`). Filled in server-side from [CliRunManager] — the desktop app's
+   * status provider doesn't set it. External tooling (e.g. the dev launcher's stale-JAR
+   * restart in `scripts/dev-jar-cache.sh`) checks this before stopping the daemon so a
+   * rebuild in one checkout can't silently kill a run in flight from another.
+   */
+  val activeRuns: Int = 0,
+  /**
+   * One human-readable line per in-flight run (trail name, state, age, session, latest
+   * progress), matching [activeRuns]. Lets the surfaces that decline to stop a busy daemon
+   * tell the developer exactly who is using it.
+   */
+  val activeRunSummaries: List<String> = emptyList(),
 )
 
 /**

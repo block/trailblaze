@@ -50,6 +50,17 @@ data class TrailblazeServerState(
      * save-back is restored.
      */
     val unifiedRecordingsEnabled: Boolean? = null,
+    /**
+     * Experimental: serve Android host-driven agent-loop screenshots from the device's live
+     * screenrecord stream instead of a per-capture on-device screenshot. Tri-state like
+     * [unifiedRecordingsEnabled]: `null` (default) means off; an explicit `true`/`false` from
+     * `trailblaze config android-stream-screenshots <value>` is a non-default value, so it
+     * survives serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what
+     * the user said even if the framework default ever changes. The
+     * `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` / `_AB` env vars still take precedence (env is the
+     * one-off / CI / A/B-validation override; this is the discoverable persistent toggle).
+     */
+    val androidStreamScreenshotsEnabled: Boolean? = null,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """

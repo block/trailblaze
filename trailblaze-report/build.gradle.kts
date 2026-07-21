@@ -131,7 +131,9 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   dependsOn(transpileRunReportCore)
   // The bun test co-located with run-report-core.ts (run-report-core.test.ts) lives under
   // resources so it can `require("./run-report-core.ts")`; keep it out of the packaged JAR.
+  // Same for the cross-language parity fixture the tests share with the Kotlin suite.
   exclude("**/*.test.ts")
+  exclude("**/session-events-parity-fixtures.json")
   // TypeScript source + ambient types + tsconfig for the run-report renderer: the packaged
   // artifact is the transpiled run-report-core.js from `transpileRunReportCore` above (the bun
   // driver run-report-cli.ts IS packaged — bun executes TS natively).

@@ -325,6 +325,7 @@ kotlin {
       api(libs.ktor.client.core)
 
       api(project(":trailblaze-models"))
+      implementation(project(":trailblaze-ondevice-rpc-proto"))
       implementation(project(":trailblaze-tracing"))
 
       implementation(libs.exp4j)
@@ -333,6 +334,7 @@ kotlin {
       implementation(libs.kotlinx.serialization.core)
       implementation(libs.ktor.client.logging)
       implementation(libs.ktor.client.okhttp)
+      implementation(libs.ktor.client.websockets)
       implementation(libs.ktor.http)
       implementation(libs.ktor.utils)
       implementation(libs.kotlin.reflect)

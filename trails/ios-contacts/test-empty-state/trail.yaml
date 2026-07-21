@@ -1,0 +1,26 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - smoke
+  title: 'Contacts (iOS): Contacts navbar visible on cold start'
+
+trail:
+  - step: "Launch the iOS Contacts app from a cold start. Verify the navbar shows \"Contacts\" and the list root surface is visible. Do not tap anything."
+    recording:
+      ios-iphone:
+        - launchApp:
+            appId: com.apple.MobileAddressBook
+            launchMode: FORCE_RESTART
+            reasoning: Launch Contacts from a cold start by its bundle identifier so the trail begins from the contacts list root regardless of prior state. Uses only framework primitives (no scripted tool) so this trail can join the pure-replay smoke set.
+        - assertVisibleBySelector:
+            reason: Verify the contacts list root rendered after the cold start by asserting the "Contacts" navbar title is visible. No row is tapped, matching the objective.
+            nodeSelector:
+              iosMaestro:
+                textRegex: Contacts
+        - assertVisibleBySelector:
+            reason: Also assert the list-only "Add" button is visible to confirm this is the contacts list root specifically (the text "Contacts" alone is not list-root-unique — a contact detail screen's back button also carries the label "Contacts"). The list root shows "Add"; a detail screen shows "Edit" there instead. assertVisibleBySelector is a framework primitive, so this keeps the trail scripted-tool-free for the pure-replay smoke set.
+            nodeSelector:
+              iosMaestro:
+                accessibilityTextRegex: Add

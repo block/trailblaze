@@ -16,7 +16,7 @@ ended up after redirects (e.g. detecting a bounce to `/login` when replaying an 
 session).
 """,
 )
-class PlaywrightNativeCurrentUrlTool : PlaywrightExecutableTool {
+object PlaywrightNativeCurrentUrlTool : PlaywrightExecutableTool {
 
   override suspend fun executeWithPlaywright(
     page: Page,

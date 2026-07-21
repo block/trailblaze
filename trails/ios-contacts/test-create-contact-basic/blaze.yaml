@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Create a contact with first + last name"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [crud]
-- prompts:
-    - step: Open the iOS Contacts app and create a new contact with first name "Trailblaze" and last name "Demo". Save and verify the new contact appears in the list.

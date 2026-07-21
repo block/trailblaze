@@ -1,0 +1,29 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - contact
+  title: 'Contacts (iOS): Verify a contact renders with no field requirements'
+
+trail:
+  - step: "Open the \"John Appleseed\" contact in Contacts."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - tapOnElementBySelector:
+            reason: The 'John Appleseed' contact is now visible in the contact list. Tapping it will open the desired contact as required by the objective.
+            nodeSelector:
+              iosMaestro:
+                textRegex: John Appleseed
+              index: 1
+
+  - step: |
+      Call the `contacts_ios_verifyContactStructure` tool with
+      name="John Appleseed", requireFields=[].
+    recording:
+      ios-iphone:
+        - contacts_ios_verifyContactStructure:
+            name: John Appleseed
+            requireFields: []

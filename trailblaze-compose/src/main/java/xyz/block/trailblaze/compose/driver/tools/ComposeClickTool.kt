@@ -17,7 +17,7 @@ Identify the element using its element ID from the view hierarchy (e.g., 'e5'),
 or by text content.
 """,
 )
-class ComposeClickTool(
+data class ComposeClickTool(
   @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e5'. Preferred method.")
   val elementId: String? = null,
   @param:LLMDescription("Accessibility identifier of the element to click.")

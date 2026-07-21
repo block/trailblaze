@@ -18,7 +18,7 @@ Verify that specific text is visible on the current page.
 This is a test assertion — it will fail the test if the text is not found.
 """,
 )
-class PlaywrightNativeVerifyTextVisibleTool(
+data class PlaywrightNativeVerifyTextVisibleTool(
   @param:LLMDescription("The text content to verify is visible on the page.")
   val text: String,
   override val reasoning: String? = null,

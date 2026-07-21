@@ -1,0 +1,13 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: Browser back button returns to the previous article'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Albert_Einstein
+  - step: Verify the heading "Albert Einstein" is visible.
+  - step: Click any hyperlink in the article body that leads to another Wikipedia article (for example a link like "physicist", "Germany", or "Theory of relativity").
+  - step: Verify the page has changed — the new page has a different first heading from "Albert Einstein".
+  - step: Navigate back to the previous page using the browser back action.
+  - step: Verify the heading "Albert Einstein" is visible again.

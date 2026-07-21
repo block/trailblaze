@@ -1,8 +1,0 @@
-- config:
-    title: "Wikipedia: Article contains at least one image"
-    platform: web
-    driver: PLAYWRIGHT_NATIVE
-- prompts:
-    - step: Navigate to https://en.wikipedia.org/wiki/Mount_Everest
-    - step: Verify the heading "Mount Everest" is visible.
-    - step: Verify that at least one image element is visible in the article body (Wikipedia articles about geographic features always include thumbnails in the infobox).

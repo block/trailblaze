@@ -17,7 +17,7 @@ Verify that specific text is visible on screen.
 This is a test assertion — it will fail if the text is not found.
 """,
 )
-class ComposeVerifyTextVisibleTool(
+data class ComposeVerifyTextVisibleTool(
   @param:LLMDescription("The text content to verify is visible.")
   val text: String,
 ) : ComposeExecutableTool {

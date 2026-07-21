@@ -84,11 +84,17 @@ class IosVideoCapture : CaptureStream {
    * Attempts to stop any stale recording on this simulator from a previous session. This can happen
    * when a previous recording process was killed without clean SIGINT shutdown (e.g.,
    * destroyForcibly on cancellation), leaving the simulator's internal recording lock held.
+   *
+   * Only Trailblaze's own recorders are targeted: the pattern requires the session-dir output
+   * filename (`.../video.mp4`), so a deliberate recording started by someone else (e.g. a CI
+   * shard's `simctl io ... recordVideo logs/simulator_recording.mp4`) is left alone. When such a
+   * recorder holds the device, our own start fails fast with "Host recording is already in
+   * progress" and the session falls back to the screenshot timeline instead of killing theirs.
    */
   private fun stopStaleRecording(deviceId: String) {
     try {
       val pgrep =
-        ProcessBuilder("pgrep", "-f", "simctl io $deviceId recordVideo")
+        ProcessBuilder("pgrep", "-f", "simctl io $deviceId recordVideo .*/video\\.mp4")
           .redirectErrorStream(true)
           .start()
       val pids = pgrep.inputStream.bufferedReader().readText().trim()

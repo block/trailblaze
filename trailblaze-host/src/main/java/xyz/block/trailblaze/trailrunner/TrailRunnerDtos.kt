@@ -216,6 +216,8 @@ data class ExternalAgentRunDto(
    * the demonstration's view instead.
    */
   val demoRunId: String? = null,
+  /** Present only for companion sessions (an external agent CLI attached from outside). */
+  val companion: CompanionStateDto? = null,
   /**
    * Permission requests from the spawned CLI that are waiting on a human decision. The web renders
    * one approve/deny card per entry; the events stream carries the transcript record separately.
@@ -471,7 +473,7 @@ data class AnalyticsResponse(val available: Boolean, val events: List<AnalyticsE
 
 // ─── Event-stream capture ─────────────────────────────────────────────────────
 // One run can capture pluggable event streams into NDJSON files under
-// <sessionDir>/events/<name>.<style>.ndjson (see the generic xyz.block.trailblaze.events
+// <sessionDir>/events/<name>.ndjson (see the generic xyz.block.trailblaze.events
 // format + SessionEventsReader). A downstream event tap is one such producer. The run detail
 // interlaces those events into the timeline (by timeMs), filterable by stream via the
 // timeline's filter. The data is sourced producer-agnostically from the events/ folder.
@@ -485,9 +487,6 @@ data class SessionEventStreamDto(
   // Short, human-readable stream name derived from the id (e.g. "network" from
   // "com.example.network") — used as the timeline filter label.
   val label: String,
-  // The declared rendering style for this stream (the filename `<style>` segment), e.g. "json",
-  // "network", "analytics". Carried so the timeline can format the stream by its declared style.
-  val style: String = "json",
   val count: Int,
   // True when the per-stream read cap was hit and [events] is a prefix of the file rather than the
   // whole thing. A single stream file can be tens of MB (large payloads); the endpoint bounds how
@@ -578,22 +577,6 @@ data class TrailIndexEntry(
   val configId: String? = null,
   /** Whether the file carries any recorded (deterministically replayable) steps. */
   val hasRecordedSteps: Boolean = false,
-)
-
-/** Result of migrating a legacy per-platform bundle folder to a single unified `.trail.yaml`. */
-@Serializable
-data class MigrateFolderResponse(
-  val success: Boolean,
-  /** Name of the unified file written into the folder, on success. */
-  val outputName: String? = null,
-  val steps: Int = 0,
-  val driftCount: Int = 0,
-  /** NL / memory drift warnings surfaced by the migrator (also leading comments in the file). */
-  val drift: List<String> = emptyList(),
-  /** Per-platform input files (+ `blaze.yaml`) that were deleted. */
-  val removed: List<String> = emptyList(),
-  /** Human-readable reason on failure (e.g. the migrator refused a trailhead / top-level tools). */
-  val error: String? = null,
 )
 
 @Serializable
@@ -990,8 +973,9 @@ data class TrailmapEntry(
   val trailheads: List<TrailmapComponent> = emptyList(),
   val systemPrompts: List<TrailmapComponent> = emptyList(),
   // Platform keys of the resolved target block (`android`/`ios`/`web`/`compose`), sorted; empty
-  // for library trailmaps. Lets the Target picker decide which declared-but-undetected targets
-  // can ever surface on a connected device (web-only ones can't — apps aren't "installed" there).
+  // for library trailmaps. Lets the Target picker keep declared-but-undetected mobile targets
+  // visible and attach browser devices to every target that supports web (browsers have no
+  // installed-app inventory to establish that relationship).
   val platforms: List<String> = emptyList(),
   // False when the workspace `trailblaze.yaml` carries a non-empty `targets:` allow-list that
   // does NOT include this id — the runtime will never load such a target, so the picker must not
@@ -1133,10 +1117,25 @@ data class ProposeRequest(
   // When false (default), the steps are drafted from the prompt alone.
   val ground: Boolean = false,
   val trailblazeDeviceId: TrailblazeDeviceId? = null,
+  // Companion-folder context ("myapp/tos" rel path, or the "0/…" bundle id): lets the shared-brain
+  // defer target the right companion session when several are attached. Optional and additive.
+  val folder: String? = null,
+  val bundleId: String? = null,
 )
 
 @Serializable
-data class ProposeResponse(val steps: List<ProposedStep> = emptyList(), val error: String? = null)
+data class ProposeResponse(
+  val steps: List<ProposedStep> = emptyList(),
+  val error: String? = null,
+  // Shared-brain outcome: the ask was handed to the attached agent session instead of an LLM.
+  // The UI waits on the companion request (requestId) rather than on steps in this response.
+  val deferred: Boolean = false,
+  val requestId: String? = null,
+  val runId: String? = null,
+  // A companion matched but its agent is not listening (no live listen stream) - show the
+  // degraded state instead of a spinner that would never clear.
+  val degraded: Boolean = false,
+)
 
 // NOTE: ReviewSuggestionDto moved to :trailblaze-host (OSS) as part of the TrailRunnerExtension seam
 // (same package — no import needed). See TrailRunnerExtensionDtos.kt.
@@ -1145,6 +1144,12 @@ data class ProposeResponse(val steps: List<ProposedStep> = emptyList(), val erro
 data class ReviewTrailResponse(
   val suggestions: List<ReviewSuggestionDto> = emptyList(),
   val error: String? = null,
+  // Shared-brain outcome, mirroring [ProposeResponse]: deferred means the attached agent got the
+  // ask and will edit the trail files directly - no suggestions come back on this path.
+  val deferred: Boolean = false,
+  val requestId: String? = null,
+  val runId: String? = null,
+  val degraded: Boolean = false,
 )
 
 // A trail bundle: a library folder holding a `blaze.yaml` spec plus zero or more recorded

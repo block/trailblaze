@@ -277,7 +277,7 @@ function useSessionAnalytics(sessionId, isRunning) {
   return hook;
 }
 
-// Per-stream event capture for a run (logs/<id>/events/<name>.<style>.ndjson). Same
+// Per-stream event capture for a run (logs/<id>/events/<name>.ndjson). Same
 // poll-while-running shape as analytics so a live run's events stream into the timeline as
 // they land. Any downstream event tap that writes this generic events format shows up here.
 function useSessionEvents(sessionId, isRunning) {

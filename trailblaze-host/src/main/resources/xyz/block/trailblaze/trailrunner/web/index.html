@@ -52,6 +52,13 @@
      legacy per-platform folders into one shape. Plain JS (no JSX/bundler), unit-tested in
      app/screens/trail-model.test.ts; loaded before the babel screens so trail-detail.tsx sees it. -->
 <script src="./app/screens/trail-model.js"></script>
+<!-- Pure target/device grouping model. Browser devices join declared web targets here rather than
+     being flattened into an anonymous Web bucket by the React screen. -->
+<script src="./app/screens/target-picker-model.js"></script>
+<!-- Live device mirror transport (H.264/CDP live stream with layered JPEG/poll fallback), shared by
+     the recorder + companion mirror. Plain JS with a sibling live-device-stream.test.ts; loaded
+     before the babel screens so they see window.TbLiveDeviceStream. -->
+<script src="./app/live-device-stream.js"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/ui.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/data-core.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/data-hooks.tsx"></script>
@@ -74,6 +81,7 @@
 <script type="text/babel" data-presets="react,typescript,env" src="./app/screens/llm-panel.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/screens/demonstrate.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/screens/external-agents.tsx"></script>
+<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/companion.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/screens/agent-setup.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/share-export.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trace-viewer.tsx"></script>

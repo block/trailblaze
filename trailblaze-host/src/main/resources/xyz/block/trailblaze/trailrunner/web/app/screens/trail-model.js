@@ -12,11 +12,6 @@
 // Tool       { name, body }   // body = the tool's args, whatever its YAML value (object, scalar,
 //                             //        list). `null`/empty-object args normalize to `{}`.
 //
-// Migrating a LEGACY per-platform folder to this single-file format is done server-side by the Kotlin
-// UnifiedTrailMigrator (exposed via /api/folder/migrate-unified) — it handles NL-drift, per-classifier
-// drivers/skip, and family collapse far more faithfully than a browser transform could, so the
-// frontend just calls that route rather than re-deriving the model here.
-//
 // Dual-exported like app/editor/lsp-convert.js: `window.TM` for the classic-script browser load,
 // `module.exports` for bun test. No external dependencies.
 (function () {

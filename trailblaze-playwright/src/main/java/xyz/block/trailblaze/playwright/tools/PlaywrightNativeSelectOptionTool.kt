@@ -18,7 +18,7 @@ Select one or more options from a <select> dropdown element identified by its el
 Provide the option values or labels to select.
 """,
 )
-class PlaywrightNativeSelectOptionTool(
+data class PlaywrightNativeSelectOptionTool(
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'combobox \"Category\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-select').",

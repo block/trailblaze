@@ -1,0 +1,13 @@
+# Goose desktop trailhead — bootstrap into the Goose home / chat screen from any state.
+#
+# The framework launches the Goose Electron app (see `target.electron:` in trailmap.yaml) and
+# connects via CDP before this runs; `playwright_desktop_launchGoose` then confirms the connection
+# is live and the app is ready for interaction. Use as a trail's step-0 trailhead so a test starts
+# from a known launched state regardless of where the agent currently is.
+id: goose_launchDesktop
+description: Launch the Goose desktop app (Electron) and confirm it is connected and ready on the home / chat screen.
+parameters: []
+trailhead:
+  to: goose/home
+tools:
+  - playwright_desktop_launchGoose: {}

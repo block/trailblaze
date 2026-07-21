@@ -395,20 +395,25 @@ object AndroidHostAdbUtils {
    * `adb forward tcp:$localPort localabstract:$socketName`. dadb's [Dadb.tcpForward] only supports
    * TCP-to-TCP, so this routes through the `adb` binary. The forward is removable via
    * [removePortForward] which falls back to the binary for forwards it didn't track.
+   *
+   * @throws IOException if the `adb forward` command times out or exits non-zero (e.g. the adb
+   *   binary is missing or the local port cannot be bound). A silent failure here would surface
+   *   later as an unrelated connection-refused error on the local port.
    */
   fun adbPortForwardLocalAbstract(
     deviceId: TrailblazeDeviceId,
     localPort: Int,
     socketName: String,
   ) {
-    runCatching {
-      runProcessBuilderWithTimeout(
-        createAdbCommandProcessBuilder(
-          deviceId = deviceId,
-          args = listOf("forward", "tcp:$localPort", "localabstract:$socketName"),
-        ),
-        timeoutMs = DEFAULT_SHORT_CALL_TIMEOUT_MS,
-      )
+    val installed = runProcessBuilderWithTimeout(
+      createAdbCommandProcessBuilder(
+        deviceId = deviceId,
+        args = listOf("forward", "tcp:$localPort", "localabstract:$socketName"),
+      ),
+      timeoutMs = DEFAULT_SHORT_CALL_TIMEOUT_MS,
+    )
+    if (!installed) {
+      throw IOException("adb forward tcp:$localPort localabstract:$socketName failed or timed out")
     }
   }
 

@@ -333,7 +333,11 @@ open class BasePlaywrightNativeTest(
     // up the new dir (or drops recording on the next trail if capture is disabled).
     (browserManager as? PlaywrightBrowserManager)?.syncRecordingWithRegistry()
 
-    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+    // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
+    // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch, e.g. `trailblaze tool`) additionally
+    // decodes to one ToolTrailItem. Required because host-runner single-tool dispatch now sends the
+    // bare envelope instead of the legacy `- tools:` list shape.
+    val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
       yaml,
       deviceClassifiers = trailblazeDeviceInfo.classifiers,
     )

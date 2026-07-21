@@ -10,7 +10,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
-import xyz.block.trailblaze.events.EventStyle
 import xyz.block.trailblaze.events.FileEventSink
 import xyz.block.trailblaze.events.SessionEvents
 
@@ -23,18 +22,17 @@ class SessionEventsReaderTest {
     buildJsonObject { put(key, JsonPrimitive(value)) }
 
   @Test
-  fun `reads envelope streams and derives name and style from the file name`() {
+  fun `reads envelope streams and derives the name from the file name`() {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->
-      sink.append("analytics", EventStyle.ANALYTICS, 200L, obj("name", "scroll"))
-      sink.append("analytics", EventStyle.ANALYTICS, 100L, obj("name", "tap"))
+      sink.append("analytics", 200L, obj("name", "scroll"))
+      sink.append("analytics", 100L, obj("name", "tap"))
     }
 
     val streams = SessionEventsReader().read(dir)
     assertEquals(1, streams.size)
     val s = streams.first()
     assertEquals("analytics", s.name)
-    assertEquals("analytics", s.style)
     assertEquals(2, s.count)
     assertEquals(listOf(200L, 100L), s.events.map { it.timeMs }, "lines kept in arrival order")
     assertEquals("scroll", (s.events.first().data as JsonObject)["name"]?.jsonPrimitive?.content)
@@ -45,11 +43,10 @@ class SessionEventsReaderTest {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->
       // A NetworkEvent-shaped line: no envelope, carries timestampMs.
-      sink.appendRaw("network", EventStyle.NETWORK, """{"id":"r1","timestampMs":1234,"phase":"REQUEST_START"}""")
+      sink.appendRaw("network", """{"id":"r1","timestampMs":1234,"phase":"REQUEST_START"}""")
     }
 
     val s = SessionEventsReader().read(dir).single()
-    assertEquals("network", s.style)
     assertEquals(1234L, s.events.first().timeMs)
     assertEquals("r1", (s.events.first().data as JsonObject)["id"]?.jsonPrimitive?.content)
   }
@@ -62,7 +59,6 @@ class SessionEventsReaderTest {
       // be unwrapped to just `data` — id/phase/timestampMs must survive.
       sink.appendRaw(
         "rich",
-        EventStyle.NETWORK,
         """{"id":"r1","timestampMs":99,"phase":"DONE","data":{"k":"v"}}""",
       )
     }
@@ -83,7 +79,7 @@ class SessionEventsReaderTest {
     // scanned-byte cap, so the reader stops instead of scanning the whole file every poll.
     val sb = StringBuilder("""{"timeMs":1,"data":{"k":"v"}}""").append('\n')
     repeat(500) { sb.append("garbage-not-json-").append(it).append('\n') }
-    File(eventsDir, SessionEvents.fileName("noisy", EventStyle.JSON)).writeText(sb.toString())
+    File(eventsDir, SessionEvents.fileName("noisy")).writeText(sb.toString())
 
     val s = SessionEventsReader(maxBytesPerStream = 200).read(dir).single()
     assertEquals(1, s.count, "only the leading valid event is kept")
@@ -98,7 +94,7 @@ class SessionEventsReaderTest {
     // decoded/retained (it can't OOM the poll); the prior valid event is kept and truncated is set.
     val huge = "x".repeat(5_000)
     val text = """{"timeMs":1,"data":{"k":"v"}}""" + "\n" + """{"timeMs":2,"data":{"big":"$huge"}}""" + "\n"
-    File(eventsDir, SessionEvents.fileName("big", EventStyle.JSON)).writeText(text)
+    File(eventsDir, SessionEvents.fileName("big")).writeText(text)
 
     val s = SessionEventsReader(maxBytesPerStream = 100).read(dir).single()
     assertEquals(1, s.count, "the over-cap line is dropped; only the small valid event survives")
@@ -109,7 +105,7 @@ class SessionEventsReaderTest {
   fun `caps the number of streams read per call`() {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->
-      repeat(5) { i -> sink.append("stream$i", EventStyle.JSON, i.toLong(), obj("k", "v")) }
+      repeat(5) { i -> sink.append("stream$i", i.toLong(), obj("k", "v")) }
     }
 
     val streams = SessionEventsReader(maxStreams = 2).read(dir)
@@ -123,8 +119,8 @@ class SessionEventsReaderTest {
     // Junk files that sort BEFORE the valid streams. They must be filtered out before maxStreams,
     // so the valid streams are not starved.
     repeat(5) { i -> File(eventsDir, "00$i-junk.txt").writeText("not an event file") }
-    File(eventsDir, SessionEvents.fileName("aaa", EventStyle.JSON)).writeText("""{"timeMs":1,"data":{}}""" + "\n")
-    File(eventsDir, SessionEvents.fileName("bbb", EventStyle.JSON)).writeText("""{"timeMs":2,"data":{}}""" + "\n")
+    File(eventsDir, SessionEvents.fileName("aaa")).writeText("""{"timeMs":1,"data":{}}""" + "\n")
+    File(eventsDir, SessionEvents.fileName("bbb")).writeText("""{"timeMs":2,"data":{}}""" + "\n")
 
     val streams = SessionEventsReader(maxStreams = 2).read(dir)
     assertEquals(setOf("aaa", "bbb"), streams.map { it.name }.toSet(), "junk must not crowd out valid streams")
@@ -135,7 +131,7 @@ class SessionEventsReaderTest {
     val dir = tempDir()
     val eventsDir = File(dir, SessionEvents.DIR_NAME).apply { mkdirs() }
     // First (and only) line exceeds the byte cap -> overflow -> stream hidden (empty -> null).
-    File(eventsDir, SessionEvents.fileName("huge", EventStyle.JSON))
+    File(eventsDir, SessionEvents.fileName("huge"))
       .writeText("""{"timeMs":1,"data":{"x":"${"y".repeat(5_000)}"}}""" + "\n")
 
     assertTrue(SessionEventsReader(maxBytesPerStream = 100).read(dir).isEmpty())
@@ -148,7 +144,7 @@ class SessionEventsReaderTest {
     // A line of multibyte chars: few characters but many UTF-8 bytes. It must trip the BYTE cap
     // (a char-based budget would have let it through).
     val euros = "€".repeat(20) // 20 chars, 60 UTF-8 bytes
-    File(eventsDir, SessionEvents.fileName("multi", EventStyle.JSON))
+    File(eventsDir, SessionEvents.fileName("multi"))
       .writeText("""{"timeMs":1,"data":{"s":"$euros"}}""" + "\n")
 
     assertTrue(SessionEventsReader(maxBytesPerStream = 30).read(dir).isEmpty(), "60-byte line must exceed a 30-byte cap")
@@ -158,7 +154,7 @@ class SessionEventsReaderTest {
   fun `caps a huge stream and flags truncated`() {
     val dir = tempDir()
     FileEventSink(dir).use { sink ->
-      repeat(10) { i -> sink.append("big", EventStyle.JSON, i.toLong(), obj("v", "x")) }
+      repeat(10) { i -> sink.append("big", i.toLong(), obj("v", "x")) }
     }
 
     val s = SessionEventsReader(maxEventsPerStream = 3).read(dir).single()
@@ -172,8 +168,17 @@ class SessionEventsReaderTest {
     assertTrue(SessionEventsReader().read(dir).isEmpty(), "no events dir -> empty")
     val eventsDir = File(dir, SessionEvents.DIR_NAME).apply { mkdirs() }
     File(eventsDir, "notes.txt").writeText("hello")
-    File(eventsDir, "network.ndjson").writeText("""{"timeMs":1}""") // missing style segment
     assertTrue(SessionEventsReader().read(dir).isEmpty())
-    assertNull(SessionEvents.parseFileName("network.ndjson"))
+    assertNull(SessionEvents.parseFileName("notes.txt"))
+  }
+
+  @Test
+  fun `legacy styled file names resolve to the same stream name`() {
+    val dir = tempDir()
+    val eventsDir = File(dir, SessionEvents.DIR_NAME).apply { mkdirs() }
+    File(eventsDir, "com.x.plugin.network.json.ndjson").writeText("""{"timeMs":1,"data":{}}""" + "\n")
+
+    val s = SessionEventsReader().read(dir).single()
+    assertEquals("com.x.plugin.network", s.name)
   }
 }

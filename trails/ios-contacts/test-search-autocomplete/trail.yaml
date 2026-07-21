@@ -1,0 +1,18 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - search
+  - flaky
+  # The inline suggestion list races simulator boot and per-keystroke debounce.
+  # Without a deterministic "suggestions are now visible" signal we get
+  # intermittent false negatives on slower simulators. Skipped until we either
+  # (a) extend `contacts_ios_searchContacts` to expose an inline-suggestions
+  # probe, or (b) settle on a structural anchor we trust.
+  skip:
+    ios-iphone: "Suggestion popup races simulator boot — remove `skip:` once the inline-suggestions probe lands."
+  title: 'Contacts (iOS): Autocomplete suggestions visible while typing'
+
+trail:
+  - step: Open Contacts and start typing "Joh" into the search field without tapping a row. Verify an inline suggestion containing "John Appleseed" appears.

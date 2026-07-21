@@ -1,0 +1,17 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - article
+  title: 'Wikipedia: Article structure verification (heading + body only)'
+
+trail:
+  # Exercises the `requireReferences: false` early-return branch of
+  # `wikipedia_web_verifyArticleStructure`. Pair with
+  # `test-article-references-section`, which covers `requireReferences: true`.
+  - step: |
+      Open the Wikipedia article for "Wikipedia" and verify it's a
+      well-formed article (first heading and body content visible). Do
+      NOT scroll down or check for a References section — only confirm
+      the article rendered.

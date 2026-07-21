@@ -4,6 +4,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
@@ -31,6 +33,7 @@ import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogTracePostEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.LogWebSocketEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GenerateReportEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
@@ -40,9 +43,12 @@ import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.ResolvedProviderAuth
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.transport.AndroidWireTransport
+import xyz.block.trailblaze.transport.AndroidWireTransportMode
 import xyz.block.trailblaze.util.Console
 import io.ktor.server.application.ApplicationStopped
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Callbacks for CLI endpoints. These are provided by the desktop app.
@@ -82,6 +88,8 @@ object ServerEndpoints {
   fun Application.logsServerKtorEndpoints(
     logsRepo: LogsRepo,
     homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
+    /** Trail Runner route exposed by this server instance, or null when it is not registered. */
+    trailRunnerPath: String? = null,
     installContentNegotiation: Boolean = true,
     cliCallbacks: CliEndpointCallbacks? = null,
     resolvedAuths: Map<String, ResolvedProviderAuth>? = null,
@@ -98,12 +106,36 @@ object ServerEndpoints {
      */
     additionalRouteRegistration: (Routing.() -> Unit)? = null,
   ) {
+    logsServerKtorEndpointsWithWireTransport(
+      logsRepo = logsRepo,
+      homeCallbackHandler = homeCallbackHandler,
+      trailRunnerPath = trailRunnerPath,
+      installContentNegotiation = installContentNegotiation,
+      cliCallbacks = cliCallbacks,
+      resolvedAuths = resolvedAuths,
+      androidWireTransportMode = AndroidWireTransport.mode,
+      additionalRouteRegistration = additionalRouteRegistration,
+    )
+  }
+
+  @OptIn(ExperimentalEncodingApi::class)
+  internal fun Application.logsServerKtorEndpointsWithWireTransport(
+    logsRepo: LogsRepo,
+    homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)?,
+    trailRunnerPath: String?,
+    installContentNegotiation: Boolean,
+    cliCallbacks: CliEndpointCallbacks?,
+    resolvedAuths: Map<String, ResolvedProviderAuth>?,
+    androidWireTransportMode: AndroidWireTransportMode,
+    additionalRouteRegistration: (Routing.() -> Unit)?,
+  ) {
     val auths = resolvedAuths ?: LlmAuthResolver.resolveAll(LlmConfigLoader.load())
     if (installContentNegotiation) {
       install(ContentNegotiation) {
         json(TrailblazeJsonInstance)
       }
     }
+    install(WebSockets) { pingPeriod = 15.seconds }
     install(CORS) {
       anyHost()
       anyMethod()
@@ -111,13 +143,21 @@ object ServerEndpoints {
       allowHeader("Authorization")
     }
     routing {
-      HomeEndpoint.register(routing = this, logsRepo = logsRepo, homeCallbackHandler = homeCallbackHandler)
+      HomeEndpoint.register(
+        routing = this,
+        logsRepo = logsRepo,
+        homeCallbackHandler = homeCallbackHandler,
+        trailRunnerPath = trailRunnerPath,
+      )
       PingEndpoint.register(this)
       GetEndpointSessionDetail.register(this, logsRepo)
       AgentLogEndpoint.register(this, logsRepo)
       DeleteLogsEndpoint.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
       LogTracePostEndpoint.register(this, logsRepo)
+      if (androidWireTransportMode != AndroidWireTransportMode.JSON) {
+        LogWebSocketEndpoint.register(this, logsRepo)
+      }
       ReverseProxyEndpoint.register(this, logsRepo, auths)
       GenerateReportEndpoint.register(this, logsRepo)
       StoryboardEndpoint.register(this, logsRepo)
@@ -132,9 +172,19 @@ object ServerEndpoints {
           runManager.close()
         }
         CliRunAsyncEndpoint.register(this, runManager)
-        CliShutdownEndpoint.register(this, callbacks.onShutdownRequest)
+        CliShutdownEndpoint.register(this, callbacks.onShutdownRequest, runManager::activeRunSummaries)
         CliShowWindowEndpoint.register(this, callbacks.onShowWindowRequest)
-        CliStatusEndpoint.register(this, callbacks.statusProvider)
+        // activeRuns lives on the CliRunManager created here, so it's stamped onto the
+        // status response server-side rather than by each app's statusProvider. Derive the
+        // count from the same summaries snapshot so the two fields can't disagree if a run
+        // starts/finishes between two separate reads.
+        CliStatusEndpoint.register(this) {
+          val summaries = runManager.activeRunSummaries()
+          callbacks.statusProvider().copy(
+            activeRuns = summaries.size,
+            activeRunSummaries = summaries,
+          )
+        }
         callbacks.onCliExecRequest?.let { CliExecEndpoint.register(this, it) }
       }
 

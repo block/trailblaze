@@ -8,7 +8,10 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.model.SessionId
+import java.io.File
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedYaml
@@ -27,9 +30,43 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
 internal fun Route.reviewRoutes(deps: TrailRunnerDeps) {
   post("$PATH_BASE/api/session/{id}/review") {
     val id = call.parameters["id"]?.trim().orEmpty()
-    if (resolveSafeSessionDir(deps.logsRepo.logsDir, id) == null) {
+    val sessionDir = resolveSafeSessionDir(deps.logsRepo.logsDir, id)
+    if (sessionDir == null) {
       call.respond(HttpStatusCode.NotFound)
       return@post
+    }
+    // Shared brain: when the human's own agent CLI is attached to this trail's folder, hand the
+    // review to it instead of the wired LLM. The dispatch marker names which trail the session
+    // ran; sessions without one (raw-YAML replays) have no folder to key on and never defer.
+    val trailId = withContext(Dispatchers.IO) {
+      runCatching { File(sessionDir, ".trailrunner-trail-id").readText().trim().takeIf { it.isNotEmpty() } }.getOrNull()
+    }
+    val folderRel = companionRelFor(null, trailId)
+    if (folderRel != null) {
+      val payload = JsonObject(
+        buildMap {
+          put("folder", JsonPrimitive(folderRel))
+          put("sessionId", JsonPrimitive(id))
+          put("trailId", JsonPrimitive(trailId!!))
+        },
+      )
+      when (val deferred = ExternalAgentSupervisor.deferToCompanion("review-trail", folderRel, payload)) {
+        is DeferOutcome.Deferred -> {
+          call.respondText(
+            text = JSON.encodeToString(ReviewTrailResponse.serializer(), ReviewTrailResponse(deferred = true, requestId = deferred.requestId, runId = deferred.runId)),
+            contentType = ContentType.Application.Json,
+          )
+          return@post
+        }
+        is DeferOutcome.Degraded -> {
+          call.respondText(
+            text = JSON.encodeToString(ReviewTrailResponse.serializer(), ReviewTrailResponse(degraded = true, runId = deferred.runId, error = COMPANION_AGENT_NOT_LISTENING)),
+            contentType = ContentType.Application.Json,
+          )
+          return@post
+        }
+        DeferOutcome.None -> {}
+      }
     }
     val provider = deps.reviewTrailProvider
     if (provider == null) {

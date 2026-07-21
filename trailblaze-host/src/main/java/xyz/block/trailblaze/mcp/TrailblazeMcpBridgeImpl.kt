@@ -67,6 +67,7 @@ import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExe
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.host.OnDeviceRpcClientPool
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
@@ -85,7 +86,7 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -169,6 +170,20 @@ class TrailblazeMcpBridgeImpl(
    * so switching devices doesn't destroy existing connections.
    */
   private val persistentDevices = ConcurrentHashMap<String, TrailblazeConnectedDevice>()
+
+  /**
+   * One host-to-runner RPC client per Android device. The bridge lives in the daemon, so this
+   * keeps its WebSocket open across separate CLI `snapshot`, `tool`, and `step` requests instead
+   * of reconnecting once per command.
+   */
+  private val onDeviceRpcClients = OnDeviceRpcClientPool { deviceId ->
+    OnDeviceRpcClient(
+      trailblazeDeviceId = deviceId,
+      sendProgressMessage = {
+        Console.log("[MCP Bridge] [rpc ${deviceId.instanceId}] $it")
+      },
+    )
+  }
 
   /** Per-device locks to prevent two threads from simultaneously opening Maestro connections. */
   private val persistentDeviceLocks = ConcurrentHashMap<String, Any>()
@@ -507,6 +522,15 @@ class TrailblazeMcpBridgeImpl(
   }
 
   companion object {
+    internal fun androidDisconnectStatus(
+      deviceId: TrailblazeDeviceId,
+      connectedDevices: Collection<TrailblazeDeviceId>,
+    ): String? {
+      if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
+      if (deviceId in connectedDevices) return null
+      return "Android device '${deviceId.instanceId}' is no longer connected to adb. Reconnect it and retry."
+    }
+
     /**
      * Pure expansion helper: synthesizes the [TrailblazeToolExecutionContext] needed by
      * `DelegatingTrailblazeTool.toExecutableTrailblazeTools` and returns the flattened
@@ -703,6 +727,7 @@ class TrailblazeMcpBridgeImpl(
     // drop) is logged and swallowed; teardown must not block on a remote that's likely already
     // gone. Skipped on non-Android because the on-device server only ships in the test APK.
     drainOnDeviceSessionBestEffort(deviceId)
+    onDeviceRpcClients.evict(deviceId)
     // Synchronize on the same lock used by selectDevice() to prevent a race where
     // another thread creates a new connection between our remove and the lock cleanup.
     // We intentionally never remove from persistentDeviceLocks — they are tiny Any objects
@@ -735,10 +760,7 @@ class TrailblazeMcpBridgeImpl(
    */
   private fun drainOnDeviceSessionBestEffort(deviceId: TrailblazeDeviceId) {
     if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return
-    val rpcClient = OnDeviceRpcClient(
-      trailblazeDeviceId = deviceId,
-      sendProgressMessage = { Console.log("[MCP Bridge] [drain ${deviceId.instanceId}] $it") },
-    )
+    val rpcClient = onDeviceRpcClients.get(deviceId)
     try {
       runBlocking {
         when (val result = rpcClient.rpcCall(DrainSessionRequest(reason = "host_close_persistent_device"))) {
@@ -759,8 +781,6 @@ class TrailblazeMcpBridgeImpl(
         "[MCP Bridge] Drain RPC threw for ${deviceId.instanceId} " +
           "(${t::class.java.simpleName}: ${t.message}) — continuing teardown",
       )
-    } finally {
-      rpcClient.close()
     }
   }
 
@@ -840,19 +860,11 @@ class TrailblazeMcpBridgeImpl(
         // not merely that a PID exists).
         fun awaitReady(timeoutMs: Long) {
           runBlocking {
-            val rpcClient = OnDeviceRpcClient(
-              trailblazeDeviceId = trailblazeDeviceId,
-              sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+            onDeviceRpcClients.get(trailblazeDeviceId).waitForReady(
+              timeoutMs = timeoutMs,
+              requireAndroidAccessibilityService =
+                driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
             )
-            try {
-              rpcClient.waitForReady(
-                timeoutMs = timeoutMs,
-                requireAndroidAccessibilityService =
-                  driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-              )
-            } finally {
-              rpcClient.close()
-            }
           }
         }
 
@@ -1095,6 +1107,14 @@ class TrailblazeMcpBridgeImpl(
     val id = deviceId ?: getEffectiveDeviceId() ?: return null
     val key = id.instanceId
 
+    // Session-scoped INFO uses this status to decide whether an Android association is safe to
+    // reuse without full device discovery. Querying adb's host:devices service checks the exact
+    // serial in one local round-trip and does not touch CoreSimulator. Cached driver/agent maps can
+    // outlive a disconnected emulator, so they are not sufficient as a liveness signal.
+    if (id.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+      androidDisconnectStatus(id, AndroidHostAdbUtils.listConnectedAdbDevices())?.let { return it }
+    }
+
     // WEB: check Playwright browser initialization state separately from Maestro drivers.
     if (id.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
       // Ready — test is cached, nothing more to report.
@@ -1235,28 +1255,22 @@ class TrailblazeMcpBridgeImpl(
       return null
     }
 
-    val rpcClient = OnDeviceRpcClient(
-      trailblazeDeviceId = deviceId,
-      sendProgressMessage = { },
+    val request = GetScreenStateRequest(
+      includeScreenshot = includeScreenshot,
+      screenshotMaxDimension1 = screenshotScalingConfig.maxDimension1,
+      screenshotMaxDimension2 = screenshotScalingConfig.maxDimension2,
+      screenshotImageFormat = screenshotScalingConfig.imageFormat,
+      screenshotCompressionQuality = screenshotScalingConfig.compressionQuality,
+      includeAnnotatedScreenshot = includeAnnotatedScreenshot,
+      includeAllElements = includeAllElements,
     )
 
-    return try {
-      val request = GetScreenStateRequest(
-        includeScreenshot = includeScreenshot,
-        screenshotMaxDimension1 = screenshotScalingConfig.maxDimension1,
-        screenshotMaxDimension2 = screenshotScalingConfig.maxDimension2,
-        screenshotImageFormat = screenshotScalingConfig.imageFormat,
-        screenshotCompressionQuality = screenshotScalingConfig.compressionQuality,
-        includeAnnotatedScreenshot = includeAnnotatedScreenshot,
-        includeAllElements = includeAllElements,
-      )
-
-      when (val result: RpcResult<GetScreenStateResponse> = rpcClient.rpcCall(request)) {
-        is RpcResult.Success -> result.data
-        is RpcResult.Failure -> null
-      }
-    } finally {
-      rpcClient.close()
+    return when (
+      val result: RpcResult<GetScreenStateResponse> =
+        onDeviceRpcClients.get(deviceId).rpcCall(request)
+    ) {
+      is RpcResult.Success -> result.data
+      is RpcResult.Failure -> null
     }
   }
 
@@ -1323,11 +1337,10 @@ class TrailblazeMcpBridgeImpl(
     // Default implementation: convert tool to YAML and run via runYaml()
     Console.log("Executing TrailblazeTool via YAML conversion: ${tool::class.simpleName}")
 
-    val yaml = createTrailblazeYaml().encodeToString(
-      TrailblazeYamlBuilder()
-        .tools(listOf(tool))
-        .build()
-    )
+    // Single-tool dispatch encodes a bare tool-wrapper envelope (`- <toolName>:`), decoded by the
+    // host runners via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
+    // parser. Same resulting trail item (one ToolTrailItem) the old `- tools:` synthesis produced.
+    val yaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
 
     Console.log("Generated YAML:\n$yaml")
 
@@ -1352,7 +1365,11 @@ class TrailblazeMcpBridgeImpl(
     // as soon as the session is created), so tool actions like taps return "executed"
     // before the on-device agent actually performs them.
     if (isOnDeviceInstrumentation()) {
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml, blocking, traceId)
+      // On-device RPC dispatch sends a bare tool-wrapper envelope (`- <toolName>:`), decoded on
+      // the device via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
+      // parser. (The host/Maestro path below keeps the trail-item `yaml` it decodes host-side.)
+      val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, blocking, traceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1635,12 +1652,9 @@ class TrailblazeMcpBridgeImpl(
     blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String {
-    val rpcClient = OnDeviceRpcClient(
-      trailblazeDeviceId = trailblazeDeviceId,
-      sendProgressMessage = { Console.log("[executeToolViaRpc] $it") },
-    )
+    val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
 
-    return try {
+    return run {
       val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
         trailblazeDeviceId = trailblazeDeviceId,
         forceNewSession = false,
@@ -1777,8 +1791,6 @@ class TrailblazeMcpBridgeImpl(
           error("On-device tool execution failed: ${result.message}")
         }
       }
-    } finally {
-      rpcClient.close()
     }
   }
 
@@ -2115,7 +2127,8 @@ class TrailblazeMcpBridgeImpl(
     // Refresh device list so the just-launched slot becomes visible to subsequent
     // `loadDevicesSuspend` calls — without this, the slot is live in
     // WebBrowserManager but the cached device list (read by the trail-run path)
-    // still doesn't include it.
+    // still doesn't include it. `loadDevices()` invalidates the short-TTL discovery
+    // cache synchronously and forces a fresh pass, so no stale slot list can leak.
     trailblazeDeviceManager.loadDevices()
     return when (terminal) {
       is xyz.block.trailblaze.host.devices.WebBrowserState.Running -> null

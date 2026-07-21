@@ -191,6 +191,15 @@ class ConfigCommand : Callable<Int> {
       Console.info("  $label: ${configKey.get(currentConfig)}")
     }
 
+    // Experimental section: opt-in toggles that aren't yet on by default. Printed so they're
+    // discoverable via `config show` rather than only findable in env-var docs.
+    Console.info("")
+    Console.info("Experimental:")
+    Console.info(
+      "  Android stream screenshots: " +
+        "${CONFIG_KEYS["android-stream-screenshots"]!!.get(currentConfig)}",
+    )
+
     Console.info("")
     Console.info("  trailblaze config llm <provider/model>      Set LLM")
     Console.info("  trailblaze config llm none                  Disable LLM")
@@ -200,6 +209,7 @@ class ConfigCommand : Callable<Int> {
     Console.info("  trailblaze config screenshot-format <fmt>   Set screenshot format (png|jpeg|webp|unset)")
     Console.info("  trailblaze config screenshot-max-dimensions <WxH>  Set max screenshot dimensions")
     Console.info("  trailblaze config screenshot-quality <0..1> Set lossy compression quality")
+    Console.info("  trailblaze config android-stream-screenshots <true|false|unset>  (experimental) Serve Android screenshots from the live device stream")
     Console.info("  trailblaze config models                    List available models")
     Console.info("  trailblaze config reset                     Reset all settings to defaults")
     Console.info("")

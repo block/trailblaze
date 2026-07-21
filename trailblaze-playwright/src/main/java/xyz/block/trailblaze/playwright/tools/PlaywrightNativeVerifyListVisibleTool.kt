@@ -19,7 +19,7 @@ Verify that a list or group of elements contains the expected items.
 Checks that each expected item text is visible within the container element.
 """,
 )
-class PlaywrightNativeVerifyListVisibleTool(
+data class PlaywrightNativeVerifyListVisibleTool(
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-list').",

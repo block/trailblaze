@@ -16,7 +16,7 @@ import xyz.block.trailblaze.util.Console
 Take a snapshot of the current page and save it under the provided screen name.
   """,
 )
-class TakeSnapshotTool(
+data class TakeSnapshotTool(
   @param:LLMDescription("Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation').")
   val screenName: String,
   @param:LLMDescription("Optional description of what this snapshot captures or why it was taken.")

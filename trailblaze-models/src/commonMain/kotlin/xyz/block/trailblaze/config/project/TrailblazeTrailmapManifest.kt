@@ -291,6 +291,13 @@ data class TrailmapTargetConfig(
    * first-run target list without per-target authoring. An explicit value overrides the convention.
    */
   @SerialName("icon") val icon: String? = null,
+  /**
+   * Launch configuration for a `PLAYWRIGHT_ELECTRON` target — see
+   * [AppTargetYamlConfig.electron]. The target-level home for what a v1 trail expressed per-trail
+   * under `config.electron`; threaded onto the resolved [AppTargetYamlConfig] by
+   * [toAppTargetYamlConfig] so the host runner reads it off the resolved target at run time.
+   */
+  @SerialName("electron") val electron: xyz.block.trailblaze.yaml.ElectronAppConfig? = null,
 ) {
   fun toAppTargetYamlConfig(
     defaultId: String,
@@ -305,5 +312,6 @@ data class TrailmapTargetConfig(
       systemPrompt = resolvedSystemPrompt,
       tools = resolvedTools.takeIf { it.isNotEmpty() },
       icon = icon,
+      electron = electron,
     )
 }

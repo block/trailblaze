@@ -1,0 +1,17 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - search
+  title: 'Contacts (iOS): Search by last name'
+
+trail:
+  - step: "Open Contacts and search for \"Appleseed\" — the last word of the seeded \"John Appleseed\" contact. Open the resulting contact and verify the detail screen shows \"John Appleseed\"."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - contacts_ios_searchAndVerify:
+            query: Appleseed
+            expectedName: John Appleseed

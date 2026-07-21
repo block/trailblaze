@@ -69,6 +69,8 @@ class TrailblazeAndroidLoggingRule(
   },
 ) {
 
+  protected override val useBinaryLogTransport: Boolean = true
+
   /**
    * Override the driver type reported in session logs. Set this before calling
    * [AndroidTrailblazeRule.runSuspend] so that the [SessionStatus.Started] log

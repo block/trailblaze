@@ -19,7 +19,7 @@ Take a snapshot of the current page state and save it with the provided screen n
 This captures a screenshot and the page's accessibility tree for logging and debugging.
 """,
 )
-class PlaywrightNativeSnapshotTool(
+data class PlaywrightNativeSnapshotTool(
   @param:LLMDescription("Name for the screen being captured (e.g., 'login_page', 'dashboard').")
   val screenName: String,
   override val reasoning: String? = null,

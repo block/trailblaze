@@ -151,13 +151,86 @@ interface SessionEvent {
   d: string;
 }
 
-/** One `events/<name>.<style>.ndjson` producer stream (last-N events + true total). */
+/** Tone accent for a formatted row or badge. */
+type RowTone = "ok" | "warn" | "error";
+
+/** Short status chip on a formatted row's summary line (e.g. "200", "142ms"). */
+interface RowBadge {
+  text: string;
+  tone?: RowTone;
+}
+
+/** One key/value pair in a formatted row's summary strip or a kv section. */
+interface RowField {
+  k: string;
+  v: string;
+}
+
+/** One expandable detail section of a formatted row: a kv table or preformatted text. */
+interface RowSection {
+  title: string;
+  kv?: RowField[];
+  text?: string;
+}
+
+/**
+ * One display row a stream formatter produced — the embedded, already-clamped shape the viewer
+ * renders netlog-style (see run-report-events.ts for the clamping pass and EventStreamFormatter
+ * for the author-side contract).
+ */
+interface FormattedRow {
+  t: number | null;
+  label: string;
+  tone?: RowTone;
+  badges?: RowBadge[];
+  fields?: RowField[];
+  sections?: RowSection[];
+  /** Serialized source payload(s) this row covers, for the Raw JSON expando. */
+  raw?: string[];
+}
+
+/** One decoded `events/` line handed to a stream formatter (full payload, pre-truncation). */
+interface FormatterEntry {
+  t: number | null;
+  data: any;
+}
+
+/**
+ * Author-side row shape returned by EventStreamFormatter.format: FormattedRow, except sections may
+ * carry structured `json` and `raw` holds payload objects — both serialized + clamped at embed time.
+ */
+interface FormatterRowInput {
+  t?: number | null;
+  label: string;
+  tone?: RowTone;
+  badges?: RowBadge[];
+  fields?: RowField[];
+  sections?: Array<{ title: string; kv?: RowField[]; text?: string; json?: unknown }>;
+  raw?: unknown[];
+}
+
+/**
+ * The default export of an event-formatter module. RunReportGenerator discovers these on the JVM
+ * classpath (xyz/block/trailblaze/report/event-formatters/*.formatter.ts|js), stages them beside
+ * run-report-cli.ts, and the driver maps each `events/<name>.ndjson` stream to the first
+ * formatter whose `streams` matches `name`. Formatters see the WHOLE decoded stream at once so
+ * they can pair related events (e.g. a request with its response) into a single row.
+ */
+interface EventStreamFormatter {
+  id: string;
+  /** Stream names this formatter owns: exact names, or `prefix.*` wildcards. */
+  streams: string[];
+  format(entries: FormatterEntry[]): Array<FormatterRowInput | null | undefined>;
+}
+
+/** One `events/<name>.ndjson` producer stream, embedded in full. */
 interface EventStream {
   name: string;
-  style: string;
   total: number;
   truncated: boolean;
   events: SessionEvent[];
+  /** Formatter-produced rows; when present the viewer renders these instead of `events`. */
+  rows?: FormattedRow[] | null;
 }
 
 /** Video sprite-sheet layout + playable logical-frame range (see run-report-cli.ts readVideo). */
@@ -173,6 +246,12 @@ interface VideoInfo {
   frameMap: number[];
   startFrame: number;
   endFrame: number;
+  /**
+   * Wall-clock epoch ms of logical frame 0 (the VIDEO_FRAMES artifact's capture start). Lets the
+   * timeline map a step's `ts` onto a video frame; when absent (older exports, no capture
+   * timestamps) the timeline preview falls back to per-step screenshots.
+   */
+  startMs?: number | null;
 }
 
 /** One run inside the embedded payload. */
@@ -187,6 +266,9 @@ interface SessionPayload {
   deviceLog?: string | null;
   network?: NetworkEvent[] | null;
   events?: EventStream[] | null;
+  /** gzip(JSON.stringify(EventStream[])) as base64 — used instead of `events` past the driver's
+   * inline threshold; the viewer inflates it lazily via DecompressionStream. */
+  eventsGz?: string | null;
   video?: VideoInfo | null;
 }
 
@@ -201,6 +283,8 @@ interface SessionInput {
   deviceLog?: string | null;
   network?: NetworkEvent[] | null;
   events?: EventStream[] | null;
+  /** See SessionPayload.eventsGz. */
+  eventsGz?: string | null;
   video?: VideoInfo | null;
 }
 

@@ -1,0 +1,11 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - smoke
+  - nav
+  title: 'Wikipedia: Open a random article from Wikipedia'
+
+trail:
+  - step: Open a random Wikipedia article and verify a new article page loaded (any article-style first heading is visible).

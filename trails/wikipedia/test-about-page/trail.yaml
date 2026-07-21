@@ -1,0 +1,10 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: About page opens and shows the project description'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Wikipedia:About
+  - step: Verify the heading "Wikipedia:About" or "About Wikipedia" is visible at the top of the page.
+  - step: Verify that body text containing the phrase "free encyclopedia" or "anyone can edit" is visible.

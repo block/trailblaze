@@ -230,16 +230,9 @@ object TrailblazeCli {
    * under in-process execution. They keep using the JVM-spawn path until we
    * have a clearer reason to pull them in.
    *
-   * **Output-shape invariant.** Candidates added to this set must emit only
-   * line-terminated output (i.e. `Console.log/info/error` → `println`). The
-   * bash shim's `/cli/exec` replay (`ipc_try_forward` in
-   * `scripts/trailblaze`) restores the trailing newline that bash
-   * `$(jq -r …)` strips with `printf '%s\n'`. A subcommand that uses
-   * partial-line output (`Console.appendLog`/`Console.appendInfo` or a raw
-   * `print(...)` before exit) would render a phantom blank line in the
-   * forwarded path while looking fine on the JVM-spawn path — a confusing
-   * divergence. If a candidate truly needs partial-line output, fix the
-   * shim contract first (interleaved capture is the in-progress design).
+   * The bash shim's `/cli/exec` replay (`ipc_try_forward` in `scripts/trailblaze`)
+   * decodes stdout/stderr as NUL-delimited fields rather than through command
+   * substitution, preserving trailing newlines and partial-line output byte-for-byte.
    */
   private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config", "tool")
 
@@ -445,7 +438,6 @@ class TrailblazeVersionProvider : IVersionProvider {
     McpCommand::class,
     CheckCommand::class,
     SkillCommand::class,
-    MigrateTrailsCommand::class,
     // (No standalone `test` subcommand — bun unit tests run as part of `trailblaze
     // check`'s third phase. `trailblaze test` collided with "Trailblaze runs trails"
     // and was deleted in favor of the bundled-in-check flow. If a finer-grained
@@ -600,11 +592,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      // `migrate-trails` is listed so that when `--all` surfaces hidden subcommands it
-      // lands under Trail: (its natural home — it operates on trail YAML files) rather
-      // than the `Other:` catch-all. With #3385 making it `hidden = true` by default,
-      // the renderer's hidden-filter drops it from normal `--help` output anyway.
-      listOf("run", "session", "report", "results", "waypoint", "migrate-trails"),
+      listOf("run", "session", "report", "results", "waypoint"),
     ),
     Group(
       "Setup:",

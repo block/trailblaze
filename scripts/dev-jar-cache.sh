@@ -127,12 +127,67 @@ dev_ensure_jar() {
   fi
 
   if [ "$need_build" = true ]; then
-    # Kill the daemon BEFORE building — it has stale code and must not survive
-    # into the new JAR. It auto-starts on the next command, so this is safe.
-    # We confirm the port is free before proceeding to the build.
+    # Stop the daemon BEFORE building — it has stale code and must not survive into the
+    # new JAR. It auto-starts on the next command, so this is safe. EXCEPTION: a daemon
+    # with in-flight runs is left running (see the busy-daemon guard below); it picks up
+    # the new JAR at its next restart. We confirm the port is free before building only
+    # when we actually stopped the daemon.
     local http_port="${TRAILBLAZE_PORT:-52525}"
     local pids
     pids=$(lsof -ti "tcp:$http_port" 2>/dev/null || true)
+    # NEVER stop a daemon with in-flight runs (unless TRAILBLAZE_FORCE_DAEMON_STOP is set).
+    # The daemon on this port may belong to a DIFFERENT checkout/worktree (jar staleness is
+    # per-checkout, the port is machine-global), so "stale from here" can mean "mid-run for
+    # someone else" — killing it severs that run (truncated /agentlog uploads, then 'Daemon
+    # unreachable' for the victim CLI). A busy daemon is left alone; it picks up the new JAR
+    # at its next restart. This staleness-stop only exists in the dev launcher — installed
+    # CLIs never rebuild JARs, so none of this applies outside a source checkout.
+    if [ -n "$pids" ]; then
+      local status_json curl_exit keep_reason=""
+      # --max-time bounds the WHOLE transfer, not just the connect (--connect-timeout): a
+      # wedged daemon can accept the TCP connection and then hang its /cli/status handler
+      # forever, and without --max-time this probe would block dev_ensure_jar indefinitely.
+      status_json=$(curl -s --connect-timeout 2 --max-time 5 "http://localhost:$http_port/cli/status" 2>/dev/null)
+      curl_exit=$?
+      if [ "$curl_exit" -ne 0 ]; then
+        # Something is listening (lsof found the pid) but /cli/status didn't answer within the
+        # timeout. The most likely cause is a daemon busy running a trail (saturated event
+        # loop) — precisely the daemon we must NOT kill. We can't confirm it's idle, so fail
+        # CLOSED (keep it) rather than open. A truly wedged daemon is handled by the FORCE
+        # override below. NOTE: an old daemon with no /cli/status route answers fast with 404
+        # (curl_exit 0), so it still falls through to the stop — only a genuine no-answer keeps.
+        keep_reason="it is listening but /cli/status did not respond within the timeout (it may be busy running a trail)"
+      else
+        local active_runs
+        active_runs=$(printf '%s' "$status_json" | sed -n 's/.*"activeRuns"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+        # Empty/absent activeRuns (older daemon, or a genuinely idle one) → no keep_reason →
+        # fall through to the stop, same as before.
+        if [ -n "$active_runs" ] && [ "$active_runs" -gt 0 ]; then
+          keep_reason="stopping it would kill $active_runs in-flight run(s)"
+        fi
+      fi
+      if [ -n "$keep_reason" ]; then
+        # tr instead of ${var,,}: macOS ships bash 3.2, which lacks case conversion.
+        case "$(printf '%s' "${TRAILBLAZE_FORCE_DAEMON_STOP:-}" | tr '[:upper:]' '[:lower:]')" in
+          1|true)
+            echo "Daemon on port $http_port: $keep_reason, but TRAILBLAZE_FORCE_DAEMON_STOP is set — stopping it anyway (in-flight runs will fail)." >&2
+            ;;
+          *)
+            echo "NOT stopping the daemon on port $http_port: its code is stale, but $keep_reason." >&2
+            # Only parse run details when we actually got a status body (curl_exit 0).
+            if [ "$curl_exit" -eq 0 ] && command -v jq >/dev/null 2>&1; then
+              printf '%s' "$status_json" | jq -r '(.activeRunSummaries // [])[] | "  - " + .' >&2 2>/dev/null || true
+              local daemon_workspace
+              daemon_workspace=$(printf '%s' "$status_json" | jq -r '.workspaceAnchor // empty' 2>/dev/null || true)
+              [ -n "$daemon_workspace" ] && echo "  daemon workspace: $daemon_workspace" >&2
+            fi
+            echo "The daemon keeps serving and picks up the newly built JAR at its next (re)start." >&2
+            echo "To stop it now anyway: 'trailblaze stop', or re-run with TRAILBLAZE_FORCE_DAEMON_STOP=1." >&2
+            pids=""
+            ;;
+        esac
+      fi
+    fi
     if [ -n "$pids" ]; then
       echo "Stopping daemon (stale code)..." >&2
       # Path must match CliEndpoints.SHUTDOWN ("/cli/shutdown"). Posting to the

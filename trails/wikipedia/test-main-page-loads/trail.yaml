@@ -1,0 +1,11 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - smoke
+  - main-page
+  title: 'Wikipedia: Main page loads'
+
+trail:
+  - step: Open Wikipedia and verify the main page loaded ("Welcome to Wikipedia" is visible somewhere on the page).

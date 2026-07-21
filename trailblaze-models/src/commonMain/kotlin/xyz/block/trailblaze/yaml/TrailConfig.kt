@@ -31,8 +31,6 @@ data class TrailConfig(
    * "PLAYWRIGHT_NATIVE", "ANDROID_ONDEVICE_INSTRUMENTATION", "IOS_HOST").
    */
   val driver: String? = null,
-  /** Optional Electron app configuration for [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] trails. */
-  val electron: ElectronAppConfig? = null,
   /**
    * Optional labels for grouping and filtering trails (e.g., `[smoke, login, flaky]`). Free-form
    * strings; informal namespacing is allowed (`flaky:retry-once`). Honored by future CLI tag

@@ -65,6 +65,40 @@ class YamlBackedHostAppTargetTest {
   }
 
   @Test
+  fun `electron launch config round-trips from YAML to getElectronAppConfig`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: goose
+      display_name: Goose Desktop
+      electron:
+        command: /Applications/Goose.app/Contents/MacOS/Goose
+        env:
+          ENABLE_PLAYWRIGHT: "true"
+        cdpTimeoutSeconds: 60
+      platforms:
+        web: {}
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    val electron = target.getElectronAppConfig()
+    assertEquals("/Applications/Goose.app/Contents/MacOS/Goose", electron?.command)
+    assertEquals("true", electron?.env?.get("ENABLE_PLAYWRIGHT"))
+    assertEquals(60, electron?.cdpTimeoutSeconds)
+  }
+
+  @Test
+  fun `electron absent returns null`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertNull(target.getElectronAppConfig())
+  }
+
+  @Test
   fun `app ids resolve by platform`() {
     val target = AppTargetYamlLoader.loadFromYaml(
       """

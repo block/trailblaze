@@ -1,0 +1,12 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - smoke
+  - main-page
+  title: 'Wikipedia: Did you know section visible on main page'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+  - step: Verify the "Did you know" section is visible on the page.

@@ -1,0 +1,11 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  tags:
+  - smoke
+  - search
+  title: 'Wikipedia: Search for Albert Einstein'
+
+trail:
+  - step: Search Wikipedia for "Albert Einstein" and verify the resulting article page shows the heading "Albert Einstein".

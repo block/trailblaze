@@ -203,8 +203,12 @@ class RunYamlRequestHandler(
         if (requestDriverType != null) info.copy(trailblazeDriverType = requestDriverType) else info
       }
       val hasRecordedSteps = try {
+        // decodeTrailOrToolEnvelope (superset of decodeTrail): the host-drives-the-loop path sends a
+        // bare `- <toolName>:` tool envelope on this same `yaml` field, which decodes to one
+        // ToolTrailItem (hasRecordedSteps → true). Plain decodeTrail throws on that shape, which would
+        // silently flip the flag to false and mislabel single-tool dispatch as agent-driven.
         trailblazeYaml.hasRecordedSteps(
-          trailblazeYaml.decodeTrail(request.yaml)
+          trailblazeYaml.decodeTrailOrToolEnvelope(request.yaml)
         )
       } catch (e: Exception) {
         false

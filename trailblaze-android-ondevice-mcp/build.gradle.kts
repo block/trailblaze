@@ -43,6 +43,7 @@ android {
 dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
+  implementation(project(":trailblaze-ondevice-rpc-proto"))
   implementation(project(":trailblaze-android"))
   implementation(project(":trailblaze-agent"))
 
@@ -51,6 +52,7 @@ dependencies {
   implementation(libs.coroutines)
   implementation(libs.okhttp)
   implementation(libs.ktor.server.cio)
+  implementation(libs.ktor.server.websockets)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.ktor.serialization.kotlinx.json)

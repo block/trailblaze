@@ -1,9 +1,0 @@
-- config:
-    title: "Contacts (iOS): Back from contact detail returns to list"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [nav]
-- prompts:
-    - step: Open the "John Appleseed" contact in Contacts.
-    - step: Tap the back-navigation control (the "<" button in the navbar). Verify the contacts list root is visible again — the "Contacts" navbar title should reappear at the top of the list.

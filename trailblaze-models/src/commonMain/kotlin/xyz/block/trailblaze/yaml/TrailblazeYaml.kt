@@ -4,6 +4,7 @@ import com.charleskorn.kaml.MultiLineStringStyle
 import com.charleskorn.kaml.SingleLineStringStyle
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
+import com.charleskorn.kaml.YamlList
 import com.charleskorn.kaml.YamlMap
 import com.charleskorn.kaml.YamlNamingStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -57,6 +58,13 @@ class TrailblazeYaml internal constructor(
   ) : this(toolSerializersByName, strict = false)
 
   companion object {
+    /**
+     * Reserved top-level keys of a legacy list-shape trail item. Used by [isBareToolEnvelope] to
+     * tell a per-tool dispatch envelope (`- <toolName>:`) apart from a legacy trail list
+     * (`- config:` / `- prompts:` / …). No tool is ever named one of these.
+     */
+    private val RESERVED_TRAIL_ITEM_KEYS = setOf("config", "prompts", "tools", "trailhead")
+
     val yamlConfiguration = yamlConfigurationWithStrictness(strict = false)
 
     private fun yamlConfigurationWithStrictness(strict: Boolean) = YamlConfiguration(
@@ -247,6 +255,32 @@ class TrailblazeYaml internal constructor(
   }
 
   /**
+   * Encode a bare tool-wrapper list — `- <toolName>:` at the root, NOT wrapped in a `- tools:`
+   * trail item. This is the wire shape of the on-device-RPC per-tool dispatch envelope (the host
+   * serializes one authored tool, sends it to the device, and the device runs it). Decoded back
+   * via [decodeTools] / [decodeTrailOrToolEnvelope], never via [decodeTrailDocument] — so the
+   * per-tool round trip carries no dependency on the legacy list-shape trail parser.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  fun encodeTools(tools: List<TrailblazeToolYamlWrapper>): String {
+    // Guard the envelope-vs-trail discrimination at the source. A tool whose name collides with a
+    // reserved trail-item key would encode to e.g. `- config:`, which [decodeTrailOrToolEnvelope]
+    // would route to the trail parser and silently mis-read as a ConfigTrailItem rather than a tool.
+    // The discrimination is structural (single-entry, non-reserved key), so this invariant must hold
+    // on encode too — fail loud here instead of corrupting silently on the far side.
+    val reserved = tools.map { it.name }.filter { it in RESERVED_TRAIL_ITEM_KEYS }
+    require(reserved.isEmpty()) {
+      "Cannot encode a tool envelope: tool name(s) $reserved collide with reserved trail-item keys " +
+        "$RESERVED_TRAIL_ITEM_KEYS. A tool with such a name is indistinguishable from a trail item."
+    }
+    val contextual = yamlInstance.serializersModule
+      .getContextual(TrailblazeToolYamlWrapper::class)
+      ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
+    val encoded = yamlInstance.encodeToString(ListSerializer(contextual), tools)
+    return if (encoded.endsWith("\n")) encoded else "$encoded\n"
+  }
+
+  /**
    * Version-aware trail decode. Legacy v1 input passes through as-is; unified
    * input is lowered to the v1 shape using closest-wins resolution against
    * [deviceClassifiers].
@@ -347,6 +381,60 @@ class TrailblazeYaml internal constructor(
       .getContextual(TrailblazeToolYamlWrapper::class)
       ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
     return yamlInstance.decodeFromString(ListSerializer(contextual), yaml)
+  }
+
+  /**
+   * Decode a value received over the on-device-RPC `yaml` field, which is EITHER a full trail
+   * document OR a per-tool dispatch envelope. The device-side runner receives both shapes on the
+   * same field: the CLI/desktop "run this whole trail on device" path sends a trail document,
+   * while the host-drives-the-loop path sends one authored tool at a time as a bare tool-wrapper
+   * list (see [encodeTools]).
+   *
+   * Scope of the v1 decoupling: ONLY the per-tool-envelope branch is off the legacy parser — it is
+   * decoded straight through [decodeTools] and wrapped into a single [TrailYamlItem.ToolTrailItem],
+   * never touching [decodeTrailDocument]. A trail *document* still falls through to [decodeTrail] →
+   * [decodeTrailDocument], which continues to try v1 strict first (unified today; legacy v1 tolerated
+   * while it exists). So this method moves per-tool dispatch off v1; trail-document dispatch remains
+   * v1-coupled until [decodeTrailDocument]'s v1-first path is reworked (a follow-up).
+   */
+  fun decodeTrailOrToolEnvelope(
+    yaml: String,
+    deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  ): List<TrailYamlItem> =
+    if (isBareToolEnvelope(yaml)) {
+      listOf(TrailYamlItem.ToolTrailItem(decodeTools(yaml)))
+    } else {
+      decodeTrail(yaml, deviceClassifiers)
+    }
+
+  /**
+   * True when [yaml] is a bare tool-wrapper list (root is a YAML sequence whose every item is a
+   * single-entry tool map) rather than a trail document. A trail document is either a mapping
+   * (unified format) or a sequence of reserved `config` / `prompts` / `tools` / `trailhead`
+   * items (legacy list shape) — a per-tool envelope is a sequence whose item keys are tool names,
+   * which can never be one of those reserved trail-item keys. Discriminating on the reserved-key
+   * set (rather than attempting a tool decode) is exact: the tool-wrapper deserializer silently
+   * falls back to a raw tool for any unknown key, so a `- config:` item would otherwise be
+   * mis-read as a tool named "config".
+   *
+   * Each item must be a map with EXACTLY ONE entry whose key is non-reserved. The single-entry
+   * requirement matters because [TrailblazeToolYamlWrapperSerializer] reads only the first entry:
+   * an empty map (`- {}`) or a multi-key map would otherwise be routed to [decodeTools] and either
+   * mis-classified or have its extra keys silently dropped. A genuine tool wrapper is always a
+   * single-entry `<toolName>: <args>` map, so this is exact, not merely conservative.
+   */
+  private fun isBareToolEnvelope(yaml: String): Boolean {
+    val root = try {
+      yamlInstance.parseToYamlNode(yaml)
+    } catch (_: Throwable) {
+      return false
+    }
+    if (root !is YamlList || root.items.isEmpty()) return false
+    return root.items.all { item ->
+      item is YamlMap &&
+        item.entries.size == 1 &&
+        item.entries.keys.single().content !in RESERVED_TRAIL_ITEM_KEYS
+    }
   }
 
   /**
@@ -508,13 +596,26 @@ class TrailblazeYaml internal constructor(
     }
     // `config:` is optional — every UnifiedTrailConfig field defaults (no target → generic tools;
     // no devices → inherit from the trailmap manifest; no id → still runs), so an absent config is
-    // an empty config. `trail:` is the one required key AND must be non-empty: it is what makes the
-    // file a test. A trailhead-only / empty trail would run its bootstrap and then pass with no real
-    // test steps (a vacuous always-pass), so reject an empty list here, not just a missing key.
-    require(!trail.isNullOrEmpty()) {
-      "unified trail is missing a non-empty top-level `trail:` — every trail needs at least one step."
+    // an empty config. `trail:` is normally required and non-empty: it is what makes the file a
+    // test, and a trailhead-only / empty trail would run its bootstrap and then pass with no real
+    // test steps (a vacuous always-pass).
+    //
+    // The ONE exception is a config-only metadata document: a `config:` block with no `trail:`
+    // steps and no `trailhead:`. This is the shape a test case with no runnable steps yet lowers
+    // to — it is not meant to run as a test, it preserves the case's
+    // metadata. Accept it so those files stay readable; reject every other stepless shape (a
+    // trailhead-only trail, or a document with neither config nor steps).
+    val resolvedTrail = trail ?: emptyList()
+    require(resolvedTrail.isNotEmpty() || (config != null && trailhead == null)) {
+      "unified trail is missing a non-empty top-level `trail:` — every trail needs at least one " +
+        "step. The only stepless document allowed is a config-only metadata doc (a `config:` " +
+        "block with no `trail:` and no `trailhead:`)."
     }
-    return UnifiedTrail(config = config ?: UnifiedTrailConfig(), trailhead = trailhead, trail = trail)
+    return UnifiedTrail(
+      config = config ?: UnifiedTrailConfig(),
+      trailhead = trailhead,
+      trail = resolvedTrail,
+    )
   }
 
   /**

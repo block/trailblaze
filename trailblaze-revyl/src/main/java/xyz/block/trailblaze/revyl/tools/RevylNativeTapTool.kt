@@ -23,7 +23,7 @@ import xyz.block.trailblaze.util.Console
     "(e.g. 'Sign In button', 'search icon', 'first product card'). " +
     "Set longPress to true for a long-press gesture.",
 )
-class RevylNativeTapTool(
+data class RevylNativeTapTool(
   @param:LLMDescription("Element to tap, described in natural language.")
   val target: String,
   @param:LLMDescription("If true, perform a long-press instead of a tap.")

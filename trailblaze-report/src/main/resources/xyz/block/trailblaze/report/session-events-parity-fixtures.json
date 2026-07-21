@@ -1,0 +1,32 @@
+{
+  "comment": [
+    "Cross-language behavioral contract for the session-events artifact (`events/<name>.ndjson`).",
+    "This file is the single source of truth for the two rules both implementations must agree on:",
+    "(1) fileNames — how a file name maps to a stream name (including the legacy `.json` style-segment",
+    "strip), implemented by Kotlin `SessionEvents.parseFileName` and TS `parseStreamFileName`;",
+    "(2) lines — how one NDJSON line decodes to an ordering timestamp + payload (the `{timeMs, data}`",
+    "envelope rule), implemented by the Kotlin `SessionEventsReader` and TS `decodeEventLine`.",
+    "Consumed by SessionEventsParityFixturesTest (Kotlin) and run-report-events.test.ts (TS).",
+    "In `lines`, `payload: null` means the line is skipped entirely; `t: null` means the line carries",
+    "no ordering timestamp (the JVM reader represents that as 0). To change either rule: update both",
+    "implementations AND this fixture in the same change — never one language's tests alone."
+  ],
+  "fileNames": [
+    { "file": "com.example.plugin.network.ndjson", "name": "com.example.plugin.network" },
+    { "file": "analytics.ndjson", "name": "analytics" },
+    { "file": "com.example.plugin.network.json.ndjson", "name": "com.example.plugin.network" },
+    { "file": "data.json.ndjson", "name": "data" },
+    { "file": "notes.txt", "name": null },
+    { "file": ".ndjson", "name": null },
+    { "file": ".json.ndjson", "name": null }
+  ],
+  "lines": [
+    { "line": "{\"timeMs\":123,\"data\":{\"a\":1}}", "t": 123, "payload": { "a": 1 } },
+    { "line": "{\"timestampMs\":456,\"phase\":\"REQUEST_START\"}", "t": 456, "payload": { "timestampMs": 456, "phase": "REQUEST_START" } },
+    { "line": "{\"timestampMs\":9,\"data\":{\"inner\":true},\"other\":1}", "t": 9, "payload": { "timestampMs": 9, "data": { "inner": true }, "other": 1 } },
+    { "line": "{\"timeMs\":5,\"x\":2}", "t": 5, "payload": { "timeMs": 5, "x": 2 } },
+    { "line": "{\"data\":{\"x\":1}}", "t": null, "payload": { "data": { "x": 1 } } },
+    { "line": "not json", "t": null, "payload": null },
+    { "line": "\"just a string\"", "t": null, "payload": null }
+  ]
+}

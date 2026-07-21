@@ -40,7 +40,7 @@ Example uses:
 - Verify an analytics call was made: eventName="checkout-started"
 """,
 )
-class PlaywrightNativeAssertNetworkEventTool(
+data class PlaywrightNativeAssertNetworkEventTool(
   @param:LLMDescription(
     "The event name to search for in captured network traffic. " +
       "Matched against request URLs and request body text (case-insensitive). Must not be blank.",

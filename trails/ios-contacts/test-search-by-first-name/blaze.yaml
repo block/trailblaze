@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Search by first name"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [smoke, search]
-- prompts:
-    - step: Open the iOS Contacts app, search Contacts for "John", and open the resulting "John Appleseed" contact. Verify its detail screen renders the name "John Appleseed".

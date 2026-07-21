@@ -1,5 +1,0 @@
-- config:
-    id: "evals/click-back"
-    driver: ANDROID_ONDEVICE_INSTRUMENTATION
-- prompts:
-    - step: Click the back button

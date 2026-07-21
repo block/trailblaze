@@ -26,7 +26,7 @@
 
 ios:
   slug: ios-contacts
-  recording: trails/ios-contacts/test-create-then-delete/ios-iphone.trail.yaml
+  recording: trails/ios-contacts/test-create-then-delete/trail.yaml
 
 android:
   slug: clock
@@ -34,4 +34,4 @@ android:
 
 web:
   slug: wikipedia
-  recording: trails/wikipedia/test-article-shakespeare/web.trail.yaml
+  recording: trails/wikipedia/test-article-shakespeare/trail.yaml

@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): Search by last name"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [search]
-- prompts:
-    - step: Open Contacts and search for "Appleseed" — the last word of the seeded "John Appleseed" contact. Open the resulting contact and verify the detail screen shows "John Appleseed".

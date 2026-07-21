@@ -18,7 +18,7 @@ Supports keys like 'Enter', 'Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp'
 and combinations like 'Control+A', 'Meta+C', 'Shift+Tab'.
 """,
 )
-class PlaywrightNativePressKeyTool(
+data class PlaywrightNativePressKeyTool(
   @param:LLMDescription(
     "The key or key combination to press (e.g., 'Enter', 'Tab', 'Control+A', 'Meta+C').",
   )

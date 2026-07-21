@@ -227,6 +227,8 @@ class YamlBackedHostAppTarget(
 
   override fun getSystemPromptTemplate(): String? = config.systemPrompt
 
+  override fun getElectronAppConfig(): xyz.block.trailblaze.yaml.ElectronAppConfig? = config.electron
+
   // --- Version info ---
 
   override fun getMinBuildVersion(platform: TrailblazeDevicePlatform): String? =

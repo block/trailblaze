@@ -77,14 +77,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# JDK version check
+# JDK version check (lazy)
 # ---------------------------------------------------------------------------
-
-JAVA_VERSION=$("$JAVA_BIN" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
-if [ -n "$JAVA_VERSION" ] && [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
-  echo "ERROR: Trailblaze requires JDK 17 or later, but found JDK ${JAVA_VERSION}." >&2
-  exit 1
-fi
+#
+# A daemon-forwarded command never starts Java in this process, so probing `java -version`
+# before the IPC decision was pure hot-path overhead. JVM fallbacks call this immediately
+# before their first tb_run* invocation; the guard keeps auto-start + command execution from
+# probing twice in one wrapper process.
+tb_check_java_version() {
+  [ "${TB_JAVA_VERSION_CHECKED:-0}" = "1" ] && return 0
+  TB_JAVA_VERSION_CHECKED=1
+  local java_version
+  java_version=$("$JAVA_BIN" -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+  if [ -n "$java_version" ] && [ "$java_version" -lt 17 ] 2>/dev/null; then
+    echo "ERROR: Trailblaze requires JDK 17 or later, but found JDK ${java_version}." >&2
+    return 1
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Execution
@@ -320,16 +329,6 @@ record_daemon_pid() {
 # On any form of failure, returns 1 so the caller can fall through.
 ipc_try_forward() {
     command -v jq >/dev/null 2>&1 || return 1
-    # Build the args JSON array by appending each arg with `jq --arg`, which
-    # passes the string through without any in-band delimiter parsing. The
-    # previous `printf '%s\n' | jq -R . | jq -s .` pipeline silently split
-    # on embedded newlines, corrupting multi-line args (realistic for `ask`
-    # prompts that contain quoted code or paragraphs).
-    local args_json="[]"
-    local a
-    for a in "$@"; do
-      args_json=$(jq --arg a "$a" '. + [$a]' <<<"$args_json") || return 1
-    done
     # Forward the user's interactive shell env vars that drive CLI resolution. The
     # daemon's own JVM env was captured at `app start` time, so `System.getenv`
     # on the daemon side never sees an `export TRAILBLAZE_DEVICE=…` the user did
@@ -344,33 +343,38 @@ ipc_try_forward() {
     # Don't add general shell env (PATH, HOME, etc.) — only TRAILBLAZE_* vars
     # that drive CLI resolution. Keep this list in sync with `CliCallerContext`
     # consumers in `CliInfrastructure.kt` — one `env*()` / `resolveCli*()`
-    # reader function per allowlisted var. The two near-identical if-blocks
-    # below are kept explicit (not factored into a bash helper) at this scale;
-    # revisit if the list grows past ~4 vars.
-    local env_json="{}"
-    if [ -n "${TRAILBLAZE_DEVICE:-}" ]; then
-        env_json=$(jq --arg v "$TRAILBLAZE_DEVICE" '. + {TRAILBLAZE_DEVICE: $v}' <<<"$env_json") || return 1
-    fi
-    if [ -n "${TRAILBLAZE_TARGET:-}" ]; then
-        env_json=$(jq --arg v "$TRAILBLAZE_TARGET" '. + {TRAILBLAZE_TARGET: $v}' <<<"$env_json") || return 1
-    fi
-    if [ -n "${TRAILBLAZE_SHELL_PID:-}" ]; then
-        env_json=$(jq --arg v "$TRAILBLAZE_SHELL_PID" '. + {TRAILBLAZE_SHELL_PID: $v}' <<<"$env_json") || return 1
-    fi
-    if [ -n "${TRAILBLAZE_INTERACTIVE:-}" ]; then
-        env_json=$(jq --arg v "$TRAILBLAZE_INTERACTIVE" '. + {TRAILBLAZE_INTERACTIVE: $v}' <<<"$env_json") || return 1
-    fi
+    # reader function per allowlisted var.
+    #
+    # Build argv + cwd + env in ONE jq process. The old implementation appended every
+    # argument and env var with a separate jq invocation, then spawned another jq for the
+    # final payload. A three-argument snapshot with the standard shell metadata paid for six
+    # short-lived jq processes before curl even started. `--args` preserves every argument
+    # byte (including embedded newlines) without an in-band delimiter.
     # Send the user's interactive cwd alongside argv so commands that walk relative
     # paths (e.g. `waypoint --target` resolving the workspace anchor) anchor at the
     # user's shell directory rather than the daemon's launch directory. Older daemons
     # ignore unknown fields (kotlinx.serialization with ignoreUnknownKeys=true);
     # newer daemons fall back to their own cwd/env if absent. See [CliCallerContext].
     local payload
-    payload=$(jq -n \
-        --argjson args "$args_json" \
+    payload=$(jq -cn \
         --arg cwd "$PWD" \
-        --argjson env "$env_json" \
-        '{args: $args, cwd: $cwd, env: $env}') || return 1
+        --arg device "${TRAILBLAZE_DEVICE:-}" \
+        --arg target "${TRAILBLAZE_TARGET:-}" \
+        --arg shell_pid "${TRAILBLAZE_SHELL_PID:-}" \
+        --arg interactive "${TRAILBLAZE_INTERACTIVE:-}" \
+        --args '
+          {
+            args: $ARGS.positional,
+            cwd: $cwd,
+            env: (
+              {}
+              + (if $device == "" then {} else {TRAILBLAZE_DEVICE: $device} end)
+              + (if $target == "" then {} else {TRAILBLAZE_TARGET: $target} end)
+              + (if $shell_pid == "" then {} else {TRAILBLAZE_SHELL_PID: $shell_pid} end)
+              + (if $interactive == "" then {} else {TRAILBLAZE_INTERACTIVE: $interactive} end)
+            )
+          }
+        ' -- "$@") || return 1
 
     local response
     response=$(curl -sS --connect-timeout 2 --max-time 600 \
@@ -378,51 +382,39 @@ ipc_try_forward() {
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null) || return 1
 
-    # Daemon returned non-JSON (endpoint missing on older daemon, etc.) — fall through.
-    echo "$response" | jq -e . >/dev/null 2>&1 || return 1
+    # Validate and decode the response in ONE jq process. NUL delimiters let bash `read`
+    # preserve trailing newlines exactly; the previous four command substitutions each
+    # spawned jq and stripped those newlines, forcing replay to guess one back with `%s\n`.
+    # A JSON/non-forwarded/shape error leaves fewer than three fields and falls through.
+    local fields=()
+    local field
+    while IFS= read -r -d '' field; do
+        fields+=("$field")
+    done < <(printf '%s' "$response" | jq -j '
+      if (.forwarded // false) != true then
+        error("not forwarded")
+      else
+        (.stdout // ""), "\u0000",
+        (.stderr // ""), "\u0000",
+        (
+          if (.exitCode | type) == "number" then
+            (.exitCode | floor | if . < 0 then 256 + (. % 256) elif . > 255 then . % 256 else . end)
+          else 1 end
+          | tostring
+        ), "\u0000"
+      end
+    ' 2>/dev/null)
+    [ "${#fields[@]}" -eq 3 ] || return 1
 
-    local forwarded
-    forwarded=$(echo "$response" | jq -r '.forwarded // false')
-    [ "$forwarded" = "true" ] || return 1
-
-    local stdout stderr exit_code
-    stdout=$(echo "$response" | jq -r '.stdout // ""')
-    stderr=$(echo "$response" | jq -r '.stderr // ""')
-    # Clamp exitCode to a shell-valid integer 0-255. jq returns the literal
-    # string "null" if the field is missing, and bash `exit "$str"` fails
-    # noisily with "numeric argument required" on anything non-numeric.
-    exit_code=$(echo "$response" | jq -r '
-        if .exitCode | type == "number" then
-          (.exitCode | floor | if . < 0 then 256 + (. % 256) elif . > 255 then . % 256 else . end)
-        else 1 end
-    ')
+    local stdout="${fields[0]}"
+    local stderr="${fields[1]}"
+    local exit_code="${fields[2]}"
     [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
 
-    # Bash `$(jq -r …)` command substitution strips ALL trailing newlines
-    # from the captured stream — so a daemon-side `println` ending with `\n`
-    # arrives here as no-newline. Without restoring it, stdout (e.g. the
-    # snapshot UI tree) visually smashes into the stderr replay that follows
-    # ("Connecting to …", "Connected: …") and into the shell prompt afterwards.
-    # `%s\n` restores the newline `println` already emitted at the source —
-    # this is replaying captured bytes, not injecting a spurious blank line.
-    #
-    # Invariant this depends on: every subcommand in FORWARDABLE_SUBCOMMANDS
-    # emits only line-terminated output (Console.log/info/error → println).
-    # A future candidate that uses Console.appendLog/appendInfo or raw print()
-    # before exit would render a phantom blank line here. See the note on
-    # TrailblazeCli.FORWARDABLE_SUBCOMMANDS.
-    #
-    # Regression guard: scripts/test_ipc_replay.sh asserts the smashed form
-    # is gone for a synthetic snapshot-shaped response.
-    #
-    # NOT fixed here: the two streams are still replayed sequentially (all
-    # stdout, then all stderr), so connection chatter that fires
-    # CHRONOLOGICALLY before the snapshot still RENDERS after it. Proper fix
-    # is interleaved capture (per-chunk stream tagging in CliOutCapture +
-    # wire-format change to CliExecResponse) — deferred as out-of-scope for
-    # the smashed-streams readability fix.
-    [ -n "$stdout" ] && printf '%s\n' "$stdout"
-    [ -n "$stderr" ] && printf '%s\n' "$stderr" >&2
+    # Streams are still replayed sequentially (all stdout, then all stderr). Proper
+    # chronological interleaving requires a tagged-chunk wire format and remains separate.
+    [ -n "$stdout" ] && printf '%s' "$stdout"
+    [ -n "$stderr" ] && printf '%s' "$stderr" >&2
     exit "$exit_code"
 }
 
@@ -538,7 +530,10 @@ elif [ "${TRAILBLAZE_IPC:-1}" = "1" ] \
     # Fast path: forward to the already-running daemon instead of spawning a JVM.
     # ipc_try_forward either exits (success) or returns nonzero so we fall through
     # to the normal JVM path below.
-    ipc_try_forward "${ARGS_ARRAY[@]}" || tb_run_quiet "${ARGS_ARRAY[@]}"
+    ipc_try_forward "${ARGS_ARRAY[@]}" || {
+        tb_check_java_version || exit 1
+        tb_run_quiet "${ARGS_ARRAY[@]}"
+    }
 elif [ "$STDIO_MODE" = true ]; then
     # STDIO MCP mode: quiet output so only JSON-RPC goes to stdout.
 
@@ -552,6 +547,7 @@ elif [ "$STDIO_MODE" = true ]; then
             abort_if_stuck_daemon
             echo "[mcp] Starting Trailblaze daemon..." >&2
             # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+            tb_check_java_version || exit 1
             tb_run_background_quiet app --foreground --headless
             record_daemon_pid "$!"
             echo "[mcp] Daemon starting (PID $!)..." >&2
@@ -572,6 +568,7 @@ elif [ "$STDIO_MODE" = true ]; then
         fi
     fi
 
+    tb_check_java_version || exit 1
     tb_run_exec_quiet "${ARGS_ARRAY[@]}"
 elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running && ! daemon_autostart_disabled; then
     abort_if_stuck_daemon
@@ -579,6 +576,7 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
     # Use stderr so --json output on stdout stays clean.
     echo "Starting Trailblaze daemon..." >&2
     # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+    tb_check_java_version || exit 1
     tb_run_background app --foreground --headless
     record_daemon_pid "$!"
 
@@ -612,8 +610,10 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
     exit $RUN_EXIT
 elif [ ${#ARGS_ARRAY[@]} -gt 0 ]; then
     # CLI command mode (config, auth, etc.)
+    tb_check_java_version || exit 1
     tb_run_quiet "${ARGS_ARRAY[@]}"
 else
     # No subcommand: show help
+    tb_check_java_version || exit 1
     tb_run_quiet --help
 fi

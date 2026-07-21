@@ -40,6 +40,26 @@ export interface CancelSessionResponse {
   reason?: string | null;
 }
 
+export interface CompanionDirectiveDto {
+  seq: number;
+  payload?: string | null;
+}
+
+export interface CompanionRequestDto {
+  requestId: string;
+  kind: string;
+  payload?: string | null;
+  status: string;
+  note?: string | null;
+}
+
+export interface CompanionStateDto {
+  agentLabel?: string | null;
+  folder?: string | null;
+  directives?: Record<string, CompanionDirectiveDto>;
+  requests?: Record<string, CompanionRequestDto>;
+}
+
 export interface CreateTrailDirRequest {
   path: string;
 }
@@ -164,6 +184,7 @@ export interface ExternalAgentRunDto {
   eventCount?: number;
   demo?: DemoStateDto | null;
   demoRunId?: string | null;
+  companion?: CompanionStateDto | null;
   pendingPermissions?: ExternalAgentPermissionRequestDto[];
   autoApprove?: boolean;
 }
@@ -321,16 +342,6 @@ export interface LlmSettingsDto {
   availableModels?: LlmModelOptionDto[];
   agent?: string;
   availableAgents?: AgentOptionDto[];
-}
-
-export interface MigrateFolderResponse {
-  success: boolean;
-  outputName?: string | null;
-  steps?: number;
-  driftCount?: number;
-  drift?: string[];
-  removed?: string[];
-  error?: string | null;
 }
 
 export interface NewComponentRequest {

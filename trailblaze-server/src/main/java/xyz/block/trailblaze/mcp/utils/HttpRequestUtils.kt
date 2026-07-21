@@ -9,7 +9,6 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
-import xyz.block.trailblaze.util.Console
 
 class HttpRequestUtils(
   private val baseUrl: String,
@@ -23,10 +22,6 @@ class HttpRequestUtils(
     }
 
     val responseBody = response.bodyAsText()
-    Console.log("Response Body: $responseBody")
-    Console.log("Response Code: ${response.status.value}")
-    Console.log("Response Message: ${response.status.description}")
-
     if (response.status.value !in 200..299) {
       throw HttpRpcException("HTTP ${response.status.value}: ${response.status.description}", responseBody)
     }
@@ -58,10 +53,6 @@ class HttpRequestUtils(
     }
 
     val responseBody = response.bodyAsText()
-    Console.log("Response Body: $responseBody")
-    Console.log("Response Code: ${response.status.value}")
-    Console.log("Response Message: ${response.status.description}")
-
     if (response.status.value !in 200..299) {
       throw HttpRpcException("HTTP ${response.status.value}: ${response.status.description}", responseBody)
     }

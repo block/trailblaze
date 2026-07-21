@@ -34,10 +34,10 @@ class HostDriverPortUtilsTest {
 
   @Test
   fun `isPortReachable returns false for an unreachable host without throwing`() {
-    // 192.0.2.1 is in RFC 5737 TEST-NET-1, reserved for documentation and unroutable
-    // on any sane network — avoids relying on DNS-resolver behavior for .invalid TLDs.
+    // Use a numeric address so DNS resolution cannot outlive the connect timeout. 0.0.0.0 is not
+    // a routable remote destination and fails immediately without involving managed egress DNS.
     assertFalse(
-      HostDriverPortUtils.isPortReachable("192.0.2.1", port = 22087, timeoutMs = 100),
+      HostDriverPortUtils.isPortReachable("0.0.0.0", port = 22087, timeoutMs = 100),
     )
   }
 }

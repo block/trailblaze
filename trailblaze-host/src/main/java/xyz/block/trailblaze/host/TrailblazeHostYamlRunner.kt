@@ -536,8 +536,10 @@ object TrailblazeHostYamlRunner {
    * using [PlaywrightTrailblazeAgent] with web-native tools.
    *
    * Electron app configuration is resolved from:
-   * 1. Trail YAML `config.electron` block
-   * 2. Env vars (`TRAILBLAZE_ELECTRON_CDP_URL`, `TRAILBLAZE_ELECTRON_COMMAND`) as fallback
+   * 1. The resolved target's launch config
+   * 2. The `TRAILBLAZE_ELECTRON_*` env vars as fallback (`TRAILBLAZE_ELECTRON_CDP_URL`,
+   *    `TRAILBLAZE_ELECTRON_COMMAND`, `TRAILBLAZE_ELECTRON_ARGS`, `TRAILBLAZE_ELECTRON_CDP_PORT`,
+   *    `TRAILBLAZE_ELECTRON_HEADLESS`)
    */
   private suspend fun runPlaywrightElectronYaml(
     dynamicLlmClient: DynamicLlmClient,
@@ -570,8 +572,8 @@ object TrailblazeHostYamlRunner {
       else "Initializing Playwright-electron test runner..."
     )
 
-    // Resolve ElectronAppConfig from trail YAML or environment variables
-    val electronConfig = resolveElectronAppConfig(runYamlRequest.yaml)
+    // Resolve ElectronAppConfig from the resolved target or environment variables
+    val electronConfig = resolveElectronAppConfig(runOnHostParams.targetTestApp)
 
     val electronTest = existingTest ?: BasePlaywrightElectronTest(
       electronAppConfig = electronConfig,
@@ -664,20 +666,19 @@ object TrailblazeHostYamlRunner {
   }
 
   /**
-   * Resolves [ElectronAppConfig] from the trail YAML config block, falling back to
-   * environment variables if not specified in the YAML.
+   * Resolves [ElectronAppConfig] in priority order:
+   *  1. The resolved target's [TrailblazeHostAppTarget.getElectronAppConfig] — the target-level
+   *     home for Electron launch config. A trail carries no per-trail launch block; it selects the
+   *     target + `PLAYWRIGHT_ELECTRON` driver and the launch config comes from the target.
+   *  2. Environment variables (`TRAILBLAZE_ELECTRON_*`) as the final fallback.
    */
-  private fun resolveElectronAppConfig(yaml: String): ElectronAppConfig {
-    val trailConfig = try {
-      createTrailblazeYaml().extractTrailConfig(yaml)
-    } catch (_: Exception) {
-      null
-    }
+  private fun resolveElectronAppConfig(
+    targetTestApp: TrailblazeHostAppTarget?,
+  ): ElectronAppConfig {
+    // 1. Take the resolved target's launch config.
+    targetTestApp?.getElectronAppConfig()?.let { return it }
 
-    // If the trail YAML has an electron config block, use it
-    trailConfig?.electron?.let { return it }
-
-    // Fall back to environment variables
+    // 2. Fall back to environment variables
     val cdpUrl = System.getenv("TRAILBLAZE_ELECTRON_CDP_URL")
     val command = System.getenv("TRAILBLAZE_ELECTRON_COMMAND")
     val args = System.getenv("TRAILBLAZE_ELECTRON_ARGS")
@@ -890,7 +891,10 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Executing YAML test via Compose RPC...")
       Console.log("▶️ Starting Compose RPC execution for device: ${trailblazeDeviceId.instanceId}")
 
-      val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+      // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes exactly as
+      // before; a bare tool-wrapper envelope (single-tool MCP dispatch) decodes via decodeTools,
+      // never the legacy list-shape trail parser.
+      val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
         runYamlRequest.yaml,
         deviceClassifiers = trailblazeDeviceInfo.classifiers,
       )
@@ -1226,7 +1230,9 @@ object TrailblazeHostYamlRunner {
         onProgressMessage("Executing YAML test via Revyl cloud device...")
         Console.log("▶️ Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
 
-        val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(
+        // See the Compose runner above: envelope-tolerant decode keeps single-tool MCP dispatch off
+        // the legacy list-shape parser while trail documents decode unchanged.
+        val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
           runYamlRequest.yaml,
           deviceClassifiers = trailblazeDeviceInfo.classifiers,
         )
@@ -1581,9 +1587,10 @@ object TrailblazeHostYamlRunner {
       listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
     }
 
-    // Decode trail YAML to extract prompt steps for V3
+    // Decode trail YAML to extract prompt steps for V3. Envelope-tolerant so single-tool MCP
+    // dispatch decodes via decodeTools rather than the legacy list-shape parser.
     val trailItems = try {
-      trailblazeYaml.decodeTrail(runYamlRequest.yaml, deviceClassifiers = classifiers)
+      trailblazeYaml.decodeTrailOrToolEnvelope(runYamlRequest.yaml, deviceClassifiers = classifiers)
     } catch (e: Exception) {
       Console.log("❌ Failed to decode V3 trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
@@ -1829,9 +1836,9 @@ object TrailblazeHostYamlRunner {
       var preActionFailure: String? = null
       preActionLoop@ for (toolItem in toolItems) {
         for (toolWrapper in toolItem.tools) {
-          val toolYaml = trailblazeYaml.encodeToString(
-            listOf(TrailYamlItem.ToolTrailItem(listOf(toolWrapper))),
-          )
+          // Bare tool-wrapper list (`- <toolName>:`), decoded on-device via
+          // decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail parser.
+          val toolYaml = trailblazeYaml.encodeTools(listOf(toolWrapper))
           val singleToolRequest = runYamlRequest.copy(
             yaml = toolYaml,
             agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
@@ -1955,8 +1962,10 @@ object TrailblazeHostYamlRunner {
       listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
     }
 
+    // Envelope-tolerant decode: single-tool MCP dispatch decodes via decodeTools, not the legacy
+    // list-shape parser; trail documents are unaffected.
     val trailItems = try {
-      trailblazeYaml.decodeTrail(runYamlRequest.yaml, deviceClassifiers = classifiers)
+      trailblazeYaml.decodeTrailOrToolEnvelope(runYamlRequest.yaml, deviceClassifiers = classifiers)
     } catch (e: Exception) {
       Console.log("❌ Failed to decode on-device-RPC trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
@@ -2252,6 +2261,9 @@ object TrailblazeHostYamlRunner {
       cleanup = {
         withContext(NonCancellable) {
           subprocessRuntimes.forEach { it.shutdownAll() }
+          // Detach from the shared H.264 tee (no-op unless TRAILBLAZE_ANDROID_STREAM_SCREENSHOT
+          // engaged) so the underlying screenrecord doesn't outlive the session.
+          agent.closeStreamScreenshotSource()
         }
       },
     ) { session ->

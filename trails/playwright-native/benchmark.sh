@@ -93,12 +93,18 @@ AI_DURATIONS=()
 REC_DURATIONS=()
 
 for trail in "${TRAILS[@]}"; do
+  # Unified format: prompts + recordings live in one trail.yaml. The AI vs
+  # recording comparison is driven by the run mode flag, not by two files:
+  #   --no-use-recorded-steps forces AI mode (the default auto-detects to
+  #   replay whenever recordings are present, which would make both legs
+  #   replay), --use-recorded-steps forces verbatim replay of the recorded
+  #   tools.
   trail_file="$SCRIPT_DIR/${trail}/trail.yaml"
-  recording_file="$SCRIPT_DIR/${trail}/web.trail.yaml"
+  recording_file="$SCRIPT_DIR/${trail}/trail.yaml"
 
   # --- AI run ---
   echo "Running AI:        $trail ..."
-  "$ROOT_DIR/trailblaze" run "$trail_file" 2>&1 | tail -1
+  "$ROOT_DIR/trailblaze" run "$trail_file" --no-use-recorded-steps 2>&1 | tail -1
   ai_session=$(find_latest_session)
   AI_DURATIONS+=("$(extract_duration_ms "$ai_session")")
 

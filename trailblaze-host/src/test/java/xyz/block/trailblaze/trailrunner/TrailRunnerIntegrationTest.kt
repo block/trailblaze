@@ -324,46 +324,6 @@ class TrailRunnerIntegrationTest {
     )
   }
 
-  // ── POST /api/folder/migrate-unified — status-code mapping the modal relies on ──
-
-  @Test
-  fun `migrate-unified without id returns 400`() = withTrailRunner {
-    val response = client.post("/trailrunner/api/folder/migrate-unified")
-    assertEquals(HttpStatusCode.BadRequest, response.status)
-  }
-
-  @Test
-  fun `migrate-unified for an unknown folder returns 404`() = withTrailRunner {
-    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/nope/missing")
-    assertEquals(HttpStatusCode.NotFound, response.status)
-  }
-
-  @Test
-  fun `migrate-unified maps a migrator refusal to 400 without touching files`() = withTrailRunner {
-    // A folder of already-unified trails is the refusal case the folder back-arrow makes reachable.
-    val file = File(trailsDir, "flows/login.trail.yaml")
-    file.parentFile?.mkdirs()
-    file.writeText("config: {id: login}\ntrail:\n  - step: Log in\n")
-
-    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/flows")
-
-    assertEquals(HttpStatusCode.BadRequest, response.status)
-    assertTrue(file.isFile, "refusal must not delete or rewrite inputs")
-  }
-
-  @Test
-  fun `migrate-unified succeeds for a v1 bundle and reports the written file`() = withTrailRunner {
-    writeTrail("case_1/android-phone.trail.yaml")
-
-    val response = client.post("/trailrunner/api/folder/migrate-unified?id=0/case_1")
-
-    assertEquals(HttpStatusCode.OK, response.status)
-    val body = response.bodyAsText()
-    assertTrue(body.contains("case_1.trail.yaml"), "expected outputName in body: ${body.take(300)}")
-    assertTrue(File(trailsDir, "case_1/case_1.trail.yaml").isFile)
-    assertTrue(!File(trailsDir, "case_1/android-phone.trail.yaml").exists(), "input should be consumed")
-  }
-
   @Test
   fun `GET Trail Runner api trails body contains fixture trail`() = withTrailRunner {
     writeTrail("smoke/login.trail.yaml", title = "Login smoke")
@@ -750,7 +710,7 @@ class TrailRunnerIntegrationTest {
   fun `GET session archive exports the session folder as zip`() = withTrailRunner {
     File(logsDir, "sess_zip/events").mkdirs()
     File(logsDir, "sess_zip/0001.json").writeText("""{"ok":true}""")
-    File(logsDir, "sess_zip/events/analytics.json.ndjson").writeText("""{"timeMs":1,"data":{"event":"x"}}""")
+    File(logsDir, "sess_zip/events/analytics.ndjson").writeText("""{"timeMs":1,"data":{"event":"x"}}""")
 
     val response = client.get("/trailrunner/api/session/sess_zip/export.zip")
 
@@ -761,7 +721,7 @@ class TrailRunnerIntegrationTest {
     )
     val names = zipEntryNames(response.bodyAsBytes())
     assertTrue("sess_zip/0001.json" in names, "expected root log file in archive: $names")
-    assertTrue("sess_zip/events/analytics.json.ndjson" in names, "expected nested event file in archive: $names")
+    assertTrue("sess_zip/events/analytics.ndjson" in names, "expected nested event file in archive: $names")
   }
 
   @Test
@@ -834,16 +794,16 @@ class TrailRunnerIntegrationTest {
 
   @Test
   fun `GET events parses per-stream ndjson into labeled streams with decoded data`() = withTrailRunner {
-    // Streams live under events/<name>.<style>.ndjson; each line is a { timeMs, data } envelope.
+    // Streams live under events/<name>.ndjson; each line is a { timeMs, data } envelope.
     val eventsDir = File(logsDir, "sess_e1/events").apply { mkdirs() }
     // Two events for the network stream, one for feature flags. Labels derive from the stream name.
-    File(eventsDir, "com.example.network.json.ndjson").writeText(
+    File(eventsDir, "com.example.network.ndjson").writeText(
       """
       {"timeMs":1750154400000,"data":{"url":"https://example.com/a","status":200}}
       {"timeMs":1750154402000,"data":{"url":"https://example.com/b","status":404}}
       """.trimIndent() + "\n",
     )
-    File(eventsDir, "feature_flags.json.ndjson").writeText(
+    File(eventsDir, "feature_flags.ndjson").writeText(
       """{"timeMs":1750154401000,"data":{"flag":"new_ui","enabled":true}}""" + "\n",
     )
 
@@ -861,14 +821,12 @@ class TrailRunnerIntegrationTest {
     assertTrue(body.contains("\"flag\":\"new_ui\""), "expected decoded feature-flag payload: $body")
     // timeMs is carried through for the timeline interleave.
     assertTrue(!body.contains("\"timeMs\":0"), "timeMs should be the non-zero envelope value: $body")
-    // The per-file style is surfaced on the wire.
-    assertTrue(body.contains("\"style\":\"json\""), "stream style should be carried: $body")
   }
 
   @Test
   fun `GET events ignores blank and malformed lines`() = withTrailRunner {
     val eventsDir = File(logsDir, "sess_e2/events").apply { mkdirs() }
-    File(eventsDir, "analytics.json.ndjson").writeText(
+    File(eventsDir, "analytics.ndjson").writeText(
       "\n" +
         """{"timeMs":1750154400000,"data":{"event":"tap"}}""" + "\n" +
         "this is not json\n" +
@@ -888,7 +846,7 @@ class TrailRunnerIntegrationTest {
     val eventsDir = File(logsDir, "sess_e3/events").apply { mkdirs() }
     // More events than the per-stream cap; the endpoint must stop early, not read all of them.
     val line = """{"timeMs":1750154400000,"data":{"event":"e"}}"""
-    File(eventsDir, "analytics.json.ndjson").writeText((0 until EVENTS_MAX_EVENTS_PER_STREAM + 50).joinToString("\n") { line } + "\n")
+    File(eventsDir, "analytics.ndjson").writeText((0 until EVENTS_MAX_EVENTS_PER_STREAM + 50).joinToString("\n") { line } + "\n")
 
     val response = client.get("/trailrunner/api/session/sess_e3/events")
 

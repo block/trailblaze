@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -75,7 +76,17 @@ data class AndroidWriteBytesToFileTrailblazeTool(
       "writing, so any binary payload is supported.",
   )
   val base64Content: String,
-) : ExecutableTrailblazeTool {
+) : ExecutableTrailblazeTool, SensitiveArgsTrailblazeTool {
+
+  /**
+   * `base64Content` is masked in persisted session logs: it is opaque bulk bytes that routinely
+   * carry secret material (seeded session/auth files with live tokens), and logging it verbatim
+   * ships that material in CI artifacts. Masking also keeps multi-hundred-KB blobs out of session
+   * logs. The write itself is unaffected — redaction applies only at the log-encode boundary.
+   */
+  override val sensitiveArgNames: Set<String>
+    get() = setOf("base64Content")
+
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {

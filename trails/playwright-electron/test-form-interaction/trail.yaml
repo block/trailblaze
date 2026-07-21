@@ -1,0 +1,101 @@
+config:
+  devices:
+    web: PLAYWRIGHT_ELECTRON
+  title: Electron Form Interaction Test
+
+trail:
+  - step: "Click on the \"Form\" navigation link"
+    recording:
+      web:
+        - web_click:
+            ref: e4
+            reasoning: The current objective is to click the 'Form' navigation link. The element [e4] is labeled as 'Form', which matches the objective.
+            nodeSelector:
+              web:
+                cssSelector: "#nav-form"
+
+  - step: "Type \"Trail Blaze\" into the Name input field"
+    recording:
+      web:
+        - web_type:
+            text: Trail Blaze
+            ref: e9
+            reasoning: The objective is to type 'Trail Blaze' into the Name input field. The element [e9] is labeled 'Name', which matches the required input field.
+            nodeSelector:
+              web:
+                cssSelector: "#name-input"
+        - web_verifyValue:
+            ref: e9
+            type: VALUE
+            expected: Trail Blaze
+            reasoning: The objective requires confirming that 'Trail Blaze' has been entered in the Name input. Verifying textbox 'Name' has the correct value ensures the task was fully completed.
+            nodeSelector:
+              web:
+                cssSelector: "#name-input"
+
+  - step: "Type \"trail@example.com\" into the Email input field"
+    recording:
+      web:
+        - web_type:
+            text: trail@example.com
+            ref: e10
+            reasoning: The objective is to type 'trail@example.com' into the Email input field. The element [e10] represents the Email textbox, making it the correct target for this action.
+            nodeSelector:
+              web:
+                cssSelector: "#email-input"
+
+  - step: "Select \"Feedback\" from the Category dropdown"
+    recording:
+      web:
+        - web_selectOption:
+            ref: e11
+            values:
+            - Feedback
+            reasoning: To fulfill the objective, I need to select the 'Feedback' option from the 'Category' dropdown (combobox). This action will select the correct item as required.
+            nodeSelector:
+              web:
+                cssSelector: "#category-select"
+        - web_verifyValue:
+            ref: e11
+            type: VALUE
+            expected: feedback
+            reasoning: The objective requires that 'Feedback' is selected from the Category dropdown. Verifying that the value of the Category combobox matches the option value 'feedback' ensures successful completion.
+            nodeSelector:
+              web:
+                cssSelector: "#category-select"
+
+  - step: "Type \"Trailblaze is great\" into the Message textarea"
+    recording:
+      web:
+        - web_type:
+            text: Trailblaze is great
+            ref: e16
+            reasoning: The objective requires entering the text 'Trailblaze is great' into the Message textarea. The element [e16] is labeled as the 'Message' textbox, making it the correct target for this action.
+            nodeSelector:
+              web:
+                cssSelector: "#message-input"
+
+  - step: "Click the \"Submit\" button"
+    recording:
+      web:
+        - web_click:
+            ref: e17
+            reasoning: The current objective is to click the "Submit" button. The button is available as e17, so I'll click it to accomplish the objective.
+            nodeSelector:
+              web:
+                ariaRole: button
+                ariaNameRegex: Submit
+
+  - step: "Verify the text \"Form submitted!\" is visible"
+    recording:
+      web:
+        - web_verifyTextVisible:
+            text: Form submitted!
+            reasoning: The current objective is to verify that the text 'Form submitted!' is visible. The view hierarchy confirms that this text appears in a strong tag after the form is submitted. Verifying its visibility ensures the objective is met.
+
+  - step: "Verify the text \"Trail Blaze\" is visible in the form summary"
+    recording:
+      web:
+        - web_verifyTextVisible:
+            text: Trail Blaze
+            reasoning: 'The objective requires verifying that the text ''Trail Blaze'' is visible in the form summary. The paragraph element [e19] includes ''Name: Trail Blaze'', so verifying the presence of ''Trail Blaze'' fulfills the objective.'

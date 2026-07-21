@@ -1,0 +1,10 @@
+config:
+  target: wikipedia
+  devices:
+    web: PLAYWRIGHT_NATIVE
+  title: 'Wikipedia: Footer Privacy policy link is reachable'
+
+trail:
+  - step: Navigate to https://en.wikipedia.org/wiki/Main_Page
+  - step: Scroll all the way to the bottom of the page.
+  - step: Verify the link text "Privacy policy" is visible in the page footer.

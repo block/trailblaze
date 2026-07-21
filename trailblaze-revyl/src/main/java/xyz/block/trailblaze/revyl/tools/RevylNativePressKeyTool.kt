@@ -17,7 +17,7 @@ import xyz.block.trailblaze.util.Console
 @Serializable
 @TrailblazeToolClass("revyl_pressKey")
 @LLMDescription("Press a key on the device keyboard (ENTER, BACKSPACE, or ANDROID_BACK).")
-class RevylNativePressKeyTool(
+data class RevylNativePressKeyTool(
   @param:LLMDescription("Key to press: 'ENTER', 'BACKSPACE', or 'ANDROID_BACK'.")
   val key: String,
   override val reasoning: String? = null,

@@ -523,8 +523,8 @@ class TrailblazeRecordingGeneratorTest {
   @Test
   fun configCarriesEveryFieldIntoTheSavedRecording() {
     // The generator must carry the session config wholesale — a rebuilt field list here
-    // silently dropped electron/tags/skip/memory before any save-back merge saw them, so a
-    // re-recorded trail lost its memory seed / tags / Electron launch config on save.
+    // silently dropped tags/skip/memory before any save-back merge saw them, so a
+    // re-recorded trail lost its memory seed / tags on save.
     val config = TrailConfig(
       id = "test/case_123",
       title = "Login test",
@@ -533,7 +533,6 @@ class TrailblazeRecordingGeneratorTest {
       tags = listOf("smoke"),
       skip = "blocked on #123",
       memory = mapOf("email" to "tb+test@example.com"),
-      electron = ElectronAppConfig(command = "/opt/app/electron-app"),
     )
     val step = DirectionStep(step = "Enter text")
     val logs = listOf(

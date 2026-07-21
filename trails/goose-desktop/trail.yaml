@@ -1,0 +1,24 @@
+# Launch Goose, send a prompt, and verify the response.
+#
+# The launch is the trail's trailhead (deterministic step 0). The Goose Electron app's launch
+# config lives on the `goose` target trailmap (`trails/config/trailmaps/goose/`), so this trail
+# just selects that target + the playwright-electron driver — no per-trail `electron:` block.
+config:
+  title: "Goose Desktop - Prompt and Verify Response"
+  target: goose
+  devices:
+    web: PLAYWRIGHT_ELECTRON
+
+trailhead:
+  step: >
+    Launch the Goose desktop application using the playwright_desktop_launchGoose tool
+    and verify it started successfully.
+
+trail:
+  - step: >
+      Find the chat input field and type the prompt:
+      "the capital of the state of virginia is __________"
+      Then submit the prompt by pressing Enter.
+  - step: >
+      Wait for Goose to respond, then verify that the word "Richmond"
+      appears somewhere in the response.

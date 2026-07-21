@@ -1,8 +1,0 @@
-- config:
-    title: "Contacts (iOS): App launches to a contacts list"
-    platform: ios
-    driver: IOS_HOST
-    target: contacts
-    tags: [smoke]
-- prompts:
-    - step: Launch the iOS Contacts app (com.apple.MobileAddressBook) with a clean state, and verify the contacts list root rendered — the "Contacts" navbar title should be visible.

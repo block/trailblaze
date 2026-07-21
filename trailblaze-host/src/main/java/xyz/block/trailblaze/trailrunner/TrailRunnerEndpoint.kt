@@ -77,6 +77,7 @@ object TrailRunnerEndpoint {
       blazeRoutes(deps)
       recordRoutes(deps)
       externalAgentRoutes(deps)
+      companionRoutes(deps)
       daemonRoutes(deps)
       // Typed /rpc/<Name> endpoints (sessions/tools/trailmaps) — the migration target the UI's
       // generated createTrailRunnerRpcClient calls, sharing the route builders' backing logic.

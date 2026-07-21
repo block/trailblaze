@@ -23,7 +23,7 @@ Swipe the screen in the specified direction to navigate long lists or pages. Sta
 are calculated automatically from the direction and screen dimensions.
     """,
 )
-class SwipeTrailblazeTool(
+data class SwipeTrailblazeTool(
   @param:LLMDescription(
     """The direction of the finger swipe gesture (not the scroll direction).
 To see more content BELOW (scroll down), use 'UP' (finger swipes upward).

@@ -26,6 +26,14 @@ internal class UnifiedTrailEmitter(
   private val toolWrapperSerializer: TrailblazeToolYamlWrapperSerializer,
 ) {
   fun emit(trail: UnifiedTrail, leadingComments: List<String>): String {
+    // Stay symmetric with decodeUnifiedTrail, which rejects a trailhead-only stepless doc (a
+    // bootstrap with no steps is a vacuous pass). Emitting one would produce a `config:`+`trailhead:`
+    // document with no `trail:` that can no longer be re-decoded — a silent round-trip break. Fail
+    // loud here instead. (A pure config-only stepless doc, no trailhead, IS allowed — see below.)
+    require(!(trail.trailhead != null && trail.trail.isEmpty())) {
+      "Cannot emit a trailhead-only trail (a trailhead with no steps) — decodeUnifiedTrail rejects " +
+        "it as a vacuous pass, so it would not round-trip. Add at least one trail step."
+    }
     val sb = StringBuilder()
     for (line in leadingComments) {
       for (subLine in line.split('\n')) {
@@ -37,14 +45,23 @@ internal class UnifiedTrailEmitter(
     // `config:` is optional — omit it entirely when empty so an absent config round-trips (decode
     // defaults a missing config to the same empty value). Track whether a section was written so the
     // blank-line separators only appear between present sections, never as a leading blank line.
+    //
+    // Exception: a stepless metadata document (no trailhead, no steps) must still anchor on a
+    // `config:` section even when config is fully default — otherwise the whole document emits as
+    // empty text, which decodes as neither unified nor v1. A default config serializes to `{}`, so
+    // this produces a minimal but valid `config: {}` config-only doc. (Reachable: a fully-blank
+    // test-case step lowers to zero steps with a default config.)
     var wroteSection = false
-    if (trail.config != UnifiedTrailConfig()) {
+    val isSteplessMetadataDoc = trail.trailhead == null && trail.trail.isEmpty()
+    if (trail.config != UnifiedTrailConfig() || isSteplessMetadataDoc) {
       sb.append("config:\n")
       val configYaml = yamlInstance.encodeToString(
         UnifiedTrailConfig.serializer(),
         trail.config,
       )
-      appendIndented(sb, configYaml, indent = INDENT_2)
+      // A fully-default config serializes to `{}` (or blank on some KAML configs); force an explicit
+      // `{}` so the config-only doc is never an empty section.
+      appendIndented(sb, configYaml.ifBlank { "{}" }, indent = INDENT_2)
       wroteSection = true
     }
 
@@ -55,11 +72,16 @@ internal class UnifiedTrailEmitter(
       wroteSection = true
     }
 
-    if (wroteSection) sb.append('\n')
-    sb.append("trail:\n")
-    trail.trail.forEachIndexed { idx, step ->
-      if (idx > 0) sb.append('\n')
-      appendStep(sb, step)
+    // Omit `trail:` entirely for a config-only metadata document (empty trail) so it round-trips as
+    // an absent key — `decodeUnifiedTrail` accepts a config-only doc, and emitting a bare `trail:`
+    // with no value under it would instead decode as a null node. A normal trail always has steps.
+    if (trail.trail.isNotEmpty()) {
+      if (wroteSection) sb.append('\n')
+      sb.append("trail:\n")
+      trail.trail.forEachIndexed { idx, step ->
+        if (idx > 0) sb.append('\n')
+        appendStep(sb, step)
+      }
     }
     if (!sb.endsWith('\n')) sb.append('\n')
     return sb.toString()

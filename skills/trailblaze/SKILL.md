@@ -158,6 +158,46 @@ load whichever matches the task at hand.
    trailmap composition via `dependencies:`, and the four-checkpoint
    workflow for diagnosing a missing tool.
 
+## Companion mode
+
+An agent-attached authoring session: your coding agent is the single writer of a trail folder's
+files, and Trail Runner opens a read-only live view of that folder for the human to watch and
+steer. Start one with `trailblaze companion start --folder <rel> --title "<what you're building>"
+--agent claude|codex`, then tail what the human does with `trailblaze companion listen <runId>`.
+
+Steer the window with standing directives - `banner`, `checklist`, `actions` (quick-reply chips),
+`select-app-target`, `select-device`, `arm-recording`, and the one-shot `navigate`. Each is
+latest-per-name state that survives window reloads; re-send one with no fields to retract it.
+
+**Single-writer rule:** the UI never writes trail files back. A human "Save" click or a guided
+recording both go through the daemon, which writes the file and then tells every listening
+session about it.
+
+Two events matter most on the listen stream:
+
+- **`recording-saved`** - a recording landed in your folder, whether from a companion save or
+  Trail Runner's own board record flow; it fans out to every companion session watching that
+  folder, not just the one that wrote it.
+- **`run-started` / `run-finished`** - a human ran a trail from Trail Runner's UI whose path is
+  inside your folder; both carry the run's `sessionId` and your `folder`, and `run-finished` adds
+  `status: succeeded|failed|cancelled`. Only Trail Runner's own run endpoints announce, and only
+  for primary-root trail/bundle ids - a raw-YAML replay (e.g. via MCP) bypasses that dispatch
+  seam and stays silent.
+
+Shared-brain requests: if the human clicks "Review my trail" (or asks for proposed steps) in
+Trail Runner while your listen stream is open, the daemon queues the ask on you instead of calling
+its own LLM - watch for a `human_action` event titled `agent-request` with `{requestId, kind,
+payload}` (kind `review-trail` or `propose-steps`). Do the review by editing the trail folder's
+files yourself, then settle it with `trailblaze companion respond <runId> --request <id> --status
+done|error`. A request you never answer is cancelled when the session ends.
+
+Companion journals (`.companion/journal-<runId>.jsonl`) age out after 7 days, swept the next time
+a session connects to that folder - never at disconnect, since a crashed agent resuming with
+`--after` needs its own journal.
+
+`trailblaze companion --agent-help` prints the full event and directive contract; load that
+instead of guessing at the wire format.
+
 ## Self-heal
 
 Recorded trails replay deterministically by default — no LLM in the

@@ -86,14 +86,31 @@ describe("localRunAgentPrompt", () => {
 // observable contract of the export). `opts` can click a step and/or a tab (by capturing the
 // data-step / data-tab onclick handlers the viewer wires) to drive a re-render — enough to test the
 // timeline overlay and the secondary tabs without a real browser.
-type ViewerOptions = { session?: number; step?: number; routeStep?: number; query?: string; legacyHash?: string; tab?: string; lightboxAll?: boolean; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight"; timelineKeyTarget?: string; evStream?: number; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; viewer?: () => void };
+type ViewerOptions = { session?: number; step?: number; routeStep?: number; query?: string; legacyHash?: string; tab?: string; lightboxAll?: boolean; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; evStream?: number; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; openEventsMenu?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void };
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; copiedText: string | null } {
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; copiedText: string | null; timelineMenuOpen: boolean; eventsMenuOpen: boolean } {
   const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; evStream: Record<string, () => void>; tlStream: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void } = { session: {}, tab: {}, step: {}, stepKey: {}, shot: {}, evStream: {}, tlStream: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   let restoredFocus: string | null = null;
+  // A <details class="streamselect"> stand-in: setting .open fires ontoggle (DOM semantics), and
+  // .inside is a node that contains() recognizes, for simulating a tap inside the open menu.
+  const detailsMenu = () => {
+    const el: any = {
+      _open: false,
+      contains(n: unknown) { return n === el || n === el.inside; },
+      addEventListener() {},
+      set onkeydown(_fn: unknown) {},
+      set ontoggle(fn: () => void) { el._ontoggle = fn; },
+      get open() { return el._open; },
+      set open(v: boolean) { if (v === el._open) return; el._open = v; if (el._ontoggle) el._ontoggle(); },
+    };
+    el.inside = { parentMenu: el };
+    return el;
+  };
+  const timelineMenu = detailsMenu();
+  const eventsMenu = detailsMenu();
   const app: any = {
     _h: "",
     set innerHTML(v: string) { this._h = v; timelineList.scrollTop = 0; },
@@ -119,6 +136,10 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (step && this._h.includes(`data-step="${step[1]}"`)) return { focus: () => { restoredFocus = sel; }, getBoundingClientRect: () => ({ top: (shotLoaded ? 500 : 300) - (opts.stackedTimeline ? mainScroller.scrollTop : timelineList.scrollTop), height: 40 }) };
       const tlStream = sel.match(/^\[data-tlstream="(\d+)"\]$/);
       if (tlStream && this._h.includes(`data-tlstream="${tlStream[1]}"`)) return { focus: () => { restoredFocus = sel; } };
+      // Each render produces fresh <details> markup; refresh the shim's open state from the html
+      // without firing ontoggle, mimicking a newly-created element.
+      if (sel === "[data-streamselect]" && this._h.includes("data-streamselect")) { timelineMenu._open = this._h.includes("data-streamselect open"); return timelineMenu; }
+      if (sel === "[data-evstreamselect]" && this._h.includes("data-evstreamselect")) return eventsMenu;
       return null;
     },
   };
@@ -196,7 +217,12 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     handlers.stepKey[String(opts.spaceOnStep)](event);
     if (handlers.documentKey) handlers.documentKey(event);
   }
-  return { html: app._h, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, copiedText };
+  if (opts.openEventsMenu) eventsMenu._open = true; // as if the user clicked its summary
+  if (opts.pointerDown) {
+    const onpointerdown = ((globalThis as Record<string, unknown>).document as { onpointerdown?: (e: unknown) => void }).onpointerdown;
+    if (onpointerdown) onpointerdown({ target: opts.pointerDown === "insideTimelineMenu" ? timelineMenu.inside : {} });
+  }
+  return { html: app._h, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, copiedText, timelineMenuOpen: timelineMenu.open, eventsMenuOpen: eventsMenu.open };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -814,7 +840,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
 
   test("the timeline shows per-step elapsed time and duration on the Trail Runner scrubber", () => {
     // sampleLogs: objective at T+0s, tool (100ms) at T+1s — the row carries both the run-clock
-    // offset and its own duration, and the preview gets the shared time-scaled vertical scrubber.
+    // offset and its own duration, and the page gets the shared time-scaled horizontal scrubber
+    // pinned between the main pane and the footer.
     const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace: core.extractTrace(sampleLogs), llmLogs: [], shots: {} });
     const out = renderViewer(payloadOf(html));
     expect(out).toContain("+1.0s");
@@ -822,6 +849,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('class="scrubtrack"');
     expect(out).toContain("scrubtick");
     expect(out).not.toContain("tldot");
+    expect(out.indexOf('<div class="scrub">')).toBeGreaterThan(out.indexOf("</main>"));
+    expect(out.indexOf('<div class="scrub">')).toBeLessThan(out.indexOf('<footer class="detailfooter">'));
   });
 
   test("a run with a trailhead renders it as its own labelled card above the numbered steps", () => {
@@ -884,7 +913,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('data-phase="trailhead" aria-expanded="true"');
     expect(out).not.toContain('class="tlphasebody" hidden');
     expect(out).not.toContain('id="trail-heading"');
-    expect(out).toContain('class="scrubline setup" style="height:100%"');
+    expect(out).toContain('class="scrubline setup" style="width:100%"');
     expect(out).not.toContain('class="scrubline trail"');
     expect(out).not.toContain('class="scrubphasebreak"');
     expect(out).toContain('aria-label="Timeline for Trailhead setup. The dotted rail marks deterministic setup."');
@@ -975,7 +1004,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       generatedAt: "now",
       sessions: [{
         meta: { title: "R", status: "passed", target: "demo" }, trace: slim, llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "network observer", style: "json", total: 1, truncated: false, events: [{ t: 1, d: "{}" }] }],
+        events: [{ name: "network observer", total: 1, truncated: false, events: [{ t: 1, d: "{}" }] }],
       }],
     };
     const info = renderViewer(payload, { tab: "info" });
@@ -1043,8 +1072,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out.indexOf(">App version<")).toBeLessThan(out.indexOf(">Platform<"));
     expect(core.RUN_REPORT_CSS).toContain('.detailfooteritem { display: grid; gap: 1px;');
     expect(core.RUN_REPORT_CSS).toContain('.indexfooter, .detailfooter { min-height: 59px;');
-    expect(core.RUN_REPORT_CSS).toContain('.detailfooteritem .k { color: var(--sub); font-size: var(--type-micro);');
-    expect(core.RUN_REPORT_CSS).toContain('.detailfooteritem .v { color: var(--sub2); font-size: var(--type-caption);');
+    expect(core.RUN_REPORT_CSS).toContain('.detailfooteritem .k { color: var(--neutral-10); font-size: var(--type-micro);');
+    expect(core.RUN_REPORT_CSS).toContain('.detailfooteritem .v { color: var(--sub); font-size: var(--type-caption);');
     expect(core.RUN_REPORT_CSS).toContain('.detailtitle { min-height: 32px; max-width: none; display: grid; grid-template-columns: auto minmax(0,1fr) auto;');
     expect(core.RUN_REPORT_CSS).toContain('.detailedge { width: 32px; height: 32px;');
   });
@@ -1149,7 +1178,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       generatedAt: "now",
       sessions: [{
         meta: { title: "Plugin events", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "network observer", style: "json", total: 1, truncated: false, events: [{ t: 1704067200500, d: '{"path":"/payments"}' }] }],
+        events: [{ name: "network observer", total: 1, truncated: false, events: [{ t: 1704067200500, d: '{"path":"/payments"}' }] }],
       }],
     }, { tlStream: 0, focusedTlStream: 0 });
     const out = result.html;
@@ -1163,7 +1192,10 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('streamtype">Stream');
     expect(out).toContain('style="--stream-color:oklch(74% .14 70)" open');
     expect(out).toContain('<span class="streamdot"></span>');
-    expect(out).toContain('{\n  &quot;path&quot;: &quot;/payments&quot;\n}');
+    // Payload bodies are lazy (filled on first open); the pretty text itself comes from the
+    // shared normalizer the lazy fill uses.
+    expect(out).toContain("data-lazykey=");
+    expect((core as any).eventPrettyText({ t: 1704067200500, d: '{"path":"/payments"}' })).toBe('{\n  "path": "/payments"\n}');
     expect(out).not.toContain("data-navstep");
     expect(out).toContain('data-streamselect open');
     expect(out).toContain('type="checkbox" data-tlstream="0" checked');
@@ -1178,9 +1210,41 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('<div class="evchips">');
   });
 
+  test("a tap outside the timeline stream dropdown dismisses it", () => {
+    const payload = {
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Plugin events", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null,
+        events: [{ name: "network", total: 1, truncated: false, events: [{ t: 1, d: "{}" }] }],
+      }],
+    };
+    // Toggling a stream re-renders with the chooser open; a pointerdown outside then dismisses it.
+    const dismissed = renderViewerState(payload, { tlStream: 0, pointerDown: "outside" });
+    expect(dismissed.html).toContain("data-streamselect open");
+    expect(dismissed.timelineMenuOpen).toBe(false);
+    // A tap inside the open menu leaves it alone.
+    const kept = renderViewerState(payload, { tlStream: 0, pointerDown: "insideTimelineMenu" });
+    expect(kept.timelineMenuOpen).toBe(true);
+  });
+
+  test("a tap outside the Events tab stream dropdown dismisses it", () => {
+    const payload = {
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "Plugin events", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null,
+        events: [
+          { name: "network", total: 1, truncated: false, events: [{ t: 1, d: "{}" }] },
+          { name: "logging", total: 1, truncated: false, events: [{ t: 2, d: "{}" }] },
+        ],
+      }],
+    };
+    const dismissed = renderViewerState(payload, { tab: "events", openEventsMenu: true, pointerDown: "outside" });
+    expect(dismissed.eventsMenuOpen).toBe(false);
+  });
+
   test("timeline stream controls sit above Trailhead and summarize selection", () => {
     const events = ["network", "lifecycle", "analytics", "eligibility"].map((name, i) => ({
-      name, style: "json", total: 1, truncated: false, events: [{ t: 1704067200500 + i, d: "{}" }],
+      name, total: 1, truncated: false, events: [{ t: 1704067200500 + i, d: "{}" }],
     }));
     const trace = [
       { i: 1, label: "Open app", tool: null, note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: true, count: null, mark: null, children: [] },
@@ -1222,6 +1286,14 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(state.html).toContain(`data-step="${slim[1].i}"`);
     expect(state.html).toContain('class="step sel');
     expect(state.timelineScrollTop).toBe(320);
+  });
+
+  test("vertical arrow keys step the timeline like the horizontal ones", () => {
+    const payload = { generatedAt: "now", sessions: [session("Keyboard", "passed")] };
+    const down = renderViewerState(payload, { routeStep: slim[0].i, timelineKey: "ArrowDown" });
+    expect(down.route).toContain(`step=${slim[1].i}`);
+    const up = renderViewerState(payload, { routeStep: slim[1].i, timelineKey: "ArrowUp" });
+    expect(up.route).toContain(`step=${slim[0].i}`);
   });
 
   test("the frame transport centers the timeline in the stacked layout's main scroller", () => {
@@ -1348,6 +1420,26 @@ describe("secondary tabs (device logs, network, lightbox, video)", () => {
     expect(out).toContain('id="vspeed"');
   });
 
+  test("the timeline preview shows the captured video frame when the video carries capture timestamps", () => {
+    const timed = {
+      ...payload,
+      sessions: [{ ...payload.sessions[0], video: { ...payload.sessions[0].video, startMs: 1704067200000 } }],
+    };
+    const out = renderViewer(timed, { step: slim[1].i });
+    expect(out).toContain('id="tlvframe"');
+    expect(out).toContain("background-image:url('data:image/webp;base64,AAAA')");
+    // slim[1] ran at capture start + 1s; at 2fps that's past the last frame, so it clamps to
+    // endFrame 1 → sprite row 1 of a 1×2 sheet (background-position 0% 100%).
+    expect(out).toContain("background-position:0% 100%");
+    expect(out).not.toContain('id="shot"');
+  });
+
+  test("the timeline preview keeps per-step screenshots when the video has no capture timestamps", () => {
+    const out = renderViewer(payload, { step: slim[1].i });
+    expect(out).not.toContain("tlvframe");
+    expect(out).toContain('id="shot"');
+  });
+
   test("lightbox tab renders a thumbnail cell per screenshot step", () => {
     const out = renderViewer(payload, { tab: "lightbox" });
     expect(out).toContain("galcell");
@@ -1422,12 +1514,12 @@ describe("events tab (generic session-events streams)", () => {
       meta: { title: "Events run", status: "passed" },
       trace: [], llm: [], shots: {}, recordingYaml: null, deviceLog: null, network: null, video: null,
       events: [
-        { name: "com.example.plugin.network", style: "json", total: 3, truncated: false, events: [
+        { name: "com.example.plugin.network", total: 3, truncated: false, events: [
           { t: 1000, d: '{"request":{"url":"https://api.test/foo"}}' },
           { t: 1500, d: '{"finalizedResponse":{"statusCode":200}}' },
           { t: 2000, d: '{"error":{"reason":"x"}}' },
         ] },
-        { name: "com.example.plugin.analytics", style: "json", total: 120, truncated: true, events: [
+        { name: "com.example.plugin.analytics", total: 120, truncated: true, events: [
           { t: 1200, d: '{"Event":"ColdStart"}' },
         ] },
       ],
@@ -1453,31 +1545,34 @@ describe("events tab (generic session-events streams)", () => {
     expect(out).toContain("2 streams");
   });
 
-  test("the default stream renders each event at its offset from the stream's first event", () => {
+  test("the default stream renders each event at its offset with a lazy Raw JSON expando", () => {
     const out = renderViewer(payload, { tab: "events" });
     expect(out).toContain("+0.00s");
     expect(out).toContain("+0.50s");
     expect(out).toContain("+1.00s");
-    expect(out).toContain("api.test/foo");
     expect(out).toContain("eventcard");
     expect(out).toContain("Raw JSON");
+    // Payload bodies fill on first open (wireLazyEventBodies); the marker indexes into the stream.
+    expect(out).toContain('data-lazyevent="0"');
+    expect(out).toContain('data-lazyevent="2"');
   });
 
   test("events tab parses escaped JSON and extracts a readable label", () => {
+    const escapedEvent = { t: 1000, d: '{\\"columnItems\\":{\\"Event\\":\\"BlockerFlow Interact CompleteFlow\\",\\"Raw Message\\":\\"{\\\\\\"event_name\\\\\\":\\\\\\"NestedAction\\\\\\",\\\\\\"action_text\\\\\\":\\\\\\"Done\\\\\\"}\\"}}' };
     const out = renderViewer({
       generatedAt: "now",
       sessions: [{
         meta: { title: "Escaped", status: "passed" },
         trace: [], llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "com.example.plugin.analytics", style: "json", total: 1, truncated: false, events: [
-          { t: 1000, d: '{\\"columnItems\\":{\\"Event\\":\\"BlockerFlow Interact CompleteFlow\\",\\"Raw Message\\":\\"{\\\\\\"event_name\\\\\\":\\\\\\"NestedAction\\\\\\",\\\\\\"action_text\\\\\\":\\\\\\"Done\\\\\\"}\\"}}' },
-        ] }],
+        events: [{ name: "com.example.plugin.analytics", total: 1, truncated: false, events: [escapedEvent] }],
       }],
     }, { tab: "events" });
     expect(out).toContain("BlockerFlow Interact CompleteFlow");
-    expect(out).toContain("NestedAction");
-    expect(out).toContain("Done");
-    expect(out).not.toContain("\\\\&quot;");
+    // The full payload (rendered when the expando opens) is fully de-escaped, nested layers included.
+    const pretty = (core as any).eventPrettyText(escapedEvent);
+    expect(pretty).toContain("NestedAction");
+    expect(pretty).toContain("Done");
+    expect(pretty).not.toContain('\\\\"');
   });
 
   test("event label priority is semantic rather than object insertion order", () => {
@@ -1486,7 +1581,7 @@ describe("events tab (generic session-events streams)", () => {
       sessions: [{
         meta: { title: "Labels", status: "passed" },
         trace: [], llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "analytics", style: "json", total: 1, truncated: false, events: [
+        events: [{ name: "analytics", total: 1, truncated: false, events: [
           { t: 1000, d: JSON.stringify({ message: "Secondary detail", event: "Checkout completed" }) },
         ] }],
       }],
@@ -1501,7 +1596,7 @@ describe("events tab (generic session-events streams)", () => {
       sessions: [{
         meta: { title: "Fallback", status: "passed" },
         trace: [{ i: 1, t: 1000, label: "Start", objective: true, ok: true }], llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "analytics producer", style: "json", total: 1, truncated: false, events: [
+        events: [{ name: "analytics producer", total: 1, truncated: false, events: [
           { t: 1000, d: JSON.stringify({ status: 201 }) },
         ] }],
       }],
@@ -1512,18 +1607,8 @@ describe("events tab (generic session-events streams)", () => {
 
   test("raw event JSON preserves fields beyond the summary scan budget", () => {
     const large = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`field${i}`, `value${i}`]));
-    const out = renderViewer({
-      generatedAt: "now",
-      sessions: [{
-        meta: { title: "Large payload", status: "passed" },
-        trace: [], llm: [], shots: {}, recordingYaml: null,
-        events: [{ name: "analytics", style: "json", total: 1, truncated: false, events: [
-          { t: 1000, d: JSON.stringify(large) },
-        ] }],
-      }],
-    }, { tab: "events" });
-
-    expect(out).toContain('&quot;field99&quot;: &quot;value99&quot;');
+    // The summary scan is bounded, but the payload text (rendered when the expando opens) is not.
+    expect((core as any).eventPrettyText({ t: 1000, d: JSON.stringify(large) })).toContain('"field99": "value99"');
   });
 
   test("selecting a truncated stream shows the 'last N of M' note", () => {
@@ -1587,5 +1672,112 @@ describe("extractTrace objective failure (MCP-sampling agents)", () => {
       { class: `${T}.ObjectiveCompleteLog`, promptStep: { step: "Open Settings" }, objectiveResult: { class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete" }, timestamp: "2024-01-01T00:00:01Z" },
     ]) as any[];
     expect(trace.find((r) => r.objective).ok).toBe(true);
+  });
+});
+
+describe("formatted event streams (EventStream.rows)", () => {
+  const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
+  const formattedStream = {
+    name: "com.example.plugin.network",
+    total: 2,
+    truncated: false,
+    events: [],
+    rows: [
+      {
+        t: 1000,
+        label: "POST /2.0/pay",
+        tone: "ok",
+        badges: [{ text: "200", tone: "ok" }, { text: "142ms" }],
+        fields: [{ k: "Host", v: "api.example.com" }],
+        sections: [
+          { title: "Request Headers", kv: [{ k: "Accept", v: "application/json" }] },
+          { title: "Response Body", text: '{\n  "ok": true\n}' },
+        ],
+        raw: ['{"request":{"id":"r1"}}'],
+      },
+      { t: 2000, label: "POST /2.0/fail", tone: "error", badges: [{ text: "503", tone: "error" }] },
+    ],
+  };
+  const genericStream = {
+    name: "com.example.plugin.analytics",
+    total: 1,
+    truncated: false,
+    events: [{ t: 1500, d: '{"event":"screen_view"}' }],
+  };
+  const payload = {
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, events: [formattedStream, genericStream] }],
+  };
+
+  test("buildMultiReportHtml embeds formatter rows untouched in the payload", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: [], llmLogs: [], shots: {}, events: [formattedStream] }],
+    });
+    const embedded = payloadOf(html).sessions[0].events[0];
+    expect(embedded.rows).toEqual(formattedStream.rows);
+  });
+
+  test("the Events tab renders formatted rows netlog-style with tone badges and lazy bodies", () => {
+    const out = renderViewer(payload, { query: "?run=0&tab=events" });
+    expect(out).toContain('class="fmtrow"');
+    expect(out).toContain("POST /2.0/pay");
+    expect(out).toContain('class="rowbadge ok">200<');
+    // Bodies (headers/payload sections) render lazily on first open — the summary carries the
+    // lazy marker, not the section content.
+    expect(out).toContain('data-lazyrow="0"');
+    expect(out).not.toContain(">Request Headers<");
+    // Error-tone rows carry the severity class the shared filter chips key on.
+    expect(out).toContain('class="fmtrow e"');
+    // The formatted view brings the filter bar; the generic view doesn't have one.
+    expect(out).toContain('id="evpane"');
+  });
+
+  test("a stream without rows keeps the generic event-card rendering", () => {
+    const out = renderViewer(payload, { query: "?run=0&tab=events&stream=1" });
+    expect(out).toContain('class="eventcard"');
+    expect(out).not.toContain('class="fmtrow"');
+  });
+});
+
+describe("compressed event streams (SessionPayload.eventsGz)", () => {
+  const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
+  const streams = [{
+    name: "com.example.plugin.network",
+    total: 1,
+    truncated: false,
+    events: [],
+    rows: [{ t: 1000, label: "POST /2.0/pay", badges: [{ text: "200", tone: "ok" }] }],
+  }];
+  const gz = (value: unknown) => require("zlib").gzipSync(JSON.stringify(value)).toString("base64");
+
+  test("inflateEventsGz round-trips a driver-compressed payload", async () => {
+    const inflated = await (core as any).inflateEventsGz(gz(streams));
+    expect(inflated).toEqual(streams);
+  });
+
+  test("inflateEventsGz returns null for malformed input instead of throwing", async () => {
+    expect(await (core as any).inflateEventsGz("not base64 gzip")).toBeNull();
+    expect(await (core as any).inflateEventsGz(gz({ not: "an array" }))).toBeNull();
+  });
+
+  test("buildMultiReportHtml embeds eventsGz verbatim without inflating it", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: [], llmLogs: [], shots: {}, eventsGz: gz(streams) }],
+    });
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.eventsGz).toBe(gz(streams));
+    expect(embedded.events).toBeNull();
+  });
+
+  test("a compressed session still offers the Events tab and shows the decompressing state", () => {
+    const payload = {
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: slim, llm: [], shots: {}, recordingYaml: null, eventsGz: gz(streams) }],
+    };
+    const out = renderViewer(payload, { query: "?run=0&tab=events" });
+    expect(out).toContain('data-tab="events"');
+    expect(out).toContain("Decompressing events…");
   });
 });

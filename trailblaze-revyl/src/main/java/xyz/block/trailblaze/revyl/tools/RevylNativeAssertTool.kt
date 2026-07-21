@@ -22,7 +22,7 @@ import xyz.block.trailblaze.util.Console
     "'the Sign In button is disabled', 'there are at least 3 search results', " +
     "'the settings screen is open', 'the order confirmation page is shown'.",
 )
-class RevylNativeAssertTool(
+data class RevylNativeAssertTool(
   @param:LLMDescription(
     "The condition to verify, described in natural language. " +
       "Examples: 'the cart badge shows 2 items', 'the profile tab is selected'.",

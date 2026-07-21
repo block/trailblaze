@@ -1,0 +1,24 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - contact
+  title: 'Contacts (iOS) (scripted): direct open by name'
+
+trail:
+  - step: |
+      Call the `contacts_ios_openApp` tool with dismissKeyboard=true.
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+
+  - step: |
+      Call the `contacts_ios_openContact` tool with name="John Appleseed",
+      expectedHeading="John Appleseed".
+    recording:
+      ios-iphone:
+        - contacts_ios_openContact:
+            name: John Appleseed
+            expectedHeading: John Appleseed

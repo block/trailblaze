@@ -2,7 +2,6 @@ package xyz.block.trailblaze.trailrunner
 
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -12,7 +11,8 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 
@@ -21,19 +21,6 @@ import xyz.block.trailblaze.util.Console
  * (create / detail / file edit / record variants / delete). A bundle is a library folder with a
  * `blaze.yaml` spec plus accumulating `<platform>.trail.yaml` recordings - see [BundleStore].
  */
-// This server has no ContentNegotiation plugin: a `call.respond(status, <object>)` throws at
-// runtime instead of serializing. Every DTO body in this file goes through this hand-encoded
-// respond instead.
-private suspend fun <T> ApplicationCall.respondJson(
-  serializer: KSerializer<T>,
-  body: T,
-  status: HttpStatusCode = HttpStatusCode.OK,
-) = respondText(
-  text = JSON.encodeToString(serializer, body),
-  contentType = ContentType.Application.Json,
-  status = status,
-)
-
 /** Resolves a bundle folder id against the current trail roots, on the IO dispatcher. */
 private suspend fun resolveBundle(deps: TrailRunnerDeps, id: String, requireBlaze: Boolean): BundleStore.ResolvedBundle? =
   withContext(Dispatchers.IO) {
@@ -46,18 +33,46 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
   // pass. The actual LLM/exploration work is supplied by the desktop app via [deps.proposeStepsProvider]
   // (the route module has no LLM credentials of its own).
   post("$PATH_BASE/api/blaze/propose") {
-    val provider = deps.proposeStepsProvider
-    if (provider == null) {
-      call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "step proposer not available"), HttpStatusCode.ServiceUnavailable)
-      return@post
-    }
+    // Body first, provider second: the shared-brain defer below must work with no provider wired
+    // at all, so a bad body is now a 400 even when the proposer is absent (was a blanket 503).
     val body = runCatching { call.receive<ProposeRequest>() }.getOrNull()
     val objective = body?.objective?.trim().orEmpty()
     if (objective.isEmpty()) {
       call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "objective is required"), HttpStatusCode.BadRequest)
       return@post
     }
-    if (body!!.ground && body.trailblazeDeviceId == null) {
+    // Shared brain: when the human's own agent CLI is attached to the folder this ask concerns,
+    // hand the ask to it instead of the daemon's wired LLM. No matching companion -> the normal
+    // provider path below, untouched.
+    val folderRel = body!!.folder?.trim()?.trim('/')?.takeIf { it.isNotEmpty() } ?: companionRelFor(body.bundleId, null)
+    val payload = JsonObject(
+      buildMap {
+        put("objective", JsonPrimitive(objective))
+        body.target?.trim()?.takeIf { it.isNotEmpty() }?.let { put("target", JsonPrimitive(it)) }
+        body.platform?.trim()?.takeIf { it.isNotEmpty() }?.let { put("platform", JsonPrimitive(it)) }
+        folderRel?.let { put("folder", JsonPrimitive(it)) }
+      },
+    )
+    when (val deferred = ExternalAgentSupervisor.deferToCompanion("propose-steps", folderRel, payload)) {
+      is DeferOutcome.Deferred -> {
+        call.respondJson(ProposeResponse.serializer(), ProposeResponse(deferred = true, requestId = deferred.requestId, runId = deferred.runId))
+        return@post
+      }
+      is DeferOutcome.Degraded -> {
+        call.respondJson(
+          ProposeResponse.serializer(),
+          ProposeResponse(degraded = true, runId = deferred.runId, error = COMPANION_AGENT_NOT_LISTENING),
+        )
+        return@post
+      }
+      DeferOutcome.None -> {}
+    }
+    val provider = deps.proposeStepsProvider
+    if (provider == null) {
+      call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "step proposer not available"), HttpStatusCode.ServiceUnavailable)
+      return@post
+    }
+    if (body.ground && body.trailblazeDeviceId == null) {
       call.respondJson(ProposeResponse.serializer(), ProposeResponse(error = "grounding requires a connected device"), HttpStatusCode.BadRequest)
       return@post
     }
@@ -207,55 +222,6 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
     }
     val ok = withContext(Dispatchers.IO) { runCatching { BundleStore.deleteFile(resolved.dir, name) }.getOrDefault(false) }
     call.respondJson(OkResponse.serializer(), OkResponse(ok = ok))
-  }
-
-  // Migrate a legacy per-platform bundle folder into a single unified `<folder>.trail.yaml` (deleting
-  // the per-platform inputs + blaze.yaml it consumed). Backs the Trails "Migrate to unified" button.
-  // The heavy lifting is BundleMigration/UnifiedTrailMigrator; this just resolves the folder and maps
-  // the migrator's refusals (top-level tools, trailhead, already-migrated) to a 400 with a reason.
-  post("$PATH_BASE/api/folder/migrate-unified") {
-    val id = call.request.queryParameters["id"]?.trim().orEmpty()
-    if (id.isEmpty()) {
-      call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = "id is required"), HttpStatusCode.BadRequest)
-      return@post
-    }
-    val resolved = resolveBundle(deps, id, requireBlaze = false)
-    // resolve() only path-validates - it returns a ResolvedBundle for a directory that does not exist.
-    // Without the isDirectory check, a missing folder would fall through to the migrator and surface
-    // as a 400 with its internal "no *.trail.yaml files" message instead of a plain 404.
-    if (resolved == null || !withContext(Dispatchers.IO) { resolved.dir.isDirectory }) {
-      call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = "folder not found"), HttpStatusCode.NotFound)
-      return@post
-    }
-    val outcome = withContext(Dispatchers.IO) { runCatching { BundleMigration.migrateFolder(resolved.dir) } }
-    outcome.fold(
-      onSuccess = { o ->
-        // The one server-side record of this destructive action — which folder, what was written,
-        // and exactly which inputs were deleted (the response's `removed` list isn't persisted).
-        Console.log(
-          "[BlazeRoutes] migrate-unified '$id': wrote ${o.outputName}, " +
-            "removed [${o.removed.joinToString()}], ${o.driftComments.size} drift warning(s)",
-        )
-        call.respondJson(
-          MigrateFolderResponse.serializer(),
-          MigrateFolderResponse(
-            success = true,
-            outputName = o.outputName,
-            steps = o.steps,
-            driftCount = o.driftComments.size,
-            drift = o.driftComments,
-            removed = o.removed,
-          ),
-        )
-      },
-      onFailure = { e ->
-        // IllegalArgumentException = the migrator (or BundleMigration) refused the input: no v1 files,
-        // a top-level `- tools:` block, a `- trailhead:`, or an already-migrated folder. Everything
-        // else is an unexpected server error.
-        val status = if (e is IllegalArgumentException) HttpStatusCode.BadRequest else HttpStatusCode.InternalServerError
-        call.respondJson(MigrateFolderResponse.serializer(), MigrateFolderResponse(success = false, error = e.message ?: (e::class.simpleName ?: "migration failed")), status)
-      },
-    )
   }
 
   // Record one variant per selected device into a library folder: dispatch the folder's blaze steps

@@ -22,7 +22,7 @@ Verify the value of an element on the page. Supports checking:
 - ATTRIBUTE: the value of an HTML attribute
 """,
 )
-class PlaywrightNativeVerifyValueTool(
+data class PlaywrightNativeVerifyValueTool(
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#email-input').",

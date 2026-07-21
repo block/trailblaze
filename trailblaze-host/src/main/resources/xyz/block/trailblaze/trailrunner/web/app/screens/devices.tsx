@@ -4,7 +4,7 @@
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // The target + device picker, embedded in the Home screen's left rail (the standalone
-// Devices screen was removed). Pick a target app, then tick the devices to run it on.
+// Devices screen was removed). Pick a target app or site, then tick the devices to run it on.
 // The choice is the global target: it scopes the Trailmaps views and is the default for
 // runs. Styled as a left list-rail to match the other tabs.
 function TargetDevicePicker({ go }) {
@@ -54,35 +54,12 @@ function TargetDevicePicker({ go }) {
     return () => { cancelled = true; };
   }, [deviceIdsKey, appsNonce]);
 
-  // target id -> { id, label, items: [{ device, app }] }
-  const groups = {};
-  const webDevices = [];
-  deviceList.forEach((d) => {
-    if (d.platform === 'web') { webDevices.push(d); return; }
-    (appsByDevice[d.id] || []).forEach((a) => {
-      const g = groups[a.id] || (groups[a.id] = { id: a.id, label: a.displayName || a.id, items: [] });
-      g.items.push({ device: d, app: a });
-    });
+  // Mobile devices join a target when its app is installed. Browser devices have no installed-app
+  // concept, so they join every workspace target that declares the web platform. This keeps a
+  // web-only target's id (and therefore its tools/trailheads) in the global selection.
+  const { groupList, webDevices, hasDeclaredWebTargets } = window.TargetPickerModel.buildTargetGroups({
+    deviceList, appsByDevice, trailmapList, restartIds,
   });
-  // Declared-but-undetected targets: a workspace trailmap with a `target:` block whose app isn't
-  // installed on any connected device would otherwise be invisible here (the groups above come
-  // from a live installed-app scan). Surface it as a device-less card so a freshly created — or
-  // simply not-yet-installed — target has a presence instead of a dead end. Web-only targets are
-  // skipped: apps aren't "installed" on a web device, so such a card could never come alive
-  // (web runs keep flowing through the Web card below). Merged unconditionally — while the app
-  // scan is in flight an installed app briefly reads as "not installed," which beats the
-  // alternative (gating on the scan makes dimmed cards vanish and reappear on every Refresh).
-  trailmapList.forEach((t) => {
-    if (!t.displayName || groups[t.id]) return;
-    if (!(t.platforms || []).some((p) => p !== 'web')) return;
-    // Excluded by the workspace's explicit targets: allow-list — the runtime will never load it,
-    // so a card here could never activate no matter what's installed or restarted.
-    if (t.workspaceListed === false) return;
-    groups[t.id] = { id: t.id, label: t.displayName, items: [] };
-  });
-  // Selectable (device-backed) targets first, then the dimmed declared-only ones, A-Z within each.
-  const groupList = Object.values(groups).sort((x, y) =>
-    (y.items.length > 0 ? 1 : 0) - (x.items.length > 0 ? 1 : 0) || x.label.localeCompare(y.label));
 
   // Toggle a device under a target. Switching targets resets the device set (one active
   // target at a time; it's the filtering axis); within a target, devices add/remove.
@@ -120,16 +97,16 @@ function TargetDevicePicker({ go }) {
         title="Target"
         help={(
           <HelpButton title="How targets work" align="left"
-            sub="A target is the app under test - a name like sample mapped to the right bundle id per platform. Pick a target, then choose every device you want it available on.">
+            sub="A target is the app or site under test. Pick one, then choose every phone or browser you want to run it on.">
             <HelpCard ico="package" color="var(--tb-amber)" title="Targets group your devices">
-              Each card is a target app and the connected devices it's installed on. Selecting a target scopes the Trailmaps views and preflights as the run target. Switching targets clears the device set - one target is active at a time.
+              Each card is a target and the devices that can run it. Mobile devices appear when the app is installed; browsers appear when the target declares Web. Selecting a target scopes Trail Runner to its tools and trailheads.
             </HelpCard>
             <HelpCard ico="smartphone" color="var(--tb-running)" title="Select multiple devices">
               Tick every device you want under the active target. Runs default to the first selected device (you pick which one in Configure run); the rest stay queued in your selection for quick switching.
             </HelpCard>
           </HelpButton>
         )}
-        sub="Pick an app, then the devices to run it on."
+        sub="Pick an app or site, then the devices to run it on."
         right={(
           <div style={{ display: 'flex', gap: 4 }}>
             <button className="tb-btn ghost sm" style={{ padding: 6 }} title="New target" onClick={() => setEditingTarget({ isNew: true })}><Ico n="plus" s={16} /></button>
@@ -154,14 +131,14 @@ function TargetDevicePicker({ go }) {
           return (
             <TargetCard key={g.id} targetId={g.id} iconNonce={iconNonce}
               icon={<AppIcon target={g.id} size={18} v={iconNonce} fallbackColor={selectedIds.length ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />}
-              label={g.label} items={g.items} selectedIds={selectedIds}
+              label={g.label} items={g.items} platforms={g.platforms} selectedIds={selectedIds}
               statusLabel={restartIds.includes(g.id) ? 'Restart Trail Runner to activate' : undefined}
               onToggleTarget={() => toggleGroup(g)} onToggleDevice={(d) => toggleDevice(g.id, g.label, d)}
               onEdit={() => setEditingTarget({ id: g.id, label: g.label })} />
           );
         })}
 
-        {webDevices.length > 0 && (() => {
+        {webDevices.length > 0 && !hasDeclaredWebTargets && (() => {
           const items = webDevices.map((d) => ({ device: d, app: null }));
           const selectedIds = gt && gt.target == null ? (gt.deviceIds || []).filter((id) => webDevices.some((d) => d.id === id)) : [];
           const ids = webDevices.map((d) => d.id);
@@ -177,18 +154,16 @@ function TargetDevicePicker({ go }) {
           );
         })()}
 
-        {/* Only the always-available Web target is here — no app target declared OR detected. A
-            mobile target needs a workspace trailmap first (an installed app alone is NOT enough —
-            the old copy implied auto-discovery and left users at a dead end, block/trailblaze#190),
-            so lead with the create flow rather than "open an emulator." */}
-        {!appsLoading && groupList.length === 0 && webDevices.length > 0 && (
+        {/* Anonymous Web is useful before a workspace target exists, but a declared web target is
+            better: it keeps the site's tools, trailheads, and base URL attached to browser runs. */}
+        {!appsLoading && groupList.length === 0 && webDevices.length > 0 && !hasDeclaredWebTargets && (
           <div style={{ marginTop: 12, padding: '12px 13px', border: '1px solid var(--tb-hairline)', borderRadius: 10, background: 'var(--bg-standard)', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <Ico n="smartphone" s={16} c="var(--text-subtle)" style={{ flex: '0 0 auto', marginTop: 1 }} />
+            <Ico n="globe" s={16} c="var(--text-subtle)" style={{ flex: '0 0 auto', marginTop: 1 }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-standard)', marginBottom: 3 }}>Testing a mobile app?</div>
-              <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5 }}>Only Web is available. A mobile target first needs a trailmap — a name mapped to your app's bundle id. Create one here, then open a simulator/emulator with the app installed and Refresh.</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-standard)', marginBottom: 3 }}>Give this site a target</div>
+              <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5 }}>Web works without one, but a named target keeps the site's base URL, tools, and trailheads attached whenever you select a browser.</div>
               <div style={{ marginTop: 8 }}>
-                <Btn sm ico="plus" onClick={() => setEditingTarget({ isNew: true })}>Create your first target</Btn>
+                <Btn sm ico="plus" onClick={() => setEditingTarget({ isNew: true })}>Create web target</Btn>
               </div>
             </div>
           </div>
@@ -239,17 +214,32 @@ function TargetDevicePicker({ go }) {
 // A target is the unit you click: the whole header selects the app and its devices in one
 // click, no need to tick a device. A single-device target shows the device inline; a
 // multi-device target reveals per-device toggles below for fine-grained control. An empty
-// `items` means the target is declared in the workspace but its app isn't installed on any
-// connected device — rendered dimmed and unselectable (nothing to run it on yet), with
-// `statusLabel` (or a generic not-installed note) explaining why; Edit stays available.
-function TargetCard({ targetId, iconNonce, icon, label, items, selectedIds, onToggleTarget, onToggleDevice, onEdit, statusLabel }) {
+// `items` means the target is declared in the workspace but has nothing to run it on yet —
+// for a mobile target that's "app not installed on any connected device"; for a web target
+// it's "no browser device connected" (browsers have no install gate). Rendered dimmed and
+// unselectable, with `statusLabel` (or the platform-appropriate note) explaining why; Edit
+// stays available. `platforms` is the target's declared platform list, used to pick that copy.
+function TargetCard({ targetId, iconNonce, icon, label, items, platforms, selectedIds, onToggleTarget, onToggleDevice, onEdit, statusLabel }) {
   const accent = selectedIds.length > 0;
   const notInstalled = items.length === 0;
   const single = items.length === 1;
   const it0 = items[0];
   const plat = (p) => (p === 'ios' ? 'iOS' : p === 'android' ? 'Android' : 'Web');
+  // A web-capable empty target is waiting on a browser, not an app install — split the copy so a
+  // web-only or cross-platform target never tells the user to "install the app."
+  const decl = platforms || [];
+  const webCapable = decl.indexOf('web') >= 0;
+  const mobileCapable = decl.some((p) => p !== 'web');
+  const emptySummary = webCapable
+    ? (mobileCapable ? 'No connected browser or installed app' : 'No browser device connected')
+    : 'Not installed on any connected device';
+  const emptyHint = webCapable
+    ? (mobileCapable
+        ? 'Connect a browser or install the app on a device, then Refresh, to select this target'
+        : 'Connect a browser device, then Refresh, to select this target')
+    : 'Install the app on a connected device, then Refresh, to select this target';
   const summary = notInstalled
-    ? (statusLabel || 'Not installed on any connected device')
+    ? (statusLabel || emptySummary)
     : single
       ? [it0.device.name, plat(it0.device.platform), it0.app && it0.app.versionName].filter(Boolean).join(' · ')
       : `${items.length} devices · ${items.filter((it) => it.device.connected).length} connected`;
@@ -257,7 +247,7 @@ function TargetCard({ targetId, iconNonce, icon, label, items, selectedIds, onTo
     <div style={{ border: '1px solid ' + (accent ? 'var(--tb-pass)' : 'var(--tb-hairline)'), borderRadius: 10, marginBottom: 8, overflow: 'hidden', background: 'var(--bg-standard)' }}>
       <div style={{ display: 'flex', alignItems: 'stretch' }}>
         <button onClick={notInstalled ? undefined : onToggleTarget} aria-disabled={notInstalled}
-          title={notInstalled ? 'Install the app on a connected device, then Refresh, to select this target' : accent ? 'Selected, click to clear' : 'Select this target'}
+          title={notInstalled ? emptyHint : accent ? 'Selected, click to clear' : 'Select this target'}
           aria-pressed={notInstalled ? undefined : accent}
           aria-label={(notInstalled ? 'Target (unavailable) ' : accent ? 'Selected target ' : 'Select target ') + label + ' (' + summary + ')'}
           style={{ display: 'flex', alignItems: 'center', gap: 9, flex: 1, minWidth: 0, textAlign: 'left', padding: '10px 11px', background: 'transparent', border: 'none',

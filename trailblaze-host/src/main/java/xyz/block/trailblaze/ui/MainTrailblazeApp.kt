@@ -117,6 +117,8 @@ class MainTrailblazeApp(
      * leave this null.
      */
     extraDaemonRoutes: (io.ktor.server.routing.Routing.() -> Unit)? = null,
+    /** Trail Runner route installed by [extraDaemonRoutes], or null when this app does not expose it. */
+    trailRunnerPath: String? = null,
     /**
      * True when the daemon HTTP server for this port is already running and owned elsewhere —
      * either another process this instance deliberately attaches to (GUI alongside a window-less
@@ -157,10 +159,11 @@ class MainTrailblazeApp(
     val trailblazeMcpServer = trailblazeMcpServerProvider()
 
     // Shared session state for the HTTP device API — tracks live DeviceScreenStream instances
-    // established via ConnectToDeviceRequest so screen-poll and interaction handlers can reach
-    // them. One instance per daemon lifetime; the map is thread-safe internally.
-    val hostDeviceSessionManager =
-      xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager()
+    // established via ConnectToDeviceRequest (and published by Trail Runner's recorder) so
+    // screen-poll, interaction, and live-stream handlers can reach them. Owned by the device
+    // manager (one instance per daemon lifetime; the map is thread-safe internally) so the
+    // recorder and the /rpc device viewer share the same registry.
+    val hostDeviceSessionManager = deviceManager.hostDeviceSessionManager
 
     if (!canRunDesktopGui()) {
       // No display available (non-macOS or headless environment): start only the
@@ -187,6 +190,7 @@ class MainTrailblazeApp(
           port = portManager.httpPort,
           httpsPort = portManager.httpsPort,
           wait = true,
+          trailRunnerPath = trailRunnerPath,
           additionalRouteRegistration = {
             allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
             extraDaemonRoutes?.invoke(this)
@@ -219,6 +223,7 @@ class MainTrailblazeApp(
             port = portManager.httpPort,
             httpsPort = portManager.httpsPort,
             wait = false,
+            trailRunnerPath = trailRunnerPath,
             additionalRouteRegistration = {
               allRouteRegistrations(trailblazeSavedSettingsRepo, deviceManager, hostDeviceSessionManager).invoke(this)
               extraDaemonRoutes?.invoke(this)

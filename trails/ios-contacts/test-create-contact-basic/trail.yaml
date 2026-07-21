@@ -1,0 +1,17 @@
+config:
+  target: contacts
+  devices:
+    ios-iphone: IOS_HOST
+  tags:
+  - crud
+  title: 'Contacts (iOS): Create a contact with first + last name'
+
+trail:
+  - step: "Open the iOS Contacts app and create a new contact with first name \"Trailblaze\" and last name \"Demo\". Save and verify the new contact appears in the list."
+    recording:
+      ios-iphone:
+        - contacts_ios_openApp:
+            dismissKeyboard: true
+        - contacts_ios_createContact:
+            firstName: Trailblaze
+            lastName: Demo

@@ -2,6 +2,7 @@
 :trailblaze-common
 :trailblaze-compose-target
 :trailblaze-models
+:trailblaze-ondevice-rpc-proto
 :trailblaze-tracing
 ai.koog:agents-core-jvm:1.0.0
 ai.koog:agents-core:1.0.0
@@ -129,6 +130,8 @@ com.squareup.okhttp3:okhttp-jvm:5.3.2
 com.squareup.okhttp3:okhttp:5.3.2
 com.squareup.okio:okio-jvm:3.17.0
 com.squareup.okio:okio:3.17.0
+com.squareup.wire:wire-runtime-jvm:5.3.3
+com.squareup.wire:wire-runtime:5.3.3
 com.typesafe:config:1.4.8
 dev.mobile:dadb:1.2.10
 dev.mobile:maestro-client:2.6.1
@@ -149,6 +152,8 @@ io.ktor:ktor-client-logging-jvm:3.5.0
 io.ktor:ktor-client-logging:3.5.0
 io.ktor:ktor-client-okhttp-jvm:3.5.0
 io.ktor:ktor-client-okhttp:3.5.0
+io.ktor:ktor-client-websockets-jvm:3.5.0
+io.ktor:ktor-client-websockets:3.5.0
 io.ktor:ktor-events-jvm:3.5.0
 io.ktor:ktor-events:3.5.0
 io.ktor:ktor-http-cio-jvm:3.5.0

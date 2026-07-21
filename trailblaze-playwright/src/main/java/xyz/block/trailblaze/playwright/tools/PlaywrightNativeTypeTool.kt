@@ -19,7 +19,7 @@ By default this clears the field first and fills in the new text.
 Set clearFirst to false to append text instead.
 """,
 )
-class PlaywrightNativeTypeTool(
+data class PlaywrightNativeTypeTool(
   @param:LLMDescription("The text to type into the element.") val text: String,
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +

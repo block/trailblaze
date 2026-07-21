@@ -19,7 +19,7 @@ Use the element ID from the page elements list (e.g., 'e5'), an ARIA descriptor 
 or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testid="submit"]').
 """,
 )
-class PlaywrightNativeClickTool(
+data class PlaywrightNativeClickTool(
   @param:LLMDescription(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button \"Submit\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-id', 'css=[data-testid=\"btn\"]').",

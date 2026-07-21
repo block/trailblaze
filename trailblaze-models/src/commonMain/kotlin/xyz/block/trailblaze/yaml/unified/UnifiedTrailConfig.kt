@@ -6,14 +6,13 @@ import kotlinx.serialization.Serializable
  * Unified-format `config:` block — identity, target, optional per-classifier
  * driver pins, and free-form context/memory/metadata.
  *
- * Converting a v1 trail to this format never silently drops config. Two v1
- * fields deliberately have no unified home: `platform:` is retired (the
+ * Converting a v1 trail to this format never silently drops config. One v1
+ * field deliberately has no unified home: `platform:` is retired (the
  * supported device set derives from the steps' recorded classifiers and the
- * [devices] keys), and `electron:` is refused — conversion fails loud on it
- * (see [UnifiedTrailAdapter.v1ConfigToUnifiedConfig]) because it is
- * driver-specific structured launch config with zero corpus usage; its
- * unified home (likely target-level, not per-trail) is deferred until a real
- * Electron trail needs one. Everything else carries: the runtime-surfaced
+ * [devices] keys). Electron launch config was never a trail-level concern
+ * either — it lives on the target (`target.electron:` /
+ * [xyz.block.trailblaze.config.AppTargetYamlConfig.electron]), reached by
+ * selecting the target. Everything else carries: the runtime-surfaced
  * scalars ([title], [description], [priority]) round-trip verbatim as fields,
  * the informational v1 `source:` rides in [metadata] under the reserved bridge
  * keys (see the [metadata] kdoc), and the two per-platform v1 scalars

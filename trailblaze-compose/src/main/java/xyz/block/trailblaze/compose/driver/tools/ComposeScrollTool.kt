@@ -18,7 +18,7 @@ Identify the container using its element ID or text.
 Leave all identifiers empty to scroll the first scrollable container found.
 """,
 )
-class ComposeScrollTool(
+data class ComposeScrollTool(
   @param:LLMDescription("Element ID from the view hierarchy, e.g., 'e2'.")
   val elementId: String? = null,
   @param:LLMDescription("Accessibility identifier of the scrollable container.")

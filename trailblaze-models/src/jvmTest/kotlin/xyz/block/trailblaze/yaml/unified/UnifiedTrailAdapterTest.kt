@@ -2,7 +2,6 @@ package xyz.block.trailblaze.yaml.unified
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -13,7 +12,6 @@ import xyz.block.trailblaze.config.DefaultBehavior
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
-import xyz.block.trailblaze.yaml.ElectronAppConfig
 import xyz.block.trailblaze.yaml.TrailArgConfig
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
@@ -206,9 +204,8 @@ class UnifiedTrailAdapterTest {
   /**
    * A v1 config with every convertible field set — the round-trip test's completeness guard
    * walks the serial descriptor to enforce that, so a future `TrailConfig` field must be added
-   * here (and thereby to every conversion covered below) before it can ship. Two fields are
-   * deliberately absent: `platform` (retired — derived from classifier slots) and `electron`
-   * (refused by [UnifiedTrailAdapter.v1ConfigToUnifiedConfig] — fail loud, never silently drop).
+   * here (and thereby to every conversion covered below) before it can ship. One field is
+   * deliberately absent: `platform` (retired — derived from classifier slots).
    */
   private fun fullV1Config() = TrailConfig(
     context = "Extra LLM context",
@@ -237,21 +234,20 @@ class UnifiedTrailAdapterTest {
     // config field may be silently dropped by the unified format.
     val v1 = fullV1Config()
 
-    // Fixture-completeness guard: every TrailConfig field must be set above, except the two
+    // Fixture-completeness guard: every TrailConfig field must be set above, except the one
     // with an explicit no-home decision — `platform` (retired: the device set derives from the
-    // classifier slots) and `electron` (refused: conversion fails loud on it, tested below).
-    // encodeDefaults=false omits unset fields, so a newly added v1 field that this fixture
-    // doesn't cover fails here — forcing it into the round-trip (or an explicit decision)
-    // instead of being silently dropped by conversion.
+    // classifier slots). encodeDefaults=false omits unset fields, so a newly added v1 field that
+    // this fixture doesn't cover fails here — forcing it into the round-trip (or an explicit
+    // decision) instead of being silently dropped by conversion.
     val encodedV1 = TrailblazeYaml.defaultYamlInstance.encodeToString(TrailConfig.serializer(), v1)
     val descriptor = TrailConfig.serializer().descriptor
     val fieldNames = (0 until descriptor.elementsCount).map { descriptor.getElementName(it) }
     for (field in fieldNames) {
-      if (field == "platform" || field == "electron") continue
+      if (field == "platform") continue
       assertTrue(
         encodedV1.lineSequence().any { it.startsWith("$field:") },
         "fixture must set v1 `$field:` so the round-trip covers it — a new TrailConfig field " +
-          "needs a unified home (or an explicit decision like `platform`/`electron`)",
+          "needs a unified home (or an explicit decision like `platform`)",
       )
     }
 
@@ -307,17 +303,6 @@ class UnifiedTrailAdapterTest {
     // …but a placeholder survives when no file declares better.
     val kept = UnifiedTrailAdapter.fillMissingConfigScalars(placeholder, UnifiedTrailConfig())
     assertEquals("  ", kept.title)
-  }
-
-  @Test
-  fun `a v1 config with an electron block is refused, never silently dropped`() {
-    // The unified config deliberately has no electron field (driver-specific launch config,
-    // zero corpus usage) — conversion must fail loud rather than change how the trail launches.
-    val v1 = TrailConfig(id = "app/x", electron = ElectronAppConfig(command = "/opt/app/electron-app"))
-    val error = assertFailsWith<IllegalArgumentException> {
-      UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1)
-    }
-    assertTrue("electron" in error.message.orEmpty())
   }
 
   @Test
