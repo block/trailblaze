@@ -42,9 +42,9 @@ class OnDeviceRpcClient(
   /**
    * Arms [onNonRecoverableWedge] when either the failure [message] or its [details] carries the
    * terminal non-recoverable stale-handle signature. Both are checked because the signature can
-   * land in `message` (handler-caught path) or `details` (HTTP-error path). The matcher requires
-   * two distinct phrases, so an ordinary failure can't trip it. `@PublishedApi internal` for the
-   * same inline-visibility reason as [onNonRecoverableWedge].
+   * land in `message` (handler-caught path) or `details` (HTTP-error path). The matcher recognizes
+   * only terminal UiAutomation recovery failures, so an ordinary failure can't trip it.
+   * `@PublishedApi internal` for the same inline-visibility reason as [onNonRecoverableWedge].
    */
   @PublishedApi
   internal fun noteIfNonRecoverableWedge(message: String?, details: String?) {

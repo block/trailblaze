@@ -90,8 +90,8 @@ class DesktopYamlRunner(
      * single matching tool log proves the server was in the kill-and-relaunch-only state,
      * regardless of how the session later ended (a different last-step failure, an LLM
      * call-budget exhaustion, even a nominal success if the remaining steps never touched the
-     * device). Still keyed to the exact two-phrase signature, so the strictness rationale of the
-     * status overload — never arm on ordinary failures — is preserved.
+     * device). Still keyed to terminal UiAutomation recovery failures, so the strictness
+     * rationale of the status overload — never arm on ordinary failures — is preserved.
      */
     internal fun shouldRelaunchOnDeviceServer(logs: List<TrailblazeLog>): Boolean {
       if (shouldRelaunchOnDeviceServer(logs.getSessionStatus())) return true

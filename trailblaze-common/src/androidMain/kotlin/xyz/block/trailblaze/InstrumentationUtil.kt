@@ -128,9 +128,9 @@ object InstrumentationUtil {
    *
    * Recovery: on the first hit we clear the cached handle via reflection on [Instrumentation]'s
    * private `mUiAutomation` field, force a fresh `getUiAutomation(FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)`
-   * (which constructs a new handle and calls `connect()`), and retry once. If the retry also fails — most likely the
-   * underlying system service is genuinely gone — we re-throw with a wrapped message that points
-   * the operator at the actual recovery (restart the on-device server / test APK).
+   * (which constructs a new handle and calls `connect()`), and retry once. If Android blocks
+   * clearing the cache, or the retry also fails, we propagate a terminal signature that causes
+   * the host to restart the on-device server before its next trail.
    *
    * Reflection is the only path here because the platform doesn't expose a public way to drop
    * the cached handle. The field name is stable across all Android versions Trailblaze targets;
@@ -155,8 +155,9 @@ object InstrumentationUtil {
       val cleared = clearInstrumentationUiAutomationCache()
       if (!cleared) {
         throw IllegalStateException(
-          "UiAutomation is not connected and the cached handle could not be cleared via " +
-            "reflection (both Instrumentation.disconnectUiAutomation() and the mUiAutomation " +
+          "UiAutomation is not connected and the " +
+            "${UiAutomationHandleErrors.NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE} " +
+            "(both Instrumentation.disconnectUiAutomation() and the mUiAutomation " +
             "field are inaccessible — Android internal API may have changed). " +
             "Recover by restarting the Trailblaze on-device server (kill + re-launch the test " +
             "APK process). Original error: $msg",
