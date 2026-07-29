@@ -72,8 +72,9 @@ class OnDeviceRpcClient(
   /**
    * Typed twin of the string-matching [noteIfNonRecoverableWedge]: arms the breaker when an
    * `awaitCompletion = true` [RunYamlResponse] is tagged [RunYamlResponse.nonRecoverableWedge]
-   * at the source, and returns whether it armed so the call site can shape its own terminal
-   * result (FatalError, `recoverable = false`, …).
+   * at the source, or an older runner returns a terminal UiAutomation error without the tag.
+   * Returns whether it armed so the call site can shape its own terminal result
+   * (FatalError, `recoverable = false`, …).
    *
    * A wedge tagged this way arrives as an `RpcResult.Success` carrying `success = false` — the
    * per-call `Failure`-arm string matches in [rpcCall] never see it (no failure body
@@ -83,10 +84,13 @@ class OnDeviceRpcClient(
    * the first time (trailblaze-android-pr/2712).
    */
   fun noteIfNonRecoverableWedge(response: RunYamlResponse): Boolean {
-    if (response.nonRecoverableWedge) {
+    val nonRecoverableWedge = response.nonRecoverableWedge ||
+      (response.success == false &&
+        UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(response.errorMessage))
+    if (nonRecoverableWedge) {
       onNonRecoverableWedge()
     }
-    return response.nonRecoverableWedge
+    return nonRecoverableWedge
   }
 
   /**

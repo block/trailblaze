@@ -142,6 +142,25 @@ class TrailblazeMcpBridgeImpl(
     @Volatile var progressMessage: String = "Checking Playwright drivers..."
   }
 
+  /** Keeps a terminal runner failure armed until that device has actually been restarted. */
+  internal class OnDeviceRunnerRecovery(
+    private val onWedged: (TrailblazeDeviceId) -> Unit = {},
+  ) {
+    private val wedgedDeviceIds: MutableSet<TrailblazeDeviceId> = ConcurrentHashMap.newKeySet()
+
+    fun arm(deviceId: TrailblazeDeviceId) {
+      if (wedgedDeviceIds.add(deviceId)) {
+        onWedged(deviceId)
+      }
+    }
+
+    fun requiresRestart(deviceId: TrailblazeDeviceId): Boolean = deviceId in wedgedDeviceIds
+
+    fun markRecovered(deviceId: TrailblazeDeviceId) {
+      wedgedDeviceIds.remove(deviceId)
+    }
+  }
+
   private val webInitJobs = ConcurrentHashMap<String, WebInitState>()
 
   /** Persists failure messages after the init thread exits, so the MCP client sees them on the next poll. */
@@ -171,6 +190,16 @@ class TrailblazeMcpBridgeImpl(
    */
   private val persistentDevices = ConcurrentHashMap<String, TrailblazeConnectedDevice>()
 
+  private val onDeviceRunnerRecovery = OnDeviceRunnerRecovery { deviceId ->
+    val key = deviceId.instanceId
+    cachedScreenStates.remove(key)
+    onDeviceAgentReady.remove(key)
+    Console.info(
+      "[MCP Bridge] Non-recoverable UiAutomation wedge armed for $key; " +
+        "the on-device runner will be force-restarted before its next MCP action.",
+    )
+  }
+
   /**
    * One host-to-runner RPC client per Android device. The bridge lives in the daemon, so this
    * keeps its WebSocket open across separate CLI `snapshot`, `tool`, and `step` requests instead
@@ -182,6 +211,7 @@ class TrailblazeMcpBridgeImpl(
       sendProgressMessage = {
         Console.log("[MCP Bridge] [rpc ${deviceId.instanceId}] $it")
       },
+      onNonRecoverableWedge = { onDeviceRunnerRecovery.arm(deviceId) },
     )
   }
 
@@ -868,7 +898,16 @@ class TrailblazeMcpBridgeImpl(
           }
         }
 
-        doConnectAndEnable(forceRestart = false)
+        val recoverFromPriorWedge = onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)
+        if (recoverFromPriorWedge) {
+          Console.info(
+            "[MCP Bridge] Recovering from a non-recoverable UiAutomation wedge on $key; " +
+              "force-restarting the on-device runner before the next MCP action.",
+          )
+          onDeviceRpcClients.evict(trailblazeDeviceId)
+        }
+
+        doConnectAndEnable(forceRestart = recoverFromPriorWedge)
         try {
           // Fail-fast first probe: a healthy clean start serves in ~26s (install + launch), so 40s
           // detects a zombie quickly and leaves room for the full restart+reprobe under the MCP timeout.
@@ -882,6 +921,9 @@ class TrailblazeMcpBridgeImpl(
         }
 
         onDeviceAgentReady.add(key)
+        if (recoverFromPriorWedge) {
+          onDeviceRunnerRecovery.markRecovered(trailblazeDeviceId)
+        }
         Console.log("[MCP Bridge] On-device agent ready for $key")
       } catch (e: Exception) {
         Console.log("[MCP Bridge] On-device agent setup failed for $key: ${e.message}")
@@ -1652,6 +1694,14 @@ class TrailblazeMcpBridgeImpl(
     blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String {
+    val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+    if (onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
+      ensureOnDeviceAgentRunning(trailblazeDeviceId, driverType)
+      check(!onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
+        "On-device runner recovery failed for ${trailblazeDeviceId.instanceId}; " +
+          "the runner will be restarted before the next MCP action."
+      }
+    }
     val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
 
     return run {
@@ -1661,7 +1711,6 @@ class TrailblazeMcpBridgeImpl(
         sessionIdPrefix = "yaml",
       )
 
-      val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       // Honor "Capture Network Traffic" on the host-driven Android RPC path. The MCP bridge
       // doesn't go through BasePlaywrightNativeTest's `ensureWebNetworkCaptureStarted()`, so we
       // wire an analog here. The actual capture lives in an external module behind
@@ -1775,6 +1824,7 @@ class TrailblazeMcpBridgeImpl(
               )
             }
             false -> {
+              rpcClient.noteIfNonRecoverableWedge(response)
               val message = response.errorMessage?.takeUnless { it.isBlank() }
                 ?: "unknown on-device error"
               Console.log("[executeToolViaRpc] On-device execution failed: $message")

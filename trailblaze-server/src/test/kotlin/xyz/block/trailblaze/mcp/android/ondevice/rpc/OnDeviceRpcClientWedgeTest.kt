@@ -187,6 +187,57 @@ class OnDeviceRpcClientWedgeTest {
   }
 
   @Test
+  fun `the typed RunYamlResponse overload recognizes an untagged legacy wedge`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("legacy-wedge-overload"),
+        success = false,
+        errorMessage = nonRecoverableWedgeMessage,
+      ),
+    )
+
+    assertTrue(noted, "a legacy terminal error must be recognized without the structured flag")
+    assertTrue(armed, "a legacy terminal error must arm the runner restart")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload recognizes untagged blocked reflective recovery`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("reflection-blocked-wedge-overload"),
+        success = false,
+        errorMessage = reflectionBlockedWedgeMessage,
+      ),
+    )
+
+    assertTrue(noted, "blocked reflective recovery must be recognized without the structured flag")
+    assertTrue(armed, "blocked reflective recovery must arm the runner restart")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload ignores terminal text on successful responses`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("successful-wedge-diagnostic"),
+        success = true,
+        errorMessage = nonRecoverableWedgeMessage,
+      ),
+    )
+
+    assertFalse(noted, "successful diagnostic output must not trigger runner recovery")
+    assertFalse(armed, "successful responses must not arm the runner restart")
+  }
+
+  @Test
   fun `the typed RunYamlResponse overload does not arm on an ordinary inline failure`() {
     var armed = false
     val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
