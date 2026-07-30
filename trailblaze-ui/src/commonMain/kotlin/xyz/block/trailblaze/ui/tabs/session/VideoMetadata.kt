@@ -21,9 +21,9 @@ data class VideoMetadata(
 /**
  * Describes a sprite sheet image containing video frames arranged in a grid.
  *
- * Frames are laid out left-to-right, top-to-bottom. Frame N is at
- * column `N / rows`, row `N % rows`. For legacy single-column sheets,
- * [columns] = 1 and [rows] = [frameCount].
+ * Frames are laid out row-major: frame N is at row `N / columns`, column `N % columns`
+ * (`VideoSpriteExtractor.spriteGridPosition` is the shared implementation). For legacy
+ * single-column sheets, [columns] = 1 and [rows] = [frameCount].
  */
 data class SpriteSheetInfo(
   /** Frames per second encoded in the sprite sheet. */

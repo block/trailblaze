@@ -22,6 +22,27 @@ object TrailblazeNodeSelectorResolver {
   /** Maximum nesting depth for recursive resolve() calls (spatial/hierarchy selectors). */
   private const val MAX_RESOLVE_DEPTH = 10
 
+  /** XCUIElementType names whose AXLabel carries the placeholder while the field is empty. */
+  private val IOS_TEXT_INPUT_TYPES = setOf("TextField", "SecureTextField", "SearchField", "TextView")
+
+  /**
+   * Maestro-era iOS class names accepted per AXe element type by the `iosMaestro` → `iosAxe`
+   * compatibility bridge. Maestro's iOS tree reports the *label view* (`LabelView`,
+   * `UIButtonLabel`, `UITextFieldLabel`) or the UIKit class (`UILabel`) where AXe reports the
+   * semantic element type — so a recorded `classNameRegex: LabelView` must still match the AXe
+   * `StaticText` node that carries the same text. Tab-bar/nav items and buttons surface on an
+   * AXe tree as `Button` carrying the label directly (no separate StaticText child), so the
+   * label-view classes are accepted there too. Curated from the class names recorded
+   * selectors actually carry; unmapped custom classes fail the constraint (and fall to the
+   * recorded coordinate fallback at replay).
+   */
+  private val MAESTRO_IOS_CLASS_ALIASES: Map<String, List<String>> = mapOf(
+    "StaticText" to listOf("UILabel", "LabelView"),
+    "Button" to listOf("UIButton", "UIButtonLabel", "UILabel", "LabelView"),
+    "TextField" to listOf("UITextField", "UITextFieldLabel"),
+    "SecureTextField" to listOf("UISecureTextField", "UITextFieldLabel"),
+  )
+
   /** Result of an element resolution attempt. */
   sealed interface ResolveResult {
     /** Exactly one element matched — the success case for interactions. */
@@ -147,6 +168,12 @@ object TrailblazeNodeSelectorResolver {
   ): Boolean {
     if (depth > MAX_RESOLVE_DEPTH) return false
 
+    // Container-chrome guard (iOS AXe): a text-driven selector never resolves to the
+    // screen-sized Application/Window chrome — see isIosAxeContainerChrome. Applied at the
+    // selector level (not per driver-match) so hierarchy shapes like a bare
+    // `containsChild: {textRegex: …}` can't match the chrome via a text-bearing descendant.
+    if (isExcludedAsContainerChrome(node, selector)) return false
+
     // Driver-specific property matching
     selector.driverMatch?.let { match ->
       if (!matchesDriverDetail(node.driverDetail, match)) return false
@@ -210,7 +237,13 @@ object TrailblazeNodeSelectorResolver {
     is DriverNodeMatch.Compose ->
       detail is DriverNodeDetail.Compose && matchesCompose(detail, match)
     is DriverNodeMatch.IosMaestro ->
-      detail is DriverNodeDetail.IosMaestro && matchesIosMaestro(detail, match)
+      when (detail) {
+        is DriverNodeDetail.IosMaestro -> matchesIosMaestro(detail, match)
+        // Cross-dialect bridge: a trail recorded under the legacy Maestro iOS driver still
+        // resolves when replayed against the newer AXe driver. See matchesIosMaestroAgainstAxe.
+        is DriverNodeDetail.IosAxe -> matchesIosMaestroAgainstAxe(detail, match)
+        else -> false
+      }
     is DriverNodeMatch.IosAxe ->
       detail is DriverNodeDetail.IosAxe && matchesIosAxe(detail, match)
   }
@@ -318,6 +351,60 @@ object TrailblazeNodeSelectorResolver {
     return true
   }
 
+  /**
+   * True for the screen-sized container chrome on an AXe tree — the `AXApplication` root and
+   * its `AXWindow`s. Their AXLabel is the app name (the Settings app's root is labeled
+   * "Settings"), so a text-driven selector must never resolve to them: the match would be
+   * technically correct yet tap the container's center — the middle of the screen — instead
+   * of the intended element, and sometimes still "pass". Mirrored in the TS resolver
+   * (`isIosAxeContainerChrome` in `sdks/typescript/src/matcher/resolver.ts`).
+   */
+  private fun isIosAxeContainerChrome(detail: DriverNodeDetail.IosAxe): Boolean =
+    detail.type == "Application" || detail.type == "Window" ||
+      detail.role == "AXApplication" || detail.role == "AXWindow"
+
+  /**
+   * True when [node] is AXe container chrome that a text-driven [selector] must not resolve
+   * to. Text constraints are collected from the whole selector tree (the candidate's own
+   * driver match plus nested containsChild/containsDescendants), so a bare
+   * `containsChild: {textRegex: …}` — which carries no driver match on the candidate — still
+   * skips the chrome. A selector whose driver match pins the container explicitly
+   * (roleRegex/typeRegex/uniqueId, or the bridged classNameRegex/resourceIdRegex) still
+   * matches it.
+   */
+  private fun isExcludedAsContainerChrome(
+    node: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+  ): Boolean {
+    val detail = node.driverDetail as? DriverNodeDetail.IosAxe ?: return false
+    if (!isIosAxeContainerChrome(detail)) return false
+    if (pinsIosContainer(selector.driverMatch)) return false
+    return hasIosTextConstraint(selector)
+  }
+
+  private fun pinsIosContainer(match: DriverNodeMatch?): Boolean = when (match) {
+    is DriverNodeMatch.IosAxe ->
+      match.roleRegex != null || match.typeRegex != null || match.uniqueId != null
+    is DriverNodeMatch.IosMaestro ->
+      match.classNameRegex != null || match.resourceIdRegex != null
+    else -> false
+  }
+
+  private fun hasIosTextConstraint(selector: TrailblazeNodeSelector): Boolean {
+    selector.driverMatch?.let { if (hasIosTextConstraint(it)) return true }
+    selector.containsChild?.let { if (hasIosTextConstraint(it)) return true }
+    selector.containsDescendants?.let { list -> if (list.any { hasIosTextConstraint(it) }) return true }
+    return false
+  }
+
+  private fun hasIosTextConstraint(match: DriverNodeMatch): Boolean = when (match) {
+    is DriverNodeMatch.IosAxe ->
+      match.labelRegex != null || match.valueRegex != null || match.titleRegex != null
+    is DriverNodeMatch.IosMaestro ->
+      match.textRegex != null || match.accessibilityTextRegex != null || match.hintTextRegex != null
+    else -> false
+  }
+
   private fun matchesIosAxe(
     detail: DriverNodeDetail.IosAxe,
     match: DriverNodeMatch.IosAxe,
@@ -333,6 +420,88 @@ object TrailblazeNodeSelectorResolver {
       if (needed !in detail.customActions) return false
     }
     if (!requireEqual(match.enabled, detail.enabled)) return false
+    return true
+  }
+
+  /**
+   * Cross-dialect compatibility bridge: matches a [DriverNodeMatch.IosMaestro] selector — as
+   * recorded under the legacy Maestro iOS driver — against a [DriverNodeDetail.IosAxe] node
+   * captured by the newer AXe driver. Without this bridge, a trail recorded on Maestro can never
+   * match on AXe (the dispatch in [matchesDriverDetail] otherwise requires shape equality), so
+   * every existing `iosMaestro:` selector would break on driver migration.
+   *
+   * Maps Maestro's inferred vocabulary onto AXe's native fields:
+   * - `text`/`textRegex` matches [DriverNodeDetail.IosAxe.label], `.value`, or `.title` — Maestro's
+   *   iOS "text" is itself derived from this AX label/value/title cluster.
+   * - `accessibilityText` matches `.label`.
+   * - `resourceId`/`id` matches `.uniqueId` (`accessibilityIdentifier`).
+   * - `className` matches `.type` or `.role` — AXe's `type` (e.g. "Button") is the closest analog
+   *   to Maestro's class notion — plus the Maestro-era UIKit class names recorded selectors
+   *   actually carry (see [MAESTRO_IOS_CLASS_ALIASES]): Maestro's iOS tree reports the *label
+   *   view* (`LabelView`, `UILabel`, `UIButtonLabel`, `UITextFieldLabel`) where AXe reports the
+   *   semantic element (`StaticText`, `Button`, `TextField`).
+   * - `hintText` matches `.help`.
+   *
+   * Uses [MatchDialect.MAESTRO] throughout: the selector was authored under Maestro's lenient
+   * semantics, and that's what it should still mean here.
+   *
+   * `focused` and `selected` **fail closed** — AXe exposes no equivalent signal, so a selector
+   * carrying either can never match on an AXe tree. Silently dropping the constraint instead
+   * would change what the selector means: a waypoint requiring `focused: true` would
+   * false-match its non-focused sibling screen, and a forbidden selector keyed on
+   * `focused: false` would match the always-present element and never let its waypoint match.
+   * Selectors that need these constraints must be migrated to AXe-expressible fields before
+   * the AXe driver replays them (they keep working unchanged on Maestro trees).
+   *
+   * The same applies to a selector with no bridgeable field at all: it matches nothing.
+   */
+  private fun matchesIosMaestroAgainstAxe(
+    detail: DriverNodeDetail.IosAxe,
+    match: DriverNodeMatch.IosMaestro,
+  ): Boolean {
+    val dialect = MatchDialect.MAESTRO
+    // Fail closed: unbridgeable constraints (focused/selected) mean this selector cannot be
+    // faithfully evaluated against an AXe tree — matching nothing is louder and safer than
+    // silently weakening a recorded constraint.
+    if (match.focused != null || match.selected != null) return false
+    // Fail closed: a selector carrying only unbridgeable fields must match nothing.
+    val bridgeable =
+      match.textRegex != null ||
+        match.accessibilityTextRegex != null ||
+        match.resourceIdRegex != null ||
+        match.classNameRegex != null ||
+        match.hintTextRegex != null
+    if (!bridgeable) return false
+
+    match.textRegex?.let { pattern ->
+      if (!matchesAnyPattern(pattern, dialect, detail.label, detail.value, detail.title)) {
+        return false
+      }
+    }
+    match.accessibilityTextRegex?.let { pattern ->
+      if (!requirePattern(pattern, detail.label, dialect)) return false
+    }
+    match.resourceIdRegex?.let { pattern ->
+      if (!requirePattern(pattern, detail.uniqueId, dialect)) return false
+    }
+    match.classNameRegex?.let { pattern ->
+      val aliases = detail.type?.let { MAESTRO_IOS_CLASS_ALIASES[it] }.orEmpty()
+      val matchesClass =
+        matchesAnyPattern(pattern, dialect, detail.type, detail.role) ||
+          aliases.any { matchesPattern(pattern, it, dialect) }
+      if (!matchesClass) return false
+    }
+    match.hintTextRegex?.let { pattern ->
+      // iOS surfaces a text input's placeholder (Maestro's hintText / XCUITest's
+      // placeholderValue) as AXLabel, not AXHelp — so accept label too, but only on
+      // text-input types so a decorative node whose label happens to equal the hint
+      // (e.g. a magnifying-glass Image labeled "Search") can't false-match.
+      val matchesHelp = requirePattern(pattern, detail.help, dialect)
+      val matchesPlaceholder =
+        detail.type in IOS_TEXT_INPUT_TYPES && requirePattern(pattern, detail.label, dialect)
+      if (!matchesHelp && !matchesPlaceholder) return false
+    }
+
     return true
   }
 
@@ -375,6 +544,14 @@ object TrailblazeNodeSelectorResolver {
     if (text == null) return false
     return matchesPattern(pattern, text, dialect)
   }
+
+  /**
+   * Returns true if [pattern] matches any non-null value in [texts]. Used by cross-dialect
+   * bridges (e.g. [matchesIosMaestroAgainstAxe]) where one selector field is derived from a
+   * cluster of several node properties on the target dialect.
+   */
+  private fun matchesAnyPattern(pattern: String, dialect: MatchDialect, vararg texts: String?): Boolean =
+    texts.any { it != null && matchesPattern(pattern, it, dialect) }
 
   /**
    * Matches a regex pattern against the full text, then falls back to literal string equality

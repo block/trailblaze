@@ -1492,19 +1492,6 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `resolveRunDevice routes a v1 web trail to the web device`() {
-    val result =
-      callResolveRunDevice(
-        deviceSpec = null,
-        allDevices = testDevices,
-        trailYaml = "- config:\n    platform: web\n- tools:\n  - pressBack: {}",
-      )
-
-    assertNotNull(result)
-    assertEquals(TrailblazeDevicePlatform.WEB, result.platform)
-  }
-
-  @Test
   fun `resolveRunDevice routes a unified web trail to the browser on a mixed shell`() {
     // The in-process headline fix: a unified trail declares its platform only through recording
     // classifiers (no v1 `platform:` field), so the YAML→declared-platforms→device composition
@@ -2260,6 +2247,40 @@ class CliCommandValidationTest {
 
     assertEquals("out.mp4", cmd.videoOutput)
     assertEquals("out.gif", cmd.gifOutput)
+  }
+
+  @Test
+  fun `report -- share-url accepts parseable http and https URLs`() {
+    assertTrue(ReportCommand.isValidShareUrl("https://reports.example.com/run/42?jwt=abc"))
+    assertTrue(ReportCommand.isValidShareUrl("http://localhost:8080/report.html"))
+    assertTrue(ReportCommand.isValidShareUrl("HTTPS://Example.com/x"))
+    assertTrue(ReportCommand.isValidShareUrl("https://reports.example.com:65535/x"))
+  }
+
+  @Test
+  fun `report -- share-url rejects values the viewer's safeHref would refuse`() {
+    // Not http(s) at all.
+    assertFalse(ReportCommand.isValidShareUrl("ftp://example.com/report"))
+    assertFalse(ReportCommand.isValidShareUrl("javascript:alert(1)"))
+    // Starts with http(s):// but has no host — the case a prefix regex accepts
+    // while the viewer's `new URL(...)` gate hides Copy link with no diagnostic.
+    assertFalse(ReportCommand.isValidShareUrl("https://?jwt=abc"))
+    assertFalse(ReportCommand.isValidShareUrl("https://"))
+    // Unparseable.
+    assertFalse(ReportCommand.isValidShareUrl("https://exa mple.com/x"))
+    // Parses via java.net.URI but a browser's `new URL(...)` rejects the port.
+    assertFalse(ReportCommand.isValidShareUrl("https://reports.example.com:99999/report.html"))
+  }
+
+  @Test
+  fun `report -- hostless share-url returns USAGE before any generation`() {
+    val cmd = ReportCommand()
+    cmd.id = "abc123"
+    cmd.shareUrl = "https://?jwt=abc"
+
+    val exitCode = cmd.call()
+
+    assertEquals(TrailblazeExitCode.MISUSE.code, exitCode)
   }
 
   // ---------------------------------------------------------------------------

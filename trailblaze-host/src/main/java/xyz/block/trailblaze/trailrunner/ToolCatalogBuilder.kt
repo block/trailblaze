@@ -11,6 +11,7 @@ import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
+import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -318,7 +319,15 @@ object ToolCatalogBuilder {
       val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return@runCatching null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return@runCatching null
       if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) return@runCatching null
-      ScriptedToolDefinitionAnalyzer(bunBinary = bun, extractorShim = shim, sdkDir = sdkDir)
+      ScriptedToolDefinitionAnalyzer(
+        bunBinary = bun,
+        extractorShim = shim,
+        sdkDir = sdkDir,
+        // Content-hash cache, same wiring as AnalyzerScriptedToolEnrichment / PerTrailmapClientDtsEmitter.
+        // Without it every catalog build re-spawns the bun + ts-json-schema-generator subprocess for every
+        // trailmap with scripted tools (~12s across a real workspace), on every Tools-page load.
+        cacheDirProvider = { ScriptedToolDefinitionCache.resolveWorkspaceCacheDir() },
+      )
     }.getOrNull()
   }
   /**

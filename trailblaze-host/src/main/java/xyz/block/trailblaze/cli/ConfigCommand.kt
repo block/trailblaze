@@ -196,8 +196,12 @@ class ConfigCommand : Callable<Int> {
     Console.info("")
     Console.info("Experimental:")
     Console.info(
-      "  Android stream screenshots: " +
-        "${CONFIG_KEYS["android-stream-screenshots"]!!.get(currentConfig)}",
+      "  Stream screenshots: " +
+        "${CONFIG_KEYS["stream-screenshots"]!!.get(currentConfig)}",
+    )
+    Console.info(
+      "  Disable animations: " +
+        "${CONFIG_KEYS["disable-animations"]!!.get(currentConfig)}",
     )
 
     Console.info("")
@@ -209,7 +213,8 @@ class ConfigCommand : Callable<Int> {
     Console.info("  trailblaze config screenshot-format <fmt>   Set screenshot format (png|jpeg|webp|unset)")
     Console.info("  trailblaze config screenshot-max-dimensions <WxH>  Set max screenshot dimensions")
     Console.info("  trailblaze config screenshot-quality <0..1> Set lossy compression quality")
-    Console.info("  trailblaze config android-stream-screenshots <true|false|unset>  (experimental) Serve Android screenshots from the live device stream")
+    Console.info("  trailblaze config stream-screenshots <true|false|unset>  (experimental) Serve agent screenshots from the live device stream (Android/iOS/web)")
+    Console.info("  trailblaze config disable-animations <true|false|unset>  (experimental) Disable OS animations during each session, restored at session end")
     Console.info("  trailblaze config models                    List available models")
     Console.info("  trailblaze config reset                     Reset all settings to defaults")
     Console.info("")

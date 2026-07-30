@@ -17,6 +17,7 @@ exp4j = "0.4.8"
 espressoCore = "3.7.0"
 androidx-test-core = "1.7.0"
 androidx-test-monitor = "1.8.0"
+androidx-test-orchestrator = "1.5.1"
 gson = "2.13.2"
 jackson = "2.21.2"
 jansi = "2.4.1"
@@ -95,6 +96,7 @@ androidx-core-v160 = { module = "androidx.test:core", version.ref = "core" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidx-test-core" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-test-monitor = { group = "androidx.test", name = "monitor", version.ref = "androidx-test-monitor" }
+androidx-test-orchestrator = { module = "androidx.test:orchestrator", version.ref = "androidx-test-orchestrator" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }

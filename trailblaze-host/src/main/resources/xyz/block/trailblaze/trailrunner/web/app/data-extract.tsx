@@ -22,109 +22,12 @@ function derivePlatformFromTrail(trail) {
   return null;
 }
 
-// `prependSteps`: ordered recorded steps to replay before the AI objective, each
-// { label, tool, args }. The runner replays steps that have a recording and lets the agent
-// drive the ones that don't, so these put the app in a known state first, such as clearing app data
-// or launching into a signed-in state.
-function buildPromptTrailYaml(title, target, platform, objective, prependSteps) {
-  const yamlValue = (v) => {
-    if (typeof v === 'string') {
-      // Quote when empty too — a bare `key:` parses as null, not "" (e.g. the iOS launch tool's
-      // unused `password` is a required String).
-      if (v === '' || /[:{}\[\],&*#?|<>=!%@`'"\\]/.test(v) || v.includes('\n')) return JSON.stringify(v);
-      return v;
-    }
-    return String(v);
-  };
-  const lines = ['- config:', `    title: ${yamlValue(title)}`];
-  if (target) lines.push(`    target: ${yamlValue(target)}`);
-  if (platform) lines.push(`    platform: ${yamlValue(platform)}`);
-  lines.push('- prompts:');
-  (prependSteps || []).forEach((s) => {
-    const args = Object.entries(s.args || {}).map(([k, v]) => `${k}: ${yamlValue(v)}`).join(', ');
-    lines.push(
-      `  - step: ${yamlValue(s.label)}`,
-      '    recording:',
-      '      tools:',
-      `      - ${s.tool}: ${args ? `{ ${args} }` : '{}'}`,
-    );
-  });
-  lines.push(`  - step: ${JSON.stringify(String(objective))}`);
-  return lines.join('\n');
-}
-
-// Serialize a `blaze.yaml` (the portable spec): config (with the original objective preserved in
-// metadata) + an ordered list of do/verify steps, NO recordings. Used by the Create save flows
-// and the step editor. `steps` is an array of { kind: 'do'|'verify', text }.
-// Build a blaze.yaml from the structured fields. `extra` carries optional config (context) and
-// metadata (destination — the eventual commit home, kept in metadata so the OSS TrailConfig model
-// is untouched, same as objective).
-function buildBlazeYaml(title, target, platform, objective, steps, extra) {
-  extra = extra || {};
-  const yamlValue = (v) => {
-    if (typeof v === 'string') {
-      if (v === '' || /[:{}\[\],&*#?|<>=!%@`'"\\]/.test(v) || v.includes('\n')) return JSON.stringify(v);
-      return v;
-    }
-    return String(v);
-  };
-  const lines = ['- config:', `    title: ${yamlValue(title)}`];
-  if (target) lines.push(`    target: ${yamlValue(target)}`);
-  if (platform) lines.push(`    platform: ${yamlValue(platform)}`);
-  if (extra.context) lines.push(`    context: ${yamlValue(extra.context)}`);
-  const meta = [];
-  if (objective) meta.push(`      objective: ${yamlValue(objective)}`);
-  if (extra.destination) meta.push(`      destination: ${yamlValue(extra.destination)}`);
-  if (meta.length) { lines.push('    metadata:'); meta.forEach((m) => lines.push(m)); }
-  lines.push('- prompts:');
-  (steps || []).forEach((s) => {
-    const key = (s.kind === 'verify') ? 'verify' : 'step';
-    lines.push(`  - ${key}: ${yamlValue(s.text)}`);
-  });
-  return lines.join('\n');
-}
-
-// Re-serialize a bundle's blaze.yaml when saving STRUCTURED edits (title/target/platform/destination/
-// steps), while PRESERVING any config the structured editor doesn't model (tags, priority, driver,
-// skip, description, memory, source, electron, id, plus extra metadata keys) — anything a user typed
-// in the raw YAML editor. Falls back to a clean buildBlazeYaml if the existing file can't be parsed.
-function mergeBlazeYaml(existingYaml, fields) {
-  const f = fields || {};
-  if (!window.jsyaml) return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
-  let config = {};
-  // The new format carries a leading `- trailhead:` item (the deterministic step 0); preserve it
-  // verbatim across a structured save, exactly like config — the step editor doesn't model it, so
-  // rebuilding [{config},{prompts}] alone would silently drop it.
-  let trailhead = null;
-  try {
-    const doc = window.jsyaml.load(existingYaml);
-    const items = Array.isArray(doc) ? doc : doc ? [doc] : [];
-    for (const it of items) {
-      if (it && it.config) config = { ...it.config };
-      if (it && it.trailhead != null) trailhead = it.trailhead;
-    }
-  } catch (e) {
-    return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
-  }
-  const set = (k, v) => { if (v != null && v !== '') config[k] = v; else delete config[k]; };
-  set('title', f.title);
-  set('target', f.target);
-  set('platform', f.platform);
-  set('context', f.context);
-  const meta = { ...(config.metadata || {}) };
-  if (f.objective) meta.objective = f.objective; else delete meta.objective;
-  if (f.destination) meta.destination = f.destination; else delete meta.destination;
-  if (Object.keys(meta).length) config.metadata = meta; else delete config.metadata;
-  const prompts = (f.steps || []).filter((s) => s.text.trim()).map((s) => ({ [s.kind === 'verify' ? 'verify' : 'step']: s.text }));
-  const out = [{ config }];
-  if (trailhead != null) out.push({ trailhead });
-  out.push({ prompts });
-  try {
-    return window.jsyaml.dump(out, { lineWidth: -1, noRefs: true }).trimEnd();
-  } catch (e) {
-    return buildBlazeYaml(f.title, f.target, f.platform, f.objective, f.steps, { context: f.context, destination: f.destination });
-  }
-}
+// Unified trail/blaze YAML producers live in app/trail-yaml.js (the single source of truth, shared
+// with bun tests); these thin wrappers keep the file-local names their call sites (here + the TB
+// export object + other screens via TB.*) already use.
+function buildPromptTrailYaml(title, target, platform, objective, prependSteps) { return window.TrailYamlBuild.buildPromptTrailYaml(title, target, platform, objective, prependSteps); }
+function buildBlazeYaml(title, target, platform, objective, steps, extra) { return window.TrailYamlBuild.buildBlazeYaml(title, target, platform, objective, steps, extra); }
+function mergeBlazeYaml(existingYaml, fields) { return window.TrailYamlBuild.mergeBlazeYaml(existingYaml, fields); }
 
 // extractTrace / extractLlmLogs and their helpers (logClass, stepText, toolDetail,
 // summarizeToolArgs, describeSelector, describeAction, toolChildren, parseLlmResponse, truncate)

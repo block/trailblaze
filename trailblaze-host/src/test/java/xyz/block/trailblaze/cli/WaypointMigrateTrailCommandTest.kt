@@ -23,9 +23,6 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
-import xyz.block.trailblaze.yaml.DirectionStep
-import xyz.block.trailblaze.yaml.ToolRecording
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
@@ -39,7 +36,7 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
  * populated, which is heavy to fixture; the helpers below cover the cleverest pieces in
  * isolation:
  *
- *  - [WaypointMigrateTrailCommand.collectMaestroSelectors] — walks a parsed trail tree and
+ *  - [WaypointMigrateTrailCommand.collectMaestroSelectorsUnified] — walks a parsed trail tree and
  *    pulls every `tapOnElementBySelector` / `assertVisibleBySelector` tool whose
  *    `nodeSelector` is still Maestro-shape (androidMaestro leaves), lowered to the
  *    [TrailblazeElementSelector] the Maestro matcher consumes, in YAML document order.
@@ -105,59 +102,55 @@ class WaypointMigrateTrailCommandTest {
     )
   }
 
-  // ----- collectMaestroSelectors --------------------------------------------------
+  // ----- collectMaestroSelectorsUnified -------------------------------------------
 
   @Test
-  fun `collectMaestroSelectors emits zero entries on a trail with no selector tools`() {
+  fun `collectMaestroSelectorsUnified emits zero entries on a trail with no selector tools`() {
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "do something custom",
-            recording = ToolRecording(
-              tools = listOf(wrap("customTool", FakeNonSelectorTool)),
-            ),
-          ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "do something custom",
+          recordings = mapOf("android" to listOf(wrap("customTool", FakeNonSelectorTool))),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectors(items)
+    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
     assertTrue(result.isEmpty(), "Expected no entries; got: $result")
   }
 
   @Test
-  fun `collectMaestroSelectors emits tapOnElementBySelector entries in YAML order`() {
+  fun `collectMaestroSelectorsUnified emits tapOnElementBySelector entries in YAML order`() {
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "tap foo",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("Foo")),
-                ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap foo",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("Foo")),
               ),
             ),
           ),
-          DirectionStep(
-            step = "tap bar",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("Bar")),
-                ),
+        ),
+        UnifiedTrailStep(
+          step = "tap bar",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("Bar")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectors(items)
+    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
     assertEquals(2, result.size)
     assertEquals("Foo", result[0].maestroSelector.textRegex)
     assertEquals("tapOnElementBySelector", result[0].toolName)
@@ -165,27 +158,26 @@ class WaypointMigrateTrailCommandTest {
   }
 
   @Test
-  fun `collectMaestroSelectors lowers nested combinators to the element selector shape`() {
+  fun `collectMaestroSelectorsUnified lowers nested combinators to the element selector shape`() {
     // The dominant recorded shape in the instrumentation-driver trails: the androidMaestro
     // leaf sits under `containsChild` on the wrapper selector. The lowering must preserve
     // that structure so the Maestro matcher resolves the same node the runtime would.
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "tap create appointment",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(
-                    nodeSelector = TrailblazeNodeSelector(
-                      containsChild = TrailblazeNodeSelector(
-                        androidMaestro = DriverNodeMatch.AndroidMaestro(
-                          textRegex = "Create appointment",
-                          resourceIdRegex = "some.package:id/button",
-                        ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap create appointment",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(
+                  nodeSelector = TrailblazeNodeSelector(
+                    containsChild = TrailblazeNodeSelector(
+                      androidMaestro = DriverNodeMatch.AndroidMaestro(
+                        textRegex = "Create appointment",
+                        resourceIdRegex = "some.package:id/button",
                       ),
                     ),
                   ),
@@ -196,7 +188,7 @@ class WaypointMigrateTrailCommandTest {
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectors(items)
+    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
     assertEquals(1, result.size)
     val lowered = result[0].maestroSelector
     assertNull(lowered.textRegex)
@@ -205,34 +197,33 @@ class WaypointMigrateTrailCommandTest {
   }
 
   @Test
-  fun `collectMaestroSelectors mixes tapOnElementBySelector and assertVisibleBySelector in document order`() {
+  fun `collectMaestroSelectorsUnified mixes tapOnElementBySelector and assertVisibleBySelector in document order`() {
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "tap then assert",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("T1")),
-                ),
-                wrap(
-                  "assertVisibleBySelector",
-                  AssertVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("A1")),
-                ),
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("T2")),
-                ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "tap then assert",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("T1")),
+              ),
+              wrap(
+                "assertVisibleBySelector",
+                AssertVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("A1")),
+              ),
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("T2")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectors(items)
+    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
     assertEquals(3, result.size)
     assertEquals(listOf("T1", "A1", "T2"), result.map { it.maestroSelector.textRegex })
     assertEquals(
@@ -242,78 +233,79 @@ class WaypointMigrateTrailCommandTest {
   }
 
   @Test
-  fun `collectMaestroSelectors skips already-migrated and selector-less tools`() {
+  fun `collectMaestroSelectorsUnified skips already-migrated and selector-less tools`() {
     // Already-migrated tools carry an androidAccessibility-shape nodeSelector; tools with
     // no nodeSelector at all have nothing to migrate. Both are no-ops for the migration —
     // confirm collect drops them so the pairing index stays in sync with what's actually
     // migrate-able.
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "three taps, one already migrated, one selector-less",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = accessibilitySelector("Done")),
-                ),
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = null),
-                ),
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("Pending")),
-                ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "three taps, one already migrated, one selector-less",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = accessibilitySelector("Done")),
+              ),
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = null),
+              ),
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("Pending")),
               ),
             ),
           ),
         ),
       ),
     )
-    val result = cmd.collectMaestroSelectors(items)
+    val result = cmd.collectMaestroSelectorsUnified(trail, "android")
     assertEquals(1, result.size)
     assertEquals("Pending", result[0].maestroSelector.textRegex)
   }
 
-  // ----- countUnmigratableNotVisible ----------------------------------------------
+  // ----- countUnmigratableNotVisibleUnified ---------------------------------------
 
   @Test
-  fun `countUnmigratableNotVisible counts Maestro-shape not-visible asserts and ignores migrated ones`() {
+  fun `countUnmigratableNotVisibleUnified counts Maestro-shape not-visible asserts and ignores migrated ones`() {
     // Not-visible asserts can't be coordinate-resolved (the element is absent from the
     // capture), so they're reported for hand-authoring rather than collected as migration
     // targets — and they must NOT perturb the collect/rewrite pairing index.
     val cmd = WaypointMigrateTrailCommand()
-    val items = listOf(
-      TrailYamlItem.PromptsTrailItem(
-        promptSteps = listOf(
-          DirectionStep(
-            step = "assert gone",
-            recording = ToolRecording(
-              tools = listOf(
-                wrap(
-                  "assertNotVisibleBySelector",
-                  AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("Gone")),
-                ),
-                wrap(
-                  "assertNotVisibleBySelector",
-                  AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = accessibilitySelector("AlreadyMigrated")),
-                ),
-                wrap(
-                  "tapOnElementBySelector",
-                  TapOnByElementSelector(nodeSelector = maestroSelector("Tap")),
-                ),
+    val trail = UnifiedTrail(
+      config = UnifiedTrailConfig(),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "assert gone",
+          recordings = mapOf(
+            "android" to listOf(
+              wrap(
+                "assertNotVisibleBySelector",
+                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = maestroSelector("Gone")),
+              ),
+              wrap(
+                "assertNotVisibleBySelector",
+                AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = accessibilitySelector("AlreadyMigrated")),
+              ),
+              wrap(
+                "tapOnElementBySelector",
+                TapOnByElementSelector(nodeSelector = maestroSelector("Tap")),
               ),
             ),
           ),
         ),
       ),
     )
-    assertEquals(1, cmd.countUnmigratableNotVisible(items))
+    assertEquals(1, cmd.countUnmigratableNotVisibleUnified(trail, "android"))
     // The not-visible assert is not a collect target — pairing index only sees the tap.
-    assertEquals(listOf("Tap"), cmd.collectMaestroSelectors(items).map { it.maestroSelector.textRegex })
+    assertEquals(
+      listOf("Tap"),
+      cmd.collectMaestroSelectorsUnified(trail, "android").map { it.maestroSelector.textRegex },
+    )
   }
 
   // ----- unified-format helpers -----------------------------------------------------

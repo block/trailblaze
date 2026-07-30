@@ -6,10 +6,12 @@ import org.gradle.testkit.runner.GradleRunner
  * Shared Gradle TestKit fixture helpers for this module's functional tests.
  *
  * The plugin under test requires `com.android.library` / `com.android.application` (it fails fast
- * otherwise) and reaches AGP's `sourceSets` by reflection, not a typed reference — so a fixture
- * only needs an `android` extension shaped like AGP's (`getSourceSets()` → a container whose
- * elements expose `getJava()` / `getAssets()`, each with `srcDir(Any)`). [ANDROID_FIXTURE_PRELUDE]
- * registers exactly that stand-in, so fixtures run fast and offline instead of resolving real AGP.
+ * otherwise) and reaches AGP's `sourceSets` / `signingConfigs` by reflection, not a typed
+ * reference — so a fixture only needs an `android` extension shaped like AGP's (`getSourceSets()`
+ * → a container whose elements expose `getJava()` / `getAssets()`, each with `srcDir(Any)`;
+ * `getSigningConfigs()` → a container whose elements expose the four signing getters).
+ * [ANDROID_FIXTURE_PRELUDE] registers exactly that stand-in, so fixtures run fast and offline
+ * instead of resolving real AGP.
  */
 private val ANDROID_FIXTURE_PRELUDE =
   """
@@ -22,13 +24,26 @@ private val ANDROID_FIXTURE_PRELUDE =
     val java = FakeAndroidSourceDirectorySet()
     val assets = FakeAndroidSourceDirectorySet()
   }
-  class FakeAndroidExtension(val sourceSets: org.gradle.api.NamedDomainObjectContainer<FakeAndroidSourceSet>)
+  open class FakeSigningConfig @javax.inject.Inject constructor(private val n: String) : org.gradle.api.Named {
+    override fun getName() = n
+    var storeFile: java.io.File? = null
+    var storePassword: String? = null
+    var keyAlias: String? = null
+    var keyPassword: String? = null
+  }
+  class FakeAndroidExtension(
+    val sourceSets: org.gradle.api.NamedDomainObjectContainer<FakeAndroidSourceSet>,
+    val signingConfigs: org.gradle.api.NamedDomainObjectContainer<FakeSigningConfig>,
+  )
 
   val fakeAndroidSourceSets = container(FakeAndroidSourceSet::class.java) { name ->
     objects.newInstance(FakeAndroidSourceSet::class.java, name)
   }
   fakeAndroidSourceSets.create("androidTest")
-  extensions.add("android", FakeAndroidExtension(fakeAndroidSourceSets))
+  val fakeSigningConfigs = container(FakeSigningConfig::class.java) { name ->
+    objects.newInstance(FakeSigningConfig::class.java, name)
+  }
+  extensions.add("android", FakeAndroidExtension(fakeAndroidSourceSets, fakeSigningConfigs))
   """
     .trimIndent()
 

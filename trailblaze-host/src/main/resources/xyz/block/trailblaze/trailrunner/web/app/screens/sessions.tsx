@@ -82,6 +82,8 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
   const [importingArchive, setImportingArchive] = React.useState(false);
   const [importNotice, setImportNotice] = React.useState(null);
   const [clearingRuns, setClearingRuns] = React.useState(false);
+  const [actionsOpen, setActionsOpen] = React.useState(false);
+  const actionsBtnRef = React.useRef(null);
   useLucide();
 
   const all = sessions.data || [];
@@ -209,7 +211,6 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
   }, [view, !!pending, running.length]);
 
   const title = view === 'active' ? 'Active' : view === 'all' ? 'Runs' : 'Completed';
-  const sub = view === 'active' ? 'Runs in flight right now' : view === 'all' ? 'All runs · live and finished, newest first' : 'Finished runs · newest first';
 
   const onAfterDelete = (deletedId) => {
     if (deletedId === sel) { setSel(null); setListCollapsed(false); }
@@ -323,12 +324,25 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           ico={view === 'active' ? 'radio' : 'history'}
           iconColor={view === 'active' ? 'var(--tb-running)' : 'var(--text-subtle-variant)'}
           title={<React.Fragment>{view === 'active' && running.length > 0 ? <Dot c="var(--tb-pass)" s={7} cls="tb-pulse" /> : null}<span style={{ marginLeft: view === 'active' && running.length > 0 ? 6 : 0 }}>{title}</span></React.Fragment>}
-          sub={sub}
           help={<HelpButton title={view === 'active' ? 'How runs work' : 'Reading a trace'} onClick={() => setShowHelp(true)} />} />
         <div style={{ padding: '0 12px 10px' }}>
-          <div className="tb-input">
-            <Ico n="search" s={14} />
-            <input placeholder="Filter runs…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="tb-input" style={{ flex: 1, minWidth: 0 }}>
+              <Ico n="search" s={14} />
+              <input placeholder="Filter runs…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+            </div>
+            <button
+              ref={actionsBtnRef}
+              type="button"
+              className="tb-icon-sq"
+              onClick={() => setActionsOpen((open) => !open)}
+              disabled={importingArchive || clearingRuns}
+              title="Run actions"
+              aria-label="Run actions"
+              aria-expanded={actionsOpen}
+            >
+              <Ico n={importingArchive || clearingRuns ? 'loader-2' : 'ellipsis'} s={16} spin={importingArchive || clearingRuns} />
+            </button>
           </div>
           <input
             ref={archiveInputRef}
@@ -337,32 +351,26 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
             onChange={onArchivePicked}
             style={{ display: 'none' }}
           />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-            <Btn sm ico="archive-restore" onClick={() => archiveInputRef.current?.click()} disabled={importingArchive}>
-              {importingArchive ? 'Importing...' : 'Import archive'}
-            </Btn>
-            <Btn sm ico="folder-open" onClick={() => TB.revealLogsRoot()} title="Open the logs folder that contains every run">
-              Open logs
-            </Btn>
-            <Btn sm kind="danger" ico="trash-2" onClick={onClearRuns} disabled={clearingRuns || all.length === 0} title="Delete all run logs">
-              {clearingRuns ? 'Clearing...' : 'Clear all'}
-            </Btn>
-            {importNotice ? (
-              <span
-                className="tb-sub"
-                style={{
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  color: importNotice.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)',
-                }}
-                title={importNotice.text}
-              >
-                {importNotice.text}
-              </span>
-            ) : null}
-          </div>
+          {actionsOpen && (
+            <ActionsPopover
+              anchor={actionsBtnRef.current}
+              onClose={() => setActionsOpen(false)}
+              items={[
+                { label: 'Import archive', ico: 'archive-restore', fn: () => archiveInputRef.current?.click() },
+                { label: 'Open logs folder', ico: 'folder-open', fn: () => TB.revealLogsRoot() },
+                ...(all.length > 0 ? [{ sep: true }, { label: 'Clear all runs', ico: 'trash-2', danger: true, fn: onClearRuns }] : []),
+              ]}
+            />
+          )}
+          {importNotice && (
+            <div
+              className="tb-sub"
+              role="status"
+              style={{ marginTop: 7, fontSize: 11.5, color: importNotice.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)' }}
+            >
+              {importNotice.text}
+            </div>
+          )}
         </div>
         <div data-testid="sessions-list" tabIndex={0} style={{ flex: 1, overflowY: 'auto', padding: '0 10px 12px', outline: 'none' }}
           onKeyDown={(e) => listNavKeyDown(e, { index: filtered.findIndex((x) => x.id === sel), count: filtered.length, set: (i) => setSel(filtered[i].id) })}>
@@ -396,7 +404,6 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
             <EmptyState
               ico={view === 'active' ? 'radio' : 'history'}
               title={view === 'active' ? 'No active runs' : 'No completed runs yet'}
-              sub={view === 'active' ? 'Runs appear here live while they execute.' : 'Run a trail to see results here.'}
             />
           </div>
         )}
@@ -453,9 +460,11 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
               <div style={{ width: 'min(420px, 70%)' }}><Skeleton rows={5} /></div>
             </div>
           )
+          : pool.length === 0
+          ? <div style={{ flex: 1, minWidth: 0, height: '100%' }} />
           : (
             <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <EmptyState ico="gallery-vertical-end" title="Select a run" sub="Pick a run to open its trace - per-step screenshots, view hierarchy, recorded tools, YAML, and the LLM transcript." />
+              <EmptyState ico="gallery-vertical-end" title="Select a run" />
             </div>
           )}
       </div>

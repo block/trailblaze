@@ -71,6 +71,16 @@ object UnifiedTrailAdapter {
           "this device's chain $resolutionChain — driver falls back to runtime resolution.",
       )
     }
+    // One census line per lowering, naming each resolution outcome. The per-step warnings below
+    // only fire on the unmatched case, so without this a run that replayed zero tools
+    // deterministically (a matched `classifier: []`) or replayed another device's tools via a
+    // family alias looks identical in the log to a full exact-key replay.
+    if (resolutionChain.isNotEmpty()) {
+      Console.log(
+        "[unified-resolve] ${resolutionChain.first()}: " +
+          describeRecordingResolution(unified, classifiers).summarize(),
+      )
+    }
     val promptSteps = unified.trail.map { step ->
       val tools = resolveClosestMatch(step.recordings, resolutionChain)
       // Observability: a step that DECLARES recordings but matches none on this device's chain
@@ -404,6 +414,43 @@ object UnifiedTrailAdapter {
   }
 
   /**
+   * Report, per step, HOW that step's recording resolved for the device described by [classifiers]
+   * — the decision [lowerToTrailItems] makes and then discards.
+   *
+   * Uses the same [resolveClosestMatch] primitive as [lowerToTrailItems] and
+   * [hasRecordingForDevice], so it reports what the executor will actually do rather than a
+   * second opinion about it.
+   *
+   * Pure and device-free: it reads only the trail document and a classifier list, so a whole corpus
+   * can be audited offline. See [TrailRecordingResolution] for what each outcome means and why the
+   * existing report fields can't tell them apart.
+   */
+  fun describeRecordingResolution(
+    unified: UnifiedTrail,
+    classifiers: List<TrailblazeDeviceClassifier>,
+  ): TrailRecordingResolution {
+    val resolutionChain = TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    fun describe(stepIndex: Int?, step: UnifiedTrailStep): RecordingResolution {
+      // One traversal: the winning key drives both fields, so they cannot disagree about whether
+      // the step matched.
+      val key = resolveClosestKey(step.recordings, resolutionChain)
+      return RecordingResolution(
+        stepIndex = stepIndex,
+        isVerify = step.verify,
+        declaredClassifiers = step.recordings.keys.toList(),
+        resolvedClassifier = key,
+        toolNames = key?.let { step.recordings.getValue(it).map { tool -> tool.name } },
+      )
+    }
+    return TrailRecordingResolution(
+      deviceClassifier = resolutionChain.firstOrNull(),
+      resolutionChain = resolutionChain,
+      steps = listOfNotNull(unified.trailhead?.let { describe(null, it) }) +
+        unified.trail.mapIndexed { index, step -> describe(index, step) },
+    )
+  }
+
+  /**
    * Closest-wins lookup shared by recordings and the per-classifier `devices:`
    * driver map: walk [resolutionChain] (most-specific first, as produced by
    * [TrailblazeClassifierLineage]) and return the first entry from
@@ -413,13 +460,19 @@ object UnifiedTrailAdapter {
   private fun <V> resolveClosestMatch(
     byClassifier: Map<String, V>?,
     resolutionChain: List<String>,
-  ): V? {
+  ): V? = resolveClosestKey(byClassifier, resolutionChain)?.let { byClassifier?.get(it) }
+
+  /**
+   * The winning classifier KEY from the same walk [resolveClosestMatch] performs. Callers that need
+   * to report *which* entry matched (not just its value) use this, so "did it match" and "what
+   * matched" can never come from two different traversals.
+   */
+  private fun <V> resolveClosestKey(
+    byClassifier: Map<String, V>?,
+    resolutionChain: List<String>,
+  ): String? {
     if (byClassifier.isNullOrEmpty()) return null
-    for (classifier in resolutionChain) {
-      val match = byClassifier[classifier]
-      if (match != null) return match
-    }
-    return null
+    return resolutionChain.firstOrNull { byClassifier[it] != null }
   }
 
   /**

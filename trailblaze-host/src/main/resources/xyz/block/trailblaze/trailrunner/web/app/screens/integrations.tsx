@@ -64,6 +64,7 @@ function IntegrationsScreen({ embedded }) {
   const [showHelp, setShowHelp] = React.useState(false);
   const port = status.data?.daemonPort;
   const running = !!status.data?.running;
+  const statusPending = status.loading && !status.data;
   const [copied, setCopied] = React.useState(null);
 
   const effectivePort = port || 52525;
@@ -79,8 +80,8 @@ function IntegrationsScreen({ embedded }) {
 
   const live = {
     id: 'mcp', name: 'MCP Server', icon: 'plug-zap', tone: 'blue',
-    status: running ? `Running · :${effectivePort}` : 'Offline',
-    statusTone: running ? 'green' : 'red',
+    status: statusPending ? 'Checking' : running ? `Running · :${effectivePort}` : 'Offline',
+    statusTone: statusPending ? '' : running ? 'green' : 'red',
     desc: 'This daemon is exposed as an MCP server for tools that can list trails, inspect tools, and drive runs.',
   };
 
@@ -124,10 +125,10 @@ function IntegrationsScreen({ embedded }) {
             <div style={{ fontSize: 14.5, fontWeight: 600 }}>{live.name}</div>
             <div className="tb-mono tb-sub" style={{ fontSize: 11, marginTop: 2 }}>{mcpUrl}</div>
           </div>
-          <Chip tone={live.statusTone}>{live.status}</Chip>
+          <Chip tone={live.statusTone}>{statusPending && <Ico n="loader-2" s={11} spin />}{live.status}</Chip>
         </div>
         <div className="tb-sub" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 10 }}>{live.desc}</div>
-        {running && (
+        {!statusPending && running && (
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <Btn
               data-testid="mcp-copy-config"

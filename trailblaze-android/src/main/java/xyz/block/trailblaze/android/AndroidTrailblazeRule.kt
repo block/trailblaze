@@ -16,6 +16,7 @@ import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailRunner
+import xyz.block.trailblaze.android.accessibility.InProcessIdleSettleClient
 import xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent
 import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
@@ -368,7 +369,16 @@ open class AndroidTrailblazeRule(
       )
     ) {
       ScreenStateKind.ACCESSIBILITY -> {
-        TrailblazeAccessibilityService.waitForSettled()
+        // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]) — same routing as
+        // [AccessibilityDeviceManager.waitForReady]; only ever faster than the standard wait.
+        if (InProcessIdleSettleClient.isEnabled()) {
+          val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(5_000L) { earlyExit ->
+            TrailblazeAccessibilityService.waitForSettled(earlyExit = earlyExit)
+          }
+          Console.log("[settle] screen-state provider via $winner")
+        } else {
+          TrailblazeAccessibilityService.waitForSettled()
+        }
         AccessibilityServiceScreenState(
           includeScreenshot = true,
           deviceClassifiers = deviceClassifiers,

@@ -74,8 +74,16 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
      *
      * @param platform The device platform, used to select the correct platform-specific
      *   capture implementation. Pass `null` for platforms that don't support capture.
+     * @param iosVideoStreamOverride Replaces the default iOS video recorder ([IosVideoCapture],
+     *   simctl) when non-null. The host module injects a baguette-stream recorder here — it can't
+     *   be built in this module because it depends on host-only baguette plumbing. Ignored on
+     *   non-iOS platforms and when video capture is off.
      */
-    fun fromOptions(options: CaptureOptions, platform: TrailblazeDevicePlatform?): CaptureSession? {
+    fun fromOptions(
+      options: CaptureOptions,
+      platform: TrailblazeDevicePlatform?,
+      iosVideoStreamOverride: CaptureStream? = null,
+    ): CaptureSession? {
       if (!options.hasAnyCaptureEnabled) return null
       val streams = mutableListOf<CaptureStream>()
       if (options.captureVideo) {
@@ -83,9 +91,16 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
           TrailblazeDevicePlatform.ANDROID ->
             streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture())
           TrailblazeDevicePlatform.IOS ->
-            streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
+            streams.add(iosVideoStreamOverride ?: xyz.block.trailblaze.capture.video.IosVideoCapture())
           TrailblazeDevicePlatform.WEB ->
-            streams.add(xyz.block.trailblaze.capture.video.PlaywrightVideoCapture())
+            // Record from the live CDP screencast (Android's one-encoder model), falling back to
+            // Playwright's setRecordVideoDir recorder when no screencast feed is registered for the
+            // device (e.g. the report-export path).
+            streams.add(
+              xyz.block.trailblaze.capture.video.WebScreencastVideoCapture(
+                fallback = xyz.block.trailblaze.capture.video.PlaywrightVideoCapture(),
+              ),
+            )
           else -> Unit
         }
       }

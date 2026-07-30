@@ -309,4 +309,22 @@ class TrailblazeAccessibilityServiceTest {
     )
     assertTrue(result.isEmpty())
   }
+
+  /**
+   * The real integration point of the inprocess-idle race's cooperative cancellation: a lost race
+   * (earlyExit already true) must return `false` promptly instead of polling to [timeoutMs] —
+   * this is what actually stops the event-quiet arm when the idle detector wins
+   * (see [InProcessIdleSettleClient.raceIdleAgainstHeuristic]).
+   */
+  @Test
+  fun `waitForSettled returns false promptly when earlyExit has fired`() {
+    val startNs = System.nanoTime()
+    val settled = TrailblazeAccessibilityService.waitForSettled(
+      timeoutMs = 30_000,
+      earlyExit = { true },
+    )
+    assertFalse(settled, "an early-exited wait must not report settled")
+    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+    assertTrue(elapsedMs < 5_000, "early exit must not run to timeout (took ${elapsedMs}ms)")
+  }
 }

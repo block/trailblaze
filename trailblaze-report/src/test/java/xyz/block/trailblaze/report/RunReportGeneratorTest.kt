@@ -26,6 +26,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
+import xyz.block.trailblaze.yaml.TrailConfig
 
 /**
  * Pure-logic tests for the headless report generator's metadata mapping — the contract the viewer's
@@ -166,6 +167,23 @@ class RunReportGeneratorTest {
   }
 
   @Test
+  fun sessionMetaJson_forwardsTrailConfigMetadataForConsumerInjection() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    val meta = RunReportGenerator.sessionMetaJson(
+      info(passed).copy(trailConfig = TrailConfig(metadata = mapOf("owner" to "payments-team", "accountToken" to "AT_123"))),
+      passed,
+    )
+    val metadata = meta["metadata"] as JsonObject
+    assertEquals("payments-team", metadata["owner"]!!.jsonPrimitive.content)
+    assertEquals("AT_123", metadata["accountToken"]!!.jsonPrimitive.content)
+    // No metadata (or an empty map) emits no key at all.
+    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed)["metadata"])
+    assertNull(
+      RunReportGenerator.sessionMetaJson(info(passed).copy(trailConfig = TrailConfig(metadata = emptyMap())), passed)["metadata"],
+    )
+  }
+
+  @Test
   fun sessionMetaJson_marksSelfHealRunsWithoutChangingTheirPassFailBadge() {
     val healed = SessionStatus.Ended.SucceededWithSelfHeal(5_000)
     val meta = RunReportGenerator.sessionMetaJson(info(healed), healed)
@@ -260,6 +278,17 @@ class RunReportGeneratorTest {
       assertTrue(html.contains("POST /2.0/pay"), "formatter-produced row label should be embedded")
       assertTrue(html.contains("formatted-by-test-sample"), "formatter-produced badge should be embedded")
       assertTrue(html.contains("screen_view"), "non-formatted stream keeps its generic events")
+      // The passed session's outcome reaches the formatter (the size-budget gate)…
+      assertTrue(html.contains("ctx-passed:true"), "formatter should see the passed session as passed")
+
+      // …and --full-report-payloads presents the same passed session as not-passed, which is how
+      // formatters bypass their REPORT_SIZE_BUDGET caps.
+      val fullReport = RunReportGenerator(bunBinary = bun)
+        .generate(logsRepo, listOf(sessionId, straySessionId), fullEventPayloads = true)
+      assertNotNull(fullReport, "generate(fullEventPayloads = true) should produce a report file")
+      val fullHtml = fullReport.readText()
+      assertTrue(fullHtml.contains("ctx-passed:false"), "formatter should see budgets opted out")
+      assertTrue(fullHtml.contains("\"status\":\"passed\""), "the session's badge still reads passed")
     } finally {
       tmp.deleteRecursively()
     }

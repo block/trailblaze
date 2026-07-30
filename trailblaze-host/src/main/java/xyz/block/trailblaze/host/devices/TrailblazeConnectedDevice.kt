@@ -3,8 +3,12 @@ package xyz.block.trailblaze.host.devices
 import maestro.DeviceInfo
 import maestro.Driver
 import xyz.block.trailblaze.android.maestro.LoggingDriver
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.axe.AxeDeviceManager
+import xyz.block.trailblaze.host.ios.IosDeviceManager
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -67,7 +71,36 @@ class MaestroConnectedDevice(
 }
 
 /**
- * AXe-backed connected device (POC) — iOS Simulator only. Drives the simulator by
+ * An iOS Simulator driven natively from the host — no Maestro/XCUITest connection is ever
+ * opened for it. This is the pluggable seam for iOS drivers: a new driver subclasses this,
+ * returns its [IosDeviceManager] from [createDeviceManager], and every wiring site
+ * (host test rule, MCP bridge, screen-state capture) works polymorphically without
+ * driver-specific branches. The driver's enum entry must be a member of
+ * [TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES]; its connection factory lives in
+ * [TrailblazeDeviceService.getConnectedDevice].
+ */
+abstract class IosNativeConnectedDevice(
+  trailblazeDriverType: TrailblazeDriverType,
+  /** Simulator UDID the driver targets. */
+  val udid: String,
+) : TrailblazeConnectedDevice(
+  trailblazeDriverType = trailblazeDriverType,
+  instanceId = udid,
+) {
+
+  /**
+   * Builds this driver's [IosDeviceManager]. [templateContext] carries the resolved
+   * target's `{{target.appId}}` expansion for selector resolution; null on target-agnostic
+   * paths (e.g. one-shot MCP tool calls).
+   */
+  abstract fun createDeviceManager(templateContext: TargetTemplateContext? = null): IosDeviceManager
+
+  /** Fresh [ScreenState] for the current UI. Cheap — expensive members are lazy. */
+  open fun screenState(): ScreenState = createDeviceManager().getScreenState()
+}
+
+/**
+ * AXe-backed connected device — iOS Simulator only. Drives the simulator by
  * shelling out to the [AXe CLI](https://github.com/cameroncooke/AXe) rather than going
  * through Maestro/XCUITest. What this unlocks vs. the Maestro path:
  *
@@ -83,11 +116,19 @@ class MaestroConnectedDevice(
  * This driver is a fidelity play, not a speed play.
  */
 class AxeConnectedDevice(
-  /** Simulator UDID that the `axe` binary targets via `--udid`. */
-  val udid: String,
+  udid: String,
   override val deviceWidth: Int,
   override val deviceHeight: Int,
-) : TrailblazeConnectedDevice(
+) : IosNativeConnectedDevice(
   trailblazeDriverType = TrailblazeDriverType.IOS_AXE,
-  instanceId = udid,
-)
+  udid = udid,
+) {
+
+  override fun createDeviceManager(templateContext: TargetTemplateContext?): IosDeviceManager =
+    AxeDeviceManager(
+      udid = udid,
+      deviceWidth = deviceWidth,
+      deviceHeight = deviceHeight,
+      templateContext = templateContext,
+    )
+}

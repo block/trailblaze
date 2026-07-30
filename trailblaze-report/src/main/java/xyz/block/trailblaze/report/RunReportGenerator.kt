@@ -6,8 +6,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
+import kotlin.time.TimeSource
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -30,7 +29,7 @@ import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
  * Headless generator for the interactive Trailblaze run report — the CLI/CI counterpart to the
  * in-app "Share as HTML" button. It produces the SAME self-contained, dependency-free HTML the
  * Share button does, by reusing the exact same extraction + renderer
- * ([run-report-core.js][CORE_RESOURCE], the build-time transpiled artifact of run-report-core.ts) under
+ * ([run-report-core.js][CORE_RESOURCE], the build-time bundle of the run-report-*.ts modules) under
  * a thin bun driver ([run-report-cli.ts][DRIVER_RESOURCE]).
  *
  * `trailblaze report` (and the after-run report) generate this artifact ALONGSIDE the legacy WASM
@@ -52,31 +51,75 @@ class RunReportGenerator(
 ) {
 
   /**
+   * Whether the interactive report can be generated at all (bun resolved). Lets callers skip
+   * work that only this generator would consume — e.g. `CliReportGenerator` skips its shared
+   * snapshot capture when this is false and the WASM leg is off too.
+   */
+  val isBunAvailable: Boolean get() = bunBinary != null
+
+  /**
    * Generate the interactive HTML report for [sessionIds] into `logsRepo.logsDir/reports/`.
+   *
+   * Convenience over the [SessionLogSnapshot] overload: captures a fresh snapshot of each
+   * session (after the cheap bun check, so a bun-less environment pays no parse). Callers
+   * that already hold snapshots — e.g. `CliReportGenerator`, which shares one capture across
+   * the interactive and WASM legs — use the overload directly.
    *
    * @return the report [File], or null if bun is unavailable, no session resolved, or the
    *   subprocess failed (each logged via [Console]).
    */
-  fun generate(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
+  @JvmOverloads
+  fun generate(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    shareUrl: String? = null,
+    fullEventPayloads: Boolean = false,
+  ): File? {
     if (sessionIds.isEmpty()) return null
+    if (bunBinary == null) {
+      logBunUnavailable()
+      return null
+    }
+    return generateFromSnapshots(logsRepo, SessionLogSnapshot.captureAll(logsRepo, sessionIds), shareUrl, fullEventPayloads)
+  }
+
+  /**
+   * Generate the interactive HTML report from already-captured session [snapshots] — no log
+   * file is read or decoded here; the report is built entirely from the snapshot (only
+   * non-log session assets, e.g. the `.ndjson` files under `events/`, are read by the bun
+   * driver).
+   *
+   * @param shareUrl optional canonical hosted URL baked into the report; its Copy link then
+   *   produces deep links against that URL regardless of where the file is opened from.
+   * @param fullEventPayloads when true (the `--full-report-payloads` CLI flag), event formatters
+   *   embed full payloads even for passed sessions instead of applying their report size budgets
+   *   (grep REPORT_SIZE_BUDGET). Failed sessions always embed full payloads regardless.
+   */
+  @JvmOverloads
+  fun generateFromSnapshots(
+    logsRepo: LogsRepo,
+    snapshots: List<SessionLogSnapshot>,
+    shareUrl: String? = null,
+    fullEventPayloads: Boolean = false,
+  ): File? {
+    if (snapshots.isEmpty()) return null
     val bun = bunBinary
     if (bun == null) {
-      Console.log(
-        "[RunReportGenerator] bun not found on PATH — cannot build the interactive report. " +
-          "Install bun (it ships with the repo toolchain via `source bin/activate-hermit`) or " +
-          "run `trailblaze report --legacy` for the WASM report.",
-      )
+      logBunUnavailable()
       return null
     }
 
-    val sessionsJson = buildJsonArray {
-      for (sessionId in sessionIds) {
-        val sessionObj = buildSessionJson(logsRepo, sessionId) ?: continue
-        add(sessionObj)
+    val generateStart = TimeSource.Monotonic.markNow()
+    val sessionsJson = ReportTiming.stage("RunReportGenerator.buildSessionJson") {
+      buildJsonArray {
+        for (snapshot in snapshots) {
+          val sessionObj = buildSessionJson(logsRepo, snapshot) ?: continue
+          add(sessionObj)
+        }
       }
     }
     if (sessionsJson.isEmpty()) {
-      Console.log("[RunReportGenerator] no resolvable sessions among ${sessionIds.size} requested.")
+      Console.log("[RunReportGenerator] no resolvable sessions among ${snapshots.size} requested.")
       return null
     }
 
@@ -87,18 +130,25 @@ class RunReportGenerator(
       copyResource(CORE_RESOURCE, File(workDir, "run-report-core.js"))
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
       copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
+      copyResource(SPRITES_RESOURCE, File(workDir, "run-report-sprites.ts"))
       val formatterNames = stageEventFormatters(workDir)
       val inputJson = buildJsonObject {
         put("generatedAt", generatedAt)
+        shareUrl?.takeIf { it.isNotBlank() }?.let { put("shareUrl", it) }
         if (formatterNames.isNotEmpty()) {
           put("formatters", buildJsonArray { formatterNames.forEach { add(it) } })
         }
+        if (fullEventPayloads) put("fullEventPayloads", true)
         put("sessions", sessionsJson)
       }
-      val inputFile = File(workDir, "input.json").apply { writeText(inputJson.toString()) }
+      val inputFile = ReportTiming.stage("RunReportGenerator.serializeAndWriteInputJson") {
+        File(workDir, "input.json").apply { writeText(inputJson.toString()) }
+      }
       val outputFile = File(workDir, "report.html")
 
-      val exit = runBun(bun, workDir, inputFile, outputFile)
+      val exit = ReportTiming.stage("RunReportGenerator.bunSubprocess") {
+        runBun(bun, workDir, inputFile, outputFile)
+      }
       if (exit != 0 || !outputFile.exists() || outputFile.length() == 0L) {
         Console.error("[RunReportGenerator] report subprocess failed (exit=$exit).")
         return null
@@ -110,24 +160,35 @@ class RunReportGenerator(
       // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
       // canonical trailblaze_report_interactive.html).
       val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
-      outputFile.copyTo(dest, overwrite = true)
+      ReportTiming.stage("RunReportGenerator.outputCopy") {
+        outputFile.copyTo(dest, overwrite = true)
+      }
       Console.log("[RunReportGenerator] report generated at ${dest.absolutePath}")
       return dest
     } finally {
       workDir.deleteRecursively()
+      ReportTiming.log("RunReportGenerator.generate", generateStart)
     }
   }
 
+  private fun logBunUnavailable() {
+    Console.log(
+      "[RunReportGenerator] bun not found on PATH — cannot build the interactive report. " +
+        "Install bun (it ships with the repo toolchain via `source bin/activate-hermit`) or " +
+        "run `trailblaze report --legacy` for the WASM report.",
+    )
+  }
+
   /** Build one session's payload object: meta + recorded YAML + screenshot dir + raw log array. */
-  private fun buildSessionJson(logsRepo: LogsRepo, sessionId: SessionId): JsonObject? {
-    val logs = logsRepo.getCachedLogsForSession(sessionId)
+  private fun buildSessionJson(logsRepo: LogsRepo, snapshot: SessionLogSnapshot): JsonObject? {
+    val logs = snapshot.logs
     // Same gate as the legacy WASM report: a session dir with stray logs but no session-status
     // log isn't a real run (e.g. a one-shot helper session) — without this it would surface as a
     // GUID-titled "UNKNOWN" entry in the session index.
     if (logs.none { it is TrailblazeLog.TrailblazeSessionStatusChangeLog }) return null
     val sessionInfo = logs.getSessionInfo() ?: return null
     val status = logs.getSessionStatus()
-    val sessionDir = logsRepo.getSessionDir(sessionId)
+    val sessionDir = logsRepo.getSessionDir(snapshot.sessionId)
 
     // Render the recording in the unified `trail.yaml` shape (`config:`/`trailhead:`/`trail:` with
     // per-classifier `recordings:`) — the format the save path writes to disk — so the report
@@ -145,26 +206,12 @@ class RunReportGenerator(
       if (recordingYaml != null) put("recordingYaml", recordingYaml)
       if (originalYaml != null) put("originalYaml", originalYaml)
       put("sessionDir", sessionDir.absolutePath)
-      put("logs", readSessionLogJson(sessionDir))
+      // The raw per-log records for the bun renderer, straight from the snapshot — byte-identical
+      // to what the daemon serves the web app at `/trailrunner/api/session/{id}/logs` (the same
+      // files `TrailblazeJsonInstance` wrote, with discriminator `class`), heavy view-hierarchy
+      // fields already stripped at snapshot capture.
+      put("logs", snapshot.rawLogsJson)
     }
-  }
-
-  /**
-   * Read a session dir's raw per-log JSON files into a [JsonArray] — byte-identical to what the
-   * daemon serves the web app at `/trailrunner/api/session/{id}/logs` (the same files
-   * `TrailblazeJsonInstance` wrote, with discriminator `class`). Mirrors that route's filter:
-   * hex-prefixed `*.json` files, sorted by name.
-   */
-  private fun readSessionLogJson(sessionDir: File): JsonArray = buildJsonArray {
-    (sessionDir.listFiles() ?: emptyArray())
-      .filter { f ->
-        f.extension == "json" &&
-          f.name.firstOrNull()?.let { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' } == true
-      }
-      .sortedBy { it.name }
-      .forEach { f ->
-        runCatching { PARSER.parseToJsonElement(f.readText()) }.getOrNull()?.let { add(stripHeavyLogFields(it)) }
-      }
   }
 
   private fun copyResource(resourcePath: String, dest: File) {
@@ -228,6 +275,7 @@ class RunReportGenerator(
     private const val CORE_RESOURCE = "xyz/block/trailblaze/trailrunner/web/app/run-report-core.js"
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
     private const val EVENTS_RESOURCE = "xyz/block/trailblaze/report/run-report-events.ts"
+    private const val SPRITES_RESOURCE = "xyz/block/trailblaze/report/run-report-sprites.ts"
 
     /**
      * Classpath directory scanned for event-formatter modules. Any module on the runtime classpath
@@ -296,7 +344,6 @@ class RunReportGenerator(
     private const val SUBPROCESS_TIMEOUT_SECONDS = 120L
     private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
-    private val PARSER = Json { ignoreUnknownKeys = true; isLenient = true }
 
     // View-hierarchy fields the interactive renderer reads but slims away before embedding. Stripped
     // at the seam so they never bloat input.json or the bun process-boundary copy. Keep in sync with
@@ -357,6 +404,11 @@ class RunReportGenerator(
         ZoneId.systemDefault(),
       ).format(HUMAN_TS))
       sessionInfo.trailConfig?.id?.let { put("trailId", it) }
+      // Consumer-injected key/values from the trail's `config.metadata` — the report's generic
+      // injection point (Info-tab rows, index search; `owner` gets first-class index treatment).
+      sessionInfo.trailConfig?.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
+        put("metadata", buildJsonObject { metadata.forEach { (key, value) -> put(key, value) } })
+      }
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
       failureReason(status)?.let { put("error", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker

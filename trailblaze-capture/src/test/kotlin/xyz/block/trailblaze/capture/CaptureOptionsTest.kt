@@ -86,4 +86,41 @@ class CaptureOptionsTest {
     assertEquals(480, options.webSpriteFrameHeight())
     assertEquals(70, options.webSpriteQuality())
   }
+
+  @Test
+  fun `hostCaptureOptions defaults to the host sprite tuning when no env vars are set`() {
+    val options = CaptureOptions.hostCaptureOptions(env = { null })
+    assertEquals(CaptureOptions.HOST_SPRITE_FPS, options.spriteFrameFps)
+    assertEquals(CaptureOptions.HOST_SPRITE_HEIGHT, options.spriteFrameHeight)
+    assertEquals(CaptureOptions.HOST_SPRITE_QUALITY, options.spriteQuality)
+    assertTrue(options.captureVideo)
+  }
+
+  @Test
+  fun `hostCaptureOptions reads sprite tuning from the environment`() {
+    val env = mapOf(
+      CaptureOptions.ENV_SPRITE_FPS to "8",
+      CaptureOptions.ENV_SPRITE_FRAME_HEIGHT to "1280",
+      CaptureOptions.ENV_SPRITE_QUALITY to "90",
+    )
+    val options = CaptureOptions.hostCaptureOptions(captureVideo = false, env = env::get)
+    assertEquals(8, options.spriteFrameFps)
+    assertEquals(1280, options.spriteFrameHeight)
+    assertEquals(90, options.spriteQuality)
+    assertFalse(options.captureVideo)
+  }
+
+  @Test
+  fun `hostCaptureOptions falls back to defaults on non-numeric, out-of-range, or blank env values`() {
+    // A bad env var must never take down video capture — each variable degrades independently.
+    val env = mapOf(
+      CaptureOptions.ENV_SPRITE_FPS to "fast",
+      CaptureOptions.ENV_SPRITE_FRAME_HEIGHT to "99999",
+      CaptureOptions.ENV_SPRITE_QUALITY to "  ",
+    )
+    val options = CaptureOptions.hostCaptureOptions(env = env::get)
+    assertEquals(CaptureOptions.HOST_SPRITE_FPS, options.spriteFrameFps)
+    assertEquals(CaptureOptions.HOST_SPRITE_HEIGHT, options.spriteFrameHeight)
+    assertEquals(CaptureOptions.HOST_SPRITE_QUALITY, options.spriteQuality)
+  }
 }

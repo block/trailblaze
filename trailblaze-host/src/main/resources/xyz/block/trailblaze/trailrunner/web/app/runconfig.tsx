@@ -55,6 +55,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   const seedDeviceId = seed && seed.deviceId;
   const [deviceId, setDeviceId] = React.useState(seedDeviceId || gtFirstDevice || pinnedId || null);
+  const deviceTouched = React.useRef(false);
   React.useEffect(() => {
     if (deviceId && deviceList.find((d) => d.id === deviceId)) return;
     const inList = (id) => !!(id && deviceList.find((d) => d.id === id));
@@ -66,6 +67,36 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const selectedDevice = deviceList.find((d) => d.id === deviceId) || null;
 
   const detail = TB.useTrailDetail(trail ? trail.id : null);
+
+  // If no caller/user selection anchors the run, prefer the device shape declared by the trail
+  // instead of blindly taking the first connected device. Unified trails commonly declare this as
+  // `config.devices.web: PLAYWRIGHT_NATIVE` (rather than top-level platform/driver), so inspect both.
+  // This prevents a web trail from briefly binding to an iOS simulator and surfacing a bogus
+  // "target isn't resolvable" warning before the user has touched the form.
+  const deviceHints = React.useMemo(() => {
+    const yaml = detail.data?.yaml || '';
+    let config = {};
+    try { config = (yaml && parseTrailYaml(yaml).config) || {}; } catch (_) {}
+    const drivers = new Set();
+    const platforms = new Set();
+    if (config.driver) drivers.add(String(config.driver).toUpperCase());
+    if (config.platform) platforms.add(String(config.platform).toLowerCase());
+    Object.entries(config.devices || {}).forEach(([platform, value]) => {
+      platforms.add(String(platform).toLowerCase());
+      if (typeof value === 'string') drivers.add(value.toUpperCase());
+      else if (value && typeof value === 'object' && value.driver) drivers.add(String(value.driver).toUpperCase());
+    });
+    return { drivers, platforms };
+  }, [detail.data?.yaml, trail && trail.id]);
+  React.useEffect(() => {
+    // Explicit board launches and a complete global target selection are user intent. `pinnedId`
+    // is only the shell's automatic first-device fallback, so a trail hint is allowed to beat it.
+    // Once the user changes this dialog's picker, never auto-switch underneath them.
+    if (seedDeviceId || (gt && gt.target && gtFirstDevice) || deviceTouched.current || deviceList.length === 0) return;
+    const hinted = deviceList.find((d) => deviceHints.drivers.has(String(d.driver || '').toUpperCase()))
+      || deviceList.find((d) => deviceHints.platforms.has(String(d.platform || '').toLowerCase()));
+    if (hinted && hinted.id !== deviceId) setDeviceId(hinted.id);
+  }, [deviceList, seedDeviceId, gt && gt.target, gtFirstDevice, deviceHints, deviceId]);
 
   const [connectedId, setConnectedId] = React.useState(null);
   React.useEffect(() => {
@@ -143,16 +174,10 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
     platform: selectedDevice ? selectedDevice.platform : null,
     driver: selectedDevice ? selectedDevice.driver : null,
   });
-  const canRun = !!trail && !!selectedDevice && phase !== 'connecting' && !launching;
-
-  // One-line live status per section, surfaced in the left nav so the rail reads
-  // as a run summary rather than empty jump links.
-  const captureCount = [captureVideo, captureLogcat, captureNetwork, captureIosLogs, captureAnalytics, captureEvents, saveRecording].filter(Boolean).length;
-  const sectionSummaries = {
-    target: selectedDevice ? selectedDevice.name : 'No device',
-    behavior: (agent === 'TRAILBLAZE_RUNNER' ? 'Default runner' : agent) + (selfHeal ? ' · self-heal' : ''),
-    capture: `${captureCount} artifact${captureCount === 1 ? '' : 's'}`,
-  };
+  const declaredTargetUnavailable = !!(selectedDevice && selectedDevice.platform !== 'web'
+    && declaredTarget && !deviceApps.loading
+    && !installedTargets.some((a) => a.id === declaredTarget) && !targetApp);
+  const canRun = !!trail && !!selectedDevice && !declaredTargetUnavailable && phase !== 'connecting' && !launching;
 
   function copyCommand() {
     navigator.clipboard.writeText(command).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
@@ -229,15 +254,15 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
 
   return (
     <div className={'tb-overlay' + (closing ? ' closing' : '')} style={{ alignItems: 'stretch', justifyContent: 'center', padding: 14, paddingTop: 14 + (document.documentElement.classList.contains('tb-native') ? 28 : 0) }} onClick={close}>
-      <div onClick={(e) => e.stopPropagation()}
+      <div className="tb-run-dialog" onClick={(e) => e.stopPropagation()}
         style={{ width: '100%', maxWidth: 1380, margin: 'auto', height: 'min(900px, 94vh)', background: 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)', borderRadius: 16, boxShadow: '0 30px 90px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(0,224,19,.12)', border: '1px solid rgba(0,224,19,.32)', display: 'grid', placeItems: 'center', flex: '0 0 auto' }}>
+        <div className="tb-run-head" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px', borderBottom: '1px solid var(--tb-hairline)', flex: '0 0 auto' }}>
+          <div className="tb-run-mark" style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(0,224,19,.12)', border: '1px solid rgba(0,224,19,.32)', display: 'grid', placeItems: 'center', flex: '0 0 auto' }}>
             <Ico n="circle-play" s={20} c="var(--tb-primary-green)" />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>Configure run</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>Run trail</div>
             {trail && <div className="tb-mono tb-sub" style={{ fontSize: 11.5, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{trail.path || trail.id}</div>}
           </div>
           <button onClick={close} title="Close" style={{ display: 'inline-flex', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-subtle)', padding: 4, marginLeft: 4 }}><Ico n="x" s={20} /></button>
@@ -253,31 +278,31 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
                 <div key={t.id} className="tb-pal-row" onClick={() => { setTrail(t); setActiveSection('target'); }} style={{ cursor: 'pointer' }}>
                   <Ico n="file-text" s={16} c="var(--text-subtle)" />
                   <span style={{ fontSize: 13.5, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title || t.id}</span>
-                  <span className="tb-mono tb-sub" style={{ fontSize: 10.5 }}>{t.platform || ''}</span>
+                  <span className="tb-sub" style={{ fontSize: 10.5 }}>{t.platform || ''}</span>
                 </div>
               ))}
             </div>
           </div>
         ) : (
-          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'grid', gridTemplateColumns: '236px 1fr 440px' }}>
-            <div style={{ borderRight: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="tb-run-grid" style={{ flex: '1 1 auto', minHeight: 0, display: 'grid', gridTemplateColumns: '190px 1fr 440px' }}>
+            <div className="tb-run-nav" style={{ borderRight: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-                <SectionNav active={activeSection} onJump={jumpToSection} summaries={sectionSummaries} />
+                <SectionNav active={activeSection} onJump={jumpToSection} />
               </div>
             </div>
             {/* One scrolling page: every section stacked top-to-bottom. The left rail
                 jumps here; this scroll position drives which rail item is active. */}
-            <div ref={scrollRef} onScroll={onBodyScroll} style={{ overflowY: 'auto', padding: '22px 30px', display: 'flex', flexDirection: 'column', gap: 26 }}>
-              <Section id="target" title="Target" sub={SECTIONS[0][2]} ico={SECTIONS[0][3]} registerRef={registerSection}>
-                <TargetSection devices={deviceList} deviceId={deviceId} setDeviceId={setDeviceId} connectedId={connectedId}
+            <div className="tb-run-form" ref={scrollRef} onScroll={onBodyScroll} style={{ overflowY: 'auto', padding: '22px 30px', display: 'flex', flexDirection: 'column', gap: 26 }}>
+              <Section id="target" title="Target" ico={SECTIONS[0][2]} registerRef={registerSection}>
+                <TargetSection devices={deviceList} deviceId={deviceId} setDeviceId={(id) => { deviceTouched.current = true; setDeviceId(id); }} connectedId={connectedId}
                   installedTargets={installedTargets} targetApp={targetApp} setTargetApp={setTargetApp} appsLoading={deviceApps.loading} declaredTarget={declaredTarget} />
               </Section>
-              <Section id="behavior" title="Behavior" sub={SECTIONS[1][2]} ico={SECTIONS[1][3]} registerRef={registerSection}>
+              <Section id="behavior" title="Behavior" ico={SECTIONS[1][2]} registerRef={registerSection}>
                 <BehaviorSection selfHeal={selfHeal} setSelfHeal={setSelfHeal} useRecordedSteps={useRecordedSteps} setUseRecordedSteps={setUseRecordedSteps}
                   agent={agent} setAgent={setAgent} maxLlmCalls={maxLlmCalls} setMaxLlmCalls={setMaxLlmCalls} llm={llm} setLlm={setLlm}
                   verbose={verbose} setVerbose={setVerbose} headless={headless} setHeadless={setHeadless} web={selectedDevice && selectedDevice.platform === 'web'} />
               </Section>
-              <Section id="capture" title="Capture" sub={SECTIONS[2][2]} ico={SECTIONS[2][3]} registerRef={registerSection}>
+              <Section id="capture" title="Capture" ico={SECTIONS[2][2]} registerRef={registerSection}>
                 <CaptureSection captureVideo={captureVideo} setCaptureVideo={setCaptureVideo} captureLogcat={captureLogcat} setCaptureLogcat={setCaptureLogcat}
                   captureNetwork={captureNetwork} setCaptureNetwork={setCaptureNetwork} captureIosLogs={captureIosLogs} setCaptureIosLogs={setCaptureIosLogs}
                   captureAnalytics={captureAnalytics} setCaptureAnalytics={setCaptureAnalytics} captureEvents={captureEvents} setCaptureEvents={setCaptureEvents} saveRecording={saveRecording} setSaveRecording={setSaveRecording}
@@ -285,7 +310,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
                   tags={tags} setTags={setTags} />
               </Section>
             </div>
-            <div style={{ borderLeft: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', minHeight: 0 }}>
+            <div className="tb-run-preview" style={{ borderLeft: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', minHeight: 0 }}>
               {/* The dialog isn't under the shell's screen Boundary, so a render throw in
                   the right rail (e.g. the Tools panel) would unmount the whole app. Contain it. */}
               <Boundary>
@@ -308,8 +333,8 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
           // Footer is a single integrated bar: the live `trailblaze run …` command
           // (always visible, updates as you configure, wraps) with a small copy button,
           // and one green Run. Wizard nav (Back/Next) lives in the left step rail.
-          <div style={{ display: 'flex', alignItems: 'stretch', gap: 12, padding: '12px 16px', borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', flex: '0 0 auto' }}>
-            <div className="tb-mono" style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 9, padding: '10px 42px 10px 13px', fontSize: 12, lineHeight: 1.6, color: 'var(--text-standard)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 92, overflowY: 'auto' }}>
+          <div className="tb-run-footer" style={{ display: 'flex', alignItems: 'stretch', gap: 12, padding: '12px 16px', borderTop: '1px solid var(--tb-hairline)', background: 'var(--bg-app)', flex: '0 0 auto' }}>
+            <div className="tb-mono tb-run-command" style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 9, padding: '10px 42px 10px 13px', fontSize: 12, lineHeight: 1.6, color: 'var(--text-standard)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 92, overflowY: 'auto' }}>
               {command}
               <button data-testid="run-cmd-copy" onClick={copyCommand} title={copied ? 'Copied!' : 'Copy command'}
                 className="tb-btn ghost sm"

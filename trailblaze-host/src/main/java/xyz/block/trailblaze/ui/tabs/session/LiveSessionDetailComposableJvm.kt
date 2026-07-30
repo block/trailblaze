@@ -15,6 +15,7 @@ import xyz.block.trailblaze.ui.TrailblazeNodeSelectorAnalysisResult
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -27,6 +28,7 @@ fun LiveSessionDetailComposableWithSelectorSupport(
   toMaestroYaml: (JsonObject) -> String,
   generateRecordingYaml: () -> String,
   generateUnifiedRecordingYaml: (() -> String)? = null,
+  generateRecordingItems: (() -> List<TrailYamlItem>)? = null,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader,
   onDeleteSession: () -> Unit = {},
@@ -118,6 +120,7 @@ fun LiveSessionDetailComposableWithSelectorSupport(
     toMaestroYaml = toMaestroYaml,
     generateRecordingYaml = generateRecordingYaml,
     generateUnifiedRecordingYaml = generateUnifiedRecordingYaml,
+    generateRecordingItems = generateRecordingItems,
     onBackClick = onBackClick,
     imageLoader = imageLoader,
     onDeleteSession = onDeleteSession,

@@ -251,6 +251,64 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `junit identity is carried alongside the trail-derived title`() {
+    // A JUnit-harness session whose trail config has a title: the title labels the
+    // result, but the JUnit class#method identity must still ride along so consumers
+    // speaking the JUnit namespace (expected-tests validation against a farm manifest)
+    // can bind the result without token overlap between the two names.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_07_22_junit_identity_session")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = TrailConfig(title = "Test app launch recording"),
+            trailFilePath = null,
+            hasRecordedSteps = true,
+            testMethodName = "launchNoCrash",
+            testClassName = "com.example.smoke.LaunchSmokeTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-22T07:53:39Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-07-22T07:53:44Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val result = report.results.single()
+      assertEquals("Test app launch recording", result.title)
+      assertEquals("com.example.smoke.LaunchSmokeTest", result.test_class)
+      assertEquals("launchNoCrash", result.test_name)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `run includes sessions with self-heal failed status in report as failed`() {
     val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
     val outputFile = File(logsDir, "results.json")
@@ -1137,6 +1195,54 @@ class GenerateTestResultsCliCommandTest {
       val webBucket = triage.failure_axes.by_platform["web"]
       assertEquals(2, webBucket?.passed)
       assertEquals(1, webBucket?.failed)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `each failure signature carries the identity of every failure behind it`() {
+    val logsDir = Files.createTempDirectory("trailblaze-triage-identity").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // Two different cases whose reasons normalize to the SAME signature — the shape that
+      // used to reach triage as one signature and a count of 2, with nothing saying which
+      // cases were behind it.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_case_a"),
+        trailFilePath = "trails/cases/suite_71172/section_838951/case_4837766/trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 1_000, exceptionMessage = "Element not found: Save"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_case_b"),
+        trailFilePath = "trails/cases/suite_71172/section_838949/case_4866622/trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 1_000, exceptionMessage = "Element not found: Save"),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON", "--triage"),
+        )
+      }
+
+      val triage = json.decodeFromString<TriageReport>(File(logsDir, "trailblaze_triage_report.json").readText())
+      val group = triage.failure_signatures.single()
+      assertEquals(2, group.count)
+
+      // Every counted failure is enumerated, and each one names its own case.
+      assertEquals(group.count, group.affected_failures.size)
+      assertEquals(
+        listOf("4837766", "4866622"),
+        group.affected_failures.mapNotNull { it.case_id }.sorted(),
+      )
+      val first = group.affected_failures.single { it.case_id == "4837766" }
+      assertEquals("cases/suite_71172/section_838951/case_4837766", first.test_key)
+      assertEquals("Element not found: Save", first.reason)
+      assertEquals("2026_06_15_case_a", first.session_id)
     } finally {
       logsDir.deleteRecursively()
     }

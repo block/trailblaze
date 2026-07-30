@@ -310,6 +310,72 @@ without pinning `runtime: "subprocess"`. `.test.ts`, `.d.ts`, and helper modules
 - `docs/scripted-tools-typed-authoring.md` — authoring the TypeScript tools this plugin compiles.
 - `docs/scripted-tools-project-layout.md` — the trailmap directory layout this plugin keys off of.
 
+## In-process idle-detector APK emission (`inProcessIdle { }`)
+
+Trailblaze's Android *in-process idle* is a tiny bare-`Instrumentation` APK that attaches
+**in-process** to the app under test and answers "is the app idle?" over localhost — the fast arm
+of the opt-in settle race (`debug.trailblaze.settle.inProcessIdle`). Android only lets an instrumentation
+attach to an app **signed with the same certificate**, so the idle detector can't ship as a prebuilt
+binary: it has to be built and signed per target app, with the target's own key.
+
+The `inProcessIdle { }` block does exactly that. The idle detector's single-file Java source and manifest
+template ship *inside this plugin's jar*; the block registers a
+`buildTrailblazeInProcessIdle<Suffix>Apk` task that compiles them with your own Android SDK tools
+(`javac` against `android.jar`, `d8`, `aapt2`, `zipalign`, `apksigner` — no AGP involvement, about
+a second of work, no binaries in git) and stages the result as an `androidTest` asset at
+`inprocess-idle-apks/trailblaze-inprocess-idle-<suffix>.apk`, where `<suffix>` is the target applicationId's
+last dotted label. Asset wiring and task dependencies are automatic, same as `trailmap { }`.
+
+One runtime requirement on the *target* app: it must hold `android.permission.INTERNET`. The
+idle detector runs with the target app's permissions, and even its localhost-only socket needs that
+permission — without it the bind fails (EPERM/EACCES) and the idle detector logs a directed
+`TbzInProcessIdle` error instead of answering `PING`. Debug builds of networked apps virtually
+always declare it; a fully-offline app would need it added to its debug manifest to use the
+idle detector.
+
+```kotlin
+trailblazeAndroid {
+  // Signs with the standard debug keystore (~/.android/debug.keystore) — the same key AGP
+  // signs debug builds with. Generated with the canonical debug parameters first if a clean
+  // machine doesn't have one yet, so the two signatures always match.
+  inProcessIdle { targetApplicationId = "com.example.app" }
+
+  // Signs with one of this module's own AGP signing configs — the key is declared once, in
+  // android.signingConfigs, and the idle detector inherits it (nothing to copy around).
+  inProcessIdle {
+    targetApplicationId = "com.example.app.internal"
+    signingConfigName = "internalRelease"
+  }
+
+  // Signs with an explicit keystore — for a target app whose key lives outside this module.
+  inProcessIdle {
+    targetApplicationId = "com.example.app.special"
+    keystoreFile = rootProject.file("keys/special.keystore")
+    keystorePassword = "…"
+    keyAlias = "…"
+    // keyPassword defaults to keystorePassword
+  }
+}
+```
+
+Call it once per target app; each call stages one APK. Targets must have distinct last dotted
+labels (the suffix keys the idle detector package name, task name, and asset path — a collision fails the
+build with a directed error).
+
+### `inProcessIdle { }` block properties
+
+| Property | Type | Required | What it does |
+| --- | --- | --- | --- |
+| `targetApplicationId` | `Property<String>` | yes | The installed applicationId of the app under test — stamped into the idle detector manifest's `targetPackage`. |
+| `signingConfigName` | `Property<String>` | optional | Name of an `android.signingConfigs` entry to sign with. Mutually exclusive with the explicit keystore properties. |
+| `keystoreFile` / `keystorePassword` / `keyAlias` / `keyPassword` | explicit signing | optional | Explicit keystore quad; `keyPassword` defaults to `keystorePassword`. Neither this nor `signingConfigName` set → the standard debug keystore. |
+| `minSdkVersion` | `Property<Int>` | optional (28) | Dex/link min SDK. |
+| `targetSdkVersion` | `Property<Int>` | optional (35) | Link target SDK. |
+
+The Android SDK is located the way an Android build usually finds it: `local.properties`
+`sdk.dir`, then `ANDROID_HOME` / `ANDROID_SDK_ROOT`, then the default install locations. Any
+modern build-tools + platform works — the highest installed of each is used.
+
 ## What it does not do
 
 This plugin scans **file and directory names only** — it never opens the

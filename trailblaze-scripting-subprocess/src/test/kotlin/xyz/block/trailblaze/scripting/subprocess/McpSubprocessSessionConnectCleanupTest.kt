@@ -10,7 +10,10 @@ import assertk.assertions.isNotNull
 import assertk.assertions.messageContains
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
+import org.junit.rules.Timeout
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
@@ -28,6 +31,17 @@ import kotlin.test.assertFailsWith
  */
 class McpSubprocessSessionConnectCleanupTest {
 
+  /**
+   * Hang-vs-forever containment, not a performance bound: the worst LEGITIMATE duration here is
+   * the default 60s handshake watchdog plus the ~9s teardown escalation ladder, so 120s can only
+   * be crossed by a genuine wedge. Before the handshake-cancel lever was added to the watchdog
+   * (see [McpSubprocessSession.connect]), an instant-exit subprocess could orphan the SDK's
+   * initialize await with nothing left to unblock it — this test class then parked forever and
+   * wedged the whole `check` run at 99% until the CI step was cancelled (three mainline
+   * mandatory-checks builds). The rule converts any recurrence into a failed test.
+   */
+  @get:Rule val perTestHangGuard: Timeout = Timeout(120, TimeUnit.SECONDS)
+
   private val binTrue = firstExecutable("/bin/true", "/usr/bin/true")
   private val binSleep = firstExecutable("/bin/sleep", "/usr/bin/sleep")
 
@@ -35,27 +49,75 @@ class McpSubprocessSessionConnectCleanupTest {
     assumeTrue("POSIX `true` is required to exercise the cleanup path", binTrue != null)
     runBlocking {
       val process = ProcessBuilder(binTrue!!.absolutePath).redirectErrorStream(false).start()
-      val spawned = SpawnedProcess(
-        process = process,
-        scriptFile = binTrue,
-        argv = listOf(binTrue.absolutePath),
-      )
-      // Explicit capture instance so the test can assert close() was reached. If the
-      // cleanup regressed to skip it, a file-backed capture would leak silently because
-      // StderrCapture.close() swallows write errors via runCatching.
-      val capture = StderrCapture()
+      try {
+        val spawned = SpawnedProcess(
+          process = process,
+          scriptFile = binTrue,
+          argv = listOf(binTrue.absolutePath),
+        )
+        // Explicit capture instance so the test can assert close() was reached. If the
+        // cleanup regressed to skip it, a file-backed capture would leak silently because
+        // StderrCapture.close() swallows write errors via runCatching.
+        val capture = StderrCapture()
 
-      // An immediate EOF is an organic handshake failure, not a timeout — connect must propagate
-      // the underlying error unchanged, never re-attribute it as a handshake timeout.
-      assertFailure {
-        McpSubprocessSession.connect(spawnedProcess = spawned, stderrCapture = capture)
-      }.isNotInstanceOf(McpSubprocessHandshakeTimeoutException::class)
-      // Cleanup ran. `true` exits on its own, so isAlive is false regardless of whether
-      // we actually had to destroy() — the guarantee we want to assert is "no orphan".
-      assertThat(process.isAlive).isEqualTo(false)
-      // And the stderr capture was closed along the way — otherwise a file-backed variant
-      // would leak its FileWriter handle and there'd be no test catching it.
-      assertThat(capture.isClosed).isEqualTo(true)
+        // An immediate EOF is an organic handshake failure, not a timeout — connect must propagate
+        // the underlying error unchanged, never re-attribute it as a handshake timeout.
+        assertFailure {
+          McpSubprocessSession.connect(spawnedProcess = spawned, stderrCapture = capture)
+        }.isNotInstanceOf(McpSubprocessHandshakeTimeoutException::class)
+        // Cleanup ran. `true` exits on its own, so isAlive is false regardless of whether
+        // we actually had to destroy() — the guarantee we want to assert is "no orphan".
+        assertThat(process.isAlive).isEqualTo(false)
+        // And the stderr capture was closed along the way — otherwise a file-backed variant
+        // would leak its FileWriter handle and there'd be no test catching it.
+        assertThat(capture.isClosed).isEqualTo(true)
+      } finally {
+        process.destroyForcibly()
+      }
+    }
+  }
+
+  /**
+   * The wedge that hung CI: a subprocess that is already dead when [McpSubprocessSession.connect]
+   * runs. Its stdout is at EOF before the SDK sends `initialize`, so the transport can close and
+   * wipe the response-handler map before the request registers — orphaning an await that no
+   * stream event will ever complete — and the watchdog's force-destroy is a no-op on a dead
+   * process. The interleaving inside the SDK is timing-dependent (usually the EOF error beats the
+   * orphaning), so this can't pin WHICH failure surfaces; the behavior under test is that connect
+   * always fails within its bound instead of parking forever, with no orphan and a closed capture.
+   */
+  @Test fun `connect fails within its bound when the subprocess is already dead`() {
+    assumeTrue("POSIX `true` is required to produce a dead-on-arrival subprocess", binTrue != null)
+    runBlocking {
+      val process = ProcessBuilder(binTrue!!.absolutePath).redirectErrorStream(false).start()
+      try {
+        // Guarantee dead-on-arrival: reap the process before connect ever sees it.
+        process.waitFor()
+        val spawned = SpawnedProcess(
+          process = process,
+          scriptFile = binTrue,
+          argv = listOf(binTrue.absolutePath),
+        )
+        val capture = StderrCapture()
+
+        val elapsedMs = measureTimeMillis {
+          assertFailure {
+            McpSubprocessSession.connect(
+              spawnedProcess = spawned,
+              stderrCapture = capture,
+              handshakeTimeoutMillis = 2_000,
+            )
+          }
+        }
+
+        // Organic EOF failure (fast) or watchdog timeout (2s) plus the teardown ladder — either
+        // way bounded, never "forever".
+        assertThat(elapsedMs).isLessThan(30_000L)
+        assertThat(process.isAlive).isEqualTo(false)
+        assertThat(capture.isClosed).isEqualTo(true)
+      } finally {
+        process.destroyForcibly()
+      }
     }
   }
 
@@ -77,36 +139,41 @@ class McpSubprocessSessionConnectCleanupTest {
     assumeTrue("POSIX `sleep` is required to exercise the handshake-timeout path", binSleep != null)
     runBlocking {
       val process = ProcessBuilder(binSleep!!.absolutePath, "30").redirectErrorStream(false).start()
-      val spawned = SpawnedProcess(
-        process = process,
-        scriptFile = binSleep,
-        argv = listOf(binSleep.absolutePath, "30"),
-      )
-      val capture = StderrCapture()
+      try {
+        val spawned = SpawnedProcess(
+          process = process,
+          scriptFile = binSleep,
+          argv = listOf(binSleep.absolutePath, "30"),
+        )
+        val capture = StderrCapture()
 
-      lateinit var thrown: McpSubprocessHandshakeTimeoutException
-      val elapsedMs = measureTimeMillis {
-        thrown = assertFailsWith<McpSubprocessHandshakeTimeoutException> {
-          McpSubprocessSession.connect(
-            spawnedProcess = spawned,
-            stderrCapture = capture,
-            handshakeTimeoutMillis = 250,
-          )
+        lateinit var thrown: McpSubprocessHandshakeTimeoutException
+        val elapsedMs = measureTimeMillis {
+          thrown = assertFailsWith<McpSubprocessHandshakeTimeoutException> {
+            McpSubprocessSession.connect(
+              spawnedProcess = spawned,
+              stderrCapture = capture,
+              handshakeTimeoutMillis = 250,
+            )
+          }
         }
-      }
 
-      // Failed fast on the 250ms bound plus the bounded teardown ladder — nowhere near the 30s
-      // sleep, so the handshake was genuinely cancelled rather than run to completion.
-      assertThat(elapsedMs).isLessThan(20_000L)
-      // The subprocess was torn down by the timeout cleanup — no orphan left behind.
-      assertThat(process.isAlive).isEqualTo(false)
-      // And the stderr capture was closed on the way out.
-      assertThat(capture.isClosed).isEqualTo(true)
-      // Attributable: the timeout names the culprit script and the bound it blew, and preserves the
-      // underlying stream-closed read error as the cause so the daemon log keeps the root failure.
-      assertThat(thrown.scriptName).isEqualTo(binSleep!!.name)
-      assertThat(thrown.timeoutMillis).isEqualTo(250L)
-      assertThat(thrown.cause).isNotNull()
+        // Failed fast on the 250ms bound plus the bounded teardown ladder — nowhere near the 30s
+        // sleep, so the handshake was genuinely cancelled rather than run to completion.
+        assertThat(elapsedMs).isLessThan(20_000L)
+        // The subprocess was torn down by the timeout cleanup — no orphan left behind.
+        assertThat(process.isAlive).isEqualTo(false)
+        // And the stderr capture was closed on the way out.
+        assertThat(capture.isClosed).isEqualTo(true)
+        // Attributable: the timeout names the culprit script and the bound it blew, and preserves the
+        // underlying unwind (stream-closed read error or the watchdog's handshake cancellation) as
+        // the cause so the daemon log keeps the root failure.
+        assertThat(thrown.scriptName).isEqualTo(binSleep!!.name)
+        assertThat(thrown.timeoutMillis).isEqualTo(250L)
+        assertThat(thrown.cause).isNotNull()
+      } finally {
+        process.destroyForcibly()
+      }
     }
   }
 

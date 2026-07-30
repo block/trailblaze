@@ -20,6 +20,9 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
+import xyz.block.trailblaze.host.recording.DeviceStreamScreenshotSource
+import xyz.block.trailblaze.host.recording.StreamFrameMonitor
+import xyz.block.trailblaze.host.recording.StreamScreenshotScreenState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -83,18 +86,136 @@ class MaestroHostRunnerImpl(
 
   companion object {
     var callCount = 0
+
+    /**
+     * Bound on waiting for the stream to produce a frame matching a tree capture. Covers the
+     * quiet window + normal encode/transport latency with margin; a capture that can't match
+     * within this falls back to one on-simulator screenshot, so a busted stream costs about as
+     * much as the pre-stream path per capture rather than wedging it.
+     */
+    private const val STREAM_FRAME_TIMEOUT_MS = 2_500L
   }
+
+  /**
+   * Experimental: serve iOS agent-loop screenshots from the simulator's live baguette H.264
+   * stream instead of a per-turn `simctl`/XCUITest screenshot. Read once at construction (per
+   * run) — see [StreamScreenshotMode].
+   */
+  private val streamScreenshotMode = StreamScreenshotMode.resolveIos()
+
+  /** Lazily started on the first capture; null until then, or when stream mode is off/unavailable. */
+  @Volatile private var streamScreenshotSource: DeviceStreamScreenshotSource? = null
+
+  /** Sticky: once baguette is found absent (or the source fails to start) we stop retrying. */
+  @Volatile private var streamSourceUnavailable = false
 
   override val screenStateProvider: () -> ScreenState = {
     callCount++
     Console.log("screenStateProvider call count: $callCount")
+    runBlocking { captureScreenState() }
+  }
+
+  /**
+   * Builds the per-turn [ScreenState]. In the default (OFF) mode this is just a
+   * [HostMaestroDriverScreenState] with its on-simulator screenshot. Stream mode replaces the
+   * screenshot with a frame from the live baguette stream that provably matches the tree capture
+   * (see [StreamFrameMonitor] / [StreamScreenshotScreenState]); AB mode keeps the on-simulator
+   * screenshot authoritative but logs a comparison line.
+   */
+  private suspend fun captureScreenState(): ScreenState {
+    // Stream screenshots are only wired for iOS (baguette is a Simulator-only transport); any
+    // other platform on this runner stays on the driver's own screenshot.
+    val engageStream = streamScreenshotMode != StreamScreenshotMode.OFF &&
+      trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS
+    if (!engageStream) return buildDriverScreenState(skipScreenshot = false)
+
+    val source = ensureStreamSource()
+      ?: return buildDriverScreenState(skipScreenshot = false) // baguette absent → on-simulator
+
+    return when (streamScreenshotMode) {
+      StreamScreenshotMode.AB_COMPARE -> {
+        // On-simulator screenshot stays authoritative; also run the matcher and log enough per
+        // capture to judge the stream path's viability (match rate, skew, sizes) from a run.
+        val base = buildDriverScreenState(skipScreenshot = false)
+        val treeCapturedAtHostMs = System.currentTimeMillis()
+        when (val result = source.awaitFrameMatching(treeCapturedAtHostMs, STREAM_FRAME_TIMEOUT_MS)) {
+          is StreamFrameMonitor.Result.Matched -> Console.log(
+            "[stream-screenshot] AB matched: skewMs=${result.frameVsTreeSkewMs} " +
+              "streamBytes=${result.jpegBytes.size} " +
+              "simulatorBytes=${base.screenshotBytes?.size} treeTs=$treeCapturedAtHostMs",
+          )
+          is StreamFrameMonitor.Result.Unavailable -> Console.log(
+            "[stream-screenshot] AB unmatched: ${result.reason} treeTs=$treeCapturedAtHostMs",
+          )
+        }
+        base
+      }
+      StreamScreenshotMode.STREAM -> {
+        // Skip the (slow) on-simulator screenshot: capture the tree only, stamp when it's final.
+        val base = buildDriverScreenState(skipScreenshot = true)
+        val treeCapturedAtHostMs = System.currentTimeMillis()
+        when (val result = source.awaitFrameMatching(treeCapturedAtHostMs, STREAM_FRAME_TIMEOUT_MS)) {
+          is StreamFrameMonitor.Result.Matched -> {
+            Console.log(
+              "[stream-screenshot] matched: skewMs=${result.frameVsTreeSkewMs} " +
+                "bytes=${result.jpegBytes.size} treeTs=$treeCapturedAtHostMs",
+            )
+            StreamScreenshotScreenState(delegate = base, streamJpegBytes = result.jpegBytes)
+          }
+          is StreamFrameMonitor.Result.Unavailable -> {
+            Console.log(
+              "[stream-screenshot] unmatched (${result.reason}) — falling back to on-simulator screenshot",
+            )
+            // Re-capture WITH the on-simulator screenshot (the tree-only base has none).
+            buildDriverScreenState(skipScreenshot = false)
+          }
+        }
+      }
+      StreamScreenshotMode.OFF -> buildDriverScreenState(skipScreenshot = false) // unreachable — guarded above
+    }
+  }
+
+  private fun buildDriverScreenState(skipScreenshot: Boolean): ScreenState =
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       // Re-resolve per call so live settings changes (e.g. `trailblaze config
       // screenshot-format png` mid-session) take effect on the very next capture.
       screenshotScalingConfig = screenshotScalingConfigProvider(),
       deviceClassifiers = deviceClassifiers,
+      skipScreenshot = skipScreenshot,
     )
+
+  /**
+   * Lazily starts the baguette stream source on the first stream/AB capture. Returns null (and
+   * latches [streamSourceUnavailable]) when baguette isn't installed or the source fails to
+   * start — the caller then stays on the on-simulator screenshot for the rest of the session.
+   */
+  private fun ensureStreamSource(): DeviceStreamScreenshotSource? {
+    if (streamSourceUnavailable) return null
+    streamScreenshotSource?.let { return it }
+    val created = DeviceStreamScreenshotSource.forIos(trailblazeDeviceId)
+    return try {
+      if (created.start()) {
+        streamScreenshotSource = created
+        created
+      } else {
+        runCatching { created.close() }
+        streamSourceUnavailable = true
+        null
+      }
+    } catch (e: Exception) {
+      Console.log("[stream-screenshot] failed to start iOS stream source: ${e.message}")
+      runCatching { created.close() }
+      streamSourceUnavailable = true
+      null
+    }
+  }
+
+  override fun closeStreamScreenshotSource() {
+    streamScreenshotSource?.let {
+      streamScreenshotSource = null
+      runCatching { it.close() }
+    }
   }
 
   override fun runMaestroYaml(yaml: String): TrailblazeToolResult {

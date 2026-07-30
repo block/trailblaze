@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
+import xyz.block.trailblaze.device.wrapShellPipelineForTransport
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -33,29 +34,32 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * this tool from `.ts` scripted-tool bodies and the same composition works whether the
  * tool is dispatched on the daemon JVM or on the device's QuickJS bundle path.
  *
- * ### Transport-aware dispatch (shell vs. no shell)
+ * ### Transport-aware dispatch (native shell vs. trampolined shell)
  *
  * The two transports are NOT shell-equivalent, and this tool dispatches differently for each based
- * on [AndroidDeviceCommandExecutor.usesShellInterpreter]:
+ * on [AndroidDeviceCommandExecutor.usesShellInterpreter] — but both routes end in a real device-side
+ * `sh` evaluating the same shell-escaped command + `$?` exit sentinel, so the fail-loud contract is
+ * identical:
  *
- *  - **Host (dadb → `adbd`): has a shell.** `adbd` runs the command via `sh -c`, so the command is
- *    shell-escaped ([joinCommandAsShellString]) and the exit code is recovered from an appended
- *    `$?` exit sentinel (below).
- *  - **On-device (`UiAutomationConnection.executeShellCommand` → [Runtime.exec]): NO shell.** The
- *    string is whitespace-split and exec'd directly. Shell-escaping a token would make the program
- *    name the literal `'su'` (→ `Cannot run program "'su'"`), and the `$?` exit sentinel would be
- *    exec'd as literal arguments. So on this transport the argv tokens are dispatched **raw** via
- *    [AndroidDeviceCommandExecutor.executeShellCommandArgs] with no escaping and no sentinel — and
- *    there is no exit-code channel (only a failed *launch* throws). (Regression context: moving the
- *    Square Android launch flow to TypeScript routed its `su root pm disable …` eviction through
- *    this tool on the on-device path; the shell-escaping broke `su` and the failure hung the run.)
+ *  - **Host (dadb → `adbd`): has a shell.** `adbd` runs the command line via `sh -c`, so the
+ *    sentinel-wrapped shell string is sent as-is.
+ *  - **On-device (`UiAutomationConnection.executeShellCommand` → [Runtime.exec]): NO shell of its
+ *    own.** The string is whitespace-split and exec'd directly, so the sentinel-wrapped shell
+ *    string cannot be sent as-is — quoting and `$?` would ride along as literal characters. Instead
+ *    it is base64-packed into a single whitespace-free `sh -c` token via the shared
+ *    [wrapShellPipelineForTransport] trampoline ([buildShellTrampolineCommand]); the device-side
+ *    `sh` decodes and evaluates it, restoring both shell semantics (whitespace-bearing tokens,
+ *    which the pre-trampoline raw-argv dispatch had to reject) and the exit sentinel. Before this,
+ *    the raw-argv dispatch had no exit-code channel at all, so a failing command silently reported
+ *    Success — the classic false green: a session-seeding `cp` that failed left the app launching
+ *    signed-out while the trail marched on.
  *
- * **Timeout.** A failed on-device `Runtime.exec` raises an exception in the separate UiAutomation
- * process that "cannot cross the Binder," leaving the caller blocked on the result pipe. The
- * on-device path therefore bounds each dispatch with [ON_DEVICE_SHELL_TIMEOUT_MS] on an
- * interruptible IO dispatcher, so a wedged exec fails fast rather than hanging until the on-device
- * RPC cap ([xyz.block.trailblaze.llm.OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS], 15 min) or the
- * session inactivity watchdog (~13 min). The host path is unbounded here but has its own
+ * **Timeout.** The on-device transport's exec runs in the separate UiAutomation process, where a
+ * failure "cannot cross the Binder" — a wedged exec leaves the caller blocked on the result pipe.
+ * The on-device path therefore bounds each dispatch with [ON_DEVICE_SHELL_TIMEOUT_MS] on an
+ * interruptible IO dispatcher, so a wedged command fails fast rather than hanging until the
+ * on-device RPC cap ([xyz.block.trailblaze.llm.OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS], 15 min)
+ * or the session inactivity watchdog (~13 min). The host path is unbounded here but has its own
  * `TRAILBLAZE_ADB_TIMEOUT_MS` env var (see `CLAUDE.md` "ADB Configuration"). Both transports return
  * the full stdout buffered in memory — no streaming — so commands with very large output (e.g.
  * `dumpsys`, `logcat -d`) are bounded by JVM heap on whichever side runs the actual.
@@ -67,8 +71,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  *
  * ### Exit-code detection via sentinel echo
  *
- * This applies only to the shell-backed (host) transport above; the on-device transport has no
- * shell to evaluate the sentinel, so it cannot observe a non-zero exit (see the dispatch section).
+ * Applies to BOTH transports: the host transport evaluates the sentinel in `adbd`'s `sh -c`, the
+ * on-device transport in the trampolined `sh` (see the dispatch section).
  *
  * The underlying [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor.executeShellCommand]
  * returns only the combined stdout — no exit-code channel. To make scripted-tool composition
@@ -195,16 +199,14 @@ data class AdbShellTrailblazeTool(
       )
     return try {
       // Pick the path by transport: a shell-backed transport (host/dadb→adbd) can take the
-      // shell-escaped string + `$?` exit sentinel; a shell-less transport (on-device
-      // UiAutomation→Runtime.exec) must get raw argv tokens — escaping them turns `su` into the
-      // literal program name `'su'` (→ "Cannot run program"). See AndroidDeviceCommandExecutor
-      // .usesShellInterpreter and joinCommandRawArgv. (This branch is specific to this tool's
-      // argv-shaped contract; Kotlin callers needing a multi-word pipeline on both transports —
-      // the thing the raw-argv path rejects — use the executor's executeShellPipelineAs.)
+      // shell-escaped string + `$?` exit sentinel directly; a shell-less transport (on-device
+      // UiAutomation→Runtime.exec) gets the same sentinel-wrapped shell string base64-packed into
+      // a single `sh -c` token (the wrapShellPipelineForTransport trampoline), so both routes end
+      // in a real device-side shell and the exit code is observable either way.
       if (executor.usesShellInterpreter) {
         executeViaShellInterpreter(executor, effectiveCommand)
       } else {
-        executeViaRawArgv(executor)
+        executeViaShellTrampoline(executor, effectiveCommand)
       }
     } catch (e: CancellationException) {
       // Propagate cancellation so structured-concurrency teardown isn't silently swallowed.
@@ -235,6 +237,18 @@ data class AdbShellTrailblazeTool(
     } else {
       executor.executeShellCommand(wrapped)
     }
+    return resultFromSentinelOutput(effectiveCommand, rawOutput)
+  }
+
+  /**
+   * Resolves the sentinel-bearing [rawOutput] of either transport into the tool result: Success on
+   * exit 0, an error naming the exit code otherwise, and a fail-loud error when the sentinel line
+   * is missing (we can't tell success from failure, so we refuse to report Success).
+   */
+  private fun resultFromSentinelOutput(
+    effectiveCommand: String,
+    rawOutput: String,
+  ): TrailblazeToolResult {
     val parsed = parseExitSentinel(rawOutput)
     return when {
       parsed.exitCode == 0 -> TrailblazeToolResult.Success(message = parsed.output)
@@ -266,52 +280,42 @@ data class AdbShellTrailblazeTool(
 
   /**
    * Shell-less transport (on-device: `UiAutomationConnection.executeShellCommand` → [Runtime.exec]).
-   * There is no shell, so the argv tokens are dispatched **raw** via
-   * [AndroidDeviceCommandExecutor.executeShellCommandArgs] — NOT shell-escaped, and with NO
-   * `$?` exit sentinel (both would be exec'd as literal characters/arguments rather than
-   * interpreted; the regression that motivated this split sent `'su' 'root' …` quoted and the
-   * device tried to exec a program literally named `'su'`).
+   * [Runtime.exec] whitespace-splits its string and execs the tokens with no shell, so the
+   * sentinel-wrapped shell string cannot be dispatched as-is. Instead it rides the shared
+   * [wrapShellPipelineForTransport] trampoline ([buildShellTrampolineCommand]): base64-packed into
+   * a single whitespace-free token that survives the split, then decoded and evaluated by a real
+   * device-side `sh`. That restores shell semantics (the shell-escaped tokens are honored, so
+   * whitespace-bearing tokens work — the raw-argv dispatch this replaces had to reject them) AND
+   * the `$?` exit sentinel, closing the false-green gap where a failing command silently reported
+   * Success.
    *
-   * `Runtime.exec` offers no exit-code channel, so a non-zero program exit is **not observable**
-   * here — only a failed *launch* throws (caught by [execute]). Critically, that launch failure is
-   * raised in the separate UiAutomation process and "cannot cross the Binder" back to us, leaving
-   * the result-pipe read blocked indefinitely; without a bound the agent hangs until the session's
-   * ~13-minute inactivity watchdog kills it. So the call runs on an interruptible IO dispatcher
-   * bounded by [ON_DEVICE_SHELL_TIMEOUT_MS] — a timeout fails fast with a clear error.
+   * The exec runs in the separate UiAutomation process, where a failure "cannot cross the Binder"
+   * back to us — a wedged command leaves the result-pipe read blocked indefinitely; without a bound
+   * the agent hangs until the session's ~13-minute inactivity watchdog kills it. So the call runs
+   * on an interruptible IO dispatcher bounded by [ON_DEVICE_SHELL_TIMEOUT_MS] — a timeout fails
+   * fast with a clear error.
    */
-  private suspend fun executeViaRawArgv(executor: AndroidDeviceCommandExecutor): TrailblazeToolResult {
-    // On the no-shell transport every element must be a single whitespace-free token: Runtime.exec
-    // re-splits the joined string on whitespace with no shell to honor quoting, so an embedded space
-    // silently becomes two tokens. The non-runAs branch gets this guard for free from
-    // executeShellCommandArgs, but the runAs branch routes through executeShellCommandAs (a joined
-    // shell string that skips it). Enforce it here for BOTH branches so they fail loud identically
-    // — and before spinning up the timeout/dispatcher — instead of silently mis-splitting.
-    val whitespaceTokens = whitespaceBearingTokens(command)
-    require(whitespaceTokens.isEmpty()) {
-      "android_adbShell: on the on-device transport, command tokens must not contain whitespace " +
-        "(UiAutomation routes through Runtime.exec, which re-splits on whitespace with no shell). " +
-        "Offending tokens: $whitespaceTokens"
-    }
-    val rendered = joinCommandRawArgv(command)
+  private suspend fun executeViaShellTrampoline(
+    executor: AndroidDeviceCommandExecutor,
+    effectiveCommand: String,
+  ): TrailblazeToolResult {
+    val transportCommand = buildShellTrampolineCommand(effectiveCommand)
     val rawOutput = withTimeoutOrNull(ON_DEVICE_SHELL_TIMEOUT_MS) {
       runInterruptible(Dispatchers.IO) {
         if (runAs != null) {
-          executor.executeShellCommandAs(runAs, rendered)
+          executor.executeShellCommandAs(runAs, transportCommand)
         } else {
-          executor.executeShellCommandArgs(*command.toTypedArray())
+          executor.executeShellCommand(transportCommand)
         }
       }
     } ?: return TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = "android_adbShell command did not return within ${ON_DEVICE_SHELL_TIMEOUT_MS}ms " +
-        "on the on-device transport: '${rendered.take(200)}'. A missing program or wedged exec " +
-        "leaves the UiAutomation result pipe blocked; failing fast instead of hanging until the " +
-        "session inactivity watchdog fires.",
+        "on the on-device transport: '${effectiveCommand.take(200)}'. A wedged command leaves the " +
+        "UiAutomation result pipe blocked; failing fast instead of hanging until the session " +
+        "inactivity watchdog fires.",
       command = this,
     )
-    // No shell on this transport → no exit-code sentinel, and UiAutomation.executeShellCommand
-    // returns only stdout. A non-zero program exit is not observable; a failed *launch* already
-    // threw above and was caught by execute(). A returned buffer is treated as success.
-    return TrailblazeToolResult.Success(message = rawOutput)
+    return resultFromSentinelOutput(effectiveCommand, rawOutput)
   }
 
   /**
@@ -344,15 +348,20 @@ data class AdbShellTrailblazeTool(
     )
 
     /**
-     * Wraps [command] so the device shell echoes a final line like
+     * Wraps [command] so the device shell emits a final line like
      * `__TBZ_ADBSHELL_EXIT__0` carrying the exit code of the user's last statement.
      *
-     * Uses `;` (not `&&`) so the echo runs regardless of the user command's exit status.
-     * Wrapping with `{ ... ; }` would buy nothing — `;`-separated lists already evaluate
-     * left-to-right and the right-hand `echo` sees `$?` of the previous statement.
+     * Uses `;` (not `&&`) so the sentinel is emitted regardless of the user command's
+     * exit status. The printf format starts with `\n` so the sentinel always begins on a
+     * fresh line even when the command's stdout doesn't end in a newline (e.g.
+     * `printf foo`) — without it the sentinel glues onto the last output line
+     * (`foo__TBZ_ADBSHELL_EXIT__0`), the line-anchored [EXIT_SENTINEL_REGEX] misses, and
+     * a successful command is misreported as sentinel-missing. A single `printf` (not
+     * `echo; echo …$?`) is load-bearing: an intermediate command would reset `$?` before
+     * it's read.
      */
     internal fun wrapWithExitSentinel(command: String): String =
-      "$command; echo $EXIT_SENTINEL_TOKEN\$?"
+      "$command; printf '\\n$EXIT_SENTINEL_TOKEN%s\\n' \$?"
 
     /**
      * Joins [command] into a single shell string by single-quote-wrapping each element via
@@ -366,32 +375,21 @@ data class AdbShellTrailblazeTool(
       command.joinToString(separator = " ") { it.shellEscape() }
 
     /**
-     * Renders [command] for a transport with **no shell interpreter** (on-device:
-     * `UiAutomationConnection.executeShellCommand` → [Runtime.exec]): the raw argv tokens joined by
-     * spaces, deliberately **NOT** shell-escaped. Contrast [joinCommandAsShellString], which
-     * single-quote-wraps each token for a `sh -c` transport.
+     * Renders the sentinel-wrapped [effectiveCommand] for a transport with **no shell interpreter**
+     * (on-device: `UiAutomationConnection.executeShellCommand` → [Runtime.exec]): the shared
+     * [wrapShellPipelineForTransport] trampoline base64-packs the whole shell expression into a
+     * single whitespace-free `sh -c` token, so it survives [Runtime.exec]'s whitespace split and is
+     * decoded + evaluated by a real device-side `sh`. Both the shell-escaping of the argv tokens
+     * and the `$?` exit sentinel are honored there, exactly as on the host transport.
      *
-     * The distinction is load-bearing: on the shell-less transport, [Runtime.exec] re-splits the
-     * string on whitespace and execs the first token as the program name verbatim. Passing the
-     * shell-escaped form would make the program name the literal `'su'` (quotes included), which
-     * fails with `Cannot run program "'su'"` — exactly the regression this split fixes. Tokens that
-     * contain whitespace cannot survive this transport and are rejected upstream by
-     * [AndroidDeviceCommandExecutor.executeShellCommandArgs].
-     *
-     * Pure function for testability — no executor needed to pin the no-escaping contract.
+     * Pure function for testability — a test can base64-decode the payload back out and pin that
+     * the device-side `sh` evaluates the same sentinel-wrapped command the host transport gets.
      */
-    internal fun joinCommandRawArgv(command: List<String>): String =
-      command.joinToString(separator = " ")
-
-    /**
-     * Returns the elements of [command] that contain whitespace — the tokens that cannot survive
-     * the no-shell transport intact (`Runtime.exec` re-splits the joined string on whitespace).
-     * Empty means every token is a clean single argv element. Pure, so the on-device fail-loud
-     * guard in [executeViaRawArgv] is unit-testable without an executor; mirrors the contract that
-     * [AndroidDeviceCommandExecutor.executeShellCommandArgs] enforces on its own actual.
-     */
-    internal fun whitespaceBearingTokens(command: List<String>): List<String> =
-      command.filter { token -> token.any(Char::isWhitespace) }
+    internal fun buildShellTrampolineCommand(effectiveCommand: String): String =
+      wrapShellPipelineForTransport(
+        usesShellInterpreter = false,
+        innerCommand = wrapWithExitSentinel(effectiveCommand),
+      )
 
     /**
      * Upper bound for a single on-device (shell-less) `android_adbShell` dispatch. A failed
@@ -406,17 +404,19 @@ data class AdbShellTrailblazeTool(
     /**
      * Splits [rawOutput] into the user-facing command output and the captured exit code.
      *
-     * The sentinel must appear on its own trailing line (`\\s*$` anchor) for safety
-     * against the rare case where the user's command output happens to contain a literal
-     * `__TBZ_ADBSHELL_EXIT__N` substring earlier in the stream. If the regex finds no
-     * match, returns the raw output verbatim with [EXIT_CODE_SENTINEL_MISSING] so the
-     * caller can surface an error.
+     * The sentinel must appear on its own line (`\\s*$` anchor) for safety against the
+     * rare case where the user's command output happens to contain a literal
+     * `__TBZ_ADBSHELL_EXIT__N` substring earlier in the stream, and the LAST such line
+     * wins — the real sentinel is always the final thing the wrapped command prints, so
+     * even a user output line that is exactly a sentinel-shaped line can't hijack the
+     * exit code. If the regex finds no match, returns the raw output verbatim with
+     * [EXIT_CODE_SENTINEL_MISSING] so the caller can surface an error.
      *
      * Pure function for testability — callers don't need a real
      * [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor] to exercise the parser.
      */
     internal fun parseExitSentinel(rawOutput: String): ParsedExit {
-      val match = EXIT_SENTINEL_REGEX.find(rawOutput)
+      val match = EXIT_SENTINEL_REGEX.findAll(rawOutput).lastOrNull()
         ?: return ParsedExit(output = rawOutput, exitCode = EXIT_CODE_SENTINEL_MISSING)
       val exitCode = match.groupValues[1].toIntOrNull()
         ?: return ParsedExit(output = rawOutput, exitCode = EXIT_CODE_SENTINEL_MISSING)

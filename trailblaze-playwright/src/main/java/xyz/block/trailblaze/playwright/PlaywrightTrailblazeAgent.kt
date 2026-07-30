@@ -77,6 +77,13 @@ class PlaywrightTrailblazeAgent(
    * tracker even when the host doesn't supply one explicitly.
    */
   val inflightRequestTracker: InflightRequestTracker = InflightRequestTracker(),
+  /**
+   * Optional replacement for the default `browserManager.getScreenState()` capture. The host
+   * layer injects a stream-sourced provider here (screenshot served from the live CDP
+   * screencast, tree from the normal capture path) when `TRAILBLAZE_WEB_STREAM_SCREENSHOT`
+   * is set — the wiring lives host-side because the stream-screenshot core does.
+   */
+  screenStateProviderOverride: (() -> ScreenState)? = null,
 ) : BaseTrailblazeAgent() {
 
   /**
@@ -85,7 +92,8 @@ class PlaywrightTrailblazeAgent(
    */
   var workingDirectory: java.io.File? = null
 
-  val screenStateProvider: () -> ScreenState = { browserManager.getScreenState() }
+  val screenStateProvider: () -> ScreenState =
+    screenStateProviderOverride ?: { browserManager.getScreenState() }
 
   // buildKoogToolExecutionContext now lives on BaseTrailblazeAgent (shared by every driver agent),
   // delegating to this agent's buildExecutionContext override.

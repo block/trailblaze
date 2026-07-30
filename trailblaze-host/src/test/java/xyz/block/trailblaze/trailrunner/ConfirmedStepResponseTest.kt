@@ -46,12 +46,12 @@ class ConfirmedStepResponseTest {
   }
 
   private val runYaml = """
-    - config:
-        title: "Run: Tap Pay"
-    - prompts:
+    config:
+      title: "Run: Tap Pay"
+    trail:
       - step: "Run: Tap Pay"
         recording:
-          tools:
+          android:
           - tapOnPoint:
               x: 10
               y: 20

@@ -214,7 +214,7 @@ abstract class MaestroTrailblazeAgent(
     )
   }
 
-  suspend fun runMaestroCommands(
+  open suspend fun runMaestroCommands(
     maestroCommands: List<Command>,
     traceId: TraceId?,
   ): TrailblazeToolResult {

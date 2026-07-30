@@ -66,12 +66,18 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
   val centerElement: Boolean = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
   @param:LLMDescription("Which part of the screen to scroll from. Default is 'CENTER'.")
   val scrollStartPosition: TrailblazeScrollStartPosition = TrailblazeScrollStartPosition.CENTER,
+  @param:LLMDescription(
+    "Duration in milliseconds of each scroll swipe gesture. Lower is a faster swipe. Omit to use " +
+      "the driver-tuned default (400ms on Android on-device). Set a lower value (e.g. '200') on " +
+      "screens where a slower swipe is misread as a tap.",
+  )
+  val scrollDurationMs: Int? = null,
   override val reasoning: String? = null,
 ) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
-    val scrollDuration = scrollDurationFor(trailblazeDriverType)
+    val scrollDuration = resolveScrollDuration(scrollDurationMs, trailblazeDriverType)
 
     // Require an actual target. `text` defaults to "" (so `textRegex` can be used instead), but a
     // call that supplies none of text/textRegex/id would otherwise build `.*\Q\E.*` — a match-all
@@ -103,12 +109,12 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       centerElement = centerElement,
     )
 
-    // The accessibility driver always uses the manual scroll loop because Maestro's
-    // ScrollUntilVisibleCommand requires a Maestro Driver instance, which the accessibility
-    // path bypasses entirely. Non-center start positions also require the manual loop since
-    // Maestro's built-in command doesn't support custom scroll regions.
+    // Drivers that bypass Maestro's Driver instance entirely (the Android accessibility driver
+    // and the iOS AXe driver) always use the manual scroll loop — Maestro's
+    // ScrollUntilVisibleCommand can't run without one. Non-center start positions also require
+    // the manual loop since Maestro's built-in command doesn't support custom scroll regions.
     val useManualScrollLoop = scrollStartPosition != TrailblazeScrollStartPosition.CENTER ||
-      trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+      trailblazeDriverType in DRIVERS_WITHOUT_MAESTRO_DRIVER
 
     return if (!useManualScrollLoop) {
       // For default scrolling with Maestro-compatible drivers, delegate to Maestro's
@@ -335,17 +341,47 @@ data class ScrollUntilTextIsVisibleTrailblazeTool(
       appendLine("- `centerElement`: current = ${maestroCommand.centerElement} → $centerAdvice")
     }
 
+    /**
+     * Resolves the swipe duration (in milliseconds) the scroll loop uses. Extracted as a pure
+     * function so the "caller override wins, else driver-tuned default" contract is unit-testable
+     * without a device (mirrors [buildTargetTextRegex] / [hasScrollTarget]).
+     *
+     * - [scrollDurationMs] (non-null): the caller's explicit per-swipe duration, e.g. a faster
+     *   200ms swipe on screens where the driver default is misread as a tap. Must be positive:
+     *   a zero/negative duration would flow into [SwipeCommand.duration] as an invalid gesture.
+     * - otherwise: the driver-tuned default from [scrollDurationFor], preserving prior behavior for
+     *   every existing caller.
+     */
+    internal fun resolveScrollDuration(
+      scrollDurationMs: Int?,
+      trailblazeDriverType: TrailblazeDriverType,
+    ): String {
+      require(scrollDurationMs == null || scrollDurationMs > 0) {
+        "scrollDurationMs must be > 0 when provided (was $scrollDurationMs)."
+      }
+      return scrollDurationMs?.toString() ?: scrollDurationFor(trailblazeDriverType)
+    }
+
+    /**
+     * Drivers with no Maestro Driver instance underneath — their scroll-until-visible must run
+     * through the manual loop instead of delegating to Maestro's ScrollUntilVisibleCommand
+     * (which host-native iOS converters would otherwise drop as unsupported).
+     */
+    private val DRIVERS_WITHOUT_MAESTRO_DRIVER =
+      setOf(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) +
+        TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES
+
+    /**
+     * 400ms matches Maestro's Swipe Implementation duration and is working well on-device Android.
+     * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
+     *
+     * The default (40ms) causes a "fling" that overshoots elements. Drivers on the manual
+     * scroll loop (accessibility, host-native iOS) need the same 400ms duration.
+     */
     fun scrollDurationFor(trailblazeDriverType: TrailblazeDriverType): String =
-      when (trailblazeDriverType) {
-        /**
-         * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
-         * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
-         *
-         * The default (40ms) causes a "fling" that overshoots elements. The accessibility driver
-         * also uses the manual scroll loop, so it needs the same 400ms duration.
-         */
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "400"
+      when {
+        trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES ||
+          trailblazeDriverType in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES -> "400"
         else -> ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
       }
 

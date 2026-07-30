@@ -67,13 +67,13 @@ function UsageChip({ ico, n, title }) {
 }
 
 function toolUsageSnippet(t) {
-  const lines = ['- prompts:', '  - step: "<what this step accomplishes>"', '    recording:', '      tools:'];
+  const lines = ['trail:', '  - step: "<what this step accomplishes>"', '    recording:', '      <android|ios|web>:'];
   const ps = (t.parameters || []).filter((p) => p.required);
   if (ps.length === 0) {
-    lines.push(`      - ${t.id}: {}`);
+    lines.push(`        - ${t.id}: {}`);
   } else {
-    lines.push(`      - ${t.id}:`);
-    ps.forEach((p) => lines.push(`          ${p.name}: <${p.type}>`));
+    lines.push(`        - ${t.id}:`);
+    ps.forEach((p) => lines.push(`            ${p.name}: <${p.type}>`));
   }
   return lines.join('\n');
 }
@@ -523,6 +523,7 @@ function ToolsScreen({ initTool, go }) {
         </div>
         <div tabIndex={0} style={{ flex: 1, overflowY: 'auto', padding: '0 8px 10px', outline: 'none' }} data-testid="tools-tree"
           onKeyDown={(e) => { const flat = trailmaps.filter((tm) => !collapsedGroups.has(tm)).flatMap((tm) => groups[tm]); listNavKeyDown(e, { index: flat.findIndex((x) => keyOf(x) === selId), count: flat.length, set: (i) => setSelId(keyOf(flat[i])) }); }}>
+          {toolsResult.loading && !toolsResult.data && <div style={{ padding: '8px 4px' }}><Skeleton rows={5} label="Loading tools" /></div>}
           {trailmaps.map((tm) => {
             const groupName = tm || (sort === 'usage' ? 'Most used' : sort === 'unused' ? 'Unused' : 'All tools');
             const open = !collapsedGroups.has(tm);
@@ -556,16 +557,19 @@ function ToolsScreen({ initTool, go }) {
               </div>
             );
           })}
+          {toolsResult.loading && trailmaps.length === 0 && <div style={{ padding: '10px 6px' }}><Skeleton rows={8} /></div>}
           {!toolsResult.loading && trailmaps.length === 0 && <div className="tb-sub" style={{ padding: '20px 10px', fontSize: 12.5 }}>No tools match.</div>}
         </div>
         <TargetScopeBanner label={scoped ? (gt.label || gt.target) : null} platform={scoped ? gtPlatform : null} onShowAll={() => setScopeOff(true)} />
         <div style={{ padding: '9px 12px', borderTop: '1px solid var(--tb-hairline)' }}>
-          <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{filtered.length === allRaw.length ? `${allRaw.length} tool${allRaw.length === 1 ? '' : 's'}` : `${filtered.length} of ${allRaw.length} tools`}</div>
+          {toolsResult.loading && !toolsResult.data
+            ? <div className="tb-skel" aria-hidden="true" style={{ width: 62, height: 8 }} />
+            : <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{filtered.length === allRaw.length ? `${allRaw.length} tool${allRaw.length === 1 ? '' : 's'}` : `${filtered.length} of ${allRaw.length} tools`}</div>}
         </div>
       </div>
       <Splitter onDown={startTreeDrag} />
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-        {toolsResult.loading && <div style={{ padding: 32 }}><Skeleton rows={5} /></div>}
+        {toolsResult.loading && <div style={{ padding: 32 }}><Skeleton rows={5} label="Loading tools" /></div>}
         {!toolsResult.loading && all.length === 0 && <div style={{ padding: '60px 32px' }}><EmptyState ico="wrench" title="No custom tools found" sub="Add a tool under a trailmap's tools/ directory and it'll appear here." /></div>}
         {cur && <ToolDetail t={cur} go={go} usageCount={(usageCounts.data || {})[cur.id] || 0} />}
       </div>

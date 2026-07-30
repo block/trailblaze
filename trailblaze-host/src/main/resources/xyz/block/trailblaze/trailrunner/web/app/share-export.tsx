@@ -105,6 +105,7 @@ async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress
     ranAt: s.timestampMs ? new Date(s.timestampMs).toLocaleString() : (s.ago || null),
     steps: (trace || []).length,
     trailId: s.trailId || null,
+    ...(s.metadata && Object.keys(s.metadata).length ? { metadata: s.metadata } : {}),
     cmd: cmd || null,
     error: s.err || null,
     recordingYaml,

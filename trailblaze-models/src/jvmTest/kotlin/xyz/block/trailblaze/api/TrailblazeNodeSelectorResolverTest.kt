@@ -927,6 +927,455 @@ class TrailblazeNodeSelectorResolverTest {
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
   }
 
+  // ======================================================================
+  // IosMaestro selector against an IosAxe tree (cross-dialect bridge)
+  //
+  // A trail recorded under the legacy Maestro iOS driver carries `iosMaestro:` selectors.
+  // These tests pin that those selectors still resolve when replayed against the newer
+  // AXe driver's DriverNodeDetail.IosAxe nodes.
+  // ======================================================================
+
+  @Test
+  fun `IosMaestro bridge - textRegex matches AXe label`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "John Appleseed"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Jane Doe"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "John Appleseed"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - textRegex matches AXe value`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(value = "50%"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(value = "10%"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "50%"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - textRegex matches AXe title`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(title = "Settings"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(title = "Profile"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Settings"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - accessibilityTextRegex matches AXe label`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Add"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Remove"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(accessibilityTextRegex = "Add"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - resourceIdRegex matches AXe uniqueId`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(uniqueId = "login_button", label = "Log In"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(uniqueId = "signup_button", label = "Sign Up"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(resourceIdRegex = "login_button"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - classNameRegex matches AXe type or role`() {
+    nextId = 1L
+    val byType = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Button", label = "OK"))
+    val byRole = nodeOf(detail = DriverNodeDetail.IosAxe(role = "AXButton", label = "Cancel"))
+    val neither = nodeOf(detail = DriverNodeDetail.IosAxe(type = "StaticText", label = "Hello"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(byType, byRole, neither))
+
+    val resultType = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(classNameRegex = ".*Button")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(resultType)
+    assertEquals(setOf(byType.nodeId, byRole.nodeId), resultType.nodes.map { it.nodeId }.toSet())
+  }
+
+  @Test
+  fun `IosMaestro bridge - hintTextRegex matches AXe help`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(help = "Enter your email address", label = "Email"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(help = "Enter your password", label = "Password"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(hintTextRegex = "Enter your email address"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - hintTextRegex matches a text input's placeholder-as-label`() {
+    nextId = 1L
+    // iOS surfaces an empty text field's placeholder as AXLabel (help is null) — e.g. the
+    // Contacts search field. A decorative sibling with the same label (magnifying-glass Image)
+    // must NOT match: placeholder-as-label only applies to text-input types.
+    val searchField = nodeOf(detail = DriverNodeDetail.IosAxe(type = "TextField", label = "Search"))
+    val searchIcon = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Image", label = "Search"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(searchIcon, searchField))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(hintTextRegex = "Search"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(searchField.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - MAESTRO dialect is case-insensitive`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Log In"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "log in"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - AND semantics across textRegex and resourceIdRegex`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Log In", uniqueId = "login_button"))
+    // Same text, different id — must not match when both constraints are specified.
+    val wrongId = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Log In", uniqueId = "other_button"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, wrongId))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Log In", resourceIdRegex = "login_button"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - only unbridgeable fields specified returns NoMatch`() {
+    nextId = 1L
+    // AXe exposes no `focused` equivalent — a selector that constrains only `focused` must
+    // not degenerate into matching every node in the tree.
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Anything"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(focused = true),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
+
+  @Test
+  fun `IosMaestro bridge - focused and selected constraints fail closed`() {
+    nextId = 1L
+    // AXe carries no focused/selected signal, so the bridge cannot evaluate these
+    // constraints faithfully — dropping them would false-match (e.g. a waypoint requiring
+    // `focused: true` matching its non-focused sibling screen). The selector must not match
+    // even though its bridgeable textRegex constraint would.
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Log In"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Log In", focused = true, selected = true),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
+
+  @Test
+  fun `IosMaestro bridge - classNameRegex matches Maestro-era class alias`() {
+    nextId = 1L
+    // Maestro's iOS tree reported label views (`LabelView`, `UILabel`) where AXe reports
+    // the semantic `StaticText` — and for tab-bar/nav items the label lives directly on a
+    // `Button` node — so a bare label-view class is genuinely ambiguous across both and
+    // resolves as MultipleMatches. An unmapped custom class must NOT match anything.
+    val staticText = nodeOf(detail = DriverNodeDetail.IosAxe(type = "StaticText", label = "More"))
+    val button = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Button", label = "More"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(staticText, button))
+
+    val viaLabelView = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(classNameRegex = "LabelView")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(viaLabelView)
+    assertEquals(listOf(staticText.nodeId, button.nodeId), viaLabelView.nodes.map { it.nodeId })
+
+    val viaUiLabel = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(classNameRegex = "UILabel")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(viaUiLabel)
+    assertEquals(listOf(staticText.nodeId, button.nodeId), viaUiLabel.nodes.map { it.nodeId })
+
+    val viaButtonLabel = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(classNameRegex = "UIButtonLabel")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaButtonLabel)
+    assertEquals(button.nodeId, viaButtonLabel.node.nodeId)
+
+    val viaCustomClass = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.IosMaestro(classNameRegex = "CustomAppTitleNavigationBarItemView"),
+      ),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(viaCustomClass)
+  }
+
+  @Test
+  fun `IosMaestro bridge - LabelView-recorded tab item resolves to its Button node`() {
+    nextId = 1L
+    // Tab-bar/nav items carry no separate StaticText on an AXe tree — the Button node holds
+    // the label. A recorded `textRegex + classNameRegex: LabelView` tap must resolve to it
+    // rather than silently dropping to the recorded-coordinate fallback.
+    val moreTab = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Button", label = "More"))
+    val itemsTab = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Button", label = "Items"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(moreTab, itemsTab))
+
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.IosMaestro(textRegex = "More", classNameRegex = "LabelView"),
+      ),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(moreTab.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - invalid-regex pattern degrades to exact literal`() {
+    nextId = 1L
+    // A recorded price like "$0.00" is regex-unmatchable (leading `$` is an end anchor) —
+    // the bridge must still resolve it via the exact-equality fallback, and must not
+    // false-match a different price.
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "$0.00"))
+    val other = nodeOf(detail = DriverNodeDetail.IosAxe(label = "$5.00"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "$0.00"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  // ======================================================================
+  // IosAxe container-chrome guard
+  //
+  // The AXe Application root (and its Windows) carry the app name as AXLabel — the Settings
+  // app's root is labeled "Settings" and sized to the screen. A text-driven selector matching
+  // it would tap screen center instead of the intended element, so text matching skips the
+  // container chrome unless the selector pins it explicitly (roleRegex/typeRegex/uniqueId).
+  // ======================================================================
+
+  @Test
+  fun `IosAxe - anchored label selector skips the Application root and resolves the row`() {
+    nextId = 1L
+    val row = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Cell", role = "AXCell", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 300, 402, 344),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(row),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosAxe(labelRegex = "^Settings$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(row.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosAxe - label selector matching only the Application and Window chrome returns NoMatch`() {
+    nextId = 1L
+    val window = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Window", role = "AXWindow", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(window),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosAxe(labelRegex = "^Settings$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
+
+  @Test
+  fun `IosAxe - explicit typeRegex still matches the Application root`() {
+    nextId = 1L
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosAxe(typeRegex = "Application", labelRegex = "^Settings$"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(root.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosAxe - bare containsChild text selector cannot match the chrome via a labeled Window`() {
+    nextId = 1L
+    // Recorded shape with no driver match on the candidate: `containsChild: {textRegex: …}`.
+    // The Application's direct child is a Window labeled with the app name, so without the
+    // selector-level guard the Application matches via that child, sorts first at (0,0), and
+    // taps screen center. The row's real wrapper must win instead.
+    val row = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Cell", role = "AXCell", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 300, 402, 344),
+    )
+    val group = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Other", role = "AXGroup"),
+      bounds = TrailblazeNode.Bounds(0, 280, 402, 360),
+      children = listOf(row),
+    )
+    val window = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Window", role = "AXWindow", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(group),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(window),
+    )
+
+    val selector = TrailblazeNodeSelector(
+      containsChild = TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(textRegex = "Settings")),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(group.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosAxe - bare containsDescendants text selector skips the Application and Window chrome`() {
+    nextId = 1L
+    // Every ancestor of a text-bearing node matches a bare containsDescendants text selector,
+    // including the screen-sized chrome — which would sort first at (0,0). Only the real
+    // wrapper below the chrome may resolve.
+    val label = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "StaticText", role = "AXStaticText", label = "General"),
+      bounds = TrailblazeNode.Bounds(16, 310, 386, 334),
+    )
+    val rowWrapper = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Cell", role = "AXCell"),
+      bounds = TrailblazeNode.Bounds(0, 300, 402, 344),
+      children = listOf(label),
+    )
+    val window = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Window", role = "AXWindow"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(rowWrapper),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(window),
+    )
+
+    val selector = TrailblazeNodeSelector(
+      containsDescendants = listOf(
+        TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(textRegex = "General")),
+      ),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(rowWrapper.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - textRegex skips the Application root`() {
+    nextId = 1L
+    val row = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "StaticText", role = "AXStaticText", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 300, 402, 344),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+      children = listOf(row),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Settings"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(row.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro bridge - explicit classNameRegex still matches the Application root`() {
+    nextId = 1L
+    // The bridged pin mirrors the native typeRegex escape hatch: classNameRegex bridges to
+    // the AXe type/role, so a selector that names the container explicitly may match it.
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(type = "Application", role = "AXApplication", label = "Settings"),
+      bounds = TrailblazeNode.Bounds(0, 0, 402, 874),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Settings", classNameRegex = "Application"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(root.nodeId, result.node.nodeId)
+  }
+
   // --- TargetTemplateContext expansion at the resolver entry ---
   //
   // The 3-arg `resolve(root, selector, target)` overload expands `{{target.appId}}`

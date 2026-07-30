@@ -217,13 +217,16 @@ expect class AndroidDeviceCommandExecutor(
    *    [Runtime.exec] — it splits on whitespace and execs the tokens **directly, with no shell
    *    interpreter**. Shell-quoting a token (e.g. `'su'`) embeds the quotes as literal characters
    *    in the program name (→ `Cannot run program "'su'"`), and a `$?` exit sentinel is exec'd
-   *    as literal arguments rather than evaluated. On this transport, callers must pass argv
-   *    tokens unescaped via [executeShellCommandArgs] and cannot rely on a shell for exit codes.
+   *    as literal arguments rather than evaluated. On this transport, callers pass argv tokens
+   *    unescaped via [executeShellCommandArgs] — or, when they need real shell semantics
+   *    (pipes, `$?`), route through the [wrapShellPipelineForTransport] trampoline, whose
+   *    device-side `sh` evaluates an in-band exit sentinel (how
+   *    [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] recovers exit codes here).
    *
    * Surfacing this as a property (rather than baking the assumption into each caller) keeps the
    * transport contract explicit: [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] reads
-   * it to pick the shell-string path vs. the raw-argv path so the same tool works correctly on
-   * both the daemon JVM and the on-device QuickJS dispatch.
+   * it to pick the direct shell-string path vs. the [wrapShellPipelineForTransport] trampoline so
+   * the same tool works correctly on both the daemon JVM and the on-device QuickJS dispatch.
    *
    * Don't hand-roll a branch on this property just to run a multi-word shell expression —
    * [executeShellPipelineAs] / [writeFileAs] own that per-transport wrapping.
@@ -622,8 +625,10 @@ internal fun buildShellCpFallbackCommands(stagingPath: String, devicePath: Strin
  * quoted), the output of this function is always eventually parsed by a real device-side `sh`,
  * so single-quote escaping inside [innerCommand] is honored on both transports.
  *
- * No exit-code channel survives this wrapper on either transport, so callers that must know the
- * inner command worked should verify by reading device state back (e.g. re-read a written file).
+ * The wrapper itself adds no exit-code channel on either transport, but the device-side `sh` DOES
+ * evaluate [innerCommand], so an in-band sentinel inside it survives — that's how
+ * [xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool] recovers `$?` on-device. Callers that
+ * don't carry a sentinel should verify by reading device state back (e.g. re-read a written file).
  *
  * Pure function so both wire shapes are pinned by unit tests without a device
  * (`ShellPipelineCommandsTest`); the executor-bound entry points are [executeShellPipelineAs]

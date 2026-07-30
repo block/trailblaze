@@ -51,21 +51,47 @@ data class TrailblazeServerState(
      */
     val unifiedRecordingsEnabled: Boolean? = null,
     /**
-     * Experimental: serve Android host-driven agent-loop screenshots from the device's live
-     * screenrecord stream instead of a per-capture on-device screenshot. Tri-state like
-     * [unifiedRecordingsEnabled]: `null` (default) means off; an explicit `true`/`false` from
-     * `trailblaze config android-stream-screenshots <value>` is a non-default value, so it
-     * survives serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what
-     * the user said even if the framework default ever changes. The
-     * `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` / `_AB` env vars still take precedence (env is the
-     * one-off / CI / A/B-validation override; this is the discoverable persistent toggle).
+     * Experimental: serve host-driven agent-loop screenshots from the device's live video stream
+     * instead of a per-capture direct screenshot. One toggle covers Android, iOS, and web — they
+     * share the stream engine, and platforms whose feed isn't available decline per capture and
+     * fall back to direct screenshots. Tri-state like [unifiedRecordingsEnabled]: `null`
+     * (default) means off; an explicit `true`/`false` from
+     * `trailblaze config stream-screenshots <value>` is a non-default value, so it survives
+     * serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what the user
+     * said even if the framework default ever changes. The per-platform
+     * `TRAILBLAZE_<PLATFORM>_STREAM_SCREENSHOT` / `_AB` env vars still take precedence (env is
+     * the one-off / CI / A/B-validation override; this is the discoverable persistent toggle).
      */
-    val androidStreamScreenshotsEnabled: Boolean? = null,
+    val streamScreenshotsEnabled: Boolean? = null,
+    /**
+     * Experimental: record the iOS Simulator session video from Trailblaze's baguette H.264 stream
+     * (wall-clock-accurate PTS so the report can overlay events) instead of the shipping
+     * `xcrun simctl io recordVideo` recorder. Tri-state like [streamScreenshotsEnabled]: `null`
+     * (default) means off — iOS keeps the simctl recorder; an explicit `true`/`false` from
+     * `trailblaze config ios-baguette-video <value>` is a non-default value that survives
+     * serialization and keeps meaning what the user said. `TRAILBLAZE_IOS_BAGUETTE_VIDEO=1` takes
+     * precedence (env is the one-off / CI / on-device-validation override; this is the discoverable
+     * persistent toggle). A machine without baguette installed declines and falls back to simctl
+     * regardless, so opting in is safe everywhere.
+     */
+    val iosBaguetteVideoEnabled: Boolean? = null,
+    /**
+     * Experimental: disable OS-level animations on the device for the duration of each session
+     * (Android animation scales via adb; iOS Simulator `UIAnimationDragCoefficient` via simctl),
+     * restoring the previous values at session end. Tri-state like [streamScreenshotsEnabled]:
+     * `null` (default) means off — devices are never touched; an explicit `true`/`false` from
+     * `trailblaze config disable-animations <value>` is a non-default value that survives
+     * serialization and keeps meaning what the user said. `TRAILBLAZE_DISABLE_ANIMATIONS=1` takes
+     * precedence (env is the one-off / CI override; this is the discoverable persistent toggle).
+     * A device where the mutation can't apply (e.g. physical iOS) declines per session, so opting
+     * in is safe everywhere.
+     */
+    val disableAnimationsEnabled: Boolean? = null,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """
-- prompts:
-    - step: click back
+trail:
+  - step: click back
 """.trimIndent(), // Default YAML content
     // Session detail UI preferences
     val sessionDetailZoomOffset: Int = 0, // Zoom offset for card size

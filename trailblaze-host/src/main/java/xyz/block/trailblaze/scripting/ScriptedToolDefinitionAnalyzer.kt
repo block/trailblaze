@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -85,37 +86,52 @@ open class ScriptedToolDefinitionAnalyzer(
   private val sdkDir: File,
   private val subprocessTimeoutSeconds: Long = DEFAULT_ANALYZER_TIMEOUT_SECONDS,
   /**
-   * Workspace-local directory under which per-trailmap subprocess outputs are cached
-   * so subsequent runs over byte-identical inputs short-circuit the bun + `ts-json-
-   * schema-generator` walk. `null` (default) disables caching — the analyzer always
-   * re-runs the subprocess. Set to `<workspace>/.trailblaze/cache/analyzer/` (see
-   * [ScriptedToolDefinitionCache.resolveDefaultCacheDir]) to opt in, or pass an
-   * explicit path in tests.
+   * Provider for the workspace-local directory under which per-trailmap subprocess
+   * outputs are cached, so subsequent runs over byte-identical inputs short-circuit
+   * the bun + `ts-json-schema-generator` walk. Returning `null` (the default)
+   * disables caching — the analyzer always re-runs the subprocess. Pass
+   * [ScriptedToolDefinitionCache.resolveWorkspaceCacheDir] to opt in (or a
+   * fixed-path lambda in tests).
+   *
+   * **Re-evaluated on every [analyze] call**, not captured at construction, so a
+   * long-lived analyzer (e.g. one held by a daemon singleton) follows Trail Runner
+   * workspace switches — entries land under the workspace that's current when the
+   * analysis runs instead of piling up under the daemon's launch directory.
    *
    * The `TRAILBLAZE_TOOL_ANALYZER_NO_CACHE=1` env var (read once at JVM start)
-   * bypasses cache lookup AND writes even when this is non-null — useful for
+   * bypasses cache lookup AND writes even when this returns non-null — useful for
    * debugging suspected stale-cache scenarios without nuking the directory.
    */
-  private val cacheDir: File? = null,
+  private val cacheDirProvider: () -> File? = { null },
   /**
-   * Forces the cache off even when [cacheDir] is non-null. Production default is
-   * the value of the `TRAILBLAZE_TOOL_ANALYZER_NO_CACHE` env var, captured once at
-   * JVM start via [ScriptedToolDefinitionCache.noCacheFromEnv]. Tests inject
+   * Forces the cache off even when [cacheDirProvider] returns non-null. Production
+   * default is the value of the `TRAILBLAZE_TOOL_ANALYZER_NO_CACHE` env var, captured
+   * once at JVM start via [ScriptedToolDefinitionCache.noCacheFromEnv]. Tests inject
    * `true` explicitly to exercise the bypass without mutating process env, which
    * Java doesn't expose cleanly anyway.
    */
   private val disableCache: Boolean = ScriptedToolDefinitionCache.noCacheFromEnv,
 ) {
 
-  private val cache: ScriptedToolDefinitionCache? =
-    if (cacheDir != null && !disableCache) {
-      ScriptedToolDefinitionCache(
-        cacheRoot = cacheDir,
-        dependencyKey = ScriptedToolDefinitionCache.computeDependencyKey(sdkDir, extractorShim),
-      )
-    } else {
-      null
-    }
+  /**
+   * The dependency key covers the SDK/shim/generator inputs only — it's independent of
+   * where the cache lives — so it's computed once per analyzer and shared across every
+   * cache dir [cacheDirProvider] resolves over the analyzer's lifetime.
+   */
+  private val dependencyKey: String by lazy {
+    ScriptedToolDefinitionCache.computeDependencyKey(sdkDir, extractorShim)
+  }
+
+  /**
+   * Resolve the cache for THIS analyze call. Called once per [analyze] so lookup and
+   * write within one analysis always target the same directory, even if a workspace
+   * switch lands mid-run.
+   */
+  private fun cacheForCurrentWorkspace(): ScriptedToolDefinitionCache? {
+    if (disableCache) return null
+    val cacheDir = cacheDirProvider() ?: return null
+    return ScriptedToolDefinitionCache(cacheRoot = cacheDir, dependencyKey = dependencyKey)
+  }
 
   /**
    * Walk every `.ts` file under [trailmapToolsDir] (recursively) and return the typed
@@ -125,6 +141,8 @@ open class ScriptedToolDefinitionAnalyzer(
    * contains no `.ts` files. Test files (`*.test.ts`) and declaration files
    * (`*.d.ts`) are filtered out — the analyzer's contract is "tool authoring files
    * only", consistent with how `bun test` and `tsc` discover tool source per trailmap.
+   * Trailmap-local `.d.ts` files still participate in the cache content key (their
+   * bytes shape the extracted schemas via import resolution) — see [ToolSourceScan].
    *
    * **Recurses into subdirectories** so trailmaps that organize their tools under
    * folders (e.g. `tools/mcp/foo.ts`, `tools/helpers/bar.ts`) are fully covered.
@@ -143,7 +161,8 @@ open class ScriptedToolDefinitionAnalyzer(
   open suspend fun analyze(trailmapToolsDir: File): List<ScriptedToolDefinition> = withContext(Dispatchers.IO) {
     if (!trailmapToolsDir.isDirectory) return@withContext emptyList()
 
-    val tsFiles = collectToolFiles(trailmapToolsDir)
+    val scan = scanToolSources(trailmapToolsDir)
+    val tsFiles = scan.toolFiles
     if (tsFiles.isEmpty()) return@withContext emptyList()
 
     // Cache lookup happens BEFORE the bun/shim presence check — a cache hit serves
@@ -152,11 +171,21 @@ open class ScriptedToolDefinitionAnalyzer(
     // has cache entries continue to function after bun is uninstalled (or while a
     // CI agent is being rebuilt) without forcing every daemon caller through the
     // "degraded — bun missing" branch.
+    val cache = cacheForCurrentWorkspace()
     val contentKey = cache?.let {
-      ScriptedToolDefinitionCache.computeContentKey(trailmapToolsDir, tsFiles, it.dependencyKey)
+      ScriptedToolDefinitionCache.computeContentKey(
+        trailmapToolsDir = trailmapToolsDir,
+        tsFiles = tsFiles,
+        dependencyKey = it.dependencyKey,
+        declarationFiles = scan.declarationFiles,
+      )
     }
     if (cache != null && contentKey != null) {
-      cache.lookup(trailmapToolsDir, contentKey)?.let { hit -> return@withContext hit }
+      // A cached mixed-outcome run rethrows (via unwrap) exactly like the live run it
+      // replaces — same exception shape, same per-tool diagnostics, same partial tools.
+      cache.lookup(trailmapToolsDir, contentKey)?.let { hit ->
+        return@withContext hit.unwrap(trailmapToolsDir, tsFiles)
+      }
     }
 
     if (!bunBinary.isFile) return@withContext emptyList()
@@ -270,44 +299,76 @@ open class ScriptedToolDefinitionAnalyzer(
       )
     }
 
-    val cleanlyExtracted = envelope.tools.map { it.toDefinition() }
-    if (envelope.errors.isNotEmpty()) {
-      throw ScriptedToolDefinitionException(
-        message = "extract-tool-defs.mjs reported ${envelope.errors.size} error(s) walking " +
-          "${tsFiles.size} file(s) under ${trailmapToolsDir.absolutePath}.",
-        errors = envelope.errors.map { rawErr ->
-          ScriptedToolDefinitionError(
-            file = rawErr.file,
-            toolName = rawErr.name,
-            message = rawErr.message,
-          )
-        },
-        partialTools = cleanlyExtracted,
-      )
-    }
-
-    // Persist the all-clean run to the cache. We intentionally don't cache the
-    // mixed-outcome path above: an envelope with per-tool errors is a transient
-    // author-editing state, not a steady-state result worth short-circuiting on the
-    // next call (the author is presumably about to save again). Caching the
-    // partial result would also surface the broken tool's diagnostics from cache
-    // even after the .ts file changes, since the failed file's content wouldn't
-    // be in the analyzer's input on a re-run.
+    val outcome = AnalyzerOutcome(
+      tools = envelope.tools.map { it.toDefinition() },
+      errors = envelope.errors.map { rawErr ->
+        ScriptedToolDefinitionError(
+          file = rawErr.file,
+          toolName = rawErr.name,
+          message = rawErr.message,
+        )
+      },
+    )
+    // Persist the outcome — mixed ones (per-tool errors + partial tools) included. The cache
+    // is keyed by file CONTENT, so an entry can never outlive the broken source — the author's
+    // next save recomputes under a fresh key. Without this, a COMMITTED per-tool error (an
+    // unsupported construct that lives in the repo for weeks) defeats the cache for its
+    // whole trailmap and every catalog build re-pays the full subprocess walk.
+    //
+    // One known exception to "errors are always content-derived": the shim's own
+    // failed-to-read-file error is environmental, and if the file was readable moments earlier
+    // when the content key was computed, that transient is cached under a clean key and replays
+    // until the file's bytes change. Deliberately unguarded — re-checking readability here
+    // wouldn't catch a transient that already passed, the window is a race between two reads
+    // milliseconds apart, and TRAILBLAZE_TOOL_ANALYZER_NO_CACHE covers triage.
     if (cache != null && contentKey != null) {
-      cache.put(trailmapToolsDir, contentKey, cleanlyExtracted)
+      cache.put(trailmapToolsDir, contentKey, outcome)
     }
-
-    cleanlyExtracted
+    outcome.unwrap(trailmapToolsDir, tsFiles)
   }
 
   /**
-   * Recursive walk under [trailmapToolsDir] that yields every author-source `.ts` file
-   * (excluding `*.test.ts`, `*.d.ts`, and anything under the framework-generated
-   * `.trailblaze/` directory). Results are sorted by absolute path so the analyzer
-   * produces deterministic output regardless of filesystem-listing order.
+   * Return the outcome's tools, or — for a mixed-outcome run (per-tool [AnalyzerOutcome.errors]
+   * alongside partially-extracted tools) — throw the [ScriptedToolDefinitionException] documented
+   * on [analyze]. Identical whether the outcome came from a live subprocess walk or a cache hit
+   * that replayed one.
    */
-  private fun collectToolFiles(trailmapToolsDir: File): List<File> {
+  private fun AnalyzerOutcome.unwrap(trailmapToolsDir: File, tsFiles: List<File>): List<ScriptedToolDefinition> {
+    if (errors.isEmpty()) return tools
+    throw ScriptedToolDefinitionException(
+      message = "extract-tool-defs.mjs reported ${errors.size} error(s) walking " +
+        "${tsFiles.size} file(s) under ${trailmapToolsDir.absolutePath}.",
+      errors = errors,
+      partialTools = tools,
+    )
+  }
+
+  /**
+   * One recursive walk under [trailmapToolsDir], split into the two roles a `.ts` file
+   * can play for the analyzer:
+   *
+   *  - [toolFiles] — author-source `.ts` files (excluding `*.test.ts`, `*.d.ts`, and
+   *    anything under the framework-generated `.trailblaze/` directory). These are the
+   *    subprocess's argv AND cache-key inputs.
+   *  - [declarationFiles] — trailmap-local `*.d.ts` files. Never subprocess inputs (the
+   *    shim's per-file TypeScript Program follows imports into them on its own), but a
+   *    tool's schema closure can include one, so their bytes participate in the cache
+   *    content key — otherwise a `.d.ts` edit could replay a stale cached schema
+   *    (code review). The framework-emitted `trailblaze-client.d.ts` is excluded:
+   *    it's codegen *derived from* the tool sources already hashed, and rewriting it
+   *    after every build would churn the key for identical inputs.
+   *
+   * Both lists are sorted by absolute path so the analyzer produces deterministic
+   * output regardless of filesystem-listing order.
+   */
+  private data class ToolSourceScan(
+    val toolFiles: List<File>,
+    val declarationFiles: List<File>,
+  )
+
+  private fun scanToolSources(trailmapToolsDir: File): ToolSourceScan {
     val results = mutableListOf<File>()
+    val declarations = mutableListOf<File>()
     val stack = ArrayDeque<File>().apply { add(trailmapToolsDir) }
     while (stack.isNotEmpty()) {
       val dir = stack.removeLast()
@@ -346,12 +407,18 @@ open class ScriptedToolDefinitionAnalyzer(
         if (!child.isFile) continue
         val name = child.name
         if (!name.endsWith(".ts")) continue
-        if (name.endsWith(".d.ts")) continue
+        if (name.endsWith(".d.ts")) {
+          if (name != WorkspaceClientDtsGenerator.GENERATED_FILE_NAME) declarations += child
+          continue
+        }
         if (name.endsWith(".test.ts")) continue
         results += child
       }
     }
-    return results.sortedBy { it.absolutePath }
+    return ToolSourceScan(
+      toolFiles = results.sortedBy { it.absolutePath },
+      declarationFiles = declarations.sortedBy { it.absolutePath },
+    )
   }
 
   // No diagnostic here on purpose: [analyze] extracts EVERY `.ts` in the dir, so logging the
@@ -673,6 +740,19 @@ data class ScriptedToolDefinitionError(
   val toolName: String?,
   /** Human-readable single-line message — the head of the underlying error. */
   val message: String,
+)
+
+/**
+ * One analyzer run's full outcome over a trailmap's tools dir: the cleanly-extracted [tools]
+ * plus any per-tool [errors] from the same run. Produced by a live subprocess walk and
+ * round-tripped through [ScriptedToolDefinitionCache], so a cache hit replays exactly what
+ * the original run reported — a non-empty [errors] makes
+ * [ScriptedToolDefinitionAnalyzer.analyze] throw the same [ScriptedToolDefinitionException]
+ * either way.
+ */
+internal data class AnalyzerOutcome(
+  val tools: List<ScriptedToolDefinition>,
+  val errors: List<ScriptedToolDefinitionError>,
 )
 
 /**

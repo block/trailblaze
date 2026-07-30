@@ -37,6 +37,15 @@ object StreamScreenshotGate {
     data class AwaitQuiet(val remainingQuietMs: Long) : Decision
 
     /**
+     * A byte-different frame the detector couldn't classify is outstanding: the latest
+     * known-good frame may be stale, so we hold until that frame is reclassified into the
+     * latest frame (or superseded). Distinct from [AwaitQuiet] so a hold-driven timeout is
+     * attributable to this mechanism rather than misread as an ordinary quiet-window wait.
+     * [pendingForMs] is how long the outstanding frame has gone unresolved.
+     */
+    data class AwaitReclassification(val pendingForMs: Long) : Decision
+
+    /**
      * Neither a frame nor a feed liveness ping has arrived within the stall threshold — the
      * capture pipeline is dead, so the cached frame can't be trusted to be current. A static
      * screen alone must not land here: damage-driven encoders emit no frames for it, which
@@ -80,6 +89,12 @@ object StreamScreenshotGate {
    * @param latencyAllowanceMs Slack for encode + transport delay when comparing a host-side
    *   content-change observation against the tree stamp. A change *observed* at host time T
    *   happened on-screen at T-minus-latency, and the latency is unmeasured.
+   * @param pendingUnclassifiedAtHostMs Host receipt time of the most recent byte-different frame
+   *   the detector couldn't classify (its throttle window), which has NOT yet been reclassified
+   *   into [lastFrameReceivedAtHostMs]. Non-null means a frame newer than the latest KNOWN-good
+   *   one exists whose content is unknown — so the cached frame may already be stale. The gate
+   *   refuses to Accept while this is set (it still proves liveness for the stall check). Null
+   *   once no such frame is outstanding. See [StreamFrameMonitor.recordFrame]/[recordFeedAlive].
    */
   fun evaluate(
     nowHostMs: Long,
@@ -91,14 +106,41 @@ object StreamScreenshotGate {
     stallThresholdMs: Long,
     latencyAllowanceMs: Long,
     lastFeedAliveAtHostMs: Long? = null,
+    pendingUnclassifiedAtHostMs: Long? = null,
   ): Decision {
-    if (lastFrameReceivedAtHostMs == null) return Decision.AwaitFirstFrame
+    // Nothing usable yet: no known frame and no outstanding unclassified one either.
+    if (lastFrameReceivedAtHostMs == null && pendingUnclassifiedAtHostMs == null) {
+      return Decision.AwaitFirstFrame
+    }
 
-    val lastSignOfLifeMs = maxOf(lastFrameReceivedAtHostMs, lastFeedAliveAtHostMs ?: Long.MIN_VALUE)
+    // A dropped-unclassified frame is still a frame that arrived, so it counts as a sign of life.
+    val lastSignOfLifeMs = maxOf(
+      lastFrameReceivedAtHostMs ?: Long.MIN_VALUE,
+      lastFeedAliveAtHostMs ?: Long.MIN_VALUE,
+      pendingUnclassifiedAtHostMs ?: Long.MIN_VALUE,
+    )
     val silentForMs = nowHostMs - lastSignOfLifeMs
     if (silentForMs > stallThresholdMs) return Decision.Stalled(silentForMs)
 
-    val lastChangeHostMs = lastContentChangeAtHostMs ?: lastFrameReceivedAtHostMs
+    // A byte-different frame we couldn't classify is newer than the latest known-good frame, so
+    // the cached bytes may no longer describe the current screen. Never pair the tree with a
+    // possibly-stale frame — hold until the pending frame is reclassified into the latest frame
+    // (or superseded by a newer classified one). On a damage-driven feed that then goes silent,
+    // the reclassification is driven by the drain loop's liveness ping; if it never resolves the
+    // wait times out and the caller falls back to a direct screenshot. This closes the
+    // static-after-transition hole where a fast transition's frames were all dropped
+    // UNCLASSIFIED and no trailing frame re-classified the true final screen.
+    //
+    // The terminal ContentNewerThanTree fast-fail below is intentionally deferred while a frame
+    // is pending: we can't tell whether the unresolved frame is newer than the tree until it's
+    // classified, so on a wedged feed we pay the poll timeout rather than risk a wrong verdict.
+    if (pendingUnclassifiedAtHostMs != null) {
+      return Decision.AwaitReclassification(nowHostMs - pendingUnclassifiedAtHostMs)
+    }
+
+    // Past the pending guard we always have a real latest frame (both-null returned above).
+    val latestFrameAtHostMs = lastFrameReceivedAtHostMs!!
+    val lastChangeHostMs = lastContentChangeAtHostMs ?: latestFrameAtHostMs
     val quietForMs = nowHostMs - lastChangeHostMs
     if (quietForMs < quietWindowMs) return Decision.AwaitQuiet(quietWindowMs - quietForMs)
 
@@ -109,7 +151,7 @@ object StreamScreenshotGate {
     }
 
     val skewMs = treeCapturedAtMs?.let {
-      (lastFrameReceivedAtHostMs + treeClockOffsetMs) - it
+      (latestFrameAtHostMs + treeClockOffsetMs) - it
     }
     return Decision.Accept(skewMs)
   }

@@ -147,7 +147,16 @@ object AdbCommandUtil {
         intervalMs = 200,
         "App $appId should be force stopped",
       ) {
-        execShellCommand("dumpsys package $appId | grep stopped=true").contains("stopped=true")
+        val stopped =
+          execShellCommand("dumpsys package $appId | grep stopped=true").contains("stopped=true")
+        if (!stopped) {
+          // The app can be restarted between the kill and this check (e.g. a JobScheduler
+          // reschedule already in flight), which clears the stopped flag — once that happens the
+          // flag never becomes true on its own. force-stop is idempotent, so re-issue it instead
+          // of polling a condition that can no longer be met.
+          execShellCommand("am force-stop $appId")
+        }
+        stopped
       }
     } else {
       Console.log("App $appId does not have an active process, no need to force stop")

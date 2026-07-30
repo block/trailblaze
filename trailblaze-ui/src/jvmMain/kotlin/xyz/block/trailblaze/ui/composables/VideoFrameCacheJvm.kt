@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
 import org.jetbrains.skia.Image
+import xyz.block.trailblaze.capture.video.VideoSpriteExtractor
 import xyz.block.trailblaze.ui.tabs.session.SpriteSheetInfo
 import xyz.block.trailblaze.util.Console
 
@@ -20,7 +21,7 @@ actual fun createVideoFrameCache(
 /**
  * Loads a sprite sheet image and crops individual frames on demand. No ffmpeg needed — the sprite
  * sheet is a single JPEG with frames arranged in a grid at [spriteInfo.frameHeight] pixels each.
- * Physical frame N is at column `N / rows`, row `N % rows`.
+ * Frame positions come from [VideoSpriteExtractor.spriteGridPosition].
  */
 private class JvmSpriteFrameCache(
   spriteSheetPath: String,
@@ -61,12 +62,11 @@ private class JvmSpriteFrameCache(
     val physicalIndex = info.frameMap?.getOrNull(frameIndex) ?: frameIndex
 
     return try {
-      // Grid layout: physical frame N is at column N/rows, row N%rows
-      val col = physicalIndex / info.rows
-      val row = physicalIndex % info.rows
+      // Single-sheet only (ActualsJvm rejects multi-sheet metadata before building this cache).
+      val cell = VideoSpriteExtractor.spriteGridPosition(physicalIndex, info.columns)
       val frameWidth = image.width / info.columns
-      val x = col * frameWidth
-      val y = row * info.frameHeight
+      val x = cell.column * frameWidth
+      val y = cell.row * info.frameHeight
       val width = frameWidth.coerceAtMost(image.width - x)
       val height = info.frameHeight.coerceAtMost(image.height - y)
       if (width <= 0 || height <= 0) return null

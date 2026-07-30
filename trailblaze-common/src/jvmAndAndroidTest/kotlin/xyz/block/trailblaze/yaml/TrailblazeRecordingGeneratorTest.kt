@@ -19,6 +19,7 @@ import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -300,7 +301,7 @@ class TrailblazeRecordingGeneratorTest {
 
     // Only tapOnElementBySelector should appear, not takeSnapshot (non-recordable)
     assertThat(yaml).contains("tapOnElementBySelector")
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
@@ -363,7 +364,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     assertThat(yaml).doesNotContain("ref: h801")
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     val recordedNames = prompts.promptSteps[0].recording!!.tools.map { it.name }
     assertThat(recordedNames).isEqualTo(listOf("tapOnElementBySelector"))
@@ -421,7 +422,7 @@ class TrailblazeRecordingGeneratorTest {
 
     // Only the selector-based tool should appear
     assertThat(yaml).contains("tapOnElementBySelector")
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
   }
@@ -466,7 +467,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].prompt).isEqualTo("Tap the button")
@@ -490,7 +491,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps.size).isEqualTo(2)
@@ -541,10 +542,30 @@ class TrailblazeRecordingGeneratorTest {
       objectiveComplete(step),
     )
 
-    val yaml = logs.generateRecordedYaml(trailblazeYaml, sessionTrailConfig = config)
+    val items = logs.generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig = config)
 
-    val savedConfig = trailblazeYaml.extractTrailConfig(yaml)
+    val savedConfig = trailblazeYaml.extractTrailConfig(items)
     assertThat(savedConfig).isEqualTo(config)
+  }
+
+  @Test
+  fun driverIsStampedFromTheStartedLogWhenTheConfigLacksOne() {
+    // A logs-only or driverless-config recording still needs a `driver:` marker so its selector
+    // shape is replayable — the generator falls back to the runtime driver captured in the
+    // session's Started log when the source config didn't declare one.
+    val config = TrailConfig(id = "test/case", title = "Login test") // no driver
+    val step = DirectionStep(step = "Enter text")
+    val logs = listOf(
+      startedLog(), // carries trailblazeDriverType = ANDROID_ONDEVICE_ACCESSIBILITY
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val items = logs.generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig = config)
+
+    val savedConfig = trailblazeYaml.extractTrailConfig(items)
+    assertThat(savedConfig?.driver).isEqualTo(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY.name)
   }
 
   @Test
@@ -558,7 +579,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].prompt).isEqualTo("Wait for screen")
@@ -574,6 +595,25 @@ class TrailblazeRecordingGeneratorTest {
    */
   @Test
   fun roundTripFromYamlToLogsToYaml() {
+    // The unified document the recorded steps are read from (v1 decoding is gone). The generator
+    // still EMITS the v1 list shape, so the round-trip's expected output stays v1 (`originalYaml`).
+    val sourceYaml = """
+      |trail:
+      |  - step: Enter username
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: testuser
+      |  - step: Press back
+      |    recording:
+      |      android:
+      |        - mobile_pasteClipboard: {}
+      |  - verify: Login button visible
+      |    recording:
+      |      android:
+      |        - assertVisibleWithText:
+      |            text: Login
+    """.trimMargin()
     val originalYaml = """
       |- prompts:
       |  - step: Enter username
@@ -592,9 +632,9 @@ class TrailblazeRecordingGeneratorTest {
       |          text: Login
     """.trimMargin()
 
-    // 1. Parse the original YAML to get trail items
-    val trailItems = trailblazeYaml.decodeTrail(originalYaml)
-    val promptsItem = trailItems[0] as TrailYamlItem.PromptsTrailItem
+    // 1. Parse the source YAML to get trail items
+    val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     // 2. Simulate the logs that would be created when running these recorded steps
     //    (ObjectiveStartLog, TrailblazeToolLog for each tool, ObjectiveCompleteLog)
@@ -627,6 +667,17 @@ class TrailblazeRecordingGeneratorTest {
    */
   @Test
   fun roundTripWithSelectorBasedTools() {
+    val sourceYaml = """
+      |trail:
+      |  - step: Tap the login button
+      |    recording:
+      |      android:
+      |        - tapOnElementBySelector:
+      |            reason: Tap the login button
+      |            nodeSelector:
+      |              androidAccessibility:
+      |                textRegex: Login
+    """.trimMargin()
     val originalYaml = """
       |- prompts:
       |  - step: Tap the login button
@@ -639,8 +690,8 @@ class TrailblazeRecordingGeneratorTest {
       |              textRegex: Login
     """.trimMargin()
 
-    val trailItems = trailblazeYaml.decodeTrail(originalYaml)
-    val promptsItem = trailItems[0] as TrailYamlItem.PromptsTrailItem
+    val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     val simulatedLogs = mutableListOf<TrailblazeLog>()
     for (promptStep in promptsItem.promptSteps) {
@@ -662,6 +713,17 @@ class TrailblazeRecordingGeneratorTest {
    */
   @Test
   fun roundTripWithConfig() {
+    val sourceYaml = """
+      |config:
+      |  id: test/case_123
+      |  title: Login test
+      |trail:
+      |  - step: Enter text
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: hello
+    """.trimMargin()
     val originalYaml = """
       |- config:
       |    id: test/case_123
@@ -674,9 +736,9 @@ class TrailblazeRecordingGeneratorTest {
       |          text: hello
     """.trimMargin()
 
-    val trailItems = trailblazeYaml.decodeTrail(originalYaml)
-    val configItem = trailItems[0] as TrailYamlItem.ConfigTrailItem
-    val promptsItem = trailItems[1] as TrailYamlItem.PromptsTrailItem
+    val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val configItem = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>().single()
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     val simulatedLogs = mutableListOf<TrailblazeLog>()
     for (promptStep in promptsItem.promptSteps) {
@@ -701,6 +763,24 @@ class TrailblazeRecordingGeneratorTest {
    */
   @Test
   fun roundTripWithMixedStepTypes() {
+    val sourceYaml = """
+      |trail:
+      |  - step: Launch the app
+      |    recording:
+      |      android:
+      |        - launchApp:
+      |            appId: com.example.app
+      |  - step: Enter username
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: testuser
+      |  - verify: Welcome message shown
+      |    recording:
+      |      android:
+      |        - assertVisibleWithText:
+      |            text: Welcome
+    """.trimMargin()
     val originalYaml = """
       |- prompts:
       |  - step: Launch the app
@@ -720,8 +800,8 @@ class TrailblazeRecordingGeneratorTest {
       |          text: Welcome
     """.trimMargin()
 
-    val trailItems = trailblazeYaml.decodeTrail(originalYaml)
-    val promptsItem = trailItems[0] as TrailYamlItem.PromptsTrailItem
+    val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     val simulatedLogs = mutableListOf<TrailblazeLog>()
     for (promptStep in promptsItem.promptSteps) {
@@ -744,6 +824,17 @@ class TrailblazeRecordingGeneratorTest {
    */
   @Test
   fun roundTripWithMultipleToolsPerStep() {
+    val sourceYaml = """
+      |trail:
+      |  - step: Fill in the form
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: testuser
+      |        - mobile_pasteClipboard: {}
+      |        - inputText:
+      |            text: password123
+    """.trimMargin()
     val originalYaml = """
       |- prompts:
       |  - step: Fill in the form
@@ -756,8 +847,8 @@ class TrailblazeRecordingGeneratorTest {
       |          text: password123
     """.trimMargin()
 
-    val trailItems = trailblazeYaml.decodeTrail(originalYaml)
-    val promptsItem = trailItems[0] as TrailYamlItem.PromptsTrailItem
+    val trailItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     val simulatedLogs = mutableListOf<TrailblazeLog>()
     for (promptStep in promptsItem.promptSteps) {
@@ -861,7 +952,7 @@ class TrailblazeRecordingGeneratorTest {
     // Only tapOnElementBySelector should appear, not the raw maestro command
     assertThat(yaml).contains("tapOnElementBySelector")
     assertThat(yaml).doesNotContain("tapOn:")
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
   }
@@ -888,7 +979,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     // Verify the YAML can be deserialized back into trail items
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     assertThat(decoded[0]).isInstanceOf(TrailYamlItem.PromptsTrailItem::class)
 
@@ -933,7 +1024,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val tools = decoded[0] as TrailYamlItem.ToolTrailItem
     assertThat(tools.tools.size).isEqualTo(2)
     assertThat(tools.tools[0].name).isEqualTo("inputText")
@@ -965,7 +1056,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     assertThat(yaml).contains("tapOnElementBySelector")
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
   }
@@ -1002,7 +1093,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     // Only tapOnElementBySelector should appear
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(1)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps.size).isEqualTo(1)
@@ -1034,7 +1125,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     assertThat(decoded.size).isEqualTo(2)
     // First item should be the tools block
     assertThat(decoded[0]).isInstanceOf(TrailYamlItem.ToolTrailItem::class)
@@ -1069,7 +1160,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     // The maestro commands between windows should be skipped, so both
     // prompts merge into one PromptsTrailItem
     assertThat(decoded.size).isEqualTo(1)
@@ -1093,31 +1184,31 @@ class TrailblazeRecordingGeneratorTest {
       context = "Account email: test@example.com",
       metadata = mapOf("caseId" to "456"),
     )
-    val promptsYaml = """
-      |- prompts:
+    val sourceYaml = """
+      |trail:
       |  - step: Enter username
       |    recording:
-      |      tools:
-      |      - inputText:
-      |          text: test@example.com
+      |      android:
+      |        - inputText:
+      |            text: test@example.com
       |  - step: Tap login button
       |    recording:
-      |      tools:
-      |      - tapOnElementBySelector:
-      |          reason: Tap login
-      |          selector:
-      |            textRegex: Login
+      |      android:
+      |        - tapOnElementBySelector:
+      |            reason: Tap login
+      |            selector:
+      |              textRegex: Login
       |  - verify: Dashboard is visible
       |    recording:
-      |      tools:
-      |      - assertVisibleBySelector:
-      |          reason: Verify dashboard
-      |          selector:
-      |            textRegex: Dashboard
+      |      android:
+      |        - assertVisibleBySelector:
+      |            reason: Verify dashboard
+      |            selector:
+      |              textRegex: Dashboard
     """.trimMargin()
 
-    val promptsItems = trailblazeYaml.decodeTrail(promptsYaml)
-    val promptsItem = promptsItems[0] as TrailYamlItem.PromptsTrailItem
+    val promptsItems = trailblazeYaml.decodeTrail(sourceYaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val promptsItem = promptsItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
 
     // Simulate logs: launchApp outside window, then prompts with objectives
     val simulatedLogs = mutableListOf<TrailblazeLog>()
@@ -1138,8 +1229,9 @@ class TrailblazeRecordingGeneratorTest {
       sessionTrailConfig = config,
     )
 
-    // Verify the generated YAML is structurally correct
-    val decoded = trailblazeYaml.decodeTrail(generatedYaml)
+    // Verify the generated recording is structurally correct (read the lowered items straight from
+    // the logs — the generator emits v1, which no longer decodes back).
+    val decoded = simulatedLogs.generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig = config)
     assertThat(decoded.size).isEqualTo(3) // config + tools + prompts
 
     val decodedConfig = (decoded[0] as TrailYamlItem.ConfigTrailItem).config
@@ -1199,7 +1291,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     // Verify all tools appear and the YAML is valid
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     val tools = prompts.promptSteps[0].recording!!.tools
     assertThat(tools.size).isEqualTo(6)
@@ -1243,7 +1335,7 @@ class TrailblazeRecordingGeneratorTest {
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     val tools = prompts.promptSteps[0].recording!!.tools
     assertThat(tools.filter { it.name == "assertVisibleBySelector" }.size).isEqualTo(1)
@@ -1307,7 +1399,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     // The wrapper is recorded as a SINGLE tool named `runIf` — not flattened to its inner tap.
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     val recordedTools = prompts.promptSteps[0].recording!!.tools
     assertThat(recordedTools.size).isEqualTo(1)
@@ -1349,7 +1441,7 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(yaml).contains("Sign in fresh")
     assertThat(yaml).doesNotContain("- prompts:")
 
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Sign in fresh")
     assertThat(th.tools!!.single().name).isEqualTo("launchApp")
@@ -1377,7 +1469,7 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(yaml).contains("trailhead:")
     assertThat(yaml).doesNotContain(TrailheadDefinition.DEFAULT_STEP)
 
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
     assertThat(th.tools!!.single().name).isEqualTo("launchApp")
@@ -1430,7 +1522,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     // Round-trips through the strict parser (this decode threw before the merge fix).
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Launch the app signed in")
     assertThat(th.maxRetries).isEqualTo(2)
@@ -1469,7 +1561,7 @@ class TrailblazeRecordingGeneratorTest {
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
     assertThat(yaml).doesNotContain(TrailheadDefinition.DEFAULT_STEP)
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
     assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp", "inputText"))
@@ -1499,7 +1591,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Launch the app signed in")
     assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
@@ -1529,7 +1621,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo("Launch the app signed in")
     assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
@@ -1568,7 +1660,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.tools!!.map { it.name })
       .isEqualTo(listOf("launchApp", "inputText", "tapOnElementBySelector"))
@@ -1604,7 +1696,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val th = trailblazeYaml.decodeTrail(yaml)
+    val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.tools!!.single().name).isEqualTo("launchApp")
   }
@@ -1625,7 +1717,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val recorded = trailblazeYaml.decodeTrail(yaml)
+    val recorded = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     assertThat(recorded).isEqualTo(listOf("inputText", "inputText"))
@@ -1657,7 +1749,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val recorded = trailblazeYaml.decodeTrail(yaml)
+    val recorded = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     assertThat(recorded).isEqualTo(listOf("mobile_listInstalledApps", "myapp_launchAppSignedIn"))
@@ -1684,7 +1776,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    val recorded = trailblazeYaml.decodeTrail(yaml)
+    val recorded = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     assertThat(recorded).isEqualTo(listOf("myapp_launchAppSignedIn"))
@@ -1711,10 +1803,11 @@ class TrailblazeRecordingGeneratorTest {
 
     assertThat(yaml).contains("{{account_email}}")
     assertThat(yaml).doesNotContain("owner@example.com")
-    // And the emitted YAML round-trips as a valid trail.
-    val recorded = trailblazeYaml.decodeTrail(yaml)
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
-      .promptSteps.single().recording!!.tools.single()
+    // And the emitted recording round-trips as a valid trail through the go-forward unified path
+    // (v1 decoding is gone) — the decoded tool is the typed authored form, token intact.
+    val recorded = trailblazeYaml.decodeUnifiedTrail(
+      logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"),
+    ).trail.single().recordings.getValue("android-phone").single()
     assertThat((recorded.trailblazeTool as InputTextTrailblazeTool).text)
       .isEqualTo("{{account_email}}")
   }
@@ -1745,11 +1838,11 @@ class TrailblazeRecordingGeneratorTest {
       objectiveComplete(step),
     )
 
-    val yaml = logs.generateRecordedYaml(trailblazeYaml)
-
-    val recordedTools = trailblazeYaml.decodeTrail(yaml)
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
-      .promptSteps.single().recording!!.tools
+    // Decoded through the go-forward unified round-trip (v1 decoding is gone): dedup must have
+    // grouped on the authored form, kept exactly one `inputText`, and emitted its token-bearing form.
+    val recordedTools = trailblazeYaml.decodeUnifiedTrail(
+      logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone"),
+    ).trail.single().recordings.getValue("android-phone")
     assertThat(recordedTools.map { it.name }).isEqualTo(listOf("inputText"))
     assertThat((recordedTools.single().trailblazeTool as InputTextTrailblazeTool).text)
       .isEqualTo("{{account_email}}")
@@ -1810,7 +1903,7 @@ class TrailblazeRecordingGeneratorTest {
       objectiveComplete(step),
     )
 
-    val v1Tools = trailblazeYaml.decodeTrail(logs.generateRecordedYaml(trailblazeYaml))
+    val v1Tools = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single().recording!!.tools.map { it.name }
     val unifiedTools = trailblazeYaml

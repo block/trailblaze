@@ -148,5 +148,6 @@ internal fun toSessionSummary(info: SessionInfo): SessionSummary {
     appBuildNumber = info.targetAppInfo?.buildNumber,
     hasRecordedSteps = info.hasRecordedSteps,
     error = error,
+    metadata = info.trailConfig?.metadata?.takeIf { it.isNotEmpty() },
   )
 }

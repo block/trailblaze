@@ -26,14 +26,14 @@ class TrailArgConfigParseTest {
 
   /** [argEntries] is the relative YAML under `args:` (its own indentation is normalized here). */
   private fun parseArgs(argEntries: String): Map<String, TrailArgConfig> {
-    val entries = argEntries.trimIndent().prependIndent("      ")
-    val doc = "- config:\n" +
-      "    title: Parameterized trail\n" +
-      "    platform: android\n" +
-      "    args:\n" +
+    val entries = argEntries.trimIndent().prependIndent("    ")
+    val doc = "config:\n" +
+      "  title: Parameterized trail\n" +
+      "  platform: android\n" +
+      "  args:\n" +
       entries + "\n" +
-      "- tools:\n" +
-      "  - pressBack: {}\n"
+      "trail:\n" +
+      "  - step: Press back\n"
     return trailblazeYaml.extractTrailConfig(doc)?.args ?: error("expected args to parse")
   }
 
@@ -41,11 +41,11 @@ class TrailArgConfigParseTest {
   fun `trail without args parses with a null args map`() {
     val parsed = trailblazeYaml.extractTrailConfig(
       """
-      - config:
-          title: Plain trail
-          platform: android
-      - tools:
-        - pressBack: {}
+      config:
+        title: Plain trail
+        platform: android
+      trail:
+        - step: Press back
       """.trimIndent(),
     )
     assertNull(parsed?.args, "args must be null when not declared")
@@ -283,31 +283,31 @@ class TrailArgConfigParseTest {
     // (the authoring form) and assert it survives a JSON encode→decode intact.
     val config = trailblazeYaml.extractTrailConfig(
       """
-      - config:
-          title: Parameterized trail
-          platform: android
-          args:
-            recipient: string
-            subject:
-              type: string
-              description: "Email subject line"
-            retries:
-              type: integer
-              default: 3
-            verbose:
-              type: boolean
-              default: false
-            code:
-              type: string
-              default: "007"
-            items:
-              type: array
-              default: [a, b]
-            opts:
-              type: object
-              default: { verbose: true }
-      - tools:
-        - pressBack: {}
+      config:
+        title: Parameterized trail
+        platform: android
+        args:
+          recipient: string
+          subject:
+            type: string
+            description: "Email subject line"
+          retries:
+            type: integer
+            default: 3
+          verbose:
+            type: boolean
+            default: false
+          code:
+            type: string
+            default: "007"
+          items:
+            type: array
+            default: [a, b]
+          opts:
+            type: object
+            default: { verbose: true }
+      trail:
+        - step: Press back
       """.trimIndent(),
     ) ?: error("expected the parameterized trail config to parse")
 

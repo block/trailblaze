@@ -19,12 +19,13 @@ import kotlin.system.exitProcess
  * With `--id` or `--current`, the report narrows to a single session and the timeline
  * exports (`--video`, `--gif`, `--webp`) become available.
  *
- * Every run produces BOTH HTML report artifacts: the legacy Compose/WebAssembly report and the
- * lightweight, self-contained interactive report (the same artifact the Trail Runner app's
- * "Share as HTML" button produces). Either can individually be unavailable (missing WASM template /
- * missing `bun`) — the command only fails when neither could be generated. The animated exports
+ * Every run produces BOTH HTML report artifacts, generated concurrently: the legacy
+ * Compose/WebAssembly report and the lightweight, self-contained interactive report (the same
+ * artifact the Trail Runner app's "Share as HTML" button produces). Either can individually be
+ * unavailable (missing WASM template / missing `bun`) — the command only fails when neither could
+ * be generated. `--no-wasm-report` skips the legacy report entirely. The animated exports
  * (`--video`/`--gif`/`--webp`) always capture the legacy timeline, since only it implements the
- * autoplay-capture contract.
+ * autoplay-capture contract, so they can't be combined with `--no-wasm-report`.
  *
  * Examples:
  *   trailblaze report                              - HTML (legacy + interactive) + JSON for all sessions
@@ -227,6 +228,17 @@ class ReportCommand : Callable<Int> {
   var noWebp: Boolean = false
 
   @Option(
+    names = ["--no-wasm-report"],
+    description = [
+      "Skip the legacy WASM report; emit only the interactive report (plus the JSON " +
+        "summary). Saves the CPU-bound WASM build when only the interactive artifact is " +
+        "consumed. Mutually exclusive with --video/--gif/--webp, which capture the legacy " +
+        "timeline. Same flag as the CI report generator's --no-wasm-report.",
+    ],
+  )
+  var noWasmReport: Boolean = false
+
+  @Option(
     names = ["--max-size"],
     description = [
       "Cap each exported timeline artifact (--gif / --video / --webp) at the given byte " +
@@ -241,6 +253,33 @@ class ReportCommand : Callable<Int> {
     ],
   )
   var maxSize: String? = null
+
+  @Option(
+    names = ["--full-report-payloads"],
+    description = [
+      "Embed full event payloads in the interactive report even for sessions that " +
+        "passed, instead of applying the report size budgets (which truncate large " +
+        "successful network bodies and elide repeated intermediate snapshots to keep the " +
+        "report small). Failed sessions always embed full payloads regardless. The " +
+        "on-disk events/ artifacts are never budgeted, so any session can be " +
+        "regenerated in full with this flag at any time.",
+    ],
+  )
+  var fullReportPayloads: Boolean = false
+
+  @Option(
+    names = ["--share-url"],
+    paramLabel = "<url>",
+    description = [
+      "Bake a canonical hosted URL (http/https) into the interactive report. Its Copy " +
+        "link button then produces deep links against that URL — with the current view, " +
+        "sort, run, and step grafted on as query parameters — no matter where the file is " +
+        "opened from (including file://). Use this when the report is published to a known " +
+        "location, e.g. a CI artifact URL or an internal report server. Without this flag, " +
+        "Copy link uses the browser's own address and only appears on http(s) pages.",
+    ],
+  )
+  var shareUrl: String? = null
 
   override fun call(): Int {
     if (positionalId != null && id != null) {
@@ -269,6 +308,15 @@ class ReportCommand : Callable<Int> {
       Console.error(
         "--video / --gif / --webp / --storyboard require --id or --current. The all-sessions " +
           "index has nothing to play, so the exporter has nothing to record.",
+      )
+      return TrailblazeExitCode.MISUSE.code
+    }
+    // The animated timeline exports drive the legacy WASM report's autoplay contract, so
+    // deliberately skipping that report while requesting one is contradictory.
+    if (noWasmReport && (videoOutput != null || gifOutput != null || webpOutput != null)) {
+      Console.error(
+        "--no-wasm-report contradicts --video/--gif/--webp — they capture the legacy " +
+          "timeline report. Drop one.",
       )
       return TrailblazeExitCode.MISUSE.code
     }
@@ -327,6 +375,14 @@ class ReportCommand : Callable<Int> {
         return TrailblazeExitCode.MISUSE.code
       }
     }
+    val trimmedShareUrl = shareUrl?.trim()?.takeIf { it.isNotEmpty() }
+    // Reject values the viewer would refuse to render (its safeHref requires a parseable
+    // http(s) URL), so a typo'd --share-url fails loudly here instead of producing a report
+    // whose Copy link silently never appears.
+    if (trimmedShareUrl != null && !isValidShareUrl(trimmedShareUrl)) {
+      Console.error("--share-url must be a valid http(s) URL with a host, got '$trimmedShareUrl'.")
+      return TrailblazeExitCode.MISUSE.code
+    }
     return generateSessionReport(
       parent.appProvider(),
       resolvedId,
@@ -341,6 +397,9 @@ class ReportCommand : Callable<Int> {
       suppressGif = noGif,
       suppressWebp = noWebp,
       maxBytes = maxBytes,
+      generateWasm = !noWasmReport,
+      shareUrl = trimmedShareUrl,
+      fullEventPayloads = fullReportPayloads,
     )
   }
 
@@ -373,6 +432,23 @@ class ReportCommand : Callable<Int> {
      * once we know where the HTML report landed.
      */
     internal const val USE_DEFAULT_PATH = "__USE_DEFAULT_PATH__"
+
+    /**
+     * Mirrors the viewer's `safeHref` acceptance (a parseable absolute http(s) URL): a value
+     * that merely starts with `http(s)://` but has no host (`https://?jwt=abc`), does not
+     * parse, or carries a port a browser's `new URL(...)` would reject (> 65535) is refused,
+     * because the viewer would refuse it and silently hide Copy link.
+     */
+    internal fun isValidShareUrl(value: String): Boolean {
+      val uri = try {
+        java.net.URI(value)
+      } catch (e: java.net.URISyntaxException) {
+        return false
+      }
+      return uri.scheme?.lowercase() in listOf("http", "https") &&
+        !uri.host.isNullOrEmpty() &&
+        uri.port <= 65535
+    }
   }
 }
 
@@ -390,6 +466,15 @@ class ReportCommand : Callable<Int> {
  * @param suppressGif / [suppressWebp] When true, suppress the auto-emitted companion file
  *   under the shared-capture model. Setting either when the corresponding spec is
  *   non-null is a usage error rejected upstream by [ReportCommand.call].
+ * @param generateWasm When false (`--no-wasm-report`), the legacy WASM report is skipped
+ *   and only the interactive report is produced. Pairing with the animated exports is a
+ *   usage error rejected upstream by [ReportCommand.call].
+ * @param shareUrl When non-null (`--share-url`), the canonical hosted URL baked into the
+ *   interactive report for its Copy link. Validated as http(s) upstream by
+ *   [ReportCommand.call].
+ * @param fullEventPayloads When true (`--full-report-payloads`), event formatters embed full
+ *   payloads in the interactive report even for passed sessions instead of applying their
+ *   report size budgets.
  */
 internal fun generateSessionReport(
   app: TrailblazeDesktopApp,
@@ -405,6 +490,9 @@ internal fun generateSessionReport(
   suppressGif: Boolean = false,
   suppressWebp: Boolean = false,
   maxBytes: Long? = null,
+  generateWasm: Boolean = true,
+  shareUrl: String? = null,
+  fullEventPayloads: Boolean = false,
 ): Int {
   val logsRepo = app.deviceManager.logsRepo
   val allIds = logsRepo.getSessionIds()
@@ -432,17 +520,28 @@ internal fun generateSessionReport(
   }
 
   Console.log("Generating HTML + JSON report for ${sessionIds.size} session(s)...")
+  if (!generateWasm) {
+    Console.log("Skipping legacy WASM report (--no-wasm-report); emitting the interactive report only.")
+  }
 
-  // Every run produces BOTH HTML artifacts: the legacy WASM report and the interactive report.
+  // A run produces BOTH HTML artifacts (the legacy WASM report and the interactive report),
+  // generated concurrently — unless --no-wasm-report narrowed it to the interactive one.
   // Either can individually be unavailable (missing WASM template / missing bun) — the command
   // only fails when neither could be generated.
   val reportGenerator = app.createCliReportGenerator()
-  val legacyHtml = reportGenerator.generateReport(logsRepo, sessionIds)
-  if (legacyHtml == null) {
+  val htmlReports = reportGenerator.generateHtmlReports(
+    logsRepo,
+    sessionIds,
+    generateWasm = generateWasm,
+    shareUrl = shareUrl,
+    fullEventPayloads = fullEventPayloads,
+  )
+  val legacyHtml = htmlReports.wasmReport
+  if (generateWasm && legacyHtml == null) {
     Console.error("Warning: could not generate the legacy WASM report (no report template found).")
     Console.error("Ensure trailblaze_report_template.html is bundled or at the git root.")
   }
-  val interactiveHtml = reportGenerator.generateInteractiveReport(logsRepo, sessionIds)
+  val interactiveHtml = htmlReports.interactiveReport
   if (interactiveHtml == null) {
     // RunReportGenerator already logged the specific cause (bun missing / subprocess failure).
     Console.error("Warning: could not generate the interactive report.")

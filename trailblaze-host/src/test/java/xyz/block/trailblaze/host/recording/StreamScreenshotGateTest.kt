@@ -21,6 +21,7 @@ class StreamScreenshotGateTest {
     stallThresholdMs: Long = 3_000,
     latencyAllowanceMs: Long = 500,
     lastFeedAliveAtHost: Long? = null,
+    pendingUnclassifiedAtHost: Long? = null,
   ): Decision = StreamScreenshotGate.evaluate(
     nowHostMs = nowHost,
     lastFrameReceivedAtHostMs = lastFrameAtHost,
@@ -31,6 +32,7 @@ class StreamScreenshotGateTest {
     stallThresholdMs = stallThresholdMs,
     latencyAllowanceMs = latencyAllowanceMs,
     lastFeedAliveAtHostMs = lastFeedAliveAtHost,
+    pendingUnclassifiedAtHostMs = pendingUnclassifiedAtHost,
   )
 
   @Test
@@ -124,5 +126,45 @@ class StreamScreenshotGateTest {
   fun `quiet check uses last frame receipt when no content change was recorded`() {
     val decision = evaluate(lastFrameAtHost = nowHost - 100, lastChangeAtHost = null)
     assertEquals(Decision.AwaitQuiet(remainingQuietMs = 300), decision)
+  }
+
+  @Test
+  fun `an outstanding unclassified frame refuses to accept the stale latest frame`() {
+    // The static-after-transition hole: the latest KNOWN frame and its change-time are both
+    // old and quiet (it would otherwise Accept against this tree), but a newer byte-different
+    // frame arrived that the detector couldn't classify. That frame may show newer content, so
+    // the cached frame is possibly stale — the gate must hold, not Accept.
+    val decision = evaluate(
+      lastFrameAtHost = nowHost - 4_000,
+      lastChangeAtHost = nowHost - 4_000,
+      lastFeedAliveAtHost = nowHost - 100,
+      pendingUnclassifiedAtHost = nowHost - 100,
+    )
+    assertEquals(Decision.AwaitReclassification(pendingForMs = 100), decision)
+  }
+
+  @Test
+  fun `a pending frame alone still counts as a sign of life`() {
+    // No classified frame yet, but a byte-different one arrived (pending). That is proof the
+    // pipeline is alive, so we wait (not stall, not first-frame) for it to be reclassified.
+    val decision = evaluate(
+      lastFrameAtHost = null,
+      lastChangeAtHost = null,
+      pendingUnclassifiedAtHost = nowHost - 50,
+    )
+    assertEquals(Decision.AwaitReclassification(pendingForMs = 50), decision)
+  }
+
+  @Test
+  fun `a stale pending frame past the stall threshold is a dead stream, not a hold`() {
+    // The pending frame contributes to the sign-of-life check, so a pending frame that is
+    // itself older than the stall threshold (and no other life) still Stalls rather than
+    // holding forever.
+    val decision = evaluate(
+      lastFrameAtHost = null,
+      lastChangeAtHost = null,
+      pendingUnclassifiedAtHost = nowHost - 4_000,
+    )
+    assertEquals(Decision.Stalled(4_000), decision)
   }
 }

@@ -9,6 +9,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
 import org.junit.Test
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 
 class TrailComparatorTest {
   private val trailblazeYaml = createTrailblazeYaml()
@@ -17,11 +18,11 @@ class TrailComparatorTest {
   @Test
   fun identicalTrails_returnsMatch() {
     val yaml = """
-      - config:
-          title: Test Case
-          priority: P1
-          context: User is logged in
-      - prompts:
+      config:
+        title: Test Case
+        priority: P1
+        context: User is logged in
+      trail:
         - step: Click the button
         - verify: The dialog appears
     """.trimIndent()
@@ -35,16 +36,16 @@ class TrailComparatorTest {
   @Test
   fun differentTitles_returnsTitleMismatch() {
     val expected = """
-      - config:
-          title: Original Title
-      - prompts:
+      config:
+        title: Original Title
+      trail:
         - step: Do something
     """.trimIndent()
 
     val actual = """
-      - config:
-          title: Changed Title
-      - prompts:
+      config:
+        title: Changed Title
+      trail:
         - step: Do something
     """.trimIndent()
 
@@ -61,16 +62,16 @@ class TrailComparatorTest {
   @Test
   fun differentPriorities_returnsPriorityMismatch() {
     val expected = """
-      - config:
-          priority: P0
-      - prompts:
+      config:
+        priority: P0
+      trail:
         - step: Do something
     """.trimIndent()
 
     val actual = """
-      - config:
-          priority: P2
-      - prompts:
+      config:
+        priority: P2
+      trail:
         - step: Do something
     """.trimIndent()
 
@@ -86,14 +87,14 @@ class TrailComparatorTest {
   @Test
   fun differentStepCount_returnsStepCountMismatch() {
     val expected = """
-      - prompts:
+      trail:
         - step: Step 1
         - step: Step 2
         - step: Step 3
     """.trimIndent()
 
     val actual = """
-      - prompts:
+      trail:
         - step: Step 1
         - step: Step 2
     """.trimIndent()
@@ -110,13 +111,13 @@ class TrailComparatorTest {
   @Test
   fun differentStepContent_returnsStepContentMismatch() {
     val expected = """
-      - prompts:
+      trail:
         - step: Click the login button
         - verify: User is logged in
     """.trimIndent()
 
     val actual = """
-      - prompts:
+      trail:
         - step: Tap the login button
         - verify: User is logged in
     """.trimIndent()
@@ -133,19 +134,17 @@ class TrailComparatorTest {
 
   @Test
   fun missingActualConfig_returnsMissingActualConfig() {
-    val expected = """
-      - config:
-          title: Test Case
-      - prompts:
-        - step: Do something
-    """.trimIndent()
+    // "No config item at all" is a v1-list notion — a unified doc always lowers to a synthesized
+    // config item, so drive the config-absence branch through the items-based overload directly.
+    val expected = listOf<TrailYamlItem>(
+      TrailYamlItem.ConfigTrailItem(TrailConfig(title = "Test Case")),
+      TrailYamlItem.PromptsTrailItem(listOf(DirectionStep(step = "Do something"))),
+    )
+    val actual = listOf<TrailYamlItem>(
+      TrailYamlItem.PromptsTrailItem(listOf(DirectionStep(step = "Do something"))),
+    )
 
-    val actual = """
-      - prompts:
-        - step: Do something
-    """.trimIndent()
-
-    val result = comparator.compare(expected, actual, trailblazeYaml)
+    val result = comparator.compare(expected, actual)
 
     assertThat(result.isMatch).isFalse()
     val missingDiffs = result.differences.filterIsInstance<TrailDifference.MissingActualConfig>()
@@ -178,9 +177,9 @@ class TrailComparatorTest {
   @Test
   fun extractNaturalLanguageSteps_extractsFromPromptsItems() {
     val yaml = """
-      - config:
-          title: Test
-      - prompts:
+      config:
+        title: Test
+      trail:
         - step: First step
         - verify: Check something
         - step: Second step
@@ -194,17 +193,20 @@ class TrailComparatorTest {
   @Test
   fun extractNaturalLanguageSteps_ignoresRecordings() {
     val yaml = """
-      - prompts:
+      trail:
         - step: Do something
           recording:
-            tools:
+            android:
               - tapOnPoint:
                   x: 100
                   y: 200
         - verify: Check result
     """.trimIndent()
 
-    val steps = comparator.extractNaturalLanguageSteps(yaml, trailblazeYaml)
+    // A recording-bearing unified trail needs classifiers to lower; extract NL steps from the
+    // lowered items (the string overload lowers with none and would trip the recordings guard).
+    val items = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    val steps = comparator.extractNaturalLanguageSteps(items)
 
     assertThat(steps).containsExactly("Do something", "Check result")
   }
@@ -239,18 +241,18 @@ class TrailComparatorTest {
   @Test
   fun compareWithConfigDisabled_ignoresConfigDifferences() {
     val expected = """
-      - config:
-          title: Original Title
-          priority: P0
-      - prompts:
+      config:
+        title: Original Title
+        priority: P0
+      trail:
         - step: Do something
     """.trimIndent()
 
     val actual = """
-      - config:
-          title: Changed Title
-          priority: P2
-      - prompts:
+      config:
+        title: Changed Title
+        priority: P2
+      trail:
         - step: Do something
     """.trimIndent()
 
@@ -263,19 +265,19 @@ class TrailComparatorTest {
   @Test
   fun multipleDifferences_returnsAllDifferences() {
     val expected = """
-      - config:
-          title: Original
-          context: Precondition A
-      - prompts:
+      config:
+        title: Original
+        context: Precondition A
+      trail:
         - step: Step 1
         - step: Step 2
     """.trimIndent()
 
     val actual = """
-      - config:
-          title: Changed
-          context: Precondition B
-      - prompts:
+      config:
+        title: Changed
+        context: Precondition B
+      trail:
         - step: Step 1
         - step: Modified Step 2
     """.trimIndent()

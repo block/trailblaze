@@ -287,6 +287,53 @@ class DeviceClassifierResolverTest {
   }
 
   @Test
+  fun `override that declines once is not cached - a later probe lets the override reclaim the device`() {
+    // A distribution installs an override to recognize custom hardware a dimension probe can't tell
+    // apart from a phone. The override declines on its first call — modeling a blank/raced shell probe
+    // right after boot — then recognizes the device on every later call. The device's real shape is a
+    // phone-sized emulator, so the dim-based fallback classifies it as `android-phone`. That
+    // declined-once verdict must NOT be cached: if it were, the daemon would answer `android-phone`
+    // for its whole lifetime and every subsequent classifier lookup would read the wrong result. The
+    // retry must let the override reclaim the device with its own classification.
+    val overrideCalls = AtomicInteger(0)
+    DeviceClassifierResolver.installOverride { _, _ ->
+      if (overrideCalls.incrementAndGet() == 1) {
+        null // first probe: shell raced / returned blank -> "I don't recognize this"
+      } else {
+        listOf(
+          TrailblazeDeviceClassifier("kiosk"),
+          TrailblazeDeviceClassifier("v2"),
+        )
+      }
+    }
+    // The device is physically a phone-shaped emulator, so the dim fallback is `android-phone` —
+    // the wrong slot the daemon would otherwise get poisoned with.
+    val phoneProbe = probeOf(
+      mapOf((TrailblazeDevicePlatform.ANDROID to "emulator-5554") to DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400)),
+    )
+    val first = DeviceClassifierResolver.classifiersFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "emulator-5554",
+      dimensionsProbe = phoneProbe,
+    )
+    assertEquals(
+      listOf("android", "phone"),
+      first.map { it.classifier },
+      "override declined the first probe -> best-effort dim fallback is android-phone",
+    )
+    val second = DeviceClassifierResolver.classifiersFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "emulator-5554",
+      dimensionsProbe = phoneProbe,
+    )
+    assertEquals(
+      listOf("kiosk", "v2"),
+      second.map { it.classifier },
+      "the declined-once verdict must not be cached; the retry lets the override reclaim its classification",
+    )
+  }
+
+  @Test
   fun `cache key is per device - different instanceIds probe independently`() {
     // Two devices, one iPhone-sized and one iPad-sized — the cache must key on instanceId
     // so adding a second device doesn't poison the first device's entry.

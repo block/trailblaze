@@ -9,13 +9,67 @@
 // the next CI run.
 import { rpcCall, type RpcResult, type RpcCallOptions } from "../rpc/client.js";
 
+export interface AccessibilityActionLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.AccessibilityActionLog";
+  actionJsonObj: Record<string, unknown>;
+  actionDescription: string;
+  traceId?: string | null;
+  successful: boolean;
+  trailblazeToolResult: TrailblazeToolResult;
+  session: string;
+  timestamp: string;
+  durationMs: number;
+}
+
+export interface Action {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface AddMedia {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.AddMedia";
+  mediaFiles: string[];
+  type?: AgentActionType;
+}
+
 export interface AddTrailRootRequest {
   path: string;
 }
 
+export type AgentActionType = "AIRPLANE_MODE" | "ENTER_TEXT" | "LAUNCH_APP" | "STOP_APP" | "SWIPE" | "TAP_POINT" | "LONG_PRESS_POINT" | "GRANT_PERMISSIONS" | "CLEAR_APP_STATE" | "KILL_APP" | "BACK_PRESS" | "ADD_MEDIA" | "ASSERT_CONDITION" | "WEB_ACTION" | "PRESS_HOME" | "PRESS_KEY" | "HIDE_KEYBOARD" | "ERASE_TEXT" | "SCROLL" | "WAIT_FOR_SETTLE";
+
+export type AgentDriverAction = AddMedia | AirplaneMode | AssertCondition | BackPress | ClearAppState | EnterText | EraseText | GrantPermissions | HideKeyboard | KillApp | LaunchApp | LongPressPoint | OtherAction | PressHome | Scroll | StopApp | Swipe | TapPoint | WaitForSettle;
+
+export type AgentImplementation = "TRAILBLAZE_RUNNER" | "MULTI_AGENT_V3" | "KOOG_STRATEGY_GRAPH";
+
 export interface AgentOptionDto {
   id: string;
   display: string;
+}
+
+export type AgentTaskStatus = AgentTaskStatusFailureMaxCallsLimitReached | InProgress | McpScreenAnalysis | ObjectiveComplete | ObjectiveFailed;
+
+export interface AgentTaskStatusData {
+  taskId: string;
+  prompt: string;
+  callCount: number;
+  taskStartTime: string;
+  totalDurationMs: number;
+}
+
+export interface AgentTaskStatusFailureMaxCallsLimitReached {
+  class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.MaxCallsLimitReached";
+  statusData: AgentTaskStatusData;
+}
+
+export type AgentTier = "INNER" | "OUTER";
+
+export type AgentToolTransport = "MCP_IN_PROCESS" | "MCP_OVER_HTTP";
+
+export interface AirplaneMode {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.AirplaneMode";
+  enable: boolean;
+  type?: AgentActionType;
 }
 
 export interface AnalyticsEventDto {
@@ -31,6 +85,92 @@ export interface AnalyticsResponse {
   events: AnalyticsEventDto[];
 }
 
+export interface AssertCondition {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.AssertCondition";
+  conditionDescription: string;
+  x: number;
+  y: number;
+  isVisible: boolean;
+  textToDisplay?: string | null;
+  succeeded?: boolean;
+  type?: AgentActionType;
+}
+
+export interface Assistant {
+  parts: ResponsePart[];
+  metaInfo: ResponseMetaInfo;
+  finishReason?: string | null;
+  rawResponse?: Record<string, unknown> | null;
+  id?: string | null;
+  role?: Role;
+}
+
+export interface Attachment {
+  class: "ai.koog.prompt.message.MessagePart.Attachment";
+  source: AttachmentSource;
+  cacheControl?: PolymorphicCacheControl | null;
+}
+
+export type AttachmentContent = Base64 | Bytes | PlainText | URL;
+
+export type AttachmentSource = AttachmentSourceAudio | AttachmentSourceImage | AttachmentSourceVideo | File;
+
+export interface AttachmentSourceAudio {
+  class: "ai.koog.prompt.message.AttachmentSource.Audio";
+  content: AttachmentContent;
+  format: string;
+  mimeType?: string;
+  fileName?: string | null;
+}
+
+export interface AttachmentSourceImage {
+  class: "ai.koog.prompt.message.AttachmentSource.Image";
+  content: AttachmentContent;
+  format: string;
+  mimeType?: string;
+  fileName?: string | null;
+}
+
+export interface AttachmentSourceVideo {
+  class: "ai.koog.prompt.message.AttachmentSource.Video";
+  content: AttachmentContent;
+  format: string;
+  mimeType?: string;
+  fileName?: string | null;
+}
+
+export interface BackPress {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.BackPress";
+}
+
+export interface Base64 {
+  class: "ai.koog.prompt.message.AttachmentContent.Binary.Base64";
+  base64: string;
+}
+
+export interface Basic {
+  class: "ai.koog.prompt.llm.LLMCapability.Schema.JSON.Basic";
+}
+
+export interface Bounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface Bytes {
+  class: "ai.koog.prompt.message.AttachmentContent.Binary.Bytes";
+  base64: string;
+}
+
+export interface Call {
+  class: "ai.koog.prompt.message.MessagePart.Tool.Call";
+  id?: string | null;
+  tool: string;
+  args: string;
+}
+
 export interface CancelSessionRequest {
   id: string;
 }
@@ -38,6 +178,46 @@ export interface CancelSessionRequest {
 export interface CancelSessionResponse {
   ok: boolean;
   reason?: string | null;
+}
+
+export interface Cancelled {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.Cancelled";
+  durationMs: number;
+  cancellationMessage?: string | null;
+}
+
+export interface CaptureCoverage {
+  contentNodes: number;
+  zeroBoundsContentNodes: number;
+  horizontalCoverage: number;
+  verticalCoverage: number;
+  looksTruncated: boolean;
+  reason: string;
+}
+
+export interface CategoryBreakdown {
+  tokens: number;
+  count: number;
+}
+
+export interface ClearAppState {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.ClearAppState";
+  appId: string;
+  type?: AgentActionType;
+}
+
+export interface CollectionInfo {
+  rowCount: number;
+  columnCount: number;
+  isHierarchical: boolean;
+}
+
+export interface CollectionItemInfo {
+  rowIndex: number;
+  rowSpan: number;
+  columnIndex: number;
+  columnSpan: number;
+  isHeading: boolean;
 }
 
 export interface CompanionDirectiveDto {
@@ -60,6 +240,14 @@ export interface CompanionStateDto {
   requests?: Record<string, CompanionRequestDto>;
 }
 
+export interface Completion {
+  class: "ai.koog.prompt.llm.LLMCapability.Completion";
+}
+
+export interface Completions {
+  class: "ai.koog.prompt.llm.LLMCapability.OpenAIEndpoint.Completions";
+}
+
 export interface CreateTrailDirRequest {
   path: string;
 }
@@ -67,6 +255,16 @@ export interface CreateTrailDirRequest {
 export interface CreateTrailRequest {
   path: string;
   yaml: string;
+}
+
+export interface DelegatingTrailblazeToolLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.DelegatingTrailblazeToolLog";
+  toolName: string;
+  trailblazeTool: OtherTrailblazeTool;
+  session: string;
+  timestamp: string;
+  traceId?: string | null;
+  executableTools: OtherTrailblazeTool[];
 }
 
 export interface DeleteSessionRequest {
@@ -110,8 +308,51 @@ export interface DeviceAppsResponse {
   currentTargetAppId?: string | null;
 }
 
+export interface DirectionStep {
+  class: "xyz.block.trailblaze.yaml.DirectionStep";
+  step: string;
+  recordable?: boolean;
+  recording?: ToolRecording | null;
+  maxRetries?: number | null;
+  isTrailhead?: boolean;
+  prompt?: string;
+}
+
+export interface Document {
+  class: "ai.koog.prompt.llm.LLMCapability.Document";
+}
+
+export type DriverNodeDetail = androidAccessibility | androidMaestro | compose | iosAxe | iosMaestro | web;
+
 export interface EditedTrailsResponse {
   paths: string[];
+}
+
+export interface Embed {
+  class: "ai.koog.prompt.llm.LLMCapability.Embed";
+}
+
+export interface EmptyToolCall {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.EmptyToolCall";
+}
+
+export interface EnterText {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.EnterText";
+  text: string;
+  type?: AgentActionType;
+}
+
+export interface EraseText {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.EraseText";
+  characters: number;
+  type?: AgentActionType;
+}
+
+export interface ExceptionThrown {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.ExceptionThrown";
+  errorMessage: string;
+  command?: unknown | null;
+  stackTrace?: string | null;
 }
 
 export interface ExternalAgentEventDto {
@@ -217,12 +458,49 @@ export interface ExternalAgentStartResponse {
 
 export type ExternalAgentType = "claude" | "codex" | "solo";
 
+export interface Failed {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.Failed";
+  durationMs: number;
+  exceptionMessage?: string | null;
+  exceptionStackTrace?: string | null;
+  failureKind?: string | null;
+}
+
+export interface FailedWithSelfHeal {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.FailedWithSelfHeal";
+  durationMs: number;
+  exceptionMessage?: string | null;
+  usedSelfHeal?: boolean;
+  exceptionStackTrace?: string | null;
+  failureKind?: string | null;
+}
+
+export interface Failure {
+  successfulTools: TrailblazeToolYamlWrapper[];
+  failedTool: TrailblazeToolYamlWrapper;
+  failureResult: TrailblazeToolResult;
+}
+
+export interface FatalError {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.FatalError";
+  errorMessage: string;
+  stackTraceString?: string | null;
+}
+
 export interface FavoriteRequest {
   id: string;
 }
 
 export interface FavoritesResponse {
   ids: string[];
+}
+
+export interface File {
+  class: "ai.koog.prompt.message.AttachmentSource.File";
+  content: AttachmentContent;
+  format: string;
+  mimeType: string;
+  fileName?: string | null;
 }
 
 export interface GetDeviceAppsRequest {
@@ -293,6 +571,24 @@ export interface GetTrailmapsRequest {
 export interface GetTrailsRequest {
 }
 
+export interface GrantPermissions {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.GrantPermissions";
+  appId: string;
+  permissions: Record<string, string>;
+  type?: AgentActionType;
+}
+
+export interface HideKeyboard {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.HideKeyboard";
+}
+
+export type ImageTokenFormula = "anthropic" | "openai_tile" | "google_tile" | "default";
+
+export interface InProgress {
+  class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.InProgress";
+  statusData: AgentTaskStatusData;
+}
+
 export interface InstalledAppDto {
   appId: string;
   label?: string | null;
@@ -325,6 +621,49 @@ export interface IntegrationsResponse {
   integrations: IntegrationDto[];
 }
 
+export interface InvalidToolCall {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.InvalidToolCall";
+  errorMessage: string;
+  command: unknown;
+}
+
+export interface KillApp {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.KillApp";
+  appId: string;
+  type?: AgentActionType;
+}
+
+export type LLMCapability = Basic | Completion | Completions | Document | Embed | LLMCapabilityAudio | LLMCapabilityVisionImage | LLMCapabilityVisionVideo | Moderation | MultipleChoices | PromptCaching | Responses | Speculation | Standard | Temperature | Thinking | ToolChoice | Tools;
+
+export interface LLMCapabilityAudio {
+  class: "ai.koog.prompt.llm.LLMCapability.Audio";
+}
+
+export interface LLMCapabilityVisionImage {
+  class: "ai.koog.prompt.llm.LLMCapability.Vision.Image";
+}
+
+export interface LLMCapabilityVisionVideo {
+  class: "ai.koog.prompt.llm.LLMCapability.Vision.Video";
+}
+
+export interface LaunchApp {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.LaunchApp";
+  appId: string;
+  type?: AgentActionType;
+}
+
+export type LlmCallStrategy = "DIRECT" | "MCP_SAMPLING";
+
+export interface LlmInputTokenBreakdown {
+  systemPrompt: CategoryBreakdown;
+  userPrompt: CategoryBreakdown;
+  toolDescriptors: CategoryBreakdown;
+  images: CategoryBreakdown;
+  assistantMessageCount: number;
+  toolMessageCount: number;
+}
+
 export interface LlmModelOptionDto {
   id: string;
   provider: string;
@@ -335,6 +674,40 @@ export interface LlmProviderOptionDto {
   display: string;
 }
 
+export interface LlmRequestContext {
+  agentImplementation: AgentImplementation;
+  llmCallStrategy: LlmCallStrategy;
+  agentTier?: AgentTier | null;
+}
+
+export interface LlmRequestUsageAndCost {
+  trailblazeLlmModel: TrailblazeLlmModel;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  promptCost: number;
+  completionCost: number;
+  totalCost?: number;
+  inputTokenBreakdown?: LlmInputTokenBreakdown | null;
+}
+
+export interface LlmSessionUsageAndCost {
+  llmModel: TrailblazeLlmModel;
+  averageDurationMillis: number;
+  totalCostInUsDollars: number;
+  totalRequestCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  averageInputTokens: number;
+  averageOutputTokens: number;
+  totalCacheReadInputTokens?: number;
+  totalCacheCreationInputTokens?: number;
+  totalCacheSavings?: number;
+  aggregatedInputTokenBreakdown?: LlmInputTokenBreakdown | null;
+  requestBreakdowns?: LlmRequestUsageAndCost[];
+}
+
 export interface LlmSettingsDto {
   provider: string;
   model: string;
@@ -342,6 +715,169 @@ export interface LlmSettingsDto {
   availableModels?: LlmModelOptionDto[];
   agent?: string;
   availableAgents?: AgentOptionDto[];
+}
+
+export interface LongPressPoint {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.LongPressPoint";
+  x: number;
+  y: number;
+  type?: AgentActionType;
+}
+
+export interface MaestroCommandLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.MaestroCommandLog";
+  maestroCommandJsonObj: Record<string, unknown>;
+  traceId?: string | null;
+  successful: boolean;
+  trailblazeToolResult: TrailblazeToolResult;
+  session: string;
+  timestamp: string;
+  durationMs: number;
+}
+
+export interface MaestroDriverLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.MaestroDriverLog";
+  viewHierarchy?: ViewHierarchyTreeNode | null;
+  trailblazeNodeTree?: TrailblazeNode | null;
+  driverMigrationTreeNode?: TrailblazeNode | null;
+  screenshotFile?: string | null;
+  action: AgentDriverAction;
+  captureCoverage?: CaptureCoverage | null;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  deviceHeight: number;
+  deviceWidth: number;
+  traceId?: string | null;
+}
+
+export interface MaestroValidationError {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.MaestroValidationError";
+  errorMessage: string;
+  commandJsonObject: Record<string, unknown>;
+}
+
+export interface McpAgentIterationLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpAgentIterationLog";
+  iterationNumber: number;
+  transportMode: AgentToolTransport;
+  toolName?: string | null;
+  toolArgs?: Record<string, unknown> | null;
+  toolSucceeded?: boolean | null;
+  llmCompletion?: string | null;
+  responseType: string;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  traceId: string;
+}
+
+export interface McpAgentRunLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpAgentRunLog";
+  objective: string;
+  transportMode: AgentToolTransport;
+  llmStrategy: LlmCallStrategy;
+  iterationCount: number;
+  toolCallCount: number;
+  successful: boolean;
+  resultMessage: string;
+  actionsTaken: string[];
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  traceId: string;
+}
+
+export interface McpAgentToolLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpAgentToolLog";
+  transportMode: AgentToolTransport;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  successful: boolean;
+  resultOutput: string;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  traceId?: string | null;
+}
+
+export interface McpAskLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpAskLog";
+  question: string;
+  answer?: string | null;
+  screenSummary?: string | null;
+  errorMessage?: string | null;
+  traceId?: string | null;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+}
+
+export interface McpSamplingLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpSamplingLog";
+  llmStrategy: LlmCallStrategy;
+  systemPrompt: string;
+  userMessage: string;
+  completion: string;
+  includedScreenshot: boolean;
+  usageAndCost?: LlmRequestUsageAndCost | null;
+  modelName?: string | null;
+  successful: boolean;
+  errorMessage?: string | null;
+  viewHierarchy?: ViewHierarchyTreeNode | null;
+  viewHierarchyFiltered?: ViewHierarchyTreeNode | null;
+  deviceWidth?: number;
+  deviceHeight?: number;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  traceId: string;
+  screenshotFile?: string | null;
+}
+
+export interface McpScreenAnalysis {
+  class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.McpScreenAnalysis";
+  statusData: AgentTaskStatusData;
+  recommendedAction?: string | null;
+  confidence?: string | null;
+}
+
+export interface McpToolCallRequestLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpToolCallRequestLog";
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  mcpSessionId: string;
+  traceId: string;
+  session: string;
+  timestamp: string;
+}
+
+export interface McpToolCallResponseLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.McpToolCallResponseLog";
+  toolName: string;
+  mcpSessionId: string;
+  successful: boolean;
+  resultSummary: unknown;
+  errorMessage?: string | null;
+  traceId: string;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+}
+
+export interface MissingRequiredArgs {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.MissingRequiredArgs";
+  functionName: string;
+  functionArgs: Record<string, unknown>;
+  requiredArgs: string[];
+}
+
+export interface Moderation {
+  class: "ai.koog.prompt.llm.LLMCapability.Moderation";
+}
+
+export interface MultipleChoices {
+  class: "ai.koog.prompt.llm.LLMCapability.MultipleChoices";
 }
 
 export interface NewComponentRequest {
@@ -357,6 +893,33 @@ export interface NewComponentResponse {
   error?: string | null;
 }
 
+export interface ObjectiveComplete {
+  class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete";
+  statusData: AgentTaskStatusData;
+  llmExplanation: string;
+}
+
+export interface ObjectiveCompleteLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveCompleteLog";
+  promptStep: PromptStep;
+  objectiveResult: AgentTaskStatus;
+  session: string;
+  timestamp: string;
+}
+
+export interface ObjectiveFailed {
+  class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.ObjectiveFailed";
+  statusData: AgentTaskStatusData;
+  llmExplanation: string;
+}
+
+export interface ObjectiveStartLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveStartLog";
+  promptStep: PromptStep;
+  session: string;
+  timestamp: string;
+}
+
 export interface OkResponse {
   ok: boolean;
   error?: string | null;
@@ -365,6 +928,46 @@ export interface OkResponse {
 export interface OpenSessionFileRequest {
   id: string;
   name: string;
+}
+
+export interface OtherAction {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.OtherAction";
+  type: AgentActionType;
+}
+
+export interface OtherTrailblazeTool {
+}
+
+export interface PlainText {
+  class: "ai.koog.prompt.message.AttachmentContent.PlainText";
+  text: string;
+}
+
+export type PolymorphicCacheControl = { class: string } & { [key: string]: unknown };
+
+export interface PressHome {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.PressHome";
+}
+
+export interface PromptCaching {
+  class: "ai.koog.prompt.llm.LLMCapability.PromptCaching";
+}
+
+export type PromptStep = DirectionStep | VerificationStep;
+
+export interface RangeInfo {
+  type: number;
+  min: number;
+  max: number;
+  current: number;
+}
+
+export interface Reasoning {
+  class: "ai.koog.prompt.message.MessagePart.Reasoning";
+  content: string[];
+  summary?: string[] | null;
+  encrypted?: string | null;
+  id?: string | null;
 }
 
 export interface RebuildDaemonRequest {
@@ -379,6 +982,21 @@ export interface RemoveTrailRootRequest {
   path: string;
 }
 
+export interface ResponseMetaInfo {
+  timestamp: string;
+  totalTokensCount?: number | null;
+  inputTokensCount?: number | null;
+  outputTokensCount?: number | null;
+  modelId?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export type ResponsePart = Attachment | Call | Reasoning | Text;
+
+export interface Responses {
+  class: "ai.koog.prompt.llm.LLMCapability.OpenAIEndpoint.Responses";
+}
+
 export interface RevealSessionRequest {
   id: string;
 }
@@ -389,6 +1007,8 @@ export interface RevealTrailRequest {
 
 export interface RevealTrailsRootRequest {
 }
+
+export type Role = "System" | "User" | "Assistant";
 
 export interface RunRequest {
   trailblazeDeviceId: TrailblazeDeviceId;
@@ -462,6 +1082,27 @@ export interface SaveTrailResponse {
   error?: string | null;
 }
 
+export interface ScreenshotScalingConfig {
+  maxDimension1?: number;
+  maxDimension2?: number;
+  imageFormat?: TrailblazeImageFormat;
+  compressionQuality?: number;
+}
+
+export interface Scroll {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.Scroll";
+  forward: boolean;
+  type?: AgentActionType;
+}
+
+export interface SelfHealInvokedLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.SelfHealInvokedLog";
+  promptStep: PromptStep;
+  session: string;
+  timestamp: string;
+  recordingResult: Failure;
+}
+
 export interface SessionFileDto {
   name: string;
   size: number;
@@ -469,6 +1110,31 @@ export interface SessionFileDto {
 
 export interface SessionFilesResponse {
   files: SessionFileDto[];
+}
+
+export interface SessionInfo {
+  sessionId: string;
+  latestStatus: SessionStatus;
+  timestamp: string;
+  durationMs: number;
+  trailFilePath?: string | null;
+  hasRecordedSteps: boolean;
+  trailblazeDeviceId?: TrailblazeDeviceId | null;
+  trailblazeDeviceInfo?: TrailblazeDeviceInfo | null;
+  targetAppInfo?: TrailblazeTargetAppInfo | null;
+  testName?: string | null;
+  testClass?: string | null;
+  trailConfig?: TrailConfig | null;
+  llmUsageSummary?: LlmSessionUsageAndCost | null;
+}
+
+export type SessionStatus = Cancelled | Failed | FailedWithSelfHeal | SessionStatusEndedMaxCallsLimitReached | Started | Succeeded | SucceededWithSelfHeal | TimeoutReached | Unknown;
+
+export interface SessionStatusEndedMaxCallsLimitReached {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.MaxCallsLimitReached";
+  durationMs: number;
+  maxCalls: number;
+  objectivePrompt: string;
 }
 
 export interface SessionSummary {
@@ -488,6 +1154,7 @@ export interface SessionSummary {
   error?: string | null;
   trailId?: string | null;
   imported?: boolean;
+  metadata?: Record<string, string> | null;
 }
 
 export interface SessionsResponse {
@@ -557,6 +1224,90 @@ export interface SettingsPatchRequest {
   screenshotCompressionQuality?: number | null;
 }
 
+export interface Speculation {
+  class: "ai.koog.prompt.llm.LLMCapability.Speculation";
+}
+
+export interface Standard {
+  class: "ai.koog.prompt.llm.LLMCapability.Schema.JSON.Standard";
+}
+
+export interface Started {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Started";
+  trailConfig?: TrailConfig | null;
+  trailFilePath?: string | null;
+  hasRecordedSteps: boolean;
+  testMethodName: string;
+  testClassName: string;
+  trailblazeDeviceInfo: TrailblazeDeviceInfo;
+  trailblazeDeviceId?: TrailblazeDeviceId | null;
+  rawYaml?: string | null;
+  resolvedInitialMemory?: Record<string, string>;
+  sensitiveMemoryKeys?: string[];
+  targetAppInfo?: TrailblazeTargetAppInfo | null;
+}
+
+export interface StopApp {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.StopApp";
+  appId: string;
+  type?: AgentActionType;
+}
+
+export interface Succeeded {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.Succeeded";
+  durationMs: number;
+}
+
+export interface SucceededWithSelfHeal {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.SucceededWithSelfHeal";
+  durationMs: number;
+  usedSelfHeal?: boolean;
+}
+
+export interface Success {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success";
+  message?: string | null;
+  structuredContent?: unknown | null;
+}
+
+export interface Swipe {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.Swipe";
+  direction: string;
+  durationMs: number;
+  startX?: number | null;
+  startY?: number | null;
+  endX?: number | null;
+  endY?: number | null;
+  type?: AgentActionType;
+}
+
+export interface TapPoint {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.TapPoint";
+  x: number;
+  y: number;
+  type?: AgentActionType;
+}
+
+export interface Temperature {
+  class: "ai.koog.prompt.llm.LLMCapability.Temperature";
+}
+
+export interface Text {
+  class: "ai.koog.prompt.message.MessagePart.Text";
+  text: string;
+  cacheControl?: PolymorphicCacheControl | null;
+}
+
+export interface Thinking {
+  class: "ai.koog.prompt.llm.LLMCapability.Thinking";
+}
+
+export interface TimeoutReached {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Ended.TimeoutReached";
+  durationMs: number;
+  message?: string | null;
+}
+
 export interface ToolCatalogEntry {
   id: string;
   flavor: ToolFlavor;
@@ -571,6 +1322,10 @@ export interface ToolCatalogEntry {
 
 export interface ToolCatalogResponse {
   tools: ToolCatalogEntry[];
+}
+
+export interface ToolChoice {
+  class: "ai.koog.prompt.llm.LLMCapability.ToolChoice";
 }
 
 export type ToolFlavor = "kotlin" | "yaml" | "scripted";
@@ -588,6 +1343,10 @@ export interface ToolParamDto {
 export interface ToolParamVisibilityDto {
   parameterName: string;
   values: string[];
+}
+
+export interface ToolRecording {
+  tools: unknown[];
 }
 
 export interface ToolRevealRequest {
@@ -619,6 +1378,33 @@ export interface ToolSourceSaveRequest {
 
 export interface ToolUsageCountsResponse {
   counts: Record<string, number>;
+}
+
+export interface Tools {
+  class: "ai.koog.prompt.llm.LLMCapability.Tools";
+}
+
+export interface TrailArgConfig {
+  type: string;
+  description?: string;
+  default?: string;
+}
+
+export interface TrailConfig {
+  context?: string | null;
+  id?: string | null;
+  title?: string | null;
+  description?: string | null;
+  priority?: string | null;
+  source?: TrailSource | null;
+  metadata?: Record<string, string> | null;
+  target?: string | null;
+  platform?: string | null;
+  driver?: string | null;
+  tags?: string[] | null;
+  skip?: string | null;
+  memory?: Record<string, string> | null;
+  args?: Record<string, TrailArgConfig> | null;
 }
 
 export interface TrailDetailResponse {
@@ -682,10 +1468,25 @@ export interface TrailRunnerUiContextDto {
   deviceId?: TrailblazeDeviceId | null;
 }
 
+export interface TrailSource {
+  type?: TrailSourceType | null;
+  reason?: string | null;
+}
+
+export type TrailSourceType = "HANDWRITTEN";
+
 export interface TrailStepEntry {
   kind: string;
   text: string;
   tools?: string[];
+}
+
+export interface TrailblazeAgentTaskStatusChangeLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeAgentTaskStatusChangeLog";
+  agentTaskStatus: AgentTaskStatus;
+  durationMs?: number;
+  session: string;
+  timestamp: string;
 }
 
 export interface TrailblazeDeviceId {
@@ -693,7 +1494,190 @@ export interface TrailblazeDeviceId {
   trailblazeDevicePlatform: TrailblazeDevicePlatform;
 }
 
+export interface TrailblazeDeviceInfo {
+  trailblazeDeviceId: TrailblazeDeviceId;
+  trailblazeDriverType: TrailblazeDriverType;
+  widthPixels: number;
+  heightPixels: number;
+  metadata?: Record<string, string>;
+  locale?: string | null;
+  classifiers?: string[];
+  orientation?: TrailblazeDeviceOrientation;
+  platform?: TrailblazeDevicePlatform;
+}
+
+export type TrailblazeDeviceOrientation = "PORTRAIT" | "LANDSCAPE";
+
 export type TrailblazeDevicePlatform = "ANDROID" | "IOS" | "WEB" | "DESKTOP";
+
+export type TrailblazeDriverType = "ANDROID_ONDEVICE_ACCESSIBILITY" | "ANDROID_ONDEVICE_INSTRUMENTATION" | "IOS_HOST" | "IOS_AXE" | "PLAYWRIGHT_NATIVE" | "PLAYWRIGHT_ELECTRON" | "REVYL_ANDROID" | "REVYL_IOS" | "COMPOSE";
+
+export type TrailblazeImageFormat = "PNG" | "JPEG" | "WEBP";
+
+export interface TrailblazeLlmMessage {
+  role: string;
+  message?: string | null;
+  toolName?: string | null;
+}
+
+export interface TrailblazeLlmModel {
+  trailblazeLlmProvider: TrailblazeLlmProvider;
+  modelId: string;
+  inputCostPerOneMillionTokens: number;
+  outputCostPerOneMillionTokens: number;
+  cachedInputCostPerOneMillionTokens?: number;
+  imageTokenFormula?: ImageTokenFormula;
+  contextLength: number;
+  maxOutputTokens: number;
+  capabilityIds: string[];
+  defaultTemperature?: number | null;
+  screenshotScalingConfig?: ScreenshotScalingConfig;
+  capabilities?: LLMCapability[];
+}
+
+export interface TrailblazeLlmProvider {
+  id: string;
+  display: string;
+  description?: string | null;
+}
+
+export interface TrailblazeLlmRequestLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog";
+  agentTaskStatus: AgentTaskStatus;
+  viewHierarchy: ViewHierarchyTreeNode;
+  viewHierarchyFiltered?: ViewHierarchyTreeNode | null;
+  trailblazeNodeTree?: TrailblazeNode | null;
+  driverMigrationTreeNode?: TrailblazeNode | null;
+  instructions: string;
+  trailblazeLlmModel: TrailblazeLlmModel;
+  llmMessages: TrailblazeLlmMessage[];
+  llmResponse: Assistant[];
+  actions: Action[];
+  toolOptions: TrailblazeToolDescriptor[];
+  llmRequestUsageAndCost?: LlmRequestUsageAndCost | null;
+  screenshotFile?: string | null;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  traceId: string;
+  deviceHeight: number;
+  deviceWidth: number;
+  requestContext?: LlmRequestContext | null;
+  llmRequestLabel?: string | null;
+  screenshotIsAnnotated?: boolean | null;
+}
+
+export type TrailblazeLog = AccessibilityActionLog | DelegatingTrailblazeToolLog | MaestroCommandLog | MaestroDriverLog | McpAgentIterationLog | McpAgentRunLog | McpAgentToolLog | McpAskLog | McpSamplingLog | McpToolCallRequestLog | McpToolCallResponseLog | ObjectiveCompleteLog | ObjectiveStartLog | SelfHealInvokedLog | TrailblazeAgentTaskStatusChangeLog | TrailblazeLlmRequestLog | TrailblazeProgressLog | TrailblazeSessionStatusChangeLog | TrailblazeSnapshotLog | TrailblazeToolLog;
+
+export interface TrailblazeNode {
+  nodeId?: number;
+  ref?: string | null;
+  children?: TrailblazeNode[];
+  bounds?: Bounds | null;
+  driverDetail: DriverNodeDetail;
+}
+
+export interface TrailblazeProgressLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeProgressLog";
+  eventType: string;
+  description: string;
+  deviceId?: TrailblazeDeviceId | null;
+  success?: boolean | null;
+  stepIndex?: number | null;
+  totalSteps?: number | null;
+  progressPercent?: number | null;
+  durationMs?: number;
+  eventData?: Record<string, unknown> | null;
+  session: string;
+  timestamp: string;
+}
+
+export interface TrailblazeSessionStatusChangeLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeSessionStatusChangeLog";
+  sessionStatus: SessionStatus;
+  session: string;
+  timestamp: string;
+}
+
+export interface TrailblazeSnapshotLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeSnapshotLog";
+  displayName?: string | null;
+  screenshotFile: string;
+  viewHierarchy: ViewHierarchyTreeNode;
+  trailblazeNodeTree?: TrailblazeNode | null;
+  driverMigrationTreeNode?: TrailblazeNode | null;
+  viewHierarchyText?: string | null;
+  captureCoverage?: CaptureCoverage | null;
+  deviceWidth: number;
+  deviceHeight: number;
+  session: string;
+  timestamp: string;
+  traceId?: string | null;
+}
+
+export interface TrailblazeTargetAppInfo {
+  appId: string;
+  versionName?: string | null;
+  versionCode?: string | null;
+  buildNumber?: string | null;
+  metadata?: Record<string, string>;
+}
+
+export interface TrailblazeToolDescriptor {
+  name: string;
+  description?: string | null;
+  requiredParameters?: TrailblazeToolParameterDescriptor[];
+  optionalParameters?: TrailblazeToolParameterDescriptor[];
+  source?: TrailblazeToolSourceDescriptor | null;
+  inputSchema?: Record<string, unknown> | null;
+}
+
+export interface TrailblazeToolLog {
+  class: "xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeToolLog";
+  trailblazeTool: OtherTrailblazeTool;
+  toolName: string;
+  successful: boolean;
+  traceId?: string | null;
+  exceptionMessage?: string | null;
+  durationMs: number;
+  session: string;
+  timestamp: string;
+  isRecordable?: boolean;
+  isTopLevelToolCall?: boolean;
+  isVerification?: boolean;
+  dispatchedHostSide?: boolean;
+  rawTrailblazeTool?: OtherTrailblazeTool | null;
+}
+
+export interface TrailblazeToolParameterDescriptor {
+  name: string;
+  type: string;
+  description?: string | null;
+  validValues?: string[] | null;
+  visibleWhen?: TrailblazeToolParameterVisibility | null;
+}
+
+export interface TrailblazeToolParameterVisibility {
+  parameterName: string;
+  values: string[];
+}
+
+export type TrailblazeToolResult = EmptyToolCall | ExceptionThrown | FatalError | InvalidToolCall | MaestroValidationError | MissingRequiredArgs | Success | UnknownTool | UnknownTrailblazeTool;
+
+export interface TrailblazeToolSourceDescriptor {
+  type: TrailblazeToolSourceType;
+  identifier?: string | null;
+  className?: string | null;
+  yamlPath?: string | null;
+  scriptPath?: string | null;
+}
+
+export type TrailblazeToolSourceType = "KOTLIN" | "YAML" | "TYPESCRIPT" | "JAVASCRIPT" | "DYNAMIC";
+
+export interface TrailblazeToolYamlWrapper {
+  name: string;
+  trailblazeTool: unknown;
+}
 
 export interface TrailmapComponent {
   name: string;
@@ -717,6 +1701,26 @@ export interface TrailmapsResponse {
   trailmaps: TrailmapEntry[];
 }
 
+export interface URL {
+  class: "ai.koog.prompt.message.AttachmentContent.URL";
+  url: string;
+}
+
+export interface Unknown {
+  class: "xyz.block.trailblaze.logs.model.SessionStatus.Unknown";
+}
+
+export interface UnknownTool {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.UnknownTool";
+  functionName: string;
+  functionArgs: Record<string, unknown>;
+}
+
+export interface UnknownTrailblazeTool {
+  class: "xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.UnknownTrailblazeTool";
+  command: unknown;
+}
+
 export interface UpdateTrailRequest {
   id: string;
   yaml: string;
@@ -734,6 +1738,171 @@ export interface ValidateTrailResponse {
 export interface ValidationErrorDto {
   message: string;
   line?: number | null;
+}
+
+export interface VerificationStep {
+  class: "xyz.block.trailblaze.yaml.VerificationStep";
+  verify: string;
+  recordable?: boolean;
+  recording?: ToolRecording | null;
+  maxRetries?: number | null;
+  prompt?: string;
+}
+
+export interface ViewHierarchyTreeNode {
+  nodeId?: number;
+  accessibilityText?: string | null;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  centerPoint?: string | null;
+  checked?: boolean;
+  children?: ViewHierarchyTreeNode[];
+  className?: string | null;
+  clickable?: boolean;
+  dimensions?: string | null;
+  enabled?: boolean;
+  focusable?: boolean;
+  focused?: boolean;
+  hintText?: string | null;
+  ignoreBoundsFiltering?: boolean;
+  password?: boolean;
+  resourceId?: string | null;
+  scrollable?: boolean;
+  selected?: boolean;
+  text?: string | null;
+}
+
+export interface WaitForSettle {
+  class: "xyz.block.trailblaze.api.AgentDriverAction.WaitForSettle";
+  timeoutMs: number;
+  type?: AgentActionType;
+}
+
+export interface androidAccessibility {
+  class: "androidAccessibility";
+  className?: string | null;
+  resourceId?: string | null;
+  uniqueId?: string | null;
+  text?: string | null;
+  contentDescription?: string | null;
+  hintText?: string | null;
+  labeledByText?: string | null;
+  stateDescription?: string | null;
+  paneTitle?: string | null;
+  roleDescription?: string | null;
+  composeTestTag?: string | null;
+  isEnabled?: boolean;
+  isClickable?: boolean;
+  isCheckable?: boolean;
+  isChecked?: boolean;
+  isSelected?: boolean;
+  isFocused?: boolean;
+  isEditable?: boolean;
+  isScrollable?: boolean;
+  isPassword?: boolean;
+  isHeading?: boolean;
+  isMultiLine?: boolean;
+  inputType?: number;
+  collectionItemInfo?: CollectionItemInfo | null;
+  packageName?: string | null;
+  tooltipText?: string | null;
+  error?: string | null;
+  isShowingHintText?: boolean;
+  isContentInvalid?: boolean;
+  isVisibleToUser?: boolean;
+  isLongClickable?: boolean;
+  isFocusable?: boolean;
+  isTextSelectable?: boolean;
+  isImportantForAccessibility?: boolean;
+  drawingOrder?: number;
+  maxTextLength?: number;
+  actions?: string[];
+  collectionInfo?: CollectionInfo | null;
+  rangeInfo?: RangeInfo | null;
+}
+
+export interface androidMaestro {
+  class: "androidMaestro";
+  text?: string | null;
+  resourceId?: string | null;
+  accessibilityText?: string | null;
+  className?: string | null;
+  hintText?: string | null;
+  clickable?: boolean;
+  enabled?: boolean;
+  focused?: boolean;
+  checked?: boolean;
+  selected?: boolean;
+  focusable?: boolean;
+  scrollable?: boolean;
+  password?: boolean;
+}
+
+export interface compose {
+  class: "compose";
+  testTag?: string | null;
+  role?: string | null;
+  text?: string | null;
+  editableText?: string | null;
+  contentDescription?: string | null;
+  toggleableState?: string | null;
+  isEnabled?: boolean;
+  isFocused?: boolean;
+  isSelected?: boolean;
+  isPassword?: boolean;
+  hasClickAction?: boolean;
+  hasScrollAction?: boolean;
+}
+
+export interface iosAxe {
+  class: "iosAxe";
+  role?: string | null;
+  subrole?: string | null;
+  roleDescription?: string | null;
+  label?: string | null;
+  value?: string | null;
+  uniqueId?: string | null;
+  type?: string | null;
+  title?: string | null;
+  help?: string | null;
+  customActions?: string[];
+  enabled?: boolean;
+  contentRequired?: boolean;
+  pid?: number | null;
+}
+
+export interface iosMaestro {
+  class: "iosMaestro";
+  text?: string | null;
+  resourceId?: string | null;
+  accessibilityText?: string | null;
+  className?: string | null;
+  hintText?: string | null;
+  clickable?: boolean;
+  enabled?: boolean;
+  focused?: boolean;
+  checked?: boolean;
+  selected?: boolean;
+  focusable?: boolean;
+  scrollable?: boolean;
+  password?: boolean;
+  visible?: boolean;
+  ignoreBoundsFiltering?: boolean;
+}
+
+export interface web {
+  class: "web";
+  ariaRole?: string | null;
+  ariaName?: string | null;
+  ariaDescriptor?: string | null;
+  headingLevel?: number | null;
+  cssSelector?: string | null;
+  dataTestId?: string | null;
+  nthIndex?: number;
+  isInteractive?: boolean;
+  isLandmark?: boolean;
 }
 
 /**

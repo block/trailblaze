@@ -107,7 +107,14 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
         artifact?.let { File(logsDir, "$sessionId/${it.filename}") }?.takeIf { it.exists() }
 
       val spritesFile = resolveFile(spritesArtifact) ?: return@withContext null
-      val spriteInfo = parseSpriteMetadata(File(logsDir, "$sessionId/video_sprites.txt"))
+      val spriteMetaFile = File(logsDir, "$sessionId/video_sprites.txt")
+      // Multi-sheet sprites aren't renderable here (the Compose frame cache loads one image, and
+      // the session views interpret spriteInfo == null as "filePath is a raw video"). Bail to the
+      // screenshot timeline instead; multi-sheet playback in Compose is a follow-up.
+      val sheetCount = spriteMetaFile.takeIf { it.exists() }?.readLines()
+        ?.firstOrNull { it.startsWith("sheets=") }?.substringAfter("=")?.trim()?.toIntOrNull() ?: 1
+      if (sheetCount > 1) return@withContext null
+      val spriteInfo = parseSpriteMetadata(spriteMetaFile)
       // The original video.mp4 still exists on disk after sprite generation but
       // isn't listed as a separate artifact. Probe for it so "Watch Video" works.
       val rawVideoFile = File(logsDir, "$sessionId/video.mp4").takeIf { it.exists() }

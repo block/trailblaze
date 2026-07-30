@@ -152,7 +152,7 @@ class UnifiedRecordingWriterTest {
   @Test
   fun `mergeIntoUnified creates a fresh unified trail from a first recording`() {
     val dir = tempFolder.newFolder()
-    val items = createTrailblazeYaml().decodeTrail(v1RecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"))
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
@@ -168,13 +168,13 @@ class UnifiedRecordingWriterTest {
     val yaml = createTrailblazeYaml()
     UnifiedRecordingWriter.mergeIntoUnified(
       dir,
-      yaml.decodeTrail(v1RecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "androidCart")),
+      recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "androidCart"),
       "android",
     )
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(
       dir,
-      yaml.decodeTrail(v1RecordingYaml(driver = "IOS_HOST", toolName = "iosCart")),
+      recordingItems(driver = "IOS_HOST", toolName = "iosCart"),
       "ios",
     )
 
@@ -189,7 +189,7 @@ class UnifiedRecordingWriterTest {
   fun `mergeIntoUnified refuses to overwrite an unreadable existing trail file`() {
     val dir = tempFolder.newFolder()
     val corrupt = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
-    val items = createTrailblazeYaml().decodeTrail(v1RecordingYaml(driver = "D", toolName = "tapCart"))
+    val items = recordingItems(driver = "D", toolName = "tapCart")
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
@@ -204,9 +204,7 @@ class UnifiedRecordingWriterTest {
   @Test
   fun `mergeIntoUnified reports a multi-tool trailhead as unsupported and writes nothing`() {
     val dir = tempFolder.newFolder()
-    val items = createTrailblazeYaml().decodeTrail(
-      v1RecordingYamlWithMultiToolTrailhead(toolNames = listOf("clearBootstrap", "openBootstrap")),
-    )
+    val items = multiToolTrailheadItems(toolNames = listOf("clearBootstrap", "openBootstrap"))
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
@@ -221,7 +219,7 @@ class UnifiedRecordingWriterTest {
   @Test
   fun `mergeIntoUnified keeps a single-tool trailhead in the unified trail`() {
     val dir = tempFolder.newFolder()
-    val items = createTrailblazeYaml().decodeTrail(v1RecordingYamlWithMultiToolTrailhead(toolNames = listOf("openBootstrap")))
+    val items = multiToolTrailheadItems(toolNames = listOf("openBootstrap"))
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
@@ -247,7 +245,7 @@ class UnifiedRecordingWriterTest {
   fun `mergeIntoUnified returns NoTarget for a parentless orphan path`() {
     // An orphan file with no parent directory resolves to no unified target. Routers never send
     // such a path to UNIFIED, so this is defensive — assert it neither writes nor throws.
-    val items = createTrailblazeYaml().decodeTrail(v1RecordingYaml(driver = "D", toolName = "tapCart"))
+    val items = recordingItems(driver = "D", toolName = "tapCart")
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(File("orphan.trail.yaml"), items, "android")
 
@@ -256,33 +254,31 @@ class UnifiedRecordingWriterTest {
 
   // --- fixtures ---
 
-  /** A minimal v1 `recording.trail.yaml` body with one config + one recorded step. */
+  /** The lowered v1 items of a minimal one-config + one-recorded-step recording — the merge input. */
+  private fun recordingItems(driver: String, toolName: String): List<TrailYamlItem> = listOf(
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
+    TrailYamlItem.PromptsTrailItem(
+      listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
+    ),
+  )
+
+  /** The same recording rendered as a legacy v1 `recording.trail.yaml` body (the v1 encoder is kept). */
   private fun v1RecordingYaml(driver: String, toolName: String): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
-        ),
-      ),
-    )
+    createTrailblazeYaml().encodeToString(recordingItems(driver, toolName))
 
   /**
-   * A v1 `recording.trail.yaml` whose trailhead (step 0) carries [toolNames] as its `tools:` list,
-   * plus one ordinary recorded step. A trailhead with more than one tool has no unified representation.
+   * The lowered v1 items whose trailhead (step 0) carries [toolNames] as its `tools:` list, plus one
+   * ordinary recorded step. A trailhead with more than one tool has no unified representation.
    */
-  private fun v1RecordingYamlWithMultiToolTrailhead(toolNames: List<String>): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
-        TrailYamlItem.TrailheadTrailItem(
-          TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) }),
-        ),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
-        ),
-      ),
-    )
+  private fun multiToolTrailheadItems(toolNames: List<String>): List<TrailYamlItem> = listOf(
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.TrailheadTrailItem(
+      TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) }),
+    ),
+    TrailYamlItem.PromptsTrailItem(
+      listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
+    ),
+  )
 
   private fun tool(name: String) = TrailblazeToolYamlWrapper(
     name = name,

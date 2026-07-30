@@ -205,6 +205,16 @@ class BaseComposeTest(
       }
     }
 
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      val trailUrl = trailConfig?.metadata?.get("testRailUrl")
+      throw TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (trailUrl?.let { " $it" } ?: ""),
+      )
+    }
+
     for (item in trailItems) {
       val itemResult =
         when (item) {

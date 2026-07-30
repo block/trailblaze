@@ -190,12 +190,11 @@ object TrailIndexBuilder {
       val yaml = file.readText()
       val tb = createTrailblazeYaml()
       // `decodeTrailDocument` also runs inside `extractTrailConfig` below, so this decodes twice. Kept
-      // separate deliberately: it avoids duplicating extractTrailConfig's V1/Unified config-lowering
-      // branches here, and this whole result is memoized per file mtime (`configCache`), so the second
-      // parse is paid once per changed file at scan time, not per request.
+      // separate deliberately: it avoids duplicating extractTrailConfig's config-lowering here, and
+      // this whole result is memoized per file mtime (`configCache`), so the second parse is paid
+      // once per changed file at scan time, not per request.
       val format = when (tb.decodeTrailDocument(yaml)) {
         is xyz.block.trailblaze.yaml.unified.TrailDocument.Unified -> "unified"
-        is xyz.block.trailblaze.yaml.unified.TrailDocument.V1 -> "v1"
       }
       val config = tb.extractTrailConfig(yaml)
       val result = CachedConfig(

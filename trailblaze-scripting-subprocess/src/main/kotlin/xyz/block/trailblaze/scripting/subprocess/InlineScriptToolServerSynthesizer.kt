@@ -3,7 +3,6 @@ package xyz.block.trailblaze.scripting.subprocess
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.scripting.bundle.SdkBundleResource
@@ -124,7 +123,7 @@ object InlineScriptToolServerSynthesizer {
     val toolRegistrations = tools.joinToString("\n\n") { tool ->
       val toolNameLiteral = tool.name.asJsStringLiteral()
       val descriptionLiteral = tool.description?.asJsStringLiteral() ?: "undefined"
-      val resolvedMeta = mergeRequiresHost(tool.meta, tool.requiresHost)
+      val resolvedMeta = SubprocessToolRegistrar.advertisedMeta(tool)
       val metaLiteral = resolvedMeta?.let { JSON.encodeToString(JsonObject.serializer(), it) } ?: "undefined"
       val inputSchemaLiteral = JSON.encodeToString(JsonObject.serializer(), tool.inputSchema)
       """
@@ -276,13 +275,6 @@ object InlineScriptToolServerSynthesizer {
         return typeof value === "object" && value !== null && !Array.isArray(value);
       }
     """.trimIndent() + "\n"
-  }
-
-  private fun mergeRequiresHost(meta: JsonObject?, requiresHost: Boolean): JsonObject? {
-    if (!requiresHost) return meta
-    val merged = (meta?.toMutableMap() ?: mutableMapOf())
-    merged["trailblaze/requiresHost"] = JsonPrimitive(true)
-    return JsonObject(merged)
   }
 
   private fun sanitize(name: String): String = buildString {

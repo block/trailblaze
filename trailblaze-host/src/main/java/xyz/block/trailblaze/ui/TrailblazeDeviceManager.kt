@@ -37,10 +37,12 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
+import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
+import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -387,6 +389,11 @@ class TrailblazeDeviceManager(
     initialMemorySensitiveSeeds: Map<String, String> = emptyMap(),
     // Per-run override (Run-config dialog); null = appConfig default.
     captureNetworkTrafficOverride: Boolean? = null,
+    // Per-run video-capture override (Trail Runner / Run-config "Capture video" toggle); null =
+    // default (record). Threaded into DesktopAppRunYamlParams.captureVideo so it reaches the
+    // web / Electron self-instrumented capture path, which the SessionCaptureCoordinator (and thus
+    // getOrCreateSessionResolution's captureVideoOverride) skips for WEB.
+    captureVideoOverride: Boolean? = null,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     // Load-time {{VAR}} template resolution — same contract as the daemon's /cli/run handler
@@ -472,6 +479,7 @@ class TrailblazeDeviceManager(
       onProgressMessage = {},
       onConnectionStatus = {},
       additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),
+      captureVideo = captureVideoOverride,
       onComplete = onComplete,
     )
 
@@ -539,13 +547,10 @@ class TrailblazeDeviceManager(
       // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
       // coordinator's reservation pattern makes that second call a no-op so the
       // appConfig-derived options here are what win for MCP-only paths.
-      captureOptions = CaptureOptions(
+      captureOptions = CaptureOptions.hostCaptureOptions(
         captureVideo = captureVideoOverride ?: true,
         captureLogcat = captureLogcatOverride ?: appConfig.captureLogcat,
         captureIosLogs = captureIosLogsOverride ?: appConfig.captureIosLogs,
-        spriteFrameFps = 2,
-        spriteFrameHeight = 720,
-        spriteQuality = 80,
       )
     }
 
@@ -561,6 +566,9 @@ class TrailblazeDeviceManager(
         options = captureOptions,
         appId = captureAppId,
       )
+      // Experimental opt-in (gated internally, idempotent like the capture start above); restored
+      // by the finalization barrier every session-end path runs.
+      SessionAnimationDisabler.startForSession(startCaptureFor, trailblazeDeviceId)
     }
     return resolution
   }
@@ -777,17 +785,12 @@ class TrailblazeDeviceManager(
         getCurrentScreenStateViaDriver(trailblazeDeviceId)
       }
       TrailblazeDriverType.IOS_AXE -> {
-        val axeDevice = deviceState.device as? xyz.block.trailblaze.host.devices.AxeConnectedDevice
-        if (axeDevice == null) {
-          Console.log("⚠️ IOS_AXE driver type but connected device is not AxeConnectedDevice")
-          null
-        } else {
-          xyz.block.trailblaze.host.screenstate.AxeScreenState(
-            udid = axeDevice.udid,
-            deviceWidth = axeDevice.deviceWidth,
-            deviceHeight = axeDevice.deviceHeight,
-          )
-        }
+        // This manager only holds device *summaries*; a host-native iOS driver's screen state
+        // lives on its live IosNativeConnectedDevice in the MCP bridge's persistent-device
+        // registry, and the bridge serves it before delegating here. Reaching this arm means
+        // no live connection exists for the device.
+        Console.log("⚠️ $driverType has no live connected device to capture screen state from")
+        null
       }
       TrailblazeDriverType.COMPOSE -> {
         // Not currently supported for direct screen capture
@@ -1009,11 +1012,18 @@ class TrailblazeDeviceManager(
           )
         }
 
-        // Connected iOS Simulators — always emit IOS_HOST; emit IOS_AXE only when the
-        // `axe` CLI is installed on this host. Otherwise users would see an IOS_AXE
-        // entry they can't actually use, which would fail at connect time with a
-        // confusing error.
-        val axeAvailable = xyz.block.trailblaze.host.axe.AxeCli.isAvailable()
+        // Connected iOS Simulators — always emit IOS_HOST; emit each host-native iOS
+        // driver only when its host dependency probe passes. Otherwise users would see
+        // an entry they can't actually use, which would fail at connect time with a
+        // confusing error. The probe is fail-closed by construction: a new member of
+        // IOS_HOST_NATIVE_DRIVER_TYPES with no branch here fails discovery loudly
+        // instead of silently listing (or hiding) the new driver.
+        val availableIosNativeDrivers = TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES.filter { driverType ->
+          when (driverType) {
+            TrailblazeDriverType.IOS_AXE -> xyz.block.trailblaze.host.axe.AxeCli.isAvailable()
+            else -> error("No availability probe for host-native iOS driver $driverType — add a branch here")
+          }
+        }
         iosSimulators.forEach { (udid, name) ->
           add(
             TrailblazeConnectedDeviceSummary(
@@ -1022,10 +1032,10 @@ class TrailblazeDeviceManager(
               description = name,
             )
           )
-          if (axeAvailable) {
+          availableIosNativeDrivers.forEach { driverType ->
             add(
               TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = TrailblazeDriverType.IOS_AXE,
+                trailblazeDriverType = driverType,
                 instanceId = udid,
                 description = name,
               )
@@ -1659,12 +1669,20 @@ class TrailblazeDeviceManager(
     /**
      * Quick probe to check if an Electron app's CDP endpoint is responding.
      * Uses a 500ms connect/read timeout — if nothing is listening, this fails fast.
+     *
+     * Resolves the base URL through [DeviceConnectionService.resolveElectronCdpUrl] (the same
+     * resolver the connect path attaches with) so an explicit `TRAILBLAZE_ELECTRON_CDP_URL`
+     * makes the tile discoverable — not just `TRAILBLAZE_ELECTRON_CDP_PORT`. Otherwise the tile
+     * could be attachable yet never listed.
      */
     internal fun isElectronCdpAvailable(): Boolean {
       var connection: HttpURLConnection? = null
       return try {
-        val port = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT")?.toIntOrNull() ?: 9222
-        val url = URI("http://localhost:$port/json/version").toURL()
+        val baseUrl = DeviceConnectionService.resolveElectronCdpUrl(
+          cdpUrlEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_URL"),
+          cdpPortEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT"),
+        )
+        val url = URI("${baseUrl.trimEnd('/')}/json/version").toURL()
         connection = url.openConnection() as HttpURLConnection
         connection.connectTimeout = 500
         connection.readTimeout = 500

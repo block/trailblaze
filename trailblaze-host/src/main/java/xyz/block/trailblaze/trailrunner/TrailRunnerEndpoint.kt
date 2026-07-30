@@ -7,7 +7,10 @@ import io.ktor.server.application.install
 import io.ktor.server.request.path
 import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Routing
+import io.ktor.server.routing.application
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -82,6 +85,21 @@ object TrailRunnerEndpoint {
       // Typed /rpc/<Name> endpoints (sessions/tools/trailmaps) — the migration target the UI's
       // generated createTrailRunnerRpcClient calls, sharing the route builders' backing logic.
       trailRunnerRpcRoutes(deps)
+    }
+    // Prewarm the tool catalog off the server-lifecycle scope so the first Tools-page visit (and
+    // first LSP schema fetch) doesn't pay the cold build. ToolCatalogCache is mutex-serialized:
+    // a request arriving mid-warm joins the in-flight build rather than starting its own. With the
+    // analyzer's on-disk content-hash cache, this is ~0.5s of background work on every launch after
+    // the first for a given workspace content state. A failed warm just logs — the first real
+    // request builds on demand exactly as before.
+    routing.application.launch(Dispatchers.IO) {
+      runCatching { ToolCatalogCache.get() }
+        // Stay cancellation-transparent (matching the cache's own lookup): a daemon shutting
+        // down mid-warm should cancel this coroutine, not log-and-complete it.
+        .onFailure {
+          if (it is CancellationException) throw it
+          Console.log("[TrailRunnerEndpoint] tool-catalog prewarm failed (first request will rebuild): ${it.message}")
+        }
     }
   }
 }

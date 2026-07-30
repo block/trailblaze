@@ -41,6 +41,7 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TemplateHelpers
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
@@ -305,6 +306,12 @@ fun SessionsTabComposableJvm(
         runBlocking {
           liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
             .generateUnifiedRecordedYaml(selectedSession.trailConfig)
+        }
+      },
+      generateRecordingItems = {
+        runBlocking {
+          liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
+            .generateRecordedTrailItems(selectedSession.trailConfig)
         }
       },
       session = selectedSession,

@@ -1851,7 +1851,10 @@ private fun cliTryStartDaemon(port: Int): Boolean {
   if (started) {
     Console.log("Trailblaze daemon started.")
   } else {
-    Console.error("Daemon did not start within 30s. If a source build is in progress it may need more time.")
+    Console.error(
+      "Daemon did not start within ${DaemonClient.MAX_WAIT_FOR_DAEMON_MS / 1000}s. " +
+        "If a source build is in progress it may need more time.",
+    )
     Console.error("Run with --foreground to see startup output directly.")
   }
   return started

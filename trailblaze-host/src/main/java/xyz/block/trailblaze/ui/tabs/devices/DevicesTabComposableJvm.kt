@@ -33,7 +33,7 @@ import maestro.Driver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.devices.AxeConnectedDevice
+import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.WebBrowserState
@@ -207,8 +207,10 @@ private fun MobileDevicePreviewPanel(
                     val stream = MaestroDeviceScreenStream(driver)
                     previewState = MobilePreviewState.Connected(driver, stream)
                   }
-                  is AxeConnectedDevice -> {
-                    previewState = MobilePreviewState.Error("Live preview not yet supported for IOS_AXE driver")
+                  is IosNativeConnectedDevice -> {
+                    previewState = MobilePreviewState.Error(
+                      "Live preview not yet supported for ${connectedDevice.trailblazeDriverType} driver",
+                    )
                   }
                   null -> {
                     previewState = MobilePreviewState.Error("Device not found: ${deviceId.instanceId}")

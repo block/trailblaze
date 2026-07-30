@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -35,24 +36,35 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 class AndroidSendBroadcastSerializationTest {
   private val trailblazeYaml = createTrailblazeYaml(setOf(AndroidSendBroadcastTrailblazeTool::class))
 
+  private val androidClassifier = listOf(TrailblazeDeviceClassifier("android"))
+
+  /** The recorded step's single tool, as the broadcast tool under test. */
+  private fun decodeSingleBroadcast(yaml: String): AndroidSendBroadcastTrailblazeTool =
+    trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.single()
+      .trailblazeTool as AndroidSendBroadcastTrailblazeTool
+
   @Test
   fun deserializeBroadcastWithStringExtras() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: com.example.app.DEBUG
-        componentPackage: com.example.app
-        componentClass: com.example.app.DebugBroadcastReceiver
-        extras:
-          - key: enable_test_mode
-            value: "1"
-          - key: another_key
-            value: "hello"
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: com.example.app.DEBUG
+            componentPackage: com.example.app
+            componentClass: com.example.app.DebugBroadcastReceiver
+            extras:
+              - key: enable_test_mode
+                value: "1"
+              - key: another_key
+                value: "hello"
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    val tool = (trailItems.single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
+    val tool = decodeSingleBroadcast(yaml)
 
     assertThat(tool.action).isEqualTo("com.example.app.DEBUG")
     assertThat(tool.componentPackage).isEqualTo("com.example.app")
@@ -68,32 +80,34 @@ class AndroidSendBroadcastSerializationTest {
   @Test
   fun deserializeBroadcastWithTypedExtras() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: com.example.ACTION
-        componentPackage: com.example
-        componentClass: com.example.Receiver
-        extras:
-          - key: flag_string
-            value: "hello"
-            type: string
-          - key: flag_bool
-            value: "true"
-            type: boolean
-          - key: flag_int
-            value: "42"
-            type: int
-          - key: flag_long
-            value: "4200000000"
-            type: long
-          - key: flag_float
-            value: "3.14"
-            type: float
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: com.example.ACTION
+            componentPackage: com.example
+            componentClass: com.example.Receiver
+            extras:
+              - key: flag_string
+                value: "hello"
+                type: string
+              - key: flag_bool
+                value: "true"
+                type: boolean
+              - key: flag_int
+                value: "42"
+                type: int
+              - key: flag_long
+                value: "4200000000"
+                type: long
+              - key: flag_float
+                value: "3.14"
+                type: float
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    val tool = (trailItems.single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
+    val tool = decodeSingleBroadcast(yaml)
 
     val byKey = tool.extras.associateBy { it.key }
     assertThat(byKey["flag_string"]!!.toTypedValue()).isInstanceOf(String::class).isEqualTo("hello")
@@ -106,19 +120,22 @@ class AndroidSendBroadcastSerializationTest {
   @Test
   fun typeNameIsCaseInsensitive() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: a
-        componentPackage: p
-        componentClass: c
-        extras:
-          - key: flag
-            value: "7"
-            type: INT
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: a
+            componentPackage: p
+            componentClass: c
+            extras:
+              - key: flag
+                value: "7"
+                type: INT
     """.trimIndent()
 
-    val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
+    val tool = decodeSingleBroadcast(yaml)
 
     assertThat(tool.extras.single().toTypedValue()).isEqualTo(7)
   }
@@ -141,22 +158,25 @@ class AndroidSendBroadcastSerializationTest {
   @Test
   fun cliFlagAliasesResolveToTheRightJavaType() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: a
-        componentPackage: p
-        componentClass: c
-        extras:
-          - key: shortEi
-            value: "42"
-            type: ei
-          - key: shortEz
-            value: "true"
-            type: ez
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: a
+            componentPackage: p
+            componentClass: c
+            extras:
+              - key: shortEi
+                value: "42"
+                type: ei
+              - key: shortEz
+                value: "true"
+                type: ez
     """.trimIndent()
 
-    val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
+    val tool = decodeSingleBroadcast(yaml)
 
     val byKey = tool.extras.associateBy { it.key }
     // Storage preserves whatever the author wrote; `toTypedValue()` resolves both short
@@ -179,17 +199,21 @@ class AndroidSendBroadcastSerializationTest {
   @Test
   fun unknownKeyInExtraObjectReportsHint() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: a
-        componentPackage: p
-        componentClass: c
-        extras:
-          - key: flag
-            valu: "oops"
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: a
+            componentPackage: p
+            componentClass: c
+            extras:
+              - key: flag
+                valu: "oops"
     """.trimIndent()
 
-    assertFailure { trailblazeYaml.decodeTrail(yaml) }
+    assertFailure { trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier) }
       .hasMessage { msg ->
         msg.contains("valu")
       }
@@ -198,25 +222,31 @@ class AndroidSendBroadcastSerializationTest {
   @Test
   fun roundTripPreservesExtrasInListForm() {
     val yaml = """
-- tools:
-    - android_sendBroadcast:
-        action: com.example.ACTION
-        componentPackage: com.example
-        componentClass: com.example.Receiver
-        extras:
-          - key: bare
-            value: "1"
-          - key: count
-            value: "42"
-            type: int
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - android_sendBroadcast:
+            action: com.example.ACTION
+            componentPackage: com.example
+            componentClass: com.example.Receiver
+            extras:
+              - key: bare
+                value: "1"
+              - key: count
+                value: "42"
+                type: int
     """.trimIndent()
 
-    val decoded = trailblazeYaml.decodeTrail(yaml)
-    val reEncoded = trailblazeYaml.encodeToString(decoded)
-    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
+    // Round-trip the recorded tool wrappers themselves (the v1 trail-document string round-trip is
+    // gone); the broadcast tool + its typed extras surviving encode-then-decode is the contract.
+    val decodedTools = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(decodedTools))
 
-    val tool = (reDecoded.single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
+    val tool = reDecoded.single().trailblazeTool as AndroidSendBroadcastTrailblazeTool
 
     val byKey = tool.extras.associateBy { it.key }
     assertThat(byKey["bare"]).isEqualTo(BroadcastExtra(key = "bare", value = "1", type = "string"))

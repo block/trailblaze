@@ -484,7 +484,10 @@ fun RecordingScreenComposable(
               val yamlToTransform = recorder.generateTrailYaml()
               scope.launch {
                 try {
-                  val result = llmService.transformToNaturalLanguageTrail(yamlToTransform)
+                  val result = llmService.transformToNaturalLanguageTrail(
+                    recordedYaml = yamlToTransform,
+                    classifier = driverType.platform.asTrailblazeDeviceClassifier().classifier,
+                  )
                   generatedTrailYaml = result
                 } catch (e: Exception) {
                   transformError = e.message ?: "LLM transformation failed"

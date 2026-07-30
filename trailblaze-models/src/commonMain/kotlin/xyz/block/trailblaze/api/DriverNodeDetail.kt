@@ -663,7 +663,11 @@ sealed interface DriverNodeDetail {
     val type: String? = null,
     /** **Matchable.** AXTitle — window/section title. Rarely set on individual elements. */
     val title: String? = null,
-    /** **Display-only.** AXHelp — tooltip/help text. */
+    /**
+     * **Display-only for native `iosAxe` selectors** (no `helpRegex` field exists), but the
+     * `iosMaestro` compatibility bridge matches recorded `hintTextRegex` against it.
+     * AXHelp — tooltip/help text.
+     */
     val help: String? = null,
     /** **Matchable.** Apple's custom accessibility gesture actions (e.g. ["Edit mode", "Today"]). */
     val customActions: List<String> = emptyList(),

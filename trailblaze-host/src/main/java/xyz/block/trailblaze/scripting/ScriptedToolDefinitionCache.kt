@@ -4,10 +4,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
@@ -85,9 +87,11 @@ internal class ScriptedToolDefinitionCache(
    * its `.ts` files (computed by [computeContentKey]). Returns `null` on miss, on
    * unreadable file, on parse failure, OR when the entry's format version doesn't
    * match this codebase's expected format. The caller treats every `null` as
-   * "subprocess required."
+   * "subprocess required." A hit carries the run's per-tool [AnalyzerOutcome.errors]
+   * alongside the extracted tools — the analyzer rethrows those the same way a live
+   * subprocess run would.
    */
-  fun lookup(trailmapToolsDir: File, contentKey: String): List<ScriptedToolDefinition>? {
+  fun lookup(trailmapToolsDir: File, contentKey: String): AnalyzerOutcome? {
     val file = cacheFileFor(trailmapToolsDir, contentKey)
     if (!file.isFile) return null
     return try {
@@ -100,7 +104,10 @@ internal class ScriptedToolDefinitionCache(
         )
         return null
       }
-      entry.tools.map { it.toDefinition() }
+      AnalyzerOutcome(
+        tools = entry.tools.map { it.toDefinition() },
+        errors = entry.errors.map { it.toError() },
+      )
     } catch (e: kotlin.coroutines.cancellation.CancellationException) {
       // Bubble cancellation up — analyze() runs inside a coroutine and a
       // cancellation propagating through cache lookup must not be swallowed.
@@ -124,7 +131,8 @@ internal class ScriptedToolDefinitionCache(
   }
 
   /**
-   * Atomically write [defs] to the cache file for ([trailmapToolsDir], [contentKey]).
+   * Atomically write an analyzer run's [outcome] (extracted tools plus any per-tool errors
+   * from the same run) to the cache file for ([trailmapToolsDir], [contentKey]).
    * Writes go to a sibling `.tmp` file first and are then renamed onto the target so a
    * concurrent reader never observes a partially-written file (and a crash between
    * `writeText` and `rename` leaves a stray `.tmp` rather than a corrupt cache entry).
@@ -132,7 +140,7 @@ internal class ScriptedToolDefinitionCache(
    * Returns silently on any I/O failure; the caller already has the freshly-computed
    * result so a write miss only means the next run re-spawns the subprocess.
    */
-  fun put(trailmapToolsDir: File, contentKey: String, defs: List<ScriptedToolDefinition>) {
+  fun put(trailmapToolsDir: File, contentKey: String, outcome: AnalyzerOutcome) {
     val file = cacheFileFor(trailmapToolsDir, contentKey)
     val parent = file.parentFile
     var tmp: File? = null
@@ -140,7 +148,8 @@ internal class ScriptedToolDefinitionCache(
       parent.mkdirs()
       val entry = CacheEntry(
         version = CACHE_FORMAT_VERSION,
-        tools = defs.map { CachedTool.fromDefinition(it) },
+        tools = outcome.tools.map { CachedTool.fromDefinition(it) },
+        errors = outcome.errors.map { CachedError.fromError(it) },
       )
       // Unique tmp filename via `Files.createTempFile` so two concurrent writers
       // (parallel daemon starts, multiple `trailblaze check` invocations sharing
@@ -228,8 +237,14 @@ internal class ScriptedToolDefinitionCache(
      * generator config changes — those flow through [dependencyKey] which is already
      * part of the cache filename, so a content/dep change writes a new file rather
      * than colliding with an existing one of incompatible shape.
+     *
+     * v2: entries carry per-tool `errors` (mixed-outcome runs are now cached) and
+     * `uncapturedSpec` on each tool. An OLD reader given a v2 entry would silently
+     * drop both (`ignoreUnknownKeys`) and misreport a mixed run as clean, so the
+     * bump — which also flows into [computeContentKey]'s digest prefix — keeps the
+     * two formats from ever sharing a cache filename.
      */
-    private const val CACHE_FORMAT_VERSION: Int = 1
+    private const val CACHE_FORMAT_VERSION: Int = 2
 
     private val JSON = Json {
       ignoreUnknownKeys = true
@@ -238,9 +253,19 @@ internal class ScriptedToolDefinitionCache(
 
     /**
      * Compose a per-trailmap content hash over [tsFiles] (the sorted list the analyzer
-     * would feed the subprocess) and the analyzer's ambient [dependencyKey]. The
-     * resulting hex string is stable across runs as long as every input is
-     * byte-identical, and it's safe to use as a filename (lowercase hex only).
+     * would feed the subprocess), the trailmap-local [declarationFiles], and the
+     * analyzer's ambient [dependencyKey]. The resulting hex string is stable across
+     * runs as long as every input is byte-identical, and it's safe to use as a
+     * filename (lowercase hex only).
+     *
+     * [declarationFiles] are hashed but never subprocess inputs: the shim builds a
+     * TypeScript Program per tool file and follows imports into local `.d.ts` on its
+     * own, so their bytes shape the emitted schemas even though the analyzer
+     * (correctly) keeps them out of the argv. Without them in the key, a `.d.ts` edit
+     * could replay a stale cached schema (code review on PR #5047). A distinct
+     * `D:` label keeps a `.d.ts` from colliding with a `.ts` of the same bytes, and an
+     * empty list contributes no bytes — trailmaps without local declarations keep
+     * their existing keys.
      *
      * The hash mixes in the relative path under [trailmapToolsDir] for each file (not
      * the absolute path) so moving a workspace to a different parent directory
@@ -251,6 +276,7 @@ internal class ScriptedToolDefinitionCache(
       trailmapToolsDir: File,
       tsFiles: List<File>,
       dependencyKey: String,
+      declarationFiles: List<File> = emptyList(),
     ): String {
       val md = MessageDigest.getInstance("SHA-256")
       md.update("ANALYZER_CACHE_V$CACHE_FORMAT_VERSION\n".toByteArray(Charsets.UTF_8))
@@ -259,34 +285,41 @@ internal class ScriptedToolDefinitionCache(
       // it's deterministic even if `tsFiles` carries paths in a non-canonical form.
       val trailmapBase = trailmapToolsDir.absoluteFile.toPath()
       for (file in tsFiles) {
-        val relative = runCatching {
-          trailmapBase.relativize(file.absoluteFile.toPath()).toString().replace('\\', '/')
-        }.getOrElse { file.absolutePath.replace('\\', '/') }
-        md.update("F:$relative\n".toByteArray(Charsets.UTF_8))
-        val read = runCatching { file.readBytes() }
-        if (read.isSuccess) {
-          val bytes = read.getOrThrow()
-          md.update("OK:L:${bytes.size}\n".toByteArray(Charsets.UTF_8))
-          md.update(bytes)
-        } else {
-          // Permission-denied / file-deleted-mid-walk / I/O error. Mix an explicit
-          // sentinel into the digest so an unreadable file does NOT collide with
-          // a legitimately empty file (which would happen if we fell back to
-          // `ByteArray(0)` — Copilot review). An unreadable file thus produces a
-          // different cache key than the same path with empty content; the next
-          // run after the file becomes readable produces yet another key, forcing
-          // a fresh subprocess walk rather than serving a 0-byte-stand-in hit.
-          val e = read.exceptionOrNull()
-          md.update("ERR:${e?.javaClass?.simpleName ?: "Unknown"}\n".toByteArray(Charsets.UTF_8))
-          Console.error(
-            "[ScriptedToolDefinitionAnalyzer] failed to read ${file.absolutePath} while " +
-              "computing cache content key (${e?.javaClass?.simpleName}: ${e?.message ?: "(no message)"}); " +
-              "mixed in unreadable-file sentinel — cache will recompute once the file is readable.",
-          )
-        }
-        md.update(byteArrayOf(0x0A))
+        digestFileInto(md, trailmapBase, file, label = "F")
+      }
+      for (file in declarationFiles) {
+        digestFileInto(md, trailmapBase, file, label = "D")
       }
       return md.digest().toHex()
+    }
+
+    private fun digestFileInto(md: MessageDigest, trailmapBase: Path, file: File, label: String) {
+      val relative = runCatching {
+        trailmapBase.relativize(file.absoluteFile.toPath()).toString().replace('\\', '/')
+      }.getOrElse { file.absolutePath.replace('\\', '/') }
+      md.update("$label:$relative\n".toByteArray(Charsets.UTF_8))
+      val read = runCatching { file.readBytes() }
+      if (read.isSuccess) {
+        val bytes = read.getOrThrow()
+        md.update("OK:L:${bytes.size}\n".toByteArray(Charsets.UTF_8))
+        md.update(bytes)
+      } else {
+        // Permission-denied / file-deleted-mid-walk / I/O error. Mix an explicit
+        // sentinel into the digest so an unreadable file does NOT collide with
+        // a legitimately empty file (which would happen if we fell back to
+        // `ByteArray(0)` — Copilot review). An unreadable file thus produces a
+        // different cache key than the same path with empty content; the next
+        // run after the file becomes readable produces yet another key, forcing
+        // a fresh subprocess walk rather than serving a 0-byte-stand-in hit.
+        val e = read.exceptionOrNull()
+        md.update("ERR:${e?.javaClass?.simpleName ?: "Unknown"}\n".toByteArray(Charsets.UTF_8))
+        Console.error(
+          "[ScriptedToolDefinitionAnalyzer] failed to read ${file.absolutePath} while " +
+            "computing cache content key (${e?.javaClass?.simpleName}: ${e?.message ?: "(no message)"}); " +
+            "mixed in unreadable-file sentinel — cache will recompute once the file is readable.",
+        )
+      }
+      md.update(byteArrayOf(0x0A))
     }
 
     /**
@@ -377,8 +410,8 @@ internal class ScriptedToolDefinitionCache(
      *
      * Returns `null` only when the path is unsuitable for a cache (e.g.
      * [searchFrom] is null). Callers that want to disable caching entirely should
-     * pass `cacheDir = null` to the analyzer constructor, not check this returning
-     * null.
+     * leave the analyzer constructor's `cacheDirProvider` at its `{ null }` default,
+     * not check this returning null.
      */
     fun resolveDefaultCacheDir(searchFrom: File? = File(System.getProperty("user.dir") ?: ".")): File? {
       if (searchFrom == null) return null
@@ -389,6 +422,30 @@ internal class ScriptedToolDefinitionCache(
         current = current.parentFile
       }
       return File(File(searchFrom.absoluteFile, ".trailblaze"), "cache/analyzer")
+    }
+
+    /**
+     * Resolve the cache root from the **currently-selected workspace** rather than the
+     * JVM's launch cwd: `<trails-dir>/.trailblaze/cache/analyzer/`, where the trails dir
+     * is the parent of the `trails/config/` directory [WorkspaceConfigDirHolder] resolves.
+     * That's the same anchor the compile bootstrap uses for every other workspace-generated
+     * `.trailblaze/` artifact (`WorkspaceCompileBootstrap` passes
+     * `workspaceRoot = configDir.parentFile` to `WorkspaceTypeScriptSetup`), so analyzer
+     * cache entries live beside the extracted SDK bundle and travel with the workspace.
+     *
+     * Deliberately no ancestor walk-up here (unlike [resolveDefaultCacheDir]): the holder
+     * already names the workspace exactly, and a walk-up from a workspace sitting directly
+     * under `$HOME` would capture the unrelated user-level `~/.trailblaze/` config dir.
+     *
+     * Falls back to [resolveDefaultCacheDir]'s cwd walk-up when no workspace resolves
+     * (holder not installed, or no workspace selected). Meant to be passed as a
+     * long-lived analyzer's `cacheDirProvider` so the cache location follows Trail Runner
+     * workspace switches (which swap [WorkspaceConfigDirHolder.resolver] at runtime).
+     */
+    fun resolveWorkspaceCacheDir(): File? {
+      val trailsDir = WorkspaceConfigDirHolder.resolver()?.absoluteFile?.parentFile
+        ?: return resolveDefaultCacheDir()
+      return File(File(trailsDir, ".trailblaze"), "cache/analyzer")
     }
 
     /**
@@ -446,6 +503,7 @@ internal class ScriptedToolDefinitionCache(
   private data class CacheEntry(
     val version: Int,
     val tools: List<CachedTool> = emptyList(),
+    val errors: List<CachedError> = emptyList(),
   )
 
   @Serializable
@@ -457,6 +515,7 @@ internal class ScriptedToolDefinitionCache(
     val inputSchema: JsonObject,
     val outputSchema: JsonObject,
     val spec: JsonObject? = null,
+    val uncapturedSpec: Boolean = false,
   ) {
     fun toDefinition(): ScriptedToolDefinition = ScriptedToolDefinition(
       name = name,
@@ -466,6 +525,7 @@ internal class ScriptedToolDefinitionCache(
       inputSchema = inputSchema,
       outputSchema = outputSchema,
       spec = spec,
+      uncapturedSpec = uncapturedSpec,
     )
 
     companion object {
@@ -477,7 +537,23 @@ internal class ScriptedToolDefinitionCache(
         inputSchema = def.inputSchemaObject,
         outputSchema = def.outputSchemaObject,
         spec = def.spec,
+        uncapturedSpec = def.uncapturedSpec,
       )
+    }
+  }
+
+  @Serializable
+  private data class CachedError(
+    val file: String,
+    val toolName: String? = null,
+    val message: String,
+  ) {
+    fun toError(): ScriptedToolDefinitionError =
+      ScriptedToolDefinitionError(file = file, toolName = toolName, message = message)
+
+    companion object {
+      fun fromError(err: ScriptedToolDefinitionError): CachedError =
+        CachedError(file = err.file, toolName = err.toolName, message = err.message)
     }
   }
 }

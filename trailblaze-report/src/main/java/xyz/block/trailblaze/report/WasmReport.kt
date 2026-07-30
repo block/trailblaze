@@ -8,10 +8,14 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.capture.logcat.LogcatParser
+import xyz.block.trailblaze.capture.model.CaptureFilenames
+import xyz.block.trailblaze.capture.video.SpriteSheetMetadata
 import xyz.block.trailblaze.capture.video.VideoSpriteExtractor
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -25,6 +29,7 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.TimeSource
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -43,42 +48,6 @@ object WasmReport {
   /** Low FPS for WASM embedded frames to keep report file size reasonable. */
   private const val WASM_VIDEO_FPS = 2
 
-  /**
-   * Floor on a sprite's unique-frame count below which it can be degenerate — a handful of
-   * distinct frames can't represent a real test run even a short one. A sprite at or above this
-   * floor always renders.
-   */
-  private const val MIN_USEFUL_UNIQUE_FRAMES = 8
-
-  /**
-   * Total-logical-frame count above which a sub-floor unique count is treated as a near-static
-   * recording stretched across the timeline (massive aliasing) rather than a genuinely short
-   * clip. ~30s at the 2fps sprite sampling — comfortably above any short, low-motion-but-valid
-   * recording, while the canonical broken case (3 unique / 234 total) clears it with huge margin.
-   */
-  private const val MIN_ALIASING_TOTAL_FRAMES = 60
-
-  /**
-   * A sprite is degenerate when its unique (deduplicated) frame count is below
-   * [MIN_USEFUL_UNIQUE_FRAMES] AND either (a) it has lots of total logical frames
-   * ([totalFrameCount] >= [MIN_ALIASING_TOTAL_FRAMES]) — i.e. a near-static recording massively
-   * aliased across the whole timeline, the broken-screenrecord case — or (b) it has fewer unique
-   * frames than the per-step screenshots it would replace. The total-frame rule is the reliable
-   * signal: [stepScreenshotCount] collapses to ~2 in replay mode (recorded steps emit few
-   * screenshot-bearing logs), so it can't be the only denominator. A short healthy clip has
-   * unique ≈ total (little dedup) and a small total, so neither rule fires. [uniqueFrameCount]
-   * null means a legacy sheet with no dedup data — conservatively not degenerate.
-   */
-  internal fun isSpriteDegenerate(
-    uniqueFrameCount: Int?,
-    totalFrameCount: Int,
-    stepScreenshotCount: Int,
-  ): Boolean {
-    if (uniqueFrameCount == null) return false
-    if (uniqueFrameCount >= MIN_USEFUL_UNIQUE_FRAMES) return false
-    return totalFrameCount >= MIN_ALIASING_TOTAL_FRAMES || uniqueFrameCount < stepScreenshotCount
-  }
-
   /** Max raw logcat file size to embed (5MB). Larger files are skipped to keep report small. */
   private const val MAX_LOGCAT_RAW_BYTES = 5L * 1024 * 1024
 
@@ -95,14 +64,25 @@ object WasmReport {
     return compactJsonReformatter.encodeToString(JsonElement.serializer(), jsonElement)
   }
 
+  /**
+   * NOT thread-safe: this object carries mutable shared state ([imageAliases], cleared per
+   * call), so only ONE generate() may run at a time per JVM. All production callers route
+   * through [generateWasmReport], which serializes invocations behind a JVM-wide lock —
+   * new call sites should go through it rather than calling this directly.
+   *
+   * @param reportTemplateFile The report template to inject session data into, or null to
+   *   build from the raw WASM UI project files under [trailblazeUiProjectDir] (a non-null
+   *   template that doesn't exist on disk falls back the same way).
+   */
   fun generate(
     logsRepo: LogsRepo,
     trailblazeUiProjectDir: File,
     outputFile: File,
-    reportTemplateFile: File,
+    reportTemplateFile: File?,
     useRelativeImageUrls: Boolean = false,
-  ) {
+  ): Unit = ReportTiming.stage("WasmReport.generate") {
     Console.log("Encoding JSON data...")
+    val sessionDataStart = TimeSource.Monotonic.markNow()
     val allSessionIds = logsRepo.getSessionIds()
     val sessionToImageFiles = allSessionIds.associateWith { logsRepo.getImagesForSession(it) }
 
@@ -131,29 +111,38 @@ object WasmReport {
 
     // Only build data for sessions that have valid session info
     val perSessionData = buildPerSessionData(logsRepo, validSessionIds, sessionToImageFiles)
+    ReportTiming.log("WasmReport.sessionDataBuild", sessionDataStart)
 
     // Extract video frames for embedding in WASM reports (trimmed to test execution window)
     Console.log("\nExtracting video frames for WASM embedding...")
     val (videoFrameImages, videoTrimInfo, degenerateSpriteSessions) =
-      extractVideoFrames(logsRepo, validSessionIds)
+      ReportTiming.stage("WasmReport.extractVideoFrames") {
+        extractVideoFrames(logsRepo, validSessionIds)
+      }
 
     // Load capture_metadata.json for each session, adjusting timestamps to trimmed window.
     // Sessions whose sprite was degenerate get their VIDEO_FRAMES artifact stripped so the
     // timeline prefers the per-step screenshot slideshow over a near-static frame scrubber.
     Console.log("\nLoading capture metadata...")
     val captureMetadataMap =
-      loadCaptureMetadata(logsRepo, validSessionIds, videoTrimInfo, degenerateSpriteSessions)
+      ReportTiming.stage("WasmReport.loadCaptureMetadata") {
+        loadCaptureMetadata(logsRepo, validSessionIds, videoTrimInfo, degenerateSpriteSessions)
+      }
     val compressedCaptureMetadata = captureMetadataMap.mapValues { (_, json) ->
       compressStringToBase64(json)
     }
 
     // Load device logs (logcat) for each session
     Console.log("\nLoading device logs...")
-    val compressedDeviceLogs = loadAndCompressDeviceLogs(logsRepo, validSessionIds)
+    val compressedDeviceLogs = ReportTiming.stage("WasmReport.loadAndCompressDeviceLogs") {
+      loadAndCompressDeviceLogs(logsRepo, validSessionIds)
+    }
 
     // Load network logs (network.ndjson) for each session
     Console.log("\nLoading network logs...")
-    val compressedNetworkLogs = loadAndCompressNetworkLogs(logsRepo, validSessionIds)
+    val compressedNetworkLogs = ReportTiming.stage("WasmReport.loadAndCompressNetworkLogs") {
+      loadAndCompressNetworkLogs(logsRepo, validSessionIds)
+    }
 
     // When useRelativeImageUrls is true, skip image embedding entirely so the report stays
     // small. This is useful for very large CI runs where embedding hundreds of screenshots
@@ -165,34 +154,36 @@ object WasmReport {
       sessionToImageFiles.mapKeys { it.key.value }
     }
 
-    if (reportTemplateFile.exists()) {
-      Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
-      generateFromTemplate(
-        reportTemplateFile = reportTemplateFile,
-        reportOutputFile = outputFile,
-        sessionJson = sessionJson,
-        sessionInfoJson = sessionInfoJson,
-        sessionToImageFiles = sessionToImageFilesStr,
-        perSessionData = perSessionData,
-        videoFrameImages = videoFrameImages,
-        compressedCaptureMetadata = compressedCaptureMetadata,
-        compressedDeviceLogs = compressedDeviceLogs,
-        compressedNetworkLogs = compressedNetworkLogs,
-      )
-    } else {
-      Console.log("Generating report from raw WASM UI build artifacts...")
-      generateRaw(
-        trailblazeUiProjectDir = trailblazeUiProjectDir,
-        reportOutputFile = outputFile,
-        sessionJson = sessionJson,
-        sessionInfoJson = sessionInfoJson,
-        sessionToImageFiles = sessionToImageFilesStr,
-        perSessionData = perSessionData,
-        videoFrameImages = videoFrameImages,
-        compressedCaptureMetadata = compressedCaptureMetadata,
-        compressedDeviceLogs = compressedDeviceLogs,
-        compressedNetworkLogs = compressedNetworkLogs,
-      )
+    ReportTiming.stage("WasmReport.templateAndWrite") {
+      if (reportTemplateFile != null && reportTemplateFile.exists()) {
+        Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
+        generateFromTemplate(
+          reportTemplateFile = reportTemplateFile,
+          reportOutputFile = outputFile,
+          sessionJson = sessionJson,
+          sessionInfoJson = sessionInfoJson,
+          sessionToImageFiles = sessionToImageFilesStr,
+          perSessionData = perSessionData,
+          videoFrameImages = videoFrameImages,
+          compressedCaptureMetadata = compressedCaptureMetadata,
+          compressedDeviceLogs = compressedDeviceLogs,
+          compressedNetworkLogs = compressedNetworkLogs,
+        )
+      } else {
+        Console.log("Generating report from raw WASM UI build artifacts...")
+        generateRaw(
+          trailblazeUiProjectDir = trailblazeUiProjectDir,
+          reportOutputFile = outputFile,
+          sessionJson = sessionJson,
+          sessionInfoJson = sessionInfoJson,
+          sessionToImageFiles = sessionToImageFilesStr,
+          perSessionData = perSessionData,
+          videoFrameImages = videoFrameImages,
+          compressedCaptureMetadata = compressedCaptureMetadata,
+          compressedDeviceLogs = compressedDeviceLogs,
+          compressedNetworkLogs = compressedNetworkLogs,
+        )
+      }
     }
 
     Console.log("\n✅ Success!")
@@ -217,22 +208,13 @@ object WasmReport {
 
   private fun compressPerSessionData(
     perSessionData: Map<String, PerSessionData>,
-  ): Map<String, String> {
-    val startTime = System.currentTimeMillis()
-
-    val compressedLogs = runBlocking(Dispatchers.Default) {
-      perSessionData.entries.map { (sessionId, data) ->
-        async {
-          val logsJson = compactJson(TrailblazeJsonInstance.encodeToString(data.logs))
-          sessionId to compressStringToBase64(logsJson)
-        }
-      }.awaitAll().toMap()
-    }
-
-    val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-    Console.log("  ✅ Compressed ${perSessionData.size} sessions in ${elapsed.toInt()}s")
-
-    return compressedLogs
+  ): Map<String, String> = runBlocking(Dispatchers.Default) {
+    perSessionData.entries.map { (sessionId, data) ->
+      async {
+        val logsJson = compactJson(TrailblazeJsonInstance.encodeToString(data.logs))
+        sessionId to compressStringToBase64(logsJson)
+      }
+    }.awaitAll().toMap()
   }
 
   private fun generateFromTemplate(
@@ -252,10 +234,14 @@ object WasmReport {
     val compressedSessionJson = compressStringToBase64(sessionJson)
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
-    val compressedPerSessionLogs = compressPerSessionData(perSessionData)
+    val compressedPerSessionLogs = ReportTiming.stage("WasmReport.compressPerSessionData") {
+      compressPerSessionData(perSessionData)
+    }
 
     Console.log("\nCompressing and encoding images...")
-    val compressedImages = compressImages(sessionToImageFiles, videoFrameImages)
+    val compressedImages = ReportTiming.stage("WasmReport.compressImages") {
+      compressImages(sessionToImageFiles, videoFrameImages)
+    }
 
     // The template already contains working WASM loader, webpack patch, and JS loader scripts
     // from the generateRaw() build step. We only need to replace the compressed data block
@@ -370,9 +356,13 @@ object WasmReport {
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
     Console.log("\nCompressing per-session data...")
-    val compressedPerSessionLogs = compressPerSessionData(perSessionData)
+    val compressedPerSessionLogs = ReportTiming.stage("WasmReport.compressPerSessionData") {
+      compressPerSessionData(perSessionData)
+    }
 
-    val compressedImages = compressImages(sessionToImageFiles, videoFrameImages)
+    val compressedImages = ReportTiming.stage("WasmReport.compressImages") {
+      compressImages(sessionToImageFiles, videoFrameImages)
+    }
 
     val rawTemplate = indexHtmlFile.readText()
     val compressedDataPlaceholder = "window.trailblaze_report_compressed = {};"
@@ -1143,28 +1133,45 @@ object WasmReport {
     val spriteFile = File(sessionDir, filename)
     if (!spriteFile.exists()) return SessionVideoFrames.EMPTY
 
-    // Parse sprite metadata
+    // Parse sprite metadata via the shared cross-language contract (see SpriteSheetMetadata;
+    // parse + acceptance rules are locked by sprite-metadata-parity-fixtures.json).
     val metaFile = File(sessionDir, "video_sprites.txt")
     if (!metaFile.exists()) return SessionVideoFrames.EMPTY
-    val props = metaFile.readLines().associate {
-      val (k, v) = it.split("=", limit = 2)
-      k.trim() to v.trim()
-    }
-    val fps = props["fps"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
-    val frameCount = props["frames"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
-    val frameHeight = props["height"]?.toIntOrNull() ?: return SessionVideoFrames.EMPTY
-    val columns = props["columns"]?.toIntOrNull() ?: 1
-    val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }
-    val uniqueFrameCount = props["uniqueFrames"]?.toIntOrNull()
-    val rows = props["rows"]?.toIntOrNull() ?: (uniqueFrameCount ?: frameCount)
+    val meta = SpriteSheetMetadata.parse(metaFile.readText()) ?: return SessionVideoFrames.EMPTY
+    val fps = meta.fps
+    val frameCount = meta.frames
+    val frameHeight = meta.height
+    val columns = meta.columns
 
     // Trim to test execution window
     val logs = logsRepo.getCachedLogsForSession(sessionId)
     val steps = stepScreenshotCount(logs)
-    if (isSpriteDegenerate(uniqueFrameCount, frameCount, steps)) {
+    val rejection = SpriteSheetMetadata.rejectionReason(meta, steps)
+    if (rejection != null) {
+      // MULTI_SHEET alone means a healthy video that merely outgrew this consumer (it renders
+      // one sheet image); re-check with the capable verdict so degenerate/restamped sprites
+      // still fall through to screenshots. The raw video is still on disk next to the sprites —
+      // usually video.mp4, but a Playwright capture whose transcode failed keeps its .webm —
+      // decode it directly, exactly as sessions whose capture emitted a raw VIDEO artifact are.
+      if (rejection == SpriteSheetMetadata.SpriteRejection.MULTI_SHEET &&
+        SpriteSheetMetadata.rejectionReason(meta, steps, supportsMultiSheet = true) == null
+      ) {
+        val rawVideoName = File(sessionDir, CaptureFilenames.VIDEO).takeIf { it.exists() }?.name
+          ?: sessionDir.listFiles { f -> f.isFile && f.name.endsWith(".webm") }?.maxByOrNull { it.lastModified() }?.name
+        if (rawVideoName != null) {
+          val rawVideoArtifact =
+            JsonObject(artifact.jsonObject + ("filename" to JsonPrimitive(rawVideoName)))
+          val fallback = extractFromVideo(sessionId, sessionDir, rawVideoArtifact, logsRepo)
+          if (fallback.frames.isNotEmpty()) {
+            Console.log("  Sprite for ${sessionId.value} spans ${meta.sheets} sheets — used the raw video instead.")
+            return fallback
+          }
+        }
+      }
       Console.log(
-        "  Skipping degenerate sprite for ${sessionId.value}/$filename " +
-          "($uniqueFrameCount unique of $frameCount total frames, $steps step screenshots); " +
+        "  Skipping sprite sheet for ${sessionId.value}/$filename " +
+          "(${rejection.wireName}: ${meta.uniqueFrames} unique of $frameCount total frames, " +
+          "$steps step screenshots, restamped=${meta.restamped}); " +
           "timeline will use per-step screenshots.",
       )
       return SessionVideoFrames(emptyMap(), emptyMap(), null, degenerate = true)
@@ -1204,7 +1211,7 @@ object WasmReport {
     val physicalToCropKey = mutableMapOf<Int, String>() // physical index -> first image key
     var aliasCount = 0
     for (i in firstFrameIndex..lastFrameIndex) {
-      val physicalIndex = frameMap?.getOrNull(i) ?: i
+      val physicalIndex = meta.physicalFrame(i)
       val imageKey = "${sessionId.value}/vf_%06d.jpg".format(outputIndex)
 
       val existingKey = physicalToCropKey[physicalIndex]
@@ -1214,10 +1221,9 @@ object WasmReport {
         aliasCount++
       } else {
         // Crop this physical frame from the sprite grid.
-        val col = physicalIndex / rows
-        val row = physicalIndex % rows
-        val x = col * frameWidth
-        val y = row * frameHeight
+        val cell = VideoSpriteExtractor.spriteGridPosition(physicalIndex, columns)
+        val x = cell.column * frameWidth
+        val y = cell.row * frameHeight
         val w = frameWidth.coerceAtMost(spriteImage.width - x)
         val h = frameHeight.coerceAtMost(spriteImage.height - y)
         if (w <= 0 || h <= 0) break

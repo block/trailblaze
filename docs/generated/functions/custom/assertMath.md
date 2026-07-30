@@ -24,6 +24,11 @@ Calculate the result of an expression and compare it to the expected output valu
 - `expression` — `String`
 - `expected` — `String`
 
+### Optional parameters
+
+- `timeoutMs` — `Integer`
+- `pollIntervalMs` — `Integer`
+
 ## Output
 
 Returns: `string` (opaque text content)

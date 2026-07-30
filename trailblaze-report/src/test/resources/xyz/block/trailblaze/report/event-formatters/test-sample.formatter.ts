@@ -7,13 +7,18 @@ import { requestLabel } from "./lib/test-sample-helpers";
 export default {
   id: "test-sample",
   streams: ["com.example.tests.network"],
-  format(entries) {
+  format(entries, ctx) {
     return entries
       .filter((e) => e.data && e.data.request)
       .map((e) => ({
         t: e.t,
         label: requestLabel(e.data.request),
-        badges: [{ text: "formatted-by-test-sample", tone: "ok" }],
+        badges: [
+          { text: "formatted-by-test-sample", tone: "ok" },
+          // Surfaces the context the driver handed over, so the generator's e2e test can pin
+          // the fullEventPayloads plumbing (Kotlin input.json → driver → formatter ctx).
+          { text: `ctx-passed:${ctx?.sessionPassed === true}` },
+        ],
         raw: [e.data],
       }));
   },

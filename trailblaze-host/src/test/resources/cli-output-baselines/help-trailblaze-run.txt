@@ -7,14 +7,14 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       capture-ios-logs] [--[no-]capture-logcat] [--[no-]
-                      capture-network] [--[no-]capture-video] [--[no-]headless]
-                      [--markdown] [--no-daemon] [--no-logging] [--no-report]
-                      [--[no-]save-recording] [--self-heal] [--[no-]
-                      unified-recordings] [--[no-]use-recorded-steps]
-                      [-a=<agent>] [--args-file=<file>]
-                      [--compose-port=<composePort>] [--driver=<driverType>]
-                      [--llm=<llm>] [--llm-model=<llmModel>]
-                      [--llm-provider=<llmProvider>]
+                      capture-network] [--[no-]capture-video]
+                      [--full-report-payloads] [--[no-]headless] [--markdown]
+                      [--no-daemon] [--no-logging] [--no-report] [--[no-]
+                      save-recording] [--self-heal] [--[no-]unified-recordings]
+                      [--[no-]use-recorded-steps] [-a=<agent>]
+                      [--args-file=<file>] [--compose-port=<composePort>]
+                      [--driver=<driverType>] [--llm=<llm>]
+                      [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
                       [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
                       [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
@@ -44,7 +44,10 @@ removed in a future release.
                                pass a `.trail.yaml` path or name a directory (e.
                                g. `trails/`) to fan out under a workspace's
                                trails directory.
-  -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
+  -a, --agent=<agent>        Agent implementation name for AI-driven steps:
+                               TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or
+                               KOOG_STRATEGY_GRAPH. Set it persistently with
+                               'trailblaze config agent'. Default:
                                TRAILBLAZE_RUNNER
       --all-devices          Run each trail on EVERY connected device whose
                                platform the trail supports (its `platform:
@@ -125,6 +128,19 @@ removed in a future release.
       --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
                                ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
                                driver from trail config.
+      --full-report-payloads Embed full event payloads in the after-run HTML
+                               report even for sessions that passed, instead of
+                               applying the report size budgets (which truncate
+                               large successful network bodies and elide
+                               repeated intermediate snapshots to keep the
+                               report small). Failed sessions always embed full
+                               payloads regardless. The on-disk events/
+                               artifacts are never budgeted, so an existing
+                               session can also be regenerated in full later
+                               via `trailblaze report --full-report-payloads`.
+                               Applies to in-process runs; a run delegated to
+                               an already-running daemon doesn't generate a
+                               report from this process.
   -h, --help                 Show this help message and exit.
       --[no-]headless        Launch the Playwright browser headless (default
                                true). Pass --no-headless or --headless=false to

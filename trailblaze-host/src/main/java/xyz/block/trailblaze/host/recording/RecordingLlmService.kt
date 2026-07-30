@@ -45,13 +45,15 @@ class RecordingLlmService(
    *
    * @param recordedYaml The YAML output from [InteractionRecorder.generateTrailYaml],
    *   containing deterministic tool calls (e.g., tapOnElementWithText, inputText).
+   * @param classifier The device classifier the recordings are keyed under in the produced
+   *   unified trail (e.g. `android`, `ios`) — the platform of the device the session recorded on.
    * @return Trail YAML with natural language step descriptions and tool recordings.
    */
   @OptIn(ExperimentalUuidApi::class)
-  suspend fun transformToNaturalLanguageTrail(recordedYaml: String): String =
+  suspend fun transformToNaturalLanguageTrail(recordedYaml: String, classifier: String): String =
     withContext(Dispatchers.IO) {
       val systemPrompt = buildSystemPrompt()
-      val userPrompt = buildUserPrompt(recordedYaml)
+      val userPrompt = buildUserPrompt(recordedYaml, classifier)
 
       val messages = listOf(
         Message.System(
@@ -120,7 +122,7 @@ Rules:
 8. Output ONLY valid YAML, no markdown fences or explanations
   """.trimIndent()
 
-  private fun buildUserPrompt(recordedYaml: String): String = """
+  private fun buildUserPrompt(recordedYaml: String, classifier: String): String = """
 Transform the following recorded tool calls into a natural language trail YAML.
 
 Each tool call should become a step with a natural language description and the original tool call preserved as a recording.
@@ -128,22 +130,35 @@ Each tool call should become a step with a natural language description and the 
 Recorded tools:
 $recordedYaml
 
-Produce a trail YAML in this format:
-- prompts:
-    - step: <natural language description>
-      recording:
-        tools:
-          - <toolName>:
-              <params>
-    - step: <natural language description>
-      recording:
-        tools:
-          - <toolName>:
-              <params>
+Produce a trail YAML in this format, keying every recording under `$classifier`:
+${unifiedTrailFormatExample(classifier)}
   """.trimIndent()
 
   override fun close() {
     baseClient.close()
+  }
+
+  companion object {
+    /**
+     * The unified trail-format exemplar taught to the "Generate Trail" LLM: a top-level `trail:`
+     * list whose steps carry per-classifier recordings (`recording: <classifier>: [tools]`) — the
+     * only shape [xyz.block.trailblaze.yaml.TrailblazeYaml.decodeUnifiedTrail] accepts since the
+     * v1 list-root parser was removed (#5043). Kept as a function of [classifier] so the embedded
+     * decode-sweep test can feed it through the production unified-trail decoder.
+     */
+    internal fun unifiedTrailFormatExample(classifier: String): String = """
+trail:
+  - step: <natural language description>
+    recording:
+      $classifier:
+        - <toolName>:
+            <param>: <value>
+  - step: <natural language description>
+    recording:
+      $classifier:
+        - <toolName>:
+            <param>: <value>
+""".trimIndent()
   }
 
   private fun extractYamlFromResponse(response: String): String {

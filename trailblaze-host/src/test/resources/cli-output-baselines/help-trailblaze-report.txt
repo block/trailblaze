@@ -5,11 +5,13 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze report [-hV] [--current] [--no-gif] [--no-webp] [--open] [--
-                         [no-]storyboard-yaml] [--gif[=<gifOutput>]]
-                         [--storyboard[=<storyboardOutput>]] [--video
-                         [=<videoOutput>]] [--webp[=<webpOutput>]] [--id=<id>]
+Usage: trailblaze report [-hV] [--current] [--full-report-payloads] [--no-gif]
+                         [--no-wasm-report] [--no-webp] [--open] [--[no-]
+                         storyboard-yaml] [--gif[=<gifOutput>]] [--storyboard
+                         [=<storyboardOutput>]] [--video[=<videoOutput>]]
+                         [--webp[=<webpOutput>]] [--id=<id>]
                          [--max-size=<maxSize>] [--output-dir=<outputDir>]
+                         [--share-url=<url>]
                          [--storyboard-columns=<storyboardColumns>]
                          [<session-id>]
 Generate an HTML report for session recordings, plus a best-effort JSON
@@ -27,6 +29,16 @@ written with a warning.
       --current              Narrow to the currently active session (resolved
                                via the running daemon). Mutually exclusive with
                                --id.
+      --full-report-payloads Embed full event payloads in the interactive
+                               report even for sessions that passed, instead of
+                               applying the report size budgets (which truncate
+                               large successful network bodies and elide
+                               repeated intermediate snapshots to keep the
+                               report small). Failed sessions always embed full
+                               payloads regardless. The on-disk events/
+                               artifacts are never budgeted, so any session can
+                               be regenerated in full with this flag at any
+                               time.
       --gif[=<gifOutput>]    Export the HTML report's timeline autoplay (the
                                scrubbing view with step labels and annotations)
                                as an animated GIF. NOT the raw device
@@ -66,6 +78,13 @@ written with a warning.
                                on scripts and CI flows that only embed the .
                                webp and want to skip the wasted GIF encode.
                                Mutually exclusive with --gif.
+      --no-wasm-report       Skip the legacy WASM report; emit only the
+                               interactive report (plus the JSON summary).
+                               Saves the CPU-bound WASM build when only the
+                               interactive artifact is consumed. Mutually
+                               exclusive with --video/--gif/--webp, which
+                               capture the legacy timeline. Same flag as the CI
+                               report generator's --no-wasm-report.
       --no-webp              Suppress the auto-emitted .webp companion when
                                --gif is requested with a bare flag. Mutually
                                exclusive with --webp.
@@ -78,6 +97,17 @@ written with a warning.
                                timeline.webp). Created if it doesn't exist. If
                                omitted, artifacts land in the default
                                `logs/reports/` location with timestamped names.
+      --share-url=<url>      Bake a canonical hosted URL (http/https) into the
+                               interactive report. Its Copy link button then
+                               produces deep links against that URL — with the
+                               current view, sort, run, and step grafted on as
+                               query parameters — no matter where the file is
+                               opened from (including file://). Use this when
+                               the report is published to a known location, e.
+                               g. a CI artifact URL or an internal report
+                               server. Without this flag, Copy link uses the
+                               browser's own address and only appears on http
+                               (s) pages.
       --storyboard[=<storyboardOutput>]
                              Export a single-frame WebP storyboard — every
                                step's screenshot tiled into a CSS grid (one
