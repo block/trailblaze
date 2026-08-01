@@ -347,6 +347,12 @@ class RunYamlRequestHandlerTest {
       "instrumentation is in a ${UiAutomationHandleErrors.NON_RECOVERABLE_STATE_PHRASE} — kill the " +
       "test APK process and re-launch. Original error: UiAutomation not connected"
 
+  private val reflectionBlockedWedgeMessage =
+    "UiAutomation is not connected and the cached handle could not be cleared via reflection " +
+      "(both Instrumentation.disconnectUiAutomation() and the mUiAutomation field are " +
+      "inaccessible — Android internal API may have changed). Recover by restarting the " +
+      "Trailblaze on-device server. Original error: UiAutomation not connected"
+
   /**
    * Shape #4 — on-device source tag: when the launched job's failure carries the non-recoverable
    * UiAutomation wedge signature, the awaitCompletion=true response is tagged
@@ -364,6 +370,19 @@ class RunYamlRequestHandlerTest {
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
     assertEquals(false, result.data.success)
     assertTrue(result.data.nonRecoverableWedge, "Expected the wedge tag to be set")
+  }
+
+  @Test
+  fun `blocked reflective recovery tags the response nonRecoverableWedge true`() = runTest {
+    val handler = createHandler(
+      runTrailblazeYaml = { _, _, _ -> throw IllegalStateException(reflectionBlockedWedgeMessage) },
+    )
+
+    val result = handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    assertEquals(false, result.data.success)
+    assertTrue(result.data.nonRecoverableWedge, "Blocked reflective recovery must arm the runner restart")
   }
 
   /** Negative control: an ordinary failure must leave `nonRecoverableWedge = false`. */

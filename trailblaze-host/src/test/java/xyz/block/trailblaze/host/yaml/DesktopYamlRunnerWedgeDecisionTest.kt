@@ -36,11 +36,26 @@ class DesktopYamlRunnerWedgeDecisionTest {
       "test APK process and re-launch the Trailblaze on-device server to recover. Original error: " +
       "UiAutomation not connected"
 
+  private val reflectionBlockedWedgeMessage =
+    "UiAutomation is not connected and the cached handle could not be cleared via reflection " +
+      "(both Instrumentation.disconnectUiAutomation() and the mUiAutomation field are " +
+      "inaccessible — Android internal API may have changed). Recover by restarting the " +
+      "Trailblaze on-device server. Original error: UiAutomation not connected"
+
   @Test
   fun `relaunches on the non-recoverable UiAutomation wedge`() {
     assertTrue(
       DesktopYamlRunner.shouldRelaunchOnDeviceServer(
         SessionStatus.Ended.Failed(durationMs = 12_000, exceptionMessage = nonRecoverableWedgeMessage),
+      ),
+    )
+  }
+
+  @Test
+  fun `relaunches when Android blocks reflective UiAutomation recovery`() {
+    assertTrue(
+      DesktopYamlRunner.shouldRelaunchOnDeviceServer(
+        SessionStatus.Ended.Failed(durationMs = 12_000, exceptionMessage = reflectionBlockedWedgeMessage),
       ),
     )
   }
@@ -161,6 +176,16 @@ class DesktopYamlRunnerWedgeDecisionTest {
         ),
       ),
     )
+    assertTrue(DesktopYamlRunner.shouldRelaunchOnDeviceServer(logs))
+  }
+
+  @Test
+  fun `log scan relaunches when Android blocks reflective recovery during a successful trail`() {
+    val logs = listOf(
+      toolLog(successful = false, exceptionMessage = reflectionBlockedWedgeMessage),
+      statusLog(SessionStatus.Ended.Succeeded(durationMs = 42_000)),
+    )
+
     assertTrue(DesktopYamlRunner.shouldRelaunchOnDeviceServer(logs))
   }
 

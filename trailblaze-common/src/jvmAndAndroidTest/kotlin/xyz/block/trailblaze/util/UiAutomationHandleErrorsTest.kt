@@ -64,6 +64,27 @@ class UiAutomationHandleErrorsTest {
   }
 
   @Test
+  fun `recognizes Android 35 rejecting reflective stale-handle recovery`() {
+    assertTrue(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        "UiAutomation is not connected and the cached handle could not be cleared via " +
+          "reflection (both Instrumentation.disconnectUiAutomation() and the mUiAutomation " +
+          "field are inaccessible — Android internal API may have changed). Recover by " +
+          "restarting the Trailblaze on-device server. Original error: UiAutomation not connected",
+      ),
+    )
+  }
+
+  @Test
+  fun `does not classify unrelated reflective recovery failures as a UiAutomation wedge`() {
+    assertFalse(
+      UiAutomationHandleErrors.isNonRecoverableStaleHandleSignature(
+        "A cached handle could not be cleared via reflection",
+      ),
+    )
+  }
+
+  @Test
   fun `silent-shell wedge message is a recoverable signature but not the non-recoverable one`() {
     // Recoverable → retry runs first; the non-recoverable signature is reserved for retry failure.
     val message = UiAutomationHandleErrors.silentShellWedgeMessage("pm clear com.example.app")

@@ -59,6 +59,12 @@ class OnDeviceRpcClientWedgeTest {
       "test APK process and re-launch the Trailblaze on-device server to recover. Original error: " +
       "UiAutomation not connected"
 
+  private val reflectionBlockedWedgeMessage =
+    "UiAutomation is not connected and the cached handle could not be cleared via reflection " +
+      "(both Instrumentation.disconnectUiAutomation() and the mUiAutomation field are " +
+      "inaccessible — Android internal API may have changed). Recover by restarting the " +
+      "Trailblaze on-device server. Original error: UiAutomation not connected"
+
   private val port = testDeviceId.getTrailblazeOnDeviceSpecificPort()
 
   @Volatile
@@ -104,6 +110,21 @@ class OnDeviceRpcClientWedgeTest {
   }
 
   @Test
+  fun `rpcCall arms the breaker when Android blocks reflective UiAutomation recovery`() {
+    responseBody =
+      """{"errorType":"UNKNOWN_ERROR","message":"Failed to capture screen state","details":${
+        TrailblazeJsonInstance.encodeToString(String.serializer(), reflectionBlockedWedgeMessage)
+      }}"""
+
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+    val result = runBlocking { client.rpcCall(GetScreenStateRequest(includeScreenshot = false)) }
+
+    assertTrue(result is RpcResult.Failure, "expected an RPC failure")
+    assertTrue(armed, "blocked reflective recovery must arm the runner restart")
+  }
+
+  @Test
   fun `rpcCall does not arm the breaker on an ordinary failure`() {
     responseBody = """{"errorType":"UNKNOWN_ERROR","message":"Element not found","details":"Element not found"}"""
 
@@ -122,6 +143,16 @@ class OnDeviceRpcClientWedgeTest {
     // The handler-caught path lands the signature in `message` rather than `details`.
     client.noteIfNonRecoverableWedge(message = nonRecoverableWedgeMessage, details = null)
     assertTrue(armed, "breaker must fire when the wedge signature is in message")
+  }
+
+  @Test
+  fun `the breaker fires when reflective recovery failure is in the failure message`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    client.noteIfNonRecoverableWedge(message = reflectionBlockedWedgeMessage, details = null)
+
+    assertTrue(armed, "blocked reflective recovery must arm the runner restart")
   }
 
   @Test
@@ -153,6 +184,57 @@ class OnDeviceRpcClientWedgeTest {
     )
     assertTrue(noted, "typed overload must report that it armed")
     assertTrue(armed, "typed overload must arm the breaker on the structured field")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload recognizes an untagged legacy wedge`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("legacy-wedge-overload"),
+        success = false,
+        errorMessage = nonRecoverableWedgeMessage,
+      ),
+    )
+
+    assertTrue(noted, "a legacy terminal error must be recognized without the structured flag")
+    assertTrue(armed, "a legacy terminal error must arm the runner restart")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload recognizes untagged blocked reflective recovery`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("reflection-blocked-wedge-overload"),
+        success = false,
+        errorMessage = reflectionBlockedWedgeMessage,
+      ),
+    )
+
+    assertTrue(noted, "blocked reflective recovery must be recognized without the structured flag")
+    assertTrue(armed, "blocked reflective recovery must arm the runner restart")
+  }
+
+  @Test
+  fun `the typed RunYamlResponse overload ignores terminal text on successful responses`() {
+    var armed = false
+    val client = OnDeviceRpcClient(testDeviceId, onNonRecoverableWedge = { armed = true })
+
+    val noted = client.noteIfNonRecoverableWedge(
+      RunYamlResponse(
+        sessionId = SessionId("successful-wedge-diagnostic"),
+        success = true,
+        errorMessage = nonRecoverableWedgeMessage,
+      ),
+    )
+
+    assertFalse(noted, "successful diagnostic output must not trigger runner recovery")
+    assertFalse(armed, "successful responses must not arm the runner restart")
   }
 
   @Test

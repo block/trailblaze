@@ -24,12 +24,13 @@ package xyz.block.trailblaze.util
  */
 object UiAutomationHandleErrors {
 
-  // Distinctive phrases from the NON-recoverable message that `InstrumentationUtil`'s
-  // `runWithStaleUiAutomationRecovery` throws after its in-process retry also fails. They are the
-  // source of truth for both that throw site and [isNonRecoverableStaleHandleSignature], so the
-  // matcher can't drift from the emitted text. Neither phrase appears in a recoverable signature.
+  // Distinctive phrases from the terminal errors `InstrumentationUtil` throws when it cannot
+  // clear the cached handle or its in-process reconnect retry fails. Keeping the emitted text
+  // and host-side classifier in sync lets both failures trigger the existing runner restart.
   const val NON_RECOVERABLE_RETRY_FAILED_PHRASE = "UiAutomation reconnect retry also failed"
   const val NON_RECOVERABLE_STATE_PHRASE = "non-recoverable state"
+  const val NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE =
+    "cached handle could not be cleared via reflection"
 
   // Matches both the platform's own "UiAutomation not connected!" error and our
   // [silentShellWedgeMessage], which starts with it on purpose so one check covers both.
@@ -46,17 +47,20 @@ object UiAutomationHandleErrors {
       "no output after '$command' — every shell command is silently returning nothing."
 
   /**
-   * @return true if [message] is the terminal NON-recoverable signature that surfaces only after
-   *   the in-process [isStaleHandleSignature] retry has already failed (see
-   *   `InstrumentationUtil.runWithStaleUiAutomationRecovery`). This is what reaches the on-disk
-   *   `SessionStatus.Ended.Failed.exceptionMessage`, so the host harness keys its server-relaunch
-   *   decision on it. Both distinctive phrases must be present, so an ordinary recoverable
-   *   signature (already absorbed in-process) or an unrelated failure does not match.
+   * @return true if [message] indicates that in-process UiAutomation recovery is impossible:
+   *   either Android blocked clearing the cached handle, or reconnecting after the cache reset
+   *   also failed. Both errors require the host to restart the on-device instrumentation.
+   *   Ordinary recoverable stale handles and unrelated reflection failures do not match.
    */
   fun isNonRecoverableStaleHandleSignature(message: String?): Boolean {
     val msg = message.orEmpty()
-    return msg.contains(NON_RECOVERABLE_RETRY_FAILED_PHRASE, ignoreCase = true) &&
+    val reconnectRetryFailed =
+      msg.contains(NON_RECOVERABLE_RETRY_FAILED_PHRASE, ignoreCase = true) &&
       msg.contains(NON_RECOVERABLE_STATE_PHRASE, ignoreCase = true)
+    val reflectiveRecoveryBlocked =
+      msg.contains("UiAutomation", ignoreCase = true) &&
+        msg.contains(NON_RECOVERABLE_CACHE_CLEAR_FAILED_PHRASE, ignoreCase = true)
+    return reconnectRetryFailed || reflectiveRecoveryBlocked
   }
 
   /**
