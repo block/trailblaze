@@ -117,9 +117,15 @@ LOGCAT_PID=$!
 echo "========================================="
 
 # ---------------------------------------------------------------------------
-# Bind the emulator. This installs + launches the on-device runner APK and, on
-# connect, makes the daemon re-register the driver-scoped first-class tools —
-# without a bound device `tools/list` carries no TrailblazeTools at all.
+# Bind the emulator. Without a bound device the driver is unknown and
+# `tools/list` carries no TrailblazeTools at all.
+#
+# `-t default` makes the target explicit rather than inherited. Note it does NOT
+# by itself pin the advertised tool surface — that is resolved per MCP session by
+# `TrailblazeMcpServer.resolveTargetScopedToolClasses`, and a developer machine
+# with a persisted target selection advertises a wider set than a fresh CI
+# checkout does. The assertions below therefore depend only on tools present in
+# both; see the tool choice at the discovery step.
 # ---------------------------------------------------------------------------
 if [ "$SETUP_FAILED" != "true" ]; then
   ANDROID_DEVICE_ID="$(adb devices | awk '/\tdevice$/ {print $1; exit}')"
@@ -128,12 +134,22 @@ if [ "$SETUP_FAILED" != "true" ]; then
     adb devices -l
     SETUP_FAILED=true
   else
-    echo "Binding android/$ANDROID_DEVICE_ID (installs + starts the on-device runner)..."
-    trailblaze snapshot -d "android/$ANDROID_DEVICE_ID" || {
-      echo "ERROR: could not bind android/$ANDROID_DEVICE_ID"
+    echo "Connecting android/$ANDROID_DEVICE_ID with target 'default'..."
+    trailblaze device connect "android/$ANDROID_DEVICE_ID" -t default || {
+      echo "ERROR: could not connect android/$ANDROID_DEVICE_ID"
       SETUP_FAILED=true
     }
   fi
+fi
+
+# Force the on-device runner up (install + `am instrument`) and land on a real
+# screen, so the tap below has a live hierarchy to resolve refs against.
+if [ "$SETUP_FAILED" != "true" ]; then
+  echo "Starting the on-device runner via a snapshot..."
+  trailblaze snapshot -d "android/$ANDROID_DEVICE_ID" || {
+    echo "ERROR: on-device runner did not come up for android/$ANDROID_DEVICE_ID"
+    SETUP_FAILED=true
+  }
 fi
 
 # ---------------------------------------------------------------------------
@@ -151,11 +167,27 @@ if [ "$SETUP_FAILED" != "true" ]; then
   else
     echo "✓ MCP session: $MCP_SESSION_ID"
     mcp_post '{"jsonrpc":"2.0","method":"notifications/initialized"}' > /dev/null
+
+    # Bind the device to THIS MCP session. The CLI's terminal pin above does not
+    # reliably carry into a freshly-created MCP session — observed locally
+    # producing a session whose tools/list held only the session-management tools
+    # and no TrailblazeTools at all. `connectToDevice` is the daemon's own
+    # per-session bind, and it fires the tools/list_changed that registers the
+    # driver-scoped surface, so calling it makes discovery deterministic.
+    mcp_call_tool connect-device connectToDevice \
+      "{\"trailblazeDeviceId\":{\"instanceId\":\"$ANDROID_DEVICE_ID\",\"trailblazeDevicePlatform\":\"ANDROID\"}}"
+
     mcp_post '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' > "$MCP_OUT_DIR/tools-list.json"
-    for required in tapOnPoint assertVisible; do
+    # Both tools come from the baseline catalog every Android driver resolves
+    # with no target-declared toolsets, so they are advertised on a bare CI
+    # checkout and on a developer machine alike. Do NOT reach for a tool from the
+    # `verification` or `memory` toolsets (assertVisible, rememberText, …): those
+    # appear only when the resolved target declares them, which is why an earlier
+    # version of this check passed locally and failed in CI.
+    for required in tapOnPoint tap; do
       if ! jq -e --arg n "$required" '.result.tools | map(.name) | index($n)' "$MCP_OUT_DIR/tools-list.json" > /dev/null; then
-        echo "ERROR: first-class tool '$required' is not advertised — the device never bound," \
-          "so the direct-MCP dispatch path is not under test"
+        echo "ERROR: first-class tool '$required' is not in the advertised surface," \
+          "so the direct-MCP dispatch path is not under test. Advertised tools:"
         jq -r '.result.tools[]?.name' "$MCP_OUT_DIR/tools-list.json"
         SETUP_FAILED=true
       fi
@@ -166,13 +198,13 @@ fi
 # ---------------------------------------------------------------------------
 # Assertion 1 — a tool that fails on device must surface as an error.
 #
-# `assertVisible` against a ref that is not on any screen fails inside the
-# on-device runner. A dispatch that does not await completion gets back a
-# response with no `success` and no `errorMessage`, so the failure is invisible
-# to the caller and the call reports OK.
+# `tap` against a ref that is not on any screen fails inside the on-device
+# runner. A dispatch that does not await completion gets back a response with no
+# `success` and no `errorMessage`, so the failure is invisible to the caller and
+# the call reports OK.
 # ---------------------------------------------------------------------------
 if [ "$SETUP_FAILED" != "true" ]; then
-  mcp_call_tool ondevice-failure assertVisible \
+  mcp_call_tool ondevice-failure tap \
     '{"ref":"zzz999","reasoning":"pr-checks: ref that is deliberately not on screen"}'
   if [ "$(jq -r '.result.isError' "$MCP_OUT_DIR/ondevice-failure.json")" != "true" ]; then
     echo "ERROR: a failing on-device tool did not surface as isError=true."
