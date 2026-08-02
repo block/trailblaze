@@ -76,27 +76,38 @@ mcp_call_tool() {
 
 # ---------------------------------------------------------------------------
 # Daemon startup
+#
+# `bun install` first: the workspace trailmaps under trails/config/trailmaps/
+# ship meta-only scripted-tool descriptors that need the analyzer to enrich.
+# Without `sdks/typescript/node_modules`, trailmap compilation fails hard and
+# `app --foreground --headless` exits before it ever binds the port.
 # ---------------------------------------------------------------------------
-echo "Starting Trailblaze daemon (app --foreground --headless)..."
-trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
-TRAILBLAZE_PID=$!
-echo "Trailblaze daemon started with PID: $TRAILBLAZE_PID"
-echo "Waiting for Trailblaze daemon to be ready on port $PORT (this may take up to 2 minutes)..."
-sleep 10
-for attempt in $(seq 1 20); do
-  if curl -s --connect-timeout 1 "$PING_URL" > /dev/null 2>&1; then
-    break
+echo "Installing TypeScript SDK devDependencies (analyzer + esbuild)..."
+(cd sdks/typescript && bun install --frozen-lockfile) \
+  || { echo "ERROR: bun install failed in sdks/typescript"; SETUP_FAILED=true; }
+
+if [ "$SETUP_FAILED" != "true" ]; then
+  echo "Starting Trailblaze daemon (app --foreground --headless)..."
+  trailblaze app --foreground --headless > /tmp/trailblaze.log 2>&1 &
+  TRAILBLAZE_PID=$!
+  echo "Trailblaze daemon started with PID: $TRAILBLAZE_PID"
+  echo "Waiting for Trailblaze daemon to be ready on port $PORT (this may take up to 2 minutes)..."
+  sleep 10
+  for attempt in $(seq 1 20); do
+    if curl -s --connect-timeout 1 "$PING_URL" > /dev/null 2>&1; then
+      break
+    fi
+    echo "Attempt $attempt/20..."
+    sleep 5
+  done
+  if ! curl -s --connect-timeout 1 "$PING_URL" > /dev/null 2>&1; then
+    echo "ERROR: Trailblaze daemon failed to start"
+    echo "=== Trailblaze logs ==="
+    cat /tmp/trailblaze.log
+    SETUP_FAILED=true
+  else
+    echo "✓ Trailblaze daemon is running on port $PORT!"
   fi
-  echo "Attempt $attempt/20..."
-  sleep 5
-done
-if ! curl -s --connect-timeout 1 "$PING_URL" > /dev/null 2>&1; then
-  echo "ERROR: Trailblaze daemon failed to start"
-  echo "=== Trailblaze logs ==="
-  cat /tmp/trailblaze.log
-  SETUP_FAILED=true
-else
-  echo "✓ Trailblaze daemon is running on port $PORT!"
 fi
 echo "========================================="
 
@@ -217,8 +228,8 @@ fi
 cp -r "$MCP_OUT_DIR" "$TRAILBLAZE_LOGS_DIR/" 2>/dev/null || true
 
 echo "Cleaning up background processes..."
-[ -n "$LOGCAT_PID" ] && kill $LOGCAT_PID 2>/dev/null
-[ -n "$TRAILBLAZE_PID" ] && kill $TRAILBLAZE_PID 2>/dev/null
+[ -n "$LOGCAT_PID" ] && kill "$LOGCAT_PID" 2>/dev/null
+[ -n "$TRAILBLAZE_PID" ] && kill "$TRAILBLAZE_PID" 2>/dev/null
 echo "✓ Cleanup complete"
 echo "========================================="
 
