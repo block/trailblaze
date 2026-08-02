@@ -133,7 +133,9 @@ object CoreTools {
   // =========================================================================
 
   /**
-   * Wait for a specified duration.
+   * Settle until the UI goes quiet, bounded by a caller-supplied ceiling. Returns as soon as the
+   * UI is idle, so on a static screen it returns in ~150ms rather than the full duration. Use
+   * [SLEEP] when wall-clock time genuinely has to elapse.
    */
   const val WAIT = "wait"
 
@@ -142,6 +144,12 @@ object CoreTools {
    * Android-only today; other drivers degrade to a fixed timed wait.
    */
   const val WAIT_FOR_CHANGE = "waitForChange"
+
+  /**
+   * Block for a fixed wall-clock duration, never returning early. The one tool that actually
+   * consumes the time it is asked for — unlike [WAIT] / [WAIT_FOR_CHANGE], which are settles.
+   */
+  const val SLEEP = "sleep"
 
   /**
    * Control network connectivity.

@@ -1,0 +1,2 @@
+id: sleep
+class: xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool

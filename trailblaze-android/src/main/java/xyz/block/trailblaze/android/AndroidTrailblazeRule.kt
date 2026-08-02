@@ -677,11 +677,9 @@ open class AndroidTrailblazeRule(
 
     if (!trailblazeYaml.hasActionableSteps(trailItems)) {
       val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
-      val trailUrl = trailConfig?.metadata?.get("testRailUrl")
       throw TrailblazeException(
         "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file." +
-          (trailUrl?.let { " $it" } ?: ""),
+          "Add prompts or tool steps to this trail file.",
       )
     }
 

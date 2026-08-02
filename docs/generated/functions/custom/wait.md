@@ -4,8 +4,11 @@
 
 # `wait`
 
-Wait for a specified amount of time. Use when you see a loading screen — prefer this over
-pressing the back button.
+Settle on a loading screen: block until the UI goes quiet, up to a ceiling. This returns as soon
+as the UI is idle, so on an already-static screen it returns almost immediately rather than
+waiting the full time — it is a ceiling, not a duration. Use when you see a loading screen —
+prefer this over pressing the back button. If you are waiting for something specific to appear,
+assert on that element instead: a quiet UI does not mean the thing you expect has arrived.
 
 ## Source
 
@@ -23,7 +26,7 @@ pressing the back button.
 ### Optional parameters
 
 - `timeToWaitInSeconds` — `Integer`
-  Unit: seconds. Default Value: 5 seconds.
+  Ceiling on how long to settle for, in seconds — not a guaranteed duration. Default Value: 5 seconds.
 
 ## Output
 

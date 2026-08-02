@@ -962,7 +962,6 @@ object TrailblazeHostYamlRunner {
         trailblazeYaml = trailblazeYaml,
         trailItems = trailItems,
         trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
       )
 
       for (item in trailItems) {
@@ -1293,7 +1292,6 @@ object TrailblazeHostYamlRunner {
           trailblazeYaml = trailblazeYaml,
           trailItems = trailItems,
           trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-          trailUrl = trailConfig?.metadata?.get("testRailUrl"),
         )
 
         for (item in trailItems) {
@@ -2329,7 +2327,6 @@ object TrailblazeHostYamlRunner {
         trailblazeYaml = trailblazeYaml,
         trailItems = trailItems,
         trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
       )
 
       // Fire the session-started callback BEFORE dispatching trail items but AFTER
@@ -2484,13 +2481,11 @@ object TrailblazeHostYamlRunner {
     trailblazeYaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
     trailItems: List<TrailYamlItem>,
     trailName: String?,
-    trailUrl: String?,
   ) {
     if (!trailblazeYaml.hasActionableSteps(trailItems)) {
       throw TrailblazeException(
         "Trail '${trailName ?: "unknown"}' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file." +
-          (trailUrl?.let { " $it" } ?: ""),
+          "Add prompts or tool steps to this trail file.",
       )
     }
   }

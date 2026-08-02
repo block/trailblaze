@@ -20,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibility
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
+import xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
@@ -681,6 +682,72 @@ trail:
           quietWindowMs = 500,
           requireChange = false,
         ),
+      ),
+    )
+  }
+
+  @Test
+  fun deserializeSleepDefaults() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep: {}
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(),
+      ),
+    )
+  }
+
+  @Test
+  fun deserializeSleepWithDuration() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep:
+            durationMs: 12000
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(durationMs = 12000),
+      ),
+    )
+  }
+
+  @Test
+  fun sleepRoundTrip() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep:
+            durationMs: 12000
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(durationMs = 12000),
       ),
     )
   }

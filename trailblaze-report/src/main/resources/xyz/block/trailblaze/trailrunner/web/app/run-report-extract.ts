@@ -218,20 +218,47 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
   });
 }
 
-// The sub-tools an outer tool delegated to. A high-level tool the agent calls (e.g.
-// `tap` on a ref) is logged as a DelegatingTrailblazeToolLog carrying `executableTools`
-// — the concrete executor tool(s) it expanded into (e.g. `tapOnElementBySelector` with a
-// resolved selector). They share the outer tool's traceId, so they're already folded into
-// this one row; we surface them as expandable children so the "this tool ran those tools"
-// hierarchy is visible. Returns null when the row didn't delegate to a distinct inner tool
-// (primitives, scripted host-side tools that call backend APIs directly, raw actions).
+// Every tool call this row stands for besides the one it is labelled with, from two sources:
+// the `executableTools` a DelegatingTrailblazeToolLog expanded into (e.g. `tap` on a ref
+// resolving to `tapOnElementBySelector`), and the sibling tool logs the traceId fold merged in.
+// Both are already collapsed into this single row, so surfacing them as expandable children is
+// what makes "this step ran those tools" followable. Returns null for a row that really did stand
+// for one tool (primitives, scripted host-side tools calling backend APIs directly, raw actions).
 function toolChildren(r: any): TraceChild[] | null {
-  const first = r._logs && r._logs[0];
-  const exec = first && Array.isArray(first.executableTools) ? first.executableTools : null;
-  if (!exec || !exec.length) return null;
-  const kids = exec
-    .map((e) => ({ label: e.toolName || '', tool: summarizeToolArgs((e && e.raw) || {}, {}) }))
-    .filter((c) => c.label && c.label !== r.label);
+  const logs: any[] = r._logs || [];
+  const isDelegating = (l: any) => logClass(l) === 'DelegatingTrailblazeToolLog';
+  // A traceId is allocated per LLM request (one turn's tool batch), not per objective, so an
+  // objective spanning several turns folds into several of these rows — each row is one turn.
+  // Only a TrailblazeToolLog is an executed tool: MCP request/response and agent-iteration logs
+  // share the row's id and name, so keying off "anything with a toolName" nests the row under itself.
+  const isExecuted = (l: any) => logClass(l) === 'TrailblazeToolLog';
+  const executed = logs
+    .map((l, i) => ({ l, i }))
+    .filter(({ l, i }) => i > 0 && l && isExecuted(l))
+    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary }));
+  // A delegating log is a dispatch wrapper, not a step: it declares executors the device then logs
+  // itself under the same traceId. Keep executed records; surface a declaration only to fill in an
+  // executor that never logged — matched to its executor by name AND args (not name alone) and by
+  // remaining count, so a repeated primitive with one unlogged dispatch still shows the missing call.
+  const key = (c: { label: string; tool: string }) => JSON.stringify([c.label, c.tool]);
+  const unmatched = new Map<string, number>();
+  // Seed logs[0]'s own identity (excluded from `executed` by the i>0 filter) so only a wrapper
+  // re-declaring exactly it is absorbed — a separate same-named dispatch with other args still shows.
+  unmatched.set(key(r), (unmatched.get(key(r)) || 0) + 1);
+  for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
+  const declared: Array<{ i: number; label: string; tool: string }> = [];
+  logs.forEach((l, i) => {
+    if (!isDelegating(l)) return;
+    for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
+      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}) };
+      if (!c.label) continue;
+      const n = unmatched.get(key(c)) || 0;
+      if (n > 0) { unmatched.set(key(c), n - 1); continue; }
+      declared.push(c);
+    }
+  });
+  // Order by log position so children read in dispatch order, not declarations-first.
+  const kids = [...executed, ...declared].sort((a, b) => a.i - b.i).map((c) => ({ label: c.label, tool: c.tool }));
   return kids.length ? kids : null;
 }
 

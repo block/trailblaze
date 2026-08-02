@@ -26,6 +26,7 @@ tools:
   - pressKey
   - scrollUntilTextIsVisible
   - mobile_setClipboard
+  - sleep
   - swipe
   - takeSnapshot
   - tap

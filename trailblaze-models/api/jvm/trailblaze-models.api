@@ -11431,6 +11431,7 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field PRESS_BACK Ljava/lang/String;
 	public static final field PRESS_KEY Ljava/lang/String;
 	public static final field SCROLL_UNTIL_VISIBLE Ljava/lang/String;
+	public static final field SLEEP Ljava/lang/String;
 	public static final field STOP_APP Ljava/lang/String;
 	public static final field SWIPE Ljava/lang/String;
 	public static final field TAP Ljava/lang/String;

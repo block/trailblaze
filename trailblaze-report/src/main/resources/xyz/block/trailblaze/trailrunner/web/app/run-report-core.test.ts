@@ -472,6 +472,214 @@ describe("extractTrace", () => {
     expect(last.screenshotFile).toBe("final.png");
     expect(String(last.label)).toContain("Final");
   });
+
+  test("surfaces the tool calls the traceId fold merged in as children", () => {
+    // A traceId is allocated per LLM request (one turn's tool batch), not per tool call, so a turn's
+    // whole batch shares one traceId and folds onto its first tool. Without children, the other calls
+    // are absent from the payload entirely and the fold increments no count to reveal it.
+    const tool = (name: string, raw: Record<string, unknown>, s: number) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: name, traceId: "obj8", successful: true,
+      durationMs: 10, trailblazeTool: { raw }, timestamp: `2024-01-01T00:00:0${s}Z`,
+    });
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Edit the end time" }, timestamp: "2024-01-01T00:00:00Z" },
+      tool("assertVisibleBySelector", { selector: { text: "End time" } }, 1),
+      { class: `${T}.MaestroDriverLog`, traceId: "obj8", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 2 }, deviceWidth: 10, deviceHeight: 20, timestamp: "2024-01-01T00:00:02Z" },
+      tool("tapOnElementBySelector", { selector: { text: "End time" } }, 3),
+      tool("swipe", { swipeOnElementText: "00 minutes" }, 4),
+      tool("mobile_maestro", { commands: "tapOn 50%,91%" }, 5),
+    ];
+    const trace = core.extractTrace(logs);
+    // Still one folded row per traceId — this fix adds detail, it does not split the row.
+    const row = trace.find((r) => r.label === "assertVisibleBySelector");
+    expect(trace.filter((r) => !r.objective).length).toBe(1);
+    // The three calls that actually did the work are now followable.
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+    // Device actions stay folded: the row already names the action, so they are not children.
+    expect((row.children as unknown[]).length).toBe(3);
+    // And they survive the share slimming — the standalone report renders from the slimmed shape.
+    const slim = (core as any).slimTraceForShare(trace);
+    expect(slim.find((r: any) => r.label === "assertVisibleBySelector").children.map((c: any) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+  });
+
+  test("a delegating tool's executor is one child, not one per source", () => {
+    // On-device instrumentation logs the DelegatingTrailblazeToolLog and, under the same traceId,
+    // the executor's own TrailblazeToolLog (TrailCommand.kt:1836) — so it arrives twice.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap the row" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tapOnElementWithNodeId", traceId: "objD",
+        trailblazeTool: { toolName: "tapOnElementWithNodeId", raw: { nodeId: 7 } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objD", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "swipe", traceId: "objD", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { swipeOnElementText: "list" } }, timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "tapOnElementWithNodeId");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe"]);
+  });
+
+  test("a delegating wrapper folded mid-objective is not a child alongside its executor", () => {
+    // The wrapper can arrive at any position in the batch, not just first. It is a dispatch record,
+    // not a step — SessionCombinedView.kt:893 and TrailblazeRecordingGenerator.kt:211 both skip it.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Check then tap" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objM", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tapOnElementWithNodeId", traceId: "objM",
+        trailblazeTool: { toolName: "tapOnElementWithNodeId", raw: { nodeId: 7 } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objM", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector"]);
+  });
+
+  test("a delegating tool whose executor never logged still shows what it dispatched", () => {
+    // The fallback that keeps the dedupe from hiding work: some tools route around the device's
+    // tool-log emit site (HostOnDeviceRpcTrailblazeAgent.kt:743), so only the declaration exists.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objF", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objF",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z639" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector"]);
+  });
+
+  test("repeated polls keep their ×N count instead of becoming N children", () => {
+    // The assertion fold already annotates the row, so expanding it would trade a readable count
+    // for noise. Only the silent tool-into-tool fold gets children.
+    const poll = (s: number) => ({
+      class: `${T}.MaestroDriverLog`, durationMs: 5, deviceWidth: 10, deviceHeight: 20,
+      action: { class: "xyz.AgentDriverAction.AssertCondition", conditionDescription: "shows 5:00 PM", succeeded: true, x: 1, y: 1 },
+      timestamp: `2024-01-01T00:00:${String(s).padStart(2, "0")}Z`,
+    });
+    const trace = core.extractTrace([poll(1), poll(2), poll(3)]);
+    expect(trace.length).toBe(1);
+    expect(trace[0].note).toBe("×3");
+    expect(trace[0].children).toBeUndefined();
+  });
+
+  test("an MCP tool's response log is not a child of itself", () => {
+    // McpToolCallRequestLog / McpToolCallResponseLog share one traceId and the same toolName
+    // (TrailblazeMcpServer.kt:1615), so folding on "anything with a toolName" would nest the row's
+    // own tool under itself. Only a TrailblazeToolLog is an executed child.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Connect the device" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.McpToolCallRequestLog`, toolName: "trailblaze_connect_device", traceId: "mcp1", timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.McpToolCallResponseLog`, toolName: "trailblaze_connect_device", traceId: "mcp1", timestamp: "2024-01-01T00:00:02Z" },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "trailblaze_connect_device");
+    expect(row).toBeDefined();
+    expect(row.children).toBeUndefined();
+  });
+
+  test("a repeated primitive with one unlogged dispatch still shows the dispatched call", () => {
+    // One tapOnElementBySelector logged its executor; a second (different selector) was dispatched
+    // via a delegating wrapper whose executor never logged. A name-only dedupe drops the second as
+    // "already ran"; matching on name AND args keeps it, so the dispatched-but-unlogged call shows.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap two rows" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objP", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Header" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objP", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "First" } } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objP",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z2" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Second" } } }],
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "tapOnElementBySelector"]);
+    // The args distinguish them: both dispatches survive, not just the one that logged.
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.tool))
+      .toEqual(["text: First", "text: Second"]);
+  });
+
+  test("children render in dispatch order, not declarations-first", () => {
+    // swipe ran and logged first; a later delegating wrapper dispatched tapOnElementBySelector whose
+    // executor never logged. Concatenating declarations ahead of executions would list the tap first
+    // even though the swipe happened first — order children by log position instead.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Swipe then tap by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objO", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "List" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "swipe", traceId: "objO", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { swipeOnElementText: "list" } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objO",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z3" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["swipe", "tapOnElementBySelector"]);
+  });
+
+  test("a ref dispatch that reuses the row's own primitive name is not filtered as self", () => {
+    // logs[0] is a directly-invoked tapOnElementBySelector, so it labels the row. A later ref-based
+    // tap resolves to the same primitive with a DIFFERENT selector and its executor never logged.
+    // Filtering every declaration named like the row would drop this genuine second call; the
+    // self-filter must key on the row's own name AND args, not the name alone.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap one directly, one by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objS", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "First" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objS",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z9" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Second" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "tapOnElementBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label)).toEqual(["tapOnElementBySelector"]);
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.tool)).toEqual(["text: Second"]);
+  });
 });
 
 describe("shotForStep (timeline preview image)", () => {
