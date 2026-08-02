@@ -61,6 +61,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
@@ -552,6 +553,57 @@ class TrailblazeMcpBridgeImpl(
   }
 
   companion object {
+    /**
+     * Builds the [RunYamlRequest] a single on-device MCP tool dispatch puts on the wire.
+     * Pure — no bridge instance required, so the wire contract is testable in isolation.
+     *
+     * [awaitCompletion] is unconditionally true and deliberately NOT derived from the caller's
+     * `blocking` flag, which governs only the HOST/Maestro path. A fire-and-forget
+     * `RunYamlResponse` returns before any tool runs, so it carries no `success`, no
+     * `errorMessage`, and no `nonRecoverableWedge`. The direct-MCP dispatchers
+     * (`TrailblazeToolToMcpBridge`, `DirectMcpToolExecutor`, `TrailExecutor`,
+     * `BridgeTrailblazeAgent`) all take the `blocking = false` default, so deriving the wait
+     * from it made those dispatches report phantom success AND left a terminal UiAutomation
+     * wedge unarmed — the poisoned runner then served every following MCP action.
+     */
+    internal fun buildOnDeviceToolRunYamlRequest(
+      tool: TrailblazeTool,
+      yaml: String,
+      trailblazeDeviceId: TrailblazeDeviceId,
+      driverType: TrailblazeDriverType?,
+      traceId: TraceId?,
+      targetAppId: String?,
+      trailblazeLlmModel: TrailblazeLlmModel,
+      sessionResolution: DeviceSessionResolution,
+      captureNetworkTraffic: Boolean,
+    ): RunYamlRequest = RunYamlRequest(
+      yaml = yaml,
+      testName = "tool_${tool::class.simpleName}",
+      trailFilePath = null,
+      targetAppName = targetAppId,
+      useRecordedSteps = false,
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeDeviceId = trailblazeDeviceId,
+      referrer = TrailblazeReferrer.MCP,
+      traceId = traceId,
+      driverType = driverType,
+      awaitCompletion = true,
+      config = TrailblazeConfig(
+        overrideSessionId = sessionResolution.sessionId,
+        // Emit start only when this call created the session. This preserves host-managed
+        // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
+        sendSessionStartLog = sessionResolution.isNewSession,
+        sendSessionEndLog = false,
+        // Propagate the toggle so on-device launch tools can do their own capture-aware
+        // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
+        // clearAppData / clearState=true cycle, and the host can't reach into that window
+        // from outside. Today nothing on-device reads this; the host bridge is the only
+        // consumer. Wired here so the next iteration can flip launch-tool behavior off this
+        // signal without another hop.
+        captureNetworkTraffic = captureNetworkTraffic,
+      ),
+    )
+
     internal fun androidDisconnectStatus(
       deviceId: TrailblazeDeviceId,
       connectedDevices: Collection<TrailblazeDeviceId>,
@@ -1771,39 +1823,16 @@ class TrailblazeMcpBridgeImpl(
             }
         }
       }
-      val request = RunYamlRequest(
+      val request = buildOnDeviceToolRunYamlRequest(
+        tool = tool,
         yaml = yaml,
-        testName = "tool_${tool::class.simpleName}",
-        trailFilePath = null,
-        targetAppName = resolvedTargetAppId,
-        useRecordedSteps = false,
-        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
-        referrer = TrailblazeReferrer.MCP,
-        traceId = traceId,
         driverType = driverType,
-        // Always await on-device completion — the caller's `blocking` flag only governs the
-        // HOST/Maestro path below. A fire-and-forget RunYamlResponse carries no `success` and
-        // no `nonRecoverableWedge` (the device returns before any tool runs), so the default
-        // `blocking = false` used by the direct-MCP dispatchers (TrailblazeToolToMcpBridge,
-        // DirectMcpToolExecutor, TrailExecutor, BridgeTrailblazeAgent) would report phantom
-        // success AND leave a terminal UiAutomation wedge unarmed — the poisoned runner would
-        // then serve every following MCP action. Matches the RunYamlRequest default.
-        awaitCompletion = true,
-        config = TrailblazeConfig(
-          overrideSessionId = sessionResolution.sessionId,
-          // Emit start only when this call created the session. This preserves host-managed
-          // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
-          sendSessionStartLog = sessionResolution.isNewSession,
-          sendSessionEndLog = false,
-          // Propagate the toggle so on-device launch tools can do their own capture-aware
-          // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
-          // clearAppData / clearState=true cycle, and the host can't reach into that window
-          // from outside. Today nothing on-device reads this; the host bridge is the only
-          // consumer. Wired here so the next iteration can flip launch-tool behavior off this
-          // signal without another hop.
-          captureNetworkTraffic = captureNetworkTraffic,
-        ),
+        traceId = traceId,
+        targetAppId = resolvedTargetAppId,
+        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
+        sessionResolution = sessionResolution,
+        captureNetworkTraffic = captureNetworkTraffic,
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
