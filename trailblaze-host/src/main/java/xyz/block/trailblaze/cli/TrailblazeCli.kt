@@ -429,6 +429,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     TrailCommand::class,
     SessionCommand::class,
     ReportCommand::class,
+    ProfileCommand::class,
     WaypointCommand::class,
     ResultsCommand::class,
     ConfigCommand::class,
@@ -592,7 +593,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "session", "report", "results", "waypoint"),
+      listOf("run", "session", "report", "profile", "results", "waypoint"),
     ),
     Group(
       "Setup:",

@@ -8,11 +8,11 @@ import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.ReportTemplateResolver
-import xyz.block.trailblaze.report.WasmReport
+import xyz.block.trailblaze.report.WasmReportRequest
+import xyz.block.trailblaze.report.generateWasmReport
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import java.io.File
-import java.nio.file.Files
 import java.security.MessageDigest
 
 /**
@@ -87,22 +87,30 @@ object GenerateReportEndpoint {
 
   /**
    * Generates a report for [sessionIds]. When the request is filtered to a single
-   * session, the function builds a temporary directory of symlinks pointing only
-   * at that session's data so [WasmReport.generate] sees a logs repo containing
-   * just one session — same pattern as [xyz.block.trailblaze.cli.CliReportGenerator].
+   * session, [generateWasmReport] runs the WASM report over a temporary logs repo of
+   * symlinks pointing only at that session's data, so the report contains just one
+   * session — the same scoping the CLI's report path uses.
    *
    * The output filename is keyed by [sessionFilterKey] so the all-sessions report
    * and any per-session reports can coexist on disk.
+   *
+   * Deliberately WASM-only (no interactive leg): this endpoint's contract is to serve
+   * exactly one HTML file as the HTTP response, and that file has always been the
+   * WASM report. The interactive artifact has no consumer here — the Trail Runner web app
+   * renders sessions live and exports interactive HTML through its own Share path.
    */
   private fun generateReport(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
     sessionFilterKey: String?,
   ): File? {
-    val templateFile = ReportTemplateResolver.resolveTemplate() ?: return null
+    // Resolve the git root ONCE and share it across the template + ui-dir lookups —
+    // each resolution forks a `git rev-parse` subprocess.
+    val gitRoot = ReportTemplateResolver.getGitRoot()
+    val templateFile = ReportTemplateResolver.resolveTemplate(gitRoot) ?: return null
     Console.log("[Report] Using template: ${templateFile.absolutePath}")
 
-    val trailblazeUiDir = ReportTemplateResolver.findTrailblazeUiDir() ?: logsRepo.logsDir
+    val trailblazeUiDir = ReportTemplateResolver.findTrailblazeUiDir(gitRoot) ?: logsRepo.logsDir
 
     val reportsDir = File(logsRepo.logsDir, "reports")
     reportsDir.mkdirs()
@@ -112,46 +120,18 @@ object GenerateReportEndpoint {
       else "trailblaze_live_report.html",
     )
 
-    val needsTempRepo = sessionFilterKey != null
-    val tempDir = if (needsTempRepo) Files.createTempDirectory("trailblaze-report-").toFile() else null
-
-    try {
-      // Use the unfiltered repo directly when no filter is requested; otherwise build
-      // a temp repo over symlinks to just the requested session(s). The temp repo MUST
-      // be closed even if WasmReport.generate throws, so it owns its own try/finally.
-      val tempLogsRepo: LogsRepo? = if (tempDir != null) {
-        for (sessionId in sessionIds) {
-          val sessionDir = File(logsRepo.logsDir, sessionId.value)
-          if (sessionDir.exists()) {
-            Files.createSymbolicLink(
-              File(tempDir, sessionId.value).toPath(),
-              sessionDir.toPath(),
-            )
-          }
-        }
-        LogsRepo(logsDir = tempDir, watchFileSystem = false)
-      } else {
-        null
-      }
-
-      try {
-        WasmReport.generate(
-          logsRepo = tempLogsRepo ?: logsRepo,
-          trailblazeUiProjectDir = trailblazeUiDir,
-          outputFile = outputFile,
-          reportTemplateFile = templateFile,
-          useRelativeImageUrls = true,
-        )
-      } finally {
-        tempLogsRepo?.close()
-      }
-      return outputFile
-    } finally {
-      // Delete the symlinks but NOT the underlying session data they point at.
-      // `File.deleteRecursively()` would follow the symlinks; use `Files.delete()` instead.
-      tempDir?.listFiles()?.forEach { Files.deleteIfExists(it.toPath()) }
-      tempDir?.delete()
-    }
+    return generateWasmReport(
+      logsRepo = logsRepo,
+      // Use the unfiltered repo directly (keeping its parse cache) when no filter is
+      // requested; otherwise scope the WASM report to just the requested session(s).
+      sessionIds = if (sessionFilterKey != null) sessionIds else null,
+      request = WasmReportRequest(
+        outputFile = outputFile,
+        templateFile = templateFile,
+        trailblazeUiProjectDir = trailblazeUiDir,
+        useRelativeImageUrls = true,
+      ),
+    )
   }
 
   /**

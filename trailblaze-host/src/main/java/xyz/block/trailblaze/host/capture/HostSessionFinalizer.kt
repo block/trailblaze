@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.capture
 
 import java.util.concurrent.CopyOnWriteArrayList
+import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.util.Console
@@ -60,6 +61,16 @@ internal fun finalizeHostSessionResources(
         failures += it
         Console.log(
           "[HostSessionFinalizerRegistry] network capture stop failed for $sessionId: ${it.message}"
+        )
+      }
+    // Same rationale as network capture: restore in the shared barrier rather than trusting every
+    // entry point to pair its own restore with the start. No-op for sessions that never disabled
+    // animations.
+    runCatching { SessionAnimationDisabler.restoreForSession(sessionId) }
+      .onFailure {
+        failures += it
+        Console.log(
+          "[HostSessionFinalizerRegistry] animation restore failed for $sessionId: ${it.message}"
         )
       }
     runCatching { stopCapture(sessionId) }

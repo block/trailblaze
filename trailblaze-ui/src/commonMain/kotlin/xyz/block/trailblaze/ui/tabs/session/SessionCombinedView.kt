@@ -256,6 +256,29 @@ internal fun SessionCombinedView(
         }
     }
 
+  // Screenshot-bearing logs ("keyframes"), and the sticky nearest one at/before the scrub
+  // position. Unlike `activeDriverLog` above — which is gated to a driver action's own duration
+  // window and goes null in idle gaps — this stays stuck on the last real keyframe, mirroring
+  // ScreenshotKeyframePanel's `activeScreenshotLog`. It lets a paused VideoFramePanel present a
+  // crisp, clickable, hierarchy-backed screenshot (parity with the no-video platforms) instead of
+  // the low-res sprite frame, and drives the keyframe-count label.
+  //
+  // Collects every `HasScreenshot` log (driver actions, snapshots, and LLM-request logs) — the same
+  // set the no-video ScreenshotKeyframePanel uses — so a video-backed session can pause/click on the
+  // final failure/`TakeSnapshot` screenshot too, not just driver-action screenshots, and the count
+  // matches. Sorted by timestamp to make `lastOrNull { <= scrub }` well-defined regardless of the
+  // order the different log types were appended.
+  val videoKeyframeLogs =
+    remember(logs) {
+      logs
+        .filter { it is HasScreenshot && (it as HasScreenshot).screenshotFile != null }
+        .sortedBy { it.timestamp.toEpochMilliseconds() }
+    }
+  val nearestKeyframeLog =
+    remember(currentTimestamp, videoKeyframeLogs) {
+      videoKeyframeLogs.lastOrNull { it.timestamp.toEpochMilliseconds() <= currentTimestamp }
+    }
+
   // Current video frame — hoisted so video column width can react to its aspect ratio
   var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -658,6 +681,8 @@ internal fun SessionCombinedView(
             effectiveEndMs = effectiveEndMs,
             exportPlaybackTimeline = exportPlaybackTimeline,
             activeDriverLog = activeDriverLog,
+            nearestKeyframeLog = nearestKeyframeLog,
+            keyframeCount = videoKeyframeLogs.size,
             sessionId = sessionId,
             imageLoader = imageLoader,
             currentFrame = currentFrame,
@@ -903,6 +928,14 @@ private fun ColumnScope.VideoFramePanel(
   effectiveEndMs: Long,
   exportPlaybackTimeline: PlaybackTimeline?,
   activeDriverLog: TrailblazeLog.AgentDriverLog?,
+  /**
+   * Sticky nearest screenshot-bearing driver log at/before the scrub position (see the caller). Backs
+   * the paused full-res screenshot and the click-to-inspect target, so the video panel reaches parity
+   * with [ScreenshotKeyframePanel] on the no-video platforms.
+   */
+  nearestKeyframeLog: TrailblazeLog?,
+  /** Number of screenshot-bearing keyframes, shown as the "N keyframes" label (parity with the no-video panel). */
+  keyframeCount: Int,
   sessionId: String,
   imageLoader: ImageLoader,
   currentFrame: ImageBitmap?,
@@ -928,6 +961,19 @@ private fun ColumnScope.VideoFramePanel(
           )
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .clickable { openVideoInSystemPlayer(watchVideoPath) },
+      )
+    }
+  }
+
+  // Keyframe count — same label the no-video ScreenshotKeyframePanel shows, so the two panels read
+  // consistently. Counts the clickable, hierarchy-backed screenshot keyframes (not the interpolated
+  // video frames), which is what a reader actually navigates.
+  if (keyframeCount > 0) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+      SelectableText(
+        text = "$keyframeCount keyframe${if (keyframeCount != 1) "s" else ""}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
   }
@@ -967,39 +1013,68 @@ private fun ColumnScope.VideoFramePanel(
     }
   }
 
-  // Show hi-res screenshot when snapped to a marker
-  val showScreenshot =
-    timelineState.isSnappedToMarker &&
-      activeDriverLog != null &&
-      activeDriverLog.screenshotFile != null &&
-      !timelineState.isVideoPlaying
+  // While paused, present the crisp full-res screenshot of the nearest keyframe (clickable →
+  // inspector, exactly like the no-video ScreenshotKeyframePanel) instead of the low-res sprite
+  // frame; while playing, keep the smooth video frames. This is looser than the old
+  // `isSnappedToMarker` gate — a reader who simply pauses on a step gets the inspectable keyframe
+  // without first having to click a marker — which is what brings the Android-with-video timeline
+  // to parity with every other platform.
+  val screenshotLog = nearestKeyframeLog?.takeIf { !timelineState.isVideoPlaying }
+  val showScreenshot = screenshotLog != null
+
+  // Whether the nearest keyframe can open the hierarchy inspector. Snapshots and LLM-request logs
+  // always carry an inspectable hierarchy; a driver log only when it recorded one. Mirrors the
+  // no-video ScreenshotKeyframePanel's `canInspect`.
+  val nearestKeyframeInspectable =
+    onShowInspectUI != null &&
+      when (val log = nearestKeyframeLog) {
+        is TrailblazeLog.TrailblazeLlmRequestLog -> true
+        is TrailblazeLog.TrailblazeSnapshotLog -> true
+        is TrailblazeLog.AgentDriverLog -> log.viewHierarchy != null
+        else -> false
+      }
 
   Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
     if (showScreenshot) {
       BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val dw = activeDriverLog!!.deviceWidth.toFloat()
-        val dh = activeDriverLog.deviceHeight.toFloat()
+        val hasScreenshot = screenshotLog as HasScreenshot
+        val dw = hasScreenshot.deviceWidth.toFloat()
+        val dh = hasScreenshot.deviceHeight.toFloat()
         val imageAspect =
-          if (currentFrame != null) {
-            currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
-          } else if (dh > 0f) dw / dh
+          if (dh > 0f) dw / dh
+          else if (currentFrame != null) currentFrame!!.width.toFloat() / currentFrame!!.height.toFloat()
           else 1f
         val (renderedWidth, renderedHeight) = computeFitDimensions(imageAspect, maxWidth, maxHeight)
-        val clickCoords = activeDriverLog.action as? HasClickCoordinates
+        // Only surface the action marker while the scrub position is still inside this keyframe's
+        // own action window, and only for driver logs (snapshot / LLM-request keyframes carry no
+        // action). Once the scrubber sits in a later idle gap — or a screenshot-less event (e.g. a
+        // batch of recording-replay assertVisibleBySelector calls) shares this same keyframe — the
+        // marker would misleadingly point at this earlier action's location, so it's suppressed.
+        // This mirrors the no-video ScreenshotKeyframePanel below. durationMs <= 0 is the "point
+        // event, no real duration" sentinel and always renders at its own keyframe.
+        val action =
+          when {
+            screenshotLog is TrailblazeLog.AgentDriverLog &&
+              (screenshotLog.durationMs <= 0 ||
+                (currentTimestamp - screenshotLog.timestamp.toEpochMilliseconds()) <
+                  screenshotLog.durationMs) -> screenshotLog.action
+            else -> null
+          }
+        val clickCoords = action as? HasClickCoordinates
         ScreenshotImage(
           sessionId = sessionId,
-          screenshotFile = activeDriverLog.screenshotFile,
-          deviceWidth = activeDriverLog.deviceWidth,
-          deviceHeight = activeDriverLog.deviceHeight,
+          screenshotFile = hasScreenshot.screenshotFile,
+          deviceWidth = hasScreenshot.deviceWidth,
+          deviceHeight = hasScreenshot.deviceHeight,
           clickX = clickCoords?.x,
           clickY = clickCoords?.y,
-          action = activeDriverLog.action,
+          action = action,
           modifier =
             Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center),
           imageLoader = imageLoader,
           onImageClick = { imageModel, dw2, dh2, cx, cy ->
-            if (onShowInspectUI != null && activeDriverLog!!.viewHierarchy != null) {
-              onShowInspectUI.invoke(activeDriverLog)
+            if (nearestKeyframeInspectable) {
+              onShowInspectUI!!.invoke(screenshotLog!!)
             } else if (imageModel != null && onShowScreenshotModal != null) {
               onShowScreenshotModal(
                 imageModel,
@@ -1007,7 +1082,7 @@ private fun ColumnScope.VideoFramePanel(
                 dh2,
                 cx,
                 cy,
-                activeDriverLog!!.action,
+                action,
               )
             }
           },
@@ -1024,10 +1099,19 @@ private fun ColumnScope.VideoFramePanel(
         }
         val (renderedWidth, renderedHeight) =
           computeFitDimensions(frameAspect, maxWidth, maxHeight)
+        // Keep the low-res sprite frame clickable too (e.g. while playing, or paused before the
+        // first keyframe): a click opens the inspector for the nearest keyframe's hierarchy so
+        // "click a frame to inspect the tree" works everywhere, not just on the snapped screenshot.
+        val frameModifier = Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center)
         VideoFrameWithOverlay(
           currentFrame = currentFrame,
           activeDriverLog = activeDriverLog,
-          modifier = Modifier.size(renderedWidth, renderedHeight).align(Alignment.Center),
+          modifier =
+            if (nearestKeyframeInspectable) {
+              frameModifier.clickable { onShowInspectUI!!.invoke(nearestKeyframeLog!!) }
+            } else {
+              frameModifier
+            },
         )
       }
     }

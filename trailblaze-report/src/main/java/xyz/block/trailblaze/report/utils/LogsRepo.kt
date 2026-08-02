@@ -47,8 +47,19 @@ class LogsRepo(
    * regardless of what pricing data was available on the device.
    *
    * Defaults to identity (no enrichment) for backward compatibility.
+   *
+   * Internal (not private) so `SessionLogSnapshot.capture` can parse with the same enrichment
+   * this repo applies.
    */
-  private val costEnricher: (TrailblazeLog) -> TrailblazeLog = { it },
+  internal val costEnricher: (TrailblazeLog) -> TrailblazeLog = { it },
+  /**
+   * Already-parsed logs to seed the single-read cache with, keyed by session. Only consulted
+   * when [watchFileSystem] is false: sessions present in this map skip the init-time disk
+   * parse and are cached as-given. Lets a caller that has already parsed a session (e.g. a
+   * report snapshot — see `SessionLogSnapshot`) hand the parse to a scoped repo instead of
+   * every repo re-reading the same files. Sessions not in the map parse from disk as before.
+   */
+  private val preParsedLogs: Map<SessionId, List<TrailblazeLog>> = emptyMap(),
 ) : TrailblazeLogsDataProvider {
 
   // Create a dedicated coroutine scope for background file operations
@@ -173,7 +184,7 @@ class LogsRepo(
       // This avoids redundant disk I/O in the main loop and makes the report
       // resilient to transient I/O failures after initialization.
       _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { sessionId ->
-        val logs = getLogsForSession(sessionId)
+        val logs = preParsedLogs[sessionId] ?: getLogsForSession(sessionId)
         // Cache the logs so getCachedLogsForSession/getSessionLogsFlow can reuse them
         _sessionLogsFlows[sessionId] = MutableStateFlow(logs)
         buildSessionInfo(logs)
@@ -260,10 +271,8 @@ class LogsRepo(
    */
   private fun readLogFilesFromDisk(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
-    ?.filter { it.extension == "json" && it.name.first().isHexDigit() && it.name != "capture_metadata.json" }
+    ?.filter { isTrailblazeLogFile(it) }
     ?: emptyList()
-
-  private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
 
   /**
    * Returns a list of logs for the given session ID with caching via the reactive flow.
@@ -298,18 +307,9 @@ class LogsRepo(
     return emptyList()
   }
 
-  private fun parseTrailblazeLogFromFile(logFile: File): TrailblazeLog? = try {
-    val log = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
-      logFile.readText(),
-    )
-    // Always recalculate costs from the host's pricing config on read
-    costEnricher(log)
-  } catch (e: Exception) {
-    if (!logFile.name.endsWith("trace.json")) {
-      Console.log("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
-    }
-    null
-  }
+  /** One log file decoded with this repo's cost enrichment — see the companion [parseTrailblazeLog]. */
+  private fun parseTrailblazeLogFromFile(logFile: File): TrailblazeLog? =
+    parseTrailblazeLog(logFile, costEnricher = costEnricher)
 
   fun deleteLogsForSession(sessionId: SessionId) {
     val sessionDir = File(logsDir, sessionId.value)
@@ -911,5 +911,43 @@ class LogsRepo(
     }
 
     return null
+  }
+
+  companion object {
+
+    /**
+     * The typed-log file filter (the same one [readLogFilesFromDisk] applies), as a predicate
+     * for callers that enumerate files themselves — static so a caller with no repo yet (e.g.
+     * `SessionLogSnapshot.capture` capturing before the repo it will seed is built) shares the
+     * exact filter every repo uses.
+     */
+    internal fun isTrailblazeLogFile(file: File): Boolean =
+      file.extension == "json" && file.name.first().isHexDigit() && file.name != "capture_metadata.json"
+
+    private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
+
+    /**
+     * Decodes one log file's JSON into a [TrailblazeLog] enriched via [costEnricher], or null
+     * (with a logged warning) when it can't be parsed. Static so a caller with no repo yet
+     * shares the exact parse every repo performs. [jsonText] lets a caller that already read
+     * the file's text (to parse it another way in the same pass — see `SessionLogSnapshot`)
+     * skip the second disk read; when null the text is read from [logFile].
+     */
+    internal fun parseTrailblazeLog(
+      logFile: File,
+      jsonText: String? = null,
+      costEnricher: (TrailblazeLog) -> TrailblazeLog = { it },
+    ): TrailblazeLog? = try {
+      val log = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
+        jsonText ?: logFile.readText(),
+      )
+      // Always recalculate costs from the host's pricing config on read
+      costEnricher(log)
+    } catch (e: Exception) {
+      if (!logFile.name.endsWith("trace.json")) {
+        Console.log("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
+      }
+      null
+    }
   }
 }

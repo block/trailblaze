@@ -327,13 +327,18 @@ function fmtClock(ms) {
 
 const TL_CAT_COLORS = {
   tool: 'var(--tb-pass)',
-  llm: 'var(--tb-running)',
+  llm: 'var(--tb-ai)',
   analytics: '#a679f5',
   assertion: 'var(--tb-analytics)',
   log: 'var(--text-subtle)',
   error: 'var(--tb-fail)',
   stream: '#4dd0e1',
 };
+
+function isAgenticStep(t) {
+  const tool = String((t && t.tool) || '');
+  return tool === 'agent step' || tool.startsWith('llm');
+}
 
 // Distinct hues cycled per event stream so different stream types read apart at a glance
 // in the timeline rows and the scrubber. Stable by first-seen stream order.
@@ -346,7 +351,7 @@ const ALL_CATS_ON = { tool: true, llm: true, assertion: true, analytics: true, e
 function stepCategory(t) {
   if (!t.ok) return 'error';
   const tool = String(t.tool || '');
-  if (tool === 'agent step' || tool.startsWith('llm')) return 'llm';
+  if (isAgenticStep(t)) return 'llm';
   const label = String(t.label || '').toLowerCase();
   if (label.startsWith('assert') || label.startsWith('verify') || tool.toLowerCase().includes('assert')) return 'assertion';
   if (t.tool || t.label) return 'tool';
@@ -356,6 +361,7 @@ function stepCategory(t) {
 // Picks a lucide icon that hints at what an action does, from its tool/label name.
 // Color still comes from stepCategory so the icon doubles as the pass/fail signal.
 function actionIcon(tr) {
+  if (isAgenticStep(tr)) return 'bot';
   if (!tr.ok) return 'circle-x';
   const s = ((tr.label || '') + ' ' + (tr.tool || '')).toLowerCase();
   const has = (...w) => w.some((x) => s.includes(x));
@@ -431,7 +437,7 @@ function VerticalScrubber({ trace, step, setStep, setPlaying, analytics = [], st
 
   return (
     <div style={{ flex: '0 0 36px', display: 'flex', flexDirection: 'column', minHeight: 0, userSelect: 'none' }}>
-      <div className="tb-mono tb-sub" style={{ fontSize: 9.5, textAlign: 'center', marginBottom: 5 }}>0:00</div>
+      <div className="tb-sub" style={{ fontSize: 9.5, textAlign: 'center', marginBottom: 5, fontVariantNumeric: 'tabular-nums' }}>0:00</div>
       <div ref={ref} onMouseDown={onDown} style={{ position: 'relative', flex: 1, minHeight: 0, width: 24, margin: '0 auto', cursor: 'pointer' }}>
         <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: 0, bottom: 0, width: 1, background: 'var(--tb-hairline)', pointerEvents: 'none' }} />
         <div ref={fillRef} style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: 0, height: (curFrac * 100) + '%', width: 2, background: 'rgba(255,255,255,.28)', borderRadius: 2, pointerEvents: 'none' }} />
@@ -551,6 +557,7 @@ function TraceRow({ item, step, setStep, rel, selRef, expanded, setExpanded, las
   const tr = item.t;
   const sel = step === tr.i;
   const cat = stepCategory(tr);
+  const selfHealSource = !!tr.selfHealSource;
   // A tool that delegated to concrete executor tool(s) — e.g. the agent's `tap` (on a ref)
   // ran `tapOnElementBySelector` (resolved selector). Expandable so the "this tool called
   // those tools" hierarchy is visible without cluttering the collapsed row.
@@ -565,8 +572,8 @@ function TraceRow({ item, step, setStep, rel, selRef, expanded, setExpanded, las
       onContextMenu={(e) => onContext && onContext(e, tr)}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 9, padding: child ? '7px 12px 7px 20px' : '8px 12px', cursor: 'pointer',
-        borderLeft: '2px solid ' + (sel ? 'var(--tb-running)' : 'transparent'),
-        background: sel ? 'rgba(94,155,255,.10)' : 'transparent',
+        borderLeft: '2px solid ' + (sel ? 'var(--tb-running)' : selfHealSource ? 'var(--tb-warning)' : 'transparent'),
+        background: sel ? 'rgba(94,155,255,.10)' : selfHealSource ? 'var(--tb-warning-surface)' : 'transparent',
         borderBottom: !last ? '1px solid var(--tb-hairline)' : 'none',
       }}
     >
@@ -575,6 +582,7 @@ function TraceRow({ item, step, setStep, rel, selRef, expanded, setExpanded, las
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontSize: 13, fontWeight: sel ? 600 : 500, lineHeight: 1.35, flex: 1, minWidth: 0 }}>{tr.label}</span>
+          {selfHealSource && <span style={{ color: 'var(--tb-warning-text)', fontSize: 10.5, fontWeight: 650, whiteSpace: 'nowrap' }}>Recovered</span>}
           {kids && (
             <span role="button" data-testid="tool-children-toggle"
               title={kidsOpen ? 'Hide the tools this called' : 'Show the ' + kids.length + ' tool' + (kids.length === 1 ? '' : 's') + ' this called'}
@@ -681,7 +689,11 @@ function StepStack({ feed, step, setStep, sessionId }) {
     const tr = g.header && g.header.t;
     const sel = tr && step === tr.i;
     const childActive = g.items.some((it) => it.kind === 'step' && it.t.i === step);
-    const failed = (tr && !tr.ok) || g.items.some((it) => it.kind === 'step' && !it.t.ok);
+    const selfHealed = !!(tr && tr.selfHeal);
+    // A healed objective is successful even though its recorded source action failed before the
+    // agent recovered it. Keep that source row amber; reserve red for the final objective outcome.
+    const failed = tr ? !tr.ok : g.items.some((it) => it.kind === 'step' && !it.t.ok);
+    const outcomeColor = failed ? 'var(--tb-fail)' : selfHealed ? 'var(--tb-warning)' : 'var(--tb-pass)';
     const lastGroup = gi === arr.length - 1;
     return (
       <React.Fragment key={g.header ? g.header.key : 'pre-' + gi}>
@@ -692,14 +704,16 @@ function StepStack({ feed, step, setStep, sessionId }) {
             onClick={() => onActivate(tr)}
             onContextMenu={(e) => onContext(e, tr)}
             style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '10px 13px', cursor: 'pointer',
-              background: sel ? 'rgba(94,155,255,.10)' : 'var(--bg-subtle)',
-              borderLeft: '3px solid ' + (sel ? 'var(--tb-running)' : childActive ? 'rgba(94,155,255,.4)' : 'transparent'),
+              background: sel ? 'rgba(94,155,255,.10)' : selfHealed ? 'var(--tb-warning-surface)' : 'var(--bg-subtle)',
+              borderLeft: '3px solid ' + (sel ? 'var(--tb-running)' : selfHealed ? 'var(--tb-warning)' : childActive ? 'rgba(94,155,255,.4)' : 'transparent'),
               borderTop: gi > 0 ? '1px solid var(--tb-hairline-strong)' : 'none',
               borderBottom: g.items.length > 0 ? '1px solid var(--tb-hairline)' : (lastGroup ? 'none' : '1px solid var(--tb-hairline)') }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Chip tone="purple">{tr.trailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</Chip>
-              <span title={failed ? 'Step had a failure' : 'Step passed'} style={{ width: 8, height: 8, borderRadius: 99, background: failed ? 'var(--tb-fail)' : 'var(--tb-pass)', flexShrink: 0 }} />
+              <Chip>{tr.trailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</Chip>
+              <span title={failed ? 'Step failed' : selfHealed ? 'Step passed after self-healing' : 'Step passed'} style={{ width: 8, height: 8, borderRadius: 99, background: outcomeColor, flexShrink: 0 }} />
+              {selfHealed && <span title="AI self-healed this step" aria-label="AI self-healed this step" style={{ display: 'inline-flex' }}><Ico n="bot" s={14} c="var(--tb-ai)" /></span>}
+              {selfHealed && <span style={{ color: 'var(--tb-warning-text)', fontSize: 10.5, fontWeight: 650 }}>Self-healed</span>}
               {g.items.length > 0 && <span className="tb-sub" style={{ fontSize: 11 }}>{g.items.length} action{g.items.length === 1 ? '' : 's'}</span>}
               {relS.get(g.header.key) != null ? <span className="tb-mono tb-sub" style={{ fontSize: 11, marginLeft: 'auto' }} title="Time into the run">{relS.get(g.header.key).toFixed(1)}s</span> : null}
             </div>

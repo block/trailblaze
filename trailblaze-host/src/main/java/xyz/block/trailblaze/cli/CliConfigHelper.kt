@@ -6,6 +6,8 @@ import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.animations.EffectiveDisableAnimationsConfig
+import xyz.block.trailblaze.host.recording.EffectiveIosBaguetteVideoConfig
 import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
@@ -343,18 +345,53 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ),
   ConfigKey(
     // Experimental. Tri-state like `unified-recordings`: `null` (default) is off; an explicit
-    // true/false is the user's persisted choice. The `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT` /
+    // true/false is the user's persisted choice. One toggle covers Android, iOS, and web (they
+    // share the stream engine); the per-platform `TRAILBLAZE_<PLATFORM>_STREAM_SCREENSHOT` /
     // `_AB` env vars still win (env = one-off / CI / A/B validation; this = discoverable
-    // persistent toggle). Only the host-driven Android accessibility agent-loop reads it.
-    name = "android-stream-screenshots",
-    description = "Experimental: serve Android agent-loop screenshots from the live device stream (default: off)",
+    // persistent toggle). Only host-driven agent-loop capture paths read it.
+    name = "stream-screenshots",
+    description = "Experimental: serve agent-loop screenshots from the live device stream on Android, iOS, and web (default: off)",
     validValues = "true, false, or 'unset' to inherit the default (off)",
-    get = { config -> config.androidStreamScreenshotsEnabled?.toString() ?: "(not set)" },
+    get = { config -> config.streamScreenshotsEnabled?.toString() ?: "(not set)" },
     set = { config, value ->
       if (value.equals("unset", ignoreCase = true)) {
-        config.copy(androidStreamScreenshotsEnabled = null)
+        config.copy(streamScreenshotsEnabled = null)
       } else {
-        value.toBooleanStrictOrNull()?.let { config.copy(androidStreamScreenshotsEnabled = it) }
+        value.toBooleanStrictOrNull()?.let { config.copy(streamScreenshotsEnabled = it) }
+      }
+    },
+  ),
+  ConfigKey(
+    // Experimental. Tri-state like `stream-screenshots`: `null` (default) is off (iOS keeps the
+    // simctl recorder); an explicit true/false is the user's persisted choice. The
+    // `TRAILBLAZE_IOS_BAGUETTE_VIDEO` env var still wins (env = one-off / CI / on-device
+    // validation; this = discoverable persistent toggle).
+    name = "ios-baguette-video",
+    description = "Experimental: record iOS session video from the baguette H.264 stream instead of simctl (default: off)",
+    validValues = "true, false, or 'unset' to inherit the default (off)",
+    get = { config -> config.iosBaguetteVideoEnabled?.toString() ?: "(not set)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(iosBaguetteVideoEnabled = null)
+      } else {
+        value.toBooleanStrictOrNull()?.let { config.copy(iosBaguetteVideoEnabled = it) }
+      }
+    },
+  ),
+  ConfigKey(
+    // Experimental. Tri-state like `stream-screenshots`: `null` (default) is off (devices are
+    // never touched); an explicit true/false is the user's persisted choice. The
+    // `TRAILBLAZE_DISABLE_ANIMATIONS` env var still wins (env = one-off / CI override; this =
+    // discoverable persistent toggle). Previous values are restored at session end.
+    name = "disable-animations",
+    description = "Experimental: disable OS animations on the device during each session, restored at session end (default: off)",
+    validValues = "true, false, or 'unset' to inherit the default (off)",
+    get = { config -> config.disableAnimationsEnabled?.toString() ?: "(not set)" },
+    set = { config, value ->
+      if (value.equals("unset", ignoreCase = true)) {
+        config.copy(disableAnimationsEnabled = null)
+      } else {
+        value.toBooleanStrictOrNull()?.let { config.copy(disableAnimationsEnabled = it) }
       }
     },
   ),
@@ -449,7 +486,9 @@ object CliConfigHelper {
       // Pass null when nothing is overridden so the web path can fall back to its own default
       // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
       EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
-      EffectiveStreamScreenshotConfig.androidEnabled = it.androidStreamScreenshotsEnabled ?: false
+      EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
+      EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
+      EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
     }
 
   /**

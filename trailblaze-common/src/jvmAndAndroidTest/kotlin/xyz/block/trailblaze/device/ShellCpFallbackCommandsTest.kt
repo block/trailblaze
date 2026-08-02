@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
  * The load-bearing property is the ABSENCE of shell quoting: the on-device transport
  * (UiAutomation → `Runtime.exec`) execs tokens with no shell interpreter, so a `shellEscape()`'d
  * path would carry literal `'` characters and the `cp` would silently fail (no exit-code channel
- * on that transport). Same rule `AdbShellTrailblazeToolTest` pins for `joinCommandRawArgv`.
+ * on that transport).
  */
 class ShellCpFallbackCommandsTest {
 

@@ -10,6 +10,7 @@ import org.junit.Test
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -34,256 +35,260 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTo
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
 
+/**
+ * These tests pin down each tool's YAML (de)serialization. The v1 top-level-list trail shape
+ * (`- tools:`) is gone, so each recorded tool is wrapped in a unified `trail:` step under an
+ * `android` recording classifier and decoded with that classifier. The wrapper only changes the
+ * enclosing document shape — the per-tool object + typed args being asserted are unchanged.
+ */
 class ToolSerializationTest {
   private val trailblazeYaml = createTrailblazeYaml(setOf(TotallyCustomTool::class))
+
+  private val androidClassifier = listOf(TrailblazeDeviceClassifier("android"))
+
+  /** Decode a unified doc and return the single recorded step's tool wrappers. */
+  private fun decodeRecordedTools(yaml: String): List<TrailblazeToolYamlWrapper> =
+    trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifier)
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools
 
   // Tool deserialization tests
   @Test
   fun deserializeRememberTextTool() {
     val yaml = """
-- tools:
-    - rememberText:
-        prompt: here is a prompt
-        variable: promptVar
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - rememberText:
+            prompt: here is a prompt
+            variable: promptVar
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "rememberText",
-            trailblazeTool = RememberTextTrailblazeTool(
-              prompt = "here is a prompt",
-              variable = "promptVar",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "rememberText",
+        trailblazeTool = RememberTextTrailblazeTool(
+          prompt = "here is a prompt",
+          variable = "promptVar",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeRememberNumberTool() {
     val yaml = """
-- tools:
-    - rememberNumber:
-        prompt: here is a prompt
-        variable: promptVar
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - rememberNumber:
+            prompt: here is a prompt
+            variable: promptVar
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "rememberNumber",
-            trailblazeTool = RememberNumberTrailblazeTool(
-              prompt = "here is a prompt",
-              variable = "promptVar",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "rememberNumber",
+        trailblazeTool = RememberNumberTrailblazeTool(
+          prompt = "here is a prompt",
+          variable = "promptVar",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeRememberWithAiTool() {
     val yaml = """
-- tools:
-    - rememberWithAi:
-        prompt: here is a prompt
-        variable: promptVar
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - rememberWithAi:
+            prompt: here is a prompt
+            variable: promptVar
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "rememberWithAi",
-            trailblazeTool = RememberWithAiTrailblazeTool(
-              prompt = "here is a prompt",
-              variable = "promptVar",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "rememberWithAi",
+        trailblazeTool = RememberWithAiTrailblazeTool(
+          prompt = "here is a prompt",
+          variable = "promptVar",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeAssertMathTool() {
     val yaml = """
-- tools:
-    - assertMath:
-        expression: "[[number of water bottles available]] - {{stockCount}}"
-        expected: 1
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertMath:
+            expression: "[[number of water bottles available]] - {{stockCount}}"
+            expected: 1
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "assertMath",
-            trailblazeTool = AssertMathTrailblazeTool(
-              expression = "[[number of water bottles available]] - {{stockCount}}",
-              expected = "1",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "assertMath",
+        trailblazeTool = AssertMathTrailblazeTool(
+          expression = "[[number of water bottles available]] - {{stockCount}}",
+          expected = "1",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeAssertEqualsTool() {
     val yaml = """
-- tools:
-    - assertEquals:
-        actual: "some actual value"
-        expected: "some expected value"
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertEquals:
+            actual: "some actual value"
+            expected: "some expected value"
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "assertEquals",
-            trailblazeTool = AssertEqualsTrailblazeTool(
-              actual = "some actual value",
-              expected = "some expected value",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "assertEquals",
+        trailblazeTool = AssertEqualsTrailblazeTool(
+          actual = "some actual value",
+          expected = "some expected value",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeAssertNotEqualsTool() {
     val yaml = """
-- tools:
-    - assertNotEquals:
-        actual: "some actual value"
-        expected: "some expected value"
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertNotEquals:
+            actual: "some actual value"
+            expected: "some expected value"
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "assertNotEquals",
-            trailblazeTool = AssertNotEqualsTrailblazeTool(
-              actual = "some actual value",
-              expected = "some expected value",
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "assertNotEquals",
+        trailblazeTool = AssertNotEqualsTrailblazeTool(
+          actual = "some actual value",
+          expected = "some expected value",
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeHideKeyboardTool() {
     val yaml = """
-- tools:
-    - hideKeyboard: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - hideKeyboard: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        with(tools[0]) {
-          assertThat(name).isEqualTo("hideKeyboard")
-          assertThat(trailblazeTool).isInstanceOf(HideKeyboardTrailblazeTool::class)
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    with(tools[0]) {
+      assertThat(name).isEqualTo("hideKeyboard")
+      assertThat(trailblazeTool).isInstanceOf(HideKeyboardTrailblazeTool::class)
     }
   }
 
   @Test
   fun deserializeInputTextTool() {
     val yaml = """
-- tools:
-    - inputText:
-        text: Text to enter
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - inputText:
+            text: Text to enter
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "inputText",
-          trailblazeTool = InputTextTrailblazeTool(
-            text = "Text to enter",
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "inputText",
+      trailblazeTool = InputTextTrailblazeTool(
+        text = "Text to enter",
+      ),
+    )
   }
 
   @Test
   fun deserializeEmptyEraseTextTool() {
     val yaml = """
-- tools:
-    - eraseText: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        val wrapper = tools[0]
-        assertThat(wrapper.name).isEqualTo("eraseText")
-        // eraseText is now a YAML-defined (`tools:` mode) tool — decodes to
-        // YamlDefinedTrailblazeTool with an empty caller-params map.
-        assertThat(wrapper.trailblazeTool)
-          .isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    val wrapper = tools[0]
+    assertThat(wrapper.name).isEqualTo("eraseText")
+    // eraseText is now a YAML-defined (`tools:` mode) tool — decodes to
+    // YamlDefinedTrailblazeTool with an empty caller-params map.
+    assertThat(wrapper.trailblazeTool)
+      .isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
   }
 
   @Test
   fun deserializeEraseTextTool() {
     val yaml = """
-- tools:
-    - eraseText:
-        charactersToErase: 10
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText:
+            charactersToErase: 10
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        val wrapper = tools[0]
-        assertThat(wrapper.name).isEqualTo("eraseText")
-        val tool = wrapper.trailblazeTool as xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
-        assertThat(tool.params.containsKey("charactersToErase")).isEqualTo(true)
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    val wrapper = tools[0]
+    assertThat(wrapper.name).isEqualTo("eraseText")
+    val tool = wrapper.trailblazeTool as xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
+    assertThat(tool.params.containsKey("charactersToErase")).isEqualTo(true)
   }
 
   @Test
@@ -291,798 +296,762 @@ class ToolSerializationTest {
     // `pressBack` is now a YAML-defined tool (see trails/config/tools/pressBack.yaml).
     // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
     val yaml = """
-- tools:
-    - pressBack: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - pressBack: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        val wrapper = tools[0]
-        assertThat(wrapper.name).isEqualTo("pressBack")
-        assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    val wrapper = tools[0]
+    assertThat(wrapper.name).isEqualTo("pressBack")
+    assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
   }
 
   @Test
   fun deserializePressKeyEnterTool() {
     val yaml = """
-- tools:
-    - pressKey:
-        keyCode: ENTER
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - pressKey:
+            keyCode: ENTER
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "pressKey",
-            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "pressKey",
+        trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
+      ),
+    )
   }
 
   @Test
   fun deserializePressKeyHomeTool() {
     val yaml = """
-- tools:
-    - pressKey:
-        keyCode: HOME
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - pressKey:
+            keyCode: HOME
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "pressKey",
-            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.HOME),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "pressKey",
+        trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.HOME),
+      ),
+    )
   }
 
   @Test
   fun deserializePressKeyLowercaseKeyCode() {
     // The LLM sometimes emits lowercase enum values; the custom serializer normalizes them.
     val yaml = """
-- tools:
-    - pressKey:
-        keyCode: enter
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - pressKey:
+            keyCode: enter
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "pressKey",
-            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "pressKey",
+        trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeUpTool() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: UP
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: UP
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.UP,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.UP,
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeDownTool() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: DOWN
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: DOWN
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.DOWN,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.DOWN,
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeLeftTool() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: LEFT
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: LEFT
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.LEFT,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.LEFT,
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeRightTool() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: RIGHT
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: RIGHT
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.RIGHT,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.RIGHT,
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeUpToolWithText() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: UP
-        swipeOnElementText: Text
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: UP
+            swipeOnElementText: Text
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.UP,
-            swipeOnElementText = "Text",
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.UP,
+        swipeOnElementText = "Text",
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeDownToolWithText() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: DOWN
-        swipeOnElementText: Text
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: DOWN
+            swipeOnElementText: Text
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.DOWN,
-            swipeOnElementText = "Text",
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.DOWN,
+        swipeOnElementText = "Text",
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeLeftToolWithText() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: LEFT
-        swipeOnElementText: Text
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: LEFT
+            swipeOnElementText: Text
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.LEFT,
-            swipeOnElementText = "Text",
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.LEFT,
+        swipeOnElementText = "Text",
+      ),
+    )
   }
 
   @Test
   fun deserializeSwipeRightToolWithText() {
     val yaml = """
-- tools:
-    - swipe:
-        direction: RIGHT
-        swipeOnElementText: Text
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - swipe:
+            direction: RIGHT
+            swipeOnElementText: Text
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "swipe",
-          trailblazeTool = SwipeTrailblazeTool(
-            direction = SwipeDirection.RIGHT,
-            swipeOnElementText = "Text",
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "swipe",
+      trailblazeTool = SwipeTrailblazeTool(
+        direction = SwipeDirection.RIGHT,
+        swipeOnElementText = "Text",
+      ),
+    )
   }
 
   @Test
   fun deserializeWaitForIdleSync() {
     val yaml = """
-- tools:
-    - wait: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - wait: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = WaitForIdleSyncTrailblazeTool(
-            timeToWaitInSeconds = 5,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = WaitForIdleSyncTrailblazeTool(
+        timeToWaitInSeconds = 5,
+      ),
+    )
   }
 
   @Test
   fun deserializeWaitForIdleSyncWithTime() {
     val yaml = """
-- tools:
-    - wait:
-        timeToWaitInSeconds: 15
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - wait:
+            timeToWaitInSeconds: 15
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = WaitForIdleSyncTrailblazeTool(
-            timeToWaitInSeconds = 15,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = WaitForIdleSyncTrailblazeTool(
+        timeToWaitInSeconds = 15,
+      ),
+    )
   }
 
   @Test
   fun deserializeWaitForChangeDefaults() {
     val yaml = """
-- tools:
-    - waitForChange: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - waitForChange: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "waitForChange",
-            trailblazeTool = WaitForChangeTrailblazeTool(),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "waitForChange",
+        trailblazeTool = WaitForChangeTrailblazeTool(),
+      ),
+    )
   }
 
   @Test
   fun deserializeWaitForChangeWithFields() {
     val yaml = """
-- tools:
-    - waitForChange:
-        timeoutMs: 12000
-        quietWindowMs: 500
-        requireChange: false
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - waitForChange:
+            timeoutMs: 12000
+            quietWindowMs: 500
+            requireChange: false
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "waitForChange",
-            trailblazeTool = WaitForChangeTrailblazeTool(
-              timeoutMs = 12000,
-              quietWindowMs = 500,
-              requireChange = false,
-            ),
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "waitForChange",
+        trailblazeTool = WaitForChangeTrailblazeTool(
+          timeoutMs = 12000,
+          quietWindowMs = 500,
+          requireChange = false,
+        ),
+      ),
+    )
   }
 
   @Test
   fun waitForChangeRoundTrip() {
     val yaml = """
-- tools:
-    - waitForChange:
-        timeoutMs: 12000
-        quietWindowMs: 500
-        requireChange: false
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - waitForChange:
+            timeoutMs: 12000
+            quietWindowMs: 500
+            requireChange: false
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    val reEncoded = trailblazeYaml.encodeToString(trailItems)
-
-    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
-    with(reDecoded) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0]).isEqualTo(
-          TrailblazeToolYamlWrapper(
-            name = "waitForChange",
-            trailblazeTool = WaitForChangeTrailblazeTool(
-              timeoutMs = 12000,
-              quietWindowMs = 500,
-              requireChange = false,
-            ),
-          ),
-        )
-      }
-    }
+    // Round-trip the recorded tool itself (encode/decode the tool-wrapper list), not the raw
+    // trail-document string — the tool object surviving the trip is the contract under test.
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "waitForChange",
+        trailblazeTool = WaitForChangeTrailblazeTool(
+          timeoutMs = 12000,
+          quietWindowMs = 500,
+          requireChange = false,
+        ),
+      ),
+    )
   }
 
   @Test
   fun deserializeLaunchAppTool() {
     val yaml = """
-- tools:
-    - launchApp:
-        appId: com.example.myapp.debug
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - launchApp:
+            appId: com.example.myapp.debug
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.example.myapp.debug",
-            launchMode = LaunchMode.REINSTALL,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = LaunchAppTrailblazeTool(
+        appId = "com.example.myapp.debug",
+        launchMode = LaunchMode.REINSTALL,
+      ),
+    )
   }
 
   @Test
   fun deserializeLaunchAppToolReinstall() {
     val yaml = """
-- tools:
-    - launchApp:
-        appId: com.example.myapp.debug
-        launchMode: REINSTALL
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - launchApp:
+            appId: com.example.myapp.debug
+            launchMode: REINSTALL
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.example.myapp.debug",
-            launchMode = LaunchMode.REINSTALL,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = LaunchAppTrailblazeTool(
+        appId = "com.example.myapp.debug",
+        launchMode = LaunchMode.REINSTALL,
+      ),
+    )
   }
 
   @Test
   fun deserializeLaunchAppToolResume() {
     val yaml = """
-- tools:
-    - launchApp:
-        appId: com.example.myapp.debug
-        launchMode: RESUME
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - launchApp:
+            appId: com.example.myapp.debug
+            launchMode: RESUME
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.example.myapp.debug",
-            launchMode = LaunchMode.RESUME,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = LaunchAppTrailblazeTool(
+        appId = "com.example.myapp.debug",
+        launchMode = LaunchMode.RESUME,
+      ),
+    )
   }
 
   @Test
   fun deserializeLaunchAppToolForceRestart() {
     val yaml = """
-- tools:
-    - launchApp:
-        appId: com.example.myapp.debug
-        launchMode: FORCE_RESTART
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - launchApp:
+            appId: com.example.myapp.debug
+            launchMode: FORCE_RESTART
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "wait",
-          trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.example.myapp.debug",
-            launchMode = LaunchMode.FORCE_RESTART,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "wait",
+      trailblazeTool = LaunchAppTrailblazeTool(
+        appId = "com.example.myapp.debug",
+        launchMode = LaunchMode.FORCE_RESTART,
+      ),
+    )
   }
 
   @Test
   fun deserializeTapOnPointTool() {
     val yaml = """
-- tools:
-    - tapOnPoint:
-        x: 100
-        y: 200
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - tapOnPoint:
+            x: 100
+            y: 200
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "tapOnPoint",
-          trailblazeTool = TapOnPointTrailblazeTool(
-            x = 100,
-            y = 200,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "tapOnPoint",
+      trailblazeTool = TapOnPointTrailblazeTool(
+        x = 100,
+        y = 200,
+      ),
+    )
   }
 
   @Test
   fun deserializeTapOnElementWithTextTool() {
     val yaml = """
-- tools:
-    - tapOnElementWithText:
-        text: Sign Out
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - tapOnElementWithText:
+            text: Sign Out
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "tapOnElementWithText",
-          trailblazeTool = TapOnElementWithTextTrailblazeTool(
-            text = "Sign Out",
-            index = 0,
-            id = null,
-            enabled = null,
-            selected = null,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "tapOnElementWithText",
+      trailblazeTool = TapOnElementWithTextTrailblazeTool(
+        text = "Sign Out",
+        index = 0,
+        id = null,
+        enabled = null,
+        selected = null,
+      ),
+    )
   }
 
   @Test
   fun deserializeTapOnElementWithAccessibilityTextTool() {
     val yaml = """
-- tools:
-    - tapOnElementWithAccessibilityText:
-        accessibilityText: Accounts
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - tapOnElementWithAccessibilityText:
+            accessibilityText: Accounts
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "tapOnElementWithAccessibilityText",
-          trailblazeTool = TapOnElementWithAccessiblityTextTrailblazeTool(
-            accessibilityText = "Accounts",
-            index = null,
-            id = null,
-            enabled = null,
-            selected = null,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "tapOnElementWithAccessibilityText",
+      trailblazeTool = TapOnElementWithAccessiblityTextTrailblazeTool(
+        accessibilityText = "Accounts",
+        index = null,
+        id = null,
+        enabled = null,
+        selected = null,
+      ),
+    )
   }
 
   @Test
   fun deserializeLongPressOnElementWithTextTool() {
     val yaml = """
-- tools:
-    - longPressOnElementWithText:
-        text: Sign Out
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - longPressOnElementWithText:
+            text: Sign Out
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "tapOnElementWithText",
-          trailblazeTool = LongPressOnElementWithTextTrailblazeTool(
-            text = "Sign Out",
-            index = null,
-            id = null,
-            enabled = null,
-            selected = null,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "tapOnElementWithText",
+      trailblazeTool = LongPressOnElementWithTextTrailblazeTool(
+        text = "Sign Out",
+        index = null,
+        id = null,
+        enabled = null,
+        selected = null,
+      ),
+    )
   }
 
   @Test
   fun deserializeLongPressOnElementWithAccessibilityTextTool() {
     val yaml = """
-- tools:
-    - longPressElementWithAccessibilityText:
-        accessibilityText: Accounts
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - longPressElementWithAccessibilityText:
+            accessibilityText: Accounts
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "tapOnElementWithAccessibilityText",
-          trailblazeTool = LongPressElementWithAccessibilityTextTrailblazeTool(
-            accessibilityText = "Accounts",
-            index = null,
-            id = null,
-            enabled = null,
-            selected = null,
-          ),
-        )
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    TrailblazeToolYamlWrapper(
+      name = "tapOnElementWithAccessibilityText",
+      trailblazeTool = LongPressElementWithAccessibilityTextTrailblazeTool(
+        accessibilityText = "Accounts",
+        index = null,
+        id = null,
+        enabled = null,
+        selected = null,
+      ),
+    )
   }
 
   @Test
   fun deserializeMaestroTool() {
     val yaml = """
-- tools:
-    - mobile_maestro:
-        commands:
-          - extendedWaitUntil:
-              notVisible: Gift card added to cart
-              timeout: 20000
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - mobile_maestro:
+            commands:
+              - extendedWaitUntil:
+                  notVisible: Gift card added to cart
+                  timeout: 20000
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("mobile_maestro")
-        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
-        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          // yaml holds the Maestro commands-list YAML; substring checks keep this stable
-          // whether kaml renders flow style or block style.
-          assertThat(yaml).contains("extendedWaitUntil")
-          assertThat(yaml).contains("Gift card added to cart")
-          assertThat(yaml).contains("20000")
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0].name).isEqualTo("mobile_maestro")
+    assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
+    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+      // yaml holds the Maestro commands-list YAML; substring checks keep this stable
+      // whether kaml renders flow style or block style.
+      assertThat(yaml).contains("extendedWaitUntil")
+      assertThat(yaml).contains("Gift card added to cart")
+      assertThat(yaml).contains("20000")
     }
   }
 
   @Test
   fun deserializeMaestroToolMultipleCommands() {
     val yaml = """
-- tools:
-    - mobile_maestro:
-        commands:
-          - assertVisible:
-              text: Hello
-          - tapOn:
-              text: OK
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - mobile_maestro:
+            commands:
+              - assertVisible:
+                  text: Hello
+              - tapOn:
+                  text: OK
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(yaml).contains("assertVisible")
-          assertThat(yaml).contains("tapOn")
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+      assertThat(yaml).contains("assertVisible")
+      assertThat(yaml).contains("tapOn")
     }
   }
 
   @Test
   fun maestroToolRoundTrip() {
     val yaml = """
-- tools:
-    - mobile_maestro:
-        commands:
-          - extendedWaitUntil:
-              notVisible: Gift card added to cart
-              timeout: 20000
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - mobile_maestro:
+            commands:
+              - extendedWaitUntil:
+                  notVisible: Gift card added to cart
+                  timeout: 20000
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    val reEncoded = trailblazeYaml.encodeToString(trailItems)
-
-    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
-    with(reDecoded) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("mobile_maestro")
-        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(yaml).contains("extendedWaitUntil")
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0].name).isEqualTo("mobile_maestro")
+    with(reDecoded[0].trailblazeTool as MaestroTrailblazeTool) {
+      assertThat(yaml).contains("extendedWaitUntil")
     }
   }
 
   @Test
   fun deserializeMaestroSetOrientation() {
     val yaml = """
-- tools:
-    - mobile_maestro:
-        commands:
-          - setOrientation: LANDSCAPE_LEFT
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - mobile_maestro:
+            commands:
+              - setOrientation: LANDSCAPE_LEFT
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("mobile_maestro")
-        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
-        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(yaml).contains("setOrientation")
-          assertThat(yaml).contains("LANDSCAPE_LEFT")
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0].name).isEqualTo("mobile_maestro")
+    assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
+    with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+      assertThat(yaml).contains("setOrientation")
+      assertThat(yaml).contains("LANDSCAPE_LEFT")
     }
   }
 
   @Test
   fun maestroSetOrientationRoundTrip() {
     val yaml = """
-- tools:
-    - mobile_maestro:
-        commands:
-          - setOrientation: LANDSCAPE_LEFT
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - mobile_maestro:
+            commands:
+              - setOrientation: LANDSCAPE_LEFT
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    val reEncoded = trailblazeYaml.encodeToString(trailItems)
-
-    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
-    with(reDecoded) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        assertThat(tools[0].name).isEqualTo("mobile_maestro")
-        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(yaml).contains("setOrientation")
-        }
-      }
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0].name).isEqualTo("mobile_maestro")
+    with(reDecoded[0].trailblazeTool as MaestroTrailblazeTool) {
+      assertThat(yaml).contains("setOrientation")
     }
   }
 
   @Test
   fun deserializeAssertVisibleBySelectorWithNodeSelector() {
     val yaml = """
-- tools:
-    - assertVisibleBySelector:
-        reason: The ALARM tab should be visible.
-        nodeSelector:
-          androidAccessibility:
-            textRegex: ALARM
-            resourceIdRegex: "android:id/text1"
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertVisibleBySelector:
+            reason: The ALARM tab should be visible.
+            nodeSelector:
+              androidAccessibility:
+                textRegex: ALARM
+                resourceIdRegex: "android:id/text1"
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ToolTrailItem) {
-        assertThat(tools.size).isEqualTo(1)
-        val tool = tools[0].trailblazeTool as AssertVisibleBySelectorTrailblazeTool
-        assertThat(tool.reason).isEqualTo("The ALARM tab should be visible.")
-        assertThat(tool.nodeSelector).isNotNull()
-        val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
-        assertThat(match.textRegex).isEqualTo("ALARM")
-        assertThat(match.resourceIdRegex).isEqualTo("android:id/text1")
-      }
-    }
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    val tool = tools[0].trailblazeTool as AssertVisibleBySelectorTrailblazeTool
+    assertThat(tool.reason).isEqualTo("The ALARM tab should be visible.")
+    assertThat(tool.nodeSelector).isNotNull()
+    val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.textRegex).isEqualTo("ALARM")
+    assertThat(match.resourceIdRegex).isEqualTo("android:id/text1")
   }
 }

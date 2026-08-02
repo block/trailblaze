@@ -16,46 +16,46 @@ import androidx.compose.ui.unit.dp
 
 /** Sample YAML: sets an alarm in the Clock app. */
 val SET_ALARM_YAML = """
-- prompts:
-    - step: Open the Clock app
-    - step: Navigate to the Alarms tab
-    - step: Create a new alarm set for 7:30 AM
-    - step: Save the alarm
-    - step: Verify the alarm for 7:30 AM is visible in the list
+trail:
+  - step: Open the Clock app
+  - step: Navigate to the Alarms tab
+  - step: Create a new alarm set for 7:30 AM
+  - step: Save the alarm
+  - step: Verify the alarm for 7:30 AM is visible in the list
 """.trimIndent()
 
 /** Sample YAML: adds a contact in the Contacts app. */
 val ADD_CONTACT_YAML = """
-- prompts:
-    - step: Open the Contacts app
-    - step: Tap the button to add a new contact
-    - step: Enter "Jane" as the first name
-    - step: Enter "Doe" as the last name
-    - step: Enter "555-0123" as the phone number
-    - step: Save the contact
-    - step: Verify the contact "Jane Doe" appears in the contacts list
+trail:
+  - step: Open the Contacts app
+  - step: Tap the button to add a new contact
+  - step: Enter "Jane" as the first name
+  - step: Enter "Doe" as the last name
+  - step: Enter "555-0123" as the phone number
+  - step: Save the contact
+  - step: Verify the contact "Jane Doe" appears in the contacts list
 """.trimIndent()
 
 /** Sample YAML: browse Trailblaze releases on GitHub. */
 val EXPLORE_TRAILBLAZE_RELEASES_YAML = """
-- prompts:
-    - step: Navigate to https://github.com/block/trailblaze
-    - step: Click on the "Releases" section
-    - step: Browse the available releases
-    - step: Click on the latest release to learn more about it
-    - step: Read the release notes and describe what changed
-    - step: Find the download assets listed for the release
+trail:
+  - step: Navigate to https://github.com/block/trailblaze
+  - step: Click on the "Releases" section
+  - step: Browse the available releases
+  - step: Click on the latest release to learn more about it
+  - step: Read the release notes and describe what changed
+  - step: Find the download assets listed for the release
 """.trimIndent()
 
 /** Sample YAML: search Wikipedia for a topic and read the summary. */
 val SEARCH_WIKIPEDIA_YAML = """
-- prompts:
-    - step: Navigate to https://en.wikipedia.org
-    - step: Search for "Golden Gate Bridge"
-    - step: Verify the article page for "Golden Gate Bridge" has loaded
-    - step: Read the opening paragraph and confirm it mentions San Francisco
-    - step: Scroll down to find the "History" section
-    - step: Verify the History section is visible on the page
+trail:
+  - step: Navigate to https://en.wikipedia.org
+  - step: Search for "Golden Gate Bridge"
+  - step: Verify the article page for "Golden Gate Bridge" has loaded
+  - step: Read the opening paragraph and confirm it mentions San Francisco
+  - step: Scroll down to find the "History" section
+  - step: Verify the History section is visible on the page
 """.trimIndent()
 
 /** A clickable card used to launch a sample trail. */

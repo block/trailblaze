@@ -488,6 +488,20 @@ internal class TrailmapTargetGenerator(
         outPlatforms
       }
 
+      // 2b) Dependency-exported scripted tools. Fold in the scripted tools this trailmap's
+      //     `dependencies:` closure publishes via `exports:` so the generated top-level `tools:`
+      //     (the single runtime delivery surface) carries them for the consumer's session. Parity
+      //     mirror of the runtime `TrailmapExportedToolsResolver` in `:trailblaze-common` — a
+      //     `dependencies: [<pack>]` edge must deliver the pack's exported tools at RUNTIME, not
+      //     just to the typed d.ts surface. Own/per-platform tools already recorded above win on
+      //     name collision.
+      foldDependencyExportedScriptedTools(
+        ownTrailmapId = trailmapId,
+        ownDeps = ownDeps,
+        trailmapsById = trailmapsById,
+        mergedScriptedTools = mergedScriptedTools,
+      )
+
       // 3) Emit. Keep the existing key order, placing the merged `tools:` immediately before
       //    `platforms:` (the established generated-file convention).
       resolvedTarget.forEach { (key, value) ->
@@ -823,6 +837,75 @@ internal class TrailmapTargetGenerator(
       // `target.tools:` is scripted-only by contract, so an unresolved name is a hard error.
       resolveScriptedToolByName(toolName, resolvedDiscovery, trailmapId)
         ?: throw unknownScriptedToolName(toolName, resolvedDiscovery, trailmapDir, trailmapFile)
+    }
+  }
+
+  /**
+   * Folds the scripted tools a trailmap's `dependencies:` closure publishes via `exports:` into
+   * [mergedScriptedTools] (the accumulator for the generated top-level `tools:`). Build-time mirror
+   * of the runtime `TrailmapExportedToolsResolver` in `:trailblaze-common`.
+   *
+   * ## PARITY CONTRACT
+   *
+   * Same semantics as `TrailmapExportedToolsResolver.resolveTargetTools`: own/per-platform tools
+   * (already in [mergedScriptedTools]) win on name collision; a dep contributes only the scripted
+   * tools named in its `exports:` list; the closure is walked breadth-first and transitively; an
+   * `exports:` name that no scripted tool ships, or the same name exported by two different deps in
+   * one closure, is a hard [GradleException]. Change the rules here and there together.
+   */
+  private fun foldDependencyExportedScriptedTools(
+    ownTrailmapId: String,
+    ownDeps: List<String>,
+    trailmapsById: Map<String, TrailmapInfo>,
+    mergedScriptedTools: LinkedHashMap<String, Map<String, Any?>>,
+  ) {
+    if (ownDeps.isEmpty()) return
+    // Which dep contributed each name we ADD here — own tools stay absent, so an
+    // already-present name with no entry is an own tool (own wins, silent skip).
+    val exportedBy = mutableMapOf<String, String>()
+    val visited = mutableSetOf(ownTrailmapId)
+    val frontier = ArrayDeque(ownDeps)
+    while (frontier.isNotEmpty()) {
+      val depId = frontier.removeFirst()
+      if (!visited.add(depId)) continue
+      val info = trailmapsById[depId] ?: continue
+      val exports = (info.manifest["exports"] as? List<*>)?.mapNotNull { it as? String }.orEmpty()
+      if (exports.isNotEmpty()) {
+        val depDir = info.trailmapFile.parentFile
+          ?: throw GradleException("Trailmap manifest ${info.trailmapFile.absolutePath} has no parent directory")
+        val depDiscovery = buildTrailmapScriptedToolRegistry(depDir, info.trailmapFile)
+        exports.forEach { exportName ->
+          if (mergedScriptedTools.containsKey(exportName)) {
+            val previousDep = exportedBy[exportName]
+            if (previousDep != null && previousDep != depId) {
+              throw GradleException(
+                "Scripted tool name '$exportName' is exported by both trailmap '$previousDep' and " +
+                  "trailmap '$depId', both in the dependency closure of trailmap '$ownTrailmapId'. " +
+                  "Tool names must be unique across a consumer's exported-dependency closure. Rename " +
+                  "one of the tools, or remove the colliding name from one of the deps' `exports:`.",
+              )
+            }
+            // Own tool (no exportedBy entry) or a diamond revisit of the same dep — own/first wins.
+            return@forEach
+          }
+          val cfgs = resolveScriptedToolByName(exportName, depDiscovery, depId)
+            ?: throw GradleException(
+              "Trailmap '$depId' declares `exports: [$exportName]` but no scripted tool with that " +
+                "name is authored under its `target.tools:`. Either remove the unresolved name from " +
+                "`exports:` or add the matching tool. (Detected while generating target " +
+                "'$ownTrailmapId'.)",
+            )
+          cfgs.forEach { cfg ->
+            val name = cfg["name"] as? String
+              ?: throw GradleException("Resolved exported scripted tool in $depId is missing a `name`: $cfg")
+            mergedScriptedTools[name] = cfg
+            exportedBy[name] = depId
+          }
+        }
+      }
+      (info.manifest["dependencies"] as? List<*>)?.forEach { dep ->
+        (dep as? String)?.let { frontier.add(it) }
+      }
     }
   }
 

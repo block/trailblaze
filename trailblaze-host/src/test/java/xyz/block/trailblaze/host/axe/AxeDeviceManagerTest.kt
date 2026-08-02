@@ -2,6 +2,11 @@ package xyz.block.trailblaze.host.axe
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.host.ios.IosDriverAction
 
 /**
  * Unit tests for pure helpers on [AxeDeviceManager]. The resolver-poll loops
@@ -16,7 +21,7 @@ class AxeDeviceManagerTest {
 
   @Test
   fun `swipe UP starts from center and ends 10% from the top`() {
-    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(AxeAction.Direction.UP, width, height)
+    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(IosDriverAction.Direction.UP, width, height)
     val (startX, startY, endX, endY) = coords
     assertEquals(width / 2, startX, "startX is center")
     assertEquals(height / 2, startY, "startY is center")
@@ -26,7 +31,7 @@ class AxeDeviceManagerTest {
 
   @Test
   fun `swipe DOWN starts from center and ends 10% from the bottom`() {
-    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(AxeAction.Direction.DOWN, width, height)
+    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(IosDriverAction.Direction.DOWN, width, height)
     val (startX, startY, endX, endY) = coords
     assertEquals(width / 2, startX)
     assertEquals(height / 2, startY)
@@ -36,7 +41,7 @@ class AxeDeviceManagerTest {
 
   @Test
   fun `swipe LEFT starts from 90% right and ends 10% from left`() {
-    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(AxeAction.Direction.LEFT, width, height)
+    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(IosDriverAction.Direction.LEFT, width, height)
     val (startX, startY, endX, endY) = coords
     assertEquals((width * 0.9).toInt(), startX, "startX is 90% across for a LEFT swipe")
     assertEquals(height / 2, startY)
@@ -46,7 +51,7 @@ class AxeDeviceManagerTest {
 
   @Test
   fun `swipe RIGHT starts from 10% left and ends 90% across`() {
-    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(AxeAction.Direction.RIGHT, width, height)
+    val coords = AxeDeviceManager.computeDirectionalSwipeCoords(IosDriverAction.Direction.RIGHT, width, height)
     val (startX, startY, endX, endY) = coords
     assertEquals((width * 0.1).toInt(), startX)
     assertEquals(height / 2, startY)
@@ -57,7 +62,7 @@ class AxeDeviceManagerTest {
   @Test
   fun `swipe math handles small simulator dimensions without going negative`() {
     // Regression guard: at 100x100 both 10% and 90% endpoints must stay in bounds.
-    val all = AxeAction.Direction.entries.map { dir ->
+    val all = IosDriverAction.Direction.entries.map { dir ->
       dir to AxeDeviceManager.computeDirectionalSwipeCoords(dir, 100, 100)
     }
     for ((dir, coords) in all) {
@@ -65,6 +70,37 @@ class AxeDeviceManagerTest {
         assert(v in 0..100) { "$dir produced out-of-bounds coord: $v" }
       }
     }
+  }
+
+  // --- isTreeReady (launch / open-link readiness poll) ---
+
+  private fun node(children: List<TrailblazeNode> = emptyList(), label: String? = null) =
+    TrailblazeNode(driverDetail = DriverNodeDetail.IosAxe(label = label), children = children)
+
+  @Test
+  fun `a null tree (capture failed) is never ready`() {
+    assertFalse(AxeDeviceManager.isTreeReady(null))
+  }
+
+  @Test
+  fun `a populated tree of blank containers is not ready`() {
+    // The mid-render state the gate exists to wait out: structure present, no content yet.
+    val root = node(children = listOf(node(), node(), node()))
+    assertFalse(AxeDeviceManager.isTreeReady(root))
+  }
+
+  @Test
+  fun `a tree with enough content-bearing nodes is ready`() {
+    val root = node(
+      children = listOf(node(label = "Sign In"), node(label = "Welcome"), node(label = "Settings")),
+    )
+    assertTrue(AxeDeviceManager.isTreeReady(root))
+  }
+
+  @Test
+  fun `a tree with too few content-bearing nodes is not ready`() {
+    val root = node(children = listOf(node(label = "Loading"), node(), node()))
+    assertFalse(AxeDeviceManager.isTreeReady(root))
   }
 
   // IntArray destructuring — mirrors the private extensions in AxeDeviceManager so the

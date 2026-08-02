@@ -412,7 +412,7 @@ abstract class BaseTrailblazeAgent(
    * throwables (notably `CancellationException`) propagate so structured concurrency stays
    * intact and programming errors aren't silently swallowed.
    */
-  private fun resolveDynamicTool(tool: TrailblazeTool): TrailblazeTool {
+  protected fun resolveDynamicTool(tool: TrailblazeTool): TrailblazeTool {
     if (tool !is OtherTrailblazeTool) return tool
     val repo = trailblazeToolRepo ?: return tool
     return try {

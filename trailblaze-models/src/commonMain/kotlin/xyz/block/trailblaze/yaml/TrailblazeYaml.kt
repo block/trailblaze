@@ -309,7 +309,6 @@ class TrailblazeYaml internal constructor(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   ): List<TrailYamlItem> = when (val doc = decodeTrailDocument(yaml)) {
-    is TrailDocument.V1 -> doc.items
     is TrailDocument.Unified -> {
       if (deviceClassifiers.isEmpty()) {
         // A classifier declared as explicitly empty (`classifier: []`, a deterministic no-op —
@@ -332,46 +331,6 @@ class TrailblazeYaml internal constructor(
   }
 
   /**
-   * Strict-v1 parse. Used by [decodeTrailDocument] for the v1 fast path; do
-   * NOT call from outside the dispatcher — public callers should always go
-   * through [decodeTrail] (or [decodeTrailDocument] directly) so v3 inputs
-   * route correctly.
-   */
-  @OptIn(ExperimentalSerializationApi::class)
-  internal fun decodeV1TrailStrict(yaml: String): List<TrailYamlItem> {
-    val trailItemList = yamlInstance.decodeFromString(
-      ListSerializer(
-        yamlInstance.serializersModule.getContextual(TrailYamlItem::class)
-          ?: error("Missing contextual serializer for TrailYamlItem"),
-      ),
-      yaml,
-    )
-    val configItems = trailItemList.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
-    require(configItems.isEmpty() || (configItems.size == 1 && configItems[0] == trailItemList[0])) {
-      "Only one config item is allowed, and it must be the first item in the trail."
-    }
-    val trailheadItems = trailItemList.filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
-    require(trailheadItems.size <= 1) {
-      "Only one trailhead item is allowed in a trail."
-    }
-    if (trailheadItems.size == 1) {
-      val trailheadIndex = trailItemList.indexOf(trailheadItems[0])
-      val firstStepIndex = trailItemList.indexOfFirst {
-        it is TrailYamlItem.PromptsTrailItem || it is TrailYamlItem.ToolTrailItem
-      }
-      // The trailhead is the deterministic step 0: it must sit after the config (if any) and before
-      // any prompts/tools steps, so it always runs first.
-      require(configItems.isEmpty() || trailheadIndex > trailItemList.indexOf(configItems[0])) {
-        "The trailhead item must come after the config item."
-      }
-      require(firstStepIndex == -1 || trailheadIndex < firstStepIndex) {
-        "The trailhead item must come before any prompts/tools steps — it is the trail's step 0."
-      }
-    }
-    return trailItemList
-  }
-
-  /**
    * Decodes a YAML list of tool wrappers directly (no TrailYamlItem wrapping).
    * Input format: `- tapOnPoint:\n    x: 200\n    y: 400`
    */
@@ -390,12 +349,9 @@ class TrailblazeYaml internal constructor(
    * while the host-drives-the-loop path sends one authored tool at a time as a bare tool-wrapper
    * list (see [encodeTools]).
    *
-   * Scope of the v1 decoupling: ONLY the per-tool-envelope branch is off the legacy parser — it is
-   * decoded straight through [decodeTools] and wrapped into a single [TrailYamlItem.ToolTrailItem],
-   * never touching [decodeTrailDocument]. A trail *document* still falls through to [decodeTrail] →
-   * [decodeTrailDocument], which continues to try v1 strict first (unified today; legacy v1 tolerated
-   * while it exists). So this method moves per-tool dispatch off v1; trail-document dispatch remains
-   * v1-coupled until [decodeTrailDocument]'s v1-first path is reworked (a follow-up).
+   * A bare tool envelope is decoded straight through [decodeTools] and wrapped into a single
+   * [TrailYamlItem.ToolTrailItem]; a trail *document* is parsed by [decodeTrail] →
+   * [decodeTrailDocument] (unified only — the legacy v1 list shape is no longer accepted).
    */
   fun decodeTrailOrToolEnvelope(
     yaml: String,
@@ -444,8 +400,6 @@ class TrailblazeYaml internal constructor(
    * lowers only the config (recordings are irrelevant for config extraction).
    */
   fun extractTrailConfig(yaml: String): TrailConfig? = when (val doc = decodeTrailDocument(yaml)) {
-    is TrailDocument.V1 -> doc.items.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
-      .firstOrNull()?.config
     // No device here (static config extraction), so no per-classifier driver to resolve —
     // pass resolvedDriver = null explicitly. The device-aware driver resolution happens in
     // lowerToTrailItems, not here (or via the device-aware overload below). Skip resolves
@@ -471,8 +425,6 @@ class TrailblazeYaml internal constructor(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
   ): TrailConfig? = when (val doc = decodeTrailDocument(yaml)) {
-    is TrailDocument.V1 -> doc.items.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
-      .firstOrNull()?.config
     is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
       doc.trail.config,
       resolvedDriver = UnifiedTrailAdapter.resolveDriver(doc.trail.config, deviceClassifiers),
@@ -547,7 +499,6 @@ class TrailblazeYaml internal constructor(
    */
   fun hasRecordedSteps(yaml: String): Boolean = try {
     when (val doc = decodeTrailDocument(yaml)) {
-      is TrailDocument.V1 -> hasRecordedSteps(doc.items)
       is TrailDocument.Unified -> doc.trail.trail.any { step ->
         step.recordings.isNotEmpty()
       } || doc.trail.trailhead?.recordings?.isNotEmpty() == true
@@ -619,32 +570,14 @@ class TrailblazeYaml internal constructor(
   }
 
   /**
-   * Version-aware parse. **Legacy v1 is the default** (the vast majority of
-   * files in the repo are still v1); the unified format is the fallback. The
-   * check is a plain try/catch — KAML throws a clean exception when the v1
-   * list-shape serializer hits a unified-format mapping root, so the v1
-   * attempt is essentially free for v1 inputs and pays for one extra parse
-   * attempt only when the file is actually the unified format.
-   *
-   * When both parsers reject the input, this rethrows the v1 error verbatim
-   * (preserving its concrete type — typically `SerializationException`) with
-   * the unified-format error attached as a suppressed exception. We preserve
-   * the v1 type because v1 is the default format; callers that catch the
-   * specific KAML exception types keep working unchanged.
+   * Parse a trail document. Only the unified format (`config:` / `trailhead:` /
+   * `trail:` mapping root) is supported — the legacy v1 list shape was removed.
+   * A legacy v1 file (top-level `- config:` / `- prompts:` list) now fails here
+   * with the [decodeUnifiedTrail] error (root is not a mapping) rather than
+   * parsing. Callers that need version-agnostic behavior no longer exist.
    */
-  fun decodeTrailDocument(yaml: String): TrailDocument {
-    val v1Error: Throwable = try {
-      return TrailDocument.V1(decodeV1TrailStrict(yaml))
-    } catch (e: Throwable) {
-      e
-    }
-    try {
-      return TrailDocument.Unified(decodeUnifiedTrail(yaml))
-    } catch (unifiedError: Throwable) {
-      v1Error.addSuppressed(unifiedError)
-    }
-    throw v1Error
-  }
+  fun decodeTrailDocument(yaml: String): TrailDocument =
+    TrailDocument.Unified(decodeUnifiedTrail(yaml))
 
   /**
    * Encode a [UnifiedTrail] document as YAML. The migrator uses this to write

@@ -2,15 +2,20 @@
   /* Trail Runner semantic colors — ONE meaning per hue (Design for Hackers ch08/ch09: functional color).
      Status hues use base palette tokens; the AI/blaze accent is Trail Runner's one signature
      color. Use these by MEANING, never by appearance — if it isn't the listed concept, don't use the hue. */
-  --tb-pass:    var(--tb-primary-green);     /* success · passed · done · primary "go" action (brand green — used sparingly) */
-  --tb-fail:    var(--status-danger);  /* failure · error · destructive */
-  --tb-running: #5e9bff;               /* in-progress · running · active · informational */
+  --tb-pass:    #39d16d;               /* success · passed · done — Trailblaze Report green */
+  --tb-fail:    #ff626d;               /* failure · error · destructive — Trailblaze Report red */
+  --tb-running: #6aa6ff;               /* in-progress · running · active · informational */
   --tb-link:    var(--tb-running);     /* links · "edit"/"open" affordances · filenames — the informational blue (a link is an informational affordance) */
-  --tb-warning: #ff9d2e;               /* warning · caution · needs attention · self-healed */
-  --tb-amber:   var(--tb-warning);     /* legacy alias for --tb-warning (kept so existing call sites resolve) */
-  --tb-ai:      #b58cff;               /* AI · blaze · prompt-authored content — the agent "magic" accent */
+  --tb-warning: #b1740f;               /* warning · caution · self-healed — canonical amber accent */
+  --tb-warning-text: #f0c16a;          /* readable amber text on dark surfaces */
+  --tb-warning-surface: rgba(177,116,15,.13);
+  --tb-amber:   var(--tb-warning-text); /* legacy text alias; the canonical mark stays --tb-warning */
+  --tb-ai:      #c29aff;               /* LLM-authored content only — Trailblaze Report violet */
+  --tb-ai-surface: #21202f;
   --tb-analytics: #f5b041;             /* analytics / metrics gold */
   --tb-danger-text: #ffb3b8;
+  --tb-selection: var(--tb-running);    /* selected · focused · current */
+  --tb-on-selection: #071426;
 
   --fz-2xs: 10.5px; --fz-xs: 11.5px; --fz-sm: 12.5px; --fz-md: 13.5px;
   --fz-lg: 15.5px; --fz-xl: 20px; --fz-2xl: 26px;
@@ -26,16 +31,24 @@
 }
 
 :where(button, [role="button"], a, select, .tb-nav, .tb-pal-row, .tb-tab):focus-visible {
-  outline: 2px solid var(--tb-primary-green);
+  outline: 2px solid var(--tb-selection);
   outline-offset: 2px;
   border-radius: 6px;
 }
 .tb-btn:active { transform: translateY(0.5px); }
-html, body { margin: 0; height: 100%; }
+html, body, #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  background: var(--bg-window);
+}
 body {
   background: var(--bg-window);
-  font-family: var(--font-display);
+  font-family: var(--font-ui);
   color: var(--text-standard);
+  font-kerning: normal;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -47,7 +60,7 @@ button { font-family: inherit; cursor: pointer; }
 [data-lucide] { stroke-width: 1.6; }
 
 .tb-window {
-  position: fixed; inset: 0; overflow: hidden;
+  position: fixed; inset: 0; width: 100vw; height: 100dvh; min-height: 100%; overflow: hidden;
   display: flex; flex-direction: column; background: var(--bg-window);
 }
 .tb-native .tb-window { padding-top: 28px; }
@@ -69,12 +82,12 @@ button { font-family: inherit; cursor: pointer; }
   position: relative; transition: background .12s, color .12s; margin-bottom: 1px;
 }
 .tb-nav:hover { background: var(--bg-standard); color: var(--text-standard); }
-/* Nav items carry their own active highlight (bg + green bar), so the global green focus-visible ring
+/* Nav items carry their own active highlight (bg + blue bar), so the global focus-visible ring
    is redundant noise here — replace it with a quiet background (keyboard feedback, no border). Listed
    before .active so a focused active item keeps its prominent fill. */
 .tb-nav:focus-visible { outline: none; background: var(--bg-standard); color: var(--text-standard); }
 .tb-nav.active { background: var(--bg-prominent); color: var(--text-standard); font-weight: 600; }
-.tb-nav.active::before { content:""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 99px; background: var(--tb-primary-green); }
+.tb-nav.active::before { content:""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 99px; background: var(--tb-selection); }
 .tb-nav .ico { flex: 0 0 18px; display: inline-flex; }
 /* Badge cluster layout lives here (not inline) so the collapsed rail can re-anchor it: an auto
    margin inside a centered row would otherwise drag the icon off the rail's center line. */
@@ -86,17 +99,9 @@ button { font-family: inherit; cursor: pointer; }
    Zero width when empty (no draft open) so it doesn't reserve space on other screens. */
 .tb-rail-right { flex: 0 0 auto; display: flex; align-items: stretch; }
 
-@media (max-width: 1000px) {
-  .tb-rail { width: 60px; flex-basis: 60px; }
-  .tb-rail .label, .tb-rail .tb-rail-h, .tb-rail .tb-brand .name, .tb-rail .cnt { display: none; }
-  .tb-rail .tb-nav { justify-content: center; padding: 9px; }
-  .tb-rail .tb-nav .bdg { position: absolute; margin-left: 0; right: 4px; top: 4px; }
-  .tb-rail .tb-rail-scroll { scrollbar-width: none; }
-  .tb-rail .tb-rail-scroll::-webkit-scrollbar { width: 0; height: 0; }
-}
-
 /* User-collapsed rail: same icon-only treatment as the narrow-window breakpoint, but toggled and
-   persisted. The pickers render their own compact (icon-only) markup when collapsed.
+   persisted. NavRail also applies this class at the narrow-window breakpoint so React and CSS
+   render the same compact markup instead of clipping expanded controls into a 60px rail.
    Alignment invariants for the icon column:
    - the badge cluster re-anchors to the row corner (its auto margin would drag the icon left of
      the rail's center line inside a justify-content:center row);
@@ -112,7 +117,7 @@ button { font-family: inherit; cursor: pointer; }
 .tb-main {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: var(--bg-sheet);
-  margin: 0 12px 12px 0; border-radius: 14px;
+  margin: 12px 12px 12px 0; border-radius: 14px;
   border: 1px solid var(--tb-hairline);
   box-shadow: 0 1px 3px rgba(0,0,0,.05); overflow: hidden;
 }
@@ -130,7 +135,8 @@ button { font-family: inherit; cursor: pointer; }
 .tb-btn.ghost { background: transparent; border-color: transparent; color: var(--text-subtle-variant); }
 .tb-btn.ghost:hover { background: var(--bg-standard); color: var(--text-standard); }
 .tb-btn.primary { background: var(--tb-primary-green); color: #00220a; border-color: transparent; font-weight: 700; }
-.tb-btn.primary:hover { background: #00c711; }
+.tb-btn.primary:hover { background: var(--tb-primary-green-pressed); }
+html[data-theme="light"] .tb-btn.primary { color: #ffffff; }
 .tb-btn:disabled { opacity: .4; cursor: not-allowed; }
 .tb-btn:disabled:hover { background: var(--bg-prominent); }
 .tb-btn.primary:disabled:hover { background: var(--tb-primary-green); }
@@ -139,8 +145,8 @@ button { font-family: inherit; cursor: pointer; }
 
 .tb-card { background: var(--bg-subtle); border: 1px solid var(--tb-hairline); border-radius: 12px; }
 .tb-card.pad { padding: 16px 18px; }
-.tb-h1 { font-size: 25px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
-.tb-h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
+.tb-h1 { font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
+.tb-h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 .tb-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-subtle); }
 /* Timeline section labels: the trailhead's purple must deepen on light (same reason as the chips below). */
 .tb-eyebrow.trailhead { color: #b58cff; }
@@ -169,17 +175,17 @@ html[data-theme="light"] .tb-eyebrow.trailhead { color: #5b21b6; }
 .tb-ready { display: inline-flex; align-items: center; gap: 4px; height: 30px; box-sizing: border-box; padding: 0 9px; border-radius: 999px; background: var(--bg-subtle); border: 1px solid var(--tb-hairline-strong); }
 .tb-ready-line { width: 20px; height: 22px; flex: 0 0 auto; padding: 0; border: none; background: transparent; cursor: pointer; position: relative; border-radius: 6px; }
 .tb-ready-line::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 5px; transform: translateY(-50%); border-radius: 99px; background: var(--bg-extra-prominent); transition: background .12s, filter .12s; }
-.tb-ready-line[data-state="done"]::after { background: #00E013; }
-.tb-ready-line[data-state="fail"]::after { background: #F84752; }
+.tb-ready-line[data-state="done"]::after { background: var(--tb-pass); }
+.tb-ready-line[data-state="fail"]::after { background: var(--tb-fail); }
 .tb-ready-line:hover::after { filter: brightness(1.18); }
 .tb-ready-line:active::after { transform: translateY(-50%) scale(.92); }
-.tb-ready-line:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -1px; }
+.tb-ready-line:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: -1px; }
 
 /* square icon button (kebab "more actions") — square hover state, like macOS toolbar buttons */
 .tb-icon-sq { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 auto; border: none; border-radius: 8px; background: transparent; color: var(--text-subtle); cursor: pointer; transition: background .12s var(--ease-out-soft), color .12s var(--ease-out-soft); }
 .tb-icon-sq:hover { background: var(--bg-prominent); color: var(--text-standard); }
 .tb-icon-sq:active { background: var(--bg-extra-prominent); }
-.tb-icon-sq:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: 2px; }
+.tb-icon-sq:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: 2px; }
 
 /* dropdown / popover menu row: background lift on hover (replaces per-row inline JS handlers) */
 .tb-menu-item:hover { background: var(--bg-subtle); }
@@ -207,39 +213,124 @@ html[data-theme="light"] .tb-eyebrow.trailhead { color: #5b21b6; }
    the active underline survives. */
 .tb-tab { font-size: 13.5px; font-weight: 600; color: var(--text-subtle); padding: 0 0 11px; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .tb-tab:hover { color: var(--text-standard); }
-.tb-tab.active { color: var(--text-standard); border-bottom-color: var(--tb-primary-green); }
+.tb-tab.active { color: var(--text-standard); border-bottom-color: var(--tb-selection); }
 
 .tb-row { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid var(--tb-hairline); background: var(--bg-subtle); border-radius: 10px; transition: background .12s, border-color .12s; }
 .tb-row:hover { background: var(--bg-standard); border-color: var(--tb-hairline-strong); }
 .tb-row.sel { border-color: rgba(0,224,19,.4); background: rgba(0,224,19,.06); }
 .tb-tree { display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text-subtle-variant); white-space: nowrap; }
 .tb-tree:hover { background: var(--bg-standard); }
-.tb-tree.active { background: rgba(0,224,19,.1); color: #fff; font-weight: 600; }
+.tb-tree.active { background: rgba(70,130,255,.12); color: var(--text-standard); font-weight: 600; border-radius: 0; }
 .tb-tree:hover .tb-pin { opacity: .7 !important; }
 .tb-ws-btn { transition: background .12s; }
 .tb-ws-btn:hover { background: var(--bg-standard); }
 
-html[data-theme="light"] .tb-nav.active { background: rgba(0,176,20,.16); }
-html[data-theme="light"] .tb-tree.active { background: rgba(0,176,20,.20); color: var(--text-standard); }
-html[data-theme="light"] .tb-row.sel { background: rgba(0,176,20,.14); border-color: rgba(0,176,20,.5); }
+html[data-theme="light"] .tb-nav.active {
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px var(--tb-hairline), 0 1px 2px rgba(65,58,43,.05);
+}
+/* A picked tree row is informational selection, not a callout. A quiet blue tint and stronger type
+   are enough; keep the active row flat and free of the rounded inset-edge treatment. */
+html[data-theme="light"] .tb-tree.active {
+  background: rgba(31,111,235,.08);
+  color: var(--text-standard);
+  box-shadow: none;
+}
+html[data-theme="light"] .tb-row.sel { background: rgba(31,111,235,.08); border-color: rgba(31,111,235,.34); }
 /* Pins are a subtle-until-hover affordance in dark; in light the resting 0.28 opacity is invisible, so lift it (the inline style needs !important to beat). */
-html[data-theme="light"] .tb-pin { opacity: .7 !important; }
+html[data-theme="light"] .tb-pin { opacity: .44 !important; }
+html[data-theme="light"] .tb-tree:hover .tb-pin,
+html[data-theme="light"] .tb-pin:hover { opacity: .9 !important; }
 /* Chip tints stay (the hue is the signal); only the text color needs to deepen — the dark-mode neon tones drop below AA on the pale light fills. */
-html[data-theme="light"] .tb-chip.green { color: #08660f; }
-html[data-theme="light"] .tb-chip.red { color: #c81e2b; }
-html[data-theme="light"] .tb-chip.blue { color: #2358b8; }
-html[data-theme="light"] .tb-chip.amber { color: #8a4500; }
-html[data-theme="light"] .tb-chip.purple { color: #5b21b6; }
+html[data-theme="light"] .tb-chip.green { color: #116b2e; background: rgba(26,127,55,.10); }
+html[data-theme="light"] .tb-chip.red { color: #cf222e; background: rgba(207,34,46,.10); }
+html[data-theme="light"] .tb-chip.blue { color: #1859c9; background: rgba(31,111,235,.10); }
+html[data-theme="light"] .tb-chip.amber { color: #825700; background: rgba(154,103,0,.11); }
+html[data-theme="light"] .tb-chip.purple { color: #6f42c1; background: rgba(130,80,223,.10); }
 /* --tb-danger-text is a light pink tuned for dark mode; on the pale error banner/snippet fills in
    light mode it drops below AA (pink-on-pink). Deepen it to the same red the light chip uses, so the
    error banner text + icon, the "Full error" triangle, and the Screen-error boundary stay readable. */
-html[data-theme="light"] { --tb-danger-text: #c81e2b; }
+html[data-theme="light"] {
+  --tb-pass: #1a7f37;
+  --tb-fail: #cf222e;
+  --tb-running: #1f6feb;
+  --tb-link: var(--tb-running);
+  --tb-danger-text: #cf222e;
+  --tb-analytics: #9a6700;
+  --tb-on-selection: #ffffff;
+  --tb-warning: #b1740f;
+  --tb-warning-text: #8a5700;
+  --tb-warning-surface: #fff7df;
+  --tb-amber: var(--tb-warning-text);
+  --tb-ai: #8250df;
+  --tb-ai-surface: #f4efff;
+}
 /* Settings rows divide with a bottom border; drop it on the last row in a section so there isn't a
    stray line floating just above the card's bottom edge. !important beats the row's inline border. */
 .tb-srow:last-child { border-bottom: none !important; }
-/* Light mode gets a soft, cool-hue-shifted float shadow on the content sheet (ch09: shadows skew
-   cool, never pure black). In dark, bg-tiering carries the elevation, so this is light-only. */
-html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 12px 32px -10px rgba(15,23,42,.12); }
+/* Light mode gets a soft warm-neutral float shadow on the content sheet. In dark, bg-tiering
+   carries the elevation, so this is light-only. */
+html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(65,58,43,.04), 0 16px 42px -18px rgba(65,58,43,.18); }
+
+/* Trails in light mode: crisp paper workspace, softly recessed index, and restrained elevation.
+   These classes live only on the run-trails surface so other screens keep their own composition. */
+html[data-theme="light"] .tb-trails-tree {
+  background: #f7f6f2 !important;
+}
+html[data-theme="light"] .tb-trail-detail-head {
+  background: #ffffff !important;
+  box-shadow: 0 1px 0 rgba(65,58,43,.04);
+}
+html[data-theme="light"] .tb-trail-config {
+  background: #f7f6f2;
+  border-color: #dfddd4;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+}
+html[data-theme="light"] .tb-trail-detail-body .tb-btn.primary:disabled {
+  opacity: 1;
+  color: var(--text-subtle);
+  background: var(--bg-prominent);
+  border-color: var(--tb-hairline);
+}
+
+html[data-theme="light"] .tb-overlay { background: rgba(42,39,32,.34); }
+html[data-theme="light"] .tb-run-dialog {
+  background: #f7f6f2 !important;
+  border-color: #d5d2c8 !important;
+  box-shadow: 0 28px 80px rgba(42,39,32,.25), 0 2px 8px rgba(42,39,32,.10) !important;
+}
+html[data-theme="light"] .tb-run-head,
+html[data-theme="light"] .tb-run-footer { background: #ffffff !important; }
+html[data-theme="light"] .tb-run-nav { background: #f2f1eb; }
+html[data-theme="light"] .tb-run-form { background: #f7f6f2; }
+html[data-theme="light"] .tb-run-command { background: #f7f6f2 !important; }
+html[data-theme="light"] .tb-run-mark {
+  background: rgba(0,168,107,.10) !important;
+  border-color: rgba(0,168,107,.28) !important;
+}
+.tb-run-footer [data-testid="run-config-run"] .tb-btn {
+  min-width: 72px;
+  height: 34px;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+@media (max-width: 1100px) {
+  .tb-run-grid { grid-template-columns: 188px minmax(0, 1fr) 330px !important; }
+  .tb-run-form { padding: 20px 22px !important; }
+  .tb-run-field { align-items: flex-start !important; }
+}
+@media (max-width: 880px) {
+  .tb-run-grid { grid-template-columns: 176px minmax(0, 1fr) !important; }
+  .tb-run-preview { display: none; }
+  .tb-trail-detail-head { padding-left: 20px !important; padding-right: 20px !important; }
+  .tb-trail-detail-body { padding-left: 20px !important; padding-right: 20px !important; }
+}
 
 .tb-input { display: flex; align-items: center; gap: 8px; background: var(--bg-standard); border: 1px solid var(--tb-hairline); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; color: var(--text-subtle); }
 .tb-input input { background: transparent; border: none; outline: none; color: var(--text-standard); font-family: inherit; font-size: 13px; width: 100%; }
@@ -247,13 +338,13 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
 .tb-select.full { display: flex; width: 100%; }
 .tb-select-control { display: inline-flex; align-items: stretch; width: 100%; height: 30px; padding: 0; font: inherit; cursor: pointer; position: relative; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); border-radius: 8px; color: var(--text-standard); overflow: hidden; transition: border-color .12s var(--ease-out-soft); }
 .tb-select-control:hover { border-color: var(--tb-hairline-stronger); }
-.tb-select-control[aria-expanded="true"] { border-color: var(--tb-primary-green); }
+.tb-select-control[aria-expanded="true"] { border-color: var(--tb-selection); }
 .tb-select-label { display: inline-flex; align-items: center; min-width: 68px; padding: 0 10px; background: var(--bg-standard); border-right: 1px solid var(--tb-hairline); color: var(--text-subtle); font-size: 11px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
 .tb-select-value { flex: 1; min-width: 0; display: inline-flex; align-items: center; padding: 0 30px 0 11px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-select-chev { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: var(--text-subtle); pointer-events: none; display: inline-flex; }
 .tb-select-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); color: var(--text-subtle-variant); font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; position: relative; white-space: nowrap; transition: border-color .12s var(--ease-out-soft), color .12s var(--ease-out-soft); }
 .tb-select-chip:hover { border-color: var(--tb-hairline-stronger); color: var(--text-standard); }
-.tb-select-chip[aria-expanded="true"] { border-color: var(--tb-primary-green); color: var(--text-standard); }
+.tb-select-chip[aria-expanded="true"] { border-color: var(--tb-selection); color: var(--text-standard); }
 /* An engaged (non-default) filter chip: a quiet informational-blue tint so an active filter reads as
    "on" at a glance, without competing with the green "go"/primary accent. */
 .tb-select-chip.active { border-color: rgba(94,155,255,.5); background: rgba(94,155,255,.08); color: var(--text-standard); }
@@ -270,8 +361,8 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
 .tb-select-pop { overflow-y: auto; z-index: 200; padding: 5px; background: var(--bg-elevated); border: 1px solid var(--tb-hairline-strong); border-radius: 10px; box-shadow: 0 16px 44px rgba(0,0,0,.5); }
 .tb-select-opt { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 6px; font-size: 12.5px; color: var(--text-standard); cursor: pointer; white-space: nowrap; }
 .tb-select-opt.active { background: var(--bg-prominent); }
-.tb-select-opt.sel { color: var(--tb-primary-green); }
-.tb-select-tick { flex: 0 0 auto; color: var(--tb-primary-green); }
+.tb-select-opt.sel { color: var(--tb-selection); }
+.tb-select-tick { flex: 0 0 auto; color: var(--tb-selection); }
 
 /* Scannable option/table rows — shared by the rich Select popup and the full tool palette. */
 .tb-opt-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: start; gap: 11px; padding: 10px 11px; border-radius: 9px; cursor: pointer; transition: background .1s var(--ease-out-soft); }
@@ -282,17 +373,17 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
 .tb-opt-row.dense .tb-opt-meta { font-size: 10.5px; line-height: 1.3; }
 .tb-opt-row.dense .tb-opt-desc { font-size: 11px; line-height: 1.3; }
 .tb-opt-row:hover, .tb-opt-row.active { background: var(--bg-subtle); }
-.tb-opt-row.sel { background: rgba(0,224,19,.06); }
-.tb-opt-row:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -2px; }
+.tb-opt-row.sel { background: rgba(94,155,255,.08); }
+.tb-opt-row:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: -2px; }
 .tb-opt-ico { margin-top: 1px; display: inline-flex; flex: 0 0 auto; }
 .tb-opt-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .tb-opt-line { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .tb-opt-name { font-size: 13px; font-weight: 700; color: var(--text-standard); }
-.tb-opt-row.sel .tb-opt-name { color: var(--tb-primary-green); }
+.tb-opt-row.sel .tb-opt-name { color: var(--tb-selection); }
 .tb-opt-meta { font-size: 11px; line-height: 1.5; color: var(--text-subtle-variant); word-break: break-word; }
 .tb-opt-desc { font-size: 11.5px; line-height: 1.45; color: var(--text-subtle); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tb-opt-trail { display: inline-flex; align-items: center; gap: 6px; align-self: center; flex: 0 0 auto; font-size: 10.5px; color: var(--text-subtle); white-space: nowrap; }
-.tb-opt-check { color: var(--tb-primary-green); flex: 0 0 auto; }
+.tb-opt-check { color: var(--tb-selection); flex: 0 0 auto; }
 
 /* Tool palette as an aligned table — one scannable row per tool, columns line up down the list. */
 .tb-paltbl-head, .tb-paltbl-row { display: grid; grid-template-columns: minmax(0,1fr) 108px 96px 66px; align-items: center; gap: 14px; padding: 0 14px; }
@@ -300,7 +391,7 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
 .tb-paltbl-head > span { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle); }
 .tb-paltbl-row { height: 42px; border-radius: 8px; cursor: pointer; transition: background .1s var(--ease-out-soft); }
 .tb-paltbl-row:hover, .tb-paltbl-row.active { background: var(--bg-subtle); }
-.tb-paltbl-row:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: -2px; }
+.tb-paltbl-row:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: -2px; }
 .tb-paltbl-tool { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .tb-paltbl-tool .nm { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--text-standard); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb-paltbl-cell { min-width: 0; overflow: hidden; }
@@ -317,7 +408,12 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
 .tb-pal-row.on { background: var(--bg-prominent); }
 
 .tb-phone { position: relative; aspect-ratio: .487; background: linear-gradient(180deg,#0b1c13,#04100a); border-radius: 26px; border: 6px solid #1c1c1e; overflow: hidden; }
-.tb-skel { background: var(--tb-hairline); border-radius: 5px; }
+.tb-skel {
+  background: var(--tb-hairline-strong);
+  border-radius: 5px;
+  animation: tbSkeletonPulse 1.35s ease-in-out infinite;
+}
+.tb-skeleton { width: 100%; }
 
 .hljs { background: transparent !important; padding: 0 !important; color: var(--text-subtle-variant); }
 
@@ -353,7 +449,10 @@ html[data-theme="light"] .tb-main { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 
    nothing keep stable keys + data refs, so existing rows don't remount and don't re-animate. */
 @keyframes tb-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .tb-enter { animation: tb-enter 200ms ease-out; }
-@media (prefers-reduced-motion: reduce) { .tb-enter { animation: none; } }
+@keyframes tbSkeletonPulse { 0%, 100% { opacity: .42; } 50% { opacity: .78; } }
+@media (prefers-reduced-motion: reduce) {
+  .tb-enter, .tb-skel { animation: none; }
+}
 .tb-editor { border: 1px solid var(--tb-hairline); border-radius: 10px; overflow: hidden; background: var(--bg-standard); padding: 8px 10px; }
 .tb-editor > div { height: 100%; }
 /* a little breathing room above the first line / below the last, on top of the wrapper padding */
@@ -379,11 +478,195 @@ html[data-theme="light"] .cm-s-tb .cm-atom,
 html[data-theme="light"] .cm-s-tb .cm-keyword,
 html[data-theme="light"] .cm-s-tb .cm-meta,
 html[data-theme="light"] .cm-s-tb .cm-def,
-html[data-theme="light"] .cm-s-tb .cm-variable-2 { color: #2358b8; }
-html[data-theme="light"] .cm-s-tb .cm-number { color: #5b21b6; }
-html[data-theme="light"] .cm-s-tb .cm-string { color: #08660f; }
-html[data-theme="light"] .cm-s-tb .cm-tag    { color: #8a4500; }
-html[data-theme="light"] .cm-s-tb .CodeMirror-selected { background: rgba(35,88,184,.16); }
+html[data-theme="light"] .cm-s-tb .cm-variable-2 { color: #1f6feb; }
+html[data-theme="light"] .cm-s-tb .cm-number { color: #8250df; }
+html[data-theme="light"] .cm-s-tb .cm-string { color: #1a7f37; }
+html[data-theme="light"] .cm-s-tb .cm-tag    { color: #9a6700; }
+html[data-theme="light"] .cm-s-tb .CodeMirror-selected { background: rgba(31,111,235,.15); }
 .tb-row-link { transition: background .12s ease, border-color .12s ease; }
 .tb-row-link:hover { background: var(--bg-elevated); border-color: var(--tb-hairline-strong); }
-.tb-row-link:focus-visible { outline: 2px solid var(--tb-primary-green); outline-offset: 1px; }
+.tb-row-link:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: 1px; }
+
+/* Create is an agent handoff, not a second authoring surface. The neutral progress rail explains
+   the three beats; violet is reserved for the agent identity inside the content itself. */
+.tb-create-onramp {
+  flex: 1;
+  min-height: 0;
+  display: block;
+  overflow: auto;
+  background: var(--bg-sheet);
+}
+.tb-create-progress {
+  width: min(720px, 100%);
+  min-height: auto;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: clamp(36px, 6vh, 64px) clamp(28px, 5vw, 64px) 0;
+  border: 0;
+  background: transparent;
+}
+.tb-create-progress li > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.tb-create-progress ol {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 24px;
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  border-bottom: 1px solid var(--tb-hairline);
+}
+.tb-create-progress li { position: relative; display: flex; flex: 1; align-items: center; gap: 8px; color: var(--text-subtle); }
+.tb-create-progress li i {
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 50%;
+  color: var(--text-subtle);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+.tb-create-progress li strong { color: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.tb-create-progress li.active { color: var(--text-standard); }
+.tb-create-progress li.active i { border-color: var(--tb-running); background: var(--tb-running); color: var(--tb-on-selection); }
+.tb-create-progress li.done { color: var(--text-subtle-variant); }
+.tb-create-progress li.done i { border-color: var(--tb-pass); background: var(--tb-pass); color: #fff; }
+.tb-create-content {
+  width: min(720px, 100%);
+  box-sizing: border-box;
+  align-self: auto;
+  margin: 0 auto;
+  padding: 32px clamp(28px, 5vw, 64px) 64px;
+}
+.tb-create-agent-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--tb-ai);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: .1em;
+}
+.tb-create-content h1 {
+  margin: 11px 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3vw, 36px);
+  line-height: 1.1;
+  letter-spacing: -.025em;
+}
+.tb-create-content > p {
+  max-width: 620px;
+  margin: 13px 0 30px;
+  color: var(--text-subtle-variant);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.tb-create-brief { display: flex; flex-direction: column; gap: 18px; }
+.tb-create-field-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-standard);
+  font-size: 12px;
+  font-weight: 650;
+}
+.tb-create-intent {
+  width: 100%;
+  min-height: 84px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 13px 14px;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 9px;
+  outline: none;
+  background: var(--bg-standard);
+  color: var(--text-standard);
+  font: 14px/1.55 var(--font-ui);
+  transition: border-color .12s, box-shadow .12s;
+}
+.tb-create-intent:focus { border-color: var(--tb-selection); box-shadow: 0 0 0 3px color-mix(in srgb, var(--tb-selection) 16%, transparent); }
+.tb-create-field-hint { margin-top: 6px; color: var(--tb-warning-text); font-size: 11px; }
+.tb-create-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .45fr); border: 1px solid var(--tb-hairline); border-radius: 9px; overflow: hidden; background: var(--bg-subtle); }
+.tb-create-context-item {
+  min-width: 0;
+  min-height: 58px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-standard);
+  text-align: left;
+}
+.tb-create-context-item + .tb-create-context-item { border-left: 1px solid var(--tb-hairline); }
+.tb-create-context-item > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.tb-create-context-item small { color: var(--text-subtle); font-size: 9.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.tb-create-context-item strong { overflow: hidden; color: var(--text-standard); font-size: 11.5px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.tb-create-context-item em { flex: 0 0 auto; color: var(--text-subtle); font-size: 10.5px; font-style: normal; }
+.tb-create-target { cursor: pointer; font: inherit; }
+.tb-create-target:hover { background: var(--bg-standard); }
+.tb-create-actions { display: flex; align-items: center; gap: 10px; }
+.tb-create-copy,
+.tb-create-preview {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font: 650 12.5px var(--font-ui);
+}
+.tb-create-copy { padding: 0 15px; border: 1px solid transparent; background: var(--tb-running); color: var(--tb-on-selection); }
+.tb-create-copy:hover:not(:disabled) { filter: brightness(1.06); }
+.tb-create-copy:disabled { opacity: .42; cursor: not-allowed; }
+.tb-create-preview { padding: 0 8px; border: 0; background: transparent; color: var(--text-subtle-variant); }
+.tb-create-preview:hover { color: var(--text-standard); background: var(--bg-subtle); }
+.tb-create-handoff {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 13px;
+  border: 1px solid var(--tb-hairline);
+  border-left: 3px solid var(--tb-running);
+  background: var(--bg-subtle);
+}
+.tb-create-handoff > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tb-create-handoff strong { font-size: 12px; }
+.tb-create-handoff span { color: var(--text-subtle); font-size: 11px; line-height: 1.45; }
+.tb-create-copy-error { color: var(--tb-danger-text); font-size: 11.5px; line-height: 1.45; }
+.tb-create-prompt {
+  max-height: 260px;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: auto;
+  padding: 13px 14px;
+  border: 1px solid var(--tb-hairline);
+  border-radius: 8px;
+  background: var(--bg-standard);
+  color: var(--text-subtle-variant);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 820px) {
+  .tb-create-progress { padding: 24px 22px 0; }
+  .tb-create-progress ol { gap: 12px; padding-bottom: 18px; }
+  .tb-create-progress li { flex: 1; }
+  .tb-create-content { padding: 28px 22px 48px; }
+}
+@media (max-width: 560px) {
+  .tb-create-progress li > span { display: none; }
+  .tb-create-progress ol { justify-content: center; }
+  .tb-create-progress li { flex: 0 0 auto; }
+  .tb-create-context { grid-template-columns: 1fr; }
+  .tb-create-context-item + .tb-create-context-item { border-left: 0; border-top: 1px solid var(--tb-hairline); }
+}

@@ -73,7 +73,7 @@ function FormatBadge({ kind }) {
   );
 }
 
-function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, filterTarget, setFilterTarget, filterFormat, setFilterFormat, platforms, targets, sortBy, setSortBy, hasUntargeted = false, hasUnplatformed = false, total, selected, selectedFolder, onSelect, onSelectFolder, onRemoveRoot, onChangeWorkspace, help, onNewTrail, onFocusDir, editedOnly, setEditedOnly, roots, addError, addBusy = false, width = 280, favSet = new Set(), onToggleFavorite, targetScopeLabel, targetScopePlatform, onClearTargetScope }) {
+function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, filterTarget, setFilterTarget, filterFormat, setFilterFormat, platforms, targets, sortBy, setSortBy, hasUntargeted = false, hasUnplatformed = false, total, selected, selectedFolder, onSelect, onSelectFolder, onRemoveRoot, onChangeWorkspace, help, onNewTrail, onFocusDir, editedOnly, setEditedOnly, roots, loading = false, rootsLoading = false, addError, addBusy = false, width = 280, favSet = new Set(), onToggleFavorite, targetScopeLabel, targetScopePlatform, onClearTargetScope }) {
   const targetMap = TB.useTargetAppMap();
   // Container (suite/section) folders collapse independently; the default is all-open. Bundles use a
   // single-open accordion instead — `openBundle` holds the one expanded bundle's acc (null = none), so
@@ -222,7 +222,7 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
   const extras = roots?.extras || [];
   const workspaceName = (roots?.primary || '').split('/').filter(Boolean).pop() || 'Not set';
   return (
-    <div style={{ width, flex: '0 0 ' + width + 'px', borderRight: '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column' }}>
+    <div className="tb-trails-tree" style={{ width, flex: '0 0 ' + width + 'px', borderRight: '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column' }}>
       <RailHeader ico="route" iconColor="var(--tb-running)" title="Trails"
         help={help}
         right={<React.Fragment>
@@ -292,7 +292,8 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
           Tools and Trailmaps list views, where it sits in the footer instead). */}
       <TargetScopeBanner label={targetScopeLabel} platform={targetScopePlatform} onShowAll={onClearTargetScope} />
       <div ref={listRef} tabIndex={0} style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px', outline: 'none' }} onKeyDown={onTreeKeyDown} data-testid="trail-tree-list">
-        {!ql && pinnedDirs.length > 0 && (
+        {loading && <div style={{ padding: '8px 4px' }}><Skeleton rows={6} label="Loading trails" /></div>}
+        {!loading && !ql && pinnedDirs.length > 0 && (
           <div style={{ marginBottom: 6 }}>
             <div className="tb-eyebrow" style={{ padding: '6px 8px 4px', display: 'flex', alignItems: 'baseline', gap: 6 }}><span>Pinned</span><span style={{ opacity: .6 }}>{pinnedDirs.length}</span></div>
             {pinnedDirs.map((acc) => (
@@ -315,7 +316,6 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
                         ? <UnifiedGlyph />
                         : <Dot c={STATUS[r.status][1]} s={7} />}
                     <span className="tb-mono" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{fileName(r)}</span>
-                    {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
                   </div>
                 ))}
               </div>
@@ -323,8 +323,8 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
             <div style={{ height: 1, background: 'var(--tb-hairline)', margin: '7px 8px 3px' }} />
           </div>
         )}
-        {filtered.length === 0 && <div className="tb-sub" style={{ fontSize: 12, padding: '8px 12px' }}>No trails match.</div>}
-        {filtered.map((r) => r.t === 'folder' ? (
+        {!loading && filtered.length === 0 && <div className="tb-sub" style={{ fontSize: 12, padding: '8px 12px' }}>No trails match.</div>}
+        {!loading && filtered.map((r) => r.t === 'folder' ? (
           r.bundle ? (
             // A bundle = one logical trail. Clicking the row opens its Implementations matrix (the
             // folder overview); the chevron expands the per-device variant files, each of which opens
@@ -406,7 +406,6 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
               <React.Fragment>
                 <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{r.name}</span>
                 <span style={{ flex: 1 }} />
-                {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
                 {r.platform && <PlatformGlyph platform={r.platform} s={17} c="var(--text-subtle)" title={r.platform} bare />}
               </React.Fragment>
             ) : (
@@ -414,7 +413,6 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
                 <PathPrefix prefix={r.prefix} />
                 <span className="tb-mono" style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{fileName(r)}</span>
                 <span style={{ flex: 1 }} />
-                {leafFormatKind(r) && <FormatBadge kind={leafFormatKind(r)} />}
               </React.Fragment>
             )}
           </div>
@@ -422,20 +420,24 @@ function TrailTree({ rows, query, setQuery, filterPlatform, setFilterPlatform, f
       </div>
       <div style={{ padding: '9px 12px', borderTop: '1px solid var(--tb-hairline)', display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{shownCount === total ? `${total} trail${total === 1 ? '' : 's'}` : `${shownCount} of ${total} trails`}{editedOnly ? ' · edited only' : ''}</div>
+          {loading
+            ? <div className="tb-skel" aria-hidden="true" style={{ width: 62, height: 8, marginBottom: 5 }} />
+            : <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{shownCount === total ? `${total} trail${total === 1 ? '' : 's'}` : `${shownCount} of ${total} trails`}{editedOnly ? ' · edited only' : ''}</div>}
           <button
             onClick={onChangeWorkspace}
-            disabled={addBusy}
+            disabled={addBusy || rootsLoading}
             className="tb-ws-btn"
             title={(TB.WORKSPACE_BLURB || 'Change the workspace folder') + (roots?.primary ? `\n(currently ${roots.primary})` : '')}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0, background: 'none', border: 'none', borderRadius: 6, padding: '2px 4px', margin: '1px 0 -2px -4px', cursor: addBusy ? 'default' : 'pointer', opacity: addBusy ? 0.6 : 1, textAlign: 'left' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0, background: 'none', border: 'none', borderRadius: 6, padding: '2px 4px', margin: '1px 0 -2px -4px', cursor: addBusy || rootsLoading ? 'default' : 'pointer', opacity: addBusy || rootsLoading ? 0.6 : 1, textAlign: 'left' }}
           >
-            <Ico n={addBusy ? 'loader-2' : 'folder-open'} spin={addBusy} s={14} c="var(--tb-primary-green)" style={{ flex: '0 0 auto' }} />
+            <Ico n={addBusy || rootsLoading ? 'loader-2' : 'folder-open'} spin={addBusy || rootsLoading} s={14} c="var(--tb-primary-green)" style={{ flex: '0 0 auto' }} />
             <span style={{ flex: '0 0 auto', fontSize: 11, fontWeight: 600, color: 'var(--text-standard)' }}>Change…</span>
-            <span className="tb-mono" style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: 'var(--text-subtle)' }}>{workspaceName}</span>
+            {rootsLoading
+              ? <span className="tb-skel" aria-hidden="true" style={{ flex: 1, minWidth: 24, maxWidth: 90, height: 8 }} />
+              : <span className="tb-mono" style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: 'var(--text-subtle)' }}>{workspaceName}</span>}
           </button>
         </div>
-        <button className="tb-btn ghost sm" style={{ padding: '3px 9px', fontSize: 11 }} title="Reveal the workspace folder in Finder" onClick={() => TB.revealTrailsRoot()}>Reveal in Finder</button>
+        <button className="tb-btn ghost sm" disabled={rootsLoading} style={{ padding: '3px 9px', fontSize: 11 }} title="Reveal the workspace folder in Finder" onClick={() => TB.revealTrailsRoot()}>Reveal in Finder</button>
       </div>
       {menu && <TrailRowContextMenu menu={menu} onClose={() => setMenu(null)} roots={roots} />}
     </div>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="xyz.block.trailblaze.inprocessidle">
+
+  <!-- Bare-Instrumentation in-process idle. Both attributes below are stamped at build time:
+       the manifest package gets a per-target suffix (so idle detectors for different apps install
+       side-by-side), and targetPackage must exactly match the installed applicationId of the
+       app under test — the idle detector can only attach when it is signed with that app's certificate. -->
+  <instrumentation
+      android:name="xyz.block.trailblaze.inprocessidle.InProcessIdleInstrumentation"
+      android:targetPackage="target.application.id.stamped.at.build.time"
+      android:label="Trailblaze In-Process Idle" />
+
+  <application android:label="Trailblaze In-Process Idle" />
+</manifest>

@@ -17,7 +17,9 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -385,13 +387,13 @@ class SessionToolSet(
     val sessionTrailConfig = startedStatus?.toRecordingTrailConfig(titleOverride = trailName)
       ?: TrailConfig(title = trailName, platform = platform?.name?.lowercase())
 
-    val yamlContent = try {
-      logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
+    val recordedItems = try {
+      logs.generateRecordedTrailItems(sessionTrailConfig = sessionTrailConfig)
     } catch (e: Exception) {
       return SessionResult(error = "Failed to generate trail: ${e.message}").toJson()
     }
 
-    if (yamlContent.isBlank() || !yamlContent.contains("- prompts:")) {
+    if (recordedItems.none { it is TrailYamlItem.PromptsTrailItem }) {
       return SessionResult(
         error = "No recordable steps found. Use blaze() or ask() first.",
       ).toJson()
@@ -405,7 +407,7 @@ class SessionToolSet(
     // marked `platform: ios`, but the filename lies. Falls back to the live-context
     // platform only when the session predates SessionStarted (very old logs).
     val effectivePlatform = startedStatus?.trailblazeDeviceInfo?.platform ?: platform
-    return writeTrailFile(trailName, yamlContent, effectivePlatform)
+    return writeTrailFile(trailName, recordedItems, effectivePlatform)
   }
 
   private fun saveFromRecordedSteps(
@@ -485,13 +487,14 @@ class SessionToolSet(
 
   private fun writeTrailFile(
     trailName: String,
-    yamlContent: String,
+    recordedItems: List<TrailYamlItem>,
     platform: TrailblazeDevicePlatform?,
   ): String {
     // Route through the shared file manager so this log-backed save (the daemon-default session-save
     // path) honors the same unified-recordings gate + refusal/merge routing as every other surface.
+    // Items go straight in — no YAML encode/decode round-trip, so save-back never touches the v1 parser.
     val saveResult = TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
-      .saveTrailYaml(trailName, yamlContent, platform)
+      .saveTrailItems(trailName, recordedItems, platform)
     return if (saveResult.success) {
       Console.log("[session] Trail saved to: ${saveResult.filePath}")
       SessionResult(

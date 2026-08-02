@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.util.BunBinaryResolver
 import java.io.File
 import kotlin.test.assertEquals
@@ -1896,7 +1897,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val toolsDir = tempFolder.newFolder("cache-miss-trailmap-tools")
     writeTsFixture(toolsDir, "cachedTool.ts", simpleToolFixture("cachedTool"))
@@ -1928,27 +1929,45 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val toolsDir = tempFolder.newFolder("cache-hit-trailmap-tools")
     writeTsFixture(toolsDir, "hitTool.ts", simpleToolFixture("hitTool"))
+    // An uncapturedSpec=true fixture rides along so the round-trip of that flag is pinned:
+    // before cache format v2 it was silently reset to false on every cache hit, and the
+    // full-equality assertion below is what keeps any future field from regressing the
+    // same way (code review on PR #5047).
+    writeTsFixture(
+      toolsDir,
+      "uncapturedRef.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { x: string; }
+        |const SPEC = { supportedPlatforms: ["web"] } as const;
+        |export const uncapturedRefTool = trailblaze.tool<I>(SPEC, async () => "ok");
+      """.trimMargin(),
+    )
     val firstDefs = warmAnalyzer.analyze(toolsDir)
-    assertEquals(1, firstDefs.size)
+    assertEquals(setOf("hitTool", "uncapturedRefTool"), firstDefs.map { it.name }.toSet())
+    assertTrue(
+      firstDefs.single { it.name == "uncapturedRefTool" }.uncapturedSpec,
+      "fixture must actually exercise uncapturedSpec, or the equality assertion below pins nothing",
+    )
 
     val bogusBun = File(tempFolder.root, "definitely-not-bun")
     val cachedOnlyAnalyzer = ScriptedToolDefinitionAnalyzer(
       bunBinary = bogusBun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val secondDefs = cachedOnlyAnalyzer.analyze(toolsDir)
     assertEquals(
-      firstDefs.map { it.name },
-      secondDefs.map { it.name },
-      "cache hit must return the prior result even when the node binary is missing",
+      firstDefs,
+      secondDefs,
+      "cache hit must replay the FULL definitions — every field, including uncapturedSpec — " +
+        "even when the node binary is missing",
     )
-    assertEquals(firstDefs.single().sourcePath, secondDefs.single().sourcePath)
   }
 
   @Test
@@ -1959,7 +1978,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val toolsDir = tempFolder.newFolder("content-change-trailmap-tools")
     writeTsFixture(toolsDir, "evolving.ts", simpleToolFixture("originalTool"))
@@ -1989,6 +2008,80 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `local declaration-file edit invalidates the cache but the generated client dts does not`() = runBlocking {
+    // A tool's schema closure can include a trailmap-local `.d.ts`: the shim's per-file
+    // TypeScript Program follows the import even though the analyzer keeps `.d.ts` out of
+    // the subprocess argv. The cache content key must therefore cover local declaration
+    // bytes — otherwise an edit that changes an imported type would replay the stale
+    // schema until some `.ts` file is touched (code review on PR #5047). The
+    // framework-emitted trailblaze-client.d.ts is the deliberate exception: it's codegen
+    // derived from the already-hashed tool sources, so it must NOT churn the key.
+    assumeAnalyzerRunnable()
+    val cacheDir = tempFolder.newFolder("dts-key-cache")
+    val toolsDir = tempFolder.newFolder("dts-key-trailmap-tools")
+    writeTsFixture(toolsDir, "helper-types.d.ts", "export interface HelperInput { value: string; }\n")
+    writeTsFixture(
+      toolsDir,
+      "dtsTool.ts",
+      """
+        |${declareTrailblazeStub()}
+        |import type { HelperInput } from "./helper-types";
+        |interface O { ok: boolean; }
+        |export const dtsTool = trailblaze.tool<HelperInput, O>({
+        |  handler: async () => ({ ok: true }),
+        |});
+      """.trimMargin(),
+    )
+    val warmAnalyzer = ScriptedToolDefinitionAnalyzer(
+      bunBinary = bun,
+      extractorShim = shim,
+      sdkDir = sdkDir,
+      cacheDirProvider = { cacheDir },
+    )
+    val firstDefs = warmAnalyzer.analyze(toolsDir)
+    assertEquals(
+      "string",
+      firstDefs.single().inputSchemaObject["properties"]?.jsonObject
+        ?.get("value")?.jsonObject?.get("type")?.jsonPrimitive?.content,
+      "fixture must resolve the imported declaration's field type, or the legs below pin nothing",
+    )
+
+    // The framework-emitted client d.ts appearing (or being rewritten after a build) must
+    // not flip the key: the bogus-bun analyzer still serves the cache hit.
+    writeTsFixture(toolsDir, "trailblaze-client.d.ts", "// framework codegen — regenerated after every build\n")
+    val bogusBun = File(tempFolder.root, "definitely-not-bun-dts")
+    val cachedOnlyAnalyzer = ScriptedToolDefinitionAnalyzer(
+      bunBinary = bogusBun,
+      extractorShim = shim,
+      sdkDir = sdkDir,
+      cacheDirProvider = { cacheDir },
+    )
+    assertEquals(
+      firstDefs,
+      cachedOnlyAnalyzer.analyze(toolsDir),
+      "unchanged declaration bytes must still hit the cache, and the codegen client d.ts must not participate",
+    )
+
+    // Editing the local declaration must change the key: the bogus-bun analyzer now
+    // misses the cache and degrades to the documented "bun missing → empty" instead of
+    // replaying the stale string-typed schema.
+    writeTsFixture(toolsDir, "helper-types.d.ts", "export interface HelperInput { value: number; }\n")
+    assertTrue(
+      cachedOnlyAnalyzer.analyze(toolsDir).isEmpty(),
+      "a local .d.ts edit must invalidate the cached entry, not replay it",
+    )
+
+    // And a real re-run extracts the NEW type from the edited declaration.
+    val refreshedDefs = warmAnalyzer.analyze(toolsDir)
+    assertEquals(
+      "number",
+      refreshedDefs.single().inputSchemaObject["properties"]?.jsonObject
+        ?.get("value")?.jsonObject?.get("type")?.jsonPrimitive?.content,
+      "the re-run after the .d.ts edit must serve the updated schema",
+    )
+  }
+
+  @Test
   fun `dependency-key change invalidates the cache even when trailmap content is unchanged`() = runBlocking {
     // Models the "SDK .d.ts changed" / "extractor shim changed" / "ts-json-schema-
     // generator version bumped" scenarios all at once: the dependency key bakes
@@ -2007,7 +2100,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val firstDefs = firstAnalyzer.analyze(toolsDir)
     assertEquals(1, firstDefs.size)
@@ -2042,7 +2135,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = File(syntheticSdk, "tools/extract-tool-defs.mjs"),
       sdkDir = syntheticSdk,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val secondDefs = secondAnalyzer.analyze(toolsDir)
     assertEquals(1, secondDefs.size)
@@ -2062,7 +2155,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = null,
+      cacheDirProvider = { null },
     )
     val toolsDir = tempFolder.newFolder("uncached-trailmap-tools")
     writeTsFixture(toolsDir, "uncachedTool.ts", simpleToolFixture("uncachedTool"))
@@ -2084,7 +2177,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val toolsDir = tempFolder.newFolder("corrupt-trailmap-tools")
     writeTsFixture(toolsDir, "corruptTool.ts", simpleToolFixture("corruptTool"))
@@ -2142,7 +2235,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
       disableCache = true,
     )
     val defs = bypassAnalyzer.analyze(toolsDir)
@@ -2163,7 +2256,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     warmAnalyzer.analyze(toolsDir) // populate cache via real subprocess
     val bogusBun = File(tempFolder.root, "definitely-not-bun-bypass")
@@ -2171,7 +2264,7 @@ class ScriptedToolDefinitionAnalyzerTest {
       bunBinary = bogusBun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
       disableCache = true,
     )
     val bypassResult = bypassAgainstWarmCache.analyze(toolsDir)
@@ -2183,21 +2276,21 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
-  fun `mixed-outcome envelope is NOT cached — partial failures stay transient`() = runBlocking {
-    // PR contract: when the subprocess returns some clean tools AND some errors
-    // (per-tool failures, e.g. unsupported TS construct), the analyzer throws
-    // ScriptedToolDefinitionException and intentionally does NOT write a cache
-    // entry. Without this guarantee, an author editing a broken tool would see
-    // the failure cached and re-served on subsequent runs even after fixing the
-    // .ts file. Pins the behavior so a future refactor that "helpfully" caches
-    // partial results surfaces this test as the canary.
+  fun `mixed-outcome envelope is cached, replayed from cache, and invalidated by fixing the file`() = runBlocking {
+    // Contract: when the subprocess returns some clean tools AND some errors (per-tool
+    // failures, e.g. unsupported TS construct), the analyzer throws
+    // ScriptedToolDefinitionException AND caches the outcome — a broken tool that lives
+    // in the repo (committed, not mid-edit) must not defeat the cache for its whole
+    // trailmap on every catalog build. The cache is content-keyed, so the author's fix
+    // recomputes under a fresh key: the "stale failure re-served after the fix" hazard
+    // the old no-cache policy guarded against cannot happen. All three legs pinned here.
     assumeAnalyzerRunnable()
     val cacheDir = tempFolder.newFolder("partial-failure-cache")
     val cachedAnalyzer = ScriptedToolDefinitionAnalyzer(
       bunBinary = bun,
       extractorShim = shim,
       sdkDir = sdkDir,
-      cacheDir = cacheDir,
+      cacheDirProvider = { cacheDir },
     )
     val toolsDir = tempFolder.newFolder("partial-failure-trailmap-tools")
     // One healthy tool + one broken tool (function-typed input, which the shim
@@ -2217,18 +2310,56 @@ class ScriptedToolDefinitionAnalyzerTest {
       """.trimMargin(),
     )
 
-    try {
+    // Leg 1: live run throws AND writes a cache entry carrying the mixed outcome.
+    val firstErrors = try {
       cachedAnalyzer.analyze(toolsDir)
       fail("expected ScriptedToolDefinitionException for the mixed-outcome envelope")
     } catch (e: ScriptedToolDefinitionException) {
       assertTrue(e.errors.isNotEmpty(), "expected per-tool errors in the exception")
       assertTrue(e.partialTools.isNotEmpty(), "expected the healthy tool surfaced as partial")
+      e.errors
+    }
+    val cacheFiles = cacheDir.walkTopDown().filter { it.isFile && it.extension == "json" }.toList()
+    assertEquals(
+      1,
+      cacheFiles.size,
+      "expected the mixed outcome cached on the first run; got: ${cacheFiles.map { it.name }}",
+    )
+
+    // Leg 2: a second analyzer with a broken bun binary must replay the SAME outcome
+    // from cache — same errors, same partial tools — without launching a subprocess.
+    val bogusBun = File(tempFolder.root, "definitely-not-bun-mixed")
+    val cachedOnlyAnalyzer = ScriptedToolDefinitionAnalyzer(
+      bunBinary = bogusBun,
+      extractorShim = shim,
+      sdkDir = sdkDir,
+      cacheDirProvider = { cacheDir },
+    )
+    try {
+      cachedOnlyAnalyzer.analyze(toolsDir)
+      fail("expected the cached mixed outcome to rethrow ScriptedToolDefinitionException")
+    } catch (e: ScriptedToolDefinitionException) {
+      assertEquals(
+        firstErrors.map { it.toolName to it.message },
+        e.errors.map { it.toolName to it.message },
+        "cache-hit replay must carry the original run's per-tool errors",
+      )
+      assertEquals(
+        listOf("healthyTool"),
+        e.partialTools.map { it.name },
+        "cache-hit replay must carry the original run's partial tools",
+      )
     }
 
-    val cacheFiles = cacheDir.walkTopDown().filter { it.isFile && it.extension == "json" }.toList()
-    assertTrue(
-      cacheFiles.isEmpty(),
-      "expected NO cache file written when the envelope carried errors; got: ${cacheFiles.map { it.name }}",
+    // Leg 3: fixing the broken file changes the content key, so the next run is a
+    // cache MISS that re-analyzes and succeeds — the cached failure cannot outlive
+    // the broken source.
+    writeTsFixture(toolsDir, "broken.ts", simpleToolFixture("fixedTool"))
+    val fixedDefs = cachedAnalyzer.analyze(toolsDir)
+    assertEquals(
+      setOf("healthyTool", "fixedTool"),
+      fixedDefs.map { it.name }.toSet(),
+      "fixing the file must invalidate the cached mixed outcome",
     )
   }
 
@@ -2274,6 +2405,79 @@ class ScriptedToolDefinitionAnalyzerTest {
       resolved!!.path.replace('\\', '/').endsWith(".trailblaze/cache/analyzer"),
       "expected resolved path to end in `.trailblaze/cache/analyzer`; got ${resolved.path}",
     )
+  }
+
+  @Test
+  fun `resolveWorkspaceCacheDir anchors under the workspace trails dir when a workspace resolves`() {
+    // Pins the workspace-aware contract: with a workspace selected (the holder
+    // resolves `<trails>/config`), the cache root is `<trails>/.trailblaze/cache/
+    // analyzer` — the same `.trailblaze/` the compile bootstrap writes generated
+    // artifacts into — NOT anything derived from the JVM's cwd. No ancestor
+    // walk-up: a `.trailblaze/` marker sitting above the workspace must not
+    // capture the cache.
+    val workspaceParent = tempFolder.newFolder("ws-aware-parent")
+    File(workspaceParent, ".trailblaze").mkdirs()
+    val trailsDir = File(workspaceParent, "workspace/trails").also { it.mkdirs() }
+    val configDir = File(trailsDir, "config").also { it.mkdirs() }
+
+    val previousResolver = WorkspaceConfigDirHolder.resolver
+    try {
+      WorkspaceConfigDirHolder.resolver = { configDir }
+      val resolved = ScriptedToolDefinitionCache.resolveWorkspaceCacheDir()
+      assertNotNull(resolved)
+      assertEquals(
+        File(File(trailsDir, ".trailblaze"), "cache/analyzer").canonicalFile,
+        resolved!!.canonicalFile,
+        "expected the cache anchored inside the resolved workspace's trails dir",
+      )
+    } finally {
+      WorkspaceConfigDirHolder.resolver = previousResolver
+    }
+  }
+
+  @Test
+  fun `resolveWorkspaceCacheDir falls back to the cwd walk-up when no workspace resolves`() {
+    val previousResolver = WorkspaceConfigDirHolder.resolver
+    try {
+      WorkspaceConfigDirHolder.resolver = { null }
+      assertEquals(
+        ScriptedToolDefinitionCache.resolveDefaultCacheDir()?.canonicalFile,
+        ScriptedToolDefinitionCache.resolveWorkspaceCacheDir()?.canonicalFile,
+        "with no workspace, the workspace-aware resolver must match the cwd default",
+      )
+    } finally {
+      WorkspaceConfigDirHolder.resolver = previousResolver
+    }
+  }
+
+  @Test
+  fun `cacheDirProvider is re-evaluated on every analyze so a workspace switch moves the cache`() = runBlocking {
+    // Pins the analyze()-time resolution contract: one long-lived analyzer whose
+    // provider's answer changes between calls (a Trail Runner workspace switch on
+    // a running daemon) writes each analysis's cache entry under the directory
+    // that was current AT THAT CALL — construction-time capture would leave both
+    // entries under the first dir.
+    assumeAnalyzerRunnable()
+    val cacheDirA = tempFolder.newFolder("switch-cache-a")
+    val cacheDirB = tempFolder.newFolder("switch-cache-b")
+    var currentCacheDir = cacheDirA
+    val analyzer = ScriptedToolDefinitionAnalyzer(
+      bunBinary = bun,
+      extractorShim = shim,
+      sdkDir = sdkDir,
+      cacheDirProvider = { currentCacheDir },
+    )
+    val toolsDir = tempFolder.newFolder("switch-trailmap-tools")
+    writeTsFixture(toolsDir, "switchTool.ts", simpleToolFixture("switchTool"))
+
+    analyzer.analyze(toolsDir)
+    currentCacheDir = cacheDirB
+    analyzer.analyze(toolsDir)
+
+    val entriesA = cacheDirA.walkTopDown().filter { it.isFile && it.extension == "json" }.toList()
+    val entriesB = cacheDirB.walkTopDown().filter { it.isFile && it.extension == "json" }.toList()
+    assertEquals(1, entriesA.size, "first analyze must cache under the then-current dir A")
+    assertEquals(1, entriesB.size, "post-switch analyze must cache under dir B, not pin to dir A")
   }
 
   @Test

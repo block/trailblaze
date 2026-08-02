@@ -36,7 +36,7 @@ import xyz.block.trailblaze.recording.WebDeviceScreenStream
  * [forward]/[currentUrl]) stay on the page object — those don't fit the unified
  * screen-state contract.
  */
-class PlaywrightDeviceScreenStream(
+open class PlaywrightDeviceScreenStream(
   private val pageManager: PlaywrightPageManager,
   private val frameIntervalMs: Long = 100,
 ) : DeviceScreenStream,
@@ -64,8 +64,17 @@ class PlaywrightDeviceScreenStream(
       ?.takeIf { System.currentTimeMillis() - it.capturedAtMs <= SCREENCAST_MIRROR_FRAME_MAX_AGE_MS }
       ?.bytes
 
-  override val deviceWidth: Int get() = pageManager.currentPage.viewportSize().width
-  override val deviceHeight: Int get() = pageManager.currentPage.viewportSize().height
+  // `Page.viewportSize()` is nullable — a CDP-attached Electron page can report no viewport (the
+  // Electron manager itself falls back to defaults for exactly this reason). A null here would NPE
+  // before `Page.startScreencast`, and a screencast consumer that re-attaches on failure (the
+  // session-video recorder's PlaywrightScreencastFeed) would then retry forever with no frames.
+  // Fall back to the same defaults the manager uses.
+  override val deviceWidth: Int
+    get() = pageManager.currentPage.viewportSize()?.width
+      ?: xyz.block.trailblaze.playwright.PlaywrightBrowserManager.DEFAULT_VIEWPORT_WIDTH
+  override val deviceHeight: Int
+    get() = pageManager.currentPage.viewportSize()?.height
+      ?: xyz.block.trailblaze.playwright.PlaywrightBrowserManager.DEFAULT_VIEWPORT_HEIGHT
 
   override fun frames(): Flow<ByteArray> = flow {
     while (currentCoroutineContext().isActive) {
@@ -183,7 +192,17 @@ class PlaywrightDeviceScreenStream(
    * normally — cancel the calling coroutine to stop the screencast (which tears the CDP session
    * down on the finally path).
    */
-  suspend fun streamScreencastJpegFrames(onFrame: suspend (ByteArray) -> Unit): Nothing =
+  suspend fun streamScreencastJpegFrames(
+    /**
+     * Optional liveness signal, invoked once per pump-loop iteration while the screencast
+     * pipeline stays attached — including when no frames flow at all. Chrome's screencast is
+     * damage-driven (a static page emits nothing), so subscribers that need to distinguish
+     * "static page" from "dead pipeline" (the stream-screenshot gate) use this, mirroring
+     * the H264 tee drain-loop pings on Android.
+     */
+    onPumpAlive: (() -> Unit)? = null,
+    onFrame: suspend (ByteArray) -> Unit,
+  ): Nothing =
     coroutineScope {
       val outbound =
         Channel<ByteArray>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -239,6 +258,9 @@ class PlaywrightDeviceScreenStream(
           // WebSocket closes and the client demotes to the JPEG fallback instead of freezing on the
           // last frame behind a still-beating heartbeat.
           pumped.exceptionOrNull()?.let { throw it }
+          // The pump completed an interval: the pipeline is attached and dispatching, even if
+          // the (damage-driven) encoder emitted nothing.
+          runCatching { onPumpAlive?.invoke() }
         }
         awaitCancellation()
       } finally {
@@ -668,4 +690,28 @@ class PlaywrightDeviceScreenStream(
     internal val FORM_CONTROL_TAGS: Set<String> = setOf("input", "select", "textarea", "button")
   }
 
+}
+
+/**
+ * A [PlaywrightDeviceScreenStream] over an *externally-attached* page manager (e.g. an Electron
+ * app reached with `connectOverCDP`) that this stream is the sole owner of.
+ *
+ * The launch-a-browser web path keeps its manager in `WebBrowserManager`, which owns closing it,
+ * so its stream deliberately does NOT implement [AutoCloseable]. An attached manager has no such
+ * owner: it would leak its Playwright executor thread + CDP connection on every
+ * connect/disconnect cycle. Implementing [AutoCloseable] lets `HostDeviceSessionManager.remove()`
+ * close the manager when the device disconnects. Non-destructive for CDP-attached managers —
+ * `PlaywrightElectronBrowserManager.close()` disconnects the CDP session without terminating the
+ * attached app.
+ *
+ * Stays an `is PlaywrightDeviceScreenStream`, so the `/devices/api/stream` WEB fast path's
+ * `as? PlaywrightDeviceScreenStream` cast still matches and streaming is unchanged.
+ */
+class AttachedPlaywrightDeviceScreenStream(
+  private val pageManager: PlaywrightPageManager,
+) : PlaywrightDeviceScreenStream(pageManager),
+  AutoCloseable {
+  override fun close() {
+    pageManager.close()
+  }
 }

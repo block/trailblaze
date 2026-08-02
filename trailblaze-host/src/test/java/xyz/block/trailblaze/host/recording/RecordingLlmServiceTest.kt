@@ -57,7 +57,7 @@ class RecordingLlmServiceTest {
     )
 
     val thrown = assertThrows(IllegalStateException::class.java) {
-      runBlocking { service.transformToNaturalLanguageTrail("- tools:\n    - tap: {}\n") }
+      runBlocking { service.transformToNaturalLanguageTrail("- tools:\n    - tap: {}\n", "android") }
     }
     assertTrue(
       "error message must mention the failure mode so users know why recording is empty," +

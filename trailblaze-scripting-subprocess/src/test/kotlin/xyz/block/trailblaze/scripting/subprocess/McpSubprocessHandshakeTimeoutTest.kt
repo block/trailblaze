@@ -7,6 +7,8 @@ import assertk.assertions.isInstanceOf
 import assertk.assertions.isLessThan
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
+import org.junit.rules.Timeout
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -18,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 
@@ -37,6 +40,14 @@ import kotlin.test.Test
  * without it); the POSIX-based tests keep the mechanism covered in that case.
  */
 class McpSubprocessHandshakeTimeoutTest {
+
+  /**
+   * Hang-vs-forever containment, mirroring [McpSubprocessSessionConnectCleanupTest]: the hanging
+   * fixture never exits on its own, so a watchdog regression here turns into an infinite park
+   * that wedges the whole Gradle test run. 120s is far above any legitimate duration (these tests
+   * bound their handshakes at 1s) — the rule converts a wedge into a failed test.
+   */
+  @get:Rule val perTestHangGuard: Timeout = Timeout(120, TimeUnit.SECONDS)
 
   private val hangingFixture: File by lazy {
     val url = requireNotNull(javaClass.getResource("/mcp-fixture/fixture-hangs.js")) {

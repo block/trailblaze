@@ -1,16 +1,21 @@
 package xyz.block.trailblaze.host
 
 import java.io.File
+import kotlinx.datetime.Clock
 import maestro.device.Platform
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.MigrationScreenState
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
@@ -19,6 +24,7 @@ import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
 
 /**
@@ -97,9 +103,18 @@ class HostMaestroTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null
-    return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
-      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch,
-      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> TrailblazeToolResult.Success()
+    return when (val result = TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
+        logAssertScreenState(nodeSelector = nodeSelector, matchedNode = result.node, isVisible = true)
+        TrailblazeToolResult.Success()
+      }
+      // For multiple matches, mark the first resolved node — consistent with how
+      // verifyTextEquality / resolveToCenter pick a representative from a match list — rather
+      // than defaulting the marker to screen center.
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
+        logAssertScreenState(nodeSelector = nodeSelector, matchedNode = result.nodes.firstOrNull(), isVisible = true)
+        TrailblazeToolResult.Success()
+      }
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null // fall back to Maestro (has retry/timeout)
     }
   }
@@ -116,8 +131,67 @@ class HostMaestroTrailblazeAgent(
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null
     return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
-      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> TrailblazeToolResult.Success()
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
+        logAssertScreenState(nodeSelector = nodeSelector, matchedNode = null, isVisible = false)
+        TrailblazeToolResult.Success()
+      }
       else -> null // fall back to Maestro (has timeout to wait for disappearance)
+    }
+  }
+
+  /**
+   * Emits an [TrailblazeLog.AgentDriverLog] carrying a screenshot for a passing node-selector
+   * assertion, so the assert renders a frame in the Storyboard/Timeline just like tap/swipe do.
+   *
+   * The host node-selector assert paths above resolve entirely from the lightweight tree
+   * ([getCurrentTrailblazeNodeTree], no screenshot) and return [TrailblazeToolResult.Success]
+   * without logging anything. Taps/swipes go through [xyz.block.trailblaze.android.maestro.LoggingDriver],
+   * which always logs an `AgentDriverLog` with a screenshot; the Maestro `Driver` interface has no
+   * assert method, so a passing assert produced no screenshot and showed no frame on iOS (while
+   * Android's accessibility runner logs one for every action, asserts included). This closes that
+   * gap by capturing a full [ScreenState] on the success path and logging the same
+   * [AgentDriverAction.AssertCondition] the Android/Maestro-fallback paths emit.
+   */
+  private fun logAssertScreenState(
+    nodeSelector: TrailblazeNodeSelector,
+    matchedNode: TrailblazeNode?,
+    isVisible: Boolean,
+  ) {
+    try {
+      val impl = maestroHostRunner as? MaestroHostRunnerImpl ?: return
+      val session = sessionProvider.invoke()
+      val screenState: ScreenState = impl.screenStateProvider.invoke()
+      val center = matchedNode?.centerPoint()
+      val screenshotFilename = if (screenState.screenshotBytes != null) {
+        trailblazeLogger.logScreenState(session, screenState)
+      } else {
+        null
+      }
+      val log = TrailblazeLog.AgentDriverLog(
+        viewHierarchy = screenState.viewHierarchy,
+        trailblazeNodeTree = screenState.trailblazeNodeTree,
+        // Migration-mode side tree (see MigrationScreenState). Carried on every log type with a
+        // `trailblazeNodeTree` so migrate-trail's cursor-scan fallback produces accessibility-shape
+        // selectors regardless of which log it lands on.
+        driverMigrationTreeNode = (screenState as? MigrationScreenState)?.driverMigrationTreeNode,
+        screenshotFile = screenshotFilename,
+        action = AgentDriverAction.AssertCondition(
+          conditionDescription = nodeSelector.description(),
+          x = center?.first ?: (screenState.deviceWidth / 2),
+          y = center?.second ?: (screenState.deviceHeight / 2),
+          isVisible = isVisible,
+          textToDisplay = if (isVisible) null else nodeSelector.description(),
+          succeeded = true,
+        ),
+        durationMs = 0,
+        timestamp = Clock.System.now(),
+        session = session.sessionId,
+        deviceWidth = screenState.deviceWidth,
+        deviceHeight = screenState.deviceHeight,
+      )
+      trailblazeLogger.log(session, log)
+    } catch (t: Throwable) {
+      Console.log("[HostMaestroTrailblazeAgent] Failed to log assert screenshot: ${t.message}")
     }
   }
 

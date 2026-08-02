@@ -22,14 +22,81 @@ Calculate the result of an expression and compare it to the expected output valu
 data class AssertMathTrailblazeTool(
   val expression: String,
   val expected: String,
+  /**
+   * Optional bound (milliseconds) that turns the assertion into a poll. When null (the default),
+   * the expression is evaluated EXACTLY ONCE against the current screen — byte-for-byte the
+   * pre-poll behavior, so every recorded assertMath keeps its single-shot semantics untouched.
+   *
+   * When set, the expression is re-evaluated on [pollIntervalMs] intervals until it passes OR this
+   * timeout elapses; on timeout the same "Math assertion failed" exception the single-shot path
+   * throws is surfaced. Reach for this only when a `[[prompt]]` read is subject to eventual
+   * consistency (a value the app back-fills a beat after the action) — it bounds WHEN the read is
+   * taken, never WHAT is asserted. Each retry re-reads through [ElementComparator.getElementValue],
+   * which captures a fresh screen, so the poll observes the updated value rather than a stale one.
+   */
+  val timeoutMs: Long? = null,
+  /**
+   * Interval (milliseconds) between re-evaluations while polling. Ignored when [timeoutMs] is null
+   * (single-shot). Each attempt drives one fresh screen read per `[[prompt]]`, so keep it coarse
+   * enough that the poll doesn't hammer the element-read path.
+   */
+  val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS,
 ) : MemoryTrailblazeTool {
+
+  init {
+    // Only constrain the poll knobs when the caller opts into polling; single-shot calls never
+    // read pollIntervalMs, so it must not gate construction of the legacy single-shot form.
+    if (timeoutMs != null) {
+      require(timeoutMs > 0) { "assertMath.timeoutMs must be > 0 when set (got $timeoutMs)" }
+      require(pollIntervalMs > 0) { "assertMath.pollIntervalMs must be > 0 (got $pollIntervalMs)" }
+    }
+  }
+
   override fun execute(
     memory: AgentMemory,
     elementComparator: ElementComparator,
+  ): TrailblazeToolResult = executeWithClock(
+    elementComparator = elementComparator,
+    now = { System.currentTimeMillis() },
+    sleep = { Thread.sleep(it) },
+  )
+
+  /**
+   * Clock/sleep-injected core so the poll's timeout boundary is unit-testable without real waits.
+   * A null [timeoutMs] runs [evaluateOnce] exactly once (unchanged single-shot behavior); a set
+   * [timeoutMs] re-runs [evaluateOnce] each attempt — and because that path re-reads via
+   * [ElementComparator.getElementValue] (a fresh screen capture per call), every retry observes the
+   * current screen instead of a cached snapshot.
+   */
+  internal fun executeWithClock(
+    elementComparator: ElementComparator,
+    now: () -> Long,
+    sleep: (Long) -> Unit,
   ): TrailblazeToolResult {
-    // Process any dynamic extraction patterns like [[prompt]] in the expression.
-    // ({{var}}/${var} tokens are resolved by the dispatch boundary — interpolateMemoryInTool —
-    // before execute() runs, so `expression` arrives with only [[prompt]] extractions left.)
+    val bound = timeoutMs ?: return evaluateOnce(elementComparator)
+
+    val deadline = now() + bound
+    while (true) {
+      try {
+        return evaluateOnce(elementComparator)
+      } catch (e: TrailblazeException) {
+        val remaining = deadline - now()
+        // Deadline reached — surface the last attempt's failure so the "Math assertion failed"
+        // message (and its negative-control marker) is identical to the single-shot path.
+        if (remaining <= 0) throw e
+        sleep(minOf(pollIntervalMs, remaining))
+      }
+    }
+  }
+
+  /**
+   * One evaluation against the current screen: reads each `[[prompt]]` via
+   * [ElementComparator.getElementValue] (fresh capture), evaluates, and throws
+   * [TrailblazeToolExecutionException] on mismatch or read failure. The poll retries on that throw;
+   * the single-shot path lets it propagate as before. ({{var}}/${var} tokens are already resolved
+   * by the dispatch boundary before execute() runs, so `expression` carries only [[prompt]]s here.)
+   */
+  private fun evaluateOnce(elementComparator: ElementComparator): TrailblazeToolResult {
     val interpolatedExpression = processDynamicExtractions(expression, elementComparator)
 
     try {
@@ -110,5 +177,10 @@ data class AssertMathTrailblazeTool(
     Console.log("Final interpolated expression: $interpolatedExpression")
 
     return interpolatedExpression
+  }
+
+  companion object {
+    /** Default interval between re-evaluations once [timeoutMs] opts into polling. */
+    const val DEFAULT_POLL_INTERVAL_MS: Long = 1_000L
   }
 }

@@ -116,32 +116,7 @@ class UnifiedTrailRuntimeIntegrationTest {
   }
 
   @Test
-  fun `v1 YAML still passes through decodeTrail unchanged regardless of classifiers`() {
-    val v1Yaml = """
-      - config:
-          id: x
-          target: y
-          platform: android
-      - prompts:
-          - step: Step 1
-            recording:
-              tools:
-                - tap:
-                    x: 1
-                    y: 1
-    """.trimIndent()
-    val items = yaml.decodeTrail(
-      v1Yaml,
-      deviceClassifiers = listOf(TrailblazeDeviceClassifier("anything")),
-    )
-    // v1 input: classifiers are ignored, recording survives intact.
-    val prompts = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps
-    val step = prompts.single() as DirectionStep
-    assertEquals("tap", step.recording?.tools?.single()?.name)
-  }
-
-  @Test
-  fun `extractTrailConfig works on both v1 and unified without device classifiers`() {
+  fun `extractTrailConfig works on unified without device classifiers`() {
     val unified = yaml.extractTrailConfig(
       """
       config:
@@ -158,18 +133,6 @@ class UnifiedTrailRuntimeIntegrationTest {
     assertEquals("unified-trail", unified.id)
     assertEquals("myapp", unified.target)
     assertEquals("this is context", unified.context)
-
-    val v1 = yaml.extractTrailConfig(
-      """
-      - config:
-          id: v1-trail
-          target: myapp
-      - prompts:
-          - step: anything
-      """.trimIndent(),
-    )
-    assertNotNull(v1)
-    assertEquals("v1-trail", v1.id)
   }
 
   @Test
@@ -246,23 +209,6 @@ class UnifiedTrailRuntimeIntegrationTest {
     assertTrue(
       yaml.hasRecordedSteps(unifiedYaml),
       "unified trail with any non-empty classifier list should report recordings present",
-    )
-  }
-
-  @Test
-  fun `hasRecordedSteps returns true for a v1 trail whose only recording is a root-level tools item`() {
-    // A root `- tools:` step is force-executed deterministically by every runner loop (no AI), so
-    // a tools-only trail must classify as recorded - auto mode, session badges, and the CLI all
-    // key off this. Regression guard for the "recorded trail badged as agent-driven" display bug.
-    val v1Yaml = """
-      - tools:
-        - tap:
-            x: 1
-            y: 1
-    """.trimIndent()
-    assertTrue(
-      yaml.hasRecordedSteps(v1Yaml),
-      "a v1 trail with a root-level tools step replays deterministically and must count as recorded",
     )
   }
 
@@ -461,25 +407,6 @@ class UnifiedTrailRuntimeIntegrationTest {
     """.trimIndent()
     val items = yaml.decodeTrail(unifiedOnlyEmptyClassifiers)
     assertNotNull(items)
-  }
-
-  @Test
-  fun `guard does NOT fire for v1 input regardless of classifiers`() {
-    val v1 = """
-      - config:
-          id: x
-          target: y
-      - prompts:
-        - step: Tap
-          recording:
-            tools:
-            - tap: { x: 1, y: 1 }
-    """.trimIndent()
-    // v1 ignores classifiers. The guard is unified-only.
-    val items = yaml.decodeTrail(v1)
-    val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
-      .promptSteps.single() as DirectionStep
-    assertNotNull(step.recording, "v1 recording must survive zero-classifier decode")
   }
 
   @Test

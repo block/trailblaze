@@ -70,25 +70,6 @@ class DesktopYamlRunnerDriverPinTest {
   }
 
   @Test
-  fun `v1 driver scalar resolves regardless of classifiers`() {
-    val yaml = """
-      - config:
-          driver: ANDROID_ONDEVICE_INSTRUMENTATION
-      - prompts:
-          - step: Open the Lists tab
-    """.trimIndent()
-
-    assertEquals(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      DesktopYamlRunner.trailPinnedDriverType(yaml, androidPhone),
-    )
-    assertEquals(
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      DesktopYamlRunner.trailPinnedDriverType(yaml, emptyList()),
-    )
-  }
-
-  @Test
   fun `trail with no pin resolves to null`() {
     val yaml = """
       trail:

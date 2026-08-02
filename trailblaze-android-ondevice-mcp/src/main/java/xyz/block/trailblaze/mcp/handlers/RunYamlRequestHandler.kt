@@ -9,7 +9,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
+import xyz.block.trailblaze.android.accessibility.InProcessIdleSettleClient
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.OnDeviceRpcTimeouts
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.TrailArgBinder
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
@@ -40,8 +43,45 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
  */
 private suspend fun defaultWaitForSettled() {
   if (TrailblazeAccessibilityService.isServiceRunning()) {
+    // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever answers
+    // first — true main-thread idle or the standard event-quiet wait. Only ever faster.
+    if (InProcessIdleSettleClient.isEnabled()) {
+      val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(5_000L) { earlyExit ->
+        TrailblazeAccessibilityService.waitForSettled(earlyExit = earlyExit)
+      }
+      Console.log("[settle] pre-tool via $winner")
+      return
+    }
     TrailblazeAccessibilityService.waitForSettled()
   }
+}
+
+/**
+ * Whether [yaml] carries recorded steps for the device described by [deviceClassifiers], swallowing
+ * any decode failure to `false`. Extracted as a pure function (top-level, no handler/device/session
+ * plumbing) so the specific regression it guards is unit-testable with plain inputs.
+ *
+ * Two things are load-bearing here:
+ * - [TrailblazeYaml.decodeTrailOrToolEnvelope] (superset of `decodeTrail`) also accepts the
+ *   host-drives-the-loop bare `- <toolName>:` tool envelope, which decodes to one `ToolTrailItem`
+ *   (→ `true`). Plain `decodeTrail` throws on that shape, which would flip the flag to `false` and
+ *   mislabel single-tool dispatch as agent-driven.
+ * - Passing THIS device's [deviceClassifiers]. A unified trail lowers its per-device recording slots
+ *   closest-wins against them, so with EMPTY classifiers `decodeTrail` throws the "no classifiers
+ *   would drop every recording" guard, the catch below swallows it, and a fully-recorded run is
+ *   mislabeled `false` — dropping the report's "Recording" pill. The host-driven emitter already
+ *   decodes with classifiers; this keeps the CLI device-emitted session consistent with it.
+ */
+internal fun computeHasRecordedSteps(
+  trailblazeYaml: TrailblazeYaml,
+  yaml: String,
+  deviceClassifiers: List<TrailblazeDeviceClassifier>,
+): Boolean = try {
+  trailblazeYaml.hasRecordedSteps(
+    trailblazeYaml.decodeTrailOrToolEnvelope(yaml, deviceClassifiers = deviceClassifiers),
+  )
+} catch (e: Exception) {
+  false
 }
 
 /**
@@ -202,17 +242,14 @@ class RunYamlRequestHandler(
         val requestDriverType = request.driverType
         if (requestDriverType != null) info.copy(trailblazeDriverType = requestDriverType) else info
       }
-      val hasRecordedSteps = try {
-        // decodeTrailOrToolEnvelope (superset of decodeTrail): the host-drives-the-loop path sends a
-        // bare `- <toolName>:` tool envelope on this same `yaml` field, which decodes to one
-        // ToolTrailItem (hasRecordedSteps → true). Plain decodeTrail throws on that shape, which would
-        // silently flip the flag to false and mislabel single-tool dispatch as agent-driven.
-        trailblazeYaml.hasRecordedSteps(
-          trailblazeYaml.decodeTrailOrToolEnvelope(request.yaml)
-        )
-      } catch (e: Exception) {
-        false
-      }
+      // Decode with THIS device's classifiers and swallow any decode failure to false — see
+      // [computeHasRecordedSteps] for why passing the classifiers (not an empty list) is what keeps
+      // a fully-recorded unified trail from being mislabeled `false` and losing its Recording pill.
+      val hasRecordedSteps = computeHasRecordedSteps(
+        trailblazeYaml = trailblazeYaml,
+        yaml = request.yaml,
+        deviceClassifiers = deviceInfo.classifiers,
+      )
 
       sessionManager.emitSessionStartLog(
         session = session,

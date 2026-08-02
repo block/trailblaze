@@ -84,3 +84,6 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 *Want this for your own app? Every `trailblaze run` produces a session you can export
 the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
 and its `--storyboard` / `--webp` / `--gif` / `--video` flags.*
+
+*Optimizing a slow trail? The same session logs also feed an Instruments-style time
+profiler - see [Performance Profiling](profiling.md) for `trailblaze profile`.*

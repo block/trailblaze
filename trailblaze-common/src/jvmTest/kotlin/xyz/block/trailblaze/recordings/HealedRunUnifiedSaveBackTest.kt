@@ -23,7 +23,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateRecordedTrailItems
 
 /**
  * Simulated end-to-end save-back for a `--self-heal` run of a unified trail. The session's log
@@ -32,12 +32,12 @@ import xyz.block.trailblaze.yaml.generateRecordedYaml
  * pair for the same step-0 prompt) — and it drives the REAL production chain, device execution
  * being the only thing simulated:
  *
- *   logs → [generateRecordedYaml] → decodeTrail (strict) → [UnifiedRecordingWriter.mergeIntoUnified]
+ *   logs → [generateRecordedTrailItems] → [UnifiedRecordingWriter.mergeIntoUnified]
  *
  * That is the chain `TrailCommand.saveRecordingAsUnified` runs after a unified-trail run. Before
- * the healed-trailhead merge fix in [generateRecordedYaml], the chain died at the strict decode
- * ("Only one trailhead item is allowed in a trail."), so a healed run could never save back to a
- * unified trail and left an unparseable `recording.trail.yaml` behind.
+ * the healed-trailhead merge fix in the recording generator, the lowering produced two trailhead
+ * items ("Only one trailhead item is allowed in a trail."), so a healed run could never save back
+ * to a unified trail and left an unparseable `recording.trail.yaml` behind.
  */
 class HealedRunUnifiedSaveBackTest {
 
@@ -59,9 +59,8 @@ class HealedRunUnifiedSaveBackTest {
     // The heal recovered with two tool calls, so the recorded trailhead arrives as
     // failed attempt (1 tool) + recovery (2 tools) = 3 tools.
     val logs = healedRunLogs(recoveryToolNames = listOf("tapSignIn", "enterEmail"))
-    val recordingYaml = logs.generateRecordedYaml(yaml)
-    // The strict parse the CLI save-back performs — this line threw before the merge fix.
-    val recordedItems = yaml.decodeTrail(recordingYaml)
+    // The lowered items the CLI save-back merges (previously a v1 encode + strict decode round-trip).
+    val recordedItems = logs.generateRecordedTrailItems(yaml)
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, recordedItems, "android")
 
@@ -79,7 +78,7 @@ class HealedRunUnifiedSaveBackTest {
     val dir = tempFolder.newFolder()
     val logs = healedRunLogs(recoveryToolNames = emptyList())
 
-    val recordedItems = yaml.decodeTrail(logs.generateRecordedYaml(yaml))
+    val recordedItems = logs.generateRecordedTrailItems(yaml)
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, recordedItems, "android")
 
     assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged)

@@ -504,8 +504,18 @@ class DaemonClient(
     /** Poll interval when checking async run status */
     const val RUN_POLL_INTERVAL_MS = 1000L
 
-    /** Maximum time to wait for daemon to start */
-    const val MAX_WAIT_FOR_DAEMON_MS = 30_000L
+    /**
+     * Maximum time to wait for daemon to start.
+     *
+     * A cold uber-jar daemon boot legitimately takes 30s+ on a loaded machine (a CI VM running
+     * an emulator concurrently, or a laptop cold start). The previous 30s ceiling sat inside
+     * that distribution's tail, so the launcher would give up and exit INFRA_FAILED while the
+     * detached daemon was still booting, which read as a fleet-wide "daemon exited before
+     * /ping became ready" failure in CI. 120s keeps real headroom; a daemon that
+     * starts sooner is detected immediately by the poll loop, so the extra budget only shows
+     * up as progress dots when startup is genuinely slow.
+     */
+    const val MAX_WAIT_FOR_DAEMON_MS = 120_000L
 
     /** Poll interval when waiting for daemon */
     const val POLL_INTERVAL_MS = 500L

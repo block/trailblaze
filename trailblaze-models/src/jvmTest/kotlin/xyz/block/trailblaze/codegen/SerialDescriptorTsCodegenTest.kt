@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.codegen
 
+import kotlinx.serialization.Polymorphic
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlin.test.Test
@@ -128,25 +129,80 @@ export interface Sample {
     assertContains(ts, "\"kebab-case\": string;")
   }
 
+  // Single-token @SerialName values so each subtype's discriminator LITERAL (the full serial name)
+  // and its TS type NAME (the serial name's last segment) coincide — the same alignment real
+  // FQN-named sealed subtypes get (e.g. TrailblazeLog.AccessibilityActionLog → type name
+  // "AccessibilityActionLog", literal the full FQN).
   @Serializable
   sealed interface Shape {
     @Serializable
-    @SerialName("circle")
+    @SerialName("Circle")
     data class Circle(val radius: Int) : Shape
+
+    @Serializable
+    @SerialName("Square")
+    data class Square(val side: Int) : Shape
   }
 
   @Serializable
   data class ShapeHolder(val shape: Shape)
 
   @Test
-  fun `a sealed or polymorphic type fails loud`() {
-    val ex = assertFailsWith<IllegalStateException> {
-      SerialDescriptorTsCodegen.generate(listOf(ShapeHolder.serializer().descriptor), header = "")
-    }
-    assertTrue(
-      ex.message!!.contains("polymorphic", ignoreCase = true),
-      "error should explain the unsupported polymorphic type: ${ex.message}",
+  fun `a sealed hierarchy renders as a discriminated union`() {
+    val ts = SerialDescriptorTsCodegen.generate(listOf(ShapeHolder.serializer().descriptor), header = "")
+    assertContains(ts, "export type Shape = Circle | Square;")
+    // Subtypes reached only via the sealed base carry the discriminator as a REQUIRED literal.
+    assertContains(ts, "class: \"Circle\";")
+    assertContains(ts, "class: \"Square\";")
+    assertContains(ts, "shape: Shape;")
+  }
+
+  @Serializable
+  data class ConcreteAndBaseHolder(val circle: Shape.Circle, val shape: Shape)
+
+  @Test
+  fun `a subtype also referenced as a concrete field type gets an optional discriminator`() {
+    // kotlinx omits the discriminator when the declared (static) type is the concrete class, so
+    // the TS field can't be required.
+    val ts = SerialDescriptorTsCodegen.generate(listOf(ConcreteAndBaseHolder.serializer().descriptor), header = "")
+    assertContains(ts, "class?: \"Circle\";")
+    assertContains(ts, "class: \"Square\";")
+  }
+
+  @Test
+  fun `the discriminator key follows the configured classDiscriminator`() {
+    val ts = SerialDescriptorTsCodegen.generate(
+      listOf(ShapeHolder.serializer().descriptor),
+      header = "",
+      classDiscriminator = "type",
     )
+    assertContains(ts, "type: \"Circle\";")
+  }
+
+  @JvmInline
+  @Serializable
+  value class WrappedId(val value: String)
+
+  @Serializable
+  data class InlineHolder(val id: WrappedId)
+
+  @Test
+  fun `an inline value class unwraps to its underlying wire type`() {
+    val ts = SerialDescriptorTsCodegen.generate(listOf(InlineHolder.serializer().descriptor), header = "")
+    assertContains(ts, "id: string;")
+    assertTrue("WrappedId" !in ts, "inline classes have no named wire type: $ts")
+  }
+
+  @Serializable
+  data class OpenHolder(@Polymorphic val payload: Any)
+
+  @Test
+  fun `open polymorphism degrades to a permissive record with a sanitized name`() {
+    // kotlinx names the OPEN descriptor `kotlinx.serialization.Polymorphic<Any>` — the angle
+    // brackets must not leak into the emitted TypeScript declaration as a bogus generic.
+    val ts = SerialDescriptorTsCodegen.generate(listOf(OpenHolder.serializer().descriptor), header = "")
+    assertContains(ts, "export type PolymorphicAny = { class: string } & { [key: string]: unknown };")
+    assertContains(ts, "payload: PolymorphicAny;")
   }
 
   // Two distinct types whose serial names differ but whose last segment ("Dup") collides into the

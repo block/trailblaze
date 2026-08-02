@@ -91,22 +91,20 @@ class TrailYamlValidationTest {
   @Test
   fun `strict parser rejects unknown keys but lenient accepts them`() {
     val knownBad = """
-      - config:
-          id: probe/strict-gate
-          title: probe
-          target: square
-          platform: ios
-          driver: IOS_HOST
-      - prompts:
+      config:
+        id: probe/strict-gate
+        title: probe
+        target: square
+      trail:
         - step: s
           recording:
-            tools:
-            - assertVisibleBySelector:
-                reason: r
-                nodeSelector:
-                  iosMaestro:
-                    textRegex: More
-                bogusUnknownArg: 1
+            ios:
+              - assertVisibleBySelector:
+                  reason: r
+                  nodeSelector:
+                    iosMaestro:
+                      textRegex: More
+                  bogusUnknownArg: 1
     """.trimIndent()
 
     val strictFailure = assertFailsWith<Exception> {

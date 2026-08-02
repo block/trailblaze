@@ -696,7 +696,7 @@ function SearchableText({ text = '', language, fontSize = 12, minHeight, backgro
         </div>
         {q && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: '0 0 auto' }}>
-            <span className="tb-mono tb-sub" style={{ fontSize: 11, minWidth: 56, textAlign: 'right' }}>{matches.length ? (active + 1) + ' / ' + matches.length : 'no matches'}</span>
+            <span className="tb-sub" style={{ fontSize: 11, minWidth: 56, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{matches.length ? (active + 1) + ' / ' + matches.length : 'no matches'}</span>
             <button className="tb-btn sm" disabled={!matches.length} onClick={() => step(-1)} title="Previous (⇧⏎ · ⌘⇧G)" style={{ width: 28, padding: 0, justifyContent: 'center' }}><Ico n="chevron-up" s={15} /></button>
             <button className="tb-btn sm" disabled={!matches.length} onClick={() => step(1)} title="Next (⏎ · ⌘G)" style={{ width: 28, padding: 0, justifyContent: 'center' }}><Ico n="chevron-down" s={15} /></button>
             <button className="tb-btn sm" onClick={() => setQ('')} title="Clear (Esc)" style={{ width: 28, padding: 0, justifyContent: 'center' }}><Ico n="x" s={14} /></button>
@@ -905,7 +905,8 @@ function HelpOverlay({ title, sub, onClose, minCardWidth, children }) {
 
 // Hover tooltip styled like the help popovers (elevated card + soft shadow), shown immediately on
 // hover/focus with none of the native `title` delay. Portaled + fixed so it never clips, clamped to
-// the viewport, and flips above the anchor when there's no room below. `tip` is a string or node;
+// the viewport. Bottom tips flip above, horizontal tips flip left/right, and top tips clamp when
+// there isn't room on the requested side. `tip` is a string or node;
 // when empty, the children render bare (no wrapper behavior). Replaces native `title` attributes.
 function HoverTip({ tip, children, gap = 8, maxWidth = 340, place = 'bottom', style }) {
   const ref = React.useRef(null);
@@ -919,11 +920,20 @@ function HoverTip({ tip, children, gap = 8, maxWidth = 340, place = 'bottom', st
     if (!anchor || !tipRef.current) return;
     const t = tipRef.current.getBoundingClientRect();
     const margin = 10;
-    let left = anchor.left + anchor.width / 2 - t.width / 2;
+    let left;
+    let top;
+    if (place === 'right' || place === 'left') {
+      left = place === 'right' ? anchor.right + gap : anchor.left - t.width - gap;
+      if (place === 'right' && left + t.width > window.innerWidth - margin) left = anchor.left - t.width - gap;
+      if (place === 'left' && left < margin) left = anchor.right + gap;
+      top = anchor.top + anchor.height / 2 - t.height / 2;
+    } else {
+      left = anchor.left + anchor.width / 2 - t.width / 2;
+      top = place === 'top' ? anchor.top - t.height - gap : anchor.bottom + gap;
+      if (place !== 'top' && top + t.height > window.innerHeight - margin) top = anchor.top - t.height - gap;
+    }
     left = Math.max(margin, Math.min(left, window.innerWidth - t.width - margin));
-    let top = place === 'top' ? anchor.top - t.height - gap : anchor.bottom + gap;
-    if (place !== 'top' && top + t.height > window.innerHeight - margin) top = anchor.top - t.height - gap;
-    top = Math.max(margin, top);
+    top = Math.max(margin, Math.min(top, window.innerHeight - t.height - margin));
     setPos({ left, top });
   }, [anchor, tip, place, gap]);
   if (tip == null || tip === '') return <React.Fragment>{children}</React.Fragment>;

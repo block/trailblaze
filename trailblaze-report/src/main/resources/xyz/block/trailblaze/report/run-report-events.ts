@@ -11,16 +11,18 @@
 // FormattedRow data (never HTML), and streams without a formatter keep the generic last-N,
 // truncated-preview shape the viewer has always rendered.
 
-// Event payloads are embedded IN FULL — no last-N event cap and no preview truncation. Report
-// size is kept in check by the driver instead: it gzips a session's events into `eventsGz` past
-// an inline threshold and enforces a loud total budget (see run-report-cli.ts), and the viewer
-// renders payload bodies lazily. The only remaining per-value clamp is a pathological-input
-// backstop far above any legitimate payload.
+// This pipeline itself embeds event payloads IN FULL — no last-N event cap and no preview
+// truncation. Report size is kept in check by the driver (it gzips a session's events into
+// `eventsGz` past an inline threshold and enforces a loud total budget — see run-report-cli.ts),
+// by lazy payload rendering in the viewer, and by the formatters themselves: a formatter receives
+// the session outcome (FormatterContext) and may apply a per-stream size budget to raw payloads of
+// PASSED sessions (grep REPORT_SIZE_BUDGET for each stream's policy). Sessions that didn't pass
+// always keep full payloads. The only per-value clamp here is a pathological-input backstop far
+// above any legitimate payload.
 export const MAX_VALUE_CHARS = 10_000_000;
 
 // Per-row output budgets. UI-chrome parts (label, badges, summary fields) stay tightly bounded so
-// a buggy formatter can't wreck the row grid; content parts (section text, raw payloads) get the
-// pathological backstop only.
+// a buggy formatter can't wreck the row grid; the raw payloads get the pathological backstop only.
 const CAPS = {
   label: 300,
   badgeText: 40,
@@ -28,10 +30,6 @@ const CAPS = {
   fieldKey: 120,
   fieldValue: 2000,
   fields: 16,
-  sectionTitle: 120,
-  sectionText: MAX_VALUE_CHARS,
-  sectionKvEntries: 120,
-  sections: 12,
   raw: 8,
   rows: 100_000,
 };
@@ -94,26 +92,52 @@ const clampText = (value: unknown, max: number): string => {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 };
 
-const serializePretty = (value: unknown): string => {
-  if (typeof value === "string") return value;
+/**
+ * Validated `RowField.href`: an absolute http(s) URL within the field-value budget, else null.
+ * Validated once here at embed time so the viewer only ever sees renderable link targets (it
+ * still re-checks before emitting an anchor — the embedded payload is data, not trusted markup).
+ */
+export function safeFieldHref(value: unknown): string | null {
+  if (typeof value !== "string" || !value || value.length > CAPS.fieldValue) return null;
   try {
-    return JSON.stringify(value, null, 2) ?? String(value);
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
   } catch {
-    return String(value);
+    return null;
   }
-};
+}
 
 const clampKv = (kv: unknown, maxEntries: number): RowField[] | null => {
   if (!Array.isArray(kv)) return null;
   const out = kv
     .filter((f) => f && typeof f === "object")
     .slice(0, maxEntries)
-    .map((f: { k?: unknown; v?: unknown }) => ({
-      k: clampText(f.k, CAPS.fieldKey),
-      v: clampText(f.v, CAPS.fieldValue),
-    }))
+    .map((f: { k?: unknown; v?: unknown; href?: unknown }) => {
+      const field: RowField = {
+        k: clampText(f.k, CAPS.fieldKey),
+        v: clampText(f.v, CAPS.fieldValue),
+      };
+      const href = safeFieldHref(f.href);
+      if (href) field.href = href;
+      return field;
+    })
     .filter((f) => f.k || f.v);
   return out.length ? out : null;
+};
+
+// Raw payloads are embedded as JSON VALUES (compact — the viewer pretty-prints on expand). Only a
+// pathological entry (unserializable, or past the size backstop) degrades to a (truncated) string.
+const clampRawEntry = (value: unknown): unknown => {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    json = undefined;
+  }
+  // Unserializable either way (throw, or stringify-to-undefined: functions, symbols) — degrade to
+  // a bounded string so nothing bypasses the backstop.
+  if (json === undefined) return clampText(String(value), MAX_VALUE_CHARS);
+  return json.length > MAX_VALUE_CHARS ? `${json.slice(0, MAX_VALUE_CHARS)}…` : value;
 };
 
 /** Author row → embedded row: validate, serialize structured parts, enforce every budget. */
@@ -137,31 +161,11 @@ const clampRow = (row: FormatterRowInput | null | undefined): FormattedRow | nul
   }
   const fields = clampKv(row.fields, CAPS.fields);
   if (fields) out.fields = fields;
-  if (Array.isArray(row.sections)) {
-    const sections = row.sections
-      .filter((s) => s && typeof s === "object" && s.title)
-      .slice(0, CAPS.sections)
-      .map((s) => {
-        const section: RowSection = { title: clampText(s.title, CAPS.sectionTitle) };
-        const kv = clampKv(s.kv, CAPS.sectionKvEntries);
-        if (kv) section.kv = kv;
-        else {
-          const hasText = s.text != null && String(s.text).trim() !== "";
-          section.text = clampText(
-            hasText ? s.text : s.json !== undefined ? serializePretty(s.json) : "",
-            CAPS.sectionText,
-          );
-        }
-        return section;
-      })
-      .filter((s) => s.kv || s.text);
-    if (sections.length) out.sections = sections;
-  }
   if (Array.isArray(row.raw)) {
     const raw = row.raw
       .filter((r) => r != null)
       .slice(0, CAPS.raw)
-      .map((r) => clampText(serializePretty(r), MAX_VALUE_CHARS));
+      .map(clampRawEntry);
     if (raw.length) out.raw = raw;
   }
   return out;
@@ -175,10 +179,11 @@ const clampRow = (row: FormatterRowInput | null | undefined): FormattedRow | nul
 export function formatRows(
   formatter: EventStreamFormatter,
   entries: FormatterEntry[],
+  ctx?: FormatterContext,
 ): FormattedRow[] | null {
   let produced: Array<FormatterRowInput | null | undefined>;
   try {
-    produced = formatter.format(entries);
+    produced = formatter.format(entries, ctx ?? { sessionPassed: false });
   } catch {
     return null;
   }
@@ -189,13 +194,15 @@ export function formatRows(
 
 /**
  * The whole pipeline for one `events/` file: raw lines in, embeddable EventStream out (null when
- * the file isn't a well-formed events stream). Every line is kept and every payload is embedded
- * in full — with a matching formatter as netlog-style rows, without one as generic events.
+ * the file isn't a well-formed events stream). Every line is kept — with a matching formatter as
+ * netlog-style rows (the formatter sees `ctx` and may size-budget raw payloads of passed
+ * sessions), without one as generic events embedded in full.
  */
 export function buildEventStream(
   fileName: string,
   lines: string[],
   formatters: EventStreamFormatter[] = [],
+  ctx?: FormatterContext,
 ): EventStream | null {
   const name = parseStreamFileName(fileName);
   if (!name) return null;
@@ -204,7 +211,7 @@ export function buildEventStream(
   if (!entries.length) return null;
 
   const formatter = formatterForStream(formatters, name);
-  const rows = formatter ? formatRows(formatter, entries) : null;
+  const rows = formatter ? formatRows(formatter, entries, ctx) : null;
   if (rows) {
     return {
       name,

@@ -28,6 +28,7 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
+import xyz.block.trailblaze.report.models.AffectedFailure
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
@@ -85,7 +86,15 @@ import kotlin.io.path.Path
  * - BUILDKITE_JOB_ID / CI_JOB_ID
  * - ARTIFACT_PREFIX  (derives `logs_<prefix>.zip` for the logs-zip filename)
  */
-open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results") {
+open class GenerateTestResultsCliCommand(
+  /**
+   * When non-null, supplies the [LogsRepo] for a logs dir instead of this command building
+   * (and closing) its own. Lets [ReportMain.main] share one single-read repo — one parse of
+   * every session — across this command and [GenerateReportCliCommand] in the same process.
+   * The provider owns the repo's lifecycle; this command only closes repos it built itself.
+   */
+  private val logsRepoProvider: ((File) -> LogsRepo)? = null,
+) : CliktCommand(name = "generate-test-results") {
 
   private val logsDirArg by argument(
     name = "logs-dir",
@@ -160,12 +169,15 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     private set
 
   override fun run() {
-    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
-    val logsRepo = LogsRepo(
-      logsDir = logsDir,
-      watchFileSystem = false,
-      costEnricher = costEnricher::enrich,
-    )
+    val ownsLogsRepo = logsRepoProvider == null
+    val logsRepo = logsRepoProvider?.invoke(logsDir) ?: run {
+      val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
+      LogsRepo(
+        logsDir = logsDir,
+        watchFileSystem = false,
+        costEnricher = costEnricher::enrich,
+      )
+    }
     // Use precomputed SessionInfo from LogsRepo init (instead of raw directory names) so
     // orphan helper-session folders — e.g. MCP-only logs with no SessionStatusChangeLog —
     // are ignored by report generation.
@@ -174,7 +186,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       .associateBy { it.sessionId }
 
     if (sessionInfos.isEmpty()) {
-      logsRepo.close()
+      if (ownsLogsRepo) logsRepo.close()
       Console.log("⚠️  No sessions found in: ${logsDir.absolutePath}")
       return
     }
@@ -222,6 +234,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
             session_id = sessionId,
             title = title,
             test_key = testKey,
+            test_class = sessionInfo.testClass?.takeIf { it.isNotBlank() },
+            test_name = sessionInfo.testName?.takeIf { it.isNotBlank() },
             platform = platform,
             execution_mode = ExecutionMode.classify(
               status = sessionInfo.latestStatus,
@@ -317,7 +331,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     generatedReport = summaryReport
 
     // Clean up file watchers to allow JVM to exit
-    logsRepo.close()
+    if (ownsLogsRepo) logsRepo.close()
   }
 
   /**
@@ -996,10 +1010,20 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           count = tests.size,
           share = tests.size.toDouble() / failures.size,
           affected_tests = tests.map { it.title }.distinct(),
+          affected_failures = tests.map { it.toAffectedFailure() },
         )
       }
       .sortedByDescending { it.count }
   }
+
+  private fun SessionResult.toAffectedFailure() = AffectedFailure(
+    title = title,
+    test_key = test_key,
+    case_id = test_key?.let { CASE_ID_IN_TEST_KEY.find(it)?.groupValues?.get(1) },
+    device = device_classifier,
+    session_id = session_id.value,
+    reason = failure_reason?.lineSequence()?.firstOrNull()?.trim()?.take(200),
+  )
 
   private fun buildFailureAxes(deduped: List<SessionResult>): FailureAxes {
     return FailureAxes(
@@ -1056,6 +1080,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       }
       .sortedByDescending { it.failed_on.size }
   }
+
+  /** Pulls `4837766` out of a `.../suite_71172/section_838951/case_4837766` test key. */
+  private val CASE_ID_IN_TEST_KEY = Regex("""case_(\d+)""")
 
   /**
    * Normalize a failure reason into a groupable signature by stripping

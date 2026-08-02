@@ -602,15 +602,12 @@ internal fun extractPlannedPrompts(logs: List<TrailblazeLog>): List<String> {
 }
 
 /**
- * The ordered planned-prompt objectives for a trail's raw YAML, for both formats. A unified
- * single-file trail is a `config:`/`trail:` mapping the v1 list-shaped `decodeTrail` can't parse
- * (it would throw and lose the whole preview), so lower a unified doc to the same v1 items the
- * runtime executes — with no device classifiers, since the planned-prompt NL is device-independent
- * — and pull the prompt steps the same way for both. Returns empty on any parse failure.
+ * The ordered planned-prompt objectives for a trail's raw YAML. Lower the unified doc to the runtime
+ * [TrailYamlItem] spine — with no device classifiers, since the planned-prompt NL is
+ * device-independent — and pull the prompt steps. Returns empty on any parse failure.
  */
 internal fun plannedPromptsFromRawYaml(rawYaml: String): List<String> = try {
   val items = when (val doc = TrailblazeYaml.Default.decodeTrailDocument(rawYaml)) {
-    is TrailDocument.V1 -> doc.items
     is TrailDocument.Unified -> UnifiedTrailAdapter.lowerToTrailItems(doc.trail, emptyList())
   }
   items

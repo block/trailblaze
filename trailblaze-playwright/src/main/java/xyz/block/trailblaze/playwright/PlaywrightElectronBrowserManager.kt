@@ -11,6 +11,8 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
+import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -38,7 +40,22 @@ class PlaywrightElectronBrowserManager(
   private val cdpUrl: String,
   override val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
+  /**
+   * Trailblaze device id under which to publish a screencast feed for the session-video recorder
+   * ([xyz.block.trailblaze.capture.video.WebScreencastVideoCapture]). When null (e.g. the
+   * recording-tab connection), no feed is registered and the Electron session gets no video —
+   * matching the pre-screencast behavior, where Electron had no session video at all because
+   * `setRecordVideoDir` can't attach to a CDP-connected context.
+   */
+  private val deviceId: String? = null,
 ) : PlaywrightPageManager {
+
+  /**
+   * Single fanned-out CDP screencast for this Electron connection, published to
+   * [WebScreencastFeedRegistry] under [deviceId]. Lazy — no screencast opens until the recorder
+   * subscribes.
+   */
+  private val screencastFeed: PlaywrightScreencastFeed = PlaywrightScreencastFeed(this)
 
   // Settle constants live on PlaywrightPageManager.Companion alongside their consumers.
 
@@ -134,7 +151,14 @@ class PlaywrightElectronBrowserManager(
       PlaywrightDriverManager.ensureDriverAvailable()
       runBlocking(playwrightDispatcher) {
         playwright = Playwright.create()
-        browser = playwright.chromium().connectOverCDP(cdpUrl)
+        // Bound the connect handshake so an endpoint that accepts the TCP socket but never
+        // speaks CDP can't block this constructor (and the caller's Connect action) forever.
+        // A refused connection already fails fast; this caps the "connected-but-silent" case.
+        browser = playwright.chromium().connectOverCDP(
+          cdpUrl,
+          com.microsoft.playwright.BrowserType.ConnectOverCDPOptions()
+            .setTimeout(CDP_CONNECT_TIMEOUT_MS),
+        )
         Console.log("Electron: connected to CDP at $cdpUrl")
 
         // Grab the first existing context and page from the Electron app
@@ -169,6 +193,9 @@ class PlaywrightElectronBrowserManager(
 
         setupPageForAutomation(currentPage)
       }
+      // Publish the lazy screencast feed so the session-video recorder can attach. No screencast
+      // opens until it actually subscribes.
+      deviceId?.let { WebScreencastFeedRegistry.register(it, screencastFeed) }
     } catch (e: Exception) {
       playwrightExecutor.shutdownNow()
       throw e
@@ -345,6 +372,7 @@ class PlaywrightElectronBrowserManager(
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     inFlightRequests.clear()
+    deviceId?.let { WebScreencastFeedRegistry.unregister(it, screencastFeed) }
     val disconnectResources = {
       // Disconnect the CDP session. For connectOverCDP browsers, browser.close()
       // only disconnects — it does NOT terminate the Electron app.
@@ -366,5 +394,15 @@ class PlaywrightElectronBrowserManager(
     }
     playwrightExecutor.shutdown()
     playwrightExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
+  }
+
+  companion object {
+    /**
+     * Upper bound on the CDP connect handshake. Generous for a healthy local endpoint (which
+     * connects in well under a second) yet short enough that a wedged / non-CDP endpoint surfaces
+     * a connect failure instead of hanging the caller. Callers front this with their own CDP
+     * readiness probe, so this is a backstop, not the primary wait.
+     */
+    private const val CDP_CONNECT_TIMEOUT_MS: Double = 30_000.0
   }
 }

@@ -13,10 +13,15 @@ import xyz.block.trailblaze.util.Console
  * stored only once in the sprite grid. A `frameMap` in the metadata maps each logical frame
  * index to its physical position in the grid.
  *
- * Unique frames are arranged in a grid: multiple columns of stacked rows, laid out
- * left-to-right, top-to-bottom. Physical frame N is at column `N / rows` and row `N % rows`.
+ * Unique frames are arranged in a grid, filled **row-major**: left-to-right along a row, then
+ * down to the next row. Physical frame N is at row `N / columns`, column `N % columns` — see
+ * [spriteGridPosition], which every reader cropping a frame out of a sheet must go through.
  * WebP has a 16383px dimension limit, so for long sessions frames are split across multiple
- * sprite sheet files (`video_sprites_0.webp`, `video_sprites_1.webp`, etc.).
+ * sprite sheet files (`video_sprites_0.webp`, `video_sprites_1.webp`, etc. — a single sheet
+ * keeps the plain `video_sprites.webp` name). The metadata's `columns`/`rows` describe one
+ * FULL sheet, so physical frame N lives on sheet `N / (columns*rows)` at the row-major cell
+ * of `N % (columns*rows)`; only the final sheet may have fewer rows
+ * ([SpriteSheetMetadata.sheetRows]).
  *
  * A companion metadata file (`video_sprites.txt`) records the layout so consumers can index
  * into the image(s):
@@ -24,12 +29,25 @@ import xyz.block.trailblaze.util.Console
  * fps=2
  * frames=120
  * height=720
+ * frameWidth=328
  * columns=2
  * rows=22
  * uniqueFrames=60
  * sheets=1
  * frameMap=0,0,1,2,2,3,...
+ * restamped=false
  * ```
+ *
+ * `restamped` records whether [maybeRestamp] had to synthesize a constant frame rate because the
+ * input mp4's container timing disagreed with the recorder's wall-clock window. When it is `true`,
+ * the frame↔timestamp mapping is a uniform *guess* (real per-frame timing was unrecoverable), so
+ * downstream consumers treat a heavily single-frame-dominated `frameMap` as degenerate and fall
+ * back to the per-step screenshot timeline rather than trust the guessed distribution.
+ *
+ * `frameWidth` is the per-frame pixel width, letting consumers size frames without decoding the
+ * whole sheet. It's optional on read: sprite files written before the key existed lack it, and
+ * every consumer must keep working without it (the parse/acceptance contract lives in
+ * [SpriteSheetMetadata], locked cross-language by `sprite-metadata-parity-fixtures.json`).
  *
  * This produces file(s) that are trivially loadable in Compose, WASM, and desktop
  * environments — no video codec or media player required.
@@ -38,6 +56,27 @@ object VideoSpriteExtractor {
 
   const val SPRITE_FILENAME = "video_sprites.webp"
   const val SPRITE_META_FILENAME = "video_sprites.txt"
+
+  /** Grid cell holding one physical sprite frame. See [spriteGridPosition]. */
+  data class SpriteGridPosition(val row: Int, val column: Int)
+
+  /**
+   * Where physical frame [physicalIndex] sits in a sheet [columns] frames wide.
+   *
+   * ffmpeg's `tile` filter — the assembler in [generateSpriteSheet] — fills row-major, so this
+   * divides by `columns`, not by `rows`. Reading a sheet with the two transposed serves a
+   * *different frame* for almost every index as soon as `columns > 1`, which is silent: the
+   * frames are all real screenshots of the same session, just the wrong ones. Both Kotlin
+   * readers (the WASM report's frame crops and the desktop timeline's sprite cache) go through
+   * here; `run-report-core.ts`'s `spriteFrameCss` is the JS mirror of it.
+   */
+  fun spriteGridPosition(physicalIndex: Int, columns: Int): SpriteGridPosition {
+    val safeColumns = columns.coerceAtLeast(1)
+    return SpriteGridPosition(
+      row = physicalIndex / safeColumns,
+      column = physicalIndex % safeColumns,
+    )
+  }
 
   /**
    * Always-written diagnostic file capturing the inputs to the duration mismatch / re-stamp
@@ -241,6 +280,14 @@ object VideoSpriteExtractor {
    *   ffmpeg's `-c copy` wrap stamps PTS at a default 25fps that doesn't reflect real
    *   wall-clock — and is a no-op for mp4s whose container timestamps already match
    *   wall-clock (iOS sim, Playwright).
+   * @param vfrTimestampsTrusted Set by callers whose recorder writes correct per-frame PTS but
+   *   emits frames only on screen change (iOS `simctl recordVideo`), so a run that ends on a
+   *   static screen legitimately reports a container shorter than [expectedDurationMs]. When
+   *   true, any such shortfall is closed by cloning the last frame through the window's tail
+   *   (`tpad`) instead of the constant-rate re-stamp — the shortfall size carries no signal
+   *   about broken timing for these recorders, so no ratio/tolerance heuristic applies. When
+   *   false (default: the Android `screenrecord` chain and any caller that hasn't audited its
+   *   PTS), a mismatch keeps the re-stamp behavior described above.
    */
   fun generateSpriteSheet(
     videoFile: File,
@@ -249,6 +296,9 @@ object VideoSpriteExtractor {
     webpQuality: Int = CaptureOptions.DEFAULT_SPRITE_QUALITY,
     isLandscape: Boolean = false,
     expectedDurationMs: Long? = null,
+    vfrTimestampsTrusted: Boolean = false,
+    // Overridable only so tests can force multi-sheet output without gigapixel fixtures.
+    maxWebpDimension: Int = MAX_WEBP_DIMENSION,
   ): File? {
     // Treat `fps <= 0` as "caller doesn't want sprites." Without this guard, the ffmpeg
     // frame-extraction below runs with `-vf fps=0`, fails noisily, and the caller has to
@@ -295,7 +345,7 @@ object VideoSpriteExtractor {
       val probeOutcome: ProbeOutcome? = expectedDurationMs?.takeIf { it > 0L }
         ?.let { probeDurationAndFrameCount(videoFile) }
       val probe = (probeOutcome as? ProbeOutcome.Success)?.duration
-      val vf = maybeRestamp(videoFile, baseVf, expectedDurationMs, probe)
+      val vf = maybeRestamp(videoFile, baseVf, expectedDurationMs, probe, vfrTimestampsTrusted)
       val diagSuffix = buildExtractionDiagnostics(expectedDurationMs, probeOutcome, vf)
       writeDiagnostics(dir, diagSuffix)
 
@@ -450,47 +500,32 @@ object VideoSpriteExtractor {
         // Step 3: Assemble sprite sheet(s) as WebP.
         // WebP max dimension is 16383px in both axes, so constrain rows by height
         // and columns by width. Split into multiple sheets for long sessions.
-        val maxRows = (MAX_WEBP_DIMENSION / frameHeight).coerceAtLeast(1)
-        val maxCols = (MAX_WEBP_DIMENSION / frameWidth).coerceAtLeast(1)
+        val maxRows = (maxWebpDimension / frameHeight).coerceAtLeast(1)
+        val maxCols = (maxWebpDimension / frameWidth).coerceAtLeast(1)
         val framesPerSheet = maxRows * maxCols
         val sheetCount = ((uniqueCount + framesPerSheet - 1) / framesPerSheet).coerceAtLeast(1)
-
-        // Multi-sheet sprites are not yet supported by downstream consumers — the
-        // VideoMetadata / WasmReport / VideoFrameCache code paths only ever load the
-        // first sheet, so frames whose physical index lands on `video_sprites_1.webp`
-        // (or higher) are unreachable. Bail out cleanly so the timeline falls back to
-        // the screenshot slideshow rather than silently dropping frames.
-        if (sheetCount > 1) {
-          Console.log(
-            "Sprite sheet would require $sheetCount sheets ($uniqueCount unique frames), " +
-              "but consumers only support a single sheet — skipping sprite extraction. " +
-              "Reduce session length, frame fps, or frame height to fit one sheet.",
-          )
-          writeFailureMarker(
-            dir,
-            "Sprite sheet would require $sheetCount sheets " +
-              "($uniqueCount unique frames, frameWidth=$frameWidth, frameHeight=$frameHeight, " +
-              "framesPerSheet=$framesPerSheet) — consumers only support 1.",
-          )
-          return null
-        }
 
         var totalSpriteKB = 0L
         val spriteFiles = mutableListOf<File>()
 
-        // Overall grid dimensions for metadata (describes the logical layout)
-        val columns = ((uniqueCount + maxRows - 1) / maxRows).coerceAtLeast(1).coerceAtMost(maxCols)
-        val rows = ((uniqueCount + columns - 1) / columns).coerceAtLeast(1)
+        // Grid geometry shared by EVERY sheet — consumers locate physical frame N on sheet
+        // `N / (columns*rows)` and at [spriteGridPosition] of the sheet-local index within it,
+        // so `columns * rows` must be the per-sheet frame count. A single sheet packs into the narrowest grid that fits; multiple
+        // sheets use the full maxCols×maxRows capacity, and only the final sheet's row count shrinks.
+        val columns = if (sheetCount == 1) {
+          ((uniqueCount + maxRows - 1) / maxRows).coerceAtLeast(1).coerceAtMost(maxCols)
+        } else {
+          maxCols
+        }
+        val rows = if (sheetCount == 1) ((uniqueCount + columns - 1) / columns).coerceAtLeast(1) else maxRows
 
         for (sheetIndex in 0 until sheetCount) {
-          val startFrame = sheetIndex * framesPerSheet
-          val endFrame = ((sheetIndex + 1) * framesPerSheet).coerceAtMost(uniqueCount)
+          val startFrame = sheetIndex * columns * rows
+          val endFrame = ((sheetIndex + 1) * columns * rows).coerceAtMost(uniqueCount)
           val sheetFrameCount = endFrame - startFrame
 
-          val sheetColumns =
-            ((sheetFrameCount + maxRows - 1) / maxRows).coerceAtLeast(1).coerceAtMost(maxCols)
-          val sheetRows =
-            ((sheetFrameCount + sheetColumns - 1) / sheetColumns).coerceAtLeast(1)
+          // Every sheet shares `columns`; only the final (partial) sheet has fewer rows.
+          val sheetRows = ((sheetFrameCount + columns - 1) / columns).coerceAtLeast(1)
 
           val tileDir = java.nio.file.Files.createTempDirectory("trailblaze_tile_").toFile()
           try {
@@ -517,7 +552,7 @@ object VideoSpriteExtractor {
                     "-i",
                     "${tileDir.absolutePath}/uf_%06d.png",
                     "-vf",
-                    "tile=${sheetColumns}x${sheetRows}",
+                    "tile=${columns}x${sheetRows}",
                     "-c:v",
                     "libwebp",
                     "-quality",
@@ -535,7 +570,7 @@ object VideoSpriteExtractor {
               val reason =
                 "ffmpeg sprite sheet assembly failed for sheet $sheetIndex " +
                   "(${if (tileResult == null) "process did not start or timed out" else "exit=${tileResult.exitCode}, fileExists=${spriteFile.exists()}"})\n" +
-                  "grid=${sheetColumns}x${sheetRows} frames=$sheetFrameCount quality=$webpQuality" +
+                  "grid=${columns}x${sheetRows} frames=$sheetFrameCount quality=$webpQuality" +
                   if (tileResult != null && tileResult.output.isNotBlank())
                     "\nstdout/stderr:\n${sanitizeSubprocessOutputForLog(tileResult.output.trim())}"
                   else ""
@@ -566,11 +601,20 @@ object VideoSpriteExtractor {
             appendLine("fps=$fps")
             appendLine("frames=$frameCount")
             appendLine("height=$frameHeight")
+            appendLine("frameWidth=$frameWidth")
             appendLine("columns=$columns")
             appendLine("rows=$rows")
             appendLine("uniqueFrames=$uniqueCount")
             appendLine("sheets=$sheetCount")
             appendLine("frameMap=$frameMapStr")
+            // Whether maybeRestamp injected a synthetic constant-rate `setpts` (i.e. the input
+            // mp4's timing was untrustworthy and the frame distribution below is a uniform guess).
+            // Downstream (WasmReport) uses this to fall back to per-step screenshots when a guessed
+            // timeline collapses onto a single dominant frame. A tail-pad (`tpad`, healthy
+            // timestamps with a static tail) is deliberately NOT a re-stamp: its frame
+            // distribution is real, and a long static tail legitimately repeats one frame —
+            // flagging it would let WasmReport discard a correct sheet.
+            appendLine("restamped=${vf.startsWith("setpts=")}")
           }
         )
 
@@ -905,6 +949,7 @@ object VideoSpriteExtractor {
     baseVf: String,
     expectedDurationMs: Long?,
     probe: ProbedDuration?,
+    vfrTimestampsTrusted: Boolean,
   ): String {
     if (expectedDurationMs == null || expectedDurationMs <= 0L) return baseVf
     val expectedS = expectedDurationMs / 1000.0
@@ -934,6 +979,30 @@ object VideoSpriteExtractor {
     val absDiff = kotlin.math.abs(reportedS - expectedS)
     val ratio = minOf(reportedS, expectedS) / maxOf(reportedS, expectedS)
     if (absDiff <= tolerance && ratio >= DURATION_MISMATCH_RATIO_MIN) return baseVf
+
+    // Trusted-timestamps shortfall: the recorder writes correct per-frame PTS but emits frames
+    // only when the screen changes (iOS `simctl recordVideo`), so a run that ends sitting on a
+    // static screen legitimately reports a container that stops at the last change. The frames'
+    // own PTS are correct; re-stamping them at a constant synthetic rate would smear real
+    // content across the wall-clock window and misalign every timeline event. Instead, keep the
+    // native timestamps and clone the last frame through the window's tail so the `fps=`
+    // resampler yields full wall-clock coverage. The tail can be arbitrarily long (a session
+    // whose last visual change happened in its first half), so no duration heuristic separates
+    // this from broken timing — the caller's [vfrTimestampsTrusted] declaration is the signal.
+    // Untrusted callers (the Android raw-H.264 wrap, whose PTS genuinely are wrong) keep the
+    // re-stamp below.
+    if (vfrTimestampsTrusted && reportedS < expectedS) {
+      // Rounded numerically (not via format(), which is locale-dependent and could emit a
+      // comma decimal separator into the ffmpeg filter string).
+      val padS = Math.round((expectedS - reportedS) * 1000.0) / 1000.0
+      Console.log(
+        "[VideoSpriteExtractor] container is ${"%.2f".format(padS)}s shorter than the " +
+          "wall-clock window (reported=${"%.2f".format(reportedS)}s " +
+          "expected=${"%.2f".format(expectedS)}s) with healthy timestamps — " +
+          "tail-padding the last frame instead of re-stamping (file=${videoFile.name})"
+      )
+      return "tpad=stop_mode=clone:stop_duration=$padS,$baseVf"
+    }
 
     val syntheticRate = nbFrames / expectedS
     // Defensive clamp: a pathological input (e.g. nbFrames=10_000 against expectedS=0.1)

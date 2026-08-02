@@ -28,6 +28,16 @@ import xyz.block.trailblaze.util.Console
  *
  * **No audio.** The mjpeg encoder is invoked with `-an` for safety.
  *
+ * **Sidecar death.** The ffmpeg process can die without any fault in this JVM — CI agents under
+ * memory pressure kill it outright (observed in the wild: full startup stderr, then silence, no
+ * exit message). Death is detected promptly as EOF on its stdout (or a failed stdin write) and
+ * healed in place: a replacement consumer is attached to the tee *before* the dead one detaches
+ * (so a shared screenrecord producer never tears down), the tee seeds it with the cached keyframe
+ * so the fresh decoder has SPS/PPS and an IDR to start from, and a new sidecar plus pump threads
+ * take over. Respawns are bounded: [MAX_CONSECUTIVE_SILENT_DEATHS] consecutive deaths without a
+ * single decoded frame give up and detach entirely, so the liveness pings stop and subscribers'
+ * stall watchdogs fire rather than being masked by a permanently dead decoder.
+ *
  * Lifecycle: [start] spins up the sidecar process and the drain thread. [stop] closes the
  * tee consumer, terminates the sidecar, and joins the drain thread. Safe to call [stop]
  * more than once.
@@ -36,9 +46,13 @@ class LiveFrameConsumer(
   private val tee: H264Tee,
   /**
    * Callback invoked for changed frames and periodic still-screen heartbeats. Runs on the
-   * drain thread. `isContentChange` is false for a heartbeat re-emit of an unchanged frame —
-   * exposed so subscribers that care about the distinction (e.g. stream-quiet detection)
-   * don't have to re-hash every frame this consumer already hashed.
+   * current pipeline's frame-pump thread, but delivery is not strictly serial across a sidecar
+   * respawn: when a failed stdin write triggers the swap, the dead sidecar's stdout pump can
+   * still be draining its last buffered frames while the replacement's pump starts emitting,
+   * so implementations must tolerate a brief two-thread overlap. `isContentChange` is false
+   * for a heartbeat re-emit of an unchanged frame — exposed so subscribers that care about
+   * the distinction (e.g. stream-quiet detection) don't have to re-hash every frame this
+   * consumer already hashed.
    */
   private val onFrame: (jpeg: ByteArray, isContentChange: Boolean) -> Unit,
   /**
@@ -48,8 +62,14 @@ class LiveFrameConsumer(
    * so heartbeat re-emits via [onFrame] only prove liveness while frames keep decoding; this
    * callback proves it when they don't. Runs on the tee drain thread. Note it attests to the
    * tee attachment being drained, not to the ffmpeg sidecar's health — a dead sidecar is
-   * detected on the next write, i.e. the next content change, so a stale-accept window is
-   * bounded by the stall threshold.
+   * detected via EOF on its stdout and healed by a bounded respawn (see the class kdoc); pings
+   * keep flowing across the swap, and stop for good only when the respawn budget is exhausted.
+   *
+   * Wire this ONLY for damage-driven feeds, where upstream silence is the healthy static-screen
+   * state. On a continuously-encoding feed (e.g. iOS baguette, ~60 fps even for a static
+   * screen) frames themselves prove liveness, and an idle-loop ping would instead mask a
+   * wedged upstream producer — the drain loop can't tell those states apart; only the caller
+   * knows the feed's cadence.
    */
   private val onFeedAlive: (() -> Unit)? = null,
   /** Ring-buffer capacity for this consumer. Default sized for live-viewer drop tolerance. */
@@ -60,46 +80,141 @@ class LiveFrameConsumer(
   private val jpegQ: Int = 5,
 ) {
 
-  private var consumer: H264Tee.Consumer? = null
-  private var process: Process? = null
-  private var teeToFfmpegThread: Thread? = null
-  private var ffmpegToFramesThread: Thread? = null
+  /** One ffmpeg sidecar plus the tee attachment and pump threads bound to it. Replaced wholesale on respawn. */
+  private class Pipeline(
+    val consumer: H264Tee.Consumer,
+    val process: Process,
+  ) {
+    /** True once this sidecar has produced at least one complete JPEG — resets the respawn budget. */
+    val producedFrame = AtomicBoolean(false)
+
+    /** Ensures a sidecar death is handled exactly once even when both pumps observe it. */
+    val deathHandled = AtomicBoolean(false)
+
+    var teeToFfmpegThread: Thread? = null
+    var ffmpegToFramesThread: Thread? = null
+  }
+
+  private val lifecycleLock = Any()
+
+  /** Guarded by [lifecycleLock]. */
+  private var pipeline: Pipeline? = null
+
+  /** Guarded by [lifecycleLock]. */
+  private var consecutiveSilentDeaths = 0
+
   private val stopped = AtomicBoolean(false)
 
   fun start() {
-    consumer = tee.attach(ringBufferBytes)
-    try {
-      process = spawnFfmpeg()
-      teeToFfmpegThread = Thread(::pumpTeeIntoFfmpeg, "live-frame-tee-to-ffmpeg").apply {
-        isDaemon = true
-        start()
-      }
-      ffmpegToFramesThread = Thread(::pumpFfmpegIntoFrames, "live-frame-ffmpeg-to-frames").apply {
-        isDaemon = true
-        start()
-      }
+    val firstConsumer = tee.attach(ringBufferBytes)
+    val started = try {
+      Pipeline(firstConsumer, spawnFfmpeg())
     } catch (e: Exception) {
       // An attached tee owns the screenrecord producer. If the decoder cannot start, tear
       // the attachment down immediately instead of leaving screenrecord running until the
       // WebSocket eventually closes.
-      stop()
+      stopped.set(true)
+      firstConsumer.detach()
       throw e
     }
+    synchronized(lifecycleLock) { pipeline = started }
+    // Pumps start only after the pipeline is published as current. An ffmpeg that dies the
+    // instant it spawns is observed by the pumps as EOF; if that could happen before
+    // publication, onSidecarExit would discard the death as stale (pipeline !== dead) after
+    // already consuming deathHandled, leaving the consumer wedged on a dead decoder forever.
+    startPumps(started)
   }
 
   fun stop() {
     if (!stopped.compareAndSet(false, true)) return
-    consumer?.detach()
-    val proc = process
-    process = null
+    val current = synchronized(lifecycleLock) { pipeline.also { pipeline = null } }
+    current?.consumer?.detach()
+    val proc = current?.process
     if (proc != null) {
       runCatching { proc.destroy() }
       if (!proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
         runCatching { proc.destroyForcibly() }
       }
     }
-    teeToFfmpegThread?.join(2_000)
-    ffmpegToFramesThread?.join(2_000)
+    current?.teeToFfmpegThread?.join(2_000)
+    current?.ffmpegToFramesThread?.join(2_000)
+  }
+
+  /** Test seam: the current ffmpeg sidecar, so tests can kill it and observe the respawn contract. */
+  internal fun sidecarProcessForTest(): Process? = synchronized(lifecycleLock) { pipeline?.process }
+
+  /**
+   * Starts the two pump threads for [p]. Callers must have already published [p] as the current
+   * [pipeline]; either pump can observe a sidecar death within microseconds of starting, and
+   * [onSidecarExit] treats a death on a non-current pipeline as stale.
+   */
+  private fun startPumps(p: Pipeline) {
+    p.teeToFfmpegThread = Thread({ pumpTeeIntoFfmpeg(p) }, "live-frame-tee-to-ffmpeg").apply {
+      isDaemon = true
+      start()
+    }
+    p.ffmpegToFramesThread = Thread({ pumpFfmpegIntoFrames(p) }, "live-frame-ffmpeg-to-frames").apply {
+      isDaemon = true
+      start()
+    }
+  }
+
+  /**
+   * Handles an unexpected sidecar exit (EOF on its stdout / failed stdin write while not
+   * [stopped]): respawn a fresh pipeline, or give up and detach once the budget of consecutive
+   * frameless deaths is spent. Runs on the dead pipeline's pump threads; [Pipeline.deathHandled]
+   * dedupes the two observers.
+   */
+  private fun onSidecarExit(dead: Pipeline) {
+    if (!dead.deathHandled.compareAndSet(false, true)) return
+    // Normally the process is already gone (that's why we're here); destroy covers the rare
+    // "closed its pipes but lingers" shape so exitValue below can't throw.
+    runCatching { dead.process.destroyForcibly() }
+    val exitCode = if (dead.process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) dead.process.exitValue() else null
+    // Rate-cap respawns before taking the lock. The frameless-death budget can't bound a
+    // sidecar that decodes a frame before each death (every such death resets it), so without
+    // a pause an externally-killed-but-productive decoder would respawn in a tight loop. Same
+    // flat pause as H264Tee's producer respawn. Unlike H264Tee we continue on interrupt rather
+    // than return: deathHandled is already consumed, so bailing here would leave the death
+    // unhandled forever.
+    try {
+      Thread.sleep(SIDECAR_RESPAWN_PAUSE_MS)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+    }
+    synchronized(lifecycleLock) {
+      if (stopped.get() || pipeline !== dead) return
+      consecutiveSilentDeaths = if (dead.producedFrame.get()) 0 else consecutiveSilentDeaths + 1
+      if (consecutiveSilentDeaths >= MAX_CONSECUTIVE_SILENT_DEATHS) {
+        Console.log(
+          "[LiveFrameConsumer] ffmpeg died (exit=$exitCode) $consecutiveSilentDeaths times in a row " +
+            "without decoding a frame; giving up and detaching from the tee",
+        )
+        pipeline = null
+        dead.consumer.detach()
+        return
+      }
+      Console.log("[LiveFrameConsumer] ffmpeg exited unexpectedly (exit=$exitCode); respawning the decoder sidecar")
+      // Attach the replacement BEFORE detaching the dead pipeline's consumer so the tee's
+      // ref-count never touches zero (which would tear down a shared screenrecord producer).
+      // The mid-stream attach is seeded with the tee's cached keyframe, so the fresh decoder
+      // has SPS/PPS and an IDR to start from without waiting for the encoder's next keyframe.
+      val newConsumer = tee.attach(ringBufferBytes)
+      val next = try {
+        Pipeline(newConsumer, spawnFfmpeg())
+      } catch (e: Exception) {
+        Console.log("[LiveFrameConsumer] decoder respawn failed: ${e.message}; detaching from the tee")
+        newConsumer.detach()
+        pipeline = null
+        dead.consumer.detach()
+        return
+      }
+      pipeline = next
+      // Safe to start pumps while holding the lock: a pump observing an instant death blocks
+      // on this lock in onSidecarExit and proceeds only after [pipeline] = next is visible.
+      startPumps(next)
+      dead.consumer.detach()
+    }
   }
 
   private fun spawnFfmpeg(): Process {
@@ -160,12 +275,14 @@ class LiveFrameConsumer(
     return proc
   }
 
-  private fun pumpTeeIntoFfmpeg() {
-    val cons = consumer ?: return
-    val proc = process ?: return
-    val sink: OutputStream = proc.outputStream
+  private fun pumpTeeIntoFfmpeg(p: Pipeline) {
+    val cons = p.consumer
+    val sink: OutputStream = p.process.outputStream
     val buf = ByteArray(64 * 1024)
-    var lastAlivePingMs = Long.MIN_VALUE
+    val alivePingGate = AlivePingGate(FEED_ALIVE_PING_INTERVAL_MS)
+    // One-shot: the liveness signal was once silently dead for a whole release; a single log
+    // line makes "pings are flowing" verifiable from the daemon log.
+    var firstPingLogged = false
     try {
       while (!stopped.get()) {
         val n = cons.read(buf)
@@ -175,7 +292,10 @@ class LiveFrameConsumer(
               sink.write(buf, 0, n)
               sink.flush()
             } catch (e: IOException) {
-              // ffmpeg died or stop() closed the pipe — exit cleanly.
+              // ffmpeg died or stop() closed the pipe. The stdout pump usually sees the death
+              // first (EOF fires the instant the process dies); this covers a race where the
+              // write fails before that EOF is observed.
+              if (!stopped.get()) onSidecarExit(p)
               return
             }
           }
@@ -190,12 +310,12 @@ class LiveFrameConsumer(
         // Reaching here means the attachment is alive and being drained (a detached tee or a
         // dead ffmpeg pipe returned above) — including the n == 0 idle case, which is exactly
         // the state a static screen leaves us in.
-        if (onFeedAlive != null) {
-          val nowMs = System.nanoTime() / NANOS_PER_MILLISECOND
-          if (nowMs - lastAlivePingMs >= FEED_ALIVE_PING_INTERVAL_MS) {
-            lastAlivePingMs = nowMs
-            runCatching { onFeedAlive?.invoke() }
+        if (onFeedAlive != null && alivePingGate.tryPing(System.nanoTime() / NANOS_PER_MILLISECOND)) {
+          if (!firstPingLogged) {
+            firstPingLogged = true
+            Console.log("[LiveFrameConsumer] feed-alive pings active (every ${FEED_ALIVE_PING_INTERVAL_MS}ms)")
           }
+          runCatching { onFeedAlive?.invoke() }
         }
       }
     } finally {
@@ -204,9 +324,8 @@ class LiveFrameConsumer(
     }
   }
 
-  private fun pumpFfmpegIntoFrames() {
-    val proc = process ?: return
-    val input: InputStream = proc.inputStream
+  private fun pumpFfmpegIntoFrames(p: Pipeline) {
+    val input: InputStream = p.process.inputStream
     val splitter = JpegFrameSplitter()
     val readBuf = ByteArray(64 * 1024)
     val emissionGate = FrameEmissionGate(MAX_IDENTICAL_FRAME_SILENCE_MS)
@@ -219,6 +338,7 @@ class LiveFrameConsumer(
         }
         if (n <= 0) break
         splitter.feed(readBuf, 0, n) { jpeg ->
+          p.producedFrame.set(true)
           val hash = sha256(jpeg)
           val emission = emissionGate.admit(hash, System.nanoTime() / NANOS_PER_MILLISECOND)
           if (emission != null) {
@@ -233,6 +353,10 @@ class LiveFrameConsumer(
     } catch (e: Exception) {
       Console.log("[LiveFrameConsumer] frame-pump exited: ${e.message}")
     }
+    // EOF on the sidecar's stdout while this consumer is live means the sidecar died (observed
+    // in the wild: CI agents under memory pressure kill ffmpeg outright, with no exit message).
+    // All remaining buffered frames were drained above, so recovery loses nothing.
+    if (!stopped.get()) onSidecarExit(p)
   }
 
   /**
@@ -316,9 +440,53 @@ class LiveFrameConsumer(
     }
   }
 
+  /**
+   * Throttle for the drain loop's [onFeedAlive] pings. The "never pinged" state is a separate
+   * flag, NOT an in-domain sentinel value: the clock is `System.nanoTime()`-derived, whose
+   * origin (and sign) is arbitrary, so any sentinel arithmetic on it risks overflow — a
+   * `now - Long.MIN_VALUE` compare silently disabled the ping entirely on positive-origin
+   * clocks.
+   */
+  internal class AlivePingGate(private val intervalMillis: Long) {
+    private var hasPinged = false
+    private var lastPingAtMillis = 0L
+
+    /** True when a ping is due (always on the first call); records the ping time when it is. */
+    fun tryPing(nowMillis: Long): Boolean {
+      if (hasPinged && nowMillis - lastPingAtMillis < intervalMillis) {
+        return false
+      }
+      hasPinged = true
+      lastPingAtMillis = nowMillis
+      return true
+    }
+  }
+
   companion object {
     private const val IDLE_SLEEP_MS: Long = 2L
     private const val MAX_IDENTICAL_FRAME_SILENCE_MS: Long = 1_000L
+
+    /**
+     * How many consecutive sidecar deaths without a single decoded frame are tolerated: reaching
+     * this count gives up, so the deaths before it are respawned (an ffmpeg that can't survive
+     * startup — bad binary, unresolvable input — would otherwise crash-loop). A sidecar that
+     * decoded at least one frame resets the budget, so a long-lived stream survives any number
+     * of isolated external kills.
+     */
+    internal const val MAX_CONSECUTIVE_SILENT_DEATHS: Int = 3
+
+    /**
+     * Flat pause before handling a sidecar death, rate-capping respawn storms. Matches
+     * [H264Tee]'s producer-respawn delay; no escalating backoff here because
+     * [MAX_CONSECUTIVE_SILENT_DEATHS] already bounds the only unbounded-loop shape (a decoder
+     * that never produces a frame).
+     */
+    internal const val SIDECAR_RESPAWN_PAUSE_MS: Long = 250L
+    /**
+     * Subscribers treat prolonged silence (no frames AND no pings) as a dead pipeline — their
+     * stall thresholds are calibrated to a sub-second idle ping cadence. Keep this interval
+     * well below any such threshold (seconds) or quiet-but-healthy feeds read as stalled.
+     */
     private const val FEED_ALIVE_PING_INTERVAL_MS: Long = 500L
     private const val NANOS_PER_MILLISECOND: Long = 1_000_000L
 

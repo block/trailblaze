@@ -97,12 +97,14 @@ function TargetPicker({ go, route, collapsed }) {
   if (collapsed) {
     return (
       <div style={{ padding: '0 0 10px', display: 'flex', justifyContent: 'center' }}>
-        <div role="button" tabIndex={0} onClick={() => go('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('home'); } }}
-          title={(gt ? (gt.label || gt.target) + ' · ' + deviceSummary : 'Select a target') + ' - open Home'}
-          style={{ position: 'relative', display: 'inline-flex', cursor: 'pointer', padding: 3, borderRadius: 8, background: on ? 'var(--bg-standard)' : 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)' }}>
-          <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} fallbackNode={genericWebIcon} />
-          <span style={{ position: 'absolute', right: -2, bottom: -2, width: 9, height: 9, borderRadius: 99, background: dot, border: '2px solid var(--bg-sheet)' }} />
-        </div>
+        <RailHoverTip compact tip={gt ? 'Target: ' + (gt.label || gt.target) : 'Choose target'}>
+          <div role="button" tabIndex={0} onClick={() => go('home')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go('home'); } }}
+            aria-label={(gt ? (gt.label || gt.target) + ' · ' + deviceSummary : 'Select a target') + ' - open Home'}
+            style={{ position: 'relative', display: 'inline-flex', cursor: 'pointer', padding: 3, borderRadius: 8, background: on ? 'var(--bg-standard)' : 'var(--bg-subtle)', border: '1px solid var(--tb-hairline)' }}>
+            <AppIcon target={gt && gt.target} size={30} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} fallbackNode={genericWebIcon} />
+            <span style={{ position: 'absolute', right: -2, bottom: -2, width: 9, height: 9, borderRadius: 99, background: dot, border: '2px solid var(--bg-sheet)' }} />
+          </div>
+        </RailHoverTip>
       </div>
     );
   }
@@ -143,8 +145,8 @@ function NavBadge({ badge }) {
 
 // Workspace marker sitting right under the target picker: the repo-root directory name of the
 // active trails workspace, so you always know which checkout you're driving (worktrees resolve
-// to the real repo name). Clicking opens a popover that explains the workspace is the source of
-// every trail/tool/recording, and lets you re-point it to another folder or reveal it on disk.
+// to the real repo name). Clicking opens a compact popover that identifies the location and lets
+// you re-point it to another folder or reveal it on disk.
 // The popover is fixed-positioned (the rail is overflow:hidden, so an absolute card would clip).
 function WorkspaceChip({ collapsed }) {
   useLucide();
@@ -185,6 +187,7 @@ function WorkspaceChip({ collapsed }) {
   const name = workspaceRepoName(dir);
   const branch = status.data && status.data.workspaceBranch;
   const isWorktree = !!(status.data && status.data.workspaceIsWorktree);
+  const gitLabel = branch || (isWorktree ? 'Detached HEAD' : null);
   const openPop = () => {
     const r = btnRef.current && btnRef.current.getBoundingClientRect();
     if (r) setPos({ left: r.left, top: r.bottom + 6 });
@@ -201,10 +204,16 @@ function WorkspaceChip({ collapsed }) {
     // looking like nothing happened. switchWorkspace persists the pick and broadcasts the global
     // refresh signal so every list (trails, trailmaps, tools, …) re-resolves against the new folder.
     try {
-      const path = await TB.pickDirectoryViaShell(dir);
-      if (!path) return; // cancelled — finally still clears busy
+      const pick = TB.pickDirectoryViaShell(dir);
+      // A folder picker is its own modal surface. Dismiss this popover while it is open so screen
+      // readers and sighted users see one active dialog, then restore the popover only when the
+      // user cancels or the chosen path needs an inline explanation.
+      setOpen(false);
+      const path = await pick;
+      if (!path) { openPop(); return; } // cancelled — finally still clears busy
       const res = await TB.switchWorkspace(path);
       if (!res.ok) {
+        openPop();
         setErr(res.error || 'Could not switch to that folder. It may not be a readable directory.');
         return;
       }
@@ -214,11 +223,11 @@ function WorkspaceChip({ collapsed }) {
       // Restart-needed is handled by the persistent badge (switchWorkspace already recorded it), so
       // it isn't duplicated here.
       if (res.empty) {
+        openPop();
         setNotice(TB.WORKSPACE_EMPTY_NOTICE);
-      } else {
-        setOpen(false);
       }
     } catch (e) {
+      openPop();
       setErr('Could not change the workspace: ' + (e && e.message ? e.message : String(e)));
     } finally {
       setBusy(false);
@@ -226,48 +235,47 @@ function WorkspaceChip({ collapsed }) {
   };
   return (
     <div style={{ padding: '0 0 10px', ...(collapsed ? { display: 'flex', justifyContent: 'center' } : {}) }}>
-      <button ref={btnRef} onClick={() => (open ? setOpen(false) : openPop())} aria-expanded={open}
-        title={'Workspace: ' + dir + '\n' + TB.WORKSPACE_BLURB + (branch ? '\nBranch: ' + branch + (isWorktree ? ' (git worktree)' : '') : '') + (restart ? '\n\nRestart needed to load this workspace’s app targets.' : '')}
-        style={collapsed
-          // 38px square: the exact outer box of the collapsed target chip above (30px icon + 3px
-          // padding + 1px border per side), so the two read as one aligned column of tiles.
-          ? { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38, borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }
-          : { display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px', borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }}>
-        <Ico n="folder-git-2" s={15} c={collapsed && isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
-        {!collapsed && (
-          <span className="label" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden' }}>
-            <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
-            {branch && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-subtle)', overflow: 'hidden' }}>
-                <Ico n="git-branch" s={10} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{branch}</span>
-                {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontWeight: 600 }}>· worktree</span>}
-              </span>
-            )}
-          </span>
-        )}
-        {!collapsed && restart && <span aria-label="Restart needed" title="Restart needed to load this workspace’s app targets" style={{ flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--tb-amber)' }} />}
-        {!collapsed && <Ico n="chevron-down" s={13} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}
-        {collapsed && restart && <span aria-label="Restart needed" style={{ position: 'absolute', right: -2, top: -2, width: 8, height: 8, borderRadius: '50%', background: 'var(--tb-amber)', border: '2px solid var(--bg-sheet)' }} />}
-      </button>
+      <RailHoverTip compact={collapsed} tip={'Workspace: ' + name}>
+        <button ref={btnRef} onClick={() => (open ? setOpen(false) : openPop())} aria-expanded={open}
+          title={collapsed ? undefined : 'Workspace: ' + dir + '\n' + TB.WORKSPACE_BLURB + (gitLabel ? '\n' + (branch ? 'Branch: ' : '') + gitLabel + (isWorktree ? ' · Git worktree' : '') : '') + (restart ? '\n\nRestart needed to load this workspace’s app targets.' : '')}
+          aria-label={'Workspace: ' + name}
+          style={collapsed
+            // 38px square: the exact outer box of the collapsed target chip above (30px icon + 3px
+            // padding + 1px border per side), so the two read as one aligned column of tiles.
+            ? { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38, borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }
+            : { display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '7px 9px', borderRadius: 8, background: open ? 'var(--bg-standard)' : 'transparent', border: '1px solid var(--tb-hairline)', cursor: 'pointer', color: 'var(--text-standard)' }}>
+          <Ico n="folder-git-2" s={15} c={collapsed && isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+          {!collapsed && (
+            <span className="label" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden' }}>
+              <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+              {gitLabel && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-subtle)', overflow: 'hidden' }}>
+                  <Ico n="git-branch" s={10} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gitLabel}</span>
+                  {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontWeight: 600 }}>· worktree</span>}
+                </span>
+              )}
+            </span>
+          )}
+          {!collapsed && restart && <span aria-label="Restart needed" title="Restart needed to load this workspace’s app targets" style={{ flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--tb-amber)' }} />}
+          {!collapsed && <Ico n="chevron-down" s={13} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />}
+          {collapsed && restart && <span aria-label="Restart needed" style={{ position: 'absolute', right: -2, top: -2, width: 8, height: 8, borderRadius: '50%', background: 'var(--tb-amber)', border: '2px solid var(--bg-sheet)' }} />}
+        </button>
+      </RailHoverTip>
       {open && pos && (
         <React.Fragment>
           <div style={{ position: 'fixed', inset: 0, zIndex: 70 }} onClick={() => setOpen(false)} onContextMenu={(e) => { e.preventDefault(); setOpen(false); }} />
-          <div className="tb-card" role="dialog" aria-label="Workspace" onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 71, width: 312, maxWidth: '90vw', padding: 14, background: 'var(--bg-elevated)', boxShadow: '0 16px 44px rgba(0,0,0,.5)', cursor: 'default' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Ico n="folder-git-2" s={16} c="var(--tb-pass)" style={{ flex: '0 0 auto' }} />
-              <span style={{ fontWeight: 600, fontSize: 13.5, flex: 1, color: 'var(--text-standard)' }}>Workspace</span>
-              <Chip>{name}</Chip>
+          <div className="tb-card" role="dialog" aria-label={'Workspace: ' + name} onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 71, width: 360, maxWidth: 'calc(100vw - 24px)', padding: 14, background: 'var(--bg-elevated)', boxShadow: '0 16px 44px rgba(0,0,0,.42)', cursor: 'default' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <Ico n="folder-git-2" s={16} c="var(--text-subtle-variant)" style={{ flex: '0 0 auto' }} />
+              <span style={{ minWidth: 0, flex: 1, color: 'var(--text-standard)', fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+              {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontSize: 10.5, fontWeight: 600 }}>Worktree</span>}
             </div>
-            <div className="tb-sub" style={{ fontSize: 12.5, lineHeight: 1.6 }}>
-              {TB.WORKSPACE_BLURB}
-            </div>
-            <div className="tb-mono" data-selectable style={{ fontSize: 11, lineHeight: 1.5, color: '#94a3b8', marginTop: 10, padding: '8px 10px', background: '#0a0a0a', border: '1px solid var(--tb-hairline)', borderRadius: 8, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{dir}</div>
-            {branch && (
-              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, lineHeight: 1.5 }}>
-                <Ico n="git-branch" s={13} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
-                <span style={{ color: 'var(--text-standard)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{branch}</span>
-                {isWorktree && <Chip>git worktree</Chip>}
+            <div data-selectable title={dir} style={{ marginTop: 10, color: 'var(--text-subtle)', fontSize: 11.5, lineHeight: 1.5, overflowWrap: 'anywhere', userSelect: 'text' }}>{dir}</div>
+            {gitLabel && (
+              <div title={isWorktree ? gitLabel + ' · worktree' : gitLabel} style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-subtle)', fontSize: 11.5, lineHeight: 1.4 }}>
+                <Ico n="git-branch" s={12} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gitLabel}</span>
               </div>
             )}
             {restart && (
@@ -278,13 +286,73 @@ function WorkspaceChip({ collapsed }) {
             )}
             {err && <div role="alert" style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--tb-danger-text)' }}>{err}</div>}
             {notice && <div role="status" style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-subtle)' }}>{notice}</div>}
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <Btn sm ico={busy ? 'loader-2' : 'folder-open'} spin={busy} onClick={change} disabled={busy}>Change…</Btn>
-              <Btn sm kind="ghost" ico="external-link" onClick={() => { TB.revealTrailsRoot(); setOpen(false); }}>Reveal in Finder</Btn>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 12, paddingTop: 8, borderTop: '1px solid var(--tb-hairline)' }}>
+              <Btn sm kind="ghost" ico={busy ? 'loader-2' : 'folder-open'} spin={busy} onClick={change} disabled={busy}>Change…</Btn>
+              <HoverTip tip="Show in Finder" place="top">
+                <Btn sm kind="ghost" ico="external-link" aria-label="Show workspace in Finder" onClick={() => { TB.revealTrailsRoot(); setOpen(false); }}>Reveal</Btn>
+              </HoverTip>
             </div>
           </div>
         </React.Fragment>
       )}
+    </div>
+  );
+}
+
+// Browser fallback for the native macOS folder picker. Web APIs deliberately hide absolute local
+// paths, but the daemon needs one to change its workspace, so the browser build collects that path
+// in-app. The native shell continues to use NSOpenPanel through trailblazePickDirectory.
+function BrowserDirectoryPicker() {
+  useLucide();
+  const [request, setRequest] = React.useState(null);
+  const [path, setPath] = React.useState('');
+  const requestRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const onRequest = (event) => {
+      event.preventDefault();
+      if (requestRef.current) requestRef.current.resolve(null);
+      requestRef.current = event.detail;
+      setRequest(event.detail);
+      setPath(event.detail.initialDir || '');
+    };
+    window.addEventListener('tb:pick-directory', onRequest);
+    return () => window.removeEventListener('tb:pick-directory', onRequest);
+  }, []);
+
+  if (!request) return null;
+  const finish = (value) => {
+    const active = requestRef.current;
+    requestRef.current = null;
+    setRequest(null);
+    if (active) active.resolve(value);
+  };
+  const selected = path.trim();
+
+  return (
+    <div className="tb-overlay" role="presentation" onClick={() => finish(null)}
+      style={{ position: 'fixed', zIndex: 100, alignItems: 'center', padding: 24 }}>
+      <div className="tb-card" role="dialog" aria-modal="true" aria-labelledby="tb-directory-picker-title"
+        onClick={(event) => event.stopPropagation()} style={{ width: 'min(520px, 94vw)', padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Ico n="folder-git-2" s={19} c="var(--tb-pass)" />
+          <h2 id="tb-directory-picker-title" className="tb-h2" style={{ flex: 1, fontSize: 17, margin: 0 }}>Choose workspace</h2>
+          <Btn sm kind="ghost" ico="x" aria-label="Cancel" onClick={() => finish(null)} />
+        </div>
+        <div className="tb-sub" style={{ fontSize: 12.5, margin: '12px 0 8px' }}>Enter the absolute path to your trails folder.</div>
+        <input autoFocus value={path} spellCheck={false} aria-label="Workspace folder path"
+          onChange={(event) => setPath(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && selected) finish(selected);
+            if (event.key === 'Escape') finish(null);
+          }}
+          placeholder="/Users/you/project/trails"
+          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '9px 11px', color: 'var(--text-standard)', font: 'inherit', fontSize: 13, outline: 'none' }} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <Btn onClick={() => finish(null)}>Cancel</Btn>
+          <Btn kind="primary" ico="folder-open" disabled={!selected} onClick={() => finish(selected)}>Use folder</Btn>
+        </div>
+      </div>
     </div>
   );
 }
@@ -318,28 +386,64 @@ function RailGroupHeader({ label, plusTitle, onPlus, plusOn }) {
   );
 }
 
+function RailHoverTip({ compact, tip, children }) {
+  return (
+    <HoverTip tip={compact ? tip : null} place="right" gap={10}
+      style={compact ? { width: '100%', justifyContent: 'center' } : undefined}>
+      {children}
+    </HoverTip>
+  );
+}
+
+function useNarrowRail() {
+  const query = '(max-width: 1000px)';
+  const [narrow, setNarrow] = useState(() => !!(window.matchMedia && window.matchMedia(query).matches));
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const media = window.matchMedia(query);
+    const update = () => setNarrow(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  return narrow;
+}
+
 // How many agent conversations the rail lists before folding the rest behind "N older" (the daemon
 // retains up to 50 finished conversations - the rail must not become a 50-row scroll by default).
 const RAIL_AGENT_SESSIONS_VISIBLE = 6;
 
 function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSel, companionSel, goStudio, interactSession, goInteract }) {
   const [collapsed, setCollapsed] = useStickyState('tb-rail-collapsed', false);
+  const narrow = useNarrowRail();
+  const [narrowExpanded, setNarrowExpanded] = useState(false);
+  const compact = collapsed || (narrow && !narrowExpanded);
+  useEffect(() => { if (!narrow) setNarrowExpanded(false); }, [narrow]);
+  const toggleRail = () => {
+    if (narrow) {
+      if (compact) setCollapsed(false);
+      setNarrowExpanded(compact);
+      return;
+    }
+    setCollapsed((value) => !value);
+  };
   const [showAllAgents, setShowAllAgents] = useState(false);
   const agentVisible = showAllAgents ? agentRuns : agentRuns.slice(0, RAIL_AGENT_SESSIONS_VISIBLE);
   const agentHidden = agentRuns.length - agentVisible.length;
   const interactActive = !!(interactSession && interactSession.active);
   return (
-    <div className={'tb-rail' + (collapsed ? ' collapsed' : '')}>
-      <div className="tb-brand" style={{ justifyContent: collapsed ? 'center' : 'space-between' }}>
+    <div className={'tb-rail' + (compact ? ' collapsed' : '')}>
+      <div className="tb-brand" style={{ justifyContent: compact ? 'center' : 'space-between' }}>
         <span className="name">Trail Runner</span>
-        <button type="button" onClick={() => setCollapsed((v) => !v)}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'var(--text-subtle)', cursor: 'pointer', padding: 4, borderRadius: 6 }}>
-          <Ico n={collapsed ? 'panel-left-open' : 'panel-left-close'} s={16} />
-        </button>
+        <RailHoverTip compact={compact} tip="Expand sidebar">
+          <button type="button" onClick={toggleRail}
+            title={compact ? undefined : 'Collapse sidebar'} aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', color: 'var(--text-subtle)', cursor: 'pointer', padding: 4, borderRadius: 6 }}>
+            <Ico n={compact ? 'panel-left-open' : 'panel-left-close'} s={16} />
+          </button>
+        </RailHoverTip>
       </div>
-      <TargetPicker go={go} route={route} collapsed={collapsed} />
-      <WorkspaceChip collapsed={collapsed} />
+      <TargetPicker go={go} route={route} collapsed={compact} />
+      <WorkspaceChip collapsed={compact} />
       {/* Divider separating the workspace/target context from the Blaze→Runs authoring nav. */}
       <div style={{ height: 1, background: 'var(--tb-hairline)', margin: '0 8px 10px' }} />
       <div className="tb-rail-scroll">
@@ -349,15 +453,17 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
             reachable from anywhere. The collapsed (icon-only) rail swaps the header + rows for a
             single sparkles entry. */}
         <div className="tb-rail-group">
-          {!collapsed && <RailGroupHeader label="Create" plusTitle="New session - drive the device by hand or describe a flow, every action becomes a step"
+          {!compact && <RailGroupHeader label="Create" plusTitle="New session - drive the device by hand or describe a flow, every action becomes a step"
             onPlus={() => goStudio('new')} plusOn={route === 'create' && studioSel === 'new'} />}
-          {collapsed && (
-            <div className={'tb-nav' + (route === 'create' ? ' active' : '')} onClick={() => goStudio('new')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goStudio('new'); } }}
-              role="button" tabIndex={0} title="Create - new session">
-              <span className="ico"><Ico n="sparkles" s={18} /></span><span className="label">Create</span><NavBadge badge={badges.create} />
-            </div>
+          {compact && (
+            <RailHoverTip compact tip="Create a trail">
+              <div className={'tb-nav' + (route === 'create' ? ' active' : '')} onClick={() => goStudio('new')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goStudio('new'); } }}
+                role="button" tabIndex={0} aria-label="Create a trail">
+                <span className="ico"><Ico n="sparkles" s={18} /></span><span className="label">Create</span><NavBadge badge={badges.create} />
+              </div>
+            </RailHoverTip>
           )}
-          {!collapsed && agentVisible.map((run) => {
+          {!compact && agentVisible.map((run) => {
             // A solo run's lifecycle status is an implementation detail (born finished, no
             // process): its row wears the hands-on identity instead of a status glyph.
             const solo = run.agentType === 'solo';
@@ -368,7 +474,7 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
                 on={(route === 'create' && studioSel === run.id) || companionSel === run.id} onClick={() => goStudio(run.id)} />
             );
           })}
-          {!collapsed && (agentHidden > 0 || showAllAgents) && (
+          {!compact && (agentHidden > 0 || showAllAgents) && (
             <div className="tb-nav" role="button" tabIndex={0} onClick={() => setShowAllAgents((v) => !v)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowAllAgents((v) => !v); } }}>
               <span className="ico"><Ico n={showAllAgents ? 'chevron-up' : 'chevron-down'} s={14} c="var(--text-subtle)" /></span>
@@ -378,7 +484,7 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
           {/* An in-progress legacy Interact recording session (reached via the command palette's
               ad hoc YAML action) folds into the same group so navigating away and back stays
               obvious. */}
-          {!collapsed && interactActive && (
+          {!compact && interactActive && (
             <SessionNavRow ico="disc" color="var(--tb-running)" spin={false}
               label={interactSession.label || 'Recording session'} count={interactSession.steps || null}
               title={(interactSession.label || 'Recording session') + (interactSession.steps ? ' · ' + interactSession.steps + ' steps' : '')}
@@ -390,11 +496,14 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
             {g.group && <div className="tb-rail-h">{g.group}</div>}
             {g.items.map(([id, label, ico]) => {
               const on = route === id;
+              const tip = id === 'trails' ? 'Trails' : id === 'active' ? 'Active runs' : id === 'completed' ? 'Completed runs' : label;
               return (
-              <div key={id} className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={label}>
-                {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-primary-green)' }}></span>}
-                <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span><NavBadge badge={badges[id]} />
-              </div>
+              <RailHoverTip key={id} compact={compact} tip={tip}>
+                <div className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={tip}>
+                  {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-selection)' }}></span>}
+                  <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span><NavBadge badge={badges[id]} />
+                </div>
+              </RailHoverTip>
             ); })}
           </div>
         ))}
@@ -408,9 +517,11 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
         {TRAILMAPS.map(([id, label, ico]) => {
           const on = route === id;
           return (
-            <div key={id} className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={label}>
-              <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span>
-            </div>
+            <RailHoverTip key={id} compact={compact} tip={label}>
+              <div className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={label}>
+                <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span>
+              </div>
+            </RailHoverTip>
           );
         })}
       </div>
@@ -418,10 +529,12 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
       <div className="tb-rail-foot">
         {FOOT.map(([id, label, ico]) => { const on = route === id;
           return (
-          <div key={id} className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={label}>
-            {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-primary-green)' }}></span>}
-            <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span>
-          </div>
+          <RailHoverTip key={id} compact={compact} tip={label}>
+            <div className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={label}>
+              {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-selection)' }}></span>}
+              <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span>
+            </div>
+          </RailHoverTip>
         ); })}
       </div>
     </div>
@@ -510,7 +623,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
       <div className="tb-palette" onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '15px 18px', borderBottom: '1px solid var(--tb-hairline)' }}>
           <Ico n="search" s={18} c="var(--text-subtle)" />
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKeyDown} aria-label="Search commands, trails, and sessions" placeholder="Type a command, trail, or session…" style={{ background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 15.5, fontFamily: 'var(--font-display)', width: '100%' }} />
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKeyDown} aria-label="Search commands, trails, and sessions" placeholder="Type a command, trail, or session…" style={{ background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 15.5, fontFamily: 'var(--font-ui)', width: '100%' }} />
           <span className="tb-kbd">esc</span>
         </div>
         <div style={{ padding: 8, maxHeight: 380, overflowY: 'auto' }}>
@@ -590,9 +703,24 @@ const companionDeepLink = (() => {
   try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
 })();
 
+// Second deep link: a session-archive URL to render as a standalone report, via
+// /trailrunner?zip=<url> or #zip-report/<encoded-url>. Same read-once-at-boot rule as
+// #companion — there is no hash router.
+const zipReportDeepLink = (() => {
+  try {
+    const q = new URLSearchParams(window.location.search || '').get('zip');
+    if (q) return q;
+  } catch (_) { /* keep booting */ }
+  const m = /^#zip-report\/(.+)$/.exec(window.location.hash || '');
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+})();
+
 function App() {
-  const initialRoute = companionDeepLink ? 'companion' : 'home';
-  const initialPayload = companionDeepLink ? { for: 'companion', data: { runId: companionDeepLink } } : {};
+  const initialRoute = companionDeepLink ? 'companion' : zipReportDeepLink ? 'zip-report' : 'home';
+  const initialPayload = companionDeepLink
+    ? { for: 'companion', data: { runId: companionDeepLink } }
+    : zipReportDeepLink ? { for: 'zip-report', data: { zipUrl: zipReportDeepLink } } : {};
   const [route, setRoute] = useState(initialRoute);
   const [payload, setPayload] = useState(initialPayload);
   // Browser-style view history: a stack of {route, payload} with a pointer.
@@ -766,6 +894,9 @@ function App() {
     // link arrives through the initial payload; the screen latches the id itself, so no fallback
     // here (a live one would flip the hidden screen back to the boot id on every navigation).
     companion: <CompanionScreen agents={externalAgents} initRunId={pf('companion').runId} go={go} />,
+    // Deep-link only (?zip=<url> or #zip-report/<encoded-url>): render the full run report from a
+    // downloaded session archive (e.g. a CI-published results zip) — no daemon data involved.
+    'zip-report': <ZipReportScreen initZipUrl={pf('zip-report').zipUrl} />,
   };
   // Fall back to Home for any route that no longer maps to a screen, so an upgrade can't strand the
   // main pane blank.
@@ -799,6 +930,7 @@ function App() {
       </div>
       {palette && <Boundary><CommandPalette go={go} openRun={openRun} close={closePalette} closing={paletteClosing} trails={trails.data || []} /></Boundary>}
       {run && <Boundary><RunConfigDialog trail={run.trail} seed={run.seed} pinnedId={pinnedId} go={go} close={closeRun} closing={runClosing} /></Boundary>}
+      <BrowserDirectoryPicker />
     </div>
   );
 }

@@ -189,6 +189,10 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       quietWindowMs: Long = 100L,
       maxGracePeriodMs: Long = 50L,
       timeoutMs: Long = 5_000L,
+      // Cooperative cancellation for callers that race this wait against another settle signal
+      // (see [InProcessIdleSettleClient.raceIdleAgainstHeuristic]) — a lost race must stop polling
+      // instead of running to [timeoutMs]. Returns false; the winner already settled.
+      earlyExit: () -> Boolean = { false },
     ): Boolean {
       val startTime = Clock.System.now().toEpochMilliseconds()
       val eventTimestampAtEntry = lastUiEventTimestampMs
@@ -197,6 +201,8 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       var sawNewEvent = false
 
       while (true) {
+        if (earlyExit()) return false
+
         val now = Clock.System.now().toEpochMilliseconds()
         val elapsed = now - startTime
 
@@ -613,7 +619,36 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         )
         return null
       }
+      // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): a background probe asks
+      // the in-process idle detector for true main-thread idle. When it answers IDLE, the source UI is
+      // final — the only staleness risk left is the accessibility client cache, which
+      // [refreshTreeInPlace] re-fetches directly, so one refreshed sample + the coverage check
+      // replaces the double-sample quiet window (a [STABILITY_QUIET_MS] floor on every capture).
+      // The probe only ever SHORTENS the gate: while the idle detector is silent (app busy, idle detector
+      // missing, TIMEOUT verdict) the standard stability loop below runs unchanged, and a
+      // truncated detector-path tree also falls back to it (probe consumed, no retry).
+      val inProcessIdleIdle = java.util.concurrent.atomic.AtomicBoolean(false)
+      if (InProcessIdleSettleClient.isEnabled()) {
+        Thread {
+          val reply = InProcessIdleSettleClient.awaitIdle(STABILITY_MAX_WAIT_MS)
+          if (reply != null && reply.startsWith("IDLE")) inProcessIdleIdle.set(true)
+        }.apply {
+          name = "trailblaze-inprocess-idle-tree-probe"
+          isDaemon = true
+          start()
+        }
+      }
+      var inProcessIdleProbeConsumed = false
       val startUptimeMs = SystemClock.uptimeMillis()
+      if (InProcessIdleSettleClient.isEnabled()) {
+        // Give the probe one round-trip's grace (~10-20ms typical) so an already-idle app takes
+        // the fast path on the first loop iteration instead of paying a wasted sample + frame
+        // sleep first. Bounded well below one STABILITY_FRAME_MS; a busy app loses nothing.
+        val probeGraceDeadline = startUptimeMs + 30
+        while (!inProcessIdleIdle.get() && SystemClock.uptimeMillis() < probeGraceDeadline) {
+          Thread.sleep(5)
+        }
+      }
       val deadlineUptimeMs = startUptimeMs + STABILITY_MAX_WAIT_MS
       var previousSignature: Long? = null
       var lastChangeUptimeMs = startUptimeMs
@@ -621,6 +656,24 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       while (true) {
         val root = getApplicationWindowRoot() ?: return null
         try {
+          if (!inProcessIdleProbeConsumed && inProcessIdleIdle.get()) {
+            inProcessIdleProbeConsumed = true
+            refreshTreeInPlace(root)
+            val inProcessIdleSample = sampleTree(root)
+            val assessment =
+              HierarchyCoverageAssessor.assess(inProcessIdleSample.bounds, screenWidth, screenHeight)
+            if (!assessment.looksTruncated) {
+              Console.log(
+                "[settle] tree accepted via inprocess-idle after " +
+                  "${SystemClock.uptimeMillis() - startUptimeMs}ms",
+              )
+              return assessment
+            }
+            Console.log(
+              "[capture-coverage] in-process-idle tree looks truncated (${assessment.reason}) — " +
+                "falling back to the stability gate",
+            )
+          }
           var sample = sampleTree(root)
           val now = SystemClock.uptimeMillis()
           if (sample.signature != previousSignature) {
@@ -1380,12 +1433,29 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         return false
       }
 
-      // Try the fast ACTION_SET_TEXT path first; verify the field actually changed.
-      if (
-        tryDispatchActionSetText(text) &&
-        focusedTextChangedFrom(initialFocusedText, VERIFY_POLL_TIMEOUT_MS)
-      ) {
+      // Try the fast ACTION_SET_TEXT path first; verify the field actually changed within the
+      // normal (short) window. This is the common case and pays no extra probing cost.
+      val setTextDispatched = tryDispatchActionSetText(text)
+      if (setTextDispatched && focusedTextChangedFrom(initialFocusedText, VERIFY_POLL_TIMEOUT_MS)) {
         return true
+      }
+
+      // The quick verify failed. Only NOW probe whether the focused field is inside a WebView —
+      // the probe is a tree walk, so we keep it off the fast path and pay it only when recovery is
+      // actually needed. A WebView field accepts ACTION_SET_TEXT but its accessibility readback can
+      // lag the real field by seconds on a busy WebView; keep waiting for it (no re-dispatch)
+      // rather than synthesizing keystrokes, which can't clear a Chromium input and would enter a
+      // SECOND copy (the "typed twice" bug). See [focusedEditableIsInWebView].
+      if (setTextDispatched && focusedEditableIsInWebView()) {
+        if (focusedTextChangedFrom(initialFocusedText, WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS)) {
+          return true
+        }
+        Console.log(
+          "inputText (length=${text.length}) ACTION_SET_TEXT did not take effect in WebView " +
+            "(waited ${WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS}ms); not synthesizing keystrokes to " +
+            "avoid duplicate entry."
+        )
+        return false
       }
 
       // Fall back to keystroke synthesis. Some masked EditTexts (e.g., payment-form
@@ -1534,6 +1604,24 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     private const val VERIFY_POLL_INTERVAL_MS = 50L
 
     /**
+     * Verify window for the ACTION_SET_TEXT path when the focused field is inside a WebView.
+     * Chromium's accessibility readback can lag the real field by seconds on a busy WebView, so
+     * [VERIFY_POLL_TIMEOUT_MS]'s 500ms would spuriously judge a landed ACTION_SET_TEXT as failed
+     * and trigger the doubling keystroke fallback. A CI replay observed the readback catching up at
+     * ~4-4.6s; 8s gives comfortable headroom over that while still bounding a genuinely stuck
+     * field. The wait only affects this recovery path (a WebView field whose fast verify missed) —
+     * the common fast path is unchanged, and the poll early-exits as soon as the change appears.
+     */
+    private const val WEBVIEW_SET_TEXT_VERIFY_TIMEOUT_MS = 8000L
+
+    /**
+     * Upper bound on the focused editable's ancestor walk in [focusedEditableIsInWebView]. Any real
+     * WebView host sits a handful of levels above the focused input; this cap only guards against a
+     * pathological or cyclic tree making the walk unbounded.
+     */
+    private const val MAX_WEBVIEW_ANCESTOR_WALK = 40
+
+    /**
      * Searches the tree rooted at [node] for a focused, editable node.
      *
      * Non-matching child references are recycled to avoid resource leaks.
@@ -1553,6 +1641,42 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         child.recycle()
       }
       return null
+    }
+
+    /**
+     * Whether the currently focused editable field lives inside a Chromium `WebView`.
+     *
+     * Detected by walking up the focused editable's ancestor chain for an `android.webkit.WebView`
+     * node — Chromium reports the focused input itself as a plain `EditText`, so the WebView host
+     * only appears above it. Bounded by [MAX_WEBVIEW_ANCESTOR_WALK] so a pathological tree can't
+     * make this walk unbounded. Returns false when there is no focused editable.
+     *
+     * [inputText] uses this to give WebView fields a longer ACTION_SET_TEXT verify window and to
+     * never fall back to keystroke synthesis there (which can't clear a Chromium input and would
+     * double the entered text).
+     */
+    private fun focusedEditableIsInWebView(): Boolean {
+      val root = getApplicationWindowRoot() ?: return false
+      return try {
+        val editable = findFocusedEditableNode(root) ?: return false
+        try {
+          var ancestor: AccessibilityNodeInfo? = editable.parent
+          var depth = 0
+          while (ancestor != null && depth < MAX_WEBVIEW_ANCESTOR_WALK) {
+            val isWebView = ancestor.className?.toString() == "android.webkit.WebView"
+            val next = if (isWebView) null else ancestor.parent
+            ancestor.recycle()
+            if (isWebView) return true
+            ancestor = next
+            depth++
+          }
+          false
+        } finally {
+          editable.recycle()
+        }
+      } finally {
+        root.recycle()
+      }
     }
 
     fun eraseText(charactersToErase: Int): Boolean {

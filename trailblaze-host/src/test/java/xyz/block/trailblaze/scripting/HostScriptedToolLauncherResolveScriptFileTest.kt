@@ -125,6 +125,54 @@ class HostScriptedToolLauncherResolveScriptFileTest {
   }
 
   /**
+   * `TrailblazeProjectConfigLoader` absolutizes `script:` against the descriptor's directory for any
+   * trailmap discovered on the **filesystem**. A trailmap whose descriptors are on disk but whose
+   * `.ts` sources ship in the JAR therefore arrives here as an absolute path to a file that isn't
+   * there — and an absolute path used to be returned unexamined, skipping the classpath fallback and
+   * handing the bundler a missing file (`Scripted-tool source not found: <workspace>/…`) while the
+   * source sat on the classpath the whole time. Absolute-ness says nothing about existence, so only
+   * a real file short-circuits now.
+   */
+  @Test
+  fun `absolute script path that does not exist still resolves via classpath`() {
+    val toolTs = "$toolsDir/fixtureapp_absolute.ts"
+    val absentAbsolute = File(extractRoot.newFolder("workspace"), toolTs).absolutePath
+    val classpath = mapOf(toolTs to "export const fixtureapp_absolute = 1;\n")
+
+    val resolved = HostScriptedToolLauncher.resolveScriptFile(
+      script = absentAbsolute,
+      loadClasspathResource = { classpath[it] },
+      listClasspathToolScripts = { emptySet() },
+      classpathExtractRoot = extractRoot.root,
+    )
+
+    assertTrue(resolved.isFile, "expected the classpath copy, got a non-existent ${resolved.absolutePath}")
+    assertEquals(classpath.getValue(toolTs), resolved.readText())
+  }
+
+  /**
+   * The other half of that change: an absolute path that DOES name a real file still wins outright,
+   * so a workspace-authored tool is never shadowed by a same-named classpath resource.
+   */
+  @Test
+  fun `absolute script path that exists wins over the classpath copy`() {
+    val toolTs = "$toolsDir/fixtureapp_absolute.ts"
+    val onDisk = File(extractRoot.newFolder("real"), "fixtureapp_absolute.ts").apply {
+      writeText("export const fromDisk = true;\n")
+    }
+
+    val resolved = HostScriptedToolLauncher.resolveScriptFile(
+      script = onDisk.absolutePath,
+      loadClasspathResource = { mapOf(toolTs to "export const fromClasspath = true;\n")[it] },
+      listClasspathToolScripts = { emptySet() },
+      classpathExtractRoot = extractRoot.root,
+    )
+
+    assertEquals(onDisk.absolutePath, resolved.absolutePath)
+    assertEquals("export const fromDisk = true;\n", resolved.readText())
+  }
+
+  /**
    * Bundled targets reference scripts nested in `tools/` subdirectories (e.g. `tools/internal/…`,
    * `tools/android/…`). The fallback must anchor on the `<id>/tools` ROOT — accepting the nested
    * script rather than rejecting it, extracting the tools tree with subdirectory structure preserved

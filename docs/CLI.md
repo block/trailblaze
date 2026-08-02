@@ -79,6 +79,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
+| `profile` | Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
 | `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
@@ -297,7 +298,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--tags` | Only run trails whose `config.tags:` list contains at least one of the given names. Repeatable (`--tags smoke --tags login`) or comma-separated (`--tags smoke,login`). Match is OR across tags. Untagged trails are excluded when --tags is specified. | - |
 | `-d`, `--device` | Device(s) to run on: `<platform>` (e.g. android), `<platform>/<instanceId>`, or a bare instanceId. Comma-separated or repeatable to run each trail on SEVERAL devices (`--device android,ios` → one run per device). When omitted, resolves to a pinned (`trailblaze device connect` / `TRAILBLAZE_DEVICE`) or single connected device; when 2+ devices are connected and none is pinned, the run fails and asks you to pass this (or `--driver` / `--all-devices`). See also --all-devices. | - |
 | `--all-devices` | Run each trail on EVERY connected device whose platform the trail supports (its `platform:`/`driver:` for v1, or its `devices:`/recording classifiers for the unified format). The opt-in way to exercise a multi-target trail across platforms in one command. Mutually exclusive with `--device` (passing both is rejected). Connected devices that don't match any supported platform are skipped. | - |
-| `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
+| `-a`, `--agent` | Agent implementation name for AI-driven steps: TRAILBLAZE_RUNNER, MULTI_AGENT_V3, or KOOG_STRATEGY_GRAPH. Set it persistently with 'trailblaze config agent'. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Three-way switch for replay vs. AI-driven execution:   --use-recorded-steps      Force replay mode (use the trail's `recording:` tools verbatim).   --no-use-recorded-steps   Force AI mode (ignore any recordings; LLM drives each step from `step:` NL).   (unset, default)          Auto-detect: AI mode if no `recording:` blocks present, replay if they are. Use --no-use-recorded-steps to re-run a trail with stale selectors and let the agent re-pick selectors from current page state. | - |
 | `--self-heal` | When a recorded step fails, let AI take over and continue. Overrides the persisted 'trailblaze config self-heal' setting for this run. Omit to inherit the saved setting (opt-in, off by default). | - |
 | `-v`, `--verbose` | Enable verbose output | - |
@@ -312,6 +313,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--args-file` | Read parameter values from a YAML or JSON file (a map of arg-name to value). Applied BEFORE --arg, so a --arg KEY=VAL overrides the file entry with the same key. A YAML-null value is rejected (args have no null) — use '' for an empty string. Arg values are logged in cleartext, persisted into logs/recordings, and surfaced to the LLM — args are non-sensitive by design. Route passwords, tokens, or other sensitive data through --secret memory instead. | - |
 | `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 50 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
+| `--full-report-payloads` | Embed full event payloads in the after-run HTML report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so an existing session can also be regenerated in full later via `trailblaze report --full-report-payloads`. Applies to in-process runs; a run delegated to an already-running daemon doesn't generate a report from this process. | - |
 | `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. See --unified-recordings for the on-disk format. | - |
 | `--unified-recordings` | Save new recordings in the unified format: the device's slot is merged into the unified trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using them). Default: on. Opt out with --no-unified-recordings, TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze config unified-recordings false' to save legacy <classifier>.trail.yaml siblings instead — nothing is ever written next to an existing unified trail.yaml. | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
@@ -605,7 +607,36 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--storyboard-yaml` | Annotate each --storyboard cell with the YAML form of the recordable tool that produced it (looked up by traceId against the session's TrailblazeToolLog entries). The YAML strip replaces the synthesized verb/sublabel line — strictly more informative for "what was invoked here" triage. Cells without a sibling tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress (reduces total rendered height by ~20% on a typical session, at the cost of less actionable per-cell labels). Has no effect without --storyboard. | - |
 | `--no-gif` | Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. Use this on scripts and CI flows that only embed the .webp and want to skip the wasted GIF encode. Mutually exclusive with --gif. | - |
 | `--no-webp` | Suppress the auto-emitted .webp companion when --gif is requested with a bare flag. Mutually exclusive with --webp. | - |
+| `--no-wasm-report` | Skip the legacy WASM report; emit only the interactive report (plus the JSON summary). Saves the CPU-bound WASM build when only the interactive artifact is consumed. Mutually exclusive with --video/--gif/--webp, which capture the legacy timeline. Same flag as the CI report generator's --no-wasm-report. | - |
 | `--max-size` | Cap each exported timeline artifact (--gif / --video / --webp) at the given byte size. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G). After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap, the export fails with an actionable error — drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The flag is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
+| `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
+| `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze profile`
+
+Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH.
+
+**Synopsis:**
+
+```
+trailblaze profile [OPTIONS] [<<logs-dir>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<logs-dir>>` | Logs directory to profile (the directory holding per-session subdirectories). Defaults to the configured logs directory. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--open` | Open the report in the default browser after generation. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1115,7 +1146,9 @@ trailblaze config reset
 | `screenshot-format` | Image format used for screenshots sent to the LLM and shown in the timeline | png, jpeg, webp, or 'unset' to use the framework default (webp) |
 | `screenshot-max-dimensions` | Max screenshot dimensions as <longer>x<shorter> (e.g. 1536x768, 2048x1024) | WIDTHxHEIGHT (positive ints), or 'unset' to use the framework default (1536x768) |
 | `screenshot-quality` | Compression quality 0.05..1.0 for lossy formats (jpeg, webp); ignored for png | 0.05..1.0, or 'unset' to use the framework default (0.80) |
-| `android-stream-screenshots` | Experimental: serve Android agent-loop screenshots from the live device stream (default: off) | true, false, or 'unset' to inherit the default (off) |
+| `stream-screenshots` | Experimental: serve agent-loop screenshots from the live device stream on Android, iOS, and web (default: off) | true, false, or 'unset' to inherit the default (off) |
+| `ios-baguette-video` | Experimental: record iOS session video from the baguette H.264 stream instead of simctl (default: off) | true, false, or 'unset' to inherit the default (off) |
+| `disable-animations` | Experimental: disable OS animations on the device during each session, restored at session end (default: off) | true, false, or 'unset' to inherit the default (off) |
 
 **Examples:**
 

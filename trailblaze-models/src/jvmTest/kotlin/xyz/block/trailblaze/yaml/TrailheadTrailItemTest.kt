@@ -24,78 +24,46 @@ class TrailheadTrailItemTest {
   private val yaml = TrailblazeYaml.Default
 
   @Test
-  fun `v1 bare-string shorthand decodes to a single bootstrap tool with no step`() {
+  fun `NL-only trailhead decodes with a step and no tools declared`() {
     val items = yaml.decodeTrail(
       """
-      - config:
-          id: x
-          target: myapp
-      - trailhead: myapp_android_freshInstall
-      - prompts:
-          - step: Tap Pay
-      """.trimIndent(),
-    )
-    val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
-    assertNull(th.step)
-    assertEquals(1, th.tools?.size)
-    assertEquals("myapp_android_freshInstall", th.tools?.single()?.name)
-  }
-
-  @Test
-  fun `v1 step-plus-tools form decodes both the NL step and the tools`() {
-    val items = yaml.decodeTrail(
-      """
-      - config:
-          id: x
-          target: myapp
-      - trailhead:
-          step: Sign in fresh and land on the payment pad
-          tools:
-            - myapp_android_signInViaUI: {}
-            - myapp_launchClientRoute:
-                route: /dl/view/my-money
-      - prompts:
-          - step: Tap Pay
-      """.trimIndent(),
-    )
-    val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
-    assertEquals("Sign in fresh and land on the payment pad", th.step)
-    assertEquals(listOf("myapp_android_signInViaUI", "myapp_launchClientRoute"), th.tools?.map { it.name })
-  }
-
-  @Test
-  fun `v1 NL-only trailhead decodes with a step and no tools declared`() {
-    val items = yaml.decodeTrail(
-      """
-      - config:
-          id: x
-          target: myapp
-      - trailhead:
-          step: Sign in as the standard account
-      - prompts:
-          - step: Tap Pay
+      config:
+        id: x
+        target: myapp
+      trailhead:
+        step: Sign in as the standard account
+      trail:
+        - step: Tap Pay
       """.trimIndent(),
     )
     val th = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Sign in as the standard account", th.step)
-    // No `tools:` key at all → null (blaze via AI), distinct from an explicit `tools: []`
+    // No recording at all → null tools (blaze via AI), distinct from an explicit `<classifier>: {}`
     // (a deterministic no-op) — see ToolRecording's 3-state doc.
     assertNull(th.tools)
   }
 
   @Test
-  fun `v1 trailhead with explicit empty tools round-trips as a deterministic no-op`() {
-    val original = listOf(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "myapp")),
-      TrailYamlItem.TrailheadTrailItem(
-        TrailheadDefinition(step = "Sign in fresh", tools = emptyList()),
-      ),
-      TrailYamlItem.PromptsTrailItem(listOf(DirectionStep(step = "Tap Pay"))),
+  fun `trailhead with explicit empty tools decodes as a deterministic no-op`() {
+    // An explicit empty-map classifier (`android-phone: {}`) is a deterministic no-op: it must
+    // lower to declared-empty tools, not collapse to null (which would fall through to AI).
+    val decoded = yaml.decodeTrail(
+      """
+      config:
+        id: x
+        target: myapp
+      trailhead:
+        step: Sign in fresh
+        recording:
+          android-phone: {}
+      trail:
+        - step: Tap Pay
+      """.trimIndent(),
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone")),
     )
-    val decoded = yaml.decodeTrail(yaml.encodeToString(original))
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertEquals("Sign in fresh", th.step)
-    // The explicit `tools = emptyList()` must round-trip as declared-empty, not collapse to null.
+    // The explicit `android-phone: {}` must lower to declared-empty, not collapse to null.
     assertNotNull(th.tools)
     assertTrue(th.tools!!.isEmpty())
   }

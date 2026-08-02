@@ -118,6 +118,11 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
     val trailmapStagingRoot: Provider<Directory> =
       project.layout.buildDirectory.dir("intermediates/trailblaze/trailmap-tool-bundle-assets")
 
+    // Staging root every inProcessIdle APK lands under, at the farm-bundle asset convention
+    // (`inprocess-idle-apks/trailblaze-inprocess-idle-<suffix>.apk`). Cheap to create unconditionally.
+    val inProcessIdleStagingRoot: Provider<Directory> =
+      project.layout.buildDirectory.dir("intermediates/trailblaze/inprocess-idle-apk-assets")
+
     val extension =
       project.extensions.create(
         "trailblazeAndroid",
@@ -125,6 +130,7 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
         generate,
         project,
         trailmapStagingRoot,
+        inProcessIdleStagingRoot,
       )
 
     // Framework-source-tree convenience: default `sdkInstallTaskPath` to the sibling SDK-install
@@ -263,9 +269,14 @@ private fun wireAgpSourceSets(
     if (extension.allStagingTasks.isNotEmpty()) {
       reflectSrcDir(androidTest, "getAssets", extension.stagingRoot)
     }
+    if (extension.inProcessIdleApkTasks.isNotEmpty()) {
+      reflectSrcDir(androidTest, "getAssets", extension.inProcessIdleStagingRoot)
+    }
   }
 
-  if (extension.allStagingTasks.isNotEmpty()) {
+  val assetProducingTasks: List<Any> =
+    listOf(extension.allStagingTasks, extension.inProcessIdleApkTasks).filter { it.isNotEmpty() }
+  if (assetProducingTasks.isNotEmpty()) {
     project.tasks
       .matching { task ->
         val n = task.name
@@ -275,7 +286,7 @@ private fun wireAgpSourceSets(
           (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
           (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
       }
-      .configureEach { it.dependsOn(extension.allStagingTasks) }
+      .configureEach { it.dependsOn(assetProducingTasks) }
   }
 }
 
@@ -294,14 +305,26 @@ private fun reflectSrcDir(sourceSet: Any, getterName: String, value: Any) {
  * deep inside reflection code isn't actionable, so every reflective AGP call is funneled through
  * here (or the `srcDir` try/catch above) to surface [agpReflectionError] instead.
  */
-private fun reflectAgpCall(target: Any, methodName: String): Any =
+internal fun reflectAgpCall(target: Any, methodName: String): Any =
+  reflectAgpCallOrNull(target, methodName)
+    ?: throw agpReflectionError(
+      target,
+      methodName,
+      NullPointerException("`$methodName()` unexpectedly returned null"),
+    )
+
+/**
+ * [reflectAgpCall] for getters whose null return is legitimate (e.g. a signing config's
+ * `getStoreFile()` when the consumer never set one) rather than an AGP-shape mismatch.
+ */
+internal fun reflectAgpCallOrNull(target: Any, methodName: String): Any? =
   try {
     target.javaClass.getMethod(methodName).invoke(target)
   } catch (e: ReflectiveOperationException) {
     throw agpReflectionError(target, methodName, e)
   }
 
-private fun agpReflectionError(target: Any, methodName: String, cause: Throwable): GradleException =
+internal fun agpReflectionError(target: Any, methodName: String, cause: Throwable): GradleException =
   GradleException(
     "xyz.block.trailblaze.android-gradle: AGP's `${target.javaClass.name}` doesn't expose " +
       "`$methodName(...)` the way this plugin expects it to (via reflection — see " +
@@ -328,12 +351,31 @@ constructor(
    * source set. Empty when [trailmap] is never called.
    */
   val stagingRoot: Provider<Directory>,
+  /**
+   * Staging root every [inProcessIdle] APK lands under (at
+   * `inprocess-idle-apks/trailblaze-inprocess-idle-<suffix>.apk`) — auto-wired into AGP's `androidTest`
+   * assets source set. Empty when [inProcessIdle] is never called.
+   */
+  val inProcessIdleStagingRoot: Provider<Directory>,
 ) {
   /**
    * Staging `Copy` tasks registered by [trailmap], one per tool — auto-wired into the AGP
    * asset-task `dependsOn(...)`. Empty (a no-op dependency) when [trailmap] is never called.
    */
   val allStagingTasks: MutableList<TaskProvider<Copy>> = mutableListOf()
+
+  /**
+   * Idle-detector-APK build tasks registered by [inProcessIdle], one per target app — auto-wired into the
+   * AGP asset-task `dependsOn(...)`. Empty when [inProcessIdle] is never called.
+   */
+  val inProcessIdleApkTasks: MutableList<TaskProvider<BuildTrailblazeInProcessIdleApkTask>> = mutableListOf()
+
+  /**
+   * Target applicationIds keyed by their idle detector package suffix, for [inProcessIdle]'s directed
+   * duplicate-suffix error (two targets sharing a last dotted label would collide on package
+   * name, task name and staged APK path).
+   */
+  internal val inProcessIdleApkTargetsBySuffix: MutableMap<String, String> = mutableMapOf()
 
   /**
    * Optional TypeScript SDK directory [trailmap] bundles against (`node_modules/.bin/esbuild`,
@@ -365,6 +407,30 @@ constructor(
     val spec = project.objects.newInstance(TrailmapToolBundleSpec::class.java)
     spec.configure()
     registerTrailmapToolBundle(project, this, spec)
+  }
+
+  /**
+   * Build + sign a Trailblaze inprocess-idle instrumentation APK for one target app and stage it as
+   * an `androidTest` asset at `inprocess-idle-apks/trailblaze-inprocess-idle-<suffix>.apk` (the farm-bundle
+   * deploy convention). The idle detector source ships inside this plugin's jar; the consumer's own
+   * Android SDK tools build it, and it signs with the target app's own key — see
+   * [InProcessIdleApkSpec] for the signing resolution. Call more than once to build idle detectors for more
+   * than one target; each output lands in the shared [inProcessIdleStagingRoot].
+   *
+   * ```kotlin
+   * inProcessIdle {
+   *   targetApplicationId = "com.example.app"          // debug-keystore signed (the default)
+   * }
+   * inProcessIdle {
+   *   targetApplicationId = "com.example.app.internal" // signed with the app's own release key
+   *   signingConfigName = "internalRelease"
+   * }
+   * ```
+   */
+  fun inProcessIdle(configure: InProcessIdleApkSpec.() -> Unit) {
+    val spec = project.objects.newInstance(InProcessIdleApkSpec::class.java)
+    spec.configure()
+    registerInProcessIdleApk(project, this, spec)
   }
 
   /**

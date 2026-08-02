@@ -17,4 +17,11 @@ interface MaestroHostRunner {
   fun runMaestroCommand(vararg commands: Command): TrailblazeToolResult
 
   fun runMaestroCommands(commands: List<Command>, traceId: TraceId?): TrailblazeToolResult
+
+  /**
+   * Detach any experimental stream-sourced screenshot feed (iOS baguette stream — see
+   * [StreamScreenshotMode]) so it doesn't outlive the session. No-op unless
+   * `TRAILBLAZE_IOS_STREAM_SCREENSHOT` engaged.
+   */
+  fun closeStreamScreenshotSource() {}
 }

@@ -654,6 +654,39 @@ class H264Tee internal constructor(
       }
     }
 
+    /**
+     * Build a standalone tee — NOT in the per-device [instances] registry — backed by a custom
+     * [producerFactory] that supplies Annex-B H.264 from some non-adb transport.
+     *
+     * The registry and the shared-`screenrecord` semantics exist to serialize the one hardware
+     * H.264 encoder an Android device exposes. Sources that fan out on their own (the iOS
+     * baguette `serve` process already multiplexes every viewer of a simulator over its own
+     * WebSocket) don't want that: each consumer opens its own transport, so there's nothing to
+     * share and no registry key to collide on. This factory skips the registry and the adb SDK
+     * probe entirely.
+     *
+     * The producer is treated as unlimited-with-no-restart: on EOF (the upstream transport
+     * closed) the reader thread stops rather than respawning, because a non-adb caller treats a
+     * dead stream as "fall back", not "reconnect" — it can build a fresh tee if it wants to
+     * retry. [videoSize] / [bitRate] are recorded for the log line only ([producerFactory] owns
+     * the real capture parameters).
+     */
+    fun standalone(
+      deviceId: TrailblazeDeviceId,
+      producerFactory: ProducerFactory,
+      videoSize: String = "external",
+      bitRate: String = "0",
+    ): H264Tee = H264Tee(
+      deviceId = deviceId,
+      videoSize = videoSize,
+      bitRate = bitRate,
+      producerFactory = producerFactory,
+      // Report Android 11+ so the reader takes the unlimited path (no 3-min-cap restart chain);
+      // combined with restartOnUnexpectedExit=false, an EOF stops the reader cleanly.
+      sdkLevelProvider = { ANDROID_R_SDK },
+      restartOnUnexpectedExit = false,
+    )
+
     /** Test seam: clear the registry so each test starts clean. */
     internal fun resetRegistryForTests() {
       synchronized(instanceLock) { instances.clear() }

@@ -1,0 +1,19 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze profile [-hV] [--open] [<logs-dir>]
+Generate the performance-analysis report (an Instruments-style time profiler
+over each session's tools, LLM calls, timeouts, and idle gaps) for a logs
+directory. Defaults to the configured logs directory when <logs-dir> is
+omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun`
+on PATH.
+      [<logs-dir>]   Logs directory to profile (the directory holding
+                       per-session subdirectories). Defaults to the configured
+                       logs directory.
+  -h, --help         Show this help message and exit.
+      --open         Open the report in the default browser after generation.
+  -V, --version      Print version information and exit.

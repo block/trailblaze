@@ -15,6 +15,7 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TargetTypeGuard
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
@@ -98,22 +99,43 @@ class AccessibilityDeviceManager(
      * `lastUiEventTimestampMs` and return "settled" instantly.
      */
     internal fun defaultAwaitSettle() {
-      val useLegacy = envFlagEnabled("TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE")
-      if (useLegacy || !TrailblazeAccessibilityService.isServiceRunning()) {
-        // Log which primitive ran so a triage can tell the branches apart — the event-quiet path
-        // emits its own "UI settled after …" line; without this the fallback is silent.
-        Console.log(
-          "[settle] via UiDevice.waitForIdle() — " +
-            if (useLegacy) "TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE set" else "accessibility service not bound",
-        )
-        withUiDevice { waitForIdle() }
+      val heuristic: (earlyExit: () -> Boolean) -> Boolean = heuristic@{ earlyExit ->
+        val useLegacy = envFlagEnabled("TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE")
+        if (useLegacy || !TrailblazeAccessibilityService.isServiceRunning()) {
+          // `UiDevice.waitForIdle()` is a single blocking call that can't honor `earlyExit`
+          // mid-flight, so if the idle detector already won by the time this arm runs, skip it entirely
+          // rather than start a non-cancellable wait that would keep poking UiAutomator after the
+          // race is decided. (Narrows, doesn't eliminate, the window — the idle detector can still win
+          // during the call — but the common already-idle case answers in ~10ms.)
+          if (earlyExit()) return@heuristic false
+          // Log which primitive ran so a triage can tell the branches apart — the event-quiet
+          // path emits its own "UI settled after …" line; without this the fallback is silent.
+          Console.log(
+            "[settle] via UiDevice.waitForIdle() — " +
+              if (useLegacy) "TRAILBLAZE_SETTLE_VIA_WAIT_FOR_IDLE set" else "accessibility service not bound",
+          )
+          withUiDevice { waitForIdle() }
+          // waitForIdle() has no timeout verdict — returning IS its "settled".
+          true
+        } else {
+          TrailblazeAccessibilityService.waitForSettled(
+            quietWindowMs = SETTLE_QUIET_WINDOW_MS,
+            maxGracePeriodMs = SETTLE_GRACE_PERIOD_MS,
+            timeoutMs = SETTLE_TIMEOUT_MS,
+            earlyExit = earlyExit,
+          )
+        }
+      }
+      // EXPERIMENTAL: in-process in-process idle (see [InProcessIdleSettleClient]) — opt-in via
+      // `setprop debug.trailblaze.settle.inProcessIdle 1`. Raced against the standard settle so the
+      // idle detector can only ever make settling FASTER; a missing/hung idle detector never breaks a run.
+      if (InProcessIdleSettleClient.isEnabled()) {
+        val winner =
+          InProcessIdleSettleClient.raceIdleAgainstHeuristic(SETTLE_TIMEOUT_MS, heuristic = heuristic)
+        Console.log("[settle] post-action via $winner")
         return
       }
-      TrailblazeAccessibilityService.waitForSettled(
-        quietWindowMs = SETTLE_QUIET_WINDOW_MS,
-        maxGracePeriodMs = SETTLE_GRACE_PERIOD_MS,
-        timeoutMs = SETTLE_TIMEOUT_MS,
-      )
+      heuristic { false }
     }
 
     /** True when env flag [name] is set to `1`/`true` (case-insensitive). Read per call, never cached. */
@@ -147,6 +169,14 @@ class AccessibilityDeviceManager(
     return AccessibilityServiceScreenState(
       deviceClassifiers = deviceClassifiers,
       captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
+      // EXPERIMENTAL (inprocess-idle mode only): honor this method's "immediate state, no settle
+      // overhead" contract by skipping the capture-time stability gate too — this snapshot is
+      // for the session log, not for selector resolution. NOTE this deliberately couples a
+      // capture-side behavior to the settle sysprop: enabling `debug.trailblaze.settle.inProcessIdle`
+      // is opting into "extreme speed mode" as a package, and this logging-only path is the one
+      // capture spot where a mid-transition tree is acceptable. Selector-resolving captures
+      // (via [getScreenState]/[waitForReady]) keep the stability gate in both modes.
+      awaitStableTree = !InProcessIdleSettleClient.isEnabled(),
     )
   }
 
@@ -157,6 +187,15 @@ class AccessibilityDeviceManager(
    * accessibility events rather than DOM mutations.
    */
   fun waitForReady(timeoutMs: Long = 5_000L) {
+    // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever
+    // answers first — true main-thread idle or the standard event-quiet wait.
+    if (InProcessIdleSettleClient.isEnabled()) {
+      val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(timeoutMs) { earlyExit ->
+        TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs, earlyExit = earlyExit)
+      }
+      Console.log("[settle] waitForReady via $winner")
+      return
+    }
     TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs)
   }
 
@@ -721,18 +760,77 @@ class AccessibilityDeviceManager(
    * case codex correctly flagged).
    */
   private fun imeOcclusionSignal(x: Int, y: Int): String? {
-    val bounds = TrailblazeAccessibilityService.imeWindowBoundsInScreen()
-    if (bounds != null) {
-      return if (bounds.contains(x, y)) "window bounds $bounds" else null
-    }
-    // No bounds available — windows enumeration may be degraded. Fall back to dumpsys
-    // for the conservative shown/not-shown signal. If shown, we can't know whether
-    // (x, y) is occluded specifically; conservatively treat as occluded.
-    return if (TrailblazeAccessibilityService.isImeShownAuthoritative()) {
-      "dumpsys reports IME shown but window bounds unavailable (windows enumeration degraded)"
-    } else {
-      null
-    }
+    val rect = TrailblazeAccessibilityService.imeWindowBoundsInScreen()
+    return imeOcclusionSignal(
+      imeBounds = rect?.let { TrailblazeNode.Bounds(it.left, it.top, it.right, it.bottom) },
+      // Only consulted when bounds are unavailable, so don't pay for dumpsys otherwise.
+      imeShownAuthoritative = rect == null && TrailblazeAccessibilityService.isImeShownAuthoritative(),
+      x = x,
+      y = y,
+    )
+  }
+
+  /**
+   * Reports — without changing tap behavior — when the resolved tap point is covered by
+   * something drawn on top of the intended target, naming the occluder.
+   *
+   * This is the generalization of [failIfTapPointOccludedByIme]: that check only ever asks "is
+   * the *keyboard* here?", so an in-app overlay (snackbar, banner, bottom-sheet scrim) that
+   * absorbs the tap passes it and the tap is reported successful while nothing happens on
+   * screen. [assessTapOcclusion] asks the general question against the same tree the selector
+   * just resolved against.
+   *
+   * Warn-only by design for its first cycle: the paint-order heuristic it relies on cannot be
+   * validated against any platform signal (see [assessTapOcclusion]), so this earns its
+   * fail-vs-warn decision from a nightly's worth of labelled fires rather than from reasoning.
+   * Every fire that is followed by a passing step is a false positive; every one followed by a
+   * failing step is a true positive.
+   *
+   * Called before route selection, so it covers both the ACTION_CLICK and gesture paths.
+   */
+  private fun warnIfTapPointOccluded(
+    root: TrailblazeNode,
+    target: TrailblazeNode,
+    x: Int,
+    y: Int,
+    targetDescription: String,
+  ) {
+    // Read per-dispatch (not cached at JVM start) so an oncall can silence a warn-flood on a
+    // running daemon without a restart.
+    if (envFlagEnabled("TRAILBLAZE_DISABLE_TAP_OCCLUSION_WARN")) return
+    val verdict = assessTapOcclusion(root, target, x, y) ?: return
+    Console.log(
+      "[tap-occlusion] tap target '$targetDescription' at ($x, $y) is covered by " +
+        "${verdict.description} — the tap may land on the overlay instead of the target. " +
+        "Reporting only; the tap is still being dispatched.",
+    )
+  }
+
+  /**
+   * Reports — without changing behavior — when a selector resolved onto a text input it never
+   * asked for, naming the field the match came from.
+   *
+   * Applies to assertions as much as taps: `assertVisibleBySelector: Pizza` passes off a search
+   * box still holding "pizza" with an empty cart, which is a false *success* rather than a
+   * failure, so nothing downstream ever surfaces it.
+   *
+   * Takes the whole [TrailblazeNodeSelectorResolver.ResolveResult] because the ambiguous case is
+   * only visible over the match set: when a bare-text selector hits both the search field and
+   * the row beneath it, no single resolved node shows the collision.
+   */
+  private fun warnIfTargetTypeMismatch(
+    selector: TrailblazeNodeSelector,
+    result: TrailblazeNodeSelectorResolver.ResolveResult,
+  ) {
+    if (envFlagEnabled("TRAILBLAZE_DISABLE_TARGET_TYPE_WARN")) return
+    val warning = when (result) {
+      is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch ->
+        TargetTypeGuard.assessUnrequestedTextInput(selector, result.node)
+      is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
+        TargetTypeGuard.assessAmbiguousTextInput(selector, result.nodes)
+      is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
+    } ?: return
+    Console.log("[tap-target-type] $warning")
   }
 
   /**
@@ -753,13 +851,27 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
+        // Captured fresh each iteration, so the occlusion hit-test below sees the screen as it
+        // is at dispatch time. That matters for animating overlays: the snackbar in the
+        // motivating repro slid into place over ~3s, so a cached or pre-animation tree would
+        // measure it in the wrong position.
+        val unfilteredTree = tree.toTrailblazeNode()
+        val result = resolveSelectorWithFallback(unfilteredTree, action.nodeSelector)
+        // Once per tap, not once per poll: every branch below that resolves a node returns, and
+        // the NoMatch case the loop retries on is not reported.
+        warnIfTargetTypeMismatch(action.nodeSelector, result)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             val center = result.node.centerPoint()
               ?: error("Element matched but has no bounds: ${action.nodeSelector.description()}")
             Console.log("Resolved via TrailblazeNode: ${action.nodeSelector.description()} at (${center.first}, ${center.second})")
             failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
+            // Against the unfiltered tree: `filterImportantForAccessibility` promotes children of
+            // dropped nodes up, collapsing parent/child pairs into siblings, which would weaken
+            // the ancestor/descendant exclusion exactly where the tree is most collapsed.
+            warnIfTapPointOccluded(
+              unfilteredTree, result.node, center.first, center.second, action.nodeSelector.description(),
+            )
             tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
@@ -771,6 +883,9 @@ class AccessibilityDeviceManager(
               "TrailblazeNode selector matched ${result.nodes.size} elements, using preferred (visible) match at (${center.first}, ${center.second})"
             )
             failIfTapPointOccludedByIme(center.first, center.second, action.nodeSelector.description())
+            warnIfTapPointOccluded(
+              unfilteredTree, chosen, center.first, center.second, action.nodeSelector.description(),
+            )
             tapOrLongPressOnResolvedNode(chosen, center.first, center.second, action.longPress)
             return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
           }
@@ -901,6 +1016,7 @@ class AccessibilityDeviceManager(
       val tree = getAccessibilityTree()
       if (tree != null) {
         val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
+        warnIfTargetTypeMismatch(action.nodeSelector, result)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             val center = result.node.centerPoint()

@@ -877,6 +877,343 @@ describe("resolve — IosAxe driver", () => {
     const result = resolve(root, selectors.iosAxe({ customAction: "Edit mode" }));
     expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
   });
+
+  // Container-chrome guard: the AXe Application root (and its Windows) carry the app name
+  // as AXLabel and are sized to the screen — the Settings app's root is labeled "Settings".
+  // Text matching skips them unless the selector pins the container explicitly
+  // (roleRegex/typeRegex/uniqueId), so an anchored label match can't tap screen center.
+
+  test("anchored label selector skips the Application root and resolves the row", () => {
+    resetIds();
+    const row = nodeOf(
+      { class: "iosAxe", type: "Cell", role: "AXCell", label: "Settings" },
+      { bounds: bounds(0, 300, 402, 344) },
+    );
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [row] },
+    );
+    const result = resolve(root, selectors.iosAxe({ labelRegex: "^Settings$" }));
+    expect(asSingleMatch(result).nodeId).toBe(row.nodeId);
+  });
+
+  test("label selector matching only the Application and Window chrome returns NoMatch", () => {
+    resetIds();
+    const window = nodeOf(
+      { class: "iosAxe", type: "Window", role: "AXWindow", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874) },
+    );
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [window] },
+    );
+    const result = resolve(root, selectors.iosAxe({ labelRegex: "^Settings$" }));
+    expect(result.kind).toBe("noMatch");
+  });
+
+  test("explicit typeRegex still matches the Application root", () => {
+    resetIds();
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874) },
+    );
+    const result = resolve(
+      root,
+      selectors.iosAxe({ typeRegex: "Application", labelRegex: "^Settings$" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(root.nodeId);
+  });
+
+  test("bare containsChild text selector cannot match the chrome via a labeled Window", () => {
+    resetIds();
+    // Recorded shape with no driver match on the candidate: `containsChild: {textRegex: …}`.
+    // The Application's direct child is a Window labeled with the app name, so without the
+    // selector-level guard the Application matches via that child, sorts first at (0,0), and
+    // taps screen center. The row's real wrapper must win instead.
+    const row = nodeOf(
+      { class: "iosAxe", type: "Cell", role: "AXCell", label: "Settings" },
+      { bounds: bounds(0, 300, 402, 344) },
+    );
+    const group = nodeOf(
+      { class: "iosAxe", type: "Other", role: "AXGroup" },
+      { bounds: bounds(0, 280, 402, 360), children: [row] },
+    );
+    const window = nodeOf(
+      { class: "iosAxe", type: "Window", role: "AXWindow", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [group] },
+    );
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [window] },
+    );
+    const result = resolve(root, {
+      containsChild: selectors.iosMaestro({ textRegex: "Settings" }),
+    });
+    expect(asSingleMatch(result).nodeId).toBe(group.nodeId);
+  });
+
+  test("bare containsDescendants text selector skips the Application and Window chrome", () => {
+    resetIds();
+    // Every ancestor of a text-bearing node matches a bare containsDescendants text selector,
+    // including the screen-sized chrome — which would sort first at (0,0). Only the real
+    // wrapper below the chrome may resolve.
+    const label = nodeOf(
+      { class: "iosAxe", type: "StaticText", role: "AXStaticText", label: "General" },
+      { bounds: bounds(16, 310, 386, 334) },
+    );
+    const rowWrapper = nodeOf(
+      { class: "iosAxe", type: "Cell", role: "AXCell" },
+      { bounds: bounds(0, 300, 402, 344), children: [label] },
+    );
+    const window = nodeOf(
+      { class: "iosAxe", type: "Window", role: "AXWindow" },
+      { bounds: bounds(0, 0, 402, 874), children: [rowWrapper] },
+    );
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [window] },
+    );
+    const result = resolve(root, {
+      containsDescendants: [selectors.iosMaestro({ textRegex: "General" })],
+    });
+    expect(asSingleMatch(result).nodeId).toBe(rowWrapper.nodeId);
+  });
+});
+
+// ============================================================================
+// IosMaestro selector against an IosAxe tree (cross-dialect bridge)
+//
+// A trail recorded under the legacy Maestro iOS driver carries `iosMaestro:` selectors.
+// These tests pin that those selectors still resolve when replayed against the newer
+// AXe driver's DriverNodeDetailIosAxe nodes.
+// ============================================================================
+
+describe("resolve — IosMaestro selector against IosAxe tree (cross-dialect bridge)", () => {
+  test("textRegex matches AXe label", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "John Appleseed" });
+    const other = nodeOf({ class: "iosAxe", label: "Jane Doe" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "John Appleseed" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("textRegex matches AXe value", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", value: "50%" });
+    const other = nodeOf({ class: "iosAxe", value: "10%" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "50%" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("textRegex matches AXe title", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", title: "Settings" });
+    const other = nodeOf({ class: "iosAxe", title: "Profile" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "Settings" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("textRegex skips the Application root", () => {
+    resetIds();
+    // Same container-chrome guard as the native IosAxe shape: the bridged text selector
+    // must resolve the row, not the screen-sized Application root labeled with the app name.
+    const row = nodeOf(
+      { class: "iosAxe", type: "StaticText", role: "AXStaticText", label: "Settings" },
+      { bounds: bounds(0, 300, 402, 344) },
+    );
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874), children: [row] },
+    );
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "Settings" }));
+    expect(asSingleMatch(result).nodeId).toBe(row.nodeId);
+  });
+
+  test("explicit classNameRegex still matches the Application root", () => {
+    resetIds();
+    // The bridged pin mirrors the native typeRegex escape hatch: classNameRegex bridges to
+    // the AXe type/role, so a selector that names the container explicitly may match it.
+    const root = nodeOf(
+      { class: "iosAxe", type: "Application", role: "AXApplication", label: "Settings" },
+      { bounds: bounds(0, 0, 402, 874) },
+    );
+    const result = resolve(
+      root,
+      selectors.iosMaestro({ textRegex: "Settings", classNameRegex: "Application" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(root.nodeId);
+  });
+
+  test("accessibilityTextRegex matches AXe label", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "Add" });
+    const other = nodeOf({ class: "iosAxe", label: "Remove" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ accessibilityTextRegex: "Add" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("resourceIdRegex matches AXe uniqueId", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", uniqueId: "login_button", label: "Log In" });
+    const other = nodeOf({ class: "iosAxe", uniqueId: "signup_button", label: "Sign Up" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ resourceIdRegex: "login_button" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("classNameRegex matches AXe type or role", () => {
+    resetIds();
+    const byType = nodeOf({ class: "iosAxe", type: "Button", label: "OK" });
+    const byRole = nodeOf({ class: "iosAxe", role: "AXButton", label: "Cancel" });
+    const neither = nodeOf({ class: "iosAxe", type: "StaticText", label: "Hello" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [byType, byRole, neither] });
+    const result = resolve(root, selectors.iosMaestro({ classNameRegex: ".*Button" }));
+    const matches = asMultipleMatches(result);
+    expect(new Set(matches.map((n) => n.nodeId))).toEqual(
+      new Set([byType.nodeId, byRole.nodeId]),
+    );
+  });
+
+  test("hintTextRegex matches AXe help", () => {
+    resetIds();
+    const target = nodeOf({
+      class: "iosAxe",
+      help: "Enter your email address",
+      label: "Email",
+    });
+    const other = nodeOf({ class: "iosAxe", help: "Enter your password", label: "Password" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(
+      root,
+      selectors.iosMaestro({ hintTextRegex: "Enter your email address" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("hintTextRegex matches a text input's placeholder-as-label", () => {
+    resetIds();
+    // iOS surfaces an empty text field's placeholder as AXLabel (help is null) — e.g. the
+    // Contacts search field. A decorative sibling with the same label (magnifying-glass Image)
+    // must NOT match: placeholder-as-label only applies to text-input types.
+    const searchField = nodeOf({ class: "iosAxe", type: "TextField", label: "Search" });
+    const searchIcon = nodeOf({ class: "iosAxe", type: "Image", label: "Search" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [searchIcon, searchField] });
+    const result = resolve(root, selectors.iosMaestro({ hintTextRegex: "Search" }));
+    expect(asSingleMatch(result).nodeId).toBe(searchField.nodeId);
+  });
+
+  test("MAESTRO dialect is case-insensitive", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "Log In" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target] });
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "log in" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("AND semantics across textRegex and resourceIdRegex", () => {
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "Log In", uniqueId: "login_button" });
+    // Same text, different id — must not match when both constraints are specified.
+    const wrongId = nodeOf({ class: "iosAxe", label: "Log In", uniqueId: "other_button" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, wrongId] });
+    const result = resolve(
+      root,
+      selectors.iosMaestro({ textRegex: "Log In", resourceIdRegex: "login_button" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
+
+  test("only unbridgeable fields specified returns NoMatch", () => {
+    // AXe exposes no `focused` equivalent — a selector that constrains only `focused`
+    // must not degenerate into matching every node in the tree.
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "Anything" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target] });
+    const result = resolve(root, selectors.iosMaestro({ focused: true }));
+    expect(result.kind).toBe("noMatch");
+  });
+
+  test("focused and selected constraints fail closed", () => {
+    // AXe carries no focused/selected signal, so the bridge cannot evaluate these
+    // constraints faithfully — dropping them would false-match (e.g. a waypoint requiring
+    // `focused: true` matching its non-focused sibling screen). The selector must not
+    // match even though its bridgeable textRegex constraint would.
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "Log In" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target] });
+    const result = resolve(
+      root,
+      selectors.iosMaestro({ textRegex: "Log In", focused: true, selected: true }),
+    );
+    expect(result.kind).toBe("noMatch");
+  });
+
+  test("classNameRegex matches Maestro-era class alias", () => {
+    // Maestro's iOS tree reported label views (`LabelView`, `UILabel`) where AXe reports
+    // the semantic `StaticText` — and for tab-bar/nav items the label lives directly on a
+    // `Button` node — so a bare label-view class is genuinely ambiguous across both and
+    // resolves as multipleMatches. An unmapped custom class must NOT match anything.
+    resetIds();
+    const staticText = nodeOf({ class: "iosAxe", type: "StaticText", label: "More" });
+    const button = nodeOf({ class: "iosAxe", type: "Button", label: "More" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [staticText, button] });
+
+    const viaLabelView = resolve(root, selectors.iosMaestro({ classNameRegex: "LabelView" }));
+    expect(asMultipleMatches(viaLabelView).map((n) => n.nodeId)).toEqual([
+      staticText.nodeId,
+      button.nodeId,
+    ]);
+
+    const viaUiLabel = resolve(root, selectors.iosMaestro({ classNameRegex: "UILabel" }));
+    expect(asMultipleMatches(viaUiLabel).map((n) => n.nodeId)).toEqual([
+      staticText.nodeId,
+      button.nodeId,
+    ]);
+
+    const viaButtonLabel = resolve(
+      root,
+      selectors.iosMaestro({ classNameRegex: "UIButtonLabel" }),
+    );
+    expect(asSingleMatch(viaButtonLabel).nodeId).toBe(button.nodeId);
+
+    const viaCustomClass = resolve(
+      root,
+      selectors.iosMaestro({ classNameRegex: "CustomAppTitleNavigationBarItemView" }),
+    );
+    expect(viaCustomClass.kind).toBe("noMatch");
+  });
+
+  test("LabelView-recorded tab item resolves to its Button node", () => {
+    // Tab-bar/nav items carry no separate StaticText on an AXe tree — the Button node
+    // holds the label. A recorded `textRegex + classNameRegex: LabelView` tap must resolve
+    // to it rather than silently dropping to the recorded-coordinate fallback.
+    resetIds();
+    const moreTab = nodeOf({ class: "iosAxe", type: "Button", label: "More" });
+    const itemsTab = nodeOf({ class: "iosAxe", type: "Button", label: "Items" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [moreTab, itemsTab] });
+
+    const result = resolve(
+      root,
+      selectors.iosMaestro({ textRegex: "More", classNameRegex: "LabelView" }),
+    );
+    expect(asSingleMatch(result).nodeId).toBe(moreTab.nodeId);
+  });
+
+  test("invalid-regex pattern degrades to exact literal", () => {
+    // A recorded price like "$0.00" is regex-unmatchable (leading `$` is an end anchor) —
+    // the bridge must still resolve it via the exact-equality fallback, and must not
+    // false-match a different price.
+    resetIds();
+    const target = nodeOf({ class: "iosAxe", label: "$0.00" });
+    const other = nodeOf({ class: "iosAxe", label: "$5.00" });
+    const root = nodeOf({ class: "iosAxe" }, { children: [target, other] });
+    const result = resolve(root, selectors.iosMaestro({ textRegex: "$0.00" }));
+    expect(asSingleMatch(result).nodeId).toBe(target.nodeId);
+  });
 });
 
 // ============================================================================

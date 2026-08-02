@@ -37,7 +37,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
 ): String = try {
-  trailblazeYaml.encodeToString(buildRecordedTrailItems(trailblazeYaml, sessionTrailConfig))
+  trailblazeYaml.encodeToString(generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig))
 } catch (e: Exception) {
   Console.error("Failed to generate recording: ${e.stackTraceToString()}")
   ""
@@ -99,7 +99,7 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   classifierOverride: String? = null,
 ): String {
   val items = try {
-    buildRecordedTrailItems(trailblazeYaml, sessionTrailConfig)
+    generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig)
   } catch (e: Exception) {
     Console.error("Failed to build recording items: ${e.stackTraceToString()}")
     return ""
@@ -118,7 +118,10 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
       recordedItems = items,
       classifier = classifier,
     )
-    if (merged.trail.isEmpty()) v1 else trailblazeYaml.encodeUnifiedTrailToString(merged)
+    // An empty `trail:` is emitted as a config-only unified doc (decodeUnifiedTrail accepts it),
+    // so the recording round-trips without ever re-parsing v1. A trailhead-only merge still can't
+    // be represented (the emitter throws) and drops into the catch below.
+    trailblazeYaml.encodeUnifiedTrailToString(merged)
   } catch (e: Exception) {
     // The unified shape couldn't be produced (e.g. multi-tool trailhead). Fall back to the v1
     // preview instead of returning empty — the save path preserves v1 for the same case.
@@ -146,7 +149,6 @@ private fun List<TrailblazeLog>.existingUnifiedTrailFromRawYaml(
   return try {
     when (val doc = trailblazeYaml.decodeTrailDocument(rawYaml)) {
       is TrailDocument.Unified -> doc.trail
-      is TrailDocument.V1 -> null
     }
   } catch (e: Exception) {
     Console.error(
@@ -158,11 +160,17 @@ private fun List<TrailblazeLog>.existingUnifiedTrailFromRawYaml(
 }
 
 /**
- * Builds the v1 [TrailYamlItem] list for this session's logs (config, optional trailhead, prompts).
- * Shared source of truth for both [generateRecordedYaml] (v1 encode) and [generateUnifiedRecordedYaml]
- * (unified merge + encode), so the two rendered formats can never diverge in content.
+ * Builds the lowered [TrailYamlItem] runtime spine for this session's logs (config, optional
+ * trailhead, prompts). Shared source of truth for both [generateRecordedYaml] (encode to the v1
+ * list shape) and [generateUnifiedRecordedYaml] (merge + encode to the unified shape), so the two
+ * rendered formats can never diverge in content.
+ *
+ * Save-back callers that already hold the session logs in-process should feed these items STRAIGHT
+ * into the unified-recording merge (`UnifiedRecordingWriter.mergeIntoUnified`, in the higher
+ * `trailblaze-common` module) rather than encode to YAML and re-decode — the items are the merge
+ * input, and the YAML/parse round-trip is what couples save-back to the legacy v1 parser.
  */
-private fun List<TrailblazeLog>.buildRecordedTrailItems(
+fun List<TrailblazeLog>.generateRecordedTrailItems(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
 ): List<TrailYamlItem> {

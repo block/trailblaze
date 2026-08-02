@@ -149,9 +149,11 @@ internal class GetSessionsHandler(private val deps: TrailRunnerDeps) :
 
 internal class GetToolsHandler : RpcHandler<GetToolsRequest, ToolCatalogResponse> {
   // The builder does recursive filesystem discovery (blocking I/O), so run it off the request
-  // coroutine — matching the REST route (ToolRoutes.kt) it mirrors.
+  // coroutine — matching the REST route (ToolRoutes.kt) it mirrors. Served through the
+  // fingerprint-keyed ToolCatalogCache so concurrent requests (the Tools page fires this RPC
+  // alongside the usage-count routes) share one build and unchanged workspaces answer instantly.
   override suspend fun handle(request: GetToolsRequest): RpcResult<ToolCatalogResponse> =
-    RpcResult.Success(ToolCatalogResponse(withContext(Dispatchers.IO) { ToolCatalogBuilder.build() }))
+    RpcResult.Success(ToolCatalogResponse(withContext(Dispatchers.IO) { ToolCatalogCache.get() }))
 }
 
 internal class GetTrailmapsHandler : RpcHandler<GetTrailmapsRequest, TrailmapsResponse> {

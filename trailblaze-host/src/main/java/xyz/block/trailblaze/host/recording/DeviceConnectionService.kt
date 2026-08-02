@@ -18,6 +18,8 @@ import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.playwright.PlaywrightElectronBrowserManager
+import xyz.block.trailblaze.playwright.recording.AttachedPlaywrightDeviceScreenStream
 import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
 import xyz.block.trailblaze.playwright.recording.PlaywrightInteractionToolFactory
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -52,7 +54,14 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
     device: TrailblazeConnectedDeviceSummary,
   ): ConnectionState = try {
     when (device.platform) {
-      TrailblazeDevicePlatform.WEB -> connectWeb(device)
+      // PLAYWRIGHT_ELECTRON reports platform WEB (it drives a Chromium-based Electron window over
+      // CDP), so it lands in this branch alongside the launch-a-browser web driver. The two diverge
+      // on connect: web LAUNCHES a fresh Chromium; electron ATTACHES to an already-running app. The
+      // pure `webConnectStrategy` decision keeps that fork explicit and unit-testable.
+      TrailblazeDevicePlatform.WEB -> when (webConnectStrategy(device.trailblazeDriverType)) {
+        WebConnectStrategy.ATTACH_ELECTRON -> connectElectron(device)
+        WebConnectStrategy.LAUNCH_CHROMIUM -> connectWeb(device)
+      }
       TrailblazeDevicePlatform.ANDROID -> connectAndroid(device)
       TrailblazeDevicePlatform.IOS -> connectIos(device)
       TrailblazeDevicePlatform.DESKTOP -> ConnectionState.Error(
@@ -110,6 +119,58 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
       existingBrowserManager = pageManager,
     )
     deviceManager.setActivePlaywrightNativeTest(device.trailblazeDeviceId, playwrightTest)
+
+    return ConnectionState.Connected(
+      RecordingDeviceConnection(
+        stream = stream,
+        toolFactory = toolFactory,
+        deviceLabel = formatDeviceLabel(device),
+        trailblazeDeviceId = device.trailblazeDeviceId,
+        trailblazeDriverType = device.trailblazeDriverType,
+      ),
+    )
+  }
+
+  /**
+   * Attach-only connect for a Playwright-Electron device: connects Playwright to an
+   * already-running Electron app's CDP endpoint (e.g. an app launched with
+   * `--remote-debugging-port=9222`) and wraps its live page in the same
+   * [PlaywrightDeviceScreenStream] the launch-a-browser web path uses — so the existing
+   * `/devices/api/stream` WEB fast path screencasts the Electron window with no changes to
+   * the streaming/endpoint layer.
+   *
+   * Non-destructive: never launches the app and never calls `chromium().launch()`. A refused or
+   * silent CDP endpoint surfaces a clear error instead of hanging — the connect handshake is
+   * bounded by [PlaywrightElectronBrowserManager]'s connect timeout.
+   *
+   * The stream is an [AttachedPlaywrightDeviceScreenStream] (an [AutoCloseable]
+   * [PlaywrightDeviceScreenStream]) so `HostDeviceSessionManager.remove()` disconnects this
+   * externally-attached manager on device disconnect — otherwise each connect/disconnect cycle
+   * would leak the manager's Playwright thread + CDP connection (nothing else owns it, unlike the
+   * launch-a-browser path where `WebBrowserManager` owns the browser lifecycle).
+   */
+  private suspend fun connectElectron(device: TrailblazeConnectedDeviceSummary): ConnectionState {
+    val cdpUrl = resolveElectronCdpUrl(
+      cdpUrlEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_URL"),
+      cdpPortEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT"),
+    )
+    // The manager's init does the (timeout-bounded) blocking `connectOverCDP` on its own Playwright
+    // thread; run its construction off the caller so it doesn't block the connect coroutine's thread.
+    val pageManager = try {
+      withContext(Dispatchers.IO) {
+        PlaywrightElectronBrowserManager(cdpUrl = cdpUrl)
+      }
+    } catch (e: Exception) {
+      val msg = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+      return ConnectionState.Error(
+        "Failed to attach to the Electron app over CDP at $cdpUrl: $msg. " +
+          "Start the app with remote debugging enabled (e.g. --remote-debugging-port=9222) " +
+          "and confirm nothing else is holding the port.",
+      )
+    }
+
+    val stream = AttachedPlaywrightDeviceScreenStream(pageManager)
+    val toolFactory = PlaywrightInteractionToolFactory(stream)
 
     return ConnectionState.Connected(
       RecordingDeviceConnection(
@@ -254,12 +315,53 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
     )
   }
 
-  private companion object {
+  /** How a WEB-platform device establishes its Playwright connection. */
+  internal enum class WebConnectStrategy {
+    /** Launch a fresh headless Chromium (the `playwright-native` / named web slots). */
+    LAUNCH_CHROMIUM,
+
+    /** Attach to an already-running Electron app over CDP (the `playwright-electron` device). */
+    ATTACH_ELECTRON,
+  }
+
+  // Internal: these are implementation details of the host connect path, not public API of this
+  // (public) class — only sibling host code and this module's tests reach them.
+  internal companion object {
     /**
      * Overall bound on the Android connect dance. Generous next to one healthy pass (~40s worst
      * case incl. an APK reinstall) but far below the multi-minute retry spiral a dead on-device
      * RPC channel produces.
      */
     const val ANDROID_CONNECT_OVERALL_TIMEOUT_MS = 120_000L
+
+    /** Default CDP remote-debugging port for an Electron app, matching `ElectronAppConfig`. */
+    const val DEFAULT_ELECTRON_CDP_PORT = 9222
+
+    /**
+     * Decides how a WEB-platform device connects. Electron devices attach to a running app over
+     * CDP (non-destructive); every other web driver launches its own Chromium. Pure so the fork
+     * is unit-testable without standing up a device.
+     */
+    fun webConnectStrategy(driverType: TrailblazeDriverType): WebConnectStrategy =
+      if (driverType == TrailblazeDriverType.PLAYWRIGHT_ELECTRON) {
+        WebConnectStrategy.ATTACH_ELECTRON
+      } else {
+        WebConnectStrategy.LAUNCH_CHROMIUM
+      }
+
+    /**
+     * Resolves the Electron CDP attach URL: an explicit `TRAILBLAZE_ELECTRON_CDP_URL` wins;
+     * otherwise `http://localhost:<port>` where the port comes from `TRAILBLAZE_ELECTRON_CDP_PORT`
+     * (default [DEFAULT_ELECTRON_CDP_PORT]). A blank URL, or a port that is missing / non-numeric /
+     * outside the valid `1..65535` range, falls through to the default. Shared with
+     * [xyz.block.trailblaze.ui.TrailblazeDeviceManager]'s CDP availability probe so the tile that
+     * `/devices` offers and the URL this attaches to always agree. Pure — env values are passed in
+     * — so it is unit-testable without touching the process environment.
+     */
+    fun resolveElectronCdpUrl(cdpUrlEnv: String?, cdpPortEnv: String?): String {
+      cdpUrlEnv?.takeIf { it.isNotBlank() }?.let { return it.trim() }
+      val port = cdpPortEnv?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_ELECTRON_CDP_PORT
+      return "http://localhost:$port"
+    }
   }
 }

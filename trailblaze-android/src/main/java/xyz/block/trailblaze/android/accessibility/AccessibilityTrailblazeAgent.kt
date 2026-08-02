@@ -136,10 +136,14 @@ class AccessibilityTrailblazeAgent(
    * Handles [LaunchAppCommand] via ADB shell commands, replicating Maestro Orchestra's behavior:
    * stop app, clear data, grant permissions, then launch.
    *
-   * This runs in the instrumentation process (has UiAutomation access for shell commands).
-   * The actual app launch uses the accessibility service's [Context.startActivity].
+   * This runs in the instrumentation process (has UiAutomation access for shell commands). The
+   * actual app launch uses the accessibility service's [Context.startActivity]. All of it is
+   * blocking (shell execs, plus — when the inprocess-idle re-attach engages — a socket PING poll of
+   * up to [InProcessIdleLaunchReattacher.awaitAttachedAfterLaunch]'s bound), so it runs on
+   * [Dispatchers.IO] to keep those seconds off the caller's (bounded) coroutine dispatcher — same
+   * treatment [waitForTreeChange] gives its blocking device call.
    */
-  private fun executeLaunchAppViaAdb(command: LaunchAppCommand) {
+  private suspend fun executeLaunchAppViaAdb(command: LaunchAppCommand) = withContext(Dispatchers.IO) {
     val appId = command.appId
     Console.log("AccessibilityTrailblazeAgent: Launching $appId via ADB")
 
@@ -164,8 +168,18 @@ class AccessibilityTrailblazeAgent(
       }
     }
 
+    // A stop/clear above just killed any attached in-process idle with the app's process; when the
+    // settle-race is opted in and the target's idle detector package is installed, re-attach it now —
+    // `am instrument` restarts the target's process, so it must run BEFORE the launch below
+    // (which then keeps the instrumented cold start foregrounded, off the background
+    // proc-start ANR path). Best-effort: a failed re-attach only means heuristic-speed settles.
+    val inProcessIdleAttachStarted = InProcessIdleLaunchReattacher.attachBeforeLaunch(appId)
+
     // Launch via accessibility service (Context.startActivity with FLAG_ACTIVITY_CLEAR_TASK)
     TrailblazeAccessibilityService.launchApp(appId)
+    if (inProcessIdleAttachStarted) {
+      InProcessIdleLaunchReattacher.awaitAttachedAfterLaunch(appId)
+    }
     TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
   }
 

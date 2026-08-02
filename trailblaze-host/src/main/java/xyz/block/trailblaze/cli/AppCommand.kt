@@ -127,7 +127,10 @@ open class AppCommand : Callable<Int> {
         if (daemon.isRunningBlocking()) {
           Console.log("Trailblaze${if (headless) " daemon" else ""} started on port $port.")
         } else {
-          Console.error("Trailblaze did not start within 30s. If a source build is in progress it may need more time.")
+          Console.error(
+            "Trailblaze did not start within ${DaemonClient.MAX_WAIT_FOR_DAEMON_MS / 1000}s. " +
+              "If a source build is in progress it may need more time.",
+          )
           Console.error("Daemon log: ${daemonLogFile.absolutePath}")
           Console.error("Run with --foreground to see startup output directly.")
           return@use TrailblazeExitCode.INFRA_FAILED.code

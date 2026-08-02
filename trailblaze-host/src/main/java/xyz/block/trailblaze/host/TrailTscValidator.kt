@@ -392,7 +392,6 @@ object TrailTscValidator {
         // filename (a unified trail may be a bare `trail.yaml` or carry any name).
         val doc = yaml.decodeTrailDocument(text)
         val target = when (doc) {
-          is TrailDocument.V1 -> yaml.extractTrailConfig(doc.items)?.target
           is TrailDocument.Unified -> doc.trail.config.target
         }
         val trailmapDir = target?.let { trailmapDirByName[it] }
@@ -546,35 +545,7 @@ object TrailTscValidator {
     doc: TrailDocument,
     descriptorsByName: Map<String, TrailblazeToolDescriptor> = emptyMap(),
   ): List<RecordedCall> = when (doc) {
-    is TrailDocument.V1 -> extractV1RecordedCalls(doc.items, descriptorsByName)
     is TrailDocument.Unified -> extractUnifiedRecordedCalls(doc.trail, descriptorsByName)
-  }
-
-  private fun extractV1RecordedCalls(
-    items: List<TrailYamlItem>,
-    descriptorsByName: Map<String, TrailblazeToolDescriptor>,
-  ): List<RecordedCall> {
-    val calls = mutableListOf<RecordedCall>()
-    var stepIndex = 0
-    items.forEach { item ->
-      when (item) {
-        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.forEach { step ->
-          stepIndex++ // one index per step; multiple tools in a step share it (matches how a human reads "step N")
-          val label = step.prompt
-          step.recording?.tools?.forEach { wrapper -> calls.add(wrapper.toRecordedCall(stepIndex, label, descriptorsByName = descriptorsByName)) }
-        }
-        is TrailYamlItem.ToolTrailItem -> item.tools.forEach { wrapper ->
-          // Top-level `tools:` blocks have no prompt step; key them to step 0 with a generic label.
-          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = "tools block", descriptorsByName = descriptorsByName))
-        }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { wrapper ->
-          // The trailhead is the deterministic step 0; type-check its bootstrap tool calls too.
-          calls.add(wrapper.toRecordedCall(stepIndex = 0, label = item.trailhead.step ?: "trailhead", descriptorsByName = descriptorsByName))
-        }
-        is TrailYamlItem.ConfigTrailItem -> Unit
-      }
-    }
-    return calls
   }
 
   private fun extractUnifiedRecordedCalls(
@@ -582,18 +553,32 @@ object TrailTscValidator {
     descriptorsByName: Map<String, TrailblazeToolDescriptor>,
   ): List<RecordedCall> {
     val calls = mutableListOf<RecordedCall>()
-    // The trailhead is the deterministic step 0; type-check each classifier's bootstrap tool.
+    forEachRecordedTool(trail) { stepIndex, label, classifier, tool ->
+      calls.add(tool.toRecordedCall(stepIndex = stepIndex, label = label, classifier = classifier, descriptorsByName = descriptorsByName))
+    }
+    return calls
+  }
+
+  /**
+   * Single owner of the recorded-tool flatten over a unified trail: the trailhead is the
+   * deterministic step 0, list steps are index + 1, and every classifier slot's every tool is
+   * visited. Both the recording type-checker ([extractRecordedCalls]) and [SelectorDialectLint]
+   * consume this, so the step-index convention can't drift between them.
+   */
+  internal fun forEachRecordedTool(
+    trail: UnifiedTrail,
+    action: (stepIndex: Int, stepLabel: String, classifier: String, tool: TrailblazeToolYamlWrapper) -> Unit,
+  ) {
     trail.trailhead?.let { trailhead ->
       trailhead.recordings.forEach { (classifier, tools) ->
-        tools.forEach { calls.add(it.toRecordedCall(stepIndex = 0, label = trailhead.step, classifier = classifier, descriptorsByName = descriptorsByName)) }
+        tools.forEach { action(0, trailhead.step, classifier, it) }
       }
     }
     trail.trail.forEachIndexed { index, step ->
       step.recordings.forEach { (classifier, tools) ->
-        tools.forEach { calls.add(it.toRecordedCall(stepIndex = index + 1, label = step.step, classifier = classifier, descriptorsByName = descriptorsByName)) }
+        tools.forEach { action(index + 1, step.step, classifier, it) }
       }
     }
-    return calls
   }
 
   private fun TrailblazeToolYamlWrapper.toRecordedCall(

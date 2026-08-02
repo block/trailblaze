@@ -117,6 +117,14 @@ object TrailblazeDeviceService {
     }.toSet()
   }
 
+  /**
+   * The per-driver connection factory. A new host-native iOS driver (a member of
+   * [TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES]) adds a branch here — probe
+   * availability, resolve device dimensions, and return its [IosNativeConnectedDevice]
+   * subclass — plus an availability-probe branch in the device-discovery pass
+   * (`TrailblazeDeviceManager.loadDevicesSuspendImpl`), which decides whether the driver
+   * is listed per simulator. Everything downstream is polymorphic over that device.
+   */
   fun getConnectedDevice(
     trailblazeDeviceId: TrailblazeDeviceId,
     driverType: TrailblazeDriverType,
@@ -131,8 +139,14 @@ object TrailblazeDeviceService {
       // the recording tab interprets that and routes through the on-device path instead.
       null
     }
-    TrailblazeDevicePlatform.IOS -> when (driverType) {
-      TrailblazeDriverType.IOS_AXE -> getConnectedIosAxeDevice(trailblazeDeviceId)
+    TrailblazeDevicePlatform.IOS -> when {
+      driverType == TrailblazeDriverType.IOS_AXE -> getConnectedIosAxeDevice(trailblazeDeviceId)
+      // Fail closed: a host-native driver with no branch above would otherwise fall through to
+      // the Maestro device and cast-fail far from the real mistake.
+      driverType in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES -> error(
+        "No connection factory for host-native iOS driver $driverType — " +
+          "add a branch in TrailblazeDeviceService.getConnectedDevice",
+      )
       else -> getConnectedIosDevice(
         trailblazeDeviceId = trailblazeDeviceId,
         appTarget = appTarget,

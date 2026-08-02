@@ -150,15 +150,12 @@ class TrailDeviceSelectorTest {
     TrailDeviceSelector.supportedPlatformsForTrail(TrailblazeYaml.Default, yaml)
 
   @Test
-  fun `v1 platform hint yields its platform`() {
-    val yaml = "- config:\n    platform: android\n- tools:\n  - pressBack: {}"
-    assertEquals(ANDROID, platformsFor(yaml))
-  }
-
-  @Test
-  fun `v1 driver yields its platform`() {
-    val yaml = "- config:\n    driver: IOS_HOST\n- tools:\n  - pressBack: {}"
-    assertEquals(setOf(TrailblazeDevicePlatform.IOS), platformsFor(yaml))
+  fun `legacy v1 list-shape trail yields no platforms now that v1 parsing is removed`() {
+    // v1 (top-level list) trails no longer decode, so they declare no platforms and device
+    // selection treats them as "runs anywhere" rather than failing — same for a platform hint or a
+    // driver scalar, the two ways a v1 config used to express its platform.
+    assertEquals(emptySet(), platformsFor("- config:\n    platform: android\n- tools:\n  - pressBack: {}"))
+    assertEquals(emptySet(), platformsFor("- config:\n    driver: IOS_HOST\n- tools:\n  - pressBack: {}"))
   }
 
   @Test

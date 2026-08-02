@@ -82,7 +82,7 @@ function useTrailheadPicker(target, platform, mirror, onArrived) {
   async function goToTrailhead() {
     if (!selectedTh || !mirror.conn || (thRun && thRun.running)) return;
     if (thMissingRequired.length) { setThRun({ ok: false, text: 'Fill ' + thMissingRequired.map((p) => p.name).join(', ') + ' first.' }); return; }
-    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs());
+    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs(), platform);
     if (!yaml) { setThRun({ ok: false, text: 'Could not build the trailhead run.' }); return; }
     setThRun({ running: true });
     const r = await TB.runToolQuick(yaml, mirror.tbId());

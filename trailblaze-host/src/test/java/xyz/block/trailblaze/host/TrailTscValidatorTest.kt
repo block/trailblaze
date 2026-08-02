@@ -347,31 +347,32 @@ class TrailTscValidatorTest {
   }
 
   @Test
-  fun `extractRecordedCalls keeps the v1 shape unchanged with no classifier attribution`() {
+  fun `extractRecordedCalls flattens a single-classifier unified trail with no trailhead`() {
     val doc = yaml.decodeTrailDocument(
       """
-      - config:
-          target: demo
-      - prompts:
-        - step: Open settings
-          recording:
-            tools:
-            - tapOn:
-                text: Settings
-        - step: Verify settings shown
-          recording:
-            tools:
-            - assertVisible:
-                text: Settings
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - tapOn:
+              text: Settings
+      - step: Verify settings shown
+        recording:
+          android:
+          - assertVisible:
+              text: Settings
       """.trimIndent(),
     )
 
     val calls = TrailTscValidator.extractRecordedCalls(doc)
 
+    // No trailhead → the first trail step is step 1 (trailhead is the reserved step 0).
     assertEquals(2, calls.size)
     assertEquals(listOf(1, 2), calls.map { it.stepIndex })
     assertEquals(listOf("tapOn", "assertVisible"), calls.map { it.toolName })
-    assertTrue(calls.all { it.classifier == null }, "v1 recordings carry no classifier slot")
+    assertTrue(calls.all { it.classifier == "android" }, "each recorded call carries its classifier slot")
   }
 
   // ── Arg type coercion (the #4179 arg-boundary class) ───────────────────────────────────────
@@ -441,22 +442,22 @@ class TrailTscValidatorTest {
   }
 
   /**
-   * The coercion must reach the v1 (`- prompts:` / `recording.tools`) recording shape, not only the
-   * unified format — extraction threads the descriptors through both paths.
+   * The coercion is attributed to the recorded classifier slot it came from — extraction threads
+   * the descriptors through the unified flattening path and preserves the slot on each call.
    */
   @Test
-  fun `extractRecordedCalls coerces args for the v1 recording shape too`() {
+  fun `extractRecordedCalls coerces args and attributes them to the classifier slot`() {
     val doc = yaml.decodeTrailDocument(
       """
-      - config:
-          target: demo
-      - prompts:
-        - step: Set the flag
-          recording:
-            tools:
-            - setFeatureFlag:
-                passcode: 12345678
-                enabled: true
+      config:
+        target: demo
+      trail:
+      - step: Set the flag
+        recording:
+          android:
+          - setFeatureFlag:
+              passcode: 12345678
+              enabled: true
       """.trimIndent(),
     )
     val descriptors = mapOf(
@@ -471,7 +472,7 @@ class TrailTscValidatorTest {
 
     val call = TrailTscValidator.extractRecordedCalls(doc, descriptors).single()
 
-    assertNull(call.classifier, "v1 recordings carry no classifier slot")
+    assertEquals("android", call.classifier, "the coerced call keeps its classifier slot")
     assertTrue(call.argsJson.contains("\"passcode\":\"12345678\""), "passcode coerced: ${call.argsJson}")
     assertTrue(call.argsJson.contains("\"enabled\":\"true\""), "enabled coerced: ${call.argsJson}")
   }
@@ -496,20 +497,20 @@ class TrailTscValidatorTest {
     )
     File(trailsRoot, "checkout.trail.yaml").writeText(
       """
-      - config:
-          target: demo
-      - prompts:
-        - step: Open settings
-          recording:
-            tools:
-            - demoTap:
-                text: Settings
+      config:
+        target: demo
+      trail:
+      - step: Open settings
+        recording:
+          android:
+          - demoTap:
+              text: Settings
       """.trimIndent(),
     )
     File(trailsRoot, "notes.yaml").writeText("just: notes")
 
     // No trailmap surfaces loaded, so nothing is staged and no tsc is spawned — this exercises
-    // discovery + target extraction (both formats) through the real entry point.
+    // discovery + target extraction through the real entry point.
     val report = TrailTscValidator.validate(
       trailsRoot = trailsRoot,
       trailmaps = emptyList(),
@@ -521,7 +522,7 @@ class TrailTscValidatorTest {
     assertTrue(report.errors.isEmpty(), "no load errors: ${report.errors}")
     // `demo` isn't in knownManifestTargets (none passed), so it's a permanent no-manifest skip,
     // never a missing-surface one.
-    assertEquals(mapOf("demo" to 2), report.skippedNoManifest, "no-manifest target: extracted (both formats)")
+    assertEquals(mapOf("demo" to 2), report.skippedNoManifest, "no-manifest target: extracted from both files")
     assertTrue(report.skippedNoSurface.isEmpty(), "a manifest-less target must not read as missing-surface")
   }
 

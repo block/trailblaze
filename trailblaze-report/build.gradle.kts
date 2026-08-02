@@ -94,27 +94,62 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
   outputs.file(reportTemplateBuildDir.map { it.file("trailblaze_report.html") })
 }
 
-// Transpile the interactive run-report renderer from its TypeScript source into the plain-JS
+// Bundle the interactive run-report renderer from its TypeScript modules into the single plain-JS
 // resource its consumers load: the Trail Runner web app (in :trailblaze-host, which depends on
 // this module) fetches it as a classic browser <script>, and RunReportGenerator copies it beside
-// the bun driver. `bun build --no-bundle` is a type-strip only pass (no bundling, no syntax
-// lowering), so the emitted file keeps the classic-script + guarded-CommonJS shape the source is
-// written in — including the serialized RUN_REPORT_VIEWER function. bun is a hard build
-// prerequisite repo-wide (see AGENTS.md), same as the SDK bundlers.
-val transpileRunReportCore by tasks.registering(Exec::class) {
+// the bun driver. `bun build --format=iife` bundles the whole module graph (entry
+// run-report-core.ts) into one self-executing classic script; the entry assigns the export surface
+// onto `window` for the browser, and the `--footer` below restores the CommonJS surface for the
+// bun driver's require() (bun's bundler captures `module` inside the IIFE, so the export hop rides
+// on the __TRAILBLAZE_RUN_REPORT_CORE__ global the entry publishes). The viewer script embedded
+// into exported report HTML is itself prebuilt during this bundle via the bun macro in
+// run-report-viewer-bundle.macro.ts. workingDir is pinned to the source dir so the bundler's
+// module-path comments stay relative and the artifact is byte-identical across machines. bun is a
+// hard build prerequisite repo-wide (see AGENTS.md), same as the SDK bundlers.
+val bundleRunReportCore by tasks.registering(Exec::class) {
   group = "trailblaze"
-  description = "Transpiles run-report-core.ts into the run-report-core.js JAR resource (bun build --no-bundle)."
-  val src = layout.projectDirectory.file(
-    "src/main/resources/xyz/block/trailblaze/trailrunner/web/app/run-report-core.ts",
-  )
+  description = "Bundles the run-report-*.ts modules into the run-report-core.js JAR resource (bun build --format=iife)."
+  val srcDir = layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/trailrunner/web/app")
   val out = layout.buildDirectory.file(
     "generated-resources/run-report/xyz/block/trailblaze/trailrunner/web/app/run-report-core.js",
   )
-  inputs.file(src)
+  inputs.files(fileTree(srcDir) { include("*.ts") }.filter { !it.name.endsWith(".test.ts") })
   outputs.file(out)
+  workingDir(srcDir)
   commandLine(
-    "bun", "build", src.asFile.absolutePath,
-    "--no-bundle",
+    "bun", "build", "run-report-core.ts",
+    "--format=iife",
+    "--target=browser",
+    // CommonJS surface for bun consumers (run-report-cli.ts): bun's bundler captures `module`
+    // inside the IIFE, so the exports hop through the global the entry module publishes. A no-op
+    // in classic browser scripts.
+    "--footer",
+    "// (--footer from :trailblaze-report bundleRunReportCore) CommonJS surface for bun consumers.\n" +
+      "if (typeof module !== 'undefined' && module.exports) module.exports = globalThis.__TRAILBLAZE_RUN_REPORT_CORE__;",
+    "--outfile", out.get().asFile.absolutePath,
+  )
+}
+
+// Same pattern for the performance-analysis report (the perf-*.ts sibling module graph): one
+// bundled perf-core.js resource that PerformanceAnalysisGenerator copies beside its bun driver
+// (perf-report-cli.ts). See bundleRunReportCore above for the --footer / determinism rationale.
+val bundlePerfReportCore by tasks.registering(Exec::class) {
+  group = "trailblaze"
+  description = "Bundles the perf-*.ts modules into the perf-core.js JAR resource (bun build --format=iife)."
+  val srcDir = layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/trailrunner/web/app")
+  val out = layout.buildDirectory.file(
+    "generated-resources/perf-report/xyz/block/trailblaze/trailrunner/web/app/perf-core.js",
+  )
+  inputs.files(fileTree(srcDir) { include("*.ts") }.filter { !it.name.endsWith(".test.ts") })
+  outputs.file(out)
+  workingDir(srcDir)
+  commandLine(
+    "bun", "build", "perf-core.ts",
+    "--format=iife",
+    "--target=browser",
+    "--footer",
+    "// (--footer from :trailblaze-report bundlePerfReportCore) CommonJS surface for bun consumers.\n" +
+      "if (typeof module !== 'undefined' && module.exports) module.exports = globalThis.__TRAILBLAZE_PERF_REPORT_CORE__;",
     "--outfile", out.get().asFile.absolutePath,
   )
 }
@@ -122,23 +157,27 @@ val transpileRunReportCore by tasks.registering(Exec::class) {
 sourceSets {
   main {
     resources.srcDir(
-      transpileRunReportCore.map { layout.buildDirectory.dir("generated-resources/run-report").get() },
+      bundleRunReportCore.map { layout.buildDirectory.dir("generated-resources/run-report").get() },
+    )
+    resources.srcDir(
+      bundlePerfReportCore.map { layout.buildDirectory.dir("generated-resources/perf-report").get() },
     )
   }
 }
 
 tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
-  dependsOn(transpileRunReportCore)
-  // The bun test co-located with run-report-core.ts (run-report-core.test.ts) lives under
-  // resources so it can `require("./run-report-core.ts")`; keep it out of the packaged JAR.
+  dependsOn(bundleRunReportCore)
+  dependsOn(bundlePerfReportCore)
+  // The bun test co-located with the run-report modules (run-report-core.test.ts) lives under
+  // resources so it can import them directly; keep it out of the packaged JAR.
   // Same for the cross-language parity fixture the tests share with the Kotlin suite.
   exclude("**/*.test.ts")
   exclude("**/session-events-parity-fixtures.json")
-  // TypeScript source + ambient types + tsconfig for the run-report renderer: the packaged
-  // artifact is the transpiled run-report-core.js from `transpileRunReportCore` above (the bun
+  exclude("**/sprite-metadata-parity-fixtures.json")
+  // TypeScript module sources + ambient types + tsconfig for the run-report renderer: the packaged
+  // artifact is the bundled run-report-core.js from `bundleRunReportCore` above (the bun
   // driver run-report-cli.ts IS packaged — bun executes TS natively).
-  exclude("**/trailrunner/web/app/run-report-core.ts")
-  exclude("**/trailrunner/web/app/run-report-types.d.ts")
+  exclude("**/trailrunner/web/app/*.ts")
   exclude("**/xyz/block/trailblaze/tsconfig.json")
 }
 

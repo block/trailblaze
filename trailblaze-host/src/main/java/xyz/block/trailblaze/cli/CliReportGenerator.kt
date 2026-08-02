@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
-import java.nio.file.Files
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.time.TimeSource
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -17,9 +17,14 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.report.ReportArtifacts
 import xyz.block.trailblaze.report.ReportTemplateResolver
+import xyz.block.trailblaze.report.ReportTiming
 import xyz.block.trailblaze.report.RunReportGenerator
-import xyz.block.trailblaze.report.WasmReport
+import xyz.block.trailblaze.report.SessionLogSnapshot
+import xyz.block.trailblaze.report.WasmReportRequest
+import xyz.block.trailblaze.report.generateWasmReport
+import xyz.block.trailblaze.report.overlapReports
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
@@ -53,12 +58,12 @@ open class CliReportGenerator {
 
     // Poll sessions with backoff until all have a terminal status or we time out.
     // Sessions that are already complete resolve immediately — no unnecessary delay.
-    val statuses = awaitTerminalStatuses(logsRepo, sessionIds)
+    val statuses = awaitTerminalSessions(logsRepo, sessionIds)
 
     var passed = 0
     var failed = 0
     for (sessionId in sessionIds) {
-      when (statuses[sessionId]) {
+      when (statuses[sessionId]?.status) {
         is SessionStatus.Ended.Succeeded,
         is SessionStatus.Ended.SucceededWithSelfHeal -> passed++
         else -> failed++
@@ -81,23 +86,36 @@ open class CliReportGenerator {
   }
 
   /**
+   * A session's resolved terminal state: the status plus the parsed logs the status was
+   * derived from. Carrying the logs lets the artifact builders reuse the poll loop's final
+   * parse (a terminal status is immutable — first Ended wins — so the parse that observed it
+   * is the session's final state) instead of re-reading every log file from disk.
+   */
+  private data class TerminalSessionState(
+    val status: SessionStatus,
+    val logs: List<TrailblazeLog>,
+  )
+
+  /**
    * Polls session logs from disk with exponential backoff, waiting for each session to
    * reach a terminal status ([SessionStatus.Ended]).
    *
-   * Starts at [initialDelayMs] and doubles each iteration up to [maxDelayMs], giving up
-   * after [maxWaitMs] total elapsed time. Sessions still in progress at that point are
-   * mapped to [SessionStatus.Unknown].
+   * Each poll round reads fresh from disk — this is deliberately UNCACHED because the
+   * sessions may still be live and mid-write. Starts at [initialDelayMs] and doubles each
+   * iteration up to [maxDelayMs], giving up after [maxWaitMs] total elapsed time. Sessions
+   * still in progress at that point are mapped to [SessionStatus.Unknown] (with one final
+   * fresh read so downstream consumers see the latest partial state).
    *
-   * @return a map from session ID to its resolved [SessionStatus].
+   * @return a map from session ID to its resolved status + the logs it was derived from.
    */
-  private fun awaitTerminalStatuses(
+  private fun awaitTerminalSessions(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
     maxWaitMs: Long = 10_000,
     initialDelayMs: Long = 100,
     maxDelayMs: Long = 2_000,
-  ): Map<SessionId, SessionStatus> {
-    val statuses = mutableMapOf<SessionId, SessionStatus>()
+  ): Map<SessionId, TerminalSessionState> {
+    val resolved = mutableMapOf<SessionId, TerminalSessionState>()
     val pending = sessionIds.toMutableSet()
 
     var delayMs = initialDelayMs
@@ -107,9 +125,10 @@ open class CliReportGenerator {
       val iterator = pending.iterator()
       while (iterator.hasNext()) {
         val sessionId = iterator.next()
-        val status = logsRepo.getLogsForSession(sessionId).getSessionStatus()
+        val logs = logsRepo.getLogsForSession(sessionId)
+        val status = logs.getSessionStatus()
         if (status is SessionStatus.Ended) {
-          statuses[sessionId] = status
+          resolved[sessionId] = TerminalSessionState(status, logs)
           iterator.remove()
         }
       }
@@ -124,13 +143,51 @@ open class CliReportGenerator {
     // Any sessions still pending after the timeout are treated as unknown.
     for (sessionId in pending) {
       Console.log("Warning: session $sessionId did not reach a terminal status within ${maxWaitMs}ms")
-      statuses[sessionId] = SessionStatus.Unknown
+      resolved[sessionId] = TerminalSessionState(SessionStatus.Unknown, logsRepo.getLogsForSession(sessionId))
     }
 
-    return statuses
+    return resolved
   }
 
   private val runReportGenerator by lazy { RunReportGenerator() }
+
+  /**
+   * Generates the legacy WASM report and the interactive report CONCURRENTLY: the
+   * interactive leg (mostly waiting on an external bun subprocess) overlaps the CPU-bound
+   * WASM build, same as the CI path in
+   * [xyz.block.trailblaze.report.GenerateReportCliCommand]. Routes each leg through the
+   * open [generateReport] / [generateInteractiveReport] seams so subclass overrides apply.
+   *
+   * Either leg can individually be unavailable (missing WASM template / missing bun) —
+   * the corresponding artifact is null. [generateWasm] false skips the WASM leg entirely
+   * (the `--no-wasm-report` path).
+   *
+   * The session logs are parsed ONCE here (into immutable [SessionLogSnapshot]s) and shared
+   * by both legs. Before this, each leg independently re-read + re-decoded every log file:
+   * the daemon repo's parse cache is deliberately evicted the moment a session ends, so the
+   * interactive leg triggered a full re-parse, and the WASM leg's session-scoped temp repo
+   * re-parsed the same files a third time.
+   */
+  fun generateHtmlReports(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    generateWasm: Boolean = true,
+    shareUrl: String? = null,
+    fullEventPayloads: Boolean = false,
+  ): ReportArtifacts {
+    // Skip the capture when nothing would consume it: with bun missing the interactive leg
+    // resolves to null before touching the snapshots, and with the WASM leg off there is no
+    // scoped repo to seed either.
+    val snapshots = if (generateWasm || runReportGenerator.isBunAvailable) {
+      SessionLogSnapshot.captureAll(logsRepo, sessionIds)
+    } else {
+      null
+    }
+    return overlapReports(
+      interactive = { generateInteractiveReport(logsRepo, sessionIds, snapshots, shareUrl, fullEventPayloads) },
+      wasm = { if (generateWasm) generateReport(logsRepo, sessionIds, snapshots) else null },
+    )
+  }
 
   /**
    * Generates the lightweight, self-contained interactive HTML report — the same artifact the
@@ -140,9 +197,27 @@ open class CliReportGenerator {
    * Generated headlessly by [RunReportGenerator] (a bun subprocess over the shared run-report
    * renderer). Returns null when it can't be produced — `bun` missing, subprocess failure — with
    * the cause logged; callers still have the legacy artifact in that case.
+   *
+   * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports],
+   *   which shares one parse across both report legs). Null — e.g. a direct call to this seam —
+   *   means the generator captures its own.
+   * @param shareUrl Optional canonical hosted URL baked into the report so its Copy link
+   *   produces deep links against that URL (the `report --share-url` path).
+   * @param fullEventPayloads When true (the `--full-report-payloads` flag), event formatters
+   *   embed full payloads even for passed sessions instead of applying their report size
+   *   budgets. Failed sessions always embed full payloads regardless.
    */
-  open fun generateInteractiveReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? =
-    runReportGenerator.generate(logsRepo, sessionIds)
+  open fun generateInteractiveReport(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    snapshots: List<SessionLogSnapshot>? = null,
+    shareUrl: String? = null,
+    fullEventPayloads: Boolean = false,
+  ): File? = if (snapshots != null) {
+    runReportGenerator.generateFromSnapshots(logsRepo, snapshots, shareUrl, fullEventPayloads)
+  } else {
+    runReportGenerator.generate(logsRepo, sessionIds, shareUrl, fullEventPayloads)
+  }
 
   /**
    * Generates a self-contained HTML report for the given session IDs.
@@ -150,11 +225,22 @@ open class CliReportGenerator {
    * Subclasses can override this to customize report generation (e.g., using
    * block-specific report features).
    *
+   * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports]);
+   *   used to seed [generateWasmReport]'s session-scoped repo so the WASM build doesn't
+   *   re-parse the log files. Null — e.g. a direct call to this seam — means the scoped repo
+   *   parses from disk itself.
    * @return the report [File] if generation succeeded, null otherwise.
    */
-  open fun generateReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
+  open fun generateReport(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    snapshots: List<SessionLogSnapshot>? = null,
+  ): File? {
     if (sessionIds.isEmpty()) return null
+    val generateReportStart = TimeSource.Monotonic.markNow()
 
+    // Resolve the git root ONCE and share it across the ui-dir + template lookups —
+    // each resolution forks a `git rev-parse` subprocess.
     val gitRoot = ReportTemplateResolver.getGitRoot()
     val trailblazeUiDir = findTrailblazeUiDir(gitRoot)
     val wasmBuildDir =
@@ -164,7 +250,7 @@ open class CliReportGenerator {
     val hasWasmBuild = wasmBuildDir?.exists() == true
 
     // Resolve template: local file at git root → classpath (bundled in JAR)
-    val effectiveTemplateFile = ReportTemplateResolver.resolveTemplate()
+    val effectiveTemplateFile = ReportTemplateResolver.resolveTemplate(gitRoot)
 
     if (effectiveTemplateFile == null && !hasWasmBuild) {
       Console.log("")
@@ -174,44 +260,26 @@ open class CliReportGenerator {
       return null
     }
 
-    // Create a temporary directory containing symlinks to only this run's sessions
-    val tempDir = Files.createTempDirectory("trailblaze-report-").toFile()
+    val reportsDir = File(logsRepo.logsDir, "reports")
+    reportsDir.mkdirs()
+    val timestamp =
+      LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
+    val outputFile = File(reportsDir, "trailblaze_report_$timestamp.html")
+
+
     try {
-      for (sessionId in sessionIds) {
-        val sessionDir = File(logsRepo.logsDir, sessionId.value)
-        if (sessionDir.exists()) {
-          Files.createSymbolicLink(
-            File(tempDir, sessionId.value).toPath(),
-            sessionDir.toPath(),
-          )
-        }
-      }
-
-      val tempLogsRepo = LogsRepo(logsDir = tempDir, watchFileSystem = false)
-
-      // Create the reports output directory
-      val reportsDir = File(logsRepo.logsDir, "reports")
-      reportsDir.mkdirs()
-
-      val timestamp =
-        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
-      val outputFile = File(reportsDir, "trailblaze_report_$timestamp.html")
-
-      WasmReport.generate(
-        logsRepo = tempLogsRepo,
-        trailblazeUiProjectDir = trailblazeUiDir ?: tempDir,
-        outputFile = outputFile,
-        reportTemplateFile = effectiveTemplateFile ?: File("nonexistent"),
+      return generateWasmReport(
+        logsRepo = logsRepo,
+        sessionIds = sessionIds,
+        request = WasmReportRequest(
+          outputFile = outputFile,
+          templateFile = effectiveTemplateFile,
+          trailblazeUiProjectDir = trailblazeUiDir,
+        ),
+        preParsedLogs = snapshots?.associate { it.sessionId to it.logs } ?: emptyMap(),
       )
-
-      tempLogsRepo.close()
-      return outputFile
     } finally {
-      // Clean up temp directory — delete symlinks only, NOT the actual session data.
-      // IMPORTANT: File.deleteRecursively() follows symlinks and would delete the real
-      // session files. We must use Files.delete() which removes the symlink itself.
-      tempDir.listFiles()?.forEach { Files.deleteIfExists(it.toPath()) }
-      tempDir.delete()
+      ReportTiming.log("CliReportGenerator.generateReport", generateReportStart)
     }
   }
 
@@ -226,7 +294,7 @@ open class CliReportGenerator {
   open fun generateMarkdownReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
     if (sessionIds.isEmpty()) return null
 
-    val statuses = awaitTerminalStatuses(logsRepo, sessionIds)
+    val terminalSessions = awaitTerminalSessions(logsRepo, sessionIds)
 
     data class SessionData(
       val title: String,
@@ -242,9 +310,12 @@ open class CliReportGenerator {
 
     val sessions = mutableListOf<SessionData>()
     for (sessionId in sessionIds) {
-      val logs = logsRepo.getLogsForSession(sessionId)
+      // Reuse the parse the terminal-status wait already did instead of re-reading the files
+      // (awaitTerminalSessions resolves an entry for every requested session).
+      val terminal = terminalSessions.getValue(sessionId)
+      val logs = terminal.logs
       val sessionInfo = logs.getSessionInfo() ?: continue
-      val status = statuses[sessionId] ?: SessionStatus.Unknown
+      val status = terminal.status
 
       val usageSummary = logs.computeUsageSummary()
       val outcome = mapStatusToOutcome(status)
@@ -344,20 +415,13 @@ open class CliReportGenerator {
   /**
    * Finds the trailblaze-ui project directory relative to the git root.
    *
-   * Supports both layouts the base CLI may run in: standalone (`trailblaze-ui/`
-   * sits next to the working dir) and nested (Trailblaze embedded under a
-   * sibling subdirectory of a larger repo). Walks the standalone candidate
-   * first because the standalone opensource checkout is the more common case
-   * for external consumers; the embedding-parent override can still pre-empt
+   * Delegates to [ReportTemplateResolver.findTrailblazeUiDir] (standalone layout
+   * checked before nested — the standalone opensource checkout is the more common
+   * case for external consumers); the embedding-parent override can still pre-empt
    * either by overriding this method.
    */
-  protected open fun findTrailblazeUiDir(gitRoot: File?): File? {
-    if (gitRoot == null) return null
-    val standalonePath = File(gitRoot, "trailblaze-ui")
-    if (standalonePath.exists()) return standalonePath
-    val nestedPath = File(File(gitRoot, "opensource"), "trailblaze-ui")
-    return nestedPath.takeIf { it.exists() }
-  }
+  protected open fun findTrailblazeUiDir(gitRoot: File?): File? =
+    ReportTemplateResolver.findTrailblazeUiDir(gitRoot)
 
   internal fun mapStatusToOutcome(status: SessionStatus): Outcome = when (status) {
     is SessionStatus.Ended.Succeeded -> Outcome.PASSED
@@ -449,10 +513,13 @@ open class CliReportGenerator {
    */
   open fun generateJsonReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
     if (sessionIds.isEmpty()) return null
+    val generateJsonReportStart = TimeSource.Monotonic.markNow()
 
-    val statuses = awaitTerminalStatuses(logsRepo, sessionIds)
+    val terminalSessions = awaitTerminalSessions(logsRepo, sessionIds)
     val results = sessionIds.mapNotNull { sessionId ->
-      buildSessionResult(logsRepo, sessionId, statuses[sessionId] ?: SessionStatus.Unknown)
+      // awaitTerminalSessions resolves an entry for every requested session.
+      val terminal = terminalSessions.getValue(sessionId)
+      buildSessionResult(logsRepo, sessionId, terminal.status, terminal.logs)
     }
     if (results.isEmpty()) return null
 
@@ -474,6 +541,8 @@ open class CliReportGenerator {
       // CLI command that's just trying to summarize results.
       Console.error("Could not write JSON report to ${outputFile.absolutePath}: ${e.message}")
       null
+    } finally {
+      ReportTiming.log("CliReportGenerator.generateJsonReport", generateJsonReportStart)
     }
   }
 
@@ -489,17 +558,18 @@ open class CliReportGenerator {
   }
 
   /**
-   * Builds a [SessionResult] for a single session. Returns null if the session has no
-   * resolvable [getSessionInfo] entry — typically a partially-written or empty session
-   * directory. Intentionally does NOT throw on per-session parse failures so one bad
+   * Builds a [SessionResult] for a single session from its already-parsed [logs] (the parse
+   * the terminal-status wait performed — see [TerminalSessionState]). Returns null if the
+   * session has no resolvable [getSessionInfo] entry — typically a partially-written or empty
+   * session directory. Intentionally does NOT throw on per-session parse failures so one bad
    * session can't fail report generation for the rest.
    */
   private fun buildSessionResult(
     logsRepo: LogsRepo,
     sessionId: SessionId,
     status: SessionStatus,
+    logs: List<TrailblazeLog>,
   ): SessionResult? = try {
-    val logs = logsRepo.getLogsForSession(sessionId)
     val sessionInfo = logs.getSessionInfo() ?: return null
 
     val platform = sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase() ?: "unknown"
@@ -524,6 +594,8 @@ open class CliReportGenerator {
       session_id = sessionId,
       title = title,
       test_key = sessionInfo.stableTestKey,
+      test_class = sessionInfo.testClass?.takeIf { it.isNotBlank() },
+      test_name = sessionInfo.testName?.takeIf { it.isNotBlank() },
       platform = platform,
       execution_mode = ExecutionMode.classify(status, sessionInfo.hasRecordedSteps, recordingInfo),
       trail_source = determineTrailSource(sessionInfo.trailConfig),

@@ -2,7 +2,9 @@ package xyz.block.trailblaze.report
 
 import java.io.File
 import java.nio.file.Files
+import kotlin.io.FileAlreadyExistsException
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -117,6 +119,49 @@ class GenerateReportCliCommandTest {
       assertTrue(
         interactiveReport.exists() && interactiveReport.length() > 0,
         "--no-wasm-report should still emit a non-empty trailblaze_report_interactive.html",
+      )
+    } finally {
+      rootDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a canonical-copy failure rides along as suppressed instead of replacing the WASM failure`() {
+    if (BunBinaryResolver.resolveBunBinary() == null) return
+    val rootDir = Files.createTempDirectory("generate-report-suppressed-copy-test").toFile()
+    try {
+      // Deliberately NO template file and no trailblaze-ui checkout under rootDir: the WASM leg
+      // falls back to building from raw WASM UI project files and deterministically throws.
+      val logsDir = File(rootDir, "logs").apply { mkdirs() }
+      val sessionId = SessionId("suppressed_copy_test_session")
+      val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+      File(sessionDir, "001_TrailblazeSessionStatusChangeLog.json").writeText(
+        TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
+          TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 1_000),
+            session = sessionId,
+            timestamp = Instant.parse("2026-06-26T12:00:00Z"),
+          ),
+        ),
+      )
+      // A non-empty directory squatting on the canonical filename makes the copy fail too:
+      // copyTo(overwrite = true) cannot delete a non-empty directory.
+      File(File(logsDir, "trailblaze_report_interactive.html"), "occupant.txt").apply {
+        parentFile.mkdirs()
+        writeText("occupied")
+      }
+
+      val thrown = assertFailsWith<Exception> {
+        GenerateReportCliCommand().main(arrayOf(logsDir.absolutePath))
+      }
+
+      assertTrue(
+        thrown !is FileAlreadyExistsException,
+        "the primary WASM failure, not the canonical-copy failure, should propagate; was: $thrown",
+      )
+      assertTrue(
+        thrown.suppressed.any { it is FileAlreadyExistsException },
+        "the canonical-copy failure should be attached as suppressed, suppressed=${thrown.suppressed.toList()}",
       )
     } finally {
       rootDir.deleteRecursively()

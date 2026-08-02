@@ -157,34 +157,32 @@ class TrailFileManager(
   }
 
   /**
-   * Saves an already-generated v1 trail YAML string (the log-backed MCP save path produces this via
-   * `generateRecordedYaml`) through the same gate/routing as [saveTrail]. On the legacy path the
-   * [yamlContent] is written verbatim (byte-identical to the pre-unified writers); the unified path
-   * decodes it to merge this device's classifier slot into the unified trail.
+   * Saves an already-lowered recording (the log-backed MCP save path builds these via
+   * `generateRecordedTrailItems`) through the same gate/routing as [saveTrail]. The items are BOTH
+   * the legacy-write source (re-encoded to the v1 list shape) and the unified-merge input — no YAML
+   * decode round-trip, so this save-back never depends on the legacy v1 parser.
    *
    * @param name Trail name (used for the directory slug)
-   * @param yamlContent The pre-generated v1 trail YAML
+   * @param recordedItems The lowered trail items for this one device's session
    * @param platform Optional platform for the classifier / legacy filename
    */
-  fun saveTrailYaml(
+  fun saveTrailItems(
     name: String,
-    yamlContent: String,
+    recordedItems: List<TrailYamlItem>,
     platform: TrailblazeDevicePlatform? = null,
   ): SaveResult = writeRoutedTrail(
     name = name,
     platform = platform,
-    yamlContentProvider = { yamlContent },
-    // Decoded ONLY when the save routes unified, so a gate-off legacy write stays a verbatim
-    // string write and never depends on the recording being re-parseable.
-    trailItemsForMerge = { trailblazeYaml.decodeTrail(yamlContent) },
+    yamlContentProvider = { trailblazeYaml.encodeToString(recordedItems) },
+    trailItemsForMerge = { recordedItems },
   )
 
   /**
-   * Shared save-back routing for both the recorded-step ([saveTrail]) and log-backed
-   * ([saveTrailYaml]) MCP paths. Validates the name slug, then routes through the shared
-   * [UnifiedRecordingWriter]: gate-on merges [trailItemsForMerge] into the directory's unified
-   * `trail.yaml` under the platform's classifier slot; gate-off writes the legacy
-   * `<platform>.trail.yaml` but refuses to shadow an existing unified trail.
+   * Shared save-back routing for the recorded-step ([saveTrail]) and log-backed ([saveTrailItems])
+   * MCP paths. Validates the name slug, then routes
+   * through the shared [UnifiedRecordingWriter]: gate-on merges [trailItemsForMerge] into the
+   * directory's unified `trail.yaml` under the platform's classifier slot; gate-off writes the
+   * legacy `<platform>.trail.yaml` but refuses to shadow an existing unified trail.
    */
   private fun writeRoutedTrail(
     name: String,

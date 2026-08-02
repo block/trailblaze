@@ -35,6 +35,12 @@ Trailblaze - AI-powered device automation
                  MAX_PLAYBACK_WAIT_MS environment variable (milliseconds,
                  default 600000); if playback overruns it, a best-effort
                  truncated artifact is still written with a warning.
+  profile      Generate the performance-analysis report (an Instruments-style
+                 time profiler over each session's tools, LLM calls, timeouts,
+                 and idle gaps) for a logs directory. Defaults to the
+                 configured logs directory when <logs-dir> is omitted. Writes
+                 <logs-dir>/trailblaze_performance_analysis.html. Requires
+                 `bun` on PATH.
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
   results      Query the persisted test-result index for a test case. Passing a

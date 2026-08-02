@@ -13,20 +13,19 @@ class TrailDetailBuilderTest {
   val tmp = TemporaryFolder()
 
   private val twoStepYaml = """
-    - config:
-        id: demo/login
-        title: Demo login
-        target: myapp
-        platform: ios
-        tags: [smoke, login]
-    - prompts:
+    config:
+      id: demo/login
+      title: Demo login
+      target: myapp
+      tags: [smoke, login]
+    trail:
       - step: Launch the app signed in
         recording:
-          tools:
+          ios:
           - myapp_ios_signInViaUI: { email: x@y.z, password: secret }
       - verify: Money tab is visible
         recording:
-          tools:
+          ios:
           - assertVisibleBySelector: { reason: "", nodeSelector: { iosMaestro: { resourceIdRegex: balance_tab_button } } }
   """.trimIndent()
 
@@ -61,7 +60,7 @@ class TrailDetailBuilderTest {
   }
 
   @Test
-  fun `build parses step and verify kinds from v1 list shape`() {
+  fun `build parses step and verify kinds from unified trail shape`() {
     val root = tmp.newFolder("trails")
     val file = File(root, "login.trail.yaml").apply { writeText(twoStepYaml) }
 
@@ -97,9 +96,9 @@ class TrailDetailBuilderTest {
   @Test
   fun `build returns filename-derived title when config has no title`() {
     val yaml = """
-      - config:
-          id: example
-      - prompts:
+      config:
+        id: example
+      trail:
         - step: Do something
     """.trimIndent()
     val root = tmp.newFolder("trails")
@@ -113,10 +112,10 @@ class TrailDetailBuilderTest {
   @Test
   fun `build handles multiple steps in a single prompts block`() {
     val yaml = """
-      - config:
-          id: multi
-          title: Multi-step trail
-      - prompts:
+      config:
+        id: multi
+        title: Multi-step trail
+      trail:
         - step: Step one
         - step: Step two
         - verify: Assert final state
@@ -136,10 +135,10 @@ class TrailDetailBuilderTest {
   @Test
   fun `build with step without recording has empty tools list`() {
     val yaml = """
-      - config:
-          id: no-recording
-          title: No recording trail
-      - prompts:
+      config:
+        id: no-recording
+        title: No recording trail
+      trail:
         - step: Just a prompt
     """.trimIndent()
     val root = tmp.newFolder("trails")

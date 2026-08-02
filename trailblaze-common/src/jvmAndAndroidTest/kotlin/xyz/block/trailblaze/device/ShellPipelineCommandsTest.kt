@@ -76,10 +76,7 @@ class ShellPipelineCommandsTest {
 
     // The newline lives inside the base64 payload, so the wrapped command still tokenizes to
     // [sh, -c, payload] and the decoded script preserves the line structure.
-    val tokens = wrapped.split(Regex("\\s+"))
-    assertEquals(3, tokens.size, "expected [sh, -c, payload], got $tokens")
-    val b64 = tokens.last().replace("\${IFS}", " ").removePrefix("printf %s ").substringBefore("|")
-    assertEquals(multiLine, String(Base64.getDecoder().decode(b64), Charsets.UTF_8))
+    assertEquals(multiLine, decodeShellTrampoline(wrapped))
   }
 
   @Test
@@ -219,9 +216,6 @@ class ShellPipelineCommandsTest {
     // Full composition (`writeFileAs` on the on-device transport): tokenize like Runtime.exec,
     // expand like the device shell, decode like the trampoline — the file-write pipeline must
     // come back byte-for-byte, still carrying the escaped destination path.
-    val tokens = wrapped.split(Regex("\\s+"))
-    assertEquals(3, tokens.size, "expected [sh, -c, payload], got $tokens")
-    val b64 = tokens.last().replace("\${IFS}", " ").removePrefix("printf %s ").substringBefore("|")
-    assertEquals(fileWrite, String(Base64.getDecoder().decode(b64), Charsets.UTF_8))
+    assertEquals(fileWrite, decodeShellTrampoline(wrapped))
   }
 }

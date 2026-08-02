@@ -4,6 +4,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.capture.CaptureOptions
+import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -12,6 +14,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.host.recording.WebStreamScreenshotSupport
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -69,6 +72,13 @@ class BasePlaywrightElectronTest(
   val analyticsUrlPatterns: List<String> = emptyList(),
   /** Per-objective LLM call cap. See [BasePlaywrightNativeTest.maxLlmCalls] for semantics. */
   val maxLlmCalls: Int? = null,
+  /**
+   * Whether to self-instrument session-video capture. Electron has no outer capture coordinator
+   * (WEB is skipped there), so this rule is the only thing that can record its session video —
+   * and this flag gates that self-instrumented recording, which is how the CLI's
+   * `--no-capture-video` opt-out is honored on Electron. Defaults to true.
+   */
+  val captureVideo: Boolean = true,
 ) {
 
   /** Manages the Electron app process (if we launched it). */
@@ -76,10 +86,21 @@ class BasePlaywrightElectronTest(
     it.start()
   }
 
+  /**
+   * Registry key under which the Electron manager publishes its screencast feed and the
+   * session-video recorder ([xyz.block.trailblaze.capture.video.WebScreencastVideoCapture]) looks
+   * it up. One stable id per rule instance — Electron has no per-trail suffix subtlety like the
+   * native web path's [BasePlaywrightNativeTest.webBrowserRecordingKey].
+   */
+  private val webBrowserRecordingKey: String = trailblazeDeviceId.instanceId
+
   val browserManager: PlaywrightPageManager = PlaywrightElectronBrowserManager(
     cdpUrl = electronAppManager.cdpUrl,
     idlingConfig = idlingConfig,
     analyticsUrlPatterns = analyticsUrlPatterns,
+    // Publish a screencast feed so the session-video recorder can attach — this is the only way
+    // Electron gets `video.mp4` at all (setRecordVideoDir can't attach to a CDP-connected context).
+    deviceId = webBrowserRecordingKey,
   )
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo
@@ -127,9 +148,24 @@ class BasePlaywrightElectronTest(
     driverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
   )
 
+  /**
+   * Serves LLM-turn screenshots from the live CDP screencast when
+   * `TRAILBLAZE_WEB_STREAM_SCREENSHOT[_AB]` is set (Electron renderers stream over the same
+   * CDP screencast as web); the delegate provider untouched otherwise. Only the LLM-loop
+   * providers below use it — recorded-tool dispatch and the element comparator keep the
+   * direct capture (their screenshots aren't per-turn LLM payloads).
+   */
+  private val webStreamScreenshots by lazy {
+    WebStreamScreenshotSupport(
+      deviceId = trailblazeDeviceId,
+      pageManager = browserManager,
+      delegateProvider = browserManager::getScreenState,
+    )
+  }
+
   private val trailblazeRunner: TrailblazeRunner by lazy {
     TrailblazeRunner(
-      screenStateProvider = browserManager::getScreenState,
+      screenStateProvider = webStreamScreenshots.screenStateProvider,
       agent = playwrightAgent,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
@@ -148,7 +184,7 @@ class BasePlaywrightElectronTest(
     KoogTestAgentRunner(
       agent = playwrightAgent,
       toolRepo = toolRepo,
-      screenStateProvider = browserManager::getScreenState,
+      screenStateProvider = webStreamScreenshots.screenStateProvider,
       elementComparator = elementComparator,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
@@ -262,6 +298,11 @@ class BasePlaywrightElectronTest(
   ): SessionId = withContext(browserManager.playwrightDispatcher) {
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
+    // Record session video from the Electron renderer's live CDP screencast. This is the only
+    // recorder wired for Electron (the SessionCaptureCoordinator skips WEB, and setRecordVideoDir
+    // never applied to a CDP-connected context), so it's always self-instrumented here.
+    ensureElectronVideoCaptureStarted()
+
     // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes identically; a
     // bare `- <toolName>:` envelope (single-tool MCP/CLI dispatch) additionally decodes to one
     // ToolTrailItem. Host-runner single-tool dispatch now sends the bare envelope, not `- tools:`.
@@ -319,6 +360,16 @@ class BasePlaywrightElectronTest(
         )
       }
     }
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      val trailUrl = trailConfig?.metadata?.get("testRailUrl")
+      throw TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (trailUrl?.let { " $it" } ?: ""),
+      )
+    }
+
     ensureWebNetworkCaptureStarted()
     ensureWebConsoleCaptureStarted()
     currentToolTraceId = traceId
@@ -328,6 +379,47 @@ class BasePlaywrightElectronTest(
       currentToolTraceId = null
     }
     loggingRule.session?.sessionId ?: SessionId("unknown")
+  }
+
+  /**
+   * Owned-by-this-rule session-video capture. Electron has no outer capture coordinator (WEB is
+   * skipped there), so this rule is the only thing that drives it — and only when [captureVideo] is
+   * enabled. Null until [ensureElectronVideoCaptureStarted] runs (and stays null when capture is
+   * disabled); nulled again by [stopOwnedVideoCapture].
+   */
+  private var ownedCaptureSession: CaptureSession? = null
+
+  /**
+   * Idempotently starts a [CaptureSession] that records `video.mp4` from the Electron renderer's
+   * screencast into the per-trail session log dir. Subsequent calls within the same session are
+   * no-ops. A start failure is logged and never tears the trail down.
+   */
+  private fun ensureElectronVideoCaptureStarted() {
+    if (!captureVideo) return
+    if (ownedCaptureSession != null) return
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    val captureSession = CaptureSession.fromOptions(
+      CaptureOptions(captureVideo = true),
+      TrailblazeDevicePlatform.WEB,
+    ) ?: return
+    try {
+      captureSession.startAll(sessionDir, webBrowserRecordingKey, appId = null)
+      ownedCaptureSession = captureSession
+    } catch (e: Exception) {
+      Console.log("Auto-start of Electron video capture failed: ${e.message}")
+    }
+  }
+
+  /** Idempotently stops the owned capture session (if any). Must run before the browser tears down. */
+  private fun stopOwnedVideoCapture() {
+    val captureSession = ownedCaptureSession ?: return
+    ownedCaptureSession = null
+    try {
+      captureSession.stopAll()
+    } catch (e: Exception) {
+      Console.log("Stop of Electron video capture failed: ${e.message}")
+    }
   }
 
   /**
@@ -372,8 +464,12 @@ class BasePlaywrightElectronTest(
   }
 
   fun close() {
+    // Detach the screencast-sourced screenshot subscription (no-op when never engaged).
+    runCatching { webStreamScreenshots.close() }
     runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
     runCatching { WebConsoleCapture.stop(browserManager.currentPage.context()) }
+    // Stop + mux the session video before the browser (and its screencast feed) tears down.
+    runCatching { stopOwnedVideoCapture() }
     browserManager.close()
     electronAppManager.close()
   }

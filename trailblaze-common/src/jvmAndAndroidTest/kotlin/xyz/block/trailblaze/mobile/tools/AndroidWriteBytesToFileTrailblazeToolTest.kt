@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -167,14 +168,20 @@ class AndroidWriteBytesToFileTrailblazeToolTest {
 
   @Test fun `decodes from trail YAML`() {
     val yaml = """
-      - tools:
-          - android_writeBytesToFile:
-              devicePath: /storage/emulated/0/Download/logo.png
-              base64Content: AQIDBA==
+      config: {}
+      trail:
+        - step: recorded
+          recording:
+            android:
+              - android_writeBytesToFile:
+                  devicePath: /storage/emulated/0/Download/logo.png
+                  base64Content: AQIDBA==
     """.trimIndent()
 
-    val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AndroidWriteBytesToFileTrailblazeTool
+    val tool = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.single()
+      .trailblazeTool as AndroidWriteBytesToFileTrailblazeTool
 
     assertThat(tool.devicePath).isEqualTo("/storage/emulated/0/Download/logo.png")
     assertThat(tool.base64Content).isEqualTo("AQIDBA==")

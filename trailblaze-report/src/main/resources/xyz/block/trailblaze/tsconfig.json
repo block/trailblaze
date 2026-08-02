@@ -1,6 +1,6 @@
 {
-  // Typecheck project for the interactive run report's TypeScript sources (the transpiled JS is a
-  // build artifact; see :trailblaze-host's transpileRunReportCore task). Run it with the SDK
+  // Typecheck project for the interactive run report's TypeScript sources (the bundled JS is a
+  // build artifact; see :trailblaze-report's bundleRunReportCore task). Run it with the SDK
   // package's pinned typescript, e.g. from the repo root:
   //   sdks/typescript/node_modules/.bin/tsc --noEmit -p <this file>
   // CI wires the exact path in its typescript-unit-tests step after materializing the SDK's
@@ -28,9 +28,11 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": [
+    "report/perf-report-cli.ts",
     "report/run-report-cli.ts",
     "report/run-report-events.ts",
-    "trailrunner/web/app/run-report-core.ts",
-    "trailrunner/web/app/run-report-types.d.ts"
-  ]
+    "report/run-report-sprites.ts",
+    "trailrunner/web/app/*.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
 }

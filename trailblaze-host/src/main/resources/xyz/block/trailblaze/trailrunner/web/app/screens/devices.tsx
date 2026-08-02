@@ -106,7 +106,6 @@ function TargetDevicePicker({ go }) {
             </HelpCard>
           </HelpButton>
         )}
-        sub="Pick an app or site, then the devices to run it on."
         right={(
           <div style={{ display: 'flex', gap: 4 }}>
             <button className="tb-btn ghost sm" style={{ padding: 6 }} title="New target" onClick={() => setEditingTarget({ isNew: true })}><Ico n="plus" s={16} /></button>
@@ -129,7 +128,7 @@ function TargetDevicePicker({ go }) {
         {groupList.map((g) => {
           const selectedIds = gt && gt.target === g.id ? (gt.deviceIds || []).filter((id) => g.items.some((it) => it.device.id === id)) : [];
           return (
-            <TargetCard key={g.id} targetId={g.id} iconNonce={iconNonce}
+            <TargetCard key={g.id}
               icon={<AppIcon target={g.id} size={18} v={iconNonce} fallbackColor={selectedIds.length ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />}
               label={g.label} items={g.items} platforms={g.platforms} selectedIds={selectedIds}
               statusLabel={restartIds.includes(g.id) ? 'Restart Trail Runner to activate' : undefined}
@@ -219,7 +218,7 @@ function TargetDevicePicker({ go }) {
 // it's "no browser device connected" (browsers have no install gate). Rendered dimmed and
 // unselectable, with `statusLabel` (or the platform-appropriate note) explaining why; Edit
 // stays available. `platforms` is the target's declared platform list, used to pick that copy.
-function TargetCard({ targetId, iconNonce, icon, label, items, platforms, selectedIds, onToggleTarget, onToggleDevice, onEdit, statusLabel }) {
+function TargetCard({ icon, label, items, platforms, selectedIds, onToggleTarget, onToggleDevice, onEdit, statusLabel }) {
   const accent = selectedIds.length > 0;
   const notInstalled = items.length === 0;
   const single = items.length === 1;
@@ -277,7 +276,7 @@ function TargetCard({ targetId, iconNonce, icon, label, items, platforms, select
       {!single && !notInstalled && (
         <div style={{ padding: '0 7px 7px', display: 'flex', flexDirection: 'column', gap: 4 }}>
           {items.map(({ device: d, app: a }) => (
-            <DeviceToggleRow key={d.id} targetId={targetId} iconNonce={iconNonce} device={d} app={a} selected={selectedIds.includes(d.id)} onToggle={() => onToggleDevice(d)} />
+            <DeviceToggleRow key={d.id} device={d} app={a} selected={selectedIds.includes(d.id)} onToggle={() => onToggleDevice(d)} />
           ))}
         </div>
       )}
@@ -285,7 +284,7 @@ function TargetCard({ targetId, iconNonce, icon, label, items, platforms, select
   );
 }
 
-function DeviceToggleRow({ targetId, iconNonce, device: d, app: a, selected, onToggle }) {
+function DeviceToggleRow({ device: d, app: a, selected, onToggle }) {
   const platLabel = d.platform === 'ios' ? 'iOS' : d.platform === 'android' ? 'Android' : 'Web';
   const ver = a ? (a.versionName || (a.versionCode ? 'build ' + a.versionCode : null)) : null;
   // Compact row: selection is a solid green fill (no checkmark), connection is a single
@@ -297,8 +296,7 @@ function DeviceToggleRow({ targetId, iconNonce, device: d, app: a, selected, onT
         border: '1px solid var(--tb-hairline-strong)', background: 'var(--bg-standard)' }}>
       <span style={{ flex: '0 0 auto', width: 13, height: 13, borderRadius: 4, boxSizing: 'border-box',
         background: selected ? 'var(--tb-pass)' : 'transparent', border: selected ? 'none' : '1.5px solid var(--text-subtle-variant)' }} />
-      <AppIcon target={targetId} platform={d.platform} appId={a && a.appId} size={14} v={iconNonce}
-        fallbackNode={<PlatformGlyph platform={d.platform} s={14} c="var(--text-subtle-variant)" style={{ flex: '0 0 auto' }} />} />
+      <PlatformGlyph platform={d.platform} s={16} c="var(--text-subtle-variant)" title={platLabel} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ver || 'Unknown'}</span>

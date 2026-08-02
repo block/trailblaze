@@ -1,12 +1,14 @@
 // Ambient (global) types for the interactive run report's data contract — the `__TB_RUN_DATA__`
 // payload shared by its three producers (the in-app Share button via share-export.jsx, the headless
 // bun driver run-report-cli.ts, and RunReportGenerator.kt's input JSON) and its one consumer (the
-// embedded viewer in run-report-core.ts).
+// embedded viewer in run-report-viewer.ts).
 //
-// Deliberately a GLOBAL declaration file (no import/export): run-report-core.ts must stay a plain
-// script — an `import` would make it a module, and its transpiled output has to keep working both
-// as a classic browser <script> and as a CommonJS `require()` from bun. Ambient interfaces give it
-// type coverage with zero runtime footprint. Never packaged into the JAR (see build.gradle.kts).
+// Deliberately still a GLOBAL declaration file (no import/export). The run-report modules could
+// import these types now that they're real ES modules, but the contract is also referenced from
+// run-report-cli.ts / run-report-events.ts (packaged, bun-executed sources in ../../../report/)
+// and mirrored by the Trail Runner web app's plain-script/babel files, which cannot import —
+// ambient interfaces keep one declaration serving every consumer with zero runtime footprint.
+// Never packaged into the JAR (see build.gradle.kts).
 
 /** The run header the viewer renders (title, badge, meta strip, error banner, rerun command). */
 interface RunMeta {
@@ -40,6 +42,13 @@ interface RunMeta {
   commitSha?: string;
   commitUrl?: string;
   branch?: string;
+  /**
+   * Consumer-injected key/values lifted from the trail's `config.metadata` (account ids, links,
+   * team-specific context). Rendered as rows on the Info tab and searchable from the index. The
+   * well-known key `owner` additionally renders as the run row's subtitle and powers the index's
+   * "Owner" sort sections.
+   */
+  metadata?: Record<string, string>;
   /** Legacy single-run payloads carried the YAML on meta; lifted onto the session by the builder. */
   recordingYaml?: string | null;
   /** Legacy-compatible transport for the authored trail before the run recorded concrete actions. */
@@ -160,23 +169,23 @@ interface RowBadge {
   tone?: RowTone;
 }
 
-/** One key/value pair in a formatted row's summary strip or a kv section. */
+/** One key/value pair in a formatted row's summary strip. */
 interface RowField {
   k: string;
   v: string;
-}
-
-/** One expandable detail section of a formatted row: a kv table or preformatted text. */
-interface RowSection {
-  title: string;
-  kv?: RowField[];
-  text?: string;
+  /**
+   * Optional absolute http(s) URL; when present the viewer renders `v` as a link opening in a
+   * new tab. Validated at embed time (`safeFieldHref` in run-report-events.ts) and re-checked by
+   * the viewer before an anchor is emitted; anything non-http(s) is dropped, never rendered.
+   */
+  href?: string;
 }
 
 /**
  * One display row a stream formatter produced — the embedded, already-clamped shape the viewer
  * renders netlog-style (see run-report-events.ts for the clamping pass and EventStreamFormatter
- * for the author-side contract).
+ * for the author-side contract). Formatting is summary-line chrome only (label, badges, fields);
+ * the expanded body is the raw payload itself.
  */
 interface FormattedRow {
   t: number | null;
@@ -184,9 +193,12 @@ interface FormattedRow {
   tone?: RowTone;
   badges?: RowBadge[];
   fields?: RowField[];
-  sections?: RowSection[];
-  /** Serialized source payload(s) this row covers, for the Raw JSON expando. */
-  raw?: string[];
+  /**
+   * Source payload(s) this row covers — JSON values, embedded compact. The viewer pretty-prints
+   * them (recursively parsing JSON-in-string values) when the row is expanded. An entry past the
+   * pathological-size backstop is embedded as a truncated string instead.
+   */
+  raw?: unknown[];
 }
 
 /** One decoded `events/` line handed to a stream formatter (full payload, pre-truncation). */
@@ -196,8 +208,8 @@ interface FormatterEntry {
 }
 
 /**
- * Author-side row shape returned by EventStreamFormatter.format: FormattedRow, except sections may
- * carry structured `json` and `raw` holds payload objects — both serialized + clamped at embed time.
+ * Author-side row shape returned by EventStreamFormatter.format: FormattedRow before the embed-time
+ * clamp. Formatters describe the summary line only; `raw` carries the payload(s) the row covers.
  */
 interface FormatterRowInput {
   t?: number | null;
@@ -205,8 +217,19 @@ interface FormatterRowInput {
   tone?: RowTone;
   badges?: RowBadge[];
   fields?: RowField[];
-  sections?: Array<{ title: string; kv?: RowField[]; text?: string; json?: unknown }>;
   raw?: unknown[];
+}
+
+/**
+ * Session-level context handed to EventStreamFormatter.format so a formatter can apply a report
+ * size budget where full payloads aren't worth their bytes. `sessionPassed` is true only when the
+ * session affirmatively passed — anything else (failed, cancelled, unknown, or a driver that
+ * doesn't supply context) reads as not-passed, so failure evidence is never budgeted away. A
+ * driver may also deliberately present a passed session as not-passed when the user opted out of
+ * budgeting (`--full-report-payloads`) — see formatterContext in run-report-cli.ts.
+ */
+interface FormatterContext {
+  sessionPassed: boolean;
 }
 
 /**
@@ -220,7 +243,7 @@ interface EventStreamFormatter {
   id: string;
   /** Stream names this formatter owns: exact names, or `prefix.*` wildcards. */
   streams: string[];
-  format(entries: FormatterEntry[]): Array<FormatterRowInput | null | undefined>;
+  format(entries: FormatterEntry[], ctx?: FormatterContext): Array<FormatterRowInput | null | undefined>;
 }
 
 /** One `events/<name>.ndjson` producer stream, embedded in full. */
@@ -235,13 +258,27 @@ interface EventStream {
 
 /** Video sprite-sheet layout + playable logical-frame range (see run-report-cli.ts readVideo). */
 interface VideoInfo {
-  /** data: URI of the sprite sheet image. */
-  sprite: string;
+  /**
+   * data: URIs of the sprite sheet image(s), in sheet order, each with that sheet's actual row
+   * count (`columns`/`rows` describe one FULL sheet, so physical frame N lives on sheet
+   * `N / (columns*rows)`; only the final sheet may have fewer rows). Usually length 1. Callers
+   * hand full URIs to buildMultiReportHtml; in the emitted document the URIs are hoisted into the
+   * inert `#tb-sprites` JSON chunk (keyed by session index, one URI array per session) and the
+   * embedded payload carries `uri: ''` — the viewer resolves them lazily on first access, so
+   * booting never parses sprite bytes.
+   */
+  sprites: Array<{ uri: string; rows: number }>;
   fps: number;
   frames: number;
   columns: number;
   rows: number;
   frameHeight: number;
+  /**
+   * Per-frame pixel width from `frameWidth=` in video_sprites.txt. Optional: sprite files written
+   * before the key existed lack it (null/undefined), and consumers must keep deriving the width
+   * from the sheet's natural size in that case.
+   */
+  frameWidth?: number | null;
   /** logical frame index → physical sprite cell (identity when no alias dedup ran). */
   frameMap: number[];
   startFrame: number;
@@ -264,7 +301,12 @@ interface SessionPayload {
   recordingYaml: string | null;
   originalYaml: string | null;
   deviceLog?: string | null;
+  /** gzip(deviceLog text) as base64 — used instead of `deviceLog` past the driver's inline
+   * threshold; the viewer inflates it lazily via DecompressionStream. */
+  deviceLogGz?: string | null;
   network?: NetworkEvent[] | null;
+  /** gzip(JSON.stringify(NetworkEvent[])) as base64 — see deviceLogGz. */
+  networkGz?: string | null;
   events?: EventStream[] | null;
   /** gzip(JSON.stringify(EventStream[])) as base64 — used instead of `events` past the driver's
    * inline threshold; the viewer inflates it lazily via DecompressionStream. */
@@ -281,16 +323,32 @@ interface SessionInput {
   recordingYaml?: string | null;
   originalYaml?: string | null;
   deviceLog?: string | null;
+  /** See SessionPayload.deviceLogGz. */
+  deviceLogGz?: string | null;
   network?: NetworkEvent[] | null;
+  /** See SessionPayload.networkGz. */
+  networkGz?: string | null;
   events?: EventStream[] | null;
   /** See SessionPayload.eventsGz. */
   eventsGz?: string | null;
   video?: VideoInfo | null;
 }
 
-/** The `window.__TB_RUN_DATA__` global the self-contained report embeds. */
+/**
+ * The run payload the self-contained report embeds. The primary source is the inert
+ * `<script type="application/json" id="tb-run-data">` element the viewer JSON.parses at boot;
+ * `window.__TB_RUN_DATA__` is a fallback read only, kept for out-of-repo embedders that set the
+ * global directly instead of shipping the JSON script element.
+ */
 interface ReportPayload {
   generatedAt: string;
+  /**
+   * Canonical URL where this report is hosted, baked in at generation time
+   * (`trailblaze report --share-url …`). When set, the Copy-link affordances use it (with the
+   * current route state grafted on) instead of the browser's address, and stay available even
+   * when the document is opened from file:// or an embed.
+   */
+  shareUrl?: string;
   sessions: SessionPayload[];
   /** Pre-multi-session single-run shape, tolerated by the viewer for old exports. */
   meta?: RunMeta;

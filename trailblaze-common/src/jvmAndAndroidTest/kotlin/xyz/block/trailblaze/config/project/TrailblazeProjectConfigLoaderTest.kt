@@ -1,9 +1,13 @@
 package xyz.block.trailblaze.config.project
 
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.PrintStream
+import java.lang.reflect.Field
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -21,6 +25,7 @@ import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
 import xyz.block.trailblaze.llm.config.LlmModelConfigEntry
+import xyz.block.trailblaze.util.Console
 
 /**
  * Unit tests for [TrailblazeProjectConfigLoader]. These exercise the loader's behaviour
@@ -471,6 +476,76 @@ class TrailblazeProjectConfigLoaderTest {
     )
   }
 
+  @Test
+  fun `consumer inherits a dependency's exported scripted tool into its runtime tools`() {
+    // P1 regression: a `dependencies: [pack]` edge must deliver the pack's `exports:`-listed
+    // scripted tools to the consumer's RUNTIME tool surface (target.tools → getInlineScriptTools()),
+    // not only to the typed d.ts surface. Before TrailmapExportedToolsResolver was wired into the
+    // loader, a step calling the shared tool type-checked but failed at dispatch as "unknown tool".
+    val packDir = File(tempFolder.root, "trailmaps/pack").apply { mkdirs() }
+    File(packDir, "trailmap.yaml").writeText(
+      """
+      id: pack
+      target:
+        display_name: Pack
+        tools:
+          - packSharedTool
+      exports:
+        - packSharedTool
+      """.trimIndent(),
+    )
+    File(packDir, "tools").mkdirs()
+    File(packDir, "tools/pack_shared.yaml").writeText(
+      """
+      script: ./pack_shared.js
+      name: packSharedTool
+      description: Shared scripted tool published by the pack.
+      supportedPlatforms: [android, ios]
+      """.trimIndent(),
+    )
+    val appDir = File(tempFolder.root, "trailmaps/myapp").apply { mkdirs() }
+    File(appDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - pack
+      target:
+        display_name: My App
+        tools:
+          - appOwnTool
+      """.trimIndent(),
+    )
+    File(appDir, "tools").mkdirs()
+    File(appDir, "tools/app_own.yaml").writeText(
+      """
+      script: ./app_own.js
+      name: appOwnTool
+      description: The app's own scripted tool.
+      supportedPlatforms: [android, ios]
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - myapp
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)!!
+    val app = resolved.targets.single { it.id == "myapp" }
+
+    // The consumer's runtime tools carry BOTH its own tool and the pack's exported tool.
+    assertEquals(
+      setOf("appOwnTool", "packSharedTool"),
+      app.tools.orEmpty().map { it.name }.toSet(),
+    )
+    // The fold must carry the exported tool's metadata (description), not just its name — the
+    // per-target tool docs and LLM surface read `description`.
+    assertEquals(
+      "Shared scripted tool published by the pack.",
+      app.tools.orEmpty().single { it.name == "packSharedTool" }.description,
+    )
+  }
 
   @Test
   fun `legacy file-path in target tools drops the trailmap and a sibling trailmap still resolves`() {
@@ -1641,6 +1716,215 @@ class TrailblazeProjectConfigLoaderTest {
     assertContains(waypointIds, "framework/home")
   }
 
+  /**
+   * Lays down a classpath-bundled `sharedlib` trailmap (target-shaped pack with bare-`.ts`
+   * scripted tools) at [classpathRoot], optionally with its build-time-baked
+   * `trails/config/targets/sharedlib.yaml`, plus a filesystem workspace consumer declaring
+   * `dependencies: [sharedlib]`. Shared by the workspace-depends-on-classpath tests below.
+   */
+  private fun writeClasspathDepFixture(
+    classpathRoot: File,
+    withBakedTargetYaml: Boolean,
+    withExports: Boolean = true,
+    explicitTargetId: String? = null,
+  ): File {
+    // The build-time generator names the baked file after the EFFECTIVE target id — `target.id`
+    // when the author set one ([explicitTargetId]), else the trailmap id.
+    val bakedTargetId = explicitTargetId ?: "sharedlib"
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/sharedlib").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      buildString {
+        appendLine("id: sharedlib")
+        appendLine("target:")
+        if (explicitTargetId != null) {
+          appendLine("  id: $explicitTargetId")
+        }
+        appendLine("  display_name: Shared Lib Pack")
+        appendLine("  tools:")
+        appendLine("    - sharedlib_createEntity")
+        if (withExports) {
+          appendLine("exports:")
+          appendLine("  - sharedlib_createEntity")
+        }
+      },
+    )
+    // Bare typed `.ts` with no sibling YAML — the enrichment-shape authoring the shared packs use.
+    File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "sharedlib_createEntity.ts").writeText(
+      "export const sharedlib_createEntity = trailblaze.tool({}, async () => {})",
+    )
+    if (withBakedTargetYaml) {
+      val targetsDir = File(classpathRoot, "trails/config/targets").apply { mkdirs() }
+      File(targetsDir, "$bakedTargetId.yaml").writeText(
+        """
+        id: $bakedTargetId
+        display_name: Shared Lib Pack
+        tools:
+          - script: trails/config/trailmaps/sharedlib/tools/sharedlib_createEntity.ts
+            name: sharedlib_createEntity
+            description: Create a fresh entity in the system.
+            inputSchema:
+              type: object
+              properties: {}
+              additionalProperties: false
+        """.trimIndent(),
+      )
+    }
+    val consumerDir = File(tempFolder.root, "trailmaps/consumerapp").apply { mkdirs() }
+    // The consumer declares a `platforms:` block (the realistic app-target shape) — it's what
+    // makes TrailmapDependencyResolver actually walk the dependency edge, so an unresolvable dep
+    // fails the consumer instead of being silently skipped.
+    File(consumerDir, "trailmap.yaml").writeText(
+      """
+      id: consumerapp
+      dependencies:
+        - sharedlib
+      target:
+        display_name: Consumer App
+        platforms:
+          android:
+            app_ids:
+              - com.example.consumerapp
+      """.trimIndent(),
+    )
+    return tempFolder.writeConfig(
+      """
+      targets:
+        - consumerapp
+      """.trimIndent(),
+    )
+  }
+
+  @Test
+  fun `workspace trailmap resolves a dependency on a classpath trailmap via its baked target yaml`() {
+    // THE workspace-depends-on-bundled regression test: a classpath-bundled trailmap whose tools
+    // are enrichment-shape (bare `.ts` — analyzer can't walk them in a JAR) used to DROP from the
+    // resolved pool, so a filesystem consumer declaring `dependencies: [sharedlib]` failed with
+    // "Trailmap 'sharedlib' not found" and the consumer target was dropped too. With the baked
+    // `targets/<id>.yaml` on the same classpath root, enrichment is repaired from the baked
+    // entries: the dep stays in the pool, the consumer resolves, and the dep's `exports:` fold
+    // into the consumer's runtime tools.
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(classpathRoot, withBakedTargetYaml = true)
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    // The consumer target survives and carries the dep's exported tool in its runtime tools.
+    val consumer = resolved.targets.single { it.id == "consumerapp" }
+    val consumerToolsByName = consumer.tools.orEmpty().associateBy { it.name }
+    val inherited = assertNotNull(
+      consumerToolsByName["sharedlib_createEntity"],
+      "Consumer must inherit the dep's exported scripted tool; got: ${consumerToolsByName.keys}",
+    )
+    // The inherited tool is the BAKED config — description/schema/script from targets/sharedlib.yaml.
+    assertEquals("Create a fresh entity in the system.", inherited.description)
+    assertEquals(
+      "trails/config/trailmaps/sharedlib/tools/sharedlib_createEntity.ts",
+      inherited.script,
+    )
+    assertNotNull(inherited.inputSchema)
+    // The dep itself stays in the resolved pool (it surfaces as a target — accepted side effect
+    // of repairing classpath enrichment) with its scripted tool resolved from the baked entries.
+    val dep = resolved.targets.single { it.id == "sharedlib" }
+    assertEquals(
+      listOf("sharedlib_createEntity"),
+      dep.tools.orEmpty().map { it.name },
+    )
+  }
+
+  @Test
+  fun `classpath dependency without a baked target yaml keeps the skip-and-drop behavior`() {
+    // Negative twin of the test above: with NO baked targets/<id>.yaml on the classpath root,
+    // the historical behavior is preserved — the enrichment-shape dep drops from the pool and
+    // the consumer's dependency edge fails, dropping the consumer target (logged, not thrown).
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(classpathRoot, withBakedTargetYaml = false)
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    assertTrue(
+      resolved.targets.none { it.id == "sharedlib" },
+      "Without a baked target YAML the classpath dep must keep dropping; got: ${resolved.targets.map { it.id }}",
+    )
+    assertTrue(
+      resolved.targets.none { it.id == "consumerapp" },
+      "The consumer target must keep dropping when its dep is unresolvable; got: ${resolved.targets.map { it.id }}",
+    )
+  }
+
+  @Test
+  fun `classpath dependency with no exports contributes nothing even with a baked target yaml`() {
+    // The `exports:` gate must remain the only door: a dep with no `exports:` resolves (baked
+    // YAML repairs its enrichment) but contributes NO tools to the consumer.
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(
+      classpathRoot,
+      withBakedTargetYaml = true,
+      withExports = false,
+    )
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    // Dep resolves — so the consumer target survives — but no tools flow across the edge.
+    val consumer = resolved.targets.single { it.id == "consumerapp" }
+    assertTrue(
+      consumer.tools.orEmpty().none { it.name == "sharedlib_createEntity" },
+      "A dep with no `exports:` must contribute nothing; got: ${consumer.tools.orEmpty().map { it.name }}",
+    )
+  }
+
+  @Test
+  fun `classpath dep whose target id differs from its trailmap id resolves via its baked target yaml`() {
+    // The build-time generator names the baked file after the trailmap's EFFECTIVE target id —
+    // `target.id` when set explicitly, else the trailmap id. The classpath repair must probe by
+    // the same id: probing `targets/<trailmapId>.yaml` here would miss `targets/sharedlib-app.yaml`
+    // and silently fall back to the skip-and-drop path.
+    val classpathRoot = newTempDir()
+    val configFile = writeClasspathDepFixture(
+      classpathRoot,
+      withBakedTargetYaml = true,
+      explicitTargetId = "sharedlib-app",
+    )
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    val consumer = resolved.targets.single { it.id == "consumerapp" }
+    val inherited = assertNotNull(
+      consumer.tools.orEmpty().find { it.name == "sharedlib_createEntity" },
+      "Consumer must inherit the dep's exported tool when the baked YAML is named after " +
+        "target.id; got: ${consumer.tools.orEmpty().map { it.name }}",
+    )
+    assertEquals("Create a fresh entity in the system.", inherited.description)
+    // The dep surfaces under its effective target id, not its trailmap id.
+    assertTrue(
+      resolved.targets.any { it.id == "sharedlib-app" },
+      "Dep target must surface under target.id; got: ${resolved.targets.map { it.id }}",
+    )
+  }
+
   @Test
   fun `trailmap target system_prompt_file resolves into config systemPrompt`() {
     val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
@@ -2182,6 +2466,75 @@ class TrailblazeProjectConfigLoaderTest {
     assertContains(msg, "missing-three")
   }
 
+  @Test
+  fun `resolving a workspace trailmap emits the grep-stable Resolved trailmap success marker`() {
+    // CI consumers pin trailmap resolution on this positive marker (literal "Resolved trailmap"
+    // + source kind) instead of grepping for the absence of failure lines, which rots silently.
+    val trailmapDir = File(tempFolder.root, "trailmaps/sampleapp").apply { mkdirs() }
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: sampleapp
+      target:
+        display_name: Sample
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - sampleapp
+      """.trimIndent(),
+    )
+
+    val captured = captureConsoleLog {
+      assertNotNull(TrailblazeProjectConfigLoader.loadResolved(file))
+    }
+
+    assertContains(captured, "Resolved trailmap 'sampleapp' from workspace (")
+  }
+
+  @Test
+  fun `a target dropped by a failed dependency fold does not emit the Resolved trailmap marker`() {
+    // The marker must mean "this trailmap fully resolved, target fold included". A target whose
+    // sibling resolution succeeds but whose Step-5 dependency/exports fold fails is dropped —
+    // emitting the marker there would hand CI a false positive on the exact line it pins.
+    val packDir = File(tempFolder.root, "trailmaps/pack").apply { mkdirs() }
+    File(packDir, "trailmap.yaml").writeText(
+      """
+      id: pack
+      exports:
+        - ghostTool
+      """.trimIndent(),
+    )
+    val appDir = File(tempFolder.root, "trailmaps/myapp").apply { mkdirs() }
+    File(appDir, "trailmap.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - pack
+      target:
+        display_name: My App
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      targets:
+        - myapp
+      """.trimIndent(),
+    )
+
+    val captured = captureConsoleLog {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(file, includeClasspathTrailmaps = false)
+    }
+
+    // The library dep itself resolved and says so; the dropped consumer must not.
+    assertContains(captured, "Resolved trailmap 'pack' from workspace (")
+    assertContains(captured, "Failed dependency resolution for trailmap 'myapp'")
+    assertFalse(
+      captured.contains("Resolved trailmap 'myapp'"),
+      "A target dropped by a failed dependency fold must not emit the success marker; log was:\n$captured",
+    )
+  }
+
   // ===========================================================================
   // Test infrastructure.
   // ===========================================================================
@@ -2205,6 +2558,32 @@ class TrailblazeProjectConfigLoaderTest {
     val file = File(root, "trailblaze.yaml")
     file.writeText(yaml)
     return file
+  }
+
+  /**
+   * Captures `Console.log` output emitted during [block]. Same field-reflection trick as
+   * [TrailblazeTrailmapManifestLoaderTest] — `Console` caches `System.out` into a private
+   * `out: PrintStream` field at object-init time, so `System.setOut` alone is insufficient.
+   * Missing fields are tolerated because this shared (jvm + android) source set runs against
+   * both `Console` actuals (jvm has `out` + `userOut`, android has only `out`).
+   */
+  private fun captureConsoleLog(block: () -> Unit): String {
+    val capture = ByteArrayOutputStream()
+    val stream = PrintStream(capture, /* autoFlush = */ true, Charsets.UTF_8)
+    val originals = mutableMapOf<Field, PrintStream>()
+    listOf("out", "userOut").forEach { fieldName ->
+      val field = runCatching {
+        Console::class.java.getDeclaredField(fieldName).apply { isAccessible = true }
+      }.getOrNull() ?: return@forEach
+      originals[field] = field.get(Console) as PrintStream
+      field.set(Console, stream)
+    }
+    try {
+      block()
+    } finally {
+      originals.forEach { (field, original) -> field.set(Console, original) }
+    }
+    return capture.toString(Charsets.UTF_8)
   }
 
   // ---- Meta-only descriptor enrichment ----------------------------------------------------

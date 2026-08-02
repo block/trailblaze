@@ -13,8 +13,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.io.asSink
@@ -229,12 +233,22 @@ class McpSubprocessSession internal constructor(
       // answering parks it, and `withTimeout` cannot unwind a thread blocked in a native read
       // (verified by test: a plain `withTimeout` returns only once the subprocess exits on its
       // own). See [DEFAULT_HANDSHAKE_TIMEOUT_MS] for why that park wedges the whole daemon. So
-      // arm a watchdog that force-destroys the subprocess after the timeout; that closes its
-      // stdout, the parked read unwinds, and `client.connect` throws — no matter which thread /
-      // dispatcher the handshake is running on.
+      // arm a watchdog with two levers, each covering a park the other can't:
+      //
+      //  - **Force-destroy the subprocess.** Closes its stdout, so a handshake parked in that
+      //    blocking native read unwinds and `client.connect` throws — no matter which thread /
+      //    dispatcher the handshake is running on.
+      //  - **Cancel the handshake coroutine.** Destroy is a no-op when the subprocess is ALREADY
+      //    dead — and an instant-exit subprocess can close the transport before the SDK registers
+      //    the initialize response handler, orphaning a suspending await that no stream event will
+      //    ever complete (`Protocol.doClose` snapshots the handler map before the request lands;
+      //    the late-registered handler is wiped un-notified and `request`'s `result.await()` parks
+      //    forever). That park is exactly what wedged this module's `check` run at 99% until the
+      //    CI step was cancelled. The await is a plain cancellable suspension, so cancelling
+      //    the handshake coroutine unwedges it.
       //
       // `decided` is the single arbiter of the outcome, claimed via compare-and-set by exactly one
-      // of {watchdog fires, handshake succeeds}. It closes the boundary race where the handshake
+      // of {watchdog fires, handshake settles}. It closes the boundary race where the handshake
       // returns in the same instant the watchdog's `delay` elapses: cancelling the watchdog alone
       // can't stop the coroutine once `delay` has returned (nothing suspends after it), so without
       // the CAS the watchdog could still force-destroy a subprocess we'd already handed back as a
@@ -242,39 +256,46 @@ class McpSubprocessSession internal constructor(
       val decided = AtomicBoolean(false)
       // Own the scope (not just the launched job) so every exit path can cancel it — the scope's
       // root Job would otherwise dangle. Detached from the caller's coroutine on purpose: the
-      // watchdog must be able to fire while the caller thread is parked in the non-cancellable
+      // watchdog must be able to fire while the handshake is parked in the non-cancellable
       // native read (the whole point), which a child of that coroutine could not.
       val watchdogScope = CoroutineScope(Dispatchers.IO)
-      watchdogScope.launch {
-        delay(handshakeTimeoutMillis)
-        if (decided.compareAndSet(false, true)) {
-          // A wedged subprocess writes nothing to stderr, so without this line the force-kill is
-          // silent and a session-startup failure is indistinguishable from any other. Name the
-          // culprit script + the bound it blew so on-call can attribute it.
-          Console.log(
-            "[McpSubprocessSession] handshake watchdog fired for " +
-              "'${spawnedProcess.scriptFile.name}' after ${handshakeTimeoutMillis}ms — " +
-              "force-destroying the subprocess",
-          )
-          runCatching { process.destroyForcibly() }
-        }
-      }
       try {
-        client.connect(transport)
+        coroutineScope {
+          val handshake = async { client.connect(transport) }
+          watchdogScope.launch {
+            delay(handshakeTimeoutMillis)
+            if (decided.compareAndSet(false, true)) {
+              // A wedged subprocess writes nothing to stderr, so without this line the force-kill
+              // is silent and a session-startup failure is indistinguishable from any other. Name
+              // the culprit script + the bound it blew so on-call can attribute it.
+              Console.log(
+                "[McpSubprocessSession] handshake watchdog fired for " +
+                  "'${spawnedProcess.scriptFile.name}' after ${handshakeTimeoutMillis}ms — " +
+                  "force-destroying the subprocess",
+              )
+              runCatching { process.destroyForcibly() }
+              handshake.cancel()
+            }
+          }
+          handshake.await()
+        }
       } catch (t: Throwable) {
         watchdogScope.cancel()
-        // A genuine parent cancellation must surface as cancellation, never be re-attributed as a
-        // handshake timeout — which it could be if it raced the watchdog and lost the CAS below.
-        // Teardown still runs (under NonCancellable) so the subprocess isn't leaked.
-        if (t is CancellationException) {
+        // A genuine caller cancellation must surface as cancellation, never be re-attributed as a
+        // handshake timeout. Distinguish it from the watchdog's own `handshake.cancel()` (also a
+        // CancellationException) by the caller's job state: only a cancelled caller makes this
+        // context inactive. Teardown still runs (under NonCancellable) so the subprocess isn't
+        // leaked.
+        if (t is CancellationException && !currentCoroutineContext().isActive) {
           teardownFailedHandshake()
           throw t
         }
         // If we can still claim the outcome, this was an organic handshake failure (server crashed
         // during init, bad protocol version) — propagate it unchanged. If the CAS fails, the
-        // watchdog already claimed it and is force-destroying the subprocess: surface an attributable
-        // timeout (with the stream-closed exception as cause) rather than the opaque read error, so
-        // the launcher names the culprit script.
+        // watchdog already claimed it and tore the subprocess down: surface an attributable
+        // timeout (with the underlying unwind — stream-closed read error or the watchdog's
+        // handshake cancellation — as cause) rather than an opaque error, so the launcher names
+        // the culprit script.
         val timedOut = !decided.compareAndSet(false, true)
         teardownFailedHandshake()
         if (timedOut) {
