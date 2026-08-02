@@ -61,6 +61,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
@@ -552,6 +553,57 @@ class TrailblazeMcpBridgeImpl(
   }
 
   companion object {
+    /**
+     * Builds the [RunYamlRequest] a single on-device MCP tool dispatch puts on the wire.
+     * Pure — no bridge instance required, so the wire contract is testable in isolation.
+     *
+     * [awaitCompletion] is unconditionally true and deliberately NOT derived from the caller's
+     * `blocking` flag, which governs only the HOST/Maestro path. A fire-and-forget
+     * `RunYamlResponse` returns before any tool runs, so it carries no `success`, no
+     * `errorMessage`, and no `nonRecoverableWedge`. The direct-MCP dispatchers
+     * (`TrailblazeToolToMcpBridge`, `DirectMcpToolExecutor`, `TrailExecutor`,
+     * `BridgeTrailblazeAgent`) all take the `blocking = false` default, so deriving the wait
+     * from it made those dispatches report phantom success AND left a terminal UiAutomation
+     * wedge unarmed — the poisoned runner then served every following MCP action.
+     */
+    internal fun buildOnDeviceToolRunYamlRequest(
+      tool: TrailblazeTool,
+      yaml: String,
+      trailblazeDeviceId: TrailblazeDeviceId,
+      driverType: TrailblazeDriverType?,
+      traceId: TraceId?,
+      targetAppId: String?,
+      trailblazeLlmModel: TrailblazeLlmModel,
+      sessionResolution: DeviceSessionResolution,
+      captureNetworkTraffic: Boolean,
+    ): RunYamlRequest = RunYamlRequest(
+      yaml = yaml,
+      testName = "tool_${tool::class.simpleName}",
+      trailFilePath = null,
+      targetAppName = targetAppId,
+      useRecordedSteps = false,
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeDeviceId = trailblazeDeviceId,
+      referrer = TrailblazeReferrer.MCP,
+      traceId = traceId,
+      driverType = driverType,
+      awaitCompletion = true,
+      config = TrailblazeConfig(
+        overrideSessionId = sessionResolution.sessionId,
+        // Emit start only when this call created the session. This preserves host-managed
+        // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
+        sendSessionStartLog = sessionResolution.isNewSession,
+        sendSessionEndLog = false,
+        // Propagate the toggle so on-device launch tools can do their own capture-aware
+        // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
+        // clearAppData / clearState=true cycle, and the host can't reach into that window
+        // from outside. Today nothing on-device reads this; the host bridge is the only
+        // consumer. Wired here so the next iteration can flip launch-tool behavior off this
+        // signal without another hop.
+        captureNetworkTraffic = captureNetworkTraffic,
+      ),
+    )
+
     internal fun androidDisconnectStatus(
       deviceId: TrailblazeDeviceId,
       connectedDevices: Collection<TrailblazeDeviceId>,
@@ -1416,7 +1468,7 @@ class TrailblazeMcpBridgeImpl(
       // the device via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
       // parser. (The host/Maestro path below keeps the trail-item `yaml` it decodes host-side.)
       val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, blocking, traceId)
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, traceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1708,7 +1760,6 @@ class TrailblazeMcpBridgeImpl(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
-    blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String {
     val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
@@ -1772,45 +1823,23 @@ class TrailblazeMcpBridgeImpl(
             }
         }
       }
-      val request = RunYamlRequest(
+      val request = buildOnDeviceToolRunYamlRequest(
+        tool = tool,
         yaml = yaml,
-        testName = "tool_${tool::class.simpleName}",
-        trailFilePath = null,
-        targetAppName = resolvedTargetAppId,
-        useRecordedSteps = false,
-        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
-        referrer = TrailblazeReferrer.MCP,
-        traceId = traceId,
         driverType = driverType,
-        // Map the caller's `blocking` flag onto the protocol-level wait. With `blocking=true`
-        // (every current caller), the on-device handler holds the HTTP response until the job
-        // terminates — that's also the RunYamlRequest default. With `blocking=false`, fire-and-forget:
-        // the device returns the new sessionId immediately and the caller can move on.
-        awaitCompletion = blocking,
-        config = TrailblazeConfig(
-          overrideSessionId = sessionResolution.sessionId,
-          // Emit start only when this call created the session. This preserves host-managed
-          // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
-          sendSessionStartLog = sessionResolution.isNewSession,
-          sendSessionEndLog = false,
-          // Propagate the toggle so on-device launch tools can do their own capture-aware
-          // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
-          // clearAppData / clearState=true cycle, and the host can't reach into that window
-          // from outside. Today nothing on-device reads this; the host bridge is the only
-          // consumer. Wired here so the next iteration can flip launch-tool behavior off this
-          // signal without another hop.
-          captureNetworkTraffic = captureNetworkTraffic,
-        ),
+        traceId = traceId,
+        targetAppId = resolvedTargetAppId,
+        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
+        sessionResolution = sessionResolution,
+        captureNetworkTraffic = captureNetworkTraffic,
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
-      // With `awaitCompletion = blocking`, rpcCall returns once the on-device job has reached
-      // its terminal state (when blocking) or as soon as the session is created (when not).
-      // Either way, no host-side log polling is needed — a previous version awaited the
-      // resulting TrailblazeToolLog here under blocking, but by the time that ran every
-      // on-device log was already on disk and `skipExisting=true` filtered them all out,
-      // burning a fixed 120s timeout on every tool call.
+      // rpcCall returns once the on-device job has reached its terminal state. No host-side log
+      // polling is needed — a previous version awaited the resulting TrailblazeToolLog here, but
+      // by the time that ran every on-device log was already on disk and `skipExisting=true`
+      // filtered them all out, burning a fixed 120s timeout on every tool call.
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           val response = result.data
@@ -1822,12 +1851,15 @@ class TrailblazeMcpBridgeImpl(
           // ([HostOnDeviceRpcTrailblazeAgent.toToolResult],
           // [HostAccessibilityRpcClient.execute]) correctly inspect `success` — match that.
           //
-          // - `success == true`: terminal success when `awaitCompletion=true` (i.e.
-          //   `blocking=true` here). Report executed.
+          // - `success == true`: terminal success. Report executed.
           // - `success == false`: terminal failure. Surface the on-device error message
           //   so the daemon log and the caller see the real cause instead of a phantom OK.
-          // - `success == null`: fire-and-forget (`awaitCompletion=false`). Run is ongoing;
-          //   the session id is the handle the caller subscribes to for terminal state.
+          // - `success == null`: contract violation. We always send `awaitCompletion = true`, so
+          //   the runner owes us a terminal outcome; `null` means it returned early (a runner
+          //   predating the flag). Reporting "Executed" there would be the same phantom success
+          //   this dispatch path exists to remove — and no wedge could be armed from it. Fail,
+          //   matching [HostAccessibilityRpcClient.execute] and
+          //   [HostOnDeviceRpcTrailblazeAgent.toToolResult], which already reject this shape.
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
@@ -1848,8 +1880,11 @@ class TrailblazeMcpBridgeImpl(
               error("On-device execution of ${tool::class.simpleName} failed: $message")
             }
             null -> {
-              Console.log("[executeToolViaRpc] On-device execution started: ${response.sessionId}")
-              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
+              val message = "On-device server returned null success inline for " +
+                "${tool::class.simpleName} — contract violation for awaitCompletion=true " +
+                "(expected true/false, got null). Update the on-device runner APK."
+              Console.log("[executeToolViaRpc] $message")
+              error(message)
             }
           }
         }
