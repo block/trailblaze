@@ -1854,10 +1854,12 @@ class TrailblazeMcpBridgeImpl(
           // - `success == true`: terminal success. Report executed.
           // - `success == false`: terminal failure. Surface the on-device error message
           //   so the daemon log and the caller see the real cause instead of a phantom OK.
-          // - `success == null`: the runner returned before the job finished despite
-          //   `awaitCompletion = true` — only an older runner that predates the flag does this.
-          //   No terminal signal is available, so a wedge on that runner can't be armed here;
-          //   the RPC-failure string match in `rpcCall` is the remaining safety net.
+          // - `success == null`: contract violation. We always send `awaitCompletion = true`, so
+          //   the runner owes us a terminal outcome; `null` means it returned early (a runner
+          //   predating the flag). Reporting "Executed" there would be the same phantom success
+          //   this dispatch path exists to remove — and no wedge could be armed from it. Fail,
+          //   matching [HostAccessibilityRpcClient.execute] and
+          //   [HostOnDeviceRpcTrailblazeAgent.toToolResult], which already reject this shape.
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
@@ -1878,12 +1880,11 @@ class TrailblazeMcpBridgeImpl(
               error("On-device execution of ${tool::class.simpleName} failed: $message")
             }
             null -> {
-              Console.log(
-                "[executeToolViaRpc] On-device runner returned no terminal state despite " +
-                  "awaitCompletion=true (session: ${response.sessionId}); update the runner APK " +
-                  "so tool failures and UiAutomation wedges are reported.",
-              )
-              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
+              val message = "On-device server returned null success inline for " +
+                "${tool::class.simpleName} — contract violation for awaitCompletion=true " +
+                "(expected true/false, got null). Update the on-device runner APK."
+              Console.log("[executeToolViaRpc] $message")
+              error(message)
             }
           }
         }
