@@ -95,6 +95,31 @@ class TrailblazeMcpBridgeRecoveryTest {
     assertHttpFailureArmsRunner(reflectionBlockedWedgeMessage)
   }
 
+  /**
+   * A fire-and-forget [RunYamlResponse] (`awaitCompletion = false`) returns before any tool runs,
+   * so it carries neither `success` nor `nonRecoverableWedge` — there is nothing to arm from. This
+   * is why the bridge's on-device tool dispatch always sends `awaitCompletion = true` regardless of
+   * the caller's `blocking` flag: the direct-MCP dispatchers (TrailblazeToolToMcpBridge,
+   * DirectMcpToolExecutor, TrailExecutor, BridgeTrailblazeAgent) all use the `blocking = false`
+   * default, and a fire-and-forget dispatch would leave a terminal wedge unarmed for every one of
+   * them.
+   */
+  @Test
+  fun `fire-and-forget MCP response carries no terminal signal to arm`() {
+    withRecoveryPool { recovery, pool ->
+      assertFalse(
+        pool.get(affectedDevice).noteIfNonRecoverableWedge(
+          RunYamlResponse(
+            sessionId = SessionId("direct-mcp-fire-and-forget"),
+            memorySnapshot = emptyMap(),
+          ),
+        ),
+      )
+
+      assertFalse(recovery.requiresRestart(affectedDevice))
+    }
+  }
+
   @Test
   fun `ordinary MCP failure does not arm or evict either runner`() {
     withRecoveryPool { recovery, pool ->

@@ -1416,7 +1416,7 @@ class TrailblazeMcpBridgeImpl(
       // the device via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
       // parser. (The host/Maestro path below keeps the trail-item `yaml` it decodes host-side.)
       val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, blocking, traceId)
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, traceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1708,7 +1708,6 @@ class TrailblazeMcpBridgeImpl(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
-    blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String {
     val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
@@ -1783,11 +1782,14 @@ class TrailblazeMcpBridgeImpl(
         referrer = TrailblazeReferrer.MCP,
         traceId = traceId,
         driverType = driverType,
-        // Map the caller's `blocking` flag onto the protocol-level wait. With `blocking=true`
-        // (every current caller), the on-device handler holds the HTTP response until the job
-        // terminates — that's also the RunYamlRequest default. With `blocking=false`, fire-and-forget:
-        // the device returns the new sessionId immediately and the caller can move on.
-        awaitCompletion = blocking,
+        // Always await on-device completion — the caller's `blocking` flag only governs the
+        // HOST/Maestro path below. A fire-and-forget RunYamlResponse carries no `success` and
+        // no `nonRecoverableWedge` (the device returns before any tool runs), so the default
+        // `blocking = false` used by the direct-MCP dispatchers (TrailblazeToolToMcpBridge,
+        // DirectMcpToolExecutor, TrailExecutor, BridgeTrailblazeAgent) would report phantom
+        // success AND leave a terminal UiAutomation wedge unarmed — the poisoned runner would
+        // then serve every following MCP action. Matches the RunYamlRequest default.
+        awaitCompletion = true,
         config = TrailblazeConfig(
           overrideSessionId = sessionResolution.sessionId,
           // Emit start only when this call created the session. This preserves host-managed
@@ -1805,12 +1807,10 @@ class TrailblazeMcpBridgeImpl(
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
-      // With `awaitCompletion = blocking`, rpcCall returns once the on-device job has reached
-      // its terminal state (when blocking) or as soon as the session is created (when not).
-      // Either way, no host-side log polling is needed — a previous version awaited the
-      // resulting TrailblazeToolLog here under blocking, but by the time that ran every
-      // on-device log was already on disk and `skipExisting=true` filtered them all out,
-      // burning a fixed 120s timeout on every tool call.
+      // rpcCall returns once the on-device job has reached its terminal state. No host-side log
+      // polling is needed — a previous version awaited the resulting TrailblazeToolLog here, but
+      // by the time that ran every on-device log was already on disk and `skipExisting=true`
+      // filtered them all out, burning a fixed 120s timeout on every tool call.
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           val response = result.data
@@ -1822,12 +1822,13 @@ class TrailblazeMcpBridgeImpl(
           // ([HostOnDeviceRpcTrailblazeAgent.toToolResult],
           // [HostAccessibilityRpcClient.execute]) correctly inspect `success` — match that.
           //
-          // - `success == true`: terminal success when `awaitCompletion=true` (i.e.
-          //   `blocking=true` here). Report executed.
+          // - `success == true`: terminal success. Report executed.
           // - `success == false`: terminal failure. Surface the on-device error message
           //   so the daemon log and the caller see the real cause instead of a phantom OK.
-          // - `success == null`: fire-and-forget (`awaitCompletion=false`). Run is ongoing;
-          //   the session id is the handle the caller subscribes to for terminal state.
+          // - `success == null`: the runner returned before the job finished despite
+          //   `awaitCompletion = true` — only an older runner that predates the flag does this.
+          //   No terminal signal is available, so a wedge on that runner can't be armed here;
+          //   the RPC-failure string match in `rpcCall` is the remaining safety net.
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
@@ -1848,7 +1849,11 @@ class TrailblazeMcpBridgeImpl(
               error("On-device execution of ${tool::class.simpleName} failed: $message")
             }
             null -> {
-              Console.log("[executeToolViaRpc] On-device execution started: ${response.sessionId}")
+              Console.log(
+                "[executeToolViaRpc] On-device runner returned no terminal state despite " +
+                  "awaitCompletion=true (session: ${response.sessionId}); update the runner APK " +
+                  "so tool failures and UiAutomation wedges are reported.",
+              )
               "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
             }
           }
