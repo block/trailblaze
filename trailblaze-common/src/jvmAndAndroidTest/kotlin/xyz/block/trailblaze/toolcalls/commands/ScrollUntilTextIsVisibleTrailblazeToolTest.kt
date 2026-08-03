@@ -5,10 +5,12 @@ import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
+import kotlin.test.assertFailsWith
 import maestro.ScrollDirection
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.ScrollUntilVisibleCommand
 import org.junit.Test
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 
 /**
  * Locks in the LLM-facing wording of the failure message produced by
@@ -101,6 +103,46 @@ class ScrollUntilTextIsVisibleTrailblazeToolTest {
   }
 
   @Test
+  fun `resolveScrollDuration uses the caller override when provided`() {
+    // A caller-supplied duration wins over the driver default (the fast-scroll case: 200ms).
+    assertThat(
+      ScrollUntilTextIsVisibleTrailblazeTool.resolveScrollDuration(
+        scrollDurationMs = 200,
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      ),
+    ).isEqualTo("200")
+  }
+
+  @Test
+  fun `resolveScrollDuration falls back to the driver-tuned default when null`() {
+    // Null preserves prior behavior for every existing caller: 400ms on Android on-device.
+    assertThat(
+      ScrollUntilTextIsVisibleTrailblazeTool.resolveScrollDuration(
+        scrollDurationMs = null,
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      ),
+    ).isEqualTo(
+      ScrollUntilTextIsVisibleTrailblazeTool.scrollDurationFor(
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      ),
+    )
+  }
+
+  @Test
+  fun `resolveScrollDuration rejects a non-positive override`() {
+    // 0 or a negative override would flow into SwipeCommand.duration as an invalid gesture.
+    for (invalid in listOf(0, -1, -400)) {
+      val failure = assertFailsWith<IllegalArgumentException> {
+        ScrollUntilTextIsVisibleTrailblazeTool.resolveScrollDuration(
+          scrollDurationMs = invalid,
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        )
+      }
+      assertThat(failure.message.orEmpty()).contains("scrollDurationMs must be > 0")
+    }
+  }
+
+  @Test
   fun `failure message leads with cannot-find-element line`() {
     val message = ScrollUntilTextIsVisibleTrailblazeTool.buildScrollFailureMessage(
       maestroCommand = command(),
@@ -140,5 +182,20 @@ class ScrollUntilTextIsVisibleTrailblazeToolTest {
     assertThat(message).contains("`timeout`")
     assertThat(message).contains("`visibilityPercentage`")
     assertThat(message).contains("`centerElement`")
+  }
+
+  @Test
+  fun `manual-scroll-loop drivers use the non-fling 400ms swipe duration`() {
+    // Drivers without a Maestro Driver instance run the manual scroll loop; the Maestro
+    // default (40ms) flings past elements there.
+    assertThat(
+      ScrollUntilTextIsVisibleTrailblazeTool.scrollDurationFor(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+    ).isEqualTo("400")
+    assertThat(
+      ScrollUntilTextIsVisibleTrailblazeTool.scrollDurationFor(TrailblazeDriverType.IOS_AXE),
+    ).isEqualTo("400")
+    assertThat(
+      ScrollUntilTextIsVisibleTrailblazeTool.scrollDurationFor(TrailblazeDriverType.IOS_HOST),
+    ).isEqualTo(ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION)
   }
 }

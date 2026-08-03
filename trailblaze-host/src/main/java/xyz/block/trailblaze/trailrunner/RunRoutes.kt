@@ -22,7 +22,7 @@ import xyz.block.trailblaze.ui.getVersionInfo
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 
 /**
  * The installed app targets on a device (plus the currently-selected one) — the shared source for
@@ -220,6 +220,10 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       initialMemorySeeds = body.memory,
       initialMemorySensitiveSeeds = body.secrets,
       captureNetworkTrafficOverride = if (captureEventsOn) true else body.captureNetworkTraffic,
+      // Thread the "Capture video" toggle into the run so web / Electron (self-instrumented,
+      // coordinator-skipped) honor it — the getOrCreateSessionResolution override above only
+      // reaches the Android/iOS coordinator path.
+      captureVideoOverride = body.captureVideo,
       onComplete = { result ->
         analyticsCapture?.let { c -> runCatching { c.close() } }
         eventCapture?.let { c -> runCatching { c.close() } }
@@ -316,7 +320,10 @@ private fun maybeWriteBundleVariant(deps: TrailRunnerDeps, body: RunRequest, ses
     if (logs.isEmpty()) {
       return Console.log("[BlazeRoutes] no logs for session $sessionId; variant '$variant' not written")
     }
-    val yaml = logs.generateRecordedYaml(createTrailblazeYaml())
+    // The variant IS the recording device's platform name, so it keys the unified recording slot.
+    // Unified emitter falls back to v1 only when it can't produce the map shape (blank classifier,
+    // empty trail, multi-tool trailhead).
+    val yaml = logs.generateUnifiedRecordedYaml(createTrailblazeYaml(), classifierOverride = variant)
     val written = BundleStore.writeVariant(resolved.dir, variant, yaml)
     // A recording landing in the folder is the same fact whether a human saved it from the
     // companion view or the board's record flow wrote it here - companion sessions watching the

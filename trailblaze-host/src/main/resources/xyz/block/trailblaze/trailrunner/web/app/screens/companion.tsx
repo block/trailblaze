@@ -71,7 +71,7 @@ function parseChecklistItem(s) {
 function CompanionCard({ ico, tone, title, children }) {
   const color = tone === 'accent' ? 'var(--tb-ai)' : 'var(--text-subtle-variant)';
   return (
-    <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 10, background: 'var(--bg-standard)', padding: '10px 12px' }}>
+    <div style={{ border: '1px solid ' + (tone === 'accent' ? 'color-mix(in srgb, var(--tb-ai) 28%, var(--tb-hairline))' : 'var(--tb-hairline)'), borderRadius: 10, background: tone === 'accent' ? 'var(--tb-ai-surface)' : 'var(--bg-standard)', padding: '10px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: title ? 6 : 0 }}>
         <Ico n={ico} s={13} c={color} />
         {title && <span style={{ fontSize: 12, fontWeight: 700 }}>{title}</span>}
@@ -621,7 +621,8 @@ function CompanionScreen({ agents, initRunId, go, active = true }) {
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px', borderBottom: '1px solid var(--tb-hairline)' }}>
-        <Ico n="satellite-dish" s={16} c={running ? 'var(--tb-running)' : 'var(--text-subtle-variant)'} />
+        <Ico n="bot" s={17} c="var(--tb-ai)" />
+        {running && <span title="Companion connected" style={{ width: 7, height: 7, marginLeft: -5, borderRadius: 99, background: 'var(--tb-running)', flex: '0 0 auto' }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shown.title || 'Companion session'}</div>
           <div className="tb-sub" style={{ fontSize: 11.5 }}>

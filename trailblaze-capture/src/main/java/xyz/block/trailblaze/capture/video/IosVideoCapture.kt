@@ -1,11 +1,14 @@
 package xyz.block.trailblaze.capture.video
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
@@ -15,14 +18,30 @@ import xyz.block.trailblaze.util.isMacOs
  *
  * Unlike Android's `adb screenrecord`, the simulator has no time limit so no segment chaining is
  * needed. The recording is stopped by sending SIGINT to the process.
+ *
+ * @param outputFileName the mp4 filename written under the session dir. Defaults to
+ *   [CaptureFilenames.VIDEO] (the report's canonical session video). `BaguetteIosVideoCapture`
+ *   overrides it to record a `simctl` *remainder* segment (`video.simctl.mp4`) after a mid-session
+ *   baguette feed death, so it doesn't clobber the primary baguette segment.
+ * @param extractSprite when true (default) `stop` runs [VideoSpriteExtractor] and returns a
+ *   `VIDEO_FRAMES` sprite sheet as today. When false it returns the raw mp4 (`VIDEO`) untouched —
+ *   `BaguetteIosVideoCapture` needs the raw file to stitch, and sprite-ifies the stitched result
+ *   once at the end.
  */
-class IosVideoCapture : CaptureStream {
+class IosVideoCapture(
+  private val outputFileName: String = CaptureFilenames.VIDEO,
+  private val extractSprite: Boolean = true,
+) : CaptureStream {
   override val type = CaptureType.VIDEO
 
   private var process: Process? = null
   private var videoFile: File? = null
+  private var recordingFile: File? = null
   private var startTimestampMs: Long = 0
   private var isLandscape: Boolean = false
+
+  /** Accumulated (merged) recorder output, filled by the drain thread; read by start-verify/stop. */
+  private val processOutput = StringBuilder()
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
@@ -31,18 +50,40 @@ class IosVideoCapture : CaptureStream {
     // Without this, xcrun fails with "Host recording is already in progress".
     stopStaleRecording(deviceId)
 
-    val output = File(sessionDir, "video.mp4")
+    val output = File(sessionDir, outputFileName)
     this.videoFile = output
-    this.startTimestampMs = System.currentTimeMillis()
+    // Record into a temp file on the boot volume, moved onto [output] at stop. The mp4 is
+    // written by CoreSimulator's SimRender process — not this JVM or its simctl child — and
+    // SimRender's file access can be narrower than ours: when the session dir sits on a
+    // non-boot volume (e.g. a CI workspace on /Volumes/...), recordVideo fails at start with
+    // NSCocoaErrorDomain 513 / OSStatus -12204 ("The file couldn't be saved because you don't
+    // have permission") even though this JVM writes the same dir fine. The per-user temp dir
+    // is on the boot volume, and the move at stop runs in this JVM, which owns the session dir.
+    // The "video_" prefix keeps [staleRecordingPgrepPattern] matching a crashed temp recorder.
+    val recordingTarget = File.createTempFile("video_", ".mp4")
+    this.recordingFile = recordingTarget
 
     // Detect simulator orientation before recording starts so we can rotate
     // video frames during sprite sheet generation if needed. iOS simulator
     // recordVideo captures the native portrait pixel buffer, but screenshots
     // are rotated to match the device orientation — this bridges that gap.
-    isLandscape = detectSimulatorLandscape(deviceId)
+    // Only the sprite path reads isLandscape; the raw-remainder mode (extractSprite=false, used by
+    // BaguetteIosVideoCapture) never does, so skip the seconds-long screenshot probe there. That
+    // matters because the remainder recorder starts from BaguetteIosVideoCapture's feed-death handler
+    // while it holds the capture lock — the probe would stall a concurrent stop() for its duration.
+    isLandscape = if (extractSprite) detectSimulatorLandscape(deviceId) else false
 
     try {
-      Console.log("Starting iOS video recording: device=$deviceId output=${output.absolutePath} landscape=$isLandscape")
+      Console.log(
+        "Starting iOS video recording: device=$deviceId output=${output.absolutePath} " +
+          "(recording via ${recordingTarget.absolutePath}) landscape=$isLandscape"
+      )
+      // Stamp the recording start as close to the spawn as possible — AFTER the seconds-long
+      // orientation probe above. The artifact's start/end window feeds VideoSpriteExtractor's
+      // duration sanity-check (`expectedDurationMs`); stamping before the probe inflated the
+      // window past the mismatch tolerance, which triggered a constant-rate re-stamp that
+      // smears this recorder's healthy variable-frame-rate timestamps across the timeline.
+      this.startTimestampMs = System.currentTimeMillis()
       process =
         ProcessBuilder(
             "xcrun",
@@ -52,26 +93,28 @@ class IosVideoCapture : CaptureStream {
             "recordVideo",
             "--codec=h264",
             "--force",
-            output.absolutePath,
+            recordingTarget.absolutePath,
           )
           .redirectErrorStream(true)
           .start()
+
+      // Drain the merged output on a daemon thread for the whole recording so a chatty simctl can't
+      // fill the ~64KB OS pipe buffer and stall/wedge the recorder on a long session (mirrors
+      // WallClockMp4MuxConsumer's stderr drainer). start-verify and stop read the accumulated buffer
+      // rather than the live stream.
+      process?.let { drainProcessOutput(it) }
 
       // Verify the recording actually started. xcrun exits immediately with an error
       // if recording can't start (e.g., "Host recording is already in progress").
       // simctl writes "Recording started" to stderr once the first frame is processed.
       Thread.sleep(RECORDING_START_VERIFY_MS)
       if (process?.isAlive != true) {
-        val errorOutput =
-          try {
-            process?.inputStream?.bufferedReader()?.readText()?.trim() ?: ""
-          } catch (_: Exception) {
-            ""
-          }
+        val errorOutput = drainedOutput()
         Console.log(
           "iOS video recording failed to start: exitCode=${process?.exitValue()}, output=$errorOutput"
         )
         process = null
+        recordingTarget.delete()
       } else {
         Console.log("iOS video recording process started (pid=${process?.pid()})")
       }
@@ -85,16 +128,22 @@ class IosVideoCapture : CaptureStream {
    * when a previous recording process was killed without clean SIGINT shutdown (e.g.,
    * destroyForcibly on cancellation), leaving the simulator's internal recording lock held.
    *
-   * Only Trailblaze's own recorders are targeted: the pattern requires the session-dir output
-   * filename (`.../video.mp4`), so a deliberate recording started by someone else (e.g. a CI
-   * shard's `simctl io ... recordVideo logs/simulator_recording.mp4`) is left alone. When such a
-   * recorder holds the device, our own start fails fast with "Host recording is already in
-   * progress" and the session falls back to the screenshot timeline instead of killing theirs.
+   * Only Trailblaze's own recorders are targeted: the pattern matches any Trailblaze video file
+   * (`.../video*.mp4` — `video.mp4`, `video.simctl.mp4`), not just this instance's `outputFileName`,
+   * so a crashed complementary recorder is cleaned too. This matters because Trailblaze runs two
+   * simctl video names on iOS — the whole-session `video.mp4` and the mid-session remainder
+   * `video.simctl.mp4` (see `BaguetteIosVideoCapture`) — and the simulator has a single recording
+   * lock: a stale process of *either* name blocks a fresh recording of *either* name, so matching
+   * only this instance's name would leave the other's lock held. A deliberate recording started by
+   * someone else (e.g. a CI shard's `simctl io ... recordVideo logs/simulator_recording.mp4`) still
+   * doesn't match (its basename isn't `video*.mp4`) and is left alone; when it holds the device our
+   * own start fails fast with "Host recording is already in progress" and the session falls back to
+   * the screenshot timeline instead of killing theirs.
    */
   private fun stopStaleRecording(deviceId: String) {
     try {
       val pgrep =
-        ProcessBuilder("pgrep", "-f", "simctl io $deviceId recordVideo .*/video\\.mp4")
+        ProcessBuilder("pgrep", "-f", staleRecordingPgrepPattern(deviceId))
           .redirectErrorStream(true)
           .start()
       val pids = pgrep.inputStream.bufferedReader().readText().trim()
@@ -152,7 +201,55 @@ class IosVideoCapture : CaptureStream {
     return false
   }
 
+  /** Drains the merged output of [proc] into [processOutput] on a daemon thread until EOF. */
+  private fun drainProcessOutput(proc: Process) {
+    Thread(
+      {
+        try {
+          proc.inputStream.bufferedReader().use { reader ->
+            reader.forEachLine { line ->
+              synchronized(processOutput) {
+                processOutput.appendLine(line)
+                // Bound the buffer: only a short tail is ever read for a diagnostic line, but a long
+                // session's simctl output would otherwise grow it without limit. Keep the last chunk.
+                if (processOutput.length > MAX_PROCESS_OUTPUT_CHARS) {
+                  processOutput.delete(0, processOutput.length - MAX_PROCESS_OUTPUT_CHARS)
+                }
+              }
+            }
+          }
+        } catch (_: Exception) {
+          // Expected when the process is force-killed mid-read.
+        }
+      },
+      "ios-video-recording-drain",
+    ).apply {
+      isDaemon = true
+      start()
+    }
+  }
+
+  /** Snapshot of the accumulated recorder output for a diagnostic log line. */
+  private fun drainedOutput(): String = synchronized(processOutput) { processOutput.toString().trim() }
+
   companion object {
+    /**
+     * `pgrep -f` pattern matching any Trailblaze `simctl recordVideo` for [deviceId] — any
+     * `.../video<anything>.mp4` basename, so both `video.mp4` and the `video.simctl.mp4` remainder
+     * match, while a non-Trailblaze basename (e.g. a CI shard's `logs/simulator_recording.mp4`)
+     * doesn't. `[^/]*` keeps the wildcard within a single path component. Extracted (with
+     * [matchesStaleTrailblazeRecording]) so the discrimination is unit-testable without pgrep.
+     */
+    internal fun staleRecordingPgrepPattern(deviceId: String): String =
+      "simctl io $deviceId recordVideo .*/video[^/]*\\.mp4"
+
+    /** True when [commandLine] would be matched by [staleRecordingPgrepPattern] (pgrep -f is unanchored). */
+    internal fun matchesStaleTrailblazeRecording(deviceId: String, commandLine: String): Boolean =
+      Regex(staleRecordingPgrepPattern(deviceId)).containsMatchIn(commandLine)
+
+    /** Cap on the retained recorder-output tail — enough for a diagnostic line, bounded for a long session. */
+    private const val MAX_PROCESS_OUTPUT_CHARS = 8192
+
     /** Time to wait after starting xcrun to verify the process is still alive. */
     private const val RECORDING_START_VERIFY_MS = 1000L
     /** Time to wait after killing stale processes for the simulator to release its lock. */
@@ -164,9 +261,11 @@ class IosVideoCapture : CaptureStream {
   override fun stop(options: CaptureOptions): CaptureArtifact? {
     val proc = process ?: run {
       Console.log("iOS video capture: process is null — recording never started")
+      recordingFile?.delete()
       return null
     }
     val file = videoFile ?: return null
+    val recording = recordingFile ?: return null
 
     // Capture the recording-end wall-clock BEFORE the SIGINT + waitFor block — the simulator
     // can take seconds to flush its moov atom after SIGINT, and the artifact's endTimestampMs
@@ -195,9 +294,7 @@ class IosVideoCapture : CaptureStream {
           proc.destroyForcibly()
         }
       } else {
-        // Drain process output for diagnostics (safe since process has exited)
-        val output = try { proc.inputStream.bufferedReader().readText().trim() } catch (_: Exception) { "" }
-        Console.log("iOS recording stopped: exitCode=${proc.exitValue()}, output=$output")
+        Console.log("iOS recording stopped: exitCode=${proc.exitValue()}, output=${drainedOutput()}")
       }
     } catch (e: Exception) {
       Console.log("Error stopping iOS video recording: ${e.message}")
@@ -215,9 +312,32 @@ class IosVideoCapture : CaptureStream {
 
     process = null
 
+    // Move the finalized temp recording onto the session-dir target (see start() for why the
+    // recording lands in the temp dir first). This JVM owns the session dir, so the move
+    // succeeds even where SimRender couldn't write the recording there directly.
+    if (recording.exists() && recording.length() > 0L) {
+      try {
+        Files.move(recording.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+      } catch (e: Exception) {
+        Console.log("Failed to move iOS recording into session dir: ${e.message}")
+      }
+    }
+    recording.delete()
+
     if (!file.exists() || file.length() == 0L) {
       Console.log("iOS video recording produced no output: exists=${file.exists()}, length=${if (file.exists()) file.length() else -1}, path=${file.absolutePath}")
       return null
+    }
+
+    // Raw-mp4 mode: hand back the untouched recording. BaguetteIosVideoCapture uses this for a
+    // simctl *remainder* segment it will stitch and sprite-ify itself.
+    if (!extractSprite) {
+      return CaptureArtifact(
+        file = file,
+        type = CaptureType.VIDEO,
+        startTimestampMs = startTimestampMs,
+        endTimestampMs = endTimestampMs,
+      )
     }
 
     // Generate a WebP sprite sheet from the video.
@@ -230,11 +350,13 @@ class IosVideoCapture : CaptureStream {
         frameHeight = options.spriteFrameHeight,
         webpQuality = options.spriteQuality,
         isLandscape = isLandscape,
-        // The simulator's recordVideo writes a properly-timestamped mp4, so the duration
-        // sanity-check inside the extractor is a no-op in the healthy case. Pass it anyway
-        // so a future regression (truncated mp4, force-kill leaving a bad moov atom, etc.)
-        // self-corrects to a wall-clock-indexed sprite sheet.
+        // The simulator's recordVideo writes a properly-timestamped but variable-frame-rate
+        // mp4 — a run that ends on a static screen reports a container that stops at the last
+        // change, and that static tail can span most of the session. The trusted flag + the
+        // wall-clock window let the extractor tail-pad that shortfall (cloning the last frame,
+        // keeping the healthy native timestamps) instead of guessing a constant frame rate.
         expectedDurationMs = endTimestampMs - startTimestampMs,
+        vfrTimestampsTrusted = true,
       )
     if (spriteSheet != null) {
       return CaptureArtifact(

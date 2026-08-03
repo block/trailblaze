@@ -289,13 +289,10 @@ function TmSection({ label, children }) {
   return <div style={{ marginBottom: 18 }}><div className="tb-eyebrow" style={{ marginBottom: 8 }}>{label}</div>{children}</div>;
 }
 
-// Wrap a component's recorded `tools:` steps into a one-step trail the daemon can
-// execute directly (same shape the Tools Test tab uses).
-function buildStepsRunYaml(label, tools) {
-  const lines = ['- config:', `    title: ${JSON.stringify('Run: ' + label)}`, '- prompts:', `  - step: ${JSON.stringify('Run: ' + label)}`, '    recording:', '      tools:'];
-  const dumped = (window.jsyaml ? window.jsyaml.dump(tools, { lineWidth: -1 }) : '').replace(/\n+$/, '');
-  dumped.split('\n').forEach((l) => lines.push(l ? '      ' + l : l));
-  return lines.join('\n');
+// Wrap a component's recorded `tools:` steps into a one-step unified trail the daemon can decode and
+// execute directly (same shape the Tools Test tab uses), keyed by the target device's classifier.
+function buildStepsRunYaml(label, tools, platform) {
+  return window.TrailYamlBuild.buildToolListRunYaml(label, tools, platform);
 }
 
 function ComponentRunTab({ comp, kind, text }) {
@@ -310,7 +307,11 @@ function ComponentRunTab({ comp, kind, text }) {
   const steps = doc && Array.isArray(doc.tools) ? doc.tools : [];
   const list = devices.data || [];
   const picked = list.find((d) => d.id === deviceId) || null;
-  const yaml = steps.length ? buildStepsRunYaml(comp.label, steps) : '';
+  // Unified recordings must be keyed by a device classifier. Key by the picked device's platform;
+  // before a device is picked, preview against the first connected device's platform so the preview
+  // isn't empty. The run below only fires with a picked device, so it always keys by the real target.
+  const runPlatform = (picked && picked.platform) || (list[0] && list[0].platform) || '';
+  const yaml = steps.length && runPlatform ? buildStepsRunYaml(comp.label, steps, runPlatform) : '';
 
   const run = async () => {
     if (!picked || busy || !steps.length) return;

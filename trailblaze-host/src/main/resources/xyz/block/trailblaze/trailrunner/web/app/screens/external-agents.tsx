@@ -132,7 +132,8 @@ function ExternalAgentsScreen({ go, agents, sel, onSel, initSel, active = true }
 
   // Companion runs (driven by an agent CLI outside Trail Runner) have their own read-only screen;
   // this screen's chat/composer only makes sense for runs the daemon spawned and can talk back to.
-  const runs = ((agentsHook.data && agentsHook.data.runs) || []).filter((r) => !r.companion);
+  const allRuns = (agentsHook.data && agentsHook.data.runs) || [];
+  const runs = allRuns.filter((r) => !r.companion);
   const supported = (agentsHook.data && agentsHook.data.supportedAgents) || [];
   const cur = sel !== 'new' ? runs.find((r) => r.id === sel) || null : null;
 
@@ -181,7 +182,11 @@ function ExternalAgentsScreen({ go, agents, sel, onSel, initSel, active = true }
             <button type="button" onClick={() => setNotice(null)} style={{ border: 'none', background: 'transparent', color: 'var(--text-subtle)', cursor: 'pointer' }}><Ico n="x" s={14} /></button>
           </div>
         )}
-        {cur && cur.demo ? (
+        {agentsHook.loading && !agentsHook.data && sel !== 'new' ? (
+          <div style={{ width: 'min(760px, 100%)', margin: '0 auto', padding: '34px 32px' }}>
+            <Skeleton rows={6} label="Loading create sessions" />
+          </div>
+        ) : cur && cur.demo ? (
           // A demo run drives the demonstrate-first flow (position -> demonstrate -> describe ->
           // generate) instead of the agent chat. The phase lives on cur.demo, so a refresh restores
           // the right step; this component only drives the device and collects the objective.
@@ -196,6 +201,7 @@ function ExternalAgentsScreen({ go, agents, sel, onSel, initSel, active = true }
         ) : (
           <ExternalAgentChat
             run={cur}
+            agentsHook={agentsHook}
             supported={supported}
             go={go}
             active={active}
@@ -212,7 +218,7 @@ function ExternalAgentsScreen({ go, agents, sel, onSel, initSel, active = true }
 
 // ─── Conversation view ───────────────────────────────────────────────────────
 
-function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onStarted, onTurn }) {
+function ExternalAgentChat({ run, agentsHook, supported, go, active, onStop, stopping, onStarted, onTurn }) {
   const running = !!run && run.status === 'running';
   // A solo session is the same composition minus the agent: the narration column becomes a guide
   // strip, the composer and the reasoning strip never render. Subtraction, not a second design.
@@ -386,7 +392,7 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
   async function confirmPending() {
     if (!pending || stepBusy || !run) return;
     setAppendArm(null);
-    const runnable = buildRunnableToolYaml(pending.label || 'step', pending.yaml);
+    const runnable = buildRunnableToolYaml(pending.label || 'step', pending.yaml, stagePlatform);
     if (!runnable) { setStepErr('This step has no runnable tools.'); return; }
     setStepBusy(true);
     const r = await mirror.sendGesture({
@@ -502,7 +508,7 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
 
   const conversation = (
     <AgentConversationColumn
-      run={run} supported={supported} go={go} events={events} eventsLoading={eventsHook.loading}
+      run={run} agentsHook={agentsHook} supported={supported} go={go} events={events} eventsLoading={eventsHook.loading}
       running={running} pins={pins} onStarted={onStarted} onTurn={onTurn}
       pendingQuestions={pendingQuestions}
       recording={!!run} narrow={!!run} solo={solo} />
@@ -533,8 +539,9 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
           </>
         ) : (
           <>
-            <Ico n="message-square-plus" s={15} c="var(--tb-ai)" />
-            <span style={{ flex: 1, fontSize: 14, fontWeight: 700 }}>New session</span>
+            <Ico n="bot" s={16} c="var(--tb-ai)" />
+            <span style={{ flex: 1, fontSize: 14, fontWeight: 700 }}>New trail</span>
+            <Chip tone="purple">External agent</Chip>
           </>
         )}
       </div>
@@ -577,7 +584,7 @@ function ExternalAgentChat({ run, supported, go, active, onStop, stopping, onSta
 // The conversation stream + composer: full-width on the new-session canvas, the narration rail
 // (narrow, no reading-measure cap) once a session exists. Owns its own stick-to-bottom scroll so
 // either host can drop it in.
-function AgentConversationColumn({ run, supported, go, events, eventsLoading, running, pins, onStarted, onTurn, pendingQuestions, recording, narrow, solo }) {
+function AgentConversationColumn({ run, agentsHook, supported, go, events, eventsLoading, running, pins, onStarted, onTurn, pendingQuestions, recording, narrow, solo }) {
   // groupPlumbingRuns + nestToolsUnderAssistant are display-only post-passes (NOT baked into
   // buildAgentTranscript, which the device event log and share export also consume): the first
   // folds long runs of quiet internal tool calls into one collapsed group so a grep-heavy agent
@@ -588,7 +595,9 @@ function AgentConversationColumn({ run, supported, go, events, eventsLoading, ru
   const stickToBottomRef = React.useRef(true);
   React.useEffect(() => {
     const el = scrollRef.current;
-    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (!run) { el.scrollTop = 0; return; }
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [events.length, run && run.status]);
   // KEEP the pin as content settles: a fresh mount renders the whole backlog, then cards,
   // screenshots, and code blocks finish laying out and grow the content long after the one-shot
@@ -598,6 +607,9 @@ function AgentConversationColumn({ run, supported, go, events, eventsLoading, ru
   React.useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Create is a top-to-bottom setup surface, not a transcript. Reusing the conversation column's
+    // bottom pin used to open it halfway down the page and hide the workflow title.
+    if (!run) { stickToBottomRef.current = true; el.scrollTop = 0; return; }
     // Re-stick on every conversation switch: the column persists across selections (the screen is
     // keep-mounted), so one upward scroll in an old conversation must not disable following forever.
     stickToBottomRef.current = true;
@@ -648,7 +660,7 @@ function AgentConversationColumn({ run, supported, go, events, eventsLoading, ru
               </>
             )
           ) : (
-            <AgentNewConversationBody go={go} onStarted={onStarted} />
+            <AgentNewConversationBody go={go} agentsHook={agentsHook} />
           )}
         </div>
       </div>
@@ -757,124 +769,72 @@ function AgentTrailTapePanel({ tape, events, pendingStep, stepErr, go, trailhead
   );
 }
 
-// The null state is the session brief: name the target the trail is for, pick the device you'll
-// demonstrate on (the pick carries into the session's mirror), and go - the two decisions a
-// demonstration needs. Everything else (positioning, trailheads, describing) lives in the
-// demonstration flow itself.
-function AgentNewConversationBody({ go, onStarted }) {
+// The external agent is the author; this page is only the handoff into Companion. Device selection
+// deliberately does not exist here — the connected agent asks for a device or arms a recording at
+// the moment evidence is needed. Legacy demonstration runs remain readable above, but new work no
+// longer starts a second, competing state machine.
+function AgentNewConversationBody({ go, agentsHook }) {
   const [gt] = TB.useGlobalTarget();
-  const target = gt && gt.target;
-  const devices = TB.useDevices();
-  const deviceList = (devices.data || []).filter((d) => d.connected);
-  // Same sticky key as the composer's uiContext handoff and useAgentDeviceMirror - all three are
-  // mounted at once, so the pick reaches them via useStickyState's cross-instance sync.
-  const [deviceId, setDeviceId] = useStickyState('tb-agent-device', null);
-  const selectedDevice = deviceList.find((d) => d.id === deviceId) || null;
-  // "Choose target" opens the full target/device picker in a drawer INSTEAD of navigating to
-  // Home - the session brief stays alive underneath.
   const [pickingTarget, setPickingTarget] = React.useState(false);
+  const [waiting, setWaiting] = React.useState(false);
+  const knownCompanionsRef = React.useRef(new Set());
+  const copiedAtRef = React.useRef(0);
+  const companionRuns = (((agentsHook && agentsHook.data && agentsHook.data.runs) || [])
+    .filter((r) => !!r.companion));
+
   React.useEffect(() => {
-    // Picking a different target is the decision the drawer exists for - close it on success.
-    if (pickingTarget && target) setPickingTarget(false);
-  }, [target]);
+    if (pickingTarget && gt && gt.target) setPickingTarget(false);
+  }, [gt && gt.target]);
+
+  // The shared hook polls automatically only after a running session already exists. While the
+  // human is pasting the brief into an external CLI, keep this one waiting surface fresh so a new
+  // Companion attachment can replace it without a manual refresh.
   React.useEffect(() => {
-    if ((!deviceId || !deviceList.some((d) => d.id === deviceId)) && deviceList.length) setDeviceId(deviceList[0].id);
-  }, [devices.data]);
-  // Interact's form language: a numbered dot + eyebrow label per section, hairline-separated
-  // sections, and the full-width Select field (label inside the control) instead of filter chips.
-  const dotStyle = { width: 16, height: 16, borderRadius: 99, border: '1px solid var(--text-subtle)', color: 'var(--text-subtle)', fontSize: 9.5, fontWeight: 700, display: 'inline-grid', placeItems: 'center', flex: '0 0 auto' };
-  // A made decision completes its dot in the app's "done" green with a check (the same treatment
-  // as captured tape steps) - color carries state, the glyph is the redundant cue (ch08).
-  const doneDotStyle = { ...dotStyle, border: '1px solid transparent', background: 'rgba(0,224,19,.14)', color: 'var(--tb-pass)' };
-  const sectionLabel = (n, text, done) => (
-    <label className="tb-eyebrow" style={{ fontSize: 9.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-      <span style={done ? doneDotStyle : dotStyle}>{done ? <Ico n="check" s={10} c="var(--tb-pass)" /> : n}</span>{text}
-    </label>
-  );
-  const sectionStyle = { borderTop: '1px solid var(--tb-hairline)', padding: '10px 13px 12px', display: 'flex', flexDirection: 'column', gap: 7 };
-  // Options carry the icon of what the thing IS: devices get their platform mark - no default wrenches.
-  const platIco = (p) => (p === 'ios' ? 'apple' : p === 'web' ? 'globe' : 'smartphone');
-  // The one door in: create a demo run bound to the picked device, then hand off to the phased
-  // Position -> Record -> Describe -> Generate flow. Needs a target and a connected device -
-  // everything after is driven on that device.
-  const [demoStarting, setDemoStarting] = React.useState(false);
-  const [demoErr, setDemoErr] = React.useState(null);
-  const canDemo = !!target && !!selectedDevice;
-  const beginDemo = async () => {
-    if (demoStarting || !canDemo) return;
-    setDemoStarting(true);
-    setDemoErr(null);
-    const r = await TB.startDemo({
-      target: target || null,
-      platform: selectedDevice.platform || null,
-      trailblazeDeviceId: { instanceId: selectedDevice.id, trailblazeDevicePlatform: (selectedDevice.platform || '').toUpperCase() },
-      title: 'Record: ' + ((gt && (gt.label || gt.target)) || 'recording'),
-    });
-    setDemoStarting(false);
-    if (!r || r.ok === false || !r.runId) { setDemoErr((r && r.error) || 'Could not start the session.'); return; }
-    if (onStarted) onStarted({ id: r.runId });
+    if (!waiting || !agentsHook) return;
+    agentsHook.reload();
+    const id = setInterval(() => agentsHook.reload(), 1500);
+    return () => clearInterval(id);
+  }, [waiting, agentsHook]);
+
+  React.useEffect(() => {
+    if (!waiting) return;
+    // Companion attach already enforces the daemon's primary workspace. Do not compare cwd strings
+    // here: the CLI canonicalizes symlinks while the configured workspace preserves the user's path.
+    const match = companionRuns
+      .filter((r) => r.status === 'running')
+      .filter((r) => !knownCompanionsRef.current.has(r.id))
+      .filter((r) => !copiedAtRef.current || (r.startedAtMs || 0) >= copiedAtRef.current - 5000)
+      .sort((a, b) => (b.startedAtMs || 0) - (a.startedAtMs || 0))[0];
+    if (!match) return;
+    setWaiting(false);
+    go('companion', { runId: match.id });
+  }, [waiting, companionRuns.map((r) => `${r.id}:${r.status}`).join('|')]);
+
+  const onCopied = ({ copiedAt }) => {
+    knownCompanionsRef.current = new Set(companionRuns.map((r) => r.id));
+    copiedAtRef.current = copiedAt;
+    setWaiting(true);
   };
+
   return (
-    <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-      <div style={{ width: 'min(560px, 100%)', paddingTop: 'clamp(24px, 10vh, 110px)' }}>
-        <EmptyState ico="clapperboard" icoColor="var(--tb-ai)" icoBg="rgba(181,140,255,.12)" title="Record a demonstration" sub="Show the flow once on a live device - an agent turns it into a durable, verified trail." />
-        {/* The whole brief: pick the app, pick the device, go. */}
-        <div style={{ marginTop: 16, border: '1px solid var(--tb-hairline)', borderRadius: 10, background: 'var(--bg-subtle)', overflow: 'hidden' }}>
-          <div style={{ ...sectionStyle, borderTop: 'none' }}>
-            {sectionLabel(1, 'Target', !!gt)}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <AppIcon target={target} size={26} radius={7} fallbackColor={gt ? 'var(--tb-pass)' : 'var(--text-subtle-variant)'} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gt ? (gt.label || gt.target) : 'No target selected'}</div>
-                {!gt && <div className="tb-sub" style={{ fontSize: 10.5, lineHeight: 1.4 }}>Pick the app this trail is for.</div>}
-              </div>
-              <Btn sm onClick={() => setPickingTarget(true)}>{gt ? 'Change' : 'Choose target'}</Btn>
-            </div>
-          </div>
-          <div style={sectionStyle}>
-            {sectionLabel(2, 'Device', !!(deviceList.length && deviceId && deviceList.some((d) => d.id === deviceId)))}
-            {deviceList.length ? (
-              <Select full value={deviceId || ''}
-                options={deviceList.map((d) => ({
-                  value: d.id,
-                  label: d.name || d.id,
-                  ico: platIco(d.platform),
-                  meta: [d.platform, (d.name || d.id) !== d.id ? d.id : null].filter(Boolean).join(' · '),
-                }))}
-                onChange={(e) => setDeviceId(e.target.value)} />
-            ) : devices.loading && !devices.data ? (
-              // First paint: the device fetch is still in flight - "No devices connected" is a
-              // hard claim we can't make yet (same class as the home footer's first-paint fix).
-              <span className="tb-sub" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
-                <Ico n="loader-circle" s={11} spin /> Looking for connected devices…
-              </span>
-            ) : (
-              <span className="tb-sub" style={{ fontSize: 11.5, lineHeight: 1.4 }}>No devices connected.</span>
-            )}
-          </div>
-        </div>
-        {/* One door in: target + device above, this button below. Everything else lives in the
-            demonstration itself. */}
-        <button type="button" onClick={beginDemo} disabled={demoStarting || !canDemo}
-          title={!target ? 'Choose a target first' : !selectedDevice ? 'Connect a device first' : 'Jump into the demonstration'}
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 14, background: canDemo ? 'linear-gradient(180deg, rgba(181,140,255,.14), rgba(181,140,255,.05))' : 'var(--bg-subtle)', border: '1px solid ' + (canDemo ? 'var(--tb-ai)' : 'var(--tb-hairline)'), color: 'var(--text-standard)', borderRadius: 12, padding: '12px 15px', cursor: (demoStarting || !canDemo) ? 'default' : 'pointer', font: 'inherit', fontSize: 13.5, fontWeight: 700, opacity: demoStarting ? .7 : 1 }}>
-          <Ico n={demoStarting ? 'loader-circle' : 'clapperboard'} s={17} c="var(--tb-ai)" spin={demoStarting} style={{ flex: '0 0 auto' }} />
-          Start the demonstration
-        </button>
-        {!canDemo && (
-          <div className="tb-sub" style={{ marginTop: 8, fontSize: 11, textAlign: 'center', color: 'var(--tb-amber)' }}>
-            {!target ? 'Choose a target above to begin.' : 'Connect a device to begin.'}
-          </div>
-        )}
-        {demoErr && (
-          <div role="alert" style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginTop: 8, padding: '7px 10px', borderRadius: 8, border: '1px solid rgba(255,90,90,.35)', background: 'rgba(255,90,90,.06)' }}>
-            <Ico n="triangle-alert" s={13} c="var(--tb-danger-text)" style={{ flex: '0 0 auto', marginTop: 1 }} />
-            <span data-selectable style={{ fontSize: 12, color: 'var(--tb-danger-text)', fontWeight: 600, lineHeight: 1.45 }}>The session did not start: {demoErr}</span>
-          </div>
-        )}
-      </div>
+    <div className="tb-create-onramp">
+      <aside className="tb-create-progress" aria-label="Create trail workflow">
+        <ol>
+          <li className={waiting ? 'done' : 'active'}><i>{waiting ? <Ico n="check" s={11} /> : '1'}</i><span><strong>Brief agent</strong></span></li>
+          <li className={waiting ? 'active' : ''}><i>2</i><span><strong>Connect</strong></span></li>
+          <li><i>3</i><span><strong>Build & verify</strong></span></li>
+        </ol>
+      </aside>
+
+      <main className="tb-create-content">
+        <div className="tb-create-agent-kicker"><Ico n="bot" s={17} c="var(--tb-ai)" /> EXTERNAL AGENT</div>
+        <h1>Build a trail with your agent</h1>
+        <p>Your coding agent authors the trail in this workspace. Trail Runner becomes its companion for live devices, recordings, and verification.</p>
+        <ExternalAgentPromptPanel onCopied={onCopied} onPickTarget={() => setPickingTarget(true)} waiting={waiting} />
+      </main>
+
       {pickingTarget && (
-        <HelpOverlay title="Choose target" sub="Pick the app this trail is for. Your session setup stays right here - the drawer closes once a target is picked." onClose={() => setPickingTarget(false)}>
+        <HelpOverlay title="Choose target" sub="Optional context for the agent brief. You can also choose the app later when your agent asks." onClose={() => setPickingTarget(false)}>
           <TargetDevicePicker go={go} />
         </HelpOverlay>
       )}
@@ -1272,7 +1232,7 @@ function AgentComposer({ run, supported, go, onStarted, onTurn, recording, pendi
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '6px 10px', borderRadius: 9, background: 'rgba(155,124,255,.07)', border: '1px solid rgba(155,124,255,.28)' }}>
             <Ico n="sparkles" s={13} c="var(--tb-ai)" style={{ flex: '0 0 auto' }} />
             <span style={{ flex: '0 0 auto', fontSize: 11.5, fontWeight: 700 }}>Guided trail composition</span>
-            {preset.trailhead && <span className="tb-mono" style={{ flex: '0 0 auto', fontSize: 10.5, color: 'var(--text-subtle-variant)' }}>from {preset.trailhead}{preset.summary ? ` · ${preset.summary}` : ''}</span>}
+            {preset.trailhead && <span style={{ flex: '0 0 auto', fontSize: 10.5, color: 'var(--text-subtle-variant)' }}>from {preset.trailhead}{preset.summary ? ` · ${preset.summary}` : ''}</span>}
             <span className="tb-sub" style={{ flex: 1, minWidth: 0, fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Rides along under the hood.</span>
             <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('tb:agent-composer-preset'))} title="Remove - start a plain conversation instead"
               style={{ flex: '0 0 auto', display: 'inline-flex', border: 'none', background: 'transparent', color: 'var(--text-subtle)', cursor: 'pointer', padding: 2 }}>
@@ -2392,6 +2352,7 @@ function queueMirrorOp(fn) {
 function useAgentDeviceMirror(active) {
   const devices = TB.useDevices();
   const deviceList = (devices.data || []).filter((d) => d.connected);
+  const devicesPending = devices.loading && !devices.data;
   // Sticky, sharing a key with the new-conversation session brief: the device picked before the
   // session starts is the one the mirror connects to once it exists.
   const [selectedId, setSelectedId] = useStickyState('tb-agent-device', null);
@@ -2585,7 +2546,7 @@ function useAgentDeviceMirror(active) {
   // address the device outside the gesture channel (tree inspector, trailhead replay).
   const tbId = () => connDeviceRef.current;
 
-  return { deviceList, selectedId, setSelectedId, conn, connecting, frame, imgRef: mirrorImgRef, canvasRef: mirrorCanvasRef, captureFrame, err, tapBusy, tapAt, swipeAt, longPressAt, toDeviceCoords, sendGesture, reconnect, tbId };
+  return { deviceList, devicesPending, selectedId, setSelectedId, conn, connecting, frame, imgRef: mirrorImgRef, canvasRef: mirrorCanvasRef, captureFrame, err, tapBusy, tapAt, swipeAt, longPressAt, toDeviceCoords, sendGesture, reconnect, tbId };
 }
 
 // The mirror's pre-frame states, told honestly. The Android connect brings up on-device
@@ -2770,7 +2731,7 @@ function shortPathSummary(s) {
 // saturated/live region on screen (dominance, ch06) - the device is the subject and everything
 // else is scaffolding. The chip names the stage's standing state: taps here are recorded as steps.
 function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe, stepBusy, inspect, mode, readOnly }) {
-  const { deviceList, selectedId, setSelectedId, frame, err, tapBusy } = mirror;
+  const { deviceList, devicesPending, selectedId, setSelectedId, frame, err, tapBusy } = mirror;
   const busy = tapBusy || stepBusy;
   // Drive mode: taps go straight to the device and record NOTHING - for navigating to a starting
   // state or backing out of a wrong screen. Two ways in: hold cmd/ctrl for a momentary drive, or
@@ -2896,7 +2857,9 @@ function AgentRecordStage({ mirror, runId, hasSteps, onStageClick, onStageSwipe,
       </div>
       <AgentDeviceError err={err} onReconnect={mirror.reconnect} />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 12, overflow: 'hidden' }}>
-        {deviceList.length === 0 ? (
+        {devicesPending ? (
+          <div style={{ width: 'min(420px, 90%)' }}><Skeleton rows={5} label="Loading devices" /></div>
+        ) : deviceList.length === 0 ? (
           <EmptyState ico="smartphone" title="Connect a device to demonstrate" sub="Taps you perform on a live device or emulator become the trail's steps. Connect one to begin." />
         ) : (
           /* The wrapper shrink-wraps the frame so the inspector's percentage boxes land exactly on

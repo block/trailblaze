@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.axe
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.Console
 
 /**
  * Thin wrapper around the [AXe CLI](https://github.com/cameroncooke/AXe).
@@ -22,6 +23,15 @@ object AxeCli {
   private const val AXE_BIN_DEFAULT = "/opt/homebrew/bin/axe"
 
   private val axeBin: String = System.getenv("AXE_BIN")?.takeIf { it.isNotBlank() } ?: AXE_BIN_DEFAULT
+
+  /**
+   * Earliest verified-good `axe` version. 1.5.2 was observed returning incomplete accessibility
+   * trees on iOS 26 (missing toolbar buttons — empirically verified: 16 nodes vs 131 for the
+   * same screen against 1.8.0); intermediate versions are untested, so the gate floors at the
+   * earliest version verified to produce complete trees rather than risk silently driving off
+   * a partial one.
+   */
+  internal const val MIN_VERSION = "1.8.0"
 
   /** Default fixed-delay settle after an interaction. */
   const val DEFAULT_SETTLE_MS: Long = 300L
@@ -184,35 +194,71 @@ object AxeCli {
     run(listOf(axeBin, "key", keycode.toString(), "--udid", udid), timeoutSeconds)
 
   /**
-   * Reports whether the AXe binary is available. For absolute paths, checks executability
-   * directly; for bare names (e.g. `AXE_BIN=axe`) relies on PATH by attempting a
-   * `--version` probe so we don't return false-negative when the binary is on PATH but not
-   * at the hard-coded default location.
+   * Reports whether the AXe binary is available AND meets [MIN_VERSION]. For absolute paths,
+   * checks executability directly; for bare names (e.g. `AXE_BIN=axe`) relies on PATH. Either
+   * way, an executable binary below [MIN_VERSION] still reports unavailable (see
+   * [computeAvailability]) since it drives off incomplete accessibility trees.
    *
-   * Result is memoized for the JVM lifetime — AXe isn't going to be installed/uninstalled
-   * mid-session, and this is called on every device-list refresh + every connect. A user
-   * who installs AXe mid-daemon can restart the daemon to pick it up.
+   * Result is memoized for the JVM lifetime — AXe isn't going to be installed/uninstalled or
+   * upgraded mid-session, and this is called on every device-list refresh + every connect. A
+   * user who installs or upgrades AXe mid-daemon can restart the daemon to pick it up.
    */
   fun isAvailable(): Boolean = cachedAvailability ?: computeAvailability().also { cachedAvailability = it }
 
   @Volatile private var cachedAvailability: Boolean? = null
 
   private fun computeAvailability(): Boolean {
-    if (File(axeBin).isAbsolute) {
-      return File(axeBin).canExecute()
+    if (File(axeBin).isAbsolute && !File(axeBin).canExecute()) {
+      return false
     }
-    return try {
-      val proc = ProcessBuilder(axeBin, "--version").redirectErrorStream(true).start()
-      val finished = proc.waitFor(2, TimeUnit.SECONDS)
-      if (!finished) {
-        proc.destroyForcibly()
-        false
-      } else {
-        proc.exitValue() == 0
-      }
-    } catch (_: Exception) {
-      false
+    val versionOutput = probeVersionOutput() ?: return false
+    val found = parseAxeVersion(versionOutput)
+    if (found == null || compareVersions(found, MIN_VERSION) < 0) {
+      Console.log(
+        "[AxeCli] axe version too old (found ${found ?: "unrecognized"}, requires >= $MIN_VERSION) " +
+          "— older versions return incomplete accessibility trees. Run: brew upgrade axe",
+      )
+      return false
     }
+    return true
+  }
+
+  private fun probeVersionOutput(): String? = try {
+    val proc = ProcessBuilder(axeBin, "--version").redirectErrorStream(true).start()
+    val finished = proc.waitFor(2, TimeUnit.SECONDS)
+    if (!finished) {
+      proc.destroyForcibly()
+      null
+    } else if (proc.exitValue() != 0) {
+      null
+    } else {
+      proc.inputStream.bufferedReader().readText()
+    }
+  } catch (_: Exception) {
+    null
+  }
+
+  /**
+   * Extracts a dotted version number (e.g. "1.8.0") from raw `axe --version` output, tolerating
+   * a leading "v" and surrounding text (e.g. "axe version v1.8.0"). Null when no version-shaped
+   * token is found — callers treat that as too old to trust.
+   */
+  internal fun parseAxeVersion(rawOutput: String): String? =
+    Regex("""v?(\d+(?:\.\d+){1,2})""").find(rawOutput)?.groupValues?.get(1)
+
+  /**
+   * Component-wise comparison of two dotted version strings, tolerating a 2- or 3-segment
+   * mismatch by padding the shorter one with zeros. Negative if [a] < [b], zero if equal,
+   * positive if [a] > [b].
+   */
+  internal fun compareVersions(a: String, b: String): Int {
+    val aParts = a.split(".").map { it.toIntOrNull() ?: 0 }
+    val bParts = b.split(".").map { it.toIntOrNull() ?: 0 }
+    for (i in 0 until maxOf(aParts.size, bParts.size)) {
+      val diff = aParts.getOrElse(i) { 0 } - bParts.getOrElse(i) { 0 }
+      if (diff != 0) return diff
+    }
+    return 0
   }
 
   /**

@@ -27,10 +27,9 @@ import xyz.block.trailblaze.util.Console
  *     session's log dir (no temp-dir + move dance — the dir already exists by the time
  *     the session id is known), and [stopForSession] runs `stopAll()` and writes a
  *     `capture_debug.txt` next to the artifacts for diagnostics.
- *  3. Stays out of the way for platforms where capture isn't wired (today: iOS, which is
- *     disabled in [CaptureSession.fromOptions]; Compose/desktop, which has no branch).
- *     [startForSession] short-circuits with `false` so callers can treat it as
- *     fire-and-forget.
+ *  3. Stays out of the way for platforms where capture isn't wired (Compose/desktop, which has no
+ *     branch in [CaptureSession.fromOptions]). [startForSession] short-circuits with `false` so
+ *     callers can treat it as fire-and-forget.
  *
  * ### Concurrency
  *
@@ -58,10 +57,25 @@ class SessionCaptureCoordinator(
    * Test seam — swap the real `CaptureSession.fromOptions` for a factory that returns
    * fake `CaptureSession` instances so unit tests can drive idempotency / race /
    * exception paths without spawning real `screenrecord`/`xcrun` subprocesses.
-   * Production code uses the default.
+   * Production code uses the default, which records iOS video via the shipping simctl recorder
+   * unless the experimental baguette-stream recorder ([BaguetteIosVideoCapture]) is opted in via
+   * [IosBaguetteVideoGate] (`trailblaze config ios-baguette-video true` or
+   * `TRAILBLAZE_IOS_BAGUETTE_VIDEO=1`) — wall-clock-accurate frame timing so the report can overlay
+   * session-log events on the video, with simctl as its automatic fallback.
    */
   private val captureSessionFactory: (CaptureOptions, TrailblazeDevicePlatform) -> CaptureSession? =
-    { options, platform -> CaptureSession.fromOptions(options, platform) },
+    { options, platform ->
+      CaptureSession.fromOptions(
+        options,
+        platform,
+        iosVideoStreamOverride =
+          if (platform == TrailblazeDevicePlatform.IOS && IosBaguetteVideoGate.enabled()) {
+            BaguetteIosVideoCapture()
+          } else {
+            null
+          },
+      )
+    },
 ) {
 
   private class ActiveCapture(
@@ -103,8 +117,9 @@ class SessionCaptureCoordinator(
    *   authoritative.
    * @return `true` when this call reserved the slot and started a fresh capture;
    *   `false` when (a) the slot was already taken by another caller, (b) the platform
-   *   has no capture stream wired today (WEB / iOS / Compose), or (c) `startAll` threw
-   *   and the slot was cleaned up.
+   *   has no coordinator-owned capture stream (WEB, which self-instruments — see below —
+   *   or Compose/desktop, which has no branch in [CaptureSession.fromOptions]; Android
+   *   and iOS are both wired), or (c) `startAll` threw and the slot was cleaned up.
    */
   fun startForSession(
     sessionId: SessionId,
@@ -119,14 +134,13 @@ class SessionCaptureCoordinator(
     // dir, the manager's `syncRecordingWithRegistry` tears down + recreates the
     // BrowserContext at exactly the moment the trail is trying to navigate, wedging
     // the runBlocking call on the Playwright dispatcher thread. Web MCP capture is a
-    // separate follow-up; this coordinator exists for Android (and iOS once
-    // re-enabled in `CaptureSession.fromOptions`).
+    // separate follow-up; this coordinator drives Android and iOS capture.
     if (platform == TrailblazeDevicePlatform.WEB) return false
 
     // Step 1: reserve the slot atomically under `lock`. Bail if another caller already
     // owns this sessionId, if this id was tombstoned by a previous failed `stopAll`
     // (could still have a leaked subprocess we don't want to race), OR if no capture
-    // stream is wired for this platform (iOS today returns null from `fromOptions`).
+    // stream is wired for this platform (`fromOptions` returns null when capture is off).
     val reservation: ActiveCapture = synchronized(lock) {
       if (active.containsKey(sessionId)) return false
       if (tombstoned.contains(sessionId)) {
@@ -308,21 +322,18 @@ class SessionCaptureCoordinator(
     const val SHUTDOWN_PER_SESSION_TIMEOUT_MS = 3_000L
 
     /**
-     * Documentation baseline showing the shape of `CaptureOptions` production callers
-     * build inline (currently `TrailblazeDeviceManager.getOrCreateSessionResolution` and
-     * `DesktopYamlRunner.captureSessionStarted`). Kept here so reviewers can see the
-     * default sprite settings at a glance; also used by `SessionCaptureCoordinatorTest`
-     * via the injectable `captureSessionFactory` seam. Not auto-applied — passing
-     * misconfigured options silently records the wrong artifacts, so callers must
-     * resolve their own.
+     * Documentation baseline showing how production callers resolve `CaptureOptions`
+     * (currently `TrailblazeDeviceManager.getOrCreateSessionResolution` and
+     * `DesktopYamlRunner.captureSessionStarted`, all through
+     * `CaptureOptions.hostCaptureOptions`, which owns the sprite tuning and its env
+     * overrides). Also used by `SessionCaptureCoordinatorTest` via the injectable
+     * `captureSessionFactory` seam. Not auto-applied — passing misconfigured options
+     * silently records the wrong artifacts, so callers must resolve their own.
      */
-    val DEFAULT_CAPTURE_OPTIONS = CaptureOptions(
+    val DEFAULT_CAPTURE_OPTIONS = CaptureOptions.hostCaptureOptions(
       captureVideo = true,
       captureLogcat = true,
       captureIosLogs = true,
-      spriteFrameFps = 2,
-      spriteFrameHeight = 720,
-      spriteQuality = 80,
     )
   }
 }

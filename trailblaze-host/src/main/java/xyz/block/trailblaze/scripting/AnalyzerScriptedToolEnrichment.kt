@@ -110,7 +110,9 @@ class AnalyzerScriptedToolEnrichment(
         bunBinary = bun,
         extractorShim = shim,
         sdkDir = sdkDir,
-        cacheDir = ScriptedToolDefinitionCache.resolveDefaultCacheDir(),
+        // Workspace-aware and re-resolved per analyze(): cache entries land under the
+        // currently-selected workspace's `.trailblaze/`, not the daemon's launch cwd.
+        cacheDirProvider = { ScriptedToolDefinitionCache.resolveWorkspaceCacheDir() },
       )
       return AnalyzerScriptedToolEnrichment(analyzer)
     }

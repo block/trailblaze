@@ -2,8 +2,10 @@
 // embeddable EventStream out. These pin the two observable contracts formatter authors and the
 // viewer depend on: (1) a stream with a matching formatter embeds clamped FormattedRow data built
 // from FULL payloads, and (2) a stream without one — or whose formatter fails — keeps the generic
-// event shape. Either way, every line and every payload is embedded in full (no last-N window,
-// no preview truncation) — size is managed downstream by gzip + lazy rendering, not by dropping data.
+// event shape. Either way, this pipeline embeds every line and every payload in full (no last-N
+// window, no preview truncation) — size is managed downstream by gzip + lazy rendering, and by
+// the formatters themselves, which receive the session outcome (FormatterContext) and may
+// size-budget raw payloads of passed sessions.
 //
 // Run: `bun test run-report-events.test.ts` from this directory.
 import { describe, expect, test } from "bun:test";
@@ -14,8 +16,8 @@ const ev = require("./run-report-events.ts") as {
   decodeEventLine: (line: string) => FormatterEntry | null;
   resolveFormatterModule: (mod: unknown) => EventStreamFormatter | null;
   formatterForStream: (formatters: EventStreamFormatter[], name: string) => EventStreamFormatter | null;
-  formatRows: (formatter: EventStreamFormatter, entries: FormatterEntry[]) => FormattedRow[] | null;
-  buildEventStream: (file: string, lines: string[], formatters?: EventStreamFormatter[]) => EventStream | null;
+  formatRows: (formatter: EventStreamFormatter, entries: FormatterEntry[], ctx?: FormatterContext) => FormattedRow[] | null;
+  buildEventStream: (file: string, lines: string[], formatters?: EventStreamFormatter[], ctx?: FormatterContext) => EventStream | null;
 };
 
 // A request/response-pairing formatter, the shape a real network formatter takes: it sees the whole
@@ -32,7 +34,7 @@ const pairingFormatter: EventStreamFormatter = {
         const row: FormatterRowInput = {
           t: e.t,
           label: `${d.request.method} ${d.request.path}`,
-          sections: [{ title: "Request Headers", kv: Object.entries(d.request.headers || {}).map(([k, v]) => ({ k, v: String(v) })) }],
+          fields: [{ k: "path", v: d.request.path }],
           raw: [d],
         };
         rows.push(row);
@@ -44,7 +46,6 @@ const pairingFormatter: EventStreamFormatter = {
         m.row.badges = [{ text: String(code), tone: code >= 400 ? "error" : "ok" }];
         if (code >= 400) m.row.tone = "error";
         if (m.t != null && e.t != null) m.row.badges.push({ text: `${e.t - m.t}ms` });
-        m.row.sections!.push({ title: "Response Body", json: d.response.body });
         m.row.raw!.push(d);
       }
     }
@@ -161,7 +162,7 @@ describe("resolveFormatterModule", () => {
 });
 
 describe("buildEventStream with a formatter", () => {
-  test("pairs raw request/response lines into one row with status, duration, and sections", () => {
+  test("pairs raw request/response lines into one row with status, duration, and fields", () => {
     const stream = ev.buildEventStream(
       "com.example.plugin.network.ndjson",
       [reqLine("r1", 1000, "/2.0/pay"), respLine("r1", 1142, 200)],
@@ -173,14 +174,34 @@ describe("buildEventStream with a formatter", () => {
     expect(row.label).toBe("POST /2.0/pay");
     expect(row.t).toBe(1000);
     expect(row.badges).toEqual([{ text: "200", tone: "ok" }, { text: "142ms" }]);
-    // Structured `json` sections are serialized to text at embed time; kv sections stay tables.
-    expect(row.sections![0]).toEqual({ title: "Request Headers", kv: [{ k: "Accept", v: "application/json" }] });
-    expect(row.sections![1].text).toContain('"ok": true');
-    // Raw payloads (request + response) ride along for the Raw JSON expando.
+    expect(row.fields).toEqual([{ k: "path", v: "/2.0/pay" }]);
+    // Raw payloads (request + response) ride along as JSON VALUES, not pre-rendered strings —
+    // the viewer pretty-prints them when the row is expanded.
     expect(row.raw).toHaveLength(2);
+    expect(row.raw![0]).toEqual({
+      request: { id: "r1", method: "POST", path: "/2.0/pay", headers: { Accept: "application/json" } },
+    });
+    expect(row.raw![1]).toEqual({ response: { requestId: "r1", statusCode: 200, body: { ok: true } } });
     expect(stream.total).toBe(1);
     expect(stream.truncated).toBe(false);
     expect(stream.events).toEqual([]);
+  });
+
+  test("hands the session outcome to the formatter, defaulting to not-passed", () => {
+    // A formatter keys report size budgets off ctx.sessionPassed, so the pipeline must deliver an
+    // affirmative "passed" when the driver supplies one and the conservative default otherwise.
+    const seen: Array<FormatterContext | undefined> = [];
+    const observing: EventStreamFormatter = {
+      id: "observer",
+      streams: ["s"],
+      format(entries, ctx) {
+        seen.push(ctx);
+        return [{ t: 1, label: "row" }];
+      },
+    };
+    ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [observing], { sessionPassed: true });
+    ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [observing]);
+    expect(seen).toEqual([{ sessionPassed: true }, { sessionPassed: false }]);
   });
 
   test("failed responses carry the error tone", () => {
@@ -193,40 +214,70 @@ describe("buildEventStream with a formatter", () => {
     expect(stream.rows![0].badges![0]).toEqual({ text: "503", tone: "error" });
   });
 
-  test("UI-chrome parts are clamped; content parts survive far beyond the old preview budget", () => {
+  test("UI-chrome parts are clamped; raw payloads survive as whole values", () => {
     const noisy: EventStreamFormatter = {
       id: "noisy",
       streams: ["s"],
       format: () => [{
         label: "x".repeat(5000),
         badges: [{ text: "y".repeat(500) }],
-        sections: [{ title: "Body", text: "z".repeat(100_000) }],
         raw: [{ big: "w".repeat(100_000) }],
       }],
     };
     const row = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [noisy])!.rows![0];
     expect(row.label.length).toBeLessThanOrEqual(301);
     expect(row.badges![0].text.length).toBeLessThanOrEqual(41);
-    expect(row.sections![0].text!.length).toBe(100_000);
-    expect(row.raw![0].length).toBeGreaterThan(100_000);
+    // Raw entries are embedded as the value itself, untouched below the pathological backstop.
+    expect(row.raw![0]).toEqual({ big: "w".repeat(100_000) });
   });
 
-  test("a section with blank text still renders its json instead of being dropped", () => {
-    const blankText: EventStreamFormatter = {
-      id: "blank",
+  test("a field's http(s) href survives the clamp; non-web and malformed hrefs are dropped", () => {
+    const linky: EventStreamFormatter = {
+      id: "linky",
       streams: ["s"],
       format: () => [{
-        label: "row",
-        sections: [
-          { title: "Body", text: "", json: { a: 1 } },
-          { title: "Empty", text: "   " },
+        label: "notice",
+        fields: [
+          { k: "docs", v: "how to configure", href: "https://example.com/docs/page.md" },
+          { k: "plain", v: "no link" },
+          { k: "js", v: "evil", href: "javascript:alert(1)" },
+          { k: "rel", v: "relative", href: "/just/a/path" },
         ],
       }],
     };
-    const row = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [blankText])!.rows![0];
-    expect(row.sections).toHaveLength(1);
-    expect(row.sections![0].title).toBe("Body");
-    expect(row.sections![0].text).toContain('"a": 1');
+    const row = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [linky])!.rows![0];
+    expect(row.fields).toEqual([
+      { k: "docs", v: "how to configure", href: "https://example.com/docs/page.md" },
+      { k: "plain", v: "no link" },
+      { k: "js", v: "evil" },
+      { k: "rel", v: "relative" },
+    ]);
+  });
+
+  test("an unserializable raw entry degrades to a string instead of breaking the row", () => {
+    const circular: Record<string, unknown> = { name: "loop" };
+    circular.self = circular;
+    const weird: EventStreamFormatter = {
+      id: "weird",
+      streams: ["s"],
+      format: () => [{ label: "row", raw: [circular] }],
+    };
+    const row = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [weird])!.rows![0];
+    expect(typeof row.raw![0]).toBe("string");
+  });
+
+  test("a stringify-to-undefined raw entry (function) degrades to a BOUNDED string", () => {
+    // JSON.stringify(fn) returns undefined without throwing — this path must hit the same size
+    // backstop as the throwing path, or a pathological entry bypasses MAX_VALUE_CHARS entirely.
+    const huge = new Function(`return 1; //${"x".repeat(ev.MAX_VALUE_CHARS + 100)}`);
+    const weird: EventStreamFormatter = {
+      id: "weird",
+      streams: ["s"],
+      format: () => [{ label: "row", raw: [huge] }],
+    };
+    const row = ev.buildEventStream("s.ndjson", ['{"timeMs":1,"data":{}}'], [weird])!.rows![0];
+    expect(typeof row.raw![0]).toBe("string");
+    expect((row.raw![0] as string).length).toBeLessThanOrEqual(ev.MAX_VALUE_CHARS + 1);
   });
 
   test("rows without a valid label are dropped; an all-invalid result falls back to generic", () => {

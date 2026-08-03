@@ -158,11 +158,11 @@ function SettingsScreen({ go, initTab }) {
     );
   };
 
-  if (settings.loading || status.loading) {
+  if ((settings.loading && !settings.data) || (status.loading && !status.data)) {
     return (
       <div className="tb-in" style={{ padding: '28px 32px', maxWidth: 760, margin: '0 auto' }}>
-        <ScreenHead ico="settings" title="Settings" sub="Loading…" />
-        <div className="tb-card" style={{ padding: '18px' }}><Skeleton rows={6} /></div>
+        <ScreenHead ico="settings" title="Settings" />
+        <div className="tb-card" style={{ padding: '18px' }}><Skeleton rows={6} label="Loading settings" /></div>
       </div>
     );
   }
@@ -312,7 +312,7 @@ function SettingsScreen({ go, initTab }) {
 
   const AppearanceBody = () => (
     <Section title="Appearance">
-      <Row label="Theme" desc="System follows your OS appearance">
+      <Row label="Theme">
         <Select value={themePref} onChange={(e) => { setThemePref(e.target.value); applyTheme(e.target.value); }}
           options={[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]} />
       </Row>
@@ -331,7 +331,7 @@ function SettingsScreen({ go, initTab }) {
 
   return (
     <div className="tb-in" style={{ padding: '24px 28px', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <ScreenHead ico="settings" title="Settings" sub={available ? 'Live from the daemon - the process that scans your trails, talks to devices, and serves this app.' : 'Daemon facts are live; per-setting config is not yet wired.'} />
+      <ScreenHead ico="settings" title="Settings" />
       <div style={{ display: 'flex', gap: 22, alignItems: 'flex-start', flex: 1, minHeight: 0 }}>
         <nav style={{ flex: '0 0 190px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {TABS.map((t) => {

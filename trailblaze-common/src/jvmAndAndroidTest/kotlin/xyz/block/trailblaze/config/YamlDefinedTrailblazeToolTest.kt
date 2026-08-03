@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -34,17 +35,25 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  */
 class YamlDefinedTrailblazeToolTest {
 
+  /** The recorded step's tool wrappers, decoded from a unified doc for the android classifier. */
+  private fun decodeRecordedTools(yaml: String) =
+    TrailblazeYaml.Default.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools
+
   @Test
   fun `trail YAML eraseText decodes to YamlDefinedTrailblazeTool and expands with charactersToErase`() {
     val yaml = """
-- tools:
-    - eraseText:
-        charactersToErase: 3
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText:
+            charactersToErase: 3
     """.trimIndent()
 
-    val items = TrailblazeYaml.Default.decodeTrail(yaml)
-    assertThat(items).hasSize(1)
-    val tools = (items[0] as TrailYamlItem.ToolTrailItem).tools
+    val tools = decodeRecordedTools(yaml)
     assertThat(tools).hasSize(1)
     val decoded = tools[0].trailblazeTool
     assertThat(decoded).isInstanceOf(YamlDefinedTrailblazeTool::class)
@@ -72,13 +81,15 @@ class YamlDefinedTrailblazeToolTest {
     // so the parameter uses DropIfOmitted — the key is absent from the command, which is
     // what triggers Maestro's erase-all behavior.
     val yaml = """
-- tools:
-    - eraseText: {}
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText: {}
     """.trimIndent()
 
-    val items = TrailblazeYaml.Default.decodeTrail(yaml)
-    val tools = (items[0] as TrailYamlItem.ToolTrailItem).tools
-    val yamlDefined = tools[0].trailblazeTool as YamlDefinedTrailblazeTool
+    val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
 
     val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
     val yamlText = (expanded[0] as MaestroTrailblazeTool).yaml
@@ -96,14 +107,16 @@ class YamlDefinedTrailblazeToolTest {
     // bypassed DropIfOmitted and produced 'key: null' in YAML (no-op in Maestro).
     // The fix treats JsonNull the same as a missing parameter.
     val yaml = """
-- tools:
-    - eraseText:
-        charactersToErase: null
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText:
+            charactersToErase: null
     """.trimIndent()
 
-    val items = TrailblazeYaml.Default.decodeTrail(yaml)
-    val tools = (items[0] as TrailYamlItem.ToolTrailItem).tools
-    val yamlDefined = tools[0].trailblazeTool as YamlDefinedTrailblazeTool
+    val yamlDefined = decodeRecordedTools(yaml)[0].trailblazeTool as YamlDefinedTrailblazeTool
     // The LLM passed null, which should resolve to DropIfOmitted (same as absent).
     assertThat(yamlDefined.params.containsKey("charactersToErase")).isEqualTo(true)
 
@@ -124,12 +137,17 @@ class YamlDefinedTrailblazeToolTest {
     // a map shape, kaml's own validator rejects the scalar before the custom deserialize
     // path even runs — that's the safer layering.
     val yaml = """
-- tools:
-    - eraseText: 3
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - eraseText: 3
     """.trimIndent()
 
-    assertFailure { TrailblazeYaml.Default.decodeTrail(yaml) }
-      .transform { it.message ?: "" }.contains("Expected a map")
+    assertFailure {
+      TrailblazeYaml.Default.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+    }.transform { it.message ?: "" }.contains("Expected a map")
   }
 
   @Test

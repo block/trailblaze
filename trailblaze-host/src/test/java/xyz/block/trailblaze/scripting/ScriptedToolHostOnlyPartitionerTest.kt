@@ -152,6 +152,49 @@ class ScriptedToolHostOnlyPartitionerTest {
     )
   }
 
+  /**
+   * A bundled trailmap's `.ts` ships inside the framework JAR, so its `script:` — a path relative
+   * to the Trailblaze repo that produced it — names nothing in a consumer's workspace. The
+   * launcher resolves that to an extracted copy; the analyzer has to be told about the same copy.
+   *
+   * Given a `node:fs` tool reachable only through the resolver, the pre-pass must still flag it
+   * host-only. The second half is the negative control: the identical tool, analyzed with the raw
+   * workspace-relative path, is NOT flagged — it slips through unanalyzed and would blow up in the
+   * bundler, which is exactly the regression this parameter closes.
+   */
+  @Test
+  fun `tool whose source is not at its declared path is still analyzed via the resolver`() = runBlocking {
+    assumeEsbuildPresent()
+    val onDisk = writeTool(
+      toolName = "jarShippedNodeFs",
+      scriptName = "jarShippedNodeFs.ts",
+      scriptBody = """
+        |import "node:fs";
+        |export function jarShippedNodeFs(): string { return 'fs'; }
+      """.trimMargin(),
+    )
+    val realSource = File(onDisk.script)
+    // What the launcher actually sees: a repo-relative `script:` that doesn't exist here.
+    val asShippedInJar = onDisk.copy(script = "trails/config/trailmaps/demo/tools/jarShippedNodeFs.ts")
+
+    val viaResolver = partitionByImportClosure(
+      tools = listOf(asShippedInJar),
+      analyzer = analyzer,
+      resolveSource = { realSource },
+      log = {},
+    )
+    assertEquals(listOf("jarShippedNodeFs"), viaResolver.skippedNames)
+    assertEquals(emptyList(), viaResolver.toBundle.map { it.name })
+
+    val viaRawPath = partitionByImportClosure(
+      tools = listOf(asShippedInJar),
+      analyzer = analyzer,
+      log = {},
+    )
+    assertEquals(emptyList(), viaRawPath.skippedNames)
+    assertEquals(listOf("jarShippedNodeFs"), viaRawPath.toBundle.map { it.name })
+  }
+
   // --- helpers ---
 
   private fun writeTool(

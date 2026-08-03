@@ -74,10 +74,14 @@ interface TrailblazeMcpBridge {
    * This enables MCP clients to act as the agent, calling low-level device control tools.
    *
    * @param tool The TrailblazeTool to execute (e.g., TapOnPointTrailblazeTool, SwipeTrailblazeTool)
-   * @param blocking When true, suspends until the tool execution completes on the device.
-   *   When false (default), the HOST/Maestro path is fire-and-forget and may return before
-   *   the action finishes. Use blocking=true when you need to capture screen state after
-   *   the action (e.g., agent-driven CLI flows).
+   * @param blocking Governs the HOST/Maestro path only. When true, suspends until the tool
+   *   execution completes on the device. When false (default), that path is fire-and-forget and
+   *   may return before the action finishes. Use blocking=true when you need to capture screen
+   *   state after the action (e.g., agent-driven CLI flows).
+   *
+   *   The Android on-device path ignores this flag and always awaits completion: its
+   *   fire-and-forget response carries no outcome and no terminal-wedge tag, so a non-blocking
+   *   dispatch there would report phantom success and leave a poisoned runner in place.
    * @return Result string describing the execution outcome
    */
   suspend fun executeTrailblazeTool(

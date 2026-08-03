@@ -13,16 +13,25 @@
 // `logs` is the verbatim array of a session's Trailblaze log records (the same JSON the daemon serves
 // to the web app at /trailrunner/api/session/{id}/logs). `sessionDir` is where screenshots live.
 import { createRequire } from "module";
+import { spawnSync } from "child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { gzipSync } from "zlib";
 import { buildEventStream, resolveFormatterModule } from "./run-report-events";
+import { parseSpriteMetadata, resolvedFrameMap, spriteRejectionReason, spriteSheetRows } from "./run-report-sprites";
 
 /** The input JSON RunReportGenerator writes (one entry per session in the report). */
 interface DriverInput {
   generatedAt?: string;
+  /** Canonical hosted URL baked into the report so its Copy link works from any serving location. */
+  shareUrl?: string;
   /** File names of event-formatter modules staged beside this driver (see run-report-events.ts). */
   formatters?: string[];
+  /**
+   * When true (the --full-report-payloads CLI flag), formatters embed full event payloads even
+   * for passed sessions — the report size budgets are bypassed entirely.
+   */
+  fullEventPayloads?: boolean;
   sessions?: Array<{
     meta?: RunMeta;
     recordingYaml?: string | null;
@@ -33,12 +42,13 @@ interface DriverInput {
 }
 
 const require = createRequire(import.meta.url);
-// The renderer is loaded at runtime from the sibling transpiled artifact; assert its API surface
-// here so this driver typechecks against the same contract the viewer implements.
-const core = require("./run-report-core.js") as {
+// The renderer is loaded at runtime (in main) from the sibling transpiled artifact; assert its API
+// surface here so this driver typechecks against the same contract the viewer implements. Loaded
+// lazily so the test suite can import this module's exported helpers without staging the artifact.
+type ReportCore = {
   extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[];
   extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[];
-  buildMultiReportHtml(args: { generatedAt?: string; sessions: SessionInput[] }): string;
+  buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string;
 };
 
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
@@ -56,8 +66,99 @@ function dataUri(path: string): string | null {
   }
 }
 
-function screenshotDataUri(sessionDir: string, file: string): string | null {
-  return dataUri(join(sessionDir, file));
+// Step screenshots dominate report size: drivers write them at full device resolution and iOS
+// emits raw PNGs (200-500KB each), so a long session inlines tens of MB of base64. The report
+// renders them in a ~360px-wide timeline column (zoomable), so re-encoding to JPEG capped at
+// SCREENSHOT_MAX_HEIGHT keeps them visually identical in context at ~10-20x fewer bytes.
+// ffmpeg is Trailblaze's documented media dependency (Hermit-pinned; the capture pipeline already
+// assumes it on PATH) — but external report generation must not require it, so every failure
+// (no ffmpeg, decode error, result not actually smaller) falls back to inlining the original
+// bytes. Screenshots at or under SCREENSHOT_RECOMPRESS_MIN_BYTES (already-compressed WEBPs from
+// the Android path are ~30-50KB) skip the subprocess entirely.
+const SCREENSHOT_MAX_HEIGHT = 900;
+const SCREENSHOT_JPEG_QSCALE = 5; // mjpeg qscale 2(best)..31; 5 ≈ libjpeg quality ~80
+const SCREENSHOT_RECOMPRESS_MIN_BYTES = 100 * 1024;
+
+const ffmpegAvailability = new Map<string, boolean>();
+function hasFfmpeg(ffmpeg: string): boolean {
+  let available = ffmpegAvailability.get(ffmpeg);
+  if (available == null) {
+    try {
+      available = spawnSync(ffmpeg, ["-version"], { stdio: "ignore" }).status === 0;
+    } catch {
+      available = false;
+    }
+    ffmpegAvailability.set(ffmpeg, available);
+  }
+  return available;
+}
+
+/** Re-encode one screenshot to a bounded JPEG; null on any failure (caller falls back). */
+function recompressScreenshot(path: string, originalBytes: number, ffmpeg: string): Buffer | null {
+  if (!hasFfmpeg(ffmpeg)) return null;
+  // scale=-2:min(ih,MAX): downscale to MAX px tall (keeping aspect, even width for the encoder);
+  // an already-short screenshot passes through at its own height. The JPEG is written to stdout
+  // (-f mjpeg pipe:1), which spawnSync captures - no temp files.
+  const res = spawnSync(ffmpeg, [
+    "-i", path,
+    "-vf", `scale=-2:'min(ih,${SCREENSHOT_MAX_HEIGHT})'`,
+    "-frames:v", "1", "-qscale:v", String(SCREENSHOT_JPEG_QSCALE),
+    "-f", "mjpeg", "pipe:1",
+  ], { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  if (res.status !== 0 || !res.stdout) return null;
+  // A tiny/flat original (or one already smaller than its JPEG) keeps its original bytes.
+  return res.stdout.length && res.stdout.length < originalBytes ? res.stdout : null;
+}
+
+/**
+ * Device-farm legs don't ship step screenshots inside the session dir: the farm ingest rewrites
+ * `screenshotFile` on driver/LLM logs to an absolute artifact URL and downloads only the
+ * `final_screenshot` locally. Such a value is a URL, not a path under sessionDir, so it can't be
+ * read off disk — it's handed to the viewer for the browser to load.
+ */
+export function isRemoteScreenshot(file: string): boolean {
+  return /^https?:\/\//i.test(file);
+}
+
+/**
+ * What the viewer interpolates into `src="…"` for a remote screenshot: the URL, reserialized.
+ *
+ * Deliberately NOT fetched and inlined here. `screenshotFile` comes from session-log JSON, so
+ * fetching it would let a crafted or corrupted log point report generation at any host the
+ * generating machine can reach and embed the response in the report — an exfiltration path out of
+ * a CI job. Letting the browser load it keeps that surface where it already was: this mirrors
+ * [StoryboardHtmlBuilder]'s handling of the same remote-URL case, which also emits the URL for
+ * Chromium to fetch. The cost is that farm-leg screenshots need network at view time.
+ *
+ * Escaping here is load-bearing: the viewer interpolates a shot into the attribute WITHOUT escaping
+ * (safe for the base64 data URIs a local screenshot produces), so a URL carrying a `"` would
+ * otherwise break out of it. Reserializing through the URL parser rather than `encodeURI`, because
+ * a farm URL already carries `%xx` escapes — the artifact key is a percent-encoded path — and
+ * `encodeURI` re-encodes the `%` itself, turning `%2F` into `%252F` and making the host reject the
+ * request. The parser leaves valid escapes alone while still encoding what would close the
+ * attribute.
+ */
+export function remoteShotValue(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    // Not parseable as a URL, so it can't be normalized — it still must not close the attribute.
+    return url.replace(/"/g, "%22");
+  }
+}
+
+export function screenshotDataUri(sessionDir: string, file: string, ffmpeg: string = "ffmpeg"): string | null {
+  const path = join(sessionDir, file);
+  try {
+    const size = statSync(path).size;
+    if (size > SCREENSHOT_RECOMPRESS_MIN_BYTES) {
+      const jpeg = recompressScreenshot(path, size, ffmpeg);
+      if (jpeg) return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+    }
+  } catch {
+    return null;
+  }
+  return dataUri(path);
 }
 
 // Device log (logcat). Matches WasmReport/LogcatParser: device.log, or any file whose name contains
@@ -104,18 +205,35 @@ function readNetworkLog(sessionDir: string): NetworkEvent[] | null {
 // per-stream formatter pass, and every payload budget live in run-report-events.ts (shared with its
 // raw-line tests); this wrapper only owns the filesystem walk.
 //
-// Event payloads are embedded IN FULL (no last-N window, no preview truncation — see
-// run-report-events.ts), so stream size is managed here instead: a per-file read cap and a loud
-// per-session total budget bound the worst case, and anything past a small inline threshold is
-// embedded gzipped (the viewer inflates lazily via DecompressionStream). A network stream that
-// captures large response bodies is legitimately tens of MB on disk and gzips ~10-20x.
+// Event payloads embed in full by default (no last-N window, no preview truncation — see
+// run-report-events.ts), bounded here by a per-file read cap and a loud per-session total budget;
+// anything past a small inline threshold is embedded gzipped (the viewer inflates lazily via
+// DecompressionStream). Formatters additionally receive the session outcome and may size-budget
+// raw payloads of PASSED sessions (grep REPORT_SIZE_BUDGET); sessions that didn't pass always
+// embed full payloads, and `--full-report-payloads` opts passed sessions out of the budgets too
+// (see formatterContext). A network stream that captures large response bodies is legitimately
+// tens of MB on disk and gzips ~10-20x.
 const MAX_EVENTS_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_EVENTS_TOTAL_CHARS = 256 * 1024 * 1024;
 // Below this, embed plain JSON: a small events payload stays greppable in the HTML and skips the
 // async inflate; only genuinely heavy sessions pay for compression.
 const EVENTS_INLINE_MAX_CHARS = 1024 * 1024;
 
-function readEvents(sessionDir: string, formatters: EventStreamFormatter[]): EventStream[] | null {
+/**
+ * Formatter size budgets key off the session outcome: only an affirmative "passed" (see
+ * RunReportGenerator.statusLabel) lets a formatter budget raw payloads — failed / cancelled /
+ * unknown sessions keep full evidence. `fullEventPayloads` (the `--full-report-payloads` CLI
+ * flag) turns budgeting off entirely by presenting every session as not-passed.
+ */
+export function formatterContext(status: string | undefined, fullEventPayloads: boolean): FormatterContext {
+  return { sessionPassed: !fullEventPayloads && status === "passed" };
+}
+
+function readEvents(
+  sessionDir: string,
+  formatters: EventStreamFormatter[],
+  ctx: FormatterContext,
+): EventStream[] | null {
   try {
     const dir = join(sessionDir, "events");
     if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
@@ -128,7 +246,7 @@ function readEvents(sessionDir: string, formatters: EventStreamFormatter[]): Eve
           console.error(`events: skipping ${file} — exceeds the ${MAX_EVENTS_FILE_BYTES / 1024 / 1024}MB per-stream cap`);
           continue;
         }
-        const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters);
+        const stream = buildEventStream(file, readFileSync(path, "utf8").split("\n"), formatters, ctx);
         if (!stream) continue;
         totalChars += JSON.stringify(stream).length;
         if (totalChars > MAX_EVENTS_TOTAL_CHARS) {
@@ -144,12 +262,36 @@ function readEvents(sessionDir: string, formatters: EventStreamFormatter[]): Eve
   }
 }
 
+// Device/network logs ride the same gzip+base64 transport as events (the viewer inflates lazily
+// via DecompressionStream when the tab first needs them). Logs are the largest field in many
+// reports (a capped logcat tail is still ~800KB of text, gzipping ~10x); below the threshold they
+// stay plain so small logs remain greppable in the HTML and skip the async inflate.
+const LOG_INLINE_MAX_CHARS = 64 * 1024;
+
+/** Splits a payload into an inline value vs a gzip+base64 blob at `maxInlineChars`. */
+function packGz<T>(value: T | null, encode: (value: T) => string, maxInlineChars: number): { inline: T | null; gz: string | null } {
+  if (value == null) return { inline: null, gz: null };
+  const text = encode(value);
+  if (text.length <= maxInlineChars) return { inline: value, gz: null };
+  return { inline: null, gz: gzipSync(text).toString("base64") };
+}
+
 /** Splits a session's streams into inline `events` vs compressed `eventsGz` at the threshold. */
 function packEvents(streams: EventStream[] | null): { events: EventStream[] | null; eventsGz: string | null } {
-  if (!streams) return { events: null, eventsGz: null };
-  const json = JSON.stringify(streams);
-  if (json.length <= EVENTS_INLINE_MAX_CHARS) return { events: streams, eventsGz: null };
-  return { events: null, eventsGz: gzipSync(json).toString("base64") };
+  const { inline, gz } = packGz(streams, (s) => JSON.stringify(s), EVENTS_INLINE_MAX_CHARS);
+  return { events: inline, eventsGz: gz };
+}
+
+/** Splits a device log into inline `deviceLog` vs compressed `deviceLogGz` at the threshold. */
+export function packDeviceLog(text: string | null): { deviceLog: string | null; deviceLogGz: string | null } {
+  const { inline, gz } = packGz(text, (t) => t, LOG_INLINE_MAX_CHARS);
+  return { deviceLog: inline, deviceLogGz: gz };
+}
+
+/** Splits network events into inline `network` vs compressed `networkGz` at the threshold. */
+export function packNetwork(events: NetworkEvent[] | null): { network: NetworkEvent[] | null; networkGz: string | null } {
+  const { inline, gz } = packGz(events, (e) => JSON.stringify(e), LOG_INLINE_MAX_CHARS);
+  return { network: inline, networkGz: gz };
 }
 
 // Event-formatter modules staged beside this driver by RunReportGenerator. A module that fails to
@@ -174,18 +316,11 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
 // and video_sprites.txt layout, then trims the playable logical-frame range to the test window
 // [first log, last log] the same way WasmReport does. The viewer reads the sprite's natural width to
 // derive per-frame width and plays frames via background-position.
-// Mirror WasmReport.isSpriteDegenerate: a sprite with very few unique frames that's either stretched
-// across many logical frames OR has fewer unique frames than step screenshots is a broken-screenrecord
-// artifact (a near-static "video"). The legacy report strips it and falls back to per-step
-// screenshots; we do the same by hiding the Video tab.
-const MIN_USEFUL_UNIQUE_FRAMES = 8;
-const MIN_ALIASING_TOTAL_FRAMES = 60;
-function isSpriteDegenerate(uniqueFrames: number, totalFrames: number, stepScreenshotCount: number): boolean {
-  if (!uniqueFrames) return false;
-  if (uniqueFrames >= MIN_USEFUL_UNIQUE_FRAMES) return false;
-  return totalFrames >= MIN_ALIASING_TOTAL_FRAMES || uniqueFrames < stepScreenshotCount;
-}
-
+//
+// Metadata parsing and the acceptance rules (degenerate sprite, restamped-and-dominated sprite,
+// multi-sheet) live in run-report-sprites.ts — the shared contract this driver and the legacy
+// WasmReport both apply, locked cross-language by sprite-metadata-parity-fixtures.json. A rejected
+// sprite hides the Video tab so the timeline falls back to per-step screenshots.
 function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreenshotCount: number): VideoInfo | null {
   try {
     const metaPath = join(sessionDir, "capture_metadata.json");
@@ -194,32 +329,38 @@ function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreensh
     const framesArt = artifacts.find((a) => a.type === "VIDEO_FRAMES");
     if (!framesArt) return null; // WASM also prefers VIDEO_FRAMES; raw-MP4-only sessions fall back to the screenshot timeline.
 
-    let spritePath = join(sessionDir, "video_sprites.webp");
-    if (!existsSync(spritePath)) spritePath = join(sessionDir, "video_sprites.jpg");
     const txtPath = join(sessionDir, "video_sprites.txt");
-    if (!existsSync(spritePath) || !existsSync(txtPath)) return null;
+    if (!existsSync(txtPath)) return null;
 
-    const info: Record<string, string> = {};
-    for (const line of readFileSync(txtPath, "utf8").split("\n")) {
-      const eq = line.indexOf("=");
-      if (eq > 0) info[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    const meta = parseSpriteMetadata(readFileSync(txtPath, "utf8"));
+    if (!meta) return null;
+    // This viewer plays multi-sheet sprites (it swaps background-image per sheet), so opt in.
+    const rejection = spriteRejectionReason(meta, stepScreenshotCount, true);
+    if (rejection) {
+      console.error(
+        `video: skipping sprite in ${sessionDir} (${rejection}: ${meta.uniqueFrames} unique of ` +
+          `${meta.frames} total frames, restamped=${meta.restamped}); timeline will use per-step screenshots`,
+      );
+      return null;
     }
-    const num = (k: string, d: number): number => { const n = parseInt(info[k], 10); return Number.isNaN(n) ? d : n; };
-    const fps = num("fps", 2) || 2;
-    const frames = num("frames", 0);
-    const columns = num("columns", 1) || 1;
-    const rows = num("rows", 0);
-    const frameHeight = num("height", 0);
-    const uniqueFrames = num("uniqueFrames", 0);
-    let frameMap = (info.frameMap || "").split(",").map((s) => parseInt(s, 10)).filter((n) => !Number.isNaN(n));
-    // A sprite txt without a frameMap means no alias dedup ran: logical frame N is physical frame N.
-    // WasmReport tolerates this with an identity map (`frameMap ?: i`); mirror that instead of
-    // dropping the whole video.
-    if (!frameMap.length) frameMap = Array.from({ length: frames }, (_, i) => i);
-    if (!frames || !rows || !frameHeight) return null;
-    // Suppress degenerate sprites (broken screenrecord) so the timeline uses per-step screenshots,
-    // matching the legacy report.
-    if (isSpriteDegenerate(uniqueFrames, frames, stepScreenshotCount)) return null;
+
+    // A single sheet keeps the plain filename (legacy sheets may be .jpg); multiple sheets are
+    // numbered video_sprites_<k>.webp and every one must be present.
+    const spritePaths: string[] = [];
+    if (meta.sheets <= 1) {
+      let spritePath = join(sessionDir, "video_sprites.webp");
+      if (!existsSync(spritePath)) spritePath = join(sessionDir, "video_sprites.jpg");
+      if (!existsSync(spritePath)) return null;
+      spritePaths.push(spritePath);
+    } else {
+      for (let k = 0; k < meta.sheets; k++) {
+        const spritePath = join(sessionDir, `video_sprites_${k}.webp`);
+        if (!existsSync(spritePath)) return null;
+        spritePaths.push(spritePath);
+      }
+    }
+    const { fps, frames, columns, rows, height: frameHeight, frameWidth } = meta;
+    const frameMap = resolvedFrameMap(meta);
 
     // Trim playable range to the test window, mirroring WasmReport.extractFromSpriteSheet.
     let startFrame = 0;
@@ -235,9 +376,13 @@ function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreensh
       if (e >= s) { startFrame = s; endFrame = e; }
     }
 
-    const sprite = dataUri(spritePath);
-    if (!sprite) return null;
-    return { sprite, fps, frames, columns, rows, frameHeight, frameMap, startFrame, endFrame, startMs };
+    const sprites: Array<{ uri: string; rows: number }> = [];
+    for (let k = 0; k < spritePaths.length; k++) {
+      const uri = dataUri(spritePaths[k]);
+      if (!uri) return null;
+      sprites.push({ uri, rows: spriteSheetRows(meta, k) });
+    }
+    return { sprites, fps, frames, columns, rows, frameHeight, frameWidth, frameMap, startFrame, endFrame, startMs };
   } catch {
     return null;
   }
@@ -249,6 +394,7 @@ function main(): void {
     console.error("usage: bun run-report-cli.ts <input.json> <output.html>");
     process.exit(2);
   }
+  const core = require("./run-report-core.js") as ReportCore;
   const input: DriverInput = JSON.parse(readFileSync(inputPath, "utf8"));
   const formatters = loadFormatters(input.formatters || []);
   const sessions: SessionInput[] = (input.sessions || []).map((s) => {
@@ -260,10 +406,17 @@ function main(): void {
     const files = [...new Set(trace.map((t) => t.screenshotFile).filter(Boolean))] as string[];
     const shots: Record<string, string> = {};
     for (const f of files) {
+      if (isRemoteScreenshot(f)) {
+        shots[f] = remoteShotValue(f);
+        continue;
+      }
       const uri = screenshotDataUri(s.sessionDir, f);
       if (uri) shots[f] = uri;
     }
-    const { events, eventsGz } = packEvents(readEvents(s.sessionDir, formatters));
+    const ctx = formatterContext(s.meta?.status, input.fullEventPayloads === true);
+    const { events, eventsGz } = packEvents(readEvents(s.sessionDir, formatters, ctx));
+    const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
+    const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
     return {
       meta: s.meta || {},
       trace,
@@ -271,16 +424,19 @@ function main(): void {
       shots,
       recordingYaml: s.recordingYaml || null,
       originalYaml: s.originalYaml || null,
-      deviceLog: readDeviceLog(s.sessionDir),
-      network: readNetworkLog(s.sessionDir),
+      deviceLog,
+      deviceLogGz,
+      network,
+      networkGz,
       events,
       eventsGz,
       video: readVideo(s.sessionDir, logs, files.length),
     };
   });
 
-  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", sessions });
+  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", ...(input.shareUrl ? { shareUrl: input.shareUrl } : {}), sessions });
   writeFileSync(outputPath, html);
 }
 
-main();
+// Entry-point guard so the test suite can import the exported helpers without running the CLI.
+if (import.meta.main) main();

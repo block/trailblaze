@@ -13,8 +13,7 @@ import xyz.block.trailblaze.devices.TrailDeviceSelector
  * The core policy is the pure [TrailDeviceSelector.selectDevicesToRun] in `:trailblaze-models`
  * (pinned by `TrailDeviceSelectorTest` there, shared with the desktop app so the surfaces can't
  * drift); [TrailCommand.resolveDevicesForFile] layers on the `--driver`/YAML platform resolution
- * and the web/compose virtual-device defer. One consistent rule for BOTH the v1 and unified
- * formats.
+ * and the web/compose virtual-device defer.
  */
 class TrailCommandDeviceAmbiguityTest {
 
@@ -34,7 +33,7 @@ class TrailCommandDeviceAmbiguityTest {
   fun `an explicit device wins outright, no file read`() {
     assertEquals(
       TrailDeviceSelection.Resolved(listOf(ios1)),
-      cmd.resolveDevicesForFile(trailFile("- tools:\n  - pressBack: {}"), listOf(ios1), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = listOf(android1, ios1)),
+      cmd.resolveDevicesForFile(trailFile("config: {}\ntrail:\n  - step: noop"), listOf(ios1), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = listOf(android1, ios1)),
     )
   }
 
@@ -42,7 +41,7 @@ class TrailCommandDeviceAmbiguityTest {
   fun `a pinned default wins on a multi-device shell`() {
     assertEquals(
       TrailDeviceSelection.Resolved(listOf(android2)),
-      cmd.resolveDevicesForFile(trailFile("- tools:\n  - pressBack: {}"), emptyList(), allDevices = false, defaultDevice = android2, driverType = null, connectedSpecs = listOf(android1, ios1)),
+      cmd.resolveDevicesForFile(trailFile("config: {}\ntrail:\n  - step: noop"), emptyList(), allDevices = false, defaultDevice = android2, driverType = null, connectedSpecs = listOf(android1, ios1)),
     )
   }
 
@@ -50,7 +49,7 @@ class TrailCommandDeviceAmbiguityTest {
   fun `no multi-device situation defers downstream`() {
     assertEquals(
       TrailDeviceSelection.Resolved(listOf<String?>(null)),
-      cmd.resolveDevicesForFile(trailFile("- tools:\n  - pressBack: {}"), emptyList(), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = null),
+      cmd.resolveDevicesForFile(trailFile("config: {}\ntrail:\n  - step: noop"), emptyList(), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = null),
     )
   }
 
@@ -58,7 +57,7 @@ class TrailCommandDeviceAmbiguityTest {
   fun `a driver flag forces the platform and disambiguates`() {
     assertEquals(
       TrailDeviceSelection.Resolved(listOf(ios1)),
-      cmd.resolveDevicesForFile(trailFile("- config: {}\n- tools:\n  - pressBack: {}"), emptyList(), allDevices = false, defaultDevice = null, driverType = "IOS_HOST", connectedSpecs = listOf(android1, ios1)),
+      cmd.resolveDevicesForFile(trailFile("config: {}\ntrail:\n  - step: noop"), emptyList(), allDevices = false, defaultDevice = null, driverType = "IOS_HOST", connectedSpecs = listOf(android1, ios1)),
     )
   }
 
@@ -147,7 +146,17 @@ class TrailCommandDeviceAmbiguityTest {
   fun `a web trail on a mixed mobile shell defers to downstream virtual-device routing`() {
     // A web/compose trail runs on a virtual device regardless of connected real devices, so a
     // shell with several mobile devices must NOT fail-loud on it — defer to downstream routing.
-    val file = trailFile("- config:\n    platform: web\n- tools:\n  - pressBack: {}")
+    val file = trailFile(
+      """
+      config:
+        target: myapp
+      trail:
+        - step: do something
+          recording:
+            web:
+              - pressBack: {}
+      """.trimIndent(),
+    )
     assertEquals(
       TrailDeviceSelection.Resolved(listOf<String?>(null)),
       cmd.resolveDevicesForFile(file, emptyList(), allDevices = false, defaultDevice = null, driverType = null, connectedSpecs = listOf(android1, ios1)),
@@ -159,7 +168,17 @@ class TrailCommandDeviceAmbiguityTest {
     // The uniform-defer contract: web/compose routing must not depend on the mobile-device count.
     // With a single autodetected mobile device (defaultDevice would be that device), a web trail
     // must still defer to the virtual device rather than run on the mobile and error.
-    val file = trailFile("- config:\n    platform: web\n- tools:\n  - pressBack: {}")
+    val file = trailFile(
+      """
+      config:
+        target: myapp
+      trail:
+        - step: do something
+          recording:
+            web:
+              - pressBack: {}
+      """.trimIndent(),
+    )
     assertEquals(
       TrailDeviceSelection.Resolved(listOf<String?>(null)),
       cmd.resolveDevicesForFile(file, emptyList(), allDevices = false, defaultDevice = android1, driverType = null, connectedSpecs = listOf(android1)),

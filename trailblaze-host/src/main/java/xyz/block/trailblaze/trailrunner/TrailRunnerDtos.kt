@@ -533,6 +533,8 @@ data class SessionSummary(
   val error: String? = null,
   val trailId: String? = null,
   val imported: Boolean = false,
+  /** Consumer-injected key/values from the trail's `config.metadata`, for shared-report parity. */
+  val metadata: Map<String, String>? = null,
 )
 
 @Serializable

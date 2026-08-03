@@ -29,10 +29,9 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
-import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.host.recording.StreamFrameMonitor
 import xyz.block.trailblaze.host.recording.StreamScreenshotScreenState
-import xyz.block.trailblaze.host.recording.StreamScreenshotSource
+import xyz.block.trailblaze.host.recording.DeviceStreamScreenshotSource
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
@@ -150,7 +149,7 @@ class HostOnDeviceRpcTrailblazeAgent(
    * dimensions to size the shared H.264 tee). Null when [streamScreenshotMode] is OFF or
    * initialization failed. Closed via [closeStreamScreenshotSource].
    */
-  @Volatile private var streamScreenshotSource: StreamScreenshotSource? = null
+  @Volatile private var streamScreenshotSource: DeviceStreamScreenshotSource? = null
 
   /** Consecutive wedge-signature [captureScreenState] failures; trips circuit breaker
    *  at [MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES] to fail fast on dead `system_server`. */
@@ -249,7 +248,8 @@ class HostOnDeviceRpcTrailblazeAgent(
    * Wraps the RPC response in a [ScreenState], substituting the screenshot from the live
    * screenrecord stream when stream mode is active. First successful capture initializes the
    * source (and keeps that response's on-device screenshot); later captures pair the tree's
-   * device-epoch stamp with a stream frame via [StreamScreenshotSource.awaitFrameMatching].
+   * device-epoch stamp with a stream frame via
+   * [DeviceStreamScreenshotSource.awaitFrameMatching].
    */
   private suspend fun adaptScreenState(
     data: GetScreenStateResponse,
@@ -262,7 +262,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     val source = if (existing != null) {
       existing
     } else {
-      val created = StreamScreenshotSource(
+      val created = DeviceStreamScreenshotSource.forAndroid(
         deviceId = runYamlRequestTemplate.trailblazeDeviceId,
         deviceWidth = data.deviceWidth,
         deviceHeight = data.deviceHeight,
@@ -282,7 +282,7 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
 
     val result = source.awaitFrameMatching(
-      treeCapturedAtDeviceMs = data.capturedAtDeviceMs,
+      treeCapturedAtMs = data.capturedAtDeviceMs,
       timeoutMs = STREAM_FRAME_TIMEOUT_MS,
     )
     return when (streamScreenshotMode) {
@@ -867,58 +867,5 @@ class HostOnDeviceRpcTrailblazeAgent(
     sensitiveKeys.forEach { memory.markSensitive(it) }
     memory.variables.putAll(deviceSnapshot)
     deletions.forEach { memory.variables.remove(it) }
-  }
-}
-
-/**
- * Experimental screenshot-source selection for the host-side Android accessibility/RPC agent,
- * resolved once at agent construction (i.e. per run — a persistent daemon picks up changes on the
- * next trail, not mid-session) from two sources, env-over-config:
- *
- * - `trailblaze config android-stream-screenshots true` — the discoverable, persistent toggle.
- *   Serves LLM-loop screenshots from the stream (equivalent to [STREAM]). Read via the JVM-wide
- *   [EffectiveStreamScreenshotConfig] holder.
- * - `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT=1` — env override (one-off / CI). Also selects [STREAM];
- *   redundant with the config toggle when both are on.
- * - `TRAILBLAZE_ANDROID_STREAM_SCREENSHOT_AB=1` — A/B validation mode ([AB_COMPARE]). Keeps the
- *   on-device screenshot authoritative but also runs the stream matcher on every capture and logs
- *   a `[stream-screenshot] AB …` line (match/mismatch, clock skew, payload sizes). Env-only — it's
- *   a validation tool, not a persistent user setting — and takes precedence over both STREAM
- *   sources so setting it always compares rather than switches.
- *
- * [STREAM] serves screenshots from the device's live screenrecord stream (shared H.264 tee)
- * instead of per-capture on-device `UiAutomation.takeScreenshot`; the on-device RPC then ships
- * tree-only responses. Stream frames use the tee's recording size and JPEG quality — the
- * `trailblaze config screenshot-*` scaling/format settings apply only to the warm-up and fallback
- * captures.
- *
- * Env values `1` / `true` (case-insensitive) enable, matching the other Trailblaze env toggles.
- */
-internal enum class StreamScreenshotMode {
-  OFF,
-  STREAM,
-  AB_COMPARE,
-  ;
-
-  companion object {
-    fun resolve(): StreamScreenshotMode = fromValues(
-      stream = System.getenv("TRAILBLAZE_ANDROID_STREAM_SCREENSHOT"),
-      abCompare = System.getenv("TRAILBLAZE_ANDROID_STREAM_SCREENSHOT_AB"),
-      configEnabled = EffectiveStreamScreenshotConfig.androidEnabled,
-    )
-
-    /** Pure seam for tests — [resolve] just feeds it the real environment + config holder. */
-    internal fun fromValues(
-      stream: String?,
-      abCompare: String?,
-      configEnabled: Boolean,
-    ): StreamScreenshotMode = when {
-      abCompare.isEnabled() -> AB_COMPARE
-      stream.isEnabled() || configEnabled -> STREAM
-      else -> OFF
-    }
-
-    private fun String?.isEnabled(): Boolean =
-      this != null && (this == "1" || this.equals("true", ignoreCase = true))
   }
 }

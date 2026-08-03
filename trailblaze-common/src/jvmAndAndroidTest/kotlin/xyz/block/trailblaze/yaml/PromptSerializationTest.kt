@@ -7,6 +7,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import org.junit.Test
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -18,26 +19,26 @@ class PromptSerializationTest {
   @Test
   fun canDeserializePromptWithStepAndVerify() {
     val yaml = """
-- prompts:
+trail:
   - step: Do a thing
     recordable: false
   - step: Do another thing
     recording:
-      tools:
+      android:
         - inputText:
             text: Hello
   - verify: Check a thing
     recordable: false
   - verify: Check another thing
     recording:
-      tools:
+      android:
         - assertVisibleWithText:
             text: Bingo
     """.trimIndent()
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val trailItems =
+      trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
     with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as PromptsTrailItem) {
+      with(filterIsInstance<PromptsTrailItem>().single()) {
         assertThat(promptSteps.size).isEqualTo(4)
         assertThat(promptSteps[0]).isEqualTo(
           DirectionStep(
@@ -167,46 +168,45 @@ class PromptSerializationTest {
   fun unrecognizedToolRoundTripPreservesParameters() {
     // YAML with a custom tool that has nested parameters (not on classpath)
     val yaml = """
-- prompts:
+trail:
   - step: Launch app with credentials
     recording:
-      tools:
-      - customLoginTool:
-          email: user@example.com
-          password: secretpassword
-          nested:
-            key1: value1
-            key2: value2
+      android:
+        - customLoginTool:
+            email: user@example.com
+            password: secretpassword
+            nested:
+              key1: value1
+              key2: value2
     """.trimIndent()
 
     // Decode the YAML
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val trailItems =
+      trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
 
     // Verify the tool was parsed as OtherTrailblazeTool with correct parameters
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as PromptsTrailItem) {
-        assertThat(promptSteps.size).isEqualTo(1)
-        val step = promptSteps[0] as DirectionStep
-        assertThat(step.step).isEqualTo("Launch app with credentials")
-        val recording = step.recording!!
-        assertThat(recording.tools.size).isEqualTo(1)
-        val tool = recording.tools[0]
-        assertThat(tool.name).isEqualTo("customLoginTool")
-        assertThat(tool.trailblazeTool).isInstanceOf(OtherTrailblazeTool::class)
-        val otherTool = tool.trailblazeTool as OtherTrailblazeTool
-        // Verify the raw JSON contains the expected parameters
-        assertThat(otherTool.raw.containsKey("email")).isEqualTo(true)
-        assertThat(otherTool.raw.containsKey("password")).isEqualTo(true)
-        assertThat(otherTool.raw.containsKey("nested")).isEqualTo(true)
-      }
-    }
+    val step = trailItems.filterIsInstance<PromptsTrailItem>().single().promptSteps.single() as DirectionStep
+    assertThat(step.step).isEqualTo("Launch app with credentials")
+    val recording = step.recording!!
+    assertThat(recording.tools.size).isEqualTo(1)
+    val tool = recording.tools[0]
+    assertThat(tool.name).isEqualTo("customLoginTool")
+    assertThat(tool.trailblazeTool).isInstanceOf(OtherTrailblazeTool::class)
+    val otherTool = tool.trailblazeTool as OtherTrailblazeTool
+    // Verify the raw JSON contains the expected parameters
+    assertThat(otherTool.raw.containsKey("email")).isEqualTo(true)
+    assertThat(otherTool.raw.containsKey("password")).isEqualTo(true)
+    assertThat(otherTool.raw.containsKey("nested")).isEqualTo(true)
 
-    // Re-encode to YAML
-    val reEncodedYaml = trailblazeYaml.encodeToString(trailItems)
-
-    // Verify round-trip preserves the parameters
-    assertThat(reEncodedYaml).isEqualTo(yaml + "\n")
+    // Round-trip the recorded tool wrappers themselves and confirm the unrecognized tool's nested
+    // parameters survive encode-then-decode (the v1 trail-document string round-trip is gone; the
+    // tool object surviving the trip is the contract this test pins).
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(recording.tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    val reTool = reDecoded[0].trailblazeTool as OtherTrailblazeTool
+    assertThat(reTool.raw.containsKey("email")).isEqualTo(true)
+    assertThat(reTool.raw.containsKey("password")).isEqualTo(true)
+    assertThat(reTool.raw.containsKey("nested")).isEqualTo(true)
   }
 
   @Test
@@ -223,12 +223,12 @@ class PromptSerializationTest {
     // `recording: { tools: [] }` decodes to a non-null, zero-tool recording — a declared no-op —
     // rather than throwing or silently falling through to AI.
     val yaml = """
-- prompts:
+trail:
   - step: Nothing needed here
     recording:
-      tools: []
+      android: []
     """.trimIndent()
-    val step = trailblazeYaml.decodeTrail(yaml)
+    val step = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
       .promptSteps.single()
     assertThat(step.recording).isNotNull()

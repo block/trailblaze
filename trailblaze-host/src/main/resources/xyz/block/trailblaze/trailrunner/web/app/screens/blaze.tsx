@@ -18,6 +18,7 @@ function BlazeScreen({ pinnedId, go }) {
   const deviceList = devicesResult.data || [];
   const tmResult = TB.useTrailmaps();
   const trailmaps = tmResult.data || [];
+  const devicesPending = devicesResult.loading && !devicesResult.data;
 
   const [objective, setObjective] = React.useState('');
   const [sel, setSel] = React.useState(null); // "<deviceId>::<targetId|>"
@@ -183,7 +184,9 @@ function BlazeScreen({ pinnedId, go }) {
           )}
         </div>
         <div style={{ padding: '9px 12px', borderTop: '1px solid var(--tb-hairline)' }}>
-          <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{deviceList.length} device{deviceList.length === 1 ? '' : 's'}</div>
+          {devicesPending
+            ? <div className="tb-skel" aria-hidden="true" style={{ width: 62, height: 8 }} />
+            : <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{deviceList.length} device{deviceList.length === 1 ? '' : 's'}</div>}
         </div>
       </div>
       <Splitter onDown={startTreeDrag} />
@@ -210,7 +213,9 @@ function BlazeScreen({ pinnedId, go }) {
 
           {/* Selected target context */}
           <div className="tb-eyebrow" style={{ marginBottom: 6 }}>Blazing on</div>
-          {device ? (
+          {devicesPending ? (
+            <div style={{ width: 'min(420px, 100%)', marginBottom: 18 }}><Skeleton rows={2} label="Loading devices" /></div>
+          ) : device ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                 <PlatformGlyph platform={device.platform} s={15} c="var(--tb-running)" />
@@ -251,7 +256,9 @@ function BlazeScreen({ pinnedId, go }) {
           {target && (
             <div style={{ marginTop: 22 }}>
               <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Trailmap{tm ? ` · ${tm.displayName || tm.id}` : ''}</div>
-              {tm ? (
+              {tmResult.loading && !tmResult.data ? (
+                <div style={{ width: 'min(480px, 100%)' }}><Skeleton rows={3} label="Loading trailmap" /></div>
+              ) : tm ? (
                 <React.Fragment>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {BLAZE_TM_KINDS.map((k) => {

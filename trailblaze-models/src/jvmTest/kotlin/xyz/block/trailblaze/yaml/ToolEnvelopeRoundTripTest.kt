@@ -83,24 +83,25 @@ class ToolEnvelopeRoundTripTest {
   }
 
   @Test
-  fun `a legacy list-shape trail is NOT mis-routed as a tool envelope`() {
-    // `- config:` / `- prompts:` are reserved trail-item keys, so this stays on the trail path even
-    // though a naive tool decode would (wrongly) read `config`/`prompts` as tool names.
-    val legacy =
+  fun `a unified trail with config and multiple steps is NOT mis-routed as a tool envelope`() {
+    // A unified mapping root is never a bare tool-wrapper list, so it stays on the trail path even
+    // though a naive tool decode would (wrongly) read `config`/`trail` as tool names.
+    val unified =
       """
-      - config:
-          id: example-app/suite_1/section_1/case_1
-          title: A trail
-      - prompts:
+      config:
+        id: example-app/suite_1/section_1/case_1
+        title: A trail
+      trail:
         - step: Open the app
+        - step: Tap continue
       """
         .trimIndent()
 
-    val items = yaml.decodeTrailOrToolEnvelope(legacy)
+    val items = yaml.decodeTrailOrToolEnvelope(unified)
 
     assertTrue(
       items.any { it is TrailYamlItem.PromptsTrailItem },
-      "Legacy list-shape trail must decode as a trail, not a tool envelope: $items",
+      "Unified trail must decode as a trail, not a tool envelope: $items",
     )
   }
 

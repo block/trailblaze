@@ -5,9 +5,9 @@ import kotlin.test.assertEquals
 
 /**
  * Pins [plannedPromptsFromRawYaml], which feeds the session progress view's "pending objectives"
- * preview. It must read the ordered objective NL from BOTH a legacy v1 trail (a top-level list with
- * a `- prompts:` item) and a unified single-file trail (a `config:`/`trail:` mapping) — the latter
- * regressed to an empty preview when the extractor parsed only the v1 list shape.
+ * preview. It reads the ordered objective NL from a unified single-file trail (a `config:`/`trail:`
+ * mapping). A legacy v1 trail (a top-level list) is no longer parseable and degrades to an empty
+ * preview rather than crashing the session view.
  */
 class SessionPlannedPromptsTest {
 
@@ -35,7 +35,9 @@ class SessionPlannedPromptsTest {
   }
 
   @Test
-  fun `a v1 trail yields its prompt-step objectives in order`() {
+  fun `a legacy v1 trail yields an empty preview instead of crashing`() {
+    // v1 (top-level list) is no longer parseable; the preview degrades to empty rather than
+    // throwing, keeping the session view rendering.
     val v1 = """
       - config:
           target: myapp
@@ -44,10 +46,7 @@ class SessionPlannedPromptsTest {
           - step: The settings screen is shown
     """.trimIndent()
 
-    assertEquals(
-      listOf("Open settings", "The settings screen is shown"),
-      plannedPromptsFromRawYaml(v1),
-    )
+    assertEquals(emptyList(), plannedPromptsFromRawYaml(v1))
   }
 
   @Test

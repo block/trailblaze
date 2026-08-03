@@ -5,6 +5,7 @@ drivers:
   - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
+  - ios-axe
 tools:
   - assertVisible
   - assertNotVisibleWithText

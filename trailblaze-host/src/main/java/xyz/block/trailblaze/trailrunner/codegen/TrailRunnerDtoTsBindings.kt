@@ -2,6 +2,8 @@ package xyz.block.trailblaze.trailrunner.codegen
 
 import kotlinx.serialization.descriptors.SerialDescriptor
 import xyz.block.trailblaze.codegen.RpcClientTsCodegen
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import xyz.block.trailblaze.trailrunner.AddTrailRootRequest
 import xyz.block.trailblaze.trailrunner.AnalyticsResponse
@@ -102,6 +104,12 @@ internal object TrailRunnerDtoTsBindings {
    * listing here. Adding a type to the UI's surface is a deliberate one-line edit, by design.
    */
   private val ROOTS: List<SerialDescriptor> = listOf(
+    // The session-log wire format (one JSON file per log in a session directory) + the derived
+    // per-session summary. These power log-reading UI (e.g. the zip-backed report page) — they are
+    // read from session artifacts rather than exchanged over /rpc, but they're part of the same
+    // Kotlin-canonical surface.
+    TrailblazeLog.serializer().descriptor,
+    SessionInfo.serializer().descriptor,
     AddTrailRootRequest.serializer().descriptor,
     AnalyticsResponse.serializer().descriptor,
     CancelSessionResponse.serializer().descriptor,

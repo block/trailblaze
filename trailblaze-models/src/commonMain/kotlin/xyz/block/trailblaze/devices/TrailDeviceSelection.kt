@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.devices
 
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
@@ -108,23 +107,15 @@ object TrailDeviceSelector {
    * device a multi-device run targets. Version-aware and never throws (a parse failure yields
    * the empty set, which [selectDevicesToRun] treats as "runs anywhere"):
    *
-   * - v1: the `platform:` hint and/or the `driver:`'s platform.
-   * - unified: the platform prefix of every declared classifier — `config.devices` keys plus
-   *   every step's and the trailhead's `recording:` classifiers (so `android-tablet` and
-   *   `ios-iphone` contribute `ANDROID` and `IOS`).
+   * The platform prefix of every declared classifier — `config.devices` keys plus every step's and
+   * the trailhead's `recording:` classifiers (so `android-tablet` and `ios-iphone` contribute
+   * `ANDROID` and `IOS`).
    *
    * [trailblazeYaml] must carry the caller's tool serializers (`createTrailblazeYaml()` on JVM
    * hosts) so recorded tools inside the trail decode rather than falling into the catch.
    */
   fun supportedPlatformsForTrail(trailblazeYaml: TrailblazeYaml, yaml: String): Set<TrailblazeDevicePlatform> = try {
     when (val doc = trailblazeYaml.decodeTrailDocument(yaml)) {
-      is TrailDocument.V1 -> {
-        val config = doc.items.filterIsInstance<TrailYamlItem.ConfigTrailItem>().firstOrNull()?.config
-        buildSet {
-          config?.platform?.let { TrailblazeDevicePlatform.fromString(it)?.let(::add) }
-          config?.driver?.let { TrailblazeDriverType.fromString(it)?.platform?.let(::add) }
-        }
-      }
       // Fold the trail's declared classifiers (`config.devices` keys + every step/trailhead
       // `recording:` key) up to platforms — the same coverage the desktop Trails browser displays.
       is TrailDocument.Unified -> UnifiedTrailTargets.declaredPlatforms(doc.trail)

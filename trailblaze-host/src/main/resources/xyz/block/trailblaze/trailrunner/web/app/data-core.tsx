@@ -278,7 +278,18 @@ function pickDirectoryViaShell(initialDir) {
   if (typeof window.trailblazePickDirectory === 'function') {
     return window.trailblazePickDirectory(initialDir);
   }
-  return Promise.resolve(window.prompt('Absolute path to directory of .trail.yaml files:', initialDir || '') || null);
+  // Plain browsers cannot expose an absolute path through <input type="file"> or the File System
+  // Access API. Ask the app shell to collect it in a real Trail Runner dialog instead of falling
+  // back to window.prompt(), which embedded browsers intentionally do not support.
+  return new Promise((resolve) => {
+    const handled = !window.dispatchEvent(new CustomEvent('tb:pick-directory', {
+      cancelable: true,
+      detail: { initialDir: initialDir || '', resolve },
+    }));
+    // This can only happen if the picker is called before the app shell mounts. Resolve as a
+    // cancellation rather than leaving the caller's loading state pending forever.
+    if (!handled) resolve(null);
+  });
 }
 
 async function addTrailRoot(path) {

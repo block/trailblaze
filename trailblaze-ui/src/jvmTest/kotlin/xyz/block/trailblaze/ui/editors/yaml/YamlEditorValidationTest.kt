@@ -17,17 +17,6 @@ class YamlEditorValidationTest {
   }
 
   @Test
-  fun `a v1 trail validates cleanly`() {
-    val v1 = """
-      - config:
-          target: myapp
-      - tools:
-        - pressBack: {}
-    """.trimIndent()
-    assertNull(validateYaml(v1))
-  }
-
-  @Test
   fun `a unified trail carrying recordings validates cleanly`() {
     // Regression: validation must NOT run through decodeTrail(no classifiers), which throws a
     // runtime guard for a unified file with recordings ("would drop every recording"). That is not
@@ -52,20 +41,6 @@ class YamlEditorValidationTest {
     // Neither a v1 list nor a unified mapping — validation must still flag it.
     val garbage = "this: is: not: a: trail"
     assertTrue(validateYaml(garbage) != null, "malformed YAML should still surface an error")
-  }
-
-  @Test
-  fun `a v1 trail using an app-specific tool not on this classpath validates cleanly`() {
-    // Observable contract: the editor must not block Run/Save on a tool it doesn't recognize, since
-    // the runner registers app-specific tools at run time. (An unknown tool decodes leniently into a
-    // pass-through OtherTrailblazeTool, so the decode succeeds; validateYaml returns null either way.)
-    val v1 = """
-      - config:
-          target: myapp
-      - tools:
-        - thisToolIsNotRegisteredAnywhere: {}
-    """.trimIndent()
-    assertNull(validateYaml(v1), "an unknown tool must be tolerated, not flagged as invalid")
   }
 
   @Test

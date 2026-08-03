@@ -62,7 +62,7 @@ import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
-import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -444,6 +444,8 @@ object TrailblazeHostYamlRunner {
       // device id; the manager must look it up under the same key (not the per-trail
       // suffixed `trailblazeDeviceId.instanceId` we use for session-cache identity).
       webBrowserRecordingKey = requestDeviceId.instanceId,
+      // Honor the CLI `--no-capture-video` opt-out — this rule self-instruments video.
+      captureVideo = runOnHostParams.captureVideo,
     )
 
     // Reset the browser session only when starting a new Trailblaze session.
@@ -585,6 +587,8 @@ object TrailblazeHostYamlRunner {
       appTarget = runOnHostParams.targetTestApp,
       trailblazeDeviceId = trailblazeDeviceId,
       maxLlmCalls = runYamlRequest.maxLlmCalls,
+      // Honor the CLI `--no-capture-video` opt-out — this rule self-instruments video.
+      captureVideo = runOnHostParams.captureVideo,
     )
 
     if (isReusingTest) {
@@ -1422,8 +1426,12 @@ object TrailblazeHostYamlRunner {
       }
     }
 
-    // Store the test instance for forceful shutdown on cancellation
-    deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
+    // Store the test instance for forceful shutdown on cancellation. Host-native iOS drivers
+    // have no Maestro driver — and dereferencing hostTbRunner.hostRunner would construct one —
+    // so this is skipped for them.
+    if (runOnHostParams.trailblazeDriverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+      deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
+    }
 
     onProgressMessage("Connecting to $trailblazeDeviceId device...")
 
@@ -1451,7 +1459,7 @@ object TrailblazeHostYamlRunner {
       deviceLabel = "maestro:${trailblazeDeviceId.instanceId}",
       sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
       onProgressMessage = onProgressMessage,
-      screenshotProvider = hostTbRunner.hostRunner.screenStateProvider,
+      screenshotProvider = hostTbRunner.screenStateProvider,
       noLogging = runOnHostParams.noLogging,
       cleanup = {
         // Shut down subprocess MCP servers before the driver goes away — they're tied to
@@ -1464,6 +1472,11 @@ object TrailblazeHostYamlRunner {
         // stderr-capture file handle.
         withContext(NonCancellable) {
           subprocessRuntimes.forEach { it.shutdownAll() }
+          // Detach the iOS baguette stream (no-op unless TRAILBLAZE_IOS_STREAM_SCREENSHOT
+          // engaged) so the WebSocket + ffmpeg decoder don't outlive the session. The
+          // if-started guard keeps cleanup from constructing the lazy hostRunner — which
+          // deliberately throws on IOS_AXE and would otherwise fail every AXe run's cleanup.
+          hostTbRunner.closeStreamScreenshotSourceIfStarted()
         }
         if (keepDriverAlive) {
           Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
@@ -1516,7 +1529,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        hostTbRunner.loggingRule.captureFinalScreenshot(session, hostTbRunner.hostRunner.screenStateProvider)
+        hostTbRunner.loggingRule.captureFinalScreenshot(session, hostTbRunner.screenStateProvider)
         hostTbRunner.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
@@ -2521,7 +2534,10 @@ object TrailblazeHostYamlRunner {
 
       val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
 
-      val recordingYaml = logs.generateRecordedYaml(
+      // Write the on-disk intermediate in the unified shape (falls back to the v1 list shape only
+      // when the session has no resolvable device classifier). The save-back step re-reads this file
+      // and merges it, so emitting unified here keeps that re-decode off the legacy v1 parser.
+      val recordingYaml = logs.generateUnifiedRecordedYaml(
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
       )

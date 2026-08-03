@@ -71,20 +71,19 @@ class TrailRunnerIntegrationTest {
     file.parentFile?.mkdirs()
     file.writeText(
       """
-      - config:
-          id: test/trail
-          title: "$title"
-          target: myapp
-          platform: ios
-          tags: [smoke]
-      - prompts:
+      config:
+        id: test/trail
+        title: "$title"
+        target: myapp
+        tags: [smoke]
+      trail:
         - step: Launch the app signed in
           recording:
-            tools:
+            ios:
             - myapp_ios_signInViaUI: { email: x@y.z, password: secret }
         - verify: Money tab is visible
           recording:
-            tools:
+            ios:
             - assertVisibleBySelector: { reason: "", nodeSelector: { iosMaestro: { resourceIdRegex: balance_tab_button } } }
       """.trimIndent(),
     )
@@ -332,7 +331,9 @@ class TrailRunnerIntegrationTest {
 
     assertTrue(body.contains("Login smoke"), "expected title in response body")
     assertTrue(body.contains("myapp"), "expected target in response body")
-    assertTrue(body.contains("ios"), "expected platform in response body")
+    // Platform is not a unified `config` scalar; a non-classifier-named trail (`login.trail.yaml`)
+    // is platform-agnostic in the index. The filename→platform backfill contract is pinned
+    // precisely in TrailIndexBuilderTest.
   }
 
   @Test
@@ -576,7 +577,7 @@ class TrailRunnerIntegrationTest {
   fun `POST Trail Runner api trail validate accepts a well-formed trail`() = withTrailRunner {
     val response = client.post("/trailrunner/api/trail/validate") {
       contentType(ContentType.Application.Json)
-      setBody("""{"yaml":"- config:\n    title: ok\n- prompts:\n  - step: do the thing"}""")
+      setBody("""{"yaml":"config:\n  title: ok\ntrail:\n  - step: do the thing"}""")
     }
     assertEquals(HttpStatusCode.OK, response.status)
     assertTrue(response.bodyAsText().replace(" ", "").contains("\"valid\":true"))
@@ -586,7 +587,7 @@ class TrailRunnerIntegrationTest {
   fun `POST Trail Runner api trail validate flags malformed yaml with an error`() = withTrailRunner {
     val response = client.post("/trailrunner/api/trail/validate") {
       contentType(ContentType.Application.Json)
-      setBody("""{"yaml":"- config:\n  title: [unclosed"}""")
+      setBody("""{"yaml":"config:\n  title: [unclosed"}""")
     }
     assertEquals(HttpStatusCode.OK, response.status)
     val body = response.bodyAsText().replace(" ", "")
@@ -606,7 +607,7 @@ class TrailRunnerIntegrationTest {
   @Test
   fun `PUT Trail Runner api trail overwrites an existing trail in place`() = withTrailRunner {
     val file = writeTrail("editable.trail.yaml", title = "Before edit")
-    val newYaml = "- config:\n    title: After edit\n- prompts:\n  - step: do the thing"
+    val newYaml = "config:\n  title: After edit\ntrail:\n  - step: do the thing"
     val response = client.put("/trailrunner/api/trail/0/editable") {
       contentType(ContentType.Application.Json)
       setBody("""{"yaml":"$newYaml"}""")
@@ -620,7 +621,7 @@ class TrailRunnerIntegrationTest {
   fun `PUT Trail Runner api trail returns 404 for unknown id`() = withTrailRunner {
     val response = client.put("/trailrunner/api/trail/0/no-such-trail") {
       contentType(ContentType.Application.Json)
-      setBody("""{"yaml":"- config:\n    title: x"}""")
+      setBody("""{"yaml":"config:\n  title: x\ntrail:\n  - step: noop"}""")
     }
     assertEquals(HttpStatusCode.NotFound, response.status)
   }
@@ -629,7 +630,7 @@ class TrailRunnerIntegrationTest {
   fun `PUT Trail Runner api trail rejects path traversal`() = withTrailRunner {
     val response = client.put("/trailrunner/api/trail/0/..%2F..%2Fescape") {
       contentType(ContentType.Application.Json)
-      setBody("""{"yaml":"- config:\n    title: x"}""")
+      setBody("""{"yaml":"config:\n  title: x\ntrail:\n  - step: noop"}""")
     }
     assertTrue(response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.BadRequest,
       "traversal id must not resolve (got ${'$'}{response.status})")
@@ -860,7 +861,7 @@ class TrailRunnerIntegrationTest {
   fun `POST run returns 503 when no deviceManager is wired`() = withTrailRunner {
     val response = client.post("/trailrunner/api/run") {
       contentType(ContentType.Application.Json)
-      setBody("""{"trailblazeDeviceId":{"instanceId":"x","trailblazeDevicePlatform":"ANDROID"},"yaml":"- prompts:\n  - step: noop"}""")
+      setBody("""{"trailblazeDeviceId":{"instanceId":"x","trailblazeDevicePlatform":"ANDROID"},"yaml":"config: {}\ntrail:\n  - step: noop"}""")
     }
     assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
   }
@@ -882,7 +883,7 @@ class TrailRunnerIntegrationTest {
     writeTrail("anchor/anchor.trail.yaml") // anchor the workspace root
     val response = client.post("/rpc/CreateTrailRequest") {
       contentType(ContentType.Application.Json)
-      setBody("""{"path":"myapp/new","yaml":"- config:\n    id: x\n    title: X"}""")
+      setBody("""{"path":"myapp/new","yaml":"config:\n  id: x\n  title: X\ntrail:\n  - step: noop"}""")
     }
     assertEquals(HttpStatusCode.OK, response.status)
     val flat = response.bodyAsText().replace(Regex("\\s"), "")

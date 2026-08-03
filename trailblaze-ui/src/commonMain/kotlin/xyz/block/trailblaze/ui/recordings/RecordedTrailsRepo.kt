@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui.recordings
 
 import kotlinx.coroutines.flow.Flow
 import xyz.block.trailblaze.logs.model.SessionInfo
+import xyz.block.trailblaze.yaml.TrailYamlItem
 
 /**
  * Configuration for a trails directory.
@@ -21,16 +22,17 @@ data class TrailsDirectory(
  */
 interface RecordedTrailsRepo {
   /**
-   * Saves a recording YAML to disk with platform-specific filename.
+   * Saves an already-lowered recording to disk with a platform-specific filename. The caller passes
+   * the lowered [items] (built from the session logs via `generateRecordedTrailItems`) so the save
+   * never round-trips through the v1 trail parser: the legacy path re-encodes them to the v1 list
+   * shape, the unified path merges them straight into the classifier slot.
    *
-   * @param yaml The YAML content to save
+   * @param items The lowered trail items for this device's session
    * @param sessionInfo The session info containing trail configuration
-   * @param includePlatform Whether to include platform in the filename
-   * @param numClassifiers Number of classifiers to include in the filename (0 = none, -1 = all)
    * @return Result with the absolute path to the saved file on success, or an error message on failure
    */
   fun saveRecording(
-    yaml: String,
+    items: List<TrailYamlItem>,
     sessionInfo: SessionInfo,
   ): Result<String>
 

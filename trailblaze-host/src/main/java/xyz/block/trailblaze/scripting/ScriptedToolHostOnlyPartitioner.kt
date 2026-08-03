@@ -39,6 +39,13 @@ data class HostOnlyPartition(
  * partition (the bundling loop has no per-tool error isolation). The directed breadcrumb
  * logged here tells the author what to change.
  *
+ * @param resolveSource Maps a tool to the `.ts` the analyzer should read. Must be the same file
+ *   the bundler is later handed, or the two disagree about what they're looking at. A
+ *   bundled-trailmap tool's source ships inside the JAR rather than at its workspace-relative
+ *   path, and [ScriptedToolImportAnalyzer.analyze] reports "no host-only imports" for a file it
+ *   can't read — so such a tool sails past this pre-pass unanalyzed and fails in the bundler
+ *   instead, which is the very outcome the pre-pass exists to prevent. Defaults to the raw
+ *   workspace-relative path, for tests and callers whose sources are already on disk.
  * @param log Logging seam — defaults to [Console.log]. Tests substitute a capturing
  *   lambda so assertions can pin the breadcrumb text without piping through a real
  *   Console sink.
@@ -46,6 +53,7 @@ data class HostOnlyPartition(
 suspend fun partitionByImportClosure(
   tools: List<InlineScriptToolConfig>,
   analyzer: ScriptedToolImportAnalyzer,
+  resolveSource: (InlineScriptToolConfig) -> File = { File(it.script) },
   log: (String) -> Unit = { Console.log(it) },
 ): HostOnlyPartition {
   val skipped = mutableListOf<String>()
@@ -55,7 +63,7 @@ suspend fun partitionByImportClosure(
       toBundle += tool
       continue
     }
-    val verdict = analyzer.analyze(File(tool.script))
+    val verdict = analyzer.analyze(resolveSource(tool))
     if (verdict.requiresHost) {
       skipped += tool.name
       log(

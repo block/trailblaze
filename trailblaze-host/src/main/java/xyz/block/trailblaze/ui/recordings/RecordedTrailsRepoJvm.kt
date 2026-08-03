@@ -17,6 +17,7 @@ import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.FileChangeEvent
 import xyz.block.trailblaze.report.utils.FileWatchService
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import xyz.block.trailblaze.util.Console
@@ -49,7 +50,7 @@ class RecordedTrailsRepoJvm(
   }
 
   override fun saveRecording(
-    yaml: String,
+    items: List<TrailYamlItem>,
     sessionInfo: SessionInfo,
   ): Result<String> {
     val trailConfig = sessionInfo.trailConfig ?: TrailConfig()
@@ -59,6 +60,13 @@ class RecordedTrailsRepoJvm(
     val suffix = classifiers.joinToString("-") { it.classifier }
 
     return try {
+      // Re-encode the lowered items to the v1 list shape for legacy/fallback writes. Byte-identical
+      // to the generator's own encode (both use createTrailblazeYaml()'s classpath-discovered tool
+      // set), and encode-only — the save-back no longer decodes through the v1 parser. Inside the
+      // try so an encode failure (e.g. a custom tool serializer throwing) becomes a Result.failure
+      // the desktop save surfaces as "Save Failed", not an exception escaping the save coroutine.
+      val yaml = createTrailblazeYaml().encodeToString(items)
+
       val trailPath = trailConfig.id
       if (trailPath == null) {
         // Fallback: no trail identity → a session-scoped directory that never holds a unified
@@ -87,7 +95,7 @@ class RecordedTrailsRepoJvm(
 
       // Route through the shared writer (same routing the CLI uses).
       if (UnifiedRecordingWriter.shouldRouteUnified(trailDir, suffix, unifiedRecordingsEnabledProvider())) {
-        return saveRecordingAsUnified(trailDir, yaml, suffix, legacyFileName)
+        return saveRecordingAsUnified(trailDir, items, yaml, suffix, legacyFileName)
       }
 
       // Legacy write. Refuse to drop a legacy sibling into a migrated directory whose recordings the
@@ -111,19 +119,19 @@ class RecordedTrailsRepoJvm(
   }
 
   /**
-   * Merge the recorded [yaml] into the directory's unified `trail.yaml` under [classifier]'s slot,
-   * preserving every other classifier already on disk. Falls back to a legacy sibling only for the
-   * shapes the unified format can't hold (a multi-tool trailhead) and refuses a corrupt existing
-   * trail rather than clobbering it.
+   * Merge the recorded [items] into the directory's unified `trail.yaml` under [classifier]'s slot,
+   * preserving every other classifier already on disk. Falls back to a legacy sibling (writing the
+   * v1-encoded [yaml]) only for the shapes the unified format can't hold (a multi-tool trailhead)
+   * and refuses a corrupt existing trail rather than clobbering it.
    */
   private fun saveRecordingAsUnified(
     trailDir: File,
+    items: List<TrailYamlItem>,
     yaml: String,
     classifier: String,
     legacyFileName: String,
   ): Result<String> {
-    val recordedItems = createTrailblazeYaml().decodeTrail(yaml)
-    return when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, recordedItems, classifier)) {
+    return when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, items, classifier)) {
       is UnifiedRecordingWriter.MergeOutcome.Merged -> {
         Console.log("Recording merged into ${outcome.target.absolutePath} (classifier `$classifier`)")
         Result.success(outcome.target.absolutePath)

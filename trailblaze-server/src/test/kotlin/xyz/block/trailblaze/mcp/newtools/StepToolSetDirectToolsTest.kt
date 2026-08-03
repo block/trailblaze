@@ -114,17 +114,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap two points",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-              - tapOnPoint:
-                  x: 300
-                  y: 400
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200\n- tapOnPoint:\n    x: 300\n    y: 400",
       )
 
     assertEquals(2, executedTools.size)
@@ -190,14 +180,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 150
-                  y: 250
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 150\n    y: 250",
       )
 
     assertEquals(1, executedTools.size)
@@ -274,13 +257,12 @@ class StepToolSetDirectToolsTest {
           objective = "Run two tools",
           tools =
             """
-            - tools:
-                - tapOnPoint:
-                    x: 1
-                    y: 2
-                - tapOnPoint:
-                    x: 3
-                    y: 4
+            - tapOnPoint:
+                x: 1
+                y: 2
+            - tapOnPoint:
+                x: 3
+                y: 4
             """
               .trimIndent(),
         )
@@ -412,17 +394,12 @@ class StepToolSetDirectToolsTest {
         },
       )
 
-    // Valid trail YAML containing only a prompts item, no tools item.
+    // Valid unified trail YAML with a single step and no recording (no tools).
     // decodeTrail will produce a PromptsTrailItem -- no ToolTrailItem.
     val result =
       toolSet.step(
         objective ="Do something",
-        tools =
-          """
-          - prompts:
-              - step: Just a prompt step
-          """
-            .trimIndent(),
+        tools = "trail:\n  - step: Just a prompt step",
       )
 
     assertFalse(executorCalled, "rawToolExecutor should not be called when no tools found")
@@ -482,19 +459,9 @@ class StepToolSetDirectToolsTest {
       toolSet.step(
         objective ="Tap three points",
         tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-              - tapOnPoint:
-                  x: 300
-                  y: 400
-              - tapOnPoint:
-                  x: 500
-                  y: 600
-          """
-            .trimIndent(),
+          "- tapOnPoint:\n    x: 100\n    y: 200\n" +
+            "- tapOnPoint:\n    x: 300\n    y: 400\n" +
+            "- tapOnPoint:\n    x: 500\n    y: 600",
       )
 
     // First tool executed, second failed, third not reached
@@ -538,14 +505,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "Tap on point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertContains(result, "not valid for the current device/target")
@@ -576,13 +536,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "Open example.com",
-        tools =
-          """
-          - tools:
-              - openUrl:
-                  url: https://example.com
-          """
-            .trimIndent(),
+        tools = "- openUrl:\n    url: https://example.com",
       )
 
     assertContains(result, "not valid for the current device/target")
@@ -612,13 +566,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "Open example.com",
-        tools =
-          """
-          - tools:
-              - openUrl:
-                  url: https://example.com
-          """
-            .trimIndent(),
+        tools = "- openUrl:\n    url: https://example.com",
       )
 
     assertContains(result, "not valid for the current device/target")
@@ -685,13 +633,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "Open example.com",
-        tools =
-          """
-          - tools:
-              - openUrl:
-                  url: https://example.com
-          """
-            .trimIndent(),
+        tools = "- openUrl:\n    url: https://example.com",
       )
 
     assertContains(result, "not valid for the current device/target")
@@ -751,12 +693,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "no tools",
-        tools =
-          """
-          - prompts:
-              - step: Just a prompt step
-          """
-            .trimIndent(),
+        tools = "trail:\n  - step: Just a prompt step",
       )
 
     assertContains(result, "No tools found")
@@ -817,14 +754,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective = "Tap on point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertEquals(1, executedTools.size)
@@ -846,14 +776,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertContains(result, "not available")
@@ -885,14 +808,7 @@ class StepToolSetDirectToolsTest {
 
       toolSet.step(
         objective ="Tap the login button",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
       val steps = sessionContext.getRecordedSteps()
@@ -928,14 +844,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertFalse(executorCalled, "rawToolExecutor should not be called when no device connected")
@@ -958,14 +867,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertContains(result, "Connecting to emulator-5554")
@@ -991,14 +893,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertEquals(1, executedTools.size)
@@ -1238,14 +1133,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertTrue(callCount >= 3, "screenStateProvider should have been called multiple times")
@@ -1361,14 +1249,7 @@ class StepToolSetDirectToolsTest {
     val result =
       toolSet.step(
         objective ="Tap a point",
-        tools =
-          """
-          - tools:
-              - tapOnPoint:
-                  x: 100
-                  y: 200
-          """
-            .trimIndent(),
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
       )
 
     assertContains(result, "Device disconnected unexpectedly")

@@ -93,6 +93,18 @@ enum class TrailblazeDriverType(
     )
 
     /**
+     * iOS drivers that drive the simulator natively from the host — no Maestro/XCUITest
+     * connection is ever opened for them. Every gate that skips Maestro-driver plumbing
+     * (host-runner construction, active-driver registration, the manual scroll loop) keys
+     * off this set, and each member's connected device is an `IosNativeConnectedDevice`
+     * exposing the driver's `IosDeviceManager`. Adding a new host-native iOS driver
+     * (e.g. an in-process driver) means adding its enum entry to this set.
+     */
+    val IOS_HOST_NATIVE_DRIVER_TYPES = setOf(
+      IOS_AXE,
+    )
+
+    /**
      * The driver type used when the user hasn't set an explicit per-platform override.
      * Returns `null` for platforms that don't have a user-togglable default (e.g. `WEB`).
      */

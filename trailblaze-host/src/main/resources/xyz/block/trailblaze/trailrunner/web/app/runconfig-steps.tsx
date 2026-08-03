@@ -22,7 +22,7 @@ function RcSelect({ value, onChange, options, children, title, style }) {
   return <Select full value={value} onChange={(e) => onChange(e.target.value)} options={options} title={title} style={style}>{children}</Select>;
 }
 
-function Field({ flag, desc, children, full, ico, preview }) {
+function Field({ flag, children, full, ico, preview }) {
   return (
     <div style={preview
       ? { margin: '10px 0', padding: '11px 13px', border: '1px dashed var(--tb-hairline-strong)', borderRadius: 10, opacity: .68 }
@@ -31,10 +31,9 @@ function Field({ flag, desc, children, full, ico, preview }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             {ico && (typeof ico === 'string' ? <Ico n={ico} s={15} c="var(--text-subtle)" /> : ico)}
-            <span className="tb-mono" style={{ fontSize: 13, color: 'var(--text-standard)', fontWeight: 600 }}>{flag}</span>
+            <span style={{ fontSize: 13, color: 'var(--text-standard)', fontWeight: 600 }}>{flag}</span>
             {preview && <Chip>Not built yet</Chip>}
           </div>
-          {desc && <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 4 }}>{desc}</div>}
           {full && <div style={{ marginTop: 9 }}>{children}</div>}
         </div>
         {!full && <div style={{ flex: '0 0 auto' }}>{children}</div>}
@@ -43,25 +42,24 @@ function Field({ flag, desc, children, full, ico, preview }) {
   );
 }
 
-// One condensed line: mono flag + small inline description on the left, a single
-// control (switch / select / input) on the right. Used by the Behavior and Capture
+// One condensed line: a direct UI label on the left and a single control on the
+// right. CLI details live in the generated command below the form. Used by Behavior and Capture
 // sections so a long list of toggles stays scannable in the single-page layout.
 // No row divider — white space separates the rows (Tufte 1+1=3); grouping is done
 // by ToggleGroup's labelled clusters instead.
-function CompactField({ flag, desc, children }) {
+function CompactField({ label, flag, children }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '7px 0' }}>
+    <div className="tb-run-field" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '7px 0' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <span className="tb-mono" style={{ fontSize: 12.5, color: 'var(--text-standard)', fontWeight: 600 }}>{flag}</span>
-        {desc && <span className="tb-sub" style={{ fontSize: 11.5, lineHeight: 1.4, marginLeft: 8 }}>{desc}</span>}
+        <span style={{ fontSize: 12.5, color: 'var(--text-standard)', fontWeight: 600 }}>{label || flag}</span>
       </div>
       <div style={{ flex: '0 0 auto' }}>{children}</div>
     </div>
   );
 }
 
-const ToggleRow = ({ flag, desc, on, set }) => (
-  <CompactField flag={flag} desc={desc}><Switch on={on} onClick={() => set(!on)} /></CompactField>
+const ToggleRow = ({ label, flag, on, set }) => (
+  <CompactField label={label} flag={flag}><Switch on={on} onClick={() => set(!on)} /></CompactField>
 );
 
 // A labelled cluster of compact rows. The eyebrow + the gap below it carry the
@@ -77,7 +75,7 @@ function ToggleGroup({ label, children }) {
 
 // A jump-to-anchor section: the header doubles as the scroll target the left nav
 // scrolls to. `id` matches the `data-section` the dialog's scroll-spy reads.
-function Section({ id, n, title, sub, ico, children, registerRef }) {
+function Section({ id, title, ico, children, registerRef }) {
   return (
     <section data-section={id} ref={registerRef ? (el) => registerRef(id, el) : null} style={{ scrollMarginTop: 12, paddingBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 6 }}>
@@ -86,7 +84,6 @@ function Section({ id, n, title, sub, ico, children, registerRef }) {
         </div>
         <div style={{ minWidth: 0 }}>
           <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, lineHeight: 1.25 }}>{title}</h2>
-          {sub && <p className="tb-sub" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '3px 0 0' }}>{sub}</p>}
         </div>
       </div>
       <div style={{ paddingLeft: 42 }}>{children}</div>
@@ -98,26 +95,20 @@ function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedT
   const sel = devices.find((d) => d.id === deviceId) || null;
   return (
     <div>
-      <Field flag="Device" ico={sel ? <PlatformGlyph platform={sel.platform} s={15} c="var(--text-subtle)" /> : 'smartphone'} full
-        desc="The simulator, emulator, or browser this trail drives.">
+      <Field flag="Device" ico={sel ? <PlatformGlyph platform={sel.platform} s={15} c="var(--text-subtle)" /> : 'smartphone'} full>
         {devices.length === 0
-          ? <span className="tb-sub" style={{ fontSize: 12.5 }}>No device connected - open Devices to connect one.</span>
+          ? <span className="tb-sub" style={{ fontSize: 12.5 }}>No connected devices.</span>
           : <RcSelect value={deviceId || ''} onChange={setDeviceId}
               options={devices.map((d) => [d.id, d.name + (connectedId === d.id ? '  ✓ connected' : '')])} />}
       </Field>
-      <Field flag="Target app" ico="package" full
-        desc={'The app under test, as installed on the selected device.'
-          + (declaredTarget && installedTargets.some((a) => a.id === declaredTarget)
-            ? ` This trail declares '${declaredTarget}', so it's preselected.` : '')}>
-        {declaredTarget && installedTargets.length > 0 && !installedTargets.some((a) => a.id === declaredTarget) && (
+      {sel && sel.platform !== 'web' && <Field flag="Target app" ico="package" full>
+        {declaredTarget && !appsLoading && !targetApp && !installedTargets.some((a) => a.id === declaredTarget) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: 'var(--tb-warn, #e0a800)', fontSize: 12.5 }}>
             <Ico n="triangle-alert" s={13} c="var(--tb-warn, #e0a800)" />
             <span>This trail declares target '{declaredTarget}', which isn't resolvable on this device - the run is blocked unless you explicitly pick an app below to run against instead.</span>
           </div>
         )}
-        {sel && sel.platform === 'web'
-          ? <span className="tb-sub" style={{ fontSize: 12.5 }}>Web runs drive the browser - no installed app to pick.</span>
-          : installedTargets.length > 0
+        {installedTargets.length > 0
             ? <Select full value={targetApp || ''} onChange={(e) => setTargetApp(e.target.value)}
                 options={installedTargets.map((a) => ({
                   value: a.id,
@@ -130,7 +121,7 @@ function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedT
                   ),
                 }))} />
             : <span className="tb-sub" style={{ fontSize: 12.5 }}>{appsLoading ? 'Checking the device…' : 'No known target apps installed on this device.'}</span>}
-      </Field>
+      </Field>}
     </div>
   );
 }
@@ -138,26 +129,26 @@ function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedT
 function BehaviorSection(p) {
   return (
     <div>
-      <ToggleRow flag="--self-heal" desc="When a recorded step fails, let AI take over and continue." on={p.selfHeal} set={p.setSelfHeal} />
-      <CompactField flag="--use-recorded-steps" desc="Replay recorded tools vs let the LLM drive.">
+      <ToggleRow label="Self-heal failures" flag="--self-heal" on={p.selfHeal} set={p.setSelfHeal} />
+      <CompactField label="Step execution" flag="--use-recorded-steps">
         <RcSelect value={p.useRecordedSteps} onChange={p.setUseRecordedSteps} style={{ minWidth: 210 }}
-          options={[['auto', 'Auto (replay if recorded)'], ['replay', 'Replay (--use-recorded-steps)'], ['ai', 'AI (--no-use-recorded-steps)']]} />
+          options={[['auto', 'Automatic'], ['replay', 'Recorded replay'], ['ai', 'AI-driven']]} />
       </CompactField>
-      <CompactField flag="model" desc="Model that drives AI steps.">
+      <CompactField label="Model">
         <ModelPicker />
       </CompactField>
-      <CompactField flag="-a, --agent" desc="Which agent runner drives the objective.">
+      <CompactField label="Agent" flag="--agent">
         <RcSelect value={p.agent} onChange={p.setAgent} style={{ minWidth: 200 }}
           options={[['TRAILBLAZE_RUNNER', 'TRAILBLAZE_RUNNER'], ['MULTI_AGENT_V3', 'MULTI_AGENT_V3'], ['KOOG_STRATEGY_GRAPH', 'KOOG_STRATEGY_GRAPH']]} />
       </CompactField>
-      <CompactField flag="--max-llm-calls" desc="Cap LLM calls per objective (TRAILBLAZE_RUNNER only).">
+      <CompactField label="AI call limit" flag="--max-llm-calls">
         <RcInput value={p.maxLlmCalls} onChange={p.setMaxLlmCalls} type="number" style={{ width: 90 }} />
       </CompactField>
-      <CompactField flag="--llm" desc="Provider / model shorthand.">
+      <CompactField label="Model override" flag="--llm">
         <RcInput value={p.llm} onChange={p.setLlm} placeholder="openai/gpt-4-1" style={{ width: 200 }} />
       </CompactField>
-      <ToggleRow flag="--verbose" desc="Verbose logging." on={p.verbose} set={p.setVerbose} />
-      {p.web && <ToggleRow flag="--headless" desc="Run the Playwright browser headless (web)." on={p.headless} set={p.setHeadless} />}
+      <ToggleRow label="Verbose logs" flag="--verbose" on={p.verbose} set={p.setVerbose} />
+      {p.web && <ToggleRow label="Headless browser" flag="--headless" on={p.headless} set={p.setHeadless} />}
     </div>
   );
 }
@@ -166,21 +157,21 @@ function CaptureSection(p) {
   return (
     <div>
       <ToggleGroup label="Artifacts">
-        <ToggleRow flag="--capture-video" desc="Record a video of the run." on={p.captureVideo} set={p.setCaptureVideo} />
-        <ToggleRow flag="--capture-logcat" desc="Capture Android logcat." on={p.captureLogcat} set={p.setCaptureLogcat} />
-        <ToggleRow flag="--capture-network" desc="Capture network traffic." on={p.captureNetwork} set={p.setCaptureNetwork} />
-        <ToggleRow flag="--capture-ios-logs" desc="Capture iOS simulator system logs." on={p.captureIosLogs} set={p.setCaptureIosLogs} />
-        <ToggleRow flag="--capture-analytics" desc="Capture analytics events so they show in the timeline." on={p.captureAnalytics} set={p.setCaptureAnalytics} />
-        <ToggleRow flag="Event streams" desc="Capture host-provided event streams and interlace them into the run timeline. Turns on network capture." on={p.captureEvents} set={p.setCaptureEvents} />
-        <ToggleRow flag="--save-recording" desc="Save the recording back after a successful run." on={p.saveRecording} set={p.setSaveRecording} />
+        <ToggleRow label="Run video" flag="--capture-video" on={p.captureVideo} set={p.setCaptureVideo} />
+        <ToggleRow label="Android logs" flag="--capture-logcat" on={p.captureLogcat} set={p.setCaptureLogcat} />
+        <ToggleRow label="Network traffic" flag="--capture-network" on={p.captureNetwork} set={p.setCaptureNetwork} />
+        <ToggleRow label="iOS system logs" flag="--capture-ios-logs" on={p.captureIosLogs} set={p.setCaptureIosLogs} />
+        <ToggleRow label="Analytics events" flag="--capture-analytics" on={p.captureAnalytics} set={p.setCaptureAnalytics} />
+        <ToggleRow label="Event streams" on={p.captureEvents} set={p.setCaptureEvents} />
+        <ToggleRow label="Save recording" flag="--save-recording" on={p.saveRecording} set={p.setSaveRecording} />
       </ToggleGroup>
       <ToggleGroup label="Reports & logging">
-        <ToggleRow flag="--no-report" desc="Skip HTML report." on={p.noReport} set={p.setNoReport} />
-        <ToggleRow flag="--markdown" desc="Generate a markdown report." on={p.markdown} set={p.setMarkdown} />
-        <ToggleRow flag="--no-logging" desc="Disable session logging." on={p.noLogging} set={p.setNoLogging} />
+        <ToggleRow label="Skip HTML report" flag="--no-report" on={p.noReport} set={p.setNoReport} />
+        <ToggleRow label="Markdown report" flag="--markdown" on={p.markdown} set={p.setMarkdown} />
+        <ToggleRow label="Disable session logs" flag="--no-logging" on={p.noLogging} set={p.setNoLogging} />
       </ToggleGroup>
       <ToggleGroup label="Filter">
-        <CompactField flag="--tags" desc="Only run trails with these tags.">
+        <CompactField label="Tags" flag="--tags">
           <RcInput value={p.tags} onChange={p.setTags} placeholder="smoke,login" style={{ width: 180 }} />
         </CompactField>
       </ToggleGroup>
@@ -192,15 +183,7 @@ function RightRail({ trail, detail, liveYaml, tab, setTab, targetId, driver, pla
   const steps = detail.data?.steps || [];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '18px 18px 12px' }}>
-        <Ico n="file-text" s={20} c="var(--text-subtle)" style={{ marginTop: 2, flex: '0 0 auto' }} />
-        <div style={{ minWidth: 0 }}>
-          <div className="tb-eyebrow" style={{ marginBottom: 5 }}>Running this trail</div>
-          <div style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.3 }}>{trail.title || trail.id}</div>
-          <div className="tb-mono tb-sub" style={{ fontSize: 11, marginTop: 3, wordBreak: 'break-all' }}>{trail.path || trail.id}</div>
-        </div>
-      </div>
-      <div style={{ padding: '0 18px 12px' }}>
+      <div style={{ padding: '18px 18px 12px' }}>
         <div style={{ display: 'flex', gap: 4, padding: 4, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 10 }}>
           {[['steps', 'Steps', 'list'], ['yaml', 'YAML', 'code'], ['tools', 'Tools', 'box']].map(([id, label, ico]) => {
             const on = tab === id;
@@ -244,7 +227,7 @@ function RailStep({ idx, step, last }) {
   const tools = step.tools || [];
   return (
     <div style={{ display: 'flex', gap: 12, paddingBottom: last ? 0 : 18 }}>
-      <span className="tb-mono" style={{ flex: '0 0 auto', minWidth: 14, textAlign: 'right', fontSize: 12, color: 'var(--text-subtle-variant)', lineHeight: '20px' }}>
+      <span style={{ flex: '0 0 auto', minWidth: 14, textAlign: 'right', fontSize: 12, color: 'var(--text-subtle-variant)', lineHeight: '20px', fontVariantNumeric: 'tabular-nums' }}>
         {isTrailhead ? <Ico n="flag" s={12} c="var(--tb-primary-green)" /> : idx + 1}
       </span>
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -321,33 +304,31 @@ function ToolSetRow({ ts }) {
 // Sections shown top-to-bottom in the single-page config. The left rail jumps to
 // each; the dialog's scroll-spy highlights the one in view.
 const SECTIONS = [
-  ['target', 'Target', 'The device and the app under test on it.', 'crosshair'],
-  ['behavior', 'Behavior', 'How the agent drives. Defaults replay the recorded steps.', 'bot'],
-  ['capture', 'Capture', 'Artifacts recorded during the run. Video and recording on by default.', 'clapperboard'],
+  ['target', 'Target', 'crosshair'],
+  ['behavior', 'Behavior', 'bot'],
+  ['capture', 'Capture', 'clapperboard'],
 ];
 
 // The nav items double as a live summary of the run: each carries the current
 // value for its section (device, context counts, agent, artifact count). Fills
 // what would otherwise be dead rail space with glanceable state.
-function SectionNav({ active, onJump, summaries = {} }) {
+function SectionNav({ active, onJump }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 8px' }}>
-      {SECTIONS.map(([id, name, , ico]) => {
+      {SECTIONS.map(([id, name, ico]) => {
         const on = active === id;
-        const summary = summaries[id];
         return (
           <button key={id} onClick={() => onJump(id)}
             style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', padding: '9px 12px', borderRadius: 10, cursor: 'pointer',
               border: '1px solid ' + (on ? 'var(--tb-hairline-strong)' : 'transparent'),
               background: on ? 'var(--bg-standard)' : 'transparent' }}>
             <span style={{ flex: '0 0 auto', width: 26, height: 26, borderRadius: 8, display: 'grid', placeItems: 'center',
-              background: on ? 'var(--tb-primary-green)' : 'var(--bg-standard)',
+              background: on ? 'var(--tb-selection)' : 'var(--bg-standard)',
               border: on ? 'none' : '1px solid var(--tb-hairline-strong)' }}>
-              <Ico n={ico} s={14} c={on ? '#04210a' : 'var(--text-subtle)'} />
+              <Ico n={ico} s={14} c={on ? 'var(--tb-on-selection)' : 'var(--text-subtle)'} />
             </span>
             <span style={{ minWidth: 0, flex: 1 }}>
               <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>{name}</span>
-              {summary && <span className="tb-sub" style={{ display: 'block', fontSize: 11, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</span>}
             </span>
           </button>
         );

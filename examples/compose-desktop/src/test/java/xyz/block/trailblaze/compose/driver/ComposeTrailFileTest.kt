@@ -15,6 +15,7 @@ import java.io.File
 import java.util.Base64
 import kotlin.test.Test
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -36,10 +37,10 @@ import xyz.block.trailblaze.util.Console
 /**
  * Trail file tests for the Compose Desktop driver.
  *
- * Validates that trail YAML (tools, prompts with recordings, config) parses correctly via
- * [TrailblazeYaml] and executes against real Compose UI through [ComposeTrailblazeAgent].
- * No LLM needed — `tools:` items execute directly, `prompts:` with `recording:` sections replay
- * without LLM.
+ * Validates that unified trail YAML (`config:` + `trail:` steps carrying per-classifier
+ * `recording:` blocks) parses correctly via [TrailblazeYaml] and executes against real Compose UI
+ * through [ComposeTrailblazeAgent]. No LLM needed — each step's recorded `android` tools replay
+ * deterministically.
  */
 @OptIn(ExperimentalTestApi::class)
 class ComposeTrailFileTest {
@@ -78,27 +79,36 @@ class ComposeTrailFileTest {
   }
 
   /**
-   * Parses [yaml] into trail items, then executes each [TrailYamlItem.ToolTrailItem] through the
-   * given [agent]. Config items are skipped. Returns the result of the last tool execution.
+   * Parses [yaml] into trail items, then replays each step's recorded tools through the given
+   * [agent]. A unified trail lowers to a single [TrailYamlItem.PromptsTrailItem] whose steps carry
+   * the closest-wins-resolved `android` recording; each step's tools run as one batch (so a failing
+   * tool stops the rest of that step). Config items are skipped. Returns the result of the last
+   * tool execution.
    */
   private fun executeToolTrailItems(
     agent: ComposeTrailblazeAgent,
     yaml: String,
   ): TrailblazeToolResult {
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val trailItems = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")),
+    )
     var lastResult: TrailblazeToolResult = TrailblazeToolResult.Success()
     for (item in trailItems) {
       when (item) {
-        is TrailYamlItem.ToolTrailItem -> {
-          val result = agent.runTrailblazeTools(
-            tools = item.tools.map { it.trailblazeTool },
-            traceId = null,
-            screenState = null,
-            elementComparator = stubElementComparator,
-            screenStateProvider = null,
-          )
-          lastResult = result.result
-          if (!result.result.isSuccess()) return result.result
+        is TrailYamlItem.PromptsTrailItem -> {
+          for (promptStep in item.promptSteps) {
+            val recording = promptStep.recording ?: continue
+            val result = agent.runTrailblazeTools(
+              tools = recording.tools.map { it.trailblazeTool },
+              traceId = null,
+              screenState = null,
+              elementComparator = stubElementComparator,
+              screenStateProvider = null,
+            )
+            lastResult = result.result
+            if (!result.result.isSuccess()) return result.result
+          }
         }
         is TrailYamlItem.ConfigTrailItem -> { /* skip */ }
         else -> error("Unexpected trail item type: ${item::class.simpleName}")
@@ -122,14 +132,19 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-    - compose_verify_text_visible:
-        text: 1 items
+config:
+  target: myapp
+trail:
+  - step: Add a todo item
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+        - compose_verify_text_visible:
+            text: 1 items
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -142,19 +157,26 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-    - compose_verify_text_visible:
-        text: 1 items
-- tools:
-    - compose_click:
-        testTag: delete_button_0
-    - compose_verify_text_visible:
-        text: 0 items
+config:
+  target: myapp
+trail:
+  - step: Add a todo item
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+        - compose_verify_text_visible:
+            text: 1 items
+  - step: Delete the todo item
+    recording:
+      android:
+        - compose_click:
+            testTag: delete_button_0
+        - compose_verify_text_visible:
+            text: 0 items
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -167,13 +189,18 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- tools:
-    - compose_verify_element_visible:
-        testTag: add_button
-    - compose_verify_element_visible:
-        testTag: todo_input
-    - compose_verify_element_visible:
-        testTag: item_count
+config:
+  target: myapp
+trail:
+  - step: Verify elements are visible
+    recording:
+      android:
+        - compose_verify_element_visible:
+            testTag: add_button
+        - compose_verify_element_visible:
+            testTag: todo_input
+        - compose_verify_element_visible:
+            testTag: item_count
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -189,14 +216,19 @@ class ComposeTrailFileTest {
 
     // First add a todo so there's visible content, then snapshot
     val yaml = """
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-    - takeSnapshot:
-        screenName: after_add_todo
+config:
+  target: myapp
+trail:
+  - step: Add a todo and snapshot
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+        - takeSnapshot:
+            screenName: after_add_todo
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -215,9 +247,14 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- tools:
-    - compose_verify_text_visible:
-        text: this text does not exist anywhere
+config:
+  target: myapp
+trail:
+  - step: Verify missing text
+    recording:
+      android:
+        - compose_verify_text_visible:
+            text: this text does not exist anywhere
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -230,9 +267,14 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- tools:
-    - compose_verify_element_visible:
-        testTag: completely_nonexistent_tag
+config:
+  target: myapp
+trail:
+  - step: Verify missing element
+    recording:
+      android:
+        - compose_verify_element_visible:
+            testTag: completely_nonexistent_tag
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -244,14 +286,20 @@ class ComposeTrailFileTest {
     setContent { SampleTodoApp() }
     waitForIdle()
 
-    // The verify should fail, meaning the second type tool should NOT execute
+    // The verify should fail, meaning the second type tool should NOT execute. Both tools live in the
+    // same step recording so they replay as one batch — the failing verify stops the trailing type.
     val yaml = """
-- tools:
-    - compose_verify_text_visible:
-        text: this text does not exist
-    - compose_type:
-        text: should not be typed
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Verify then type
+    recording:
+      android:
+        - compose_verify_text_visible:
+            text: this text does not exist
+        - compose_type:
+            text: should not be typed
+            testTag: todo_input
     """.trimIndent()
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
@@ -276,28 +324,32 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- prompts:
+config:
+  target: myapp
+trail:
   - step: Type a todo item
     recording:
-      tools:
+      android:
         - compose_type:
             text: Buy groceries
             testTag: todo_input
   - step: Click the add button
     recording:
-      tools:
+      android:
         - compose_click:
             testTag: add_button
   - verify: Verify item count updated
     recording:
-      tools:
+      android:
         - compose_verify_text_visible:
             text: 1 items
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    assertThat(trailItems.size).isEqualTo(1)
-    val promptsItem = trailItems[0] as TrailYamlItem.PromptsTrailItem
+    val trailItems = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")),
+    )
+    val promptsItem = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
     assertThat(promptsItem.promptSteps.size).isEqualTo(3)
 
     // Replay the recorded tools through the agent — same path as
@@ -326,21 +378,27 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- config:
-    id: compose-test
-    title: Add a todo item
-    context: "User should add a todo and verify it appears"
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-    - compose_verify_text_visible:
-        text: 1 items
+config:
+  id: compose-test
+  title: Add a todo item
+  context: "User should add a todo and verify it appears"
+trail:
+  - step: Add a todo item
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+        - compose_verify_text_visible:
+            text: 1 items
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val trailItems = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")),
+    )
     assertThat(trailItems.size).isEqualTo(2)
 
     // Verify config was parsed
@@ -361,30 +419,39 @@ class ComposeTrailFileTest {
     waitForIdle()
 
     val yaml = """
-- config:
-    id: multi-step-test
-    title: Multi-step todo management
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-- tools:
-    - compose_type:
-        text: Walk the dog
-        testTag: todo_input
-    - compose_click:
-        testTag: add_button
-    - compose_verify_text_visible:
-        text: 2 items
+config:
+  id: multi-step-test
+  title: Multi-step todo management
+trail:
+  - step: Add the first todo
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+  - step: Add the second todo and verify the count
+    recording:
+      android:
+        - compose_type:
+            text: Walk the dog
+            testTag: todo_input
+        - compose_click:
+            testTag: add_button
+        - compose_verify_text_visible:
+            text: 2 items
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    assertThat(trailItems.size).isEqualTo(3)
+    val trailItems = trailblazeYaml.decodeTrail(
+      yaml,
+      deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")),
+    )
+    // A unified trail lowers to a singleton config + a single prompts item holding every step.
+    assertThat(trailItems.size).isEqualTo(2)
     assertThat(trailItems[0]).isInstanceOf(TrailYamlItem.ConfigTrailItem::class)
-    assertThat(trailItems[1]).isInstanceOf(TrailYamlItem.ToolTrailItem::class)
-    assertThat(trailItems[2]).isInstanceOf(TrailYamlItem.ToolTrailItem::class)
+    assertThat(trailItems[1]).isInstanceOf(TrailYamlItem.PromptsTrailItem::class)
+    assertThat((trailItems[1] as TrailYamlItem.PromptsTrailItem).promptSteps.size).isEqualTo(2)
 
     val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -404,76 +471,121 @@ class ComposeTrailFileTest {
       Step(
         "Type 'Buy groceries' into input",
         """
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Buy groceries' into input
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
         """.trimIndent(),
       ),
       Step(
         "Click 'Add' button",
         """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Click 'Add' button
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
         """.trimIndent(),
       ),
       Step(
         "Type 'Walk the dog' into input",
         """
-- tools:
-    - compose_type:
-        text: Walk the dog
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Walk the dog' into input
+    recording:
+      android:
+        - compose_type:
+            text: Walk the dog
+            testTag: todo_input
         """.trimIndent(),
       ),
       Step(
         "Click 'Add' button",
         """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Click 'Add' button
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
         """.trimIndent(),
       ),
       Step(
         "Type 'Learn Compose' into input",
         """
-- tools:
-    - compose_type:
-        text: Learn Compose
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Learn Compose' into input
+    recording:
+      android:
+        - compose_type:
+            text: Learn Compose
+            testTag: todo_input
         """.trimIndent(),
       ),
       Step(
         "Click 'Add' button",
         """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Click 'Add' button
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
         """.trimIndent(),
       ),
       Step(
         "Verify '3 items' visible",
         """
-- tools:
-    - compose_verify_text_visible:
-        text: 3 items
+config:
+  target: myapp
+trail:
+  - step: Verify '3 items' visible
+    recording:
+      android:
+        - compose_verify_text_visible:
+            text: 3 items
         """.trimIndent(),
       ),
       Step(
         "Delete first todo (Buy groceries)",
         """
-- tools:
-    - compose_click:
-        testTag: delete_button_0
+config:
+  target: myapp
+trail:
+  - step: Delete first todo (Buy groceries)
+    recording:
+      android:
+        - compose_click:
+            testTag: delete_button_0
         """.trimIndent(),
       ),
       Step(
         "Verify '2 items' visible",
         """
-- tools:
-    - compose_verify_text_visible:
-        text: 2 items
+config:
+  target: myapp
+trail:
+  - step: Verify '2 items' visible
+    recording:
+      android:
+        - compose_verify_text_visible:
+            text: 2 items
         """.trimIndent(),
       ),
     )
@@ -512,47 +624,87 @@ class ComposeTrailFileTest {
     val trailSteps = listOf(
       "" to "Empty todo list",
       """
-- tools:
-    - compose_type:
-        text: Buy groceries
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Buy groceries'
+    recording:
+      android:
+        - compose_type:
+            text: Buy groceries
+            testTag: todo_input
       """.trimIndent() to "Typing 'Buy groceries'",
       """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Add the first todo
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
       """.trimIndent() to "Added first todo",
       """
-- tools:
-    - compose_type:
-        text: Walk the dog
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Walk the dog'
+    recording:
+      android:
+        - compose_type:
+            text: Walk the dog
+            testTag: todo_input
       """.trimIndent() to "Typing 'Walk the dog'",
       """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Add the second todo
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
       """.trimIndent() to "Added second todo",
       """
-- tools:
-    - compose_type:
-        text: Learn Compose
-        testTag: todo_input
+config:
+  target: myapp
+trail:
+  - step: Type 'Learn Compose'
+    recording:
+      android:
+        - compose_type:
+            text: Learn Compose
+            testTag: todo_input
       """.trimIndent() to "Typing 'Learn Compose'",
       """
-- tools:
-    - compose_click:
-        testTag: add_button
+config:
+  target: myapp
+trail:
+  - step: Add the third todo
+    recording:
+      android:
+        - compose_click:
+            testTag: add_button
       """.trimIndent() to "Added third todo",
       """
-- tools:
-    - compose_click:
-        testTag: delete_button_1
+config:
+  target: myapp
+trail:
+  - step: Delete 'Walk the dog'
+    recording:
+      android:
+        - compose_click:
+            testTag: delete_button_1
       """.trimIndent() to "Deleted 'Walk the dog'",
       """
-- tools:
-    - compose_verify_text_visible:
-        text: 2 items
+config:
+  target: myapp
+trail:
+  - step: Verify 2 items remain
+    recording:
+      android:
+        - compose_verify_text_visible:
+            text: 2 items
       """.trimIndent() to "Verified 2 items remain",
     )
 

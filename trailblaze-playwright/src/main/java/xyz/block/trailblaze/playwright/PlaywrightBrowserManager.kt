@@ -15,6 +15,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.capture.video.PlaywrightVideoRecordDir
+import xyz.block.trailblaze.capture.video.WebScreencastFeedRegistry
+import xyz.block.trailblaze.playwright.recording.PlaywrightScreencastFeed
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -421,6 +423,14 @@ class PlaywrightBrowserManager(
 
   private val closed = AtomicBoolean(false)
 
+  /**
+   * Single fanned-out CDP screencast for this browser, published to [WebScreencastFeedRegistry]
+   * under [deviceId]. Lazy — no screencast opens until a consumer (the session-video recorder)
+   * subscribes. Constructed eagerly (cheap; it holds no resources until subscribed) so the init
+   * block can register it.
+   */
+  private val screencastFeed: PlaywrightScreencastFeed = PlaywrightScreencastFeed(this)
+
   override lateinit var currentPage: Page
     private set
 
@@ -484,6 +494,11 @@ class PlaywrightBrowserManager(
         }
       }
       Console.log("[PlaywrightBrowserManager] init complete (${System.currentTimeMillis() - initStartMs}ms)")
+      // Publish a lazy screencast feed keyed by this browser's device id so the session-video
+      // recorder (WebScreencastVideoCapture) records from the same CDP screencast the live viewer
+      // uses. No-op when deviceId is null (recording-tab browser, unit tests). The feed opens no
+      // screencast until a recorder subscribes.
+      deviceId?.let { WebScreencastFeedRegistry.register(it, screencastFeed) }
     } catch (e: Exception) {
       // Surface the upstream exception on the local logger before propagating. If the
       // pipe-closed concurrent-init race ever resurfaces in a different shape, the local
@@ -843,6 +858,8 @@ class PlaywrightBrowserManager(
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     inFlightRequests.clear()
+    // Drop the screencast feed so a later capture can't subscribe to a torn-down browser.
+    deviceId?.let { WebScreencastFeedRegistry.unregister(it, screencastFeed) }
     // Drop any video finalizer we registered so a later capture.stop() doesn't try
     // to drive this torn-down manager. The `browserContext.close()` below already
     // flushes the in-progress WebM.

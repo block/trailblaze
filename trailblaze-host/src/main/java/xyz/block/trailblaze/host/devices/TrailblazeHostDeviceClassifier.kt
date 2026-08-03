@@ -16,6 +16,11 @@ class TrailblazeHostDeviceClassifier(
   // smallestWidthDp (density-independent) instead of raw pixels — see [isAndroidTablet]. iOS
   // ignores it. Null (density couldn't be probed) → the legacy pixel heuristic is used.
   private val androidDensityDpi: Int? = null,
+  // Set when the provider's iOS dimensions are in points rather than pixels (e.g. the AXe
+  // root-frame bounds a non-Maestro connected device reports). Points and pixels overlap across
+  // the iPhone/iPad fleet (an iPad's 1024-point side sits inside the iPhone pixel range), so the
+  // caller must say which unit it has — the iPhone/iPad split then uses the matching threshold.
+  private val iosDimensionsInPoints: Boolean = false,
 ) : TrailblazeDeviceClassifiersProvider {
 
   private val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
@@ -31,9 +36,11 @@ class TrailblazeHostDeviceClassifier(
       when (platform) {
         TrailblazeDevicePlatform.IOS -> {
           // iOS reports large pixel buffers regardless of point-scale, so the pixel threshold
-          // separates iPhone from iPad cleanly.
+          // separates iPhone from iPad cleanly. Point-derived dimensions use their own boundary.
+          val iosTabletMin =
+            if (iosDimensionsInPoints) IOS_TABLET_MIN_SHORTEST_SIDE_POINTS else TABLET_MIN_SHORTEST_SIDE_PX
           add(
-            when (minPx >= TABLET_MIN_SHORTEST_SIDE_PX) {
+            when (minPx >= iosTabletMin) {
               true -> TrailblazeIosDeviceCategory.IPAD.asTrailblazeDeviceClassifier()
               false -> TrailblazeIosDeviceCategory.IPHONE.asTrailblazeDeviceClassifier()
             },
@@ -71,6 +78,13 @@ class TrailblazeHostDeviceClassifier(
      * [HostIosDriverFactory]'s iPad auto-rotate check so the boundary lives in exactly one place.
      */
     const val TABLET_MIN_SHORTEST_SIDE_PX = 1536
+
+    /**
+     * Shortest screen side, in points, at or above which an iOS device is an iPad. Only used when
+     * the caller says its dimensions are points ([iosDimensionsInPoints]). 600 sits between the
+     * largest iPhone (~440pt shortest side, Pro Max) and the smallest iPad (744pt, iPad mini).
+     */
+    const val IOS_TABLET_MIN_SHORTEST_SIDE_POINTS = 600
 
     /**
      * smallestWidthDp at or above which an Android device is a tablet. 600dp is the canonical

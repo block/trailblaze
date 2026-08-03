@@ -14,7 +14,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import java.io.File
 import xyz.block.trailblaze.util.Console
@@ -225,8 +226,8 @@ class TrailMcpTool(
     val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
       ?: platform?.let { p -> TrailConfig(platform = p.name.lowercase()) }
 
-    val yamlContent = try {
-      logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
+    val recordedItems = try {
+      logs.generateRecordedTrailItems(sessionTrailConfig = sessionTrailConfig)
     } catch (e: Exception) {
       Console.log("[TrailMcpTool] Log-based generation failed: ${e.message}")
       return TrailSaveResult(
@@ -235,7 +236,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    if (yamlContent.isBlank() || !yamlContent.contains("- prompts:")) {
+    if (recordedItems.none { it is TrailYamlItem.PromptsTrailItem }) {
       return TrailSaveResult(
         saved = false,
         error = "No recordable steps found in session logs. Use blaze(), verify(), or ask() first.",
@@ -243,8 +244,9 @@ class TrailMcpTool(
     }
 
     // Write through the shared file manager so this log-backed save honors the same unified-recordings
-    // gate + refusal/merge routing as every other save surface (it's the daemon-default path).
-    val saveResult = trailFileManager.saveTrailYaml(trailName, yamlContent, platform)
+    // gate + refusal/merge routing as every other save surface (it's the daemon-default path). Feed the
+    // items straight in — no YAML encode/decode round-trip, so save-back never touches the v1 parser.
+    val saveResult = trailFileManager.saveTrailItems(trailName, recordedItems, platform)
     return if (saveResult.success) {
       Console.log("[TrailMcpTool] Saved trail from logs to: ${saveResult.filePath}")
       TrailSaveResult(

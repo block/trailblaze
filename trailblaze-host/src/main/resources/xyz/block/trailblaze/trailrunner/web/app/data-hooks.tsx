@@ -162,6 +162,7 @@ function useSessions() {
       hasRecordedSteps: !!s.hasRecordedSteps,
       err: s.error || null,
       trailId: s.trailId || null,
+      metadata: s.metadata || null,
       imported: !!s.imported,
       timestampMs: s.timestampMs || 0,
     }));

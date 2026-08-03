@@ -131,6 +131,7 @@ import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
+import xyz.block.trailblaze.scripting.subprocess.SubprocessToolRegistrar
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import kotlin.reflect.KClass
@@ -697,10 +698,19 @@ class TrailblazeMcpServer(
         engineExtension = OkHttpFetchExtension(),
       )
 
-      // Inline scripted tools (target.tools:) keep going through the subprocess synthesizer.
-      val runtime = if (inlineTools.isNotEmpty()) {
+      // Inline scripted tools (target.tools:) keep going through the subprocess synthesizer, minus
+      // the ones this session's driver/platform would discard at `tools/list` anyway — those must
+      // not cost a fork and a `script:` resolution to reject (see
+      // [SubprocessToolRegistrar.applicableInlineTools]).
+      val spawnableInlineTools = SubprocessToolRegistrar.applicableInlineTools(
+        tools = inlineTools,
+        driver = driverType,
+        preferHostAgent = TrailblazeConfig.DEFAULT.preferHostAgent,
+        logPrefix = "[TrailblazeMcpServer]",
+      )
+      val runtime = if (spawnableInlineTools.isNotEmpty()) {
         val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
-          tools = inlineTools,
+          tools = spawnableInlineTools,
           outputDir = File(sessionDir, "inline-script-tools"),
         )
         McpSubprocessRuntimeLauncher.launchAll(

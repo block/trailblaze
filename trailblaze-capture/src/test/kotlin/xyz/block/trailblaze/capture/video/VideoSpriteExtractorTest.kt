@@ -90,6 +90,13 @@ class VideoSpriteExtractorTest {
       actualFrames in (expectedFrames - 1)..(expectedFrames + 1),
       "expected ~$expectedFrames sprite frames after re-stamp, got $actualFrames (metadata=$props)",
     )
+    // The broken-timing fixture forces a re-stamp; record it so the report's #3 safety net can
+    // distinguish a guessed (uniform) frame distribution from a genuine wall-clock one.
+    assertEquals(
+      "true",
+      props["restamped"],
+      "broken-timing mp4 that was re-stamped should record restamped=true (metadata=$props)",
+    )
   }
 
   @Test
@@ -167,6 +174,13 @@ class VideoSpriteExtractorTest {
     assertTrue(
       actualFrames in 9..11,
       "expected 9–11 sprite frames from a 5-second healthy mp4 at 2 fps; got $actualFrames",
+    )
+    // A healthy (reported ≈ expected) mp4 must not be re-stamped, so consumers know the frame
+    // timing is trustworthy and never treat it as timing-degenerate.
+    assertEquals(
+      "false",
+      props["restamped"],
+      "healthy mp4 should record restamped=false (metadata=$props)",
     )
   }
 
@@ -790,7 +804,264 @@ class VideoSpriteExtractorTest {
     )
   }
 
+  @Test
+  fun `trusted-VFR mp4 shorter than the wall-clock window is tail-padded, not re-stamped`() {
+    // The iOS `simctl recordVideo` failure mode this pins: a healthy variable-frame-rate
+    // recording whose run ends on a static screen reports a container shorter than the
+    // wall-clock window (frames are only emitted on change). The frames' own timestamps are
+    // correct, so the extractor must NOT smear them across the window with a constant-rate
+    // re-stamp — it should clone the last frame through the tail. The static tail here is
+    // deliberately LONGER than the recorded portion (ratio 5/12 < 0.5): the tail length
+    // carries no broken-timing signal for a trusted recorder, so no duration heuristic may
+    // reroute this to the re-stamp path.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val healthy = generateHealthyMp4(File(tempDir, "healthy_short.mp4"), durationSeconds = 5, fps = 15)
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = healthy,
+      fps = 2,
+      frameHeight = 360,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 12_000L,
+      vfrTimestampsTrusted = true,
+    )
+    assertNotNull(spriteFile)
+
+    val diagText = File(tempDir, VideoSpriteExtractor.DIAG_FILENAME).readText()
+    assertTrue(
+      diagText.contains("tpad="),
+      "trusted-but-short recording should tail-pad; diag's vf= line should include tpad=, got:\n$diagText",
+    )
+    assertTrue(
+      !diagText.contains("setpts="),
+      "trusted-but-short recording must not be constant-rate re-stamped, got:\n$diagText",
+    )
+
+    val props = File(tempDir, "video_sprites.txt").readLines().associate {
+      val parts = it.split("=", limit = 2)
+      parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+    }
+    // The padded timeline covers the full 12s window at 2fps ≈ 24 frames (±2 for ffmpeg edge
+    // rounding); an un-padded extraction would stop at ~10.
+    val actualFrames = props["frames"]?.toIntOrNull() ?: error("frames missing from metadata: $props")
+    assertTrue(
+      actualFrames in 22..26,
+      "expected ~24 sprite frames covering the padded 12s window; got $actualFrames (metadata=$props)",
+    )
+    // A tail-pad keeps real per-frame timing — it must not read as a re-stamp, or WasmReport's
+    // single-dominant-frame gate could discard a correct sheet whose tail is legitimately static.
+    assertTrue(
+      props["restamped"] == "false",
+      "tail-padded sheet must report restamped=false (metadata=$props)",
+    )
+  }
+
+  @Test
+  fun `sprite grid positions run row-major`() {
+    // A 3-wide sheet: physical 1 and 2 finish the first row before physical 3 starts a new one.
+    val cells = (0..5).map { VideoSpriteExtractor.spriteGridPosition(it, columns = 3) }
+    assertEquals(
+      listOf(0 to 0, 0 to 1, 0 to 2, 1 to 0, 1 to 1, 1 to 2),
+      cells.map { it.row to it.column },
+    )
+    // Legacy single-column sheets stack straight down, and a bogus width can't divide by zero.
+    assertEquals(listOf(0, 1, 2), (0..2).map { VideoSpriteExtractor.spriteGridPosition(it, 1).row })
+    assertEquals(2, VideoSpriteExtractor.spriteGridPosition(2, columns = 0).row)
+  }
+
+  @Test
+  fun `each logical frame reads back from the sheet as the screen that was recorded`() {
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    // Nine 1-second frames of unmistakable solid colors, so "which frame is in this cell" is
+    // decidable by sampling one pixel. frameHeight is large enough that nine frames no longer
+    // fit in a single column — the shape that made the grid read wrong in production, where
+    // reading transposed served a real frame of the same run at the wrong step.
+    val palette = listOf(
+      0xFF0000, 0x00FF00, 0x0000FF, 0x00FFFF, 0xFF00FF, 0xFFFF00, 0xFFFFFF, 0x000000, 0xFF8000,
+    )
+    val video = synthesizeSolidColorMp4(File(tempDir, "colors.mp4"), palette)
+
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = video,
+      fps = 1,
+      frameHeight = 2000,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = palette.size * 1000L,
+    )
+    assertNotNull(spriteFile, "expected a sprite sheet to be produced")
+
+    val props = File(tempDir, "video_sprites.txt").readLines().associate {
+      val parts = it.split("=", limit = 2)
+      parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+    }
+    val columns = props["columns"]?.toIntOrNull() ?: error("columns missing from metadata: $props")
+    val frameHeight = props["height"]?.toIntOrNull() ?: error("height missing from metadata: $props")
+    val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }
+      ?: error("frameMap missing from metadata: $props")
+    // Without this the sheet would be one column wide and a transposed read would still pass.
+    assertTrue(columns > 1, "fixture must produce a multi-column sheet to be meaningful: $props")
+
+    val sheet = decodeSpriteSheetToImage(spriteFile)
+    val frameWidth = sheet.width / columns
+    palette.forEachIndexed { logical, expectedColor ->
+      val cell = VideoSpriteExtractor.spriteGridPosition(frameMap[logical], columns)
+      val sampled = sheet.getRGB(
+        cell.column * frameWidth + frameWidth / 2,
+        cell.row * frameHeight + frameHeight / 2,
+      )
+      assertEquals(
+        expectedColor,
+        nearestPaletteColor(sampled, palette),
+        "logical frame $logical (physical ${frameMap[logical]}) should be " +
+          "#${"%06X".format(expectedColor)} but the sheet cell at " +
+          "row=${cell.row} column=${cell.column} holds #${"%06X".format(sampled and 0xFFFFFF)}",
+      )
+    }
+  }
+
+  @Test
+  fun `unique frames beyond one sheet's capacity split into numbered sheets sharing one grid`() {
+    // Locks the multi-sheet layout contract end-to-end against real ffmpeg output: the
+    // metadata's columns/rows describe one FULL sheet (so consumers can locate physical frame
+    // N on sheet N/(columns*rows) — see SpriteSheetMetadata.sheetRows), every sheet
+    // is written at those columns, and only the final sheet's row count shrinks. A tiny
+    // maxWebpDimension stands in for the real 16383px WebP limit so the fixture doesn't need
+    // hours of video to overflow a sheet.
+    if (!ffmpegOnPath() || !ffprobeOnPath()) {
+      println("skipping: ffmpeg or ffprobe not on PATH")
+      return
+    }
+    val healthy = generateHealthyMp4(File(tempDir, "healthy_long.mp4"), durationSeconds = 10, fps = 15)
+
+    val frameHeight = 120
+    // Source is 320x240 scaled to height 120 → frameWidth 160. maxWebpDimension=400 gives
+    // maxRows = 400/120 = 3 and maxCols = 400/160 = 2 → 6 frames per sheet. 10s × 2fps ≈ 20
+    // unique testsrc frames (every frame differs) → 4 sheets with a partial final sheet.
+    val spriteFile = VideoSpriteExtractor.generateSpriteSheet(
+      videoFile = healthy,
+      fps = 2,
+      frameHeight = frameHeight,
+      webpQuality = 80,
+      isLandscape = false,
+      expectedDurationMs = 10_000L,
+      maxWebpDimension = 400,
+    )
+
+    assertNotNull(spriteFile, "expected multi-sheet extraction to succeed, not bail")
+    assertEquals(
+      "video_sprites_0.webp",
+      spriteFile.name,
+      "multi-sheet output should return the first numbered sheet",
+    )
+    assertTrue(
+      !File(tempDir, VideoSpriteExtractor.SPRITE_FILENAME).exists(),
+      "the un-numbered single-sheet filename must not be written for multi-sheet output",
+    )
+
+    val props = File(tempDir, "video_sprites.txt").readLines().associate {
+      val parts = it.split("=", limit = 2)
+      parts[0].trim() to parts.getOrElse(1) { "" }.trim()
+    }
+    val columns = props["columns"]?.toIntOrNull() ?: error("columns missing from metadata: $props")
+    val rows = props["rows"]?.toIntOrNull() ?: error("rows missing from metadata: $props")
+    val sheets = props["sheets"]?.toIntOrNull() ?: error("sheets missing from metadata: $props")
+    val uniqueFrames = props["uniqueFrames"]?.toIntOrNull() ?: error("uniqueFrames missing: $props")
+    val frameWidth = props["frameWidth"]?.toIntOrNull() ?: error("frameWidth missing: $props")
+
+    // Full-sheet grid at the forced cap, and enough unique frames to need several sheets.
+    assertEquals(2, columns, "full-sheet columns at maxWebpDimension=400/frameWidth=160 (metadata=$props)")
+    assertEquals(3, rows, "full-sheet rows at maxWebpDimension=400/frameHeight=120 (metadata=$props)")
+    assertEquals(
+      (uniqueFrames + columns * rows - 1) / (columns * rows),
+      sheets,
+      "sheets must be ceil(uniqueFrames / (columns*rows)) (metadata=$props)",
+    )
+    assertTrue(sheets >= 3, "fixture should genuinely overflow multiple sheets; got $sheets (metadata=$props)")
+
+    for (sheetIndex in 0 until sheets) {
+      val sheetFile = File(tempDir, "video_sprites_$sheetIndex.webp")
+      assertTrue(sheetFile.exists(), "expected sheet file ${sheetFile.name} (sheets=$sheets)")
+      val (width, height) = readImageSize(sheetFile) ?: error("ffprobe couldn't size ${sheetFile.name}")
+      val framesOnSheet = (uniqueFrames - sheetIndex * columns * rows).coerceAtMost(columns * rows)
+      val expectedRows = (framesOnSheet + columns - 1) / columns
+      assertEquals(
+        columns * frameWidth,
+        width,
+        "every sheet shares the full grid's width (sheet $sheetIndex, metadata=$props)",
+      )
+      assertEquals(
+        expectedRows * frameHeight,
+        height,
+        "sheet $sheetIndex should have ceil(remainingFrames/columns) rows of pixels (metadata=$props)",
+      )
+    }
+  }
+
   // ────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Generates a correctly-timed `mp4` showing each of [colors] as a full-frame solid color for
+   * one second, in order. Tall and narrow so a large `frameHeight` forces a multi-column sprite
+   * grid without producing a huge sheet.
+   */
+  private fun synthesizeSolidColorMp4(target: File, colors: List<Int>): File {
+    val srcDir = Files.createTempDirectory(tempDir.toPath(), "solid-").toFile()
+    colors.forEachIndexed { index, rgb ->
+      val image = java.awt.image.BufferedImage(10, 200, java.awt.image.BufferedImage.TYPE_INT_RGB)
+      val g = image.createGraphics()
+      g.color = java.awt.Color(rgb)
+      g.fillRect(0, 0, image.width, image.height)
+      g.dispose()
+      javax.imageio.ImageIO.write(image, "png", File(srcDir, "src_%03d.png".format(index + 1)))
+    }
+    runFfmpegOrThrow(
+      listOf(
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "image2", "-framerate", "1", "-i", "${srcDir.absolutePath}/src_%03d.png",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        target.absolutePath,
+      ),
+      what = "solid-color mp4 at ${target.absolutePath}",
+    )
+    return target
+  }
+
+  /** ImageIO can't read WebP, so round-trip the sheet through ffmpeg to PNG first. */
+  private fun decodeSpriteSheetToImage(sprite: File): java.awt.image.BufferedImage {
+    val png = File(tempDir, "sheet_decoded.png")
+    runFfmpegOrThrow(
+      listOf("ffmpeg", "-y", "-loglevel", "error", "-i", sprite.absolutePath, png.absolutePath),
+      what = "decode of ${sprite.name}",
+    )
+    return javax.imageio.ImageIO.read(png) ?: error("could not decode ${png.absolutePath}")
+  }
+
+  /**
+   * The palette entry [sampled] is closest to. The mp4's yuv420p round-trip and WebP's lossy
+   * encode both nudge exact RGB values, so a solid color is identified by proximity rather than
+   * equality — the palette is far enough apart that the nearest entry is unambiguous.
+   */
+  private fun nearestPaletteColor(sampled: Int, palette: List<Int>): Int = palette.minBy { candidate ->
+    listOf(16, 8, 0).sumOf { shift ->
+      kotlin.math.abs(((sampled shr shift) and 0xFF) - ((candidate shr shift) and 0xFF))
+    }
+  }
+
+  private fun runFfmpegOrThrow(command: List<String>, what: String) {
+    val process = ProcessBuilder(command).redirectErrorStream(true).start()
+    val output = process.inputStream.bufferedReader().readText()
+    if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) {
+      throw IllegalStateException("ffmpeg failed to produce $what:\n$output")
+    }
+  }
 
   /**
    * Generates a real `mp4` with proper timing — uses `testsrc` so every frame is unique
@@ -903,6 +1174,29 @@ class VideoSpriteExtractorTest {
       val output = process.inputStream.bufferedReader().readText().trim()
       if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) return null
       output.toLongOrNull()
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /** Reads a WebP's pixel dimensions via ffprobe (ImageIO can't decode WebP). */
+  private fun readImageSize(file: File): Pair<Int, Int>? {
+    val pb = ProcessBuilder(
+      "ffprobe",
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "csv=p=0",
+      file.absolutePath,
+    ).redirectErrorStream(true)
+    return try {
+      val process = pb.start()
+      val output = process.inputStream.bufferedReader().readText().trim()
+      if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) return null
+      val parts = output.lineSequence().first().split(",")
+      val width = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: return null
+      val height = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: return null
+      width to height
     } catch (_: Exception) {
       null
     }

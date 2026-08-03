@@ -18,15 +18,14 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.axe.AxeDeviceManager
-import xyz.block.trailblaze.host.axe.IosAxeTrailblazeAgent
-import xyz.block.trailblaze.host.devices.AxeConnectedDevice
+import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
+import xyz.block.trailblaze.host.ios.IosDeviceManager
+import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
 import xyz.block.trailblaze.host.devices.HostIosDriverFactory
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
-import xyz.block.trailblaze.host.screenstate.AxeScreenState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -62,6 +61,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager.DeviceSessionResolution
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
@@ -79,6 +79,7 @@ import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.cli.DeviceClassifierResolver
@@ -142,6 +143,25 @@ class TrailblazeMcpBridgeImpl(
     @Volatile var progressMessage: String = "Checking Playwright drivers..."
   }
 
+  /** Keeps a terminal runner failure armed until that device has actually been restarted. */
+  internal class OnDeviceRunnerRecovery(
+    private val onWedged: (TrailblazeDeviceId) -> Unit = {},
+  ) {
+    private val wedgedDeviceIds: MutableSet<TrailblazeDeviceId> = ConcurrentHashMap.newKeySet()
+
+    fun arm(deviceId: TrailblazeDeviceId) {
+      if (wedgedDeviceIds.add(deviceId)) {
+        onWedged(deviceId)
+      }
+    }
+
+    fun requiresRestart(deviceId: TrailblazeDeviceId): Boolean = deviceId in wedgedDeviceIds
+
+    fun markRecovered(deviceId: TrailblazeDeviceId) {
+      wedgedDeviceIds.remove(deviceId)
+    }
+  }
+
   private val webInitJobs = ConcurrentHashMap<String, WebInitState>()
 
   /** Persists failure messages after the init thread exits, so the MCP client sees them on the next poll. */
@@ -171,6 +191,16 @@ class TrailblazeMcpBridgeImpl(
    */
   private val persistentDevices = ConcurrentHashMap<String, TrailblazeConnectedDevice>()
 
+  private val onDeviceRunnerRecovery = OnDeviceRunnerRecovery { deviceId ->
+    val key = deviceId.instanceId
+    cachedScreenStates.remove(key)
+    onDeviceAgentReady.remove(key)
+    Console.info(
+      "[MCP Bridge] Non-recoverable UiAutomation wedge armed for $key; " +
+        "the on-device runner will be force-restarted before its next MCP action.",
+    )
+  }
+
   /**
    * One host-to-runner RPC client per Android device. The bridge lives in the daemon, so this
    * keeps its WebSocket open across separate CLI `snapshot`, `tool`, and `step` requests instead
@@ -182,6 +212,7 @@ class TrailblazeMcpBridgeImpl(
       sendProgressMessage = {
         Console.log("[MCP Bridge] [rpc ${deviceId.instanceId}] $it")
       },
+      onNonRecoverableWedge = { onDeviceRunnerRecovery.arm(deviceId) },
     )
   }
 
@@ -522,6 +553,57 @@ class TrailblazeMcpBridgeImpl(
   }
 
   companion object {
+    /**
+     * Builds the [RunYamlRequest] a single on-device MCP tool dispatch puts on the wire.
+     * Pure — no bridge instance required, so the wire contract is testable in isolation.
+     *
+     * [awaitCompletion] is unconditionally true and deliberately NOT derived from the caller's
+     * `blocking` flag, which governs only the HOST/Maestro path. A fire-and-forget
+     * `RunYamlResponse` returns before any tool runs, so it carries no `success`, no
+     * `errorMessage`, and no `nonRecoverableWedge`. The direct-MCP dispatchers
+     * (`TrailblazeToolToMcpBridge`, `DirectMcpToolExecutor`, `TrailExecutor`,
+     * `BridgeTrailblazeAgent`) all take the `blocking = false` default, so deriving the wait
+     * from it made those dispatches report phantom success AND left a terminal UiAutomation
+     * wedge unarmed — the poisoned runner then served every following MCP action.
+     */
+    internal fun buildOnDeviceToolRunYamlRequest(
+      tool: TrailblazeTool,
+      yaml: String,
+      trailblazeDeviceId: TrailblazeDeviceId,
+      driverType: TrailblazeDriverType?,
+      traceId: TraceId?,
+      targetAppId: String?,
+      trailblazeLlmModel: TrailblazeLlmModel,
+      sessionResolution: DeviceSessionResolution,
+      captureNetworkTraffic: Boolean,
+    ): RunYamlRequest = RunYamlRequest(
+      yaml = yaml,
+      testName = "tool_${tool::class.simpleName}",
+      trailFilePath = null,
+      targetAppName = targetAppId,
+      useRecordedSteps = false,
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeDeviceId = trailblazeDeviceId,
+      referrer = TrailblazeReferrer.MCP,
+      traceId = traceId,
+      driverType = driverType,
+      awaitCompletion = true,
+      config = TrailblazeConfig(
+        overrideSessionId = sessionResolution.sessionId,
+        // Emit start only when this call created the session. This preserves host-managed
+        // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
+        sendSessionStartLog = sessionResolution.isNewSession,
+        sendSessionEndLog = false,
+        // Propagate the toggle so on-device launch tools can do their own capture-aware
+        // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
+        // clearAppData / clearState=true cycle, and the host can't reach into that window
+        // from outside. Today nothing on-device reads this; the host bridge is the only
+        // consumer. Wired here so the next iteration can flip launch-tool behavior off this
+        // signal without another hop.
+        captureNetworkTraffic = captureNetworkTraffic,
+      ),
+    )
+
     internal fun androidDisconnectStatus(
       deviceId: TrailblazeDeviceId,
       connectedDevices: Collection<TrailblazeDeviceId>,
@@ -868,7 +950,16 @@ class TrailblazeMcpBridgeImpl(
           }
         }
 
-        doConnectAndEnable(forceRestart = false)
+        val recoverFromPriorWedge = onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)
+        if (recoverFromPriorWedge) {
+          Console.info(
+            "[MCP Bridge] Recovering from a non-recoverable UiAutomation wedge on $key; " +
+              "force-restarting the on-device runner before the next MCP action.",
+          )
+          onDeviceRpcClients.evict(trailblazeDeviceId)
+        }
+
+        doConnectAndEnable(forceRestart = recoverFromPriorWedge)
         try {
           // Fail-fast first probe: a healthy clean start serves in ~26s (install + launch), so 40s
           // detects a zombie quickly and leaves room for the full restart+reprobe under the MCP timeout.
@@ -882,6 +973,9 @@ class TrailblazeMcpBridgeImpl(
         }
 
         onDeviceAgentReady.add(key)
+        if (recoverFromPriorWedge) {
+          onDeviceRunnerRecovery.markRecovered(trailblazeDeviceId)
+        }
         Console.log("[MCP Bridge] On-device agent ready for $key")
       } catch (e: Exception) {
         Console.log("[MCP Bridge] On-device agent setup failed for $key: ${e.message}")
@@ -966,6 +1060,13 @@ class TrailblazeMcpBridgeImpl(
     // Return cached state if available (from last tool execution)
     cachedScreenStates[key]?.let { return it }
 
+    // Host-native iOS drivers (IOS_AXE today, ButtonHeist etc. tomorrow) expose screen state
+    // polymorphically on their live connected device — which lives in THIS registry, not in
+    // the device manager (its DeviceState holds summaries, not connections).
+    (persistentDevices[key] as? xyz.block.trailblaze.host.devices.IosNativeConnectedDevice)?.let { device ->
+      return device.screenState().also { cachedScreenStates[key] = it }
+    }
+
     // Otherwise capture fresh state (creates a new session)
     return trailblazeDeviceManager.getCurrentScreenState(trailblazeDeviceId).also {
       if (it != null) cachedScreenStates[key] = it
@@ -1007,10 +1108,8 @@ class TrailblazeMcpBridgeImpl(
             )
           }
         }
-        is AxeConnectedDevice -> {
-          return { _ ->
-            AxeScreenState(udid = device.udid, deviceWidth = device.deviceWidth, deviceHeight = device.deviceHeight)
-          }
+        is IosNativeConnectedDevice -> {
+          return { _ -> device.screenState() }
         }
       }
     }
@@ -1035,10 +1134,8 @@ class TrailblazeMcpBridgeImpl(
                 )
               }
             }
-            is AxeConnectedDevice -> {
-              return { _ ->
-                AxeScreenState(udid = device.udid, deviceWidth = device.deviceWidth, deviceHeight = device.deviceHeight)
-              }
+            is IosNativeConnectedDevice -> {
+              return { _ -> device.screenState() }
             }
           }
         }
@@ -1351,11 +1448,13 @@ class TrailblazeMcpBridgeImpl(
       return result
     }
 
-    // IOS_AXE driver: convert Maestro commands → AxeActions → dispatch via AxeCli.
-    // Skips the Maestro/XCUITest yaml runner path entirely — the IosAxeTrailblazeAgent
-    // class stays available for the host-test-rule path when we wire that up next.
-    if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType == TrailblazeDriverType.IOS_AXE) {
-      val result = executeToolViaAxe(tool, trailblazeDeviceId)
+    // Host-native iOS drivers (e.g. IOS_AXE): dispatch through the driver's IosDeviceManager.
+    // Skips the Maestro/XCUITest yaml runner path entirely. The same IosDriverTrailblazeAgent
+    // class is also wired into the host-test-rule path (BaseHostTrailblazeTest / `trailblaze
+    // run --driver IOS_AXE`), which gets real session logging that this one-shot MCP path
+    // still doesn't (see warnIosNativeSessionLoggingGapOnce below).
+    if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+      val result = executeToolViaIosNativeDriver(tool, trailblazeDeviceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1369,7 +1468,7 @@ class TrailblazeMcpBridgeImpl(
       // the device via decodeTrailOrToolEnvelope → decodeTools — never the legacy list-shape trail
       // parser. (The host/Maestro path below keeps the trail-item `yaml` it decodes host-side.)
       val toolEnvelopeYaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(tool)))
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, blocking, traceId)
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, toolEnvelopeYaml, traceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1422,56 +1521,51 @@ class TrailblazeMcpBridgeImpl(
   }
 
   /**
-   * Routes an MCP tool call for an IOS_AXE-configured device to [IosAxeTrailblazeAgent.runTool].
+   * Routes an MCP tool call for a host-native-iOS-configured device (e.g. IOS_AXE) to
+   * [IosDriverTrailblazeAgent.runTool].
    *
    * The bridge's job here is to wire up the device manager, agent, screen state, and execution
    * context. The agent handles all the tool-shape dispatch, supporting:
    *
    *   * [ExecutableTrailblazeTool] (e.g. `InputTextTrailblazeTool`) — runs directly; its
    *     internal `runMaestroCommands` calls land on our agent, which routes Maestro commands
-   *     through `MaestroCommandToAxeActionConverter` → `AxeTrailRunner`.
+   *     through the driver's converter → runner.
    *   * [DelegatingTrailblazeTool] (e.g. `TapTrailblazeTool`) — expands to a list of
    *     `ExecutableTrailblazeTool`s via `toExecutableTrailblazeTools(ctx)`, then each one
    *     runs through the same path.
    *   * `MapsToMaestroCommands` is an `ExecutableTrailblazeTool` whose `execute` just calls
    *     `runMaestroCommands`, so it falls through the first branch.
    *
-   * The context carries a fresh [AxeScreenState] so tools that need to read the current
+   * The context carries a fresh [ScreenState] so tools that need to read the current
    * tree (e.g. `tap ref=e964`) can find their target.
    *
    * **POC limitation:** session logging is not wired through this path — trails executed on
-   * IOS_AXE while a session is active will not emit per-tool logs or screen states to the
-   * session directory. A one-time stderr warning is emitted on first call so users notice
-   * before their session directory comes up empty. Proper wire-up is tracked as a follow-up.
+   * host-native iOS drivers while a session is active will not emit per-tool logs or screen
+   * states to the session directory. A one-time stderr warning is emitted on first call so
+   * users notice before their session directory comes up empty. Proper wire-up is tracked as
+   * a follow-up.
    */
-  private suspend fun executeToolViaAxe(tool: TrailblazeTool, trailblazeDeviceId: TrailblazeDeviceId): String {
-    val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? AxeConnectedDevice
-      ?: error("IOS_AXE execution requires an AxeConnectedDevice in the persistent registry; got ${persistentDevices[trailblazeDeviceId.instanceId]?.let { it::class.simpleName }}")
-    val deviceManager = AxeDeviceManager(
-      udid = persistentDevice.udid,
-      deviceWidth = persistentDevice.deviceWidth,
-      deviceHeight = persistentDevice.deviceHeight,
-    )
-    val agent = buildAxeAgent(deviceManager, persistentDevice)
-    val screenState = AxeScreenState(
-      udid = persistentDevice.udid,
-      deviceWidth = persistentDevice.deviceWidth,
-      deviceHeight = persistentDevice.deviceHeight,
-    )
-    // POC limitation: the AXE path short-circuits runYamlInternal, which means the
+  private suspend fun executeToolViaIosNativeDriver(tool: TrailblazeTool, trailblazeDeviceId: TrailblazeDeviceId): String {
+    val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? IosNativeConnectedDevice
+      ?: error("Host-native iOS execution requires an IosNativeConnectedDevice in the persistent registry; got ${persistentDevices[trailblazeDeviceId.instanceId]?.let { it::class.simpleName }}")
+    val driverType = persistentDevice.trailblazeDriverType
+    val deviceManager = persistentDevice.createDeviceManager()
+    val agent = buildIosNativeAgent(deviceManager, persistentDevice)
+    val screenState = persistentDevice.screenState()
+    // POC limitation: this path short-circuits runYamlInternal, which means the
     // TrailblazeLoggingRule + session wiring that IOS_HOST gets doesn't apply here.
     // If a session is active, its directory will NOT capture per-tool-call logs for
-    // IOS_AXE actions. Surface that loudly once per daemon lifetime so nobody is
-    // surprised by empty session artifacts after running against the AXE driver.
-    warnIosAxeSessionLoggingGapOnce()
-    Console.log("[IOS_AXE] Executing ${tool::class.simpleName} on ${persistentDevice.udid}")
+    // these actions. Surface that loudly once per daemon lifetime so nobody is
+    // surprised by empty session artifacts after running against a host-native driver.
+    warnIosNativeSessionLoggingGapOnce(driverType)
+    Console.log("[$driverType] Executing ${tool::class.simpleName} on ${persistentDevice.udid}")
     val ctx = TrailblazeToolExecutionContext(
       screenState = screenState,
       traceId = xyz.block.trailblaze.logs.model.TraceId.generate(
         origin = xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin.MCP,
       ),
-      trailblazeDeviceInfo = axeDeviceInfo(persistentDevice),
-      sessionProvider = { axeSession() },
+      trailblazeDeviceInfo = iosNativeDeviceInfo(persistentDevice),
+      sessionProvider = { iosNativeSession() },
       screenStateProvider = { deviceManager.getScreenState() },
       androidDeviceCommandExecutor = null,
       trailblazeLogger = noOpTrailblazeLogger(),
@@ -1485,32 +1579,48 @@ class TrailblazeMcpBridgeImpl(
         renderToolResultOutput(
           message = result.message,
           structuredContent = result.structuredContent,
-          fallback = "Executed ${tool::class.simpleName} via IOS_AXE on ${persistentDevice.udid}",
+          fallback = "Executed ${tool::class.simpleName} via $driverType on ${persistentDevice.udid}",
         )
-      is TrailblazeToolResult.Error -> error("IOS_AXE tool execution failed: ${result.errorMessage}")
+      is TrailblazeToolResult.Error -> error("$driverType tool execution failed: ${result.errorMessage}")
     }
   }
 
-  /** Builds a fresh [IosAxeTrailblazeAgent] around [deviceManager] for a single tool invocation. */
-  private fun buildAxeAgent(
-    deviceManager: AxeDeviceManager,
-    device: AxeConnectedDevice,
-  ): IosAxeTrailblazeAgent = IosAxeTrailblazeAgent(
+  /**
+   * Builds a fresh [IosDriverTrailblazeAgent] around [deviceManager] for a single tool invocation.
+   *
+   * The repo carries the driver's full built-in tool surface so an [xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool]
+   * placeholder forwarded by callers without their own repo (e.g. `BridgeUiActionExecutor`'s
+   * no-repo fallback) resolves to its concrete tool before dispatch — the same contract the
+   * Maestro-driver agents honor. Target-specific custom tools are not wired on this one-shot
+   * path (same POC scope as the missing session logging, see [executeToolViaIosNativeDriver]).
+   */
+  private fun buildIosNativeAgent(
+    deviceManager: IosDeviceManager,
+    device: IosNativeConnectedDevice,
+  ): IosDriverTrailblazeAgent = IosDriverTrailblazeAgent(
     deviceManager = deviceManager,
     trailblazeLogger = noOpTrailblazeLogger(),
-    trailblazeDeviceInfoProvider = { axeDeviceInfo(device) },
-    sessionProvider = { axeSession() },
+    trailblazeDeviceInfoProvider = { iosNativeDeviceInfo(device) },
+    sessionProvider = { iosNativeSession() },
+    trailblazeToolRepo = TrailblazeToolRepo.withDynamicToolSets(
+      // The recording/replay surface (assertVisibleBySelector, assertVisibleWithText, …) on top
+      // of the LLM catalog — same union `CustomTrailblazeTools.allForSerializationTools` uses —
+      // because forwarded placeholders carry whatever name the caller's loop advertised,
+      // including recording-only assertion tools.
+      customToolClasses = TrailblazeToolSet.NonLlmTrailblazeTools,
+      driverType = device.trailblazeDriverType,
+    ),
   )
 
-  private fun axeDeviceInfo(device: AxeConnectedDevice): TrailblazeDeviceInfo = TrailblazeDeviceInfo(
+  private fun iosNativeDeviceInfo(device: IosNativeConnectedDevice): TrailblazeDeviceInfo = TrailblazeDeviceInfo(
     trailblazeDeviceId = device.trailblazeDeviceId,
-    trailblazeDriverType = TrailblazeDriverType.IOS_AXE,
+    trailblazeDriverType = device.trailblazeDriverType,
     widthPixels = device.deviceWidth,
     heightPixels = device.deviceHeight,
   )
 
-  private fun axeSession(): TrailblazeSession =
-    TrailblazeSession(sessionId = SessionId("axe"), startTime = Clock.System.now())
+  private fun iosNativeSession(): TrailblazeSession =
+    TrailblazeSession(sessionId = SessionId("ios-native"), startTime = Clock.System.now())
 
   private fun noOpTrailblazeLogger(): TrailblazeLogger =
     TrailblazeLogger(logEmitter = NoOpLogEmitter, screenStateLogger = ScreenStateLogger { "" })
@@ -1583,19 +1693,20 @@ class TrailblazeMcpBridgeImpl(
     }
   }
 
-  /** One-shot guard — we only want the IOS_AXE session-logging warning printed once per daemon. */
-  private val iosAxeSessionLoggingWarningEmitted = java.util.concurrent.atomic.AtomicBoolean(false)
+  /** One-shot guard — we only want the host-native session-logging warning printed once per daemon. */
+  private val iosNativeSessionLoggingWarningEmitted = java.util.concurrent.atomic.AtomicBoolean(false)
 
   /**
-   * Prints a visible warning the first time someone runs an IOS_AXE tool through this bridge,
-   * so users who have `trailblaze session start` active don't get silently-empty session
-   * directories. Goes to stderr (not `Console.log`) so it bypasses quiet-mode suppression.
+   * Prints a visible warning the first time someone runs a host-native iOS tool through this
+   * bridge, so users who have `trailblaze session start` active don't get silently-empty
+   * session directories. Goes to stderr (not `Console.log`) so it bypasses quiet-mode
+   * suppression.
    */
-  private fun warnIosAxeSessionLoggingGapOnce() {
-    if (iosAxeSessionLoggingWarningEmitted.compareAndSet(false, true)) {
+  private fun warnIosNativeSessionLoggingGapOnce(driverType: TrailblazeDriverType) {
+    if (iosNativeSessionLoggingWarningEmitted.compareAndSet(false, true)) {
       System.err.println(
-        "⚠️  [IOS_AXE] Session logging is NOT wired on the AXE driver path — if you have " +
-          "`trailblaze session start` active, tool-call steps executed on IOS_AXE will NOT " +
+        "⚠️  [$driverType] Session logging is NOT wired on this driver's one-shot MCP path — if you " +
+          "have `trailblaze session start` active, tool-call steps executed on $driverType will NOT " +
           "be captured in the session directory. Proper wire-up is planned as a follow-up.",
       )
     }
@@ -1649,9 +1760,16 @@ class TrailblazeMcpBridgeImpl(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
-    blocking: Boolean = false,
     traceId: TraceId? = null,
   ): String {
+    val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+    if (onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
+      ensureOnDeviceAgentRunning(trailblazeDeviceId, driverType)
+      check(!onDeviceRunnerRecovery.requiresRestart(trailblazeDeviceId)) {
+        "On-device runner recovery failed for ${trailblazeDeviceId.instanceId}; " +
+          "the runner will be restarted before the next MCP action."
+      }
+    }
     val rpcClient = onDeviceRpcClients.get(trailblazeDeviceId)
 
     return run {
@@ -1661,7 +1779,6 @@ class TrailblazeMcpBridgeImpl(
         sessionIdPrefix = "yaml",
       )
 
-      val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       // Honor "Capture Network Traffic" on the host-driven Android RPC path. The MCP bridge
       // doesn't go through BasePlaywrightNativeTest's `ensureWebNetworkCaptureStarted()`, so we
       // wire an analog here. The actual capture lives in an external module behind
@@ -1706,45 +1823,23 @@ class TrailblazeMcpBridgeImpl(
             }
         }
       }
-      val request = RunYamlRequest(
+      val request = buildOnDeviceToolRunYamlRequest(
+        tool = tool,
         yaml = yaml,
-        testName = "tool_${tool::class.simpleName}",
-        trailFilePath = null,
-        targetAppName = resolvedTargetAppId,
-        useRecordedSteps = false,
-        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
-        referrer = TrailblazeReferrer.MCP,
-        traceId = traceId,
         driverType = driverType,
-        // Map the caller's `blocking` flag onto the protocol-level wait. With `blocking=true`
-        // (every current caller), the on-device handler holds the HTTP response until the job
-        // terminates — that's also the RunYamlRequest default. With `blocking=false`, fire-and-forget:
-        // the device returns the new sessionId immediately and the caller can move on.
-        awaitCompletion = blocking,
-        config = TrailblazeConfig(
-          overrideSessionId = sessionResolution.sessionId,
-          // Emit start only when this call created the session. This preserves host-managed
-          // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
-          sendSessionStartLog = sessionResolution.isNewSession,
-          sendSessionEndLog = false,
-          // Propagate the toggle so on-device launch tools can do their own capture-aware
-          // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
-          // clearAppData / clearState=true cycle, and the host can't reach into that window
-          // from outside. Today nothing on-device reads this; the host bridge is the only
-          // consumer. Wired here so the next iteration can flip launch-tool behavior off this
-          // signal without another hop.
-          captureNetworkTraffic = captureNetworkTraffic,
-        ),
+        traceId = traceId,
+        targetAppId = resolvedTargetAppId,
+        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
+        sessionResolution = sessionResolution,
+        captureNetworkTraffic = captureNetworkTraffic,
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
-      // With `awaitCompletion = blocking`, rpcCall returns once the on-device job has reached
-      // its terminal state (when blocking) or as soon as the session is created (when not).
-      // Either way, no host-side log polling is needed — a previous version awaited the
-      // resulting TrailblazeToolLog here under blocking, but by the time that ran every
-      // on-device log was already on disk and `skipExisting=true` filtered them all out,
-      // burning a fixed 120s timeout on every tool call.
+      // rpcCall returns once the on-device job has reached its terminal state. No host-side log
+      // polling is needed — a previous version awaited the resulting TrailblazeToolLog here, but
+      // by the time that ran every on-device log was already on disk and `skipExisting=true`
+      // filtered them all out, burning a fixed 120s timeout on every tool call.
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           val response = result.data
@@ -1756,12 +1851,15 @@ class TrailblazeMcpBridgeImpl(
           // ([HostOnDeviceRpcTrailblazeAgent.toToolResult],
           // [HostAccessibilityRpcClient.execute]) correctly inspect `success` — match that.
           //
-          // - `success == true`: terminal success when `awaitCompletion=true` (i.e.
-          //   `blocking=true` here). Report executed.
+          // - `success == true`: terminal success. Report executed.
           // - `success == false`: terminal failure. Surface the on-device error message
           //   so the daemon log and the caller see the real cause instead of a phantom OK.
-          // - `success == null`: fire-and-forget (`awaitCompletion=false`). Run is ongoing;
-          //   the session id is the handle the caller subscribes to for terminal state.
+          // - `success == null`: contract violation. We always send `awaitCompletion = true`, so
+          //   the runner owes us a terminal outcome; `null` means it returned early (a runner
+          //   predating the flag). Reporting "Executed" there would be the same phantom success
+          //   this dispatch path exists to remove — and no wedge could be armed from it. Fail,
+          //   matching [HostAccessibilityRpcClient.execute] and
+          //   [HostOnDeviceRpcTrailblazeAgent.toToolResult], which already reject this shape.
           when (response.success) {
             true -> {
               Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
@@ -1775,14 +1873,18 @@ class TrailblazeMcpBridgeImpl(
               )
             }
             false -> {
+              rpcClient.noteIfNonRecoverableWedge(response)
               val message = response.errorMessage?.takeUnless { it.isBlank() }
                 ?: "unknown on-device error"
               Console.log("[executeToolViaRpc] On-device execution failed: $message")
               error("On-device execution of ${tool::class.simpleName} failed: $message")
             }
             null -> {
-              Console.log("[executeToolViaRpc] On-device execution started: ${response.sessionId}")
-              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
+              val message = "On-device server returned null success inline for " +
+                "${tool::class.simpleName} — contract violation for awaitCompletion=true " +
+                "(expected true/false, got null). Update the on-device runner APK."
+              Console.log("[executeToolViaRpc] $message")
+              error(message)
             }
           }
         }

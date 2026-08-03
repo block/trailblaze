@@ -457,6 +457,65 @@ class TrailmapTargetGeneratorTest {
   }
 
   @Test
+  fun `consumer target hoists a dependency's exported scripted tool into its generated tools`() {
+    // P1 regression / parity with the runtime TrailmapExportedToolsResolver: a `dependencies: [pack]`
+    // edge must bake the pack's `exports:`-listed scripted tools into the CONSUMER's generated
+    // top-level `tools:` (the classpath-bundled runtime delivery surface for bundled targets).
+    // Before this, the generated consumer target YAML carried only the target's own tools.
+    val trailmapsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(trailmapsDir, "pack/tools").mkdirs()
+    File(trailmapsDir, "pack/tools/pack_shared.yaml").writeText(
+      """
+      script: ./pack_shared.ts
+      name: packSharedTool
+      description: Shared scripted tool published by the pack.
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "pack/trailmap.yaml").writeText(
+      """
+      id: pack
+      target:
+        display_name: Pack
+        tools:
+          - packSharedTool
+      exports:
+        - packSharedTool
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "myapp/tools").mkdirs()
+    File(trailmapsDir, "myapp/tools/app_own.yaml").writeText(
+      """
+      script: ./app_own.ts
+      name: appOwnTool
+      description: The app's own scripted tool.
+      """.trimIndent(),
+    )
+    File(trailmapsDir, "myapp/trailmap.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - pack
+      target:
+        display_name: My App
+        tools:
+          - appOwnTool
+      """.trimIndent(),
+    )
+
+    val expected = TrailmapTargetGenerator(trailmapsDir, targetsDir, "./gradlew :foo:generate").buildExpectedTargets()
+    val myapp = expected.getValue(File(targetsDir, "myapp.yaml"))
+
+    assertTrue(myapp.contains("name: appOwnTool"), "consumer's own tool missing in: $myapp")
+    assertTrue(myapp.contains("name: packSharedTool"), "dependency-exported tool not hoisted in: $myapp")
+    // The fold must carry the exported tool's metadata (description), not just its name.
+    assertTrue(
+      myapp.contains("Shared scripted tool published by the pack"),
+      "dependency-exported tool description not carried through the fold in: $myapp",
+    )
+  }
+
+  @Test
   fun `dependencies cycle is rejected with a clear error`() {
     val trailmapsDir = newTempDir()
     val targetsDir = newTempDir()

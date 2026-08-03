@@ -40,11 +40,10 @@ class TrailCommandReadSkipReasonTest {
   fun `returns null when skip field is absent`() {
     val file = writeTrail(
       """
-      - config:
-          title: Sample trail
-          platform: android
-      - tools:
-        - pressBack: {}
+      config:
+        title: Sample trail
+      trail:
+        - step: Press back
       """,
     )
     assertNull(TrailCommand.readSkipReason(file))
@@ -54,12 +53,12 @@ class TrailCommandReadSkipReasonTest {
   fun `returns null when skip value is empty`() {
     val file = writeTrail(
       """
-      - config:
-          title: Sample trail
-          platform: android
-          skip: ""
-      - tools:
-        - pressBack: {}
+      config:
+        title: Sample trail
+        skip:
+          android: ""
+      trail:
+        - step: Press back
       """,
     )
     assertNull(TrailCommand.readSkipReason(file))
@@ -69,12 +68,12 @@ class TrailCommandReadSkipReasonTest {
   fun `returns null when skip value is whitespace only`() {
     val file = writeTrail(
       """
-      - config:
-          title: Sample trail
-          platform: android
-          skip: "   "
-      - tools:
-        - pressBack: {}
+      config:
+        title: Sample trail
+        skip:
+          android: "   "
+      trail:
+        - step: Press back
       """,
     )
     assertNull(TrailCommand.readSkipReason(file))
@@ -84,12 +83,12 @@ class TrailCommandReadSkipReasonTest {
   fun `returns trimmed reason string when skip has a real value`() {
     val file = writeTrail(
       """
-      - config:
-          title: Sample trail
-          platform: android
-          skip: "  Compact element list regression — see #2194  "
-      - tools:
-        - pressBack: {}
+      config:
+        title: Sample trail
+        skip:
+          android: "  Compact element list regression — see #2194  "
+      trail:
+        - step: Press back
       """,
     )
     assertEquals(
@@ -118,12 +117,12 @@ class TrailCommandReadSkipReasonTest {
     // is gone), not the specific resolved value.
     val file = writeTrail(
       """
-      - config:
-          title: Sample trail
-          platform: android
-          skip: "blocked at {{CWD}}"
-      - tools:
-        - pressBack: {}
+      config:
+        title: Sample trail
+        skip:
+          android: "blocked at {{CWD}}"
+      trail:
+        - step: Press back
       """,
     )
     val reason = TrailCommand.readSkipReason(file)

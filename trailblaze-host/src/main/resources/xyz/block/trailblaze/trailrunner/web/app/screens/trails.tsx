@@ -287,7 +287,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
       return;
     }
     const title = newTitle.trim() || p.split('/').pop().replace(/[-_]+/g, ' ');
-    const yaml = ['- config:', `    title: ${JSON.stringify(title)}`, '- prompts:', '  - step: "<describe what this step accomplishes>"', ''].join('\n');
+    const yaml = ['config:', `  title: ${JSON.stringify(title)}`, 'trail:', '  - step: "<describe what this step accomplishes>"', ''].join('\n');
     const r = await TB.createTrail(p, yaml);
     setCreating(false);
     if (!r.success) { setCreateErr(r.error || 'Could not create the trail'); return; }
@@ -298,7 +298,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   };
 
   return (
-    <div className="tb-in" style={{ display: 'flex', height: '100%' }}>
+    <div className="tb-in tb-trails-layout" style={{ display: 'flex', height: '100%' }}>
       <TrailTree
         width={treeW}
         rows={rows}
@@ -322,6 +322,8 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
         onSelectFolder={(acc) => { setFolderView(acc); }}
         total={TB.countTrailBundles(allTrails)}
         roots={roots.data}
+        loading={trails.loading && !trails.data}
+        rootsLoading={roots.loading && !roots.data}
         addError={addError}
         addBusy={addBusy}
         onRemoveRoot={onRemoveRoot}
@@ -335,7 +337,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
               One directory per logical trail: a <span className="tb-mono">blaze.yaml</span> holds the plain-language definition (flame icon), and each <span className="tb-mono">&lt;device&gt;.trail.yaml</span> beside it is that device's recording. Pinning pins the directory, so the whole trail comes along.
             </HelpCard>
             <HelpCard ico="footprints" color="var(--tb-pass)" title="Steps · intent first"
-              snippet={'- config:\n    title: "Login"\n    target: sample\n- prompts:\n  - step: "Open the dashboard"\n    recording:\n      tools:\n      - tapOn:\n          selector: { text: "Dashboard" }'}>
+              snippet={'config:\n  title: "Login"\n  target: sample\ntrail:\n  - step: "Open the dashboard"\n    recording:\n      android:\n        - tapOn:\n            selector: { text: "Dashboard" }'}>
               Each step is a sentence describing <i>what</i> it accomplishes. "Tap sign in" survives a redesign; coordinates don't. The recording underneath captures the exact tool calls that did it. That step text is what makes repair possible: it preserves intent when the UI drifts.
             </HelpCard>
             <HelpCard ico="play" color="var(--tb-amber)" title="Replay is deterministic">
@@ -401,14 +403,14 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
           <div style={{ padding: '60px 32px' }}>
             {allTrails.length === 0
               ? <EmptyState ico="folder-search" title="No trails found" sub="Set a trails directory in Settings, or open a workspace that contains .trail.yaml files." />
-              : <EmptyState ico="mouse-pointer-click" title="Select a trail" sub="Pick a trail from the list to see its steps, edit it, or run it." />}
+              : <EmptyState ico="mouse-pointer-click" title="Select a trail" />}
           </div>
         )}
         {/* Folder view: the bundle's Implementations matrix (steps × per-device recordings). Shown
             only when a bundle folder row is selected; clicking a column opens that trail's detail. */}
         {!trails.loading && folderView && folderEntries.length > 0 && (
           <>
-            <div style={{ padding: '24px 28px 14px', flex: '0 0 auto', background: 'var(--bg-standard)', borderBottom: '1px solid var(--tb-hairline)', position: 'relative', zIndex: 6 }}>
+            <div className="tb-trail-detail-head" style={{ padding: '24px 28px 14px', flex: '0 0 auto', background: 'var(--bg-standard)', borderBottom: '1px solid var(--tb-hairline)', position: 'relative', zIndex: 6 }}>
               {/* No breadcrumb — the sidebar tree already shows where this lives. Tokens sit under the
                   title; the pin (favorite) moves to the far right. */}
               <DetailHeader
@@ -433,7 +435,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 )}
               />
             </div>
-            <div style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+            <div className="tb-trail-detail-body" style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
               <TrailImplementationsBoard
                 key={fvFolderId + ':' + boardReloadKey}
                 folderId={fvFolderId} home={fvRel} blazeEntry={fvBlaze} variantEntries={fvVariants}
@@ -445,7 +447,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
         )}
         {!trails.loading && !folderView && current && (
           <>
-            <div style={{ padding: '24px 28px 14px', flex: '0 0 auto', background: 'var(--bg-standard)', borderBottom: '1px solid var(--tb-hairline)', position: 'relative', zIndex: 6 }}>
+            <div className="tb-trail-detail-head" style={{ padding: '24px 28px 14px', flex: '0 0 auto', background: 'var(--bg-standard)', borderBottom: '1px solid var(--tb-hairline)', position: 'relative', zIndex: 6 }}>
               {/* No breadcrumb (the sidebar shows location); tokens under the title; pin to the right. */}
               <DetailHeader
                 title={current.title}
@@ -481,7 +483,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 the view mounted so the Edit tab's Monaco editor + language-server socket are reused instead of
                 rebuilt on every switch. TrailDetailView resets the editor to the new trail's content on switch
                 (via its `resetKey`); the Steps/Runs panes are prop-driven and re-render on their own. */}
-            <div style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column' }}>
+            <div className="tb-trail-detail-body" style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column' }}>
               <TrailDetailView
                 trail={current}
                 configTrail={current}

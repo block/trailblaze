@@ -36,26 +36,52 @@ class TrailCommandPlanTrailExecutionTest {
     dir.mkdirs()
     val file = File(dir, name)
     val configLines = buildString {
-      appendLine("- config:")
-      appendLine("    title: $title")
-      appendLine("    platform: android")
-      if (id != null) appendLine("    id: $id")
-      if (tags != null) appendLine("    tags: [${tags.joinToString(", ")}]")
-      if (skip != null) appendLine("    skip: \"$skip\"")
-      appendLine("- tools:")
-      appendLine("  - pressBack: {}")
+      appendLine("config:")
+      appendLine("  title: $title")
+      if (id != null) appendLine("  id: $id")
+      if (tags != null) appendLine("  tags: [${tags.joinToString(", ")}]")
+      if (skip != null) {
+        appendLine("  skip:")
+        appendLine("    android: \"$skip\"")
+      }
+      appendLine("trail:")
+      appendLine("  - step: Press back")
     }
     file.writeText(configLines)
     return file
   }
 
   /**
-   * Writes a unified-format trail file (`config:`-map document) — the canonical named-scenario
-   * shape, one self-contained `<scenario>.trail.yaml` per distinct trail. Several of these in one
-   * directory each expand, because [expandTrailFiles] recognizes them by unified *content* (unlike
-   * the v1 `- config:`-list recordings that [writeTrail] produces, which collapse to one pick per
-   * directory). [id] is optional on purpose: some real named unified trails carry no `config.id`
-   * (the eval suite), and content detection must still expand them.
+   * Writes a LEGACY (v1) per-device recording — a top-level-list document with no column-0
+   * `trail:` key. [expandTrailFiles] classifies it into the directory's single-trail (collapse)
+   * bucket via [isDistinctNamedScenario]'s content check, exercising the back-compat resolution
+   * path where a `<classifier>.trail.yaml` recording collapses against its sibling `blaze.yaml`.
+   * (A unified-content `<classifier>.trail.yaml` would instead expand as a distinct named
+   * scenario, so the collapse tests must use v1 content here.)
+   */
+  private fun writeLegacyRecording(name: String, dir: File = tempFolder.root, id: String? = null): File {
+    dir.mkdirs()
+    val file = File(dir, name)
+    file.writeText(
+      buildString {
+        appendLine("- config:")
+        appendLine("    platform: android")
+        if (id != null) appendLine("    id: $id")
+        appendLine("- tools:")
+        appendLine("  - pressBack: {}")
+      },
+    )
+    return file
+  }
+
+  /**
+   * Writes a unified-format trail file (`config:`-map document) carrying a `recording:` block —
+   * the canonical named-scenario shape, one self-contained `<scenario>.trail.yaml` per distinct
+   * trail. Several of these in one directory each expand, because [expandTrailFiles] recognizes
+   * them by unified *content* (unlike the v1 `- config:`-list recordings that [writeLegacyRecording]
+   * produces, which collapse to one pick per directory). [id] is optional on purpose: some real
+   * named unified trails carry no `config.id` (the eval suite), and content detection must still
+   * expand them.
    */
   private fun writeUnifiedTrail(
     name: String,
@@ -306,7 +332,7 @@ class TrailCommandPlanTrailExecutionTest {
     // recording so the CLI runs a deterministic replay instead of double-billing an LLM run.
     val trailDir = File(tempFolder.root, "test-with-recording").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val webRecording = writeTrail("web.trail.yaml", dir = trailDir)
+    val webRecording = writeLegacyRecording("web.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -340,7 +366,7 @@ class TrailCommandPlanTrailExecutionTest {
     val expectedRecordings = (1..5).map { i ->
       val sub = File(parent, "test-$i").apply { mkdirs() }
       writeTrail("blaze.yaml", dir = sub)
-      writeTrail("web.trail.yaml", dir = sub)
+      writeLegacyRecording("web.trail.yaml", dir = sub)
     }
 
     val expanded = TrailCommand.expandTrailFiles(
@@ -367,7 +393,7 @@ class TrailCommandPlanTrailExecutionTest {
     // those classifiers.
     val trailDir = File(tempFolder.root, "ios-iphone-recording").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val iosIphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+    val iosIphoneRecording = writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -391,8 +417,8 @@ class TrailCommandPlanTrailExecutionTest {
     // the change in selected file will be the visible signal.
     val trailDir = File(tempFolder.root, "mixed-recordings").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
-    writeTrail("pixel-android.trail.yaml", dir = trailDir)
+    val androidRecording = writeLegacyRecording("android.trail.yaml", dir = trailDir)
+    writeLegacyRecording("pixel-android.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -418,7 +444,7 @@ class TrailCommandPlanTrailExecutionTest {
     // silently fires the LLM despite the explicit replay flag.
     val trailDir = File(tempFolder.root, "ios-recording-only").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+    val iphoneRecording = writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -439,8 +465,8 @@ class TrailCommandPlanTrailExecutionTest {
     // `ios-ipad.trail.yaml` (19 chars).
     val trailDir = File(tempFolder.root, "ios-multi").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    writeTrail("ios-ipad.trail.yaml", dir = trailDir)
-    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+    writeLegacyRecording("ios-ipad.trail.yaml", dir = trailDir)
+    val iphoneRecording = writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -459,8 +485,8 @@ class TrailCommandPlanTrailExecutionTest {
     // `ios-iphone.trail.yaml` < `ios-iwatch.trail.yaml` alphabetically.
     val trailDir = File(tempFolder.root, "ios-tied").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val iphoneRecording = writeTrail("ios-iphone.trail.yaml", dir = trailDir)
-    writeTrail("ios-iwatch.trail.yaml", dir = trailDir)
+    val iphoneRecording = writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir)
+    writeLegacyRecording("ios-iwatch.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -478,8 +504,8 @@ class TrailCommandPlanTrailExecutionTest {
     // when the resolver had no recording-shaped candidate and fell through to `blaze.yaml`.
     val trailDir = File(tempFolder.root, "ios-exact-plus-class").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val exactRecording = writeTrail("ios.trail.yaml", dir = trailDir)
-    writeTrail("ios-iphone.trail.yaml", dir = trailDir)
+    val exactRecording = writeLegacyRecording("ios.trail.yaml", dir = trailDir)
+    writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -535,7 +561,7 @@ class TrailCommandPlanTrailExecutionTest {
     // matched against `--device android` — rather than running both as if distinct scenarios.
     val trailDir = File(tempFolder.root, "legacy-trail").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = trailDir)
-    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
+    val androidRecording = writeLegacyRecording("android.trail.yaml", dir = trailDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -555,7 +581,7 @@ class TrailCommandPlanTrailExecutionTest {
     val scenarioA = writeUnifiedTrail("scenario-a.trail.yaml", mixed, id = "sample/mixed/scenario-a")
     val scenarioB = writeUnifiedTrail("scenario-b.trail.yaml", mixed, id = "sample/mixed/scenario-b")
     writeTrail("blaze.yaml", dir = mixed)
-    val legacyAndroid = writeTrail("android.trail.yaml", dir = mixed)
+    val legacyAndroid = writeLegacyRecording("android.trail.yaml", dir = mixed)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(mixed),
@@ -628,7 +654,7 @@ class TrailCommandPlanTrailExecutionTest {
     val scenarioB = writeUnifiedTrail("scenario-b.trail.yaml", namedDir, id = "tree/scenario-b")
     val legacyDir = File(root, "legacy").apply { mkdirs() }
     writeTrail("blaze.yaml", dir = legacyDir)
-    val legacyRecording = writeTrail("android.trail.yaml", dir = legacyDir)
+    val legacyRecording = writeLegacyRecording("android.trail.yaml", dir = legacyDir)
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(root),
@@ -771,10 +797,10 @@ class TrailCommandPlanTrailExecutionTest {
     // config.id — which would wrongly split the inconsistent-id variants into separate runs.
     val trailDir = File(tempFolder.root, "multi-device-trail").apply { mkdirs() }
     val androidPhone =
-      writeTrail("android-phone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
-    writeTrail("android-tablet.trail.yaml", dir = trailDir, id = "checkout-flow")
-    writeTrail("ios-iphone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
-    writeTrail("ios-ipad.trail.yaml", dir = trailDir, id = "checkout-flow")
+      writeLegacyRecording("android-phone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
+    writeLegacyRecording("android-tablet.trail.yaml", dir = trailDir, id = "checkout-flow")
+    writeLegacyRecording("ios-iphone.trail.yaml", dir = trailDir, id = "generated/checkout-flow/run-77")
+    writeLegacyRecording("ios-ipad.trail.yaml", dir = trailDir, id = "checkout-flow")
 
     val expanded = TrailCommand.expandTrailFiles(
       files = listOf(trailDir),
@@ -800,8 +826,8 @@ class TrailCommandPlanTrailExecutionTest {
     //      this is what guards the user-facing behavior — a regression that silently
     //      stopped warning would be invisible without an assertion.
     val trailDir = File(tempFolder.root, "recordings-only").apply { mkdirs() }
-    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
-    writeTrail("ios.trail.yaml", dir = trailDir)
+    val androidRecording = writeLegacyRecording("android.trail.yaml", dir = trailDir)
+    writeLegacyRecording("ios.trail.yaml", dir = trailDir)
 
     val capturedErr = ByteArrayOutputStream()
     val expanded = withCapturedStderr(capturedErr) {
@@ -833,7 +859,7 @@ class TrailCommandPlanTrailExecutionTest {
     // stays usable, matches the no-device case), but we surface a warning so the user
     // knows the requested classifiers were ignored.
     val trailDir = File(tempFolder.root, "lone-android-recording").apply { mkdirs() }
-    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
+    val androidRecording = writeLegacyRecording("android.trail.yaml", dir = trailDir)
 
     val capturedErr = ByteArrayOutputStream()
     val expanded = withCapturedStderr(capturedErr) {
@@ -862,8 +888,8 @@ class TrailCommandPlanTrailExecutionTest {
     // names the dropped `ios.trail.yaml`. Covers the explicit-platform-but-no-match
     // case that prior tests didn't pin (the existing fallback test uses no `--device`).
     val trailDir = File(tempFolder.root, "no-web-recording").apply { mkdirs() }
-    val androidRecording = writeTrail("android.trail.yaml", dir = trailDir)
-    writeTrail("ios.trail.yaml", dir = trailDir)
+    val androidRecording = writeLegacyRecording("android.trail.yaml", dir = trailDir)
+    writeLegacyRecording("ios.trail.yaml", dir = trailDir)
 
     val capturedErr = ByteArrayOutputStream()
     val expanded = withCapturedStderr(capturedErr) {

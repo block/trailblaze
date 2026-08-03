@@ -111,7 +111,7 @@ object TrailYamlSchemaBuilder {
       stringField("driver", "Explicit driver type (e.g. `ANDROID_ONDEVICE_ACCESSIBILITY`, `IOS_HOST`); takes precedence over platform.")
       stringField("skip", "When set, mark the trail skipped with this reason (empty string = not skipped).")
       putJsonObject("tags") { put("type", "array"); put("description", "Free-form labels for grouping/filtering."); putJsonObject("items") { put("type", "string") } }
-      putJsonObject("metadata") { put("type", "object"); put("description", "Arbitrary string metadata (e.g. external test-case ids)."); put("additionalProperties", true) }
+      putJsonObject("metadata") { put("type", "object"); put("description", "Arbitrary string metadata (e.g. external test-case ids), surfaced on the run report's Info tab. The `owner` key also renders as the run's subtitle and powers the report's Owner sort."); put("additionalProperties", true) }
       putJsonObject("memory") { put("type", "object"); put("description", "Pre-seeded AgentMemory variables, visible to {{name}} interpolation."); put("additionalProperties", true) }
     }
   }

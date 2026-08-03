@@ -20,25 +20,14 @@ const RUN_STATUS_DOT = {
   running: ['loader-2', 'var(--tb-running)'],
 };
 
-// Parse a trail/blaze yaml into { config, prompts, trailhead, toolsItems }. The top-level doc is a
-// list whose items carry a `config:`, `prompts:`, `tools:` (a recorded step the engine
-// force-executes), or (new format) `trailhead:` key - the trailhead is the deterministic step 0
-// the flow launches from.
+// Parse a trail/blaze yaml into { config, prompts, trailhead, toolsItems }. Reads BOTH the unified
+// map (`config:` + `trail:` with per-classifier `recording:`) and the legacy v1 list (items carrying
+// `config:`/`prompts:`/`tools:`/`trailhead:`) — the normalization lives in trail-yaml.js (unit-tested,
+// shape-agnostic); we only own the yaml.load and the ok/error envelope here.
 function parseTrailYaml(content) {
   try {
     const doc = window.jsyaml ? window.jsyaml.load(content) : null;
-    let config = {};
-    let prompts = [];
-    let trailhead = null;
-    const toolsItems = [];
-    const items = Array.isArray(doc) ? doc : doc ? [doc] : [];
-    for (const it of items) {
-      if (it && it.config) config = it.config;
-      if (it && it.prompts) prompts = it.prompts;
-      if (it && it.trailhead != null) trailhead = it.trailhead;
-      if (it && Array.isArray(it.tools)) toolsItems.push(it.tools);
-    }
-    return { ok: true, config, prompts, trailhead, toolsItems };
+    return { ok: true, ...window.TrailYamlBuild.normalizeTrailDoc(doc) };
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e), config: {}, prompts: [], trailhead: null, toolsItems: [] };
   }
@@ -54,34 +43,37 @@ function toolNamesOf(toolsArray) {
   return names;
 }
 
-// Patch one recorded step's tool list in a variant file, PRESERVING every other top-level item —
-// config AND any `- tools:` setup block the backend prepends before `- prompts:` (dropping it would
-// silently break the recorded setup on replay). Re-reads the raw file (the in-memory {config,prompts}
-// parse discards other items), patches in place, and re-dumps. An empty tools list REMOVES the
-// `recording` block (an empty `tools:` fails ToolRecording validation). promptIndex null creates a
-// recording for the given blaze step (stepInfo {text,kind}) so it aligns back to it by text.
+// The device classifier a unified variant file's recordings key by: an existing `recording:` key or
+// `config.devices` key if the file already has one, else the file's platform (its `<platform>.trail.yaml`
+// name stem, lowercased). Only consulted for unified (map) docs; a v1 list ignores it.
+function variantClassifier(doc, name) {
+  if (doc && !Array.isArray(doc) && typeof doc === 'object') {
+    for (const s of (Array.isArray(doc.trail) ? doc.trail : [])) {
+      if (s && s.recording && typeof s.recording === 'object') { const k = Object.keys(s.recording)[0]; if (k) return k; }
+    }
+    if (doc.config && doc.config.devices) { const k = Object.keys(doc.config.devices)[0]; if (k) return k; }
+  }
+  return String(name || '').replace(/\.trail\.ya?ml$/i, '').toLowerCase();
+}
+
+// Patch one recorded step's tool list in a variant file, PRESERVING every other item — config,
+// trailhead, and any setup block. Reads the raw file (the in-memory {config,prompts} parse discards
+// other items), applies the edit via the shape-aware, unit-tested applyRecordingEdit (v1 list →
+// `recording: { tools }`; unified map → `trail[i].recording[classifier]`), and re-dumps. An empty
+// tools list REMOVES the recording (an empty recording fails ToolRecording validation). promptIndex
+// null creates a step for the given blaze step (stepInfo {text,kind}) so it aligns back by text.
 // Returns { yaml } to save, { noop:true } when there's nothing to write, or { error }.
 async function patchVariantRecording(fetchFile, id, name, promptIndex, newToolsArray, stepInfo) {
   const raw = await fetchFile(id, name);
   if (raw == null) return { error: 'Could not read ' + name };
-  let items;
-  try { const doc = window.jsyaml.load(raw); items = Array.isArray(doc) ? doc : doc ? [doc] : []; }
+  let doc;
+  try { doc = window.jsyaml.load(raw); }
   catch (e) { return { error: 'Could not parse ' + name }; }
-  const hasTools = !!(newToolsArray && newToolsArray.length);
-  const pItem = items.find((it) => it && Array.isArray(it.prompts));
-  if (promptIndex == null) {
-    if (!hasTools) return { noop: true };
-    const kindKey = (stepInfo && stepInfo.kind) === 'verify' ? 'verify' : 'step';
-    const p = { [kindKey]: (stepInfo && stepInfo.text) || '', recording: { tools: newToolsArray } };
-    if (pItem) pItem.prompts.push(p); else items.push({ prompts: [p] });
-  } else {
-    const prompt = pItem && pItem.prompts[promptIndex];
-    if (!prompt) return { error: 'That step moved — reload and try again.' };
-    if (hasTools) prompt.recording = { ...(prompt.recording || {}), tools: newToolsArray };
-    else if (prompt.recording) delete prompt.recording;
-  }
+  const r = window.TrailYamlBuild.applyRecordingEdit(doc, promptIndex, newToolsArray, stepInfo, variantClassifier(doc, name));
+  if (r.error) return { error: r.error };
+  if (r.noop) return { noop: true };
   let yaml;
-  try { yaml = window.jsyaml.dump(items, { lineWidth: -1, noRefs: true }).trimEnd(); }
+  try { yaml = window.jsyaml.dump(r.value, { lineWidth: -1, noRefs: true }).trimEnd(); }
   catch (e) { return { error: 'Could not serialize the edit.' }; }
   return { yaml };
 }

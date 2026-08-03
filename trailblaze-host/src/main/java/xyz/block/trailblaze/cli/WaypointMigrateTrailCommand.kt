@@ -22,12 +22,7 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
-import xyz.block.trailblaze.yaml.DirectionStep
-import xyz.block.trailblaze.yaml.PromptStep
-import xyz.block.trailblaze.yaml.ToolRecording
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
-import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
@@ -175,12 +170,9 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     }
 
     // Unified-format trails nest per-classifier tool lists under `recording:`; a session
-    // is captured against exactly one device at a time (unchanged contract from the v1
-    // one-file-per-device world), so migrate-trail always resolves against exactly ONE
-    // classifier per invocation — resolvedClassifier is null for legacy v1 trails, where
-    // there's nothing to disambiguate.
-    val resolvedClassifier: String? = when (doc) {
-      is TrailDocument.V1 -> null
+    // is captured against exactly one device at a time, so migrate-trail always resolves
+    // against exactly ONE classifier per invocation.
+    val resolvedClassifier: String = when (doc) {
       is TrailDocument.Unified -> {
         val available = availableClassifiers(doc.trail)
         if (available.isEmpty()) {
@@ -215,8 +207,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // accessibility driver never matches anything, which would make assertNotVisible pass
     // VACUOUSLY (a silent false green) after a driver-marker flip.
     val unmigratableNotVisible = when (doc) {
-      is TrailDocument.V1 -> countUnmigratableNotVisible(doc.items)
-      is TrailDocument.Unified -> countUnmigratableNotVisibleUnified(doc.trail, resolvedClassifier!!)
+      is TrailDocument.Unified -> countUnmigratableNotVisibleUnified(doc.trail, resolvedClassifier)
     }
     if (unmigratableNotVisible > 0) {
       Console.log(
@@ -231,8 +222,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // Pass 1 — collect the Maestro-shape selectors in YAML order. The list index doubles
     // as the alignment key against the session-log list in pass 2 / 3.
     val maestroSelectors = when (doc) {
-      is TrailDocument.V1 -> collectMaestroSelectors(doc.items)
-      is TrailDocument.Unified -> collectMaestroSelectorsUnified(doc.trail, resolvedClassifier!!)
+      is TrailDocument.Unified -> collectMaestroSelectorsUnified(doc.trail, resolvedClassifier)
     }
     if (maestroSelectors.isEmpty()) {
       Console.log("# No Maestro-shape selector-bearing tools found in ${trailFile.name}; nothing to migrate.")
@@ -371,14 +361,9 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     // are dropped on round-trip — that's an acknowledged trade-off; a follow-up LLM pass
     // can re-add commentary where it carries semantic value.
     val migratedYaml = when (doc) {
-      is TrailDocument.V1 -> {
-        val cursor = IndexedCursor()
-        val migratedItems = doc.items.map { migrateItem(it, migrations, cursor) }
-        trailblazeYaml.encodeToString(migratedItems)
-      }
       is TrailDocument.Unified -> {
         val cursor = IndexedCursor()
-        val migratedTrail = migrateUnifiedTrail(doc.trail, resolvedClassifier!!, migrations, cursor)
+        val migratedTrail = migrateUnifiedTrail(doc.trail, resolvedClassifier, migrations, cursor)
         trailblazeYaml.encodeUnifiedTrailToString(migratedTrail)
       }
     }
@@ -460,22 +445,6 @@ class WaypointMigrateTrailCommand : Callable<Int> {
    * definition. They must be hand-authored; the caller reports them loudly so a trail
    * isn't treated as fully migrated when Maestro-shape content remains.
    */
-  internal fun countUnmigratableNotVisible(items: List<TrailYamlItem>): Int {
-    var count = 0
-    items.forEach { item ->
-      when (item) {
-        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.forEach { step ->
-          step.recording?.tools?.forEach { if (isUnmigratableNotVisible(it)) count++ }
-        }
-        is TrailYamlItem.ToolTrailItem -> item.tools.forEach { if (isUnmigratableNotVisible(it)) count++ }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { if (isUnmigratableNotVisible(it)) count++ }
-        is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
-      }
-    }
-    return count
-  }
-
-  /** Unified-format counterpart of [countUnmigratableNotVisible], scoped to one classifier. */
   internal fun countUnmigratableNotVisibleUnified(trail: UnifiedTrail, classifier: String): Int {
     var count = 0
     trail.trailhead?.recordings?.get(classifier)?.forEach { if (isUnmigratableNotVisible(it)) count++ }
@@ -503,22 +472,6 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     }
   }
 
-  internal fun collectMaestroSelectors(items: List<TrailYamlItem>): List<MaestroSelectorAtIndex> {
-    val out = mutableListOf<MaestroSelectorAtIndex>()
-    items.forEach { item ->
-      when (item) {
-        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.forEach { step ->
-          step.recording?.tools?.forEach { collectSelectorVisit(it, out) }
-        }
-        is TrailYamlItem.ToolTrailItem -> item.tools.forEach { collectSelectorVisit(it, out) }
-        is TrailYamlItem.TrailheadTrailItem -> item.trailhead.tools?.forEach { collectSelectorVisit(it, out) }
-        is TrailYamlItem.ConfigTrailItem -> { /* no tools */ }
-      }
-    }
-    return out
-  }
-
-  /** Unified-format counterpart of [collectMaestroSelectors], scoped to one classifier. */
   internal fun collectMaestroSelectorsUnified(trail: UnifiedTrail, classifier: String): List<MaestroSelectorAtIndex> {
     val out = mutableListOf<MaestroSelectorAtIndex>()
     trail.trailhead?.recordings?.get(classifier)?.forEach { collectSelectorVisit(it, out) }
@@ -576,39 +529,6 @@ class WaypointMigrateTrailCommand : Callable<Int> {
 
   // ----- Pass 3: re-walk and substitute tools by index ----------------------------
 
-  private fun migrateItem(
-    item: TrailYamlItem,
-    migrations: Map<Int, TrailblazeNodeSelector>,
-    cursor: IndexedCursor,
-  ): TrailYamlItem = when (item) {
-    is TrailYamlItem.PromptsTrailItem ->
-      item.copy(promptSteps = item.promptSteps.map { migrateStep(it, migrations, cursor) })
-    is TrailYamlItem.ToolTrailItem ->
-      item.copy(tools = item.tools.map { migrateWrapper(it, migrations, cursor) })
-    is TrailYamlItem.TrailheadTrailItem ->
-      item.copy(
-        trailhead = item.trailhead.copy(
-          tools = item.trailhead.tools?.map { migrateWrapper(it, migrations, cursor) },
-        ),
-      )
-    is TrailYamlItem.ConfigTrailItem -> item
-  }
-
-  private fun migrateStep(
-    step: PromptStep,
-    migrations: Map<Int, TrailblazeNodeSelector>,
-    cursor: IndexedCursor,
-  ): PromptStep {
-    val recording = step.recording ?: return step
-    val migrated = ToolRecording(
-      tools = recording.tools.map { migrateWrapper(it, migrations, cursor) },
-    )
-    return when (step) {
-      is DirectionStep -> step.copy(recording = migrated)
-      is VerificationStep -> step.copy(recording = migrated)
-    }
-  }
-
   private fun migrateWrapper(
     wrapper: TrailblazeToolYamlWrapper,
     migrations: Map<Int, TrailblazeNodeSelector>,
@@ -632,7 +552,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
       }
       is AssertVisibleBySelectorTrailblazeTool -> {
         // Skip already-migrated tools so the cursor stays in sync with
-        // [collectMaestroSelectors], which also skips those.
+        // [collectMaestroSelectorsUnified], which also skips those.
         if (needsMigration(tool.nodeSelector)) {
           val idx = cursor.index++
           migrations[idx]?.let { tool.copy(nodeSelector = it) }
@@ -664,7 +584,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
     return recordings + (classifier to tools.map { migrateWrapper(it, migrations, cursor) })
   }
 
-  /** Unified-format counterpart of [migrateItem]/[migrateWrapper], scoped to one classifier. */
+  /** Re-walks [trail], substituting migrated node selectors on [classifier]'s recordings only. */
   internal fun migrateUnifiedTrail(
     trail: UnifiedTrail,
     classifier: String,

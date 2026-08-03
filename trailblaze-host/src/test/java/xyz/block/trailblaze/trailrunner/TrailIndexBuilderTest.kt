@@ -14,24 +14,22 @@ class TrailIndexBuilderTest {
   @get:Rule
   val tmp = TemporaryFolder()
 
-  private fun v1Trail(
+  private fun unifiedTrail(
     id: String = "demo/login",
     title: String = "Demo login",
     target: String = "myapp",
-    platform: String = "ios",
     tags: List<String> = listOf("smoke", "login"),
     steps: List<String> = listOf("Launch the app", "Assert money tab"),
     verify: Boolean = false,
   ): String = buildString {
-    appendLine("- config:")
-    appendLine("    id: $id")
-    appendLine("    title: \"$title\"")
-    appendLine("    target: $target")
-    appendLine("    platform: $platform")
+    appendLine("config:")
+    appendLine("  id: $id")
+    appendLine("  title: \"$title\"")
+    appendLine("  target: $target")
     if (tags.isNotEmpty()) {
-      appendLine("    tags: [${tags.joinToString(", ")}]")
+      appendLine("  tags: [${tags.joinToString(", ")}]")
     }
-    appendLine("- prompts:")
+    appendLine("trail:")
     for (step in steps) {
       if (verify) appendLine("  - verify: \"$step\"")
       else appendLine("  - step: \"$step\"")
@@ -41,7 +39,7 @@ class TrailIndexBuilderTest {
   @Test
   fun `scan returns entry for a single trail file`() {
     val dir = tmp.newFolder("trails")
-    File(dir, "login.trail.yaml").writeText(v1Trail())
+    File(dir, "login.trail.yaml").writeText(unifiedTrail())
 
     val results = TrailIndexBuilder.scan(dir)
 
@@ -49,7 +47,9 @@ class TrailIndexBuilderTest {
     val entry = results.single()
     assertEquals("Demo login", entry.title)
     assertEquals("myapp", entry.target)
-    assertEquals("ios", entry.platform)
+    // `platform` is no longer a config field — it backfills from the filename's classifier lineage,
+    // and `login.trail.yaml` has no platform classifier, so it stays platform-agnostic.
+    assertNull(entry.platform)
     assertEquals(listOf("smoke", "login"), entry.tags)
     assertEquals(0, entry.rootIdx)
   }
@@ -57,9 +57,18 @@ class TrailIndexBuilderTest {
   @Test
   fun `scan classifies on-disk format and carries the declared config id`() {
     // `format` drives the unified badge + the migrate affordance; `configId` is the trail's
-    // DECLARED config.id (shared by per-platform variants), distinct from the path-derived entry.id.
+    // DECLARED config.id. A legacy v1 (top-level-list) file is no longer decodable, so it is
+    // indexed as a filename-derived entry with `format = "v1"` and NO configId — the migrate badge
+    // still fires, but nothing is read out of the undecodable body.
     val dir = tmp.newFolder("trails-format-test")
-    File(dir, "legacy.trail.yaml").writeText(v1Trail(id = "demo/login"))
+    File(dir, "legacy.trail.yaml").writeText(
+      """
+      - config:
+          id: demo/login
+      - prompts:
+          - step: Open the app
+      """.trimIndent(),
+    )
     File(dir, "single.trail.yaml").writeText(
       """
       config:
@@ -74,7 +83,7 @@ class TrailIndexBuilderTest {
 
     val v1 = byName.getValue("legacy.trail.yaml")
     assertEquals("v1", v1.format)
-    assertEquals("demo/login", v1.configId)
+    assertNull(v1.configId)
     val unified = byName.getValue("single.trail.yaml")
     assertEquals("unified", unified.format)
     assertEquals("demo/unified", unified.configId)
@@ -218,7 +227,7 @@ class TrailIndexBuilderTest {
   fun `scan derives id as 0-slash-relative-path-without-trail-yaml-suffix`() {
     val dir = tmp.newFolder("trails-id-test")
     val sub = File(dir, "myapp/cold-boot").also { it.mkdirs() }
-    File(sub, "my-trail.trail.yaml").writeText(v1Trail(title = "Cold boot"))
+    File(sub, "my-trail.trail.yaml").writeText(unifiedTrail(title = "Cold boot"))
 
     val results = TrailIndexBuilder.scan(dir)
 
@@ -230,7 +239,7 @@ class TrailIndexBuilderTest {
   fun `scan returns folder label derived from directory name`() {
     val dir = tmp.newFolder("trails")
     val sub = File(dir, "smoke").apply { mkdirs() }
-    File(sub, "example.trail.yaml").writeText(v1Trail())
+    File(sub, "example.trail.yaml").writeText(unifiedTrail())
 
     val entry = TrailIndexBuilder.scan(dir).single()
 
@@ -242,9 +251,9 @@ class TrailIndexBuilderTest {
     val dir = tmp.newFolder("trails")
     File(dir, "my-cold-boot-test.trail.yaml").writeText(
       """
-      - config:
-          id: example
-      - prompts:
+      config:
+        id: example
+      trail:
         - step: Launch
       """.trimIndent(),
     )
@@ -268,7 +277,7 @@ class TrailIndexBuilderTest {
     val dir = tmp.newFolder("trails")
     File(dir, "a").mkdirs()
     File(dir, "a/b").mkdirs()
-    File(dir, "a/b/deep.trail.yaml").writeText(v1Trail(title = "Deep trail"))
+    File(dir, "a/b/deep.trail.yaml").writeText(unifiedTrail(title = "Deep trail"))
 
     val results = TrailIndexBuilder.scan(dir)
     assertEquals(1, results.size)
@@ -293,7 +302,7 @@ class TrailIndexBuilderTest {
   @Test
   fun `scanAll prefixes primary entries with rootIdx 0`() {
     val primary = tmp.newFolder("primary")
-    File(primary, "trail-a.trail.yaml").writeText(v1Trail(title = "Trail A"))
+    File(primary, "trail-a.trail.yaml").writeText(unifiedTrail(title = "Trail A"))
 
     val results = TrailIndexBuilder.scanAll(primary = primary, extras = emptyList())
 
@@ -305,10 +314,10 @@ class TrailIndexBuilderTest {
   @Test
   fun `scanAll prefixes extra root entries with rootIdx 1 onward`() {
     val primary = tmp.newFolder("primary")
-    File(primary, "primary-trail.trail.yaml").writeText(v1Trail(title = "Primary trail"))
+    File(primary, "primary-trail.trail.yaml").writeText(unifiedTrail(title = "Primary trail"))
 
     val extra = tmp.newFolder("extra")
-    File(extra, "extra-trail.trail.yaml").writeText(v1Trail(title = "Extra trail"))
+    File(extra, "extra-trail.trail.yaml").writeText(unifiedTrail(title = "Extra trail"))
 
     val results = TrailIndexBuilder.scanAll(primary = primary, extras = listOf(extra))
 
@@ -323,11 +332,11 @@ class TrailIndexBuilderTest {
   @Test
   fun `scanAll combines trails from primary and extras`() {
     val primary = tmp.newFolder("primary")
-    File(primary, "a.trail.yaml").writeText(v1Trail(title = "A"))
-    File(primary, "b.trail.yaml").writeText(v1Trail(title = "B"))
+    File(primary, "a.trail.yaml").writeText(unifiedTrail(title = "A"))
+    File(primary, "b.trail.yaml").writeText(unifiedTrail(title = "B"))
 
     val extra = tmp.newFolder("extra")
-    File(extra, "c.trail.yaml").writeText(v1Trail(title = "C"))
+    File(extra, "c.trail.yaml").writeText(unifiedTrail(title = "C"))
 
     val results = TrailIndexBuilder.scanAll(primary = primary, extras = listOf(extra))
     assertEquals(3, results.size)
@@ -338,7 +347,7 @@ class TrailIndexBuilderTest {
   @Test
   fun `scanAll skips missing extra root without throwing`() {
     val primary = tmp.newFolder("primary")
-    File(primary, "a.trail.yaml").writeText(v1Trail(title = "A"))
+    File(primary, "a.trail.yaml").writeText(unifiedTrail(title = "A"))
     val missing = File(tmp.root, "does-not-exist")
 
     val results = TrailIndexBuilder.scanAll(primary = primary, extras = listOf(missing))
@@ -350,9 +359,9 @@ class TrailIndexBuilderTest {
   fun `scanAll two extras get rootIdx 1 and 2`() {
     val primary = tmp.newFolder("primary")
     val extra1 = tmp.newFolder("extra1")
-    File(extra1, "e1.trail.yaml").writeText(v1Trail(title = "E1"))
+    File(extra1, "e1.trail.yaml").writeText(unifiedTrail(title = "E1"))
     val extra2 = tmp.newFolder("extra2")
-    File(extra2, "e2.trail.yaml").writeText(v1Trail(title = "E2"))
+    File(extra2, "e2.trail.yaml").writeText(unifiedTrail(title = "E2"))
 
     val results = TrailIndexBuilder.scanAll(primary = primary, extras = listOf(extra1, extra2))
 

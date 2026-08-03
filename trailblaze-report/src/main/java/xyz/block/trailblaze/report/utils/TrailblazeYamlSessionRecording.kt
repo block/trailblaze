@@ -3,7 +3,9 @@ package xyz.block.trailblaze.report.utils
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedTrailItems as generateRecordedTrailItemsCommon
 import xyz.block.trailblaze.yaml.generateRecordedYaml as generateRecordedYamlCommon
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml as generateUnifiedRecordedYamlCommon
 
@@ -42,6 +44,24 @@ object TrailblazeYamlSessionRecording {
       customTrailblazeToolClasses = customToolClasses,
     )
     return generateUnifiedRecordedYamlCommon(
+      trailblazeYaml = trailblazeYaml,
+      sessionTrailConfig = sessionTrailConfig,
+    )
+  }
+
+  /**
+   * The lowered [TrailYamlItem] runtime spine for this session's logs, with JVM custom-tool-class
+   * support. Save-back callers holding the logs in-process feed these straight into the unified
+   * merge, skipping the YAML encode/decode round-trip that couples save-back to the v1 parser.
+   */
+  fun List<TrailblazeLog>.generateRecordedTrailItems(
+    sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null,
+    customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
+  ): List<TrailYamlItem> {
+    val trailblazeYaml = createTrailblazeYaml(
+      customTrailblazeToolClasses = customToolClasses,
+    )
+    return generateRecordedTrailItemsCommon(
       trailblazeYaml = trailblazeYaml,
       sessionTrailConfig = sessionTrailConfig,
     )

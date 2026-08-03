@@ -7,18 +7,26 @@ import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.models.LogsSummary
 import xyz.block.trailblaze.report.snapshot.SnapshotCollector
 import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
-import java.util.concurrent.CompletableFuture
 import xyz.block.trailblaze.util.Console
 
-open class GenerateReportCliCommand :
-  SimpleCliCommand(
-    name = "generate-report",
-  ) {
+open class GenerateReportCliCommand(
+  /**
+   * Injected by [main] so both commands in one process share one [SingleReadLogsRepoProvider]
+   * — i.e. ONE capture of every session, feeding both the shared [LogsRepo] and this command's
+   * interactive-report leg — instead of each command re-parsing the same directory. Null (the
+   * default, and every direct/standalone use) means the command builds its own provider and
+   * closes it when done; a supplied provider is owned (and closed) by the caller.
+   */
+  private val sharedLogsSource: SingleReadLogsRepoProvider? = null,
+) : SimpleCliCommand(
+  name = "generate-report",
+) {
 
   private val logsDirArg = FileArgument(
     name = "logs-dir",
@@ -87,7 +95,7 @@ open class GenerateReportCliCommand :
     Console.error("  ${noWasmReportFlag.getUsage()}  ${noWasmReportFlag.getHelp()}")
   }
 
-  override fun run() {
+  override fun run(): Unit = ReportTiming.stage("ReportMain.run") {
     Console.log("logsDir: ${logsDir.canonicalPath}")
     Console.log("useRelativeImageUrls: $useRelativeImageUrls")
 
@@ -95,85 +103,110 @@ open class GenerateReportCliCommand :
     // LogsRepo's single-read cache is built at construction, so doing the moves first means that
     // cache captures the final on-disk layout. Every emitter below can then share ONE parse per
     // session (via getCachedLogsForSession) instead of re-reading each session off disk.
-    moveJsonFilesToSessionDirs(logsDir)
-    moveScreenshotsToSessionDirs(logsDir)
+    // The screenshot pass reuses the decode the JSON pass already performed (the two run
+    // back-to-back over the same files) instead of re-decoding every session-dir JSON.
+    val sessionByScreenshotName = ReportTiming.stage("ReportMain.moveJsonFilesToSessionDirs") { moveJsonFilesToSessionDirs(logsDir) }
+    ReportTiming.stage("ReportMain.moveScreenshotsToSessionDirs") { moveScreenshotsToSessionDirs(logsDir, sessionByScreenshotName) }
 
-    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
-    val logsRepo = LogsRepo(logsDir, watchFileSystem = false, costEnricher = costEnricher::enrich)
-
-    val standaloneFileReport = true
-    val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
-    val logsSummaryJson = TrailblazeJsonInstance.encodeToString(LogsSummary.serializer(), logsSummaryEvents)
-    val summaryJsonFile = File(logsDir, "summary.json")
-    summaryJsonFile.writeText(logsSummaryJson)
-
-    // Use explicit root dir if provided (e.g. from Gradle's generateReportTemplate task),
-    // otherwise fall back to inferring from the logs directory parent.
-    val rootWorkingDir = System.getProperty("trailblaze.rootDir")?.let { File(it) }
-      ?: logsRepo.logsDir.parentFile
-
-    // Every run produces the lightweight, self-contained interactive report — the same artifact
-    // `trailblaze report` (the CLI/daemon path) emits. The legacy WASM report is emitted ALONGSIDE
-    // it unless --no-wasm-report was passed.
-    //
-    // The WASM report is CPU-bound (image/log compression + video-frame decode); the interactive
-    // report spends most of its time waiting on an external bun subprocess. They are independent
-    // readers of the same parsed sessions (LogsRepo's cache is read-only once built) that write
-    // distinct files, so run them concurrently — overlapping the bun wait with the WASM build is
-    // nearly-free wall-clock. Best-effort (bun may be missing, the subprocess may fail), so the
-    // async task captures and logs failures and resolves to null instead of aborting the run.
-    val interactiveHtmlFile = File(logsDir, "trailblaze_report_interactive.html")
-    val interactiveReport: CompletableFuture<File?> = CompletableFuture.supplyAsync {
-      runCatching { RunReportGenerator().generate(logsRepo, logsRepo.getSessionIds()) }
-        .onFailure { Console.error("Warning: interactive report generation threw: ${it.message}") }
-        .getOrNull()
-    }
-
+    // One capture of every session (see [SingleReadLogsRepoProvider]): the same
+    // SessionLogSnapshots seed the LogsRepo below AND feed the interactive report leg, so
+    // this command reads + decodes each log file exactly once.
+    val ownsLogsSource = sharedLogsSource == null
+    val logsSource = sharedLogsSource ?: SingleReadLogsRepoProvider()
     try {
-      if (skipWasmReport) {
+      val logsRepo = ReportTiming.stage("ReportMain.logsRepoParse") { logsSource.get(logsDir) }
+
+      val standaloneFileReport = true
+      val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
+      val logsSummaryJson = TrailblazeJsonInstance.encodeToString(LogsSummary.serializer(), logsSummaryEvents)
+      val summaryJsonFile = File(logsDir, "summary.json")
+      summaryJsonFile.writeText(logsSummaryJson)
+
+      // Use explicit root dir if provided (e.g. from Gradle's generateReportTemplate task),
+      // otherwise fall back to inferring from the logs directory parent.
+      val rootWorkingDir = System.getProperty("trailblaze.rootDir")?.let { File(it) }
+        ?: logsRepo.logsDir.parentFile
+
+      // Every run produces the lightweight, self-contained interactive report — the same artifact
+      // `trailblaze report` (the CLI/daemon path) emits. The legacy WASM report is emitted ALONGSIDE
+      // it unless --no-wasm-report was passed. overlapReports runs the two concurrently
+      // (overlapping the interactive report's bun wait with the CPU-bound WASM build) and joins
+      // the interactive leg even when the WASM build throws.
+      val interactiveHtmlFile = File(logsDir, "trailblaze_report_interactive.html")
+
+      val wasmRequest: WasmReportRequest? = if (skipWasmReport) {
         Console.log("Skipping legacy WASM report (--no-wasm-report); emitting the interactive report only.")
+        null
       } else {
         val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
         Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
 
-        // Trailblaze supports two layouts: standalone (`trailblaze-ui/` next to the
-        // working dir) and nested (Trailblaze embedded under a sibling subdirectory
-        // of a larger repo, where the embedding parent re-exports the framework).
-        val standaloneUiDir = File(rootWorkingDir, "trailblaze-ui")
-        val nestedUiDir = File(File(rootWorkingDir, "opensource"), "trailblaze-ui")
-        val trailblazeUiProjectDir = (if (standaloneUiDir.exists()) standaloneUiDir else nestedUiDir).also {
-          Console.log("Using project directory: ${it.canonicalPath}")
-        }
+        // Supports both layouts (standalone `trailblaze-ui/` next to the working dir, or nested
+        // one level deeper when Trailblaze is embedded in a larger monorepo) — see the resolver.
+        val trailblazeUiProjectDir = ReportTemplateResolver.findTrailblazeUiDir(rootWorkingDir)
+          ?.also { Console.log("Using project directory: ${it.canonicalPath}") }
 
-        WasmReport.generate(
-          logsRepo = logsRepo,
-          trailblazeUiProjectDir = trailblazeUiProjectDir,
+        WasmReportRequest(
           outputFile = trailblazeReportHtmlFile,
-          reportTemplateFile = File(rootWorkingDir, "trailblaze_report_template.html"),
+          templateFile = File(rootWorkingDir, "trailblaze_report_template.html"),
+          trailblazeUiProjectDir = trailblazeUiProjectDir,
           useRelativeImageUrls = useRelativeImageUrls,
         )
       }
-    } finally {
-      // Always harvest the interactive report, even if the WASM build above threw — it's now the
-      // primary artifact, so a WASM failure must not discard it or orphan its timestamped temp file.
-      val generatedInteractiveHtml = interactiveReport.join()
-      if (generatedInteractiveHtml != null) {
-        generatedInteractiveHtml.copyTo(interactiveHtmlFile, overwrite = true)
-        generatedInteractiveHtml.delete()
-        Console.log("file://${interactiveHtmlFile.absolutePath}")
+
+      // The interactive leg only GENERATES the report (best-effort — overlapReports logs a leg
+      // failure and resolves it to null). The copy-to-canonical-filename below runs even when the
+      // WASM build throws — the interactive report is now the primary artifact, so a WASM failure
+      // must not discard it or orphan its timestamped temp file. The copy itself deliberately sits
+      // OUTSIDE the best-effort leg: failing to land the canonical artifact is fatal. When BOTH
+      // fail, the WASM failure stays primary and the copy failure rides along as suppressed.
+      var generatedInteractiveHtml: File? = null
+      // Held (not rethrown immediately) so a copy-to-canonical failure below can be attached as
+      // suppressed instead of replacing the primary WASM failure.
+      var wasmFailure: Throwable? = null
+      try {
+        overlapReports(
+          interactive = {
+            // Built from the shared snapshots — no re-read of the log files the repo already
+            // decoded (the WASM leg is unscoped, so it reuses the repo's seeded cache directly).
+            RunReportGenerator().generateFromSnapshots(logsRepo, logsSource.snapshots(logsDir))
+              .also { generatedInteractiveHtml = it }
+          },
+          wasm = { wasmRequest?.let { generateWasmReport(logsRepo, request = it) } },
+        )
+      } catch (t: Throwable) {
+        wasmFailure = t
+      }
+
+      // overlapReports joins the interactive leg before returning or rethrowing, so the
+      // write above is visible here on both paths.
+      val generatedHtml = generatedInteractiveHtml
+      if (generatedHtml != null) {
+        try {
+          generatedHtml.copyTo(interactiveHtmlFile, overwrite = true)
+          generatedHtml.delete()
+          Console.log("file://${interactiveHtmlFile.absolutePath}")
+        } catch (copyFailure: Throwable) {
+          val primary = wasmFailure
+          if (primary != null) primary.addSuppressed(copyFailure) else throw copyFailure
+        }
       } else {
         Console.error("Warning: could not generate the interactive report (bun unavailable or subprocess failure).")
       }
+      wasmFailure?.let { throw it }
+
+      afterReportGenerated(logsRepo, rootWorkingDir)
+
+      // Generate snapshot viewer using pre-parsed logs from LogsRepo (integrated mode)
+      // This avoids re-scanning and re-parsing all the JSON files
+      generateSnapshotViewerIntegrated(logsRepo)
+    } finally {
+      // Clean up file watchers to allow JVM to exit — on success AND on a report failure
+      // rethrown above (a leaked provider keeps its repo's coroutine scope alive). A
+      // caller-supplied provider's repo is still in use by the next command in the process —
+      // its owner closes it.
+      if (ownsLogsSource) logsSource.close()
     }
-
-    afterReportGenerated(logsRepo, rootWorkingDir)
-
-    // Generate snapshot viewer using pre-parsed logs from LogsRepo (integrated mode)
-    // This avoids re-scanning and re-parsing all the JSON files
-    generateSnapshotViewerIntegrated(logsRepo)
-
-    // Clean up file watchers to allow JVM to exit
-    logsRepo.close()
   }
 
   /**
@@ -247,21 +280,86 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
   }
 }
 
-fun main(args: Array<String>) {
-  // The HTML report command understands neither --dedup (removed; dedup is now unconditional) nor
-  // the test-results-only --triage flag — strip both before handing args to it.
-  val reportArgs = args.filterNot { it == "--dedup" || it == "--triage" }.toTypedArray()
-  GenerateReportCliCommand().main(reportArgs)
-  // The test-results command dropped --dedup and doesn't know the HTML-only
-  // --use-relative-image-urls / --no-wasm-report; --triage is still a valid flag here and must
-  // pass through.
-  val filteredArgs = args
-    .filterNot { it == "--use-relative-image-urls" || it == "--no-wasm-report" || it == "--dedup" }
-    .toTypedArray()
-  GenerateTestResultsCliCommand().main(argv = filteredArgs)
+/**
+ * Memoizes one shared parse per logs directory: each session is captured ONCE (as
+ * [SessionLogSnapshot]s, one read + decode per log file) and that capture serves everything —
+ * it seeds the single-read [LogsRepo] the memoized [get] returns, and [snapshots] hands the
+ * raw view to the interactive-report leg. Lets the two commands [main] runs in sequence share
+ * a single parse of every session instead of each re-reading the whole logs dir. The provider
+ * owns the repos: close them via [close] after the last command completes.
+ */
+class SingleReadLogsRepoProvider {
+
+  private class SharedLogs(val snapshots: List<SessionLogSnapshot>, val logsRepo: LogsRepo)
+
+  private val logsByDir = mutableMapOf<File, SharedLogs>()
+
+  @Synchronized
+  fun get(logsDir: File): LogsRepo = shared(logsDir).logsRepo
+
+  /** The one-per-session capture [get]'s repo was seeded from, for the same [logsDir]. */
+  @Synchronized
+  fun snapshots(logsDir: File): List<SessionLogSnapshot> = shared(logsDir).snapshots
+
+  private fun shared(logsDir: File): SharedLogs = logsByDir.getOrPut(logsDir.canonicalFile) {
+    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
+    // Same session-dir enumeration AND descending-name ordering as LogsRepo.getSessionIds, done
+    // up front so the capture can happen BEFORE the repo exists (the repo's init-time parse is
+    // what the seeding skips). The ordering matters: the interactive report embeds sessions in
+    // capture order, and the pre-snapshot path rendered them in getSessionIds order.
+    val sessionIds = logsDir.listFiles()
+      ?.filter { it.isDirectory }
+      ?.sortedByDescending { it.name }
+      ?.map { SessionId(it.name) }
+      ?: emptyList()
+    val snapshots = SessionLogSnapshot.captureAll(logsDir, sessionIds, costEnricher::enrich)
+    SharedLogs(
+      snapshots = snapshots,
+      logsRepo = LogsRepo(
+        logsDir = logsDir,
+        watchFileSystem = false,
+        costEnricher = costEnricher::enrich,
+        preParsedLogs = snapshots.associate { it.sessionId to it.logs },
+      ),
+    )
+  }
+
+  @Synchronized
+  fun close() {
+    logsByDir.values.forEach { it.logsRepo.close() }
+    logsByDir.clear()
+  }
 }
 
-fun moveJsonFilesToSessionDirs(logsDir: File) {
+fun main(args: Array<String>) {
+  // One shared parse of every session across both commands — see [SingleReadLogsRepoProvider].
+  // The capture is lazy (first `get`), and ordering makes it correct: the report command runs
+  // first and only touches the provider AFTER its file moves, so the shared capture (and the
+  // repo seeded from it) sees the final on-disk layout for the test-results command too.
+  val sharedLogsRepos = SingleReadLogsRepoProvider()
+  try {
+    // The HTML report command understands neither --dedup (removed; dedup is now unconditional)
+    // nor the test-results-only --triage flag — strip both before handing args to it.
+    val reportArgs = args.filterNot { it == "--dedup" || it == "--triage" }.toTypedArray()
+    GenerateReportCliCommand(sharedLogsRepos).main(reportArgs)
+    // The test-results command dropped --dedup and doesn't know the HTML-only
+    // --use-relative-image-urls / --no-wasm-report; --triage is still a valid flag here and must
+    // pass through.
+    val filteredArgs = args
+      .filterNot { it == "--use-relative-image-urls" || it == "--no-wasm-report" || it == "--dedup" }
+      .toTypedArray()
+    GenerateTestResultsCliCommand(sharedLogsRepos::get).main(argv = filteredArgs)
+  } finally {
+    sharedLogsRepos.close()
+  }
+}
+
+/**
+ * @return a map from screenshot filename to owning session ID, gathered from the logs decoded
+ *   while moving them — [moveScreenshotsToSessionDirs] uses it to route loose screenshots
+ *   without re-decoding the JSONs this pass just organized.
+ */
+fun moveJsonFilesToSessionDirs(logsDir: File): Map<String, SessionId> {
   val jsonFilesInLogsDir = logsDir.listFiles()
     ?.filter { it.extension == "json" }
     // `trailblaze_test_report*.json` is the aggregate test-results document produced by
@@ -272,6 +370,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
     // Filter it at the source so the inner decode never sees it.
     ?.filterNot { it.name.startsWith("trailblaze_test_report") }
     ?: emptyList()
+  val sessionByScreenshotName = mutableMapOf<String, SessionId>()
   jsonFilesInLogsDir.forEach { downloadedJsonFile ->
     try {
       val log: TrailblazeLog = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
@@ -285,6 +384,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
 
       if (log is HasScreenshot) {
         log.screenshotFile?.let { screenshotFile ->
+          sessionByScreenshotName[screenshotFile.substringAfterLast('/')] = sessionId
           val currentScreenshotFileBytes = File(logsDir, screenshotFile).readBytes()
           sessionDir.delete()
           val destScreenshotFile = File(sessionDir, screenshotFile)
@@ -315,6 +415,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
       Console.log("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
     }
   }
+  return sessionByScreenshotName
 }
 
 // Canonical screenshot file extensions, derived from [TrailblazeImageFormat]. Adding a
@@ -323,7 +424,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
 // TrailblazeImageFormat normalizes to "jpg" for output.
 private val IMAGE_EXTENSIONS = TrailblazeImageFormat.entries.map { it.fileExtension }.toSet() + setOf("jpeg")
 
-fun moveScreenshotsToSessionDirs(logsDir: File) {
+fun moveScreenshotsToSessionDirs(logsDir: File, knownSessionByScreenshotName: Map<String, SessionId> = emptyMap()) {
   val imageFiles = logsDir.listFiles()?.filter { it.extension in IMAGE_EXTENSIONS } ?: emptyList()
   if (imageFiles.isEmpty()) return
 
@@ -331,14 +432,20 @@ fun moveScreenshotsToSessionDirs(logsDir: File) {
   // would push the filename past NAME_MAX (255 bytes), TrailblazeLogger falls back to
   // `{sha8(sessionId)}_{timestamp}.{ext}`. In that fallback the leading token is the hash,
   // not the real session id, so filename-based inference via substringBeforeLast("_") routes
-  // the file into a `<sha8>/` dir that LogsRepo never looks under. Build a screenshot →
-  // session map from the JSONs already organized by moveJsonFilesToSessionDirs so we route
-  // by what the log says, falling back to filename parsing only for orphaned files.
-  val sessionByScreenshotName = buildSessionByScreenshotNameMap(logsDir)
+  // the file into a `<sha8>/` dir that LogsRepo never looks under. Route by what the log
+  // says: prefer the map [moveJsonFilesToSessionDirs] gathered while decoding the JSONs it
+  // just organized, and only re-scan the organized session dirs when some loose image isn't
+  // covered by it (e.g. its log was already in a session dir before this run). Filename
+  // parsing remains the last resort for orphaned files.
+  val sessionByScreenshotName = if (imageFiles.all { it.name in knownSessionByScreenshotName }) {
+    knownSessionByScreenshotName
+  } else {
+    knownSessionByScreenshotName + buildSessionByScreenshotNameMap(logsDir)
+  }
 
   imageFiles.forEach { imageFile ->
     try {
-      val sessionId = sessionByScreenshotName[imageFile.name]
+      val sessionId = sessionByScreenshotName[imageFile.name]?.value
         ?: imageFile.nameWithoutExtension.substringBeforeLast("_").takeIf { it.isNotEmpty() }
 
       if (sessionId != null) {
@@ -358,9 +465,9 @@ fun moveScreenshotsToSessionDirs(logsDir: File) {
   }
 }
 
-private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, String> {
+private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, SessionId> {
   val sessionDirs = logsDir.listFiles()?.filter { it.isDirectory } ?: return emptyMap()
-  val result = mutableMapOf<String, String>()
+  val result = mutableMapOf<String, SessionId>()
   sessionDirs.forEach { sessionDir ->
     val jsonFiles = sessionDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()
     jsonFiles.forEach { jsonFile ->
@@ -370,7 +477,7 @@ private fun buildSessionByScreenshotNameMap(logsDir: File): Map<String, String> 
           log.screenshotFile?.let { screenshotFile ->
             // Strip the `<sessionId>/` prefix that moveJsonFilesToSessionDirs may have rewritten in.
             val justName = screenshotFile.substringAfterLast('/')
-            result[justName] = log.session.value
+            result[justName] = log.session
           }
         }
       } catch (_: Exception) {

@@ -4,6 +4,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import maestro.DeviceInfo
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
@@ -14,6 +15,8 @@ import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -27,7 +30,12 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.HostYamlRunResult
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
+import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
+import xyz.block.trailblaze.host.toMaestroPlatform
+import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
+import xyz.block.trailblaze.host.ios.IosDeviceManager
+import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
@@ -125,7 +133,11 @@ abstract class BaseHostTrailblazeTest(
     }
   }
 
-  val hostRunner: MaestroHostRunnerImpl by lazy {
+  private val hostRunnerLazy: Lazy<MaestroHostRunnerImpl> = lazy {
+    check(trailblazeDriverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+      "hostRunner must never be constructed on $trailblazeDriverType — it opens the Maestro/XCUITest " +
+        "connection host-native iOS drivers exist to avoid. Use screenStateProvider/trailblazeAgent instead."
+    }
     MaestroHostRunnerImpl(
       trailblazeDeviceId = trailblazeDeviceId,
       trailblazeLogger = loggingRule.logger,
@@ -137,6 +149,17 @@ abstract class BaseHostTrailblazeTest(
       // interactive desktop settings.
       screenshotScalingConfigProvider = { trailblazeLlmModel.screenshotScalingConfig },
     )
+  }
+  val hostRunner: MaestroHostRunnerImpl by hostRunnerLazy
+
+  /**
+   * Detach the stream-screenshot feed, but only if [hostRunner] was ever constructed —
+   * on host-native iOS drivers (where constructing it throws by design) and on any run
+   * that never touched it, cleanup must not be the thing that forces the Maestro
+   * connection open.
+   */
+  fun closeStreamScreenshotSourceIfStarted() {
+    if (hostRunnerLazy.isInitialized()) hostRunner.closeStreamScreenshotSource()
   }
 
   /**
@@ -161,8 +184,23 @@ abstract class BaseHostTrailblazeTest(
       trailblazeDriverType = trailblazeDriverType,
       maestroDeviceInfoProvider = {
         (connectedDevice as? MaestroConnectedDevice)?.initialMaestroDeviceInfo
-          ?: error("Host-test device classification currently requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
+          ?: run {
+            // Non-Maestro-backed device (e.g. AxeConnectedDevice) — synthesize a DeviceInfo from
+            // its own width/height so the classifier still resolves iOS/Android + phone/tablet.
+            // Mirrors DeviceClassifierResolver's dimension-probe fallback construction.
+            DeviceInfo(
+              platform = trailblazeDeviceId.trailblazeDevicePlatform.toMaestroPlatform(),
+              widthPixels = connectedDevice.deviceWidth,
+              heightPixels = connectedDevice.deviceHeight,
+              widthGrid = connectedDevice.deviceWidth,
+              heightGrid = connectedDevice.deviceHeight,
+            )
+          }
       },
+      // A non-Maestro device's dimensions are AXe root-frame bounds, which are points — the
+      // classifier's iPhone/iPad split needs to know so an iPad (e.g. 1024x1366pt) isn't read
+      // against the pixel threshold and misclassified as an iPhone.
+      iosDimensionsInPoints = connectedDevice !is MaestroConnectedDevice,
     ).getDeviceClassifiers()
   }
 
@@ -176,6 +214,26 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
+  /**
+   * Driver-branched screen-state provider. Host-native iOS drivers build a fresh
+   * [ScreenState] per call from their own [IosNativeConnectedDevice] (no Maestro/XCUITest
+   * connection); every other driver delegates to [hostRunner]'s Maestro-backed provider.
+   *
+   * CRITICAL: for host-native iOS drivers this must NEVER dereference [hostRunner] — doing
+   * so constructs a [MaestroHostRunnerImpl], which opens the Maestro/XCUITest connection
+   * those drivers exist to avoid. Every other property in this class that used to read
+   * `hostRunner.screenStateProvider` reads this instead.
+   */
+  val screenStateProvider: () -> ScreenState by lazy {
+    when (val device = connectedDevice) {
+      is IosNativeConnectedDevice -> {
+        val provider: () -> ScreenState = { device.screenState() }
+        provider
+      }
+      else -> hostRunner.screenStateProvider
+    }
+  }
+
   val hostLoggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = {
       trailblazeDeviceInfo
@@ -185,7 +243,7 @@ abstract class BaseHostTrailblazeTest(
   val loggingRule: TrailblazeLoggingRule = hostLoggingRule
 
   init {
-    loggingRule.failureScreenStateProvider = { hostRunner.screenStateProvider() }
+    loggingRule.failureScreenStateProvider = { screenStateProvider() }
   }
 
   /**
@@ -253,21 +311,46 @@ abstract class BaseHostTrailblazeTest(
     }.getOrNull()
   }
 
-  val trailblazeAgent by lazy {
-    HostMaestroTrailblazeAgent(
-      maestroHostRunner = hostRunner,
-      trailblazeLogger = loggingRule.logger,
-      trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
-      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-      nodeSelectorMode = config.nodeSelectorMode,
-      trailblazeToolRepo = toolRepo,
-      resolvedTarget = resolvedTargetForSession,
-      appId = resolvedAppIdForSession,
-      // Lets host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
-      // written under this session's on-host log dir. Same wiring the Playwright/MCP set-sites use.
-      // `hostLoggingRule` (not the common-typed `loggingRule`) is the one carrying `logsRepo`.
-      sessionDirProvider = hostLoggingRule.logsRepo::getSessionDir,
-    )
+  /**
+   * Branches by driver: host-native iOS drivers drive the device natively via their
+   * [IosDeviceManager] (no Maestro/XCUITest connection — never touches [hostRunner]); every
+   * other driver goes through the existing [HostMaestroTrailblazeAgent] / [hostRunner] path.
+   */
+  val trailblazeAgent: MaestroTrailblazeAgent by lazy {
+    when (val device = connectedDevice) {
+      is IosNativeConnectedDevice -> {
+        // Mirrors HostMaestroTrailblazeAgent's own templateContext, computed here because
+        // the device manager (not the agent) is the one that needs it for selector resolution.
+        val templateContext = resolvedTargetForSession?.let {
+          TargetTemplateContext(appId = resolvedAppIdForSession, appIds = it.appIds)
+        }
+        IosDriverTrailblazeAgent(
+          deviceManager = device.createDeviceManager(templateContext),
+          trailblazeLogger = loggingRule.logger,
+          trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
+          sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+          nodeSelectorMode = config.nodeSelectorMode,
+          trailblazeToolRepo = toolRepo,
+          resolvedTarget = resolvedTargetForSession,
+          appId = resolvedAppIdForSession,
+          sessionDirProvider = hostLoggingRule.logsRepo::getSessionDir,
+        )
+      }
+      else -> HostMaestroTrailblazeAgent(
+        maestroHostRunner = hostRunner,
+        trailblazeLogger = loggingRule.logger,
+        trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
+        sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+        nodeSelectorMode = config.nodeSelectorMode,
+        trailblazeToolRepo = toolRepo,
+        resolvedTarget = resolvedTargetForSession,
+        appId = resolvedAppIdForSession,
+        // Lets host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
+        // written under this session's on-host log dir. Same wiring the Playwright/MCP set-sites use.
+        // `hostLoggingRule` (not the common-typed `loggingRule`) is the one carrying `logsRepo`.
+        sessionDirProvider = hostLoggingRule.logsRepo::getSessionDir,
+      )
+    }
   }
 
   /**
@@ -319,7 +402,7 @@ abstract class BaseHostTrailblazeTest(
 
   private val elementComparator by lazy {
     TrailblazeElementComparator(
-      screenStateProvider = hostRunner.screenStateProvider,
+      screenStateProvider = screenStateProvider,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       toolRepo = toolRepo,
@@ -336,7 +419,7 @@ abstract class BaseHostTrailblazeTest(
 
   private fun createLegacyRunner(): TrailblazeRunner {
     return TrailblazeRunner(
-      screenStateProvider = hostRunner.screenStateProvider,
+      screenStateProvider = screenStateProvider,
       agent = trailblazeAgent,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
@@ -364,7 +447,7 @@ abstract class BaseHostTrailblazeTest(
     )
     val executor = AgentUiActionExecutor(
       agent = trailblazeAgent,
-      screenStateProvider = hostRunner.screenStateProvider,
+      screenStateProvider = screenStateProvider,
       toolRepo = toolRepo,
       elementComparator = elementComparator,
     )
@@ -392,7 +475,7 @@ abstract class BaseHostTrailblazeTest(
     var cachedFallbackSessionId: SessionId? = null
     return MultiAgentV3TestAgentRunner(
       v3Runner = v3Runner,
-      screenStateProvider = hostRunner.screenStateProvider,
+      screenStateProvider = screenStateProvider,
       sessionIdProvider = {
         loggingRule.session?.sessionId ?: cachedFallbackSessionId ?: run {
           Console.error("⚠️ No active loggingRule session; generating fallback session ID")
@@ -429,9 +512,9 @@ abstract class BaseHostTrailblazeTest(
         trailblazeAgent.runTrailblazeTools(
           trailblazeTools,
           currentToolTraceId,
-          screenState = hostRunner.screenStateProvider(),
+          screenState = screenStateProvider(),
           elementComparator = elementComparator,
-          screenStateProvider = hostRunner.screenStateProvider,
+          screenStateProvider = screenStateProvider,
         ).result
       },
       trailblazeLogger = loggingRule.logger,
@@ -565,7 +648,7 @@ abstract class BaseHostTrailblazeTest(
   private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
     agent = trailblazeAgent,
     toolRepo = toolRepo,
-    screenStateProvider = hostRunner.screenStateProvider,
+    screenStateProvider = screenStateProvider,
     elementComparator = elementComparator,
     llmClient = dynamicLlmClient.createLlmClient(),
     trailblazeLlmModel = trailblazeLlmModel,

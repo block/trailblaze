@@ -17,6 +17,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.project.LoadedTrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
+import xyz.block.trailblaze.host.SelectorDialectLint
 import xyz.block.trailblaze.host.TrailTscValidator
 import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
@@ -27,6 +28,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailArgTokens
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailDocument
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -265,6 +267,11 @@ class CheckCommand : Callable<Int> {
     // kill-switch. See [TrailArgTokens].
     val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot)
 
+    // WARNING-only selector-dialect lint: Maestro-dialect selectors in a trail pinning a native
+    // driver for the same platform (see [SelectorDialectLint]). Deliberately excluded from the
+    // exit-code fold below — it is a shadow lint (never fatal) until promoted.
+    runSelectorDialectLintPhase(workspaceRoot = resolved.workspaceRoot)
+
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
@@ -323,7 +330,7 @@ class CheckCommand : Callable<Int> {
       // otherwise land under cwd's `.trailblaze/` rather than the workspace
       // the rest of `check` operates on — every cache hit/miss would be
       // misaligned with what the user pinned. (Automated review feedback.)
-      cacheDir = ScriptedToolDefinitionCache.resolveDefaultCacheDir(searchFrom = workspaceRoot),
+      cacheDirProvider = { ScriptedToolDefinitionCache.resolveDefaultCacheDir(searchFrom = workspaceRoot) },
     )
 
     val perTrailmap = try {
@@ -812,6 +819,52 @@ class CheckCommand : Callable<Int> {
       return emptyList()
     }
     return TrailArgTokens.validate(yamlText, declaredArgNames)
+  }
+
+  /**
+   * WARNING-only selector-dialect lint (see [SelectorDialectLint]): walks every trail file under
+   * `<workspace>/trails/`, lints each parsed trail, and renders one warning per offending trail.
+   * ALWAYS returns [EXIT_OK] — findings are warnings, never fatal, and the call site deliberately
+   * excludes this phase from the exit-code fold, so `check`'s exit code can never change because of
+   * this lint (the shadow-then-promote pattern; promotion to a gate is a separate, explicit
+   * decision). A trail that fails to parse yields no findings here — the parse-level validators own
+   * that error.
+   *
+   * Internal (not private) so the always-[EXIT_OK] contract is directly testable — same visibility
+   * rationale as [runArgTokenValidationPhase].
+   */
+  internal fun runSelectorDialectLintPhase(workspaceRoot: File): Int {
+    try {
+      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR).toFile()
+      if (!trailsRoot.isDirectory) return EXIT_OK
+      val yaml = createTrailblazeYaml()
+      val findings = mutableListOf<SelectorDialectLint.Finding>()
+      trailsRoot.walkTopDown()
+        .filter { it.isFile && TrailTscValidator.isTrailFile(it.name) }
+        .forEach { file ->
+          val rel = trailsRoot.toPath().relativize(file.toPath()).toString()
+          try {
+            val unified = when (val doc = yaml.decodeTrailDocument(file.readText())) {
+              is TrailDocument.Unified -> doc.trail
+            }
+            SelectorDialectLint.lint(rel, unified)?.let { findings.add(it) }
+          } catch (_: Throwable) {
+            // Unparseable trail — the parse-level validators own that error; double-reporting is
+            // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
+            // as non-Exception Throwables (see SessionProgressHelpers / YamlEditorCommon), and one
+            // bad trail must not crash a warning-only phase.
+          }
+        }
+      if (findings.isNotEmpty()) {
+        Console.info(SelectorDialectLint.renderWarnings(findings))
+      }
+    } catch (e: Exception) {
+      Console.error(
+        "trailblaze check: selector-dialect lint failed (ignored): " +
+          (e.message ?: e::class.simpleName),
+      )
+    }
+    return EXIT_OK
   }
 
   /**

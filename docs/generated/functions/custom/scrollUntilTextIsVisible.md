@@ -51,6 +51,8 @@ additional disambiguation fields (e.g. 'index') when multiple elements match the
   entries = [CENTER, TOP, BOTTOM]
 )`
   Which part of the screen to scroll from. Default is 'CENTER'.
+- `scrollDurationMs` — `Integer`
+  Duration in milliseconds of each scroll swipe gesture. Lower is a faster swipe. Omit to use the driver-tuned default (400ms on Android on-device). Set a lower value (e.g. '200') on screens where a slower swipe is misread as a tap.
 - `reasoning` — `String`
 
 ## Output

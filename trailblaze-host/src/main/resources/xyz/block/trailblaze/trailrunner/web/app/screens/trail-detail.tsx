@@ -33,7 +33,7 @@ function VariantsMode({ variants, currentId, onSelect, openRun }) {
             const stem = stemOf(v.path);
             return (
               <div key={v.id} className="tb-card" {...clickable(() => onSelect(v.id))}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, cursor: 'pointer', border: on ? '1px solid var(--tb-primary-green)' : '1px solid var(--tb-hairline)' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, cursor: 'pointer', border: on ? '1px solid var(--tb-selection)' : '1px solid var(--tb-hairline)' }}>
                 {p === 'other'
                   ? <Ico n={VARIANT_PLAT.other.ico} s={20} c="var(--text-subtle-variant)" />
                   : <PlatformGlyph platform={p} s={20} c="var(--text-subtle-variant)" />}
@@ -42,7 +42,7 @@ function VariantsMode({ variants, currentId, onSelect, openRun }) {
                   <div className="tb-mono tb-sub" style={{ fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{stem}.trail.yaml</div>
                 </div>
                 {on
-                  ? <Chip tone="green">current</Chip>
+                  ? <Chip tone="blue">current</Chip>
                   : <span {...clickable((e) => { e.stopPropagation(); openRun(v); })} aria-label="Run this variant" title="Run this variant" style={{ cursor: 'pointer', display: 'inline-flex', flex: '0 0 auto' }}><Ico n="play" s={16} c="var(--text-subtle)" /></span>}
               </div>
             );
@@ -146,13 +146,11 @@ function serializeUnifiedModel(model) {
   return window.jsyaml.dump(window.TM.matrixToUnifiedDoc(model), { lineWidth: -1, noRefs: true }).trimEnd();
 }
 
-// Wrap a [{ toolName: body }] list into the minimal trail YAML runToolQuick executes (config +
-// one prompt whose recording is those tools) — the same shape the trailmaps "Run" tab uses.
-function buildToolRunYaml(tools) {
-  const lines = ['- config:', '    title: "Run tool"', '- prompts:', '  - step: "Run tool"', '    recording:', '      tools:'];
-  const dumped = (window.jsyaml ? window.jsyaml.dump(tools, { lineWidth: -1 }) : '').replace(/\n+$/, '');
-  dumped.split('\n').forEach((l) => lines.push(l ? '      ' + l : l));
-  return lines.join('\n');
+// Wrap a [{ toolName: body }] list into the minimal unified trail runToolQuick decodes and executes
+// (config + one step whose recording is those tools, keyed by the cell's device classifier) — the
+// same shape the trailmaps "Run" tab uses.
+function buildToolRunYaml(tools, platform) {
+  return window.TrailYamlBuild.buildToolListRunYaml('tool', tools, platform);
 }
 
 // Base platform for glyph/label lookup ('android-phone' -> 'android', 'ios-iphone' -> 'ios').
@@ -327,7 +325,7 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
       if (resolved.error) return { ok: false, text: resolved.error };
       const connected = await TB.connectDevice(resolved.trailblazeDeviceId);
       if (!connected) return { ok: false, text: 'Could not connect to the device.' };
-      const r = await TB.runToolQuick(buildToolRunYaml(toolsArray), resolved.trailblazeDeviceId);
+      const r = await TB.runToolQuick(buildToolRunYaml(toolsArray, platform), resolved.trailblazeDeviceId);
       return { ok: r && r.success === true, text: (r && r.success === true) ? (r.result || 'Ran OK') : ((r && r.error) || 'Run failed') };
     } catch (e) { return { ok: false, text: String((e && e.message) || e) }; }
   }
@@ -401,7 +399,7 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <Btn kind="primary" sm ico={saving ? 'loader-2' : 'save'} spin={saving} disabled={!dirty || saving} onClick={save}>Save</Btn>
-        <span className="tb-sub" style={{ fontSize: 12, color: dirty ? 'var(--tb-amber)' : 'var(--text-subtle)' }}>{dirty ? 'Unsaved changes' : 'Saved'}</span>
+        {dirty && <span className="tb-sub" style={{ fontSize: 12, color: 'var(--tb-amber)' }}>Unsaved changes</span>}
         {err && <span style={{ fontSize: 12, color: 'var(--tb-fail)' }}>{err}</span>}
         <span style={{ flex: 1 }} />
         {availBases.length > 0 && (
@@ -536,7 +534,7 @@ function StepRow({ step, idx, go, toolMap = new Map() }) {
 function TrailConfigCard({ config }) {
   const rows = flattenObject(config || {}, { joinArray: (a) => a.join(', ') });
   return (
-    <div className="tb-card pad">
+    <div className="tb-card pad tb-trail-config">
       <div className="tb-eyebrow" style={{ marginBottom: 11 }}>Config</div>
       {rows.length === 0
         ? <span className="tb-sub" style={{ fontSize: 12 }}>No config keys.</span>
@@ -590,38 +588,30 @@ function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) 
     return out;
   }, [effYaml, configTrail, trail]);
 
-  // Unified trails span platforms, so the step board goes full width with config ABOVE it (the trail's
-  // identity/context reads first, then its steps). When the view is editable (a committed trail with a
-  // save handler), render the editable matrix that writes the whole file back; otherwise the read-only
-  // table (non-editable contexts).
+  // Unified trails span platforms, so the step board goes full width. Configuration remains available
+  // in the YAML tab instead of repeating the detail header and pushing the steps below the fold.
   if (!loading && unifiedModel) {
     const canEdit = editable && typeof onSave === 'function';
     const saveYaml = canEdit ? async (t) => { const r = await onSave(t); if (r && r.success) onSaved && onSaved(); return r; } : null;
     return (
       <div>
-        <div style={{ marginBottom: 20, maxWidth: 560 }}>
-          <TrailConfigCard config={cfgObj} />
-        </div>
         {canEdit
           ? <UnifiedStepsBoard yaml={effYaml} target={cfgObj.target} onSaveYaml={saveYaml} catalog={catalog.data || []} />
           : unified
             ? <UnifiedStepsTable data={unified} />
-            : <EmptyState ico="list" title="No steps" sub="This unified trail has no steps yet." />}
+            : <EmptyState ico="list" title="No steps" />}
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', gap: 20 }}>
-      <div style={{ flex: 1.7, minWidth: 0 }}>
+    <div>
+      <div style={{ minWidth: 0 }}>
         {loading && <Skeleton rows={4} />}
         {!loading && steps.length === 0 && (
-          <EmptyState ico="list" title="No steps" sub="This trail has no parsed steps, or couldn't be loaded." />
+          <EmptyState ico="list" title="No steps" />
         )}
         {(() => { let n = 0; return steps.map((s, i) => <StepRow key={i} step={s} idx={s.kind === 'trailhead' ? null : n++} go={go} toolMap={toolMap} />); })()}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <TrailConfigCard config={cfgObj} />
       </div>
     </div>
   );
@@ -847,9 +837,9 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div className="tb-tabs" style={{ flex: '0 0 auto' }}>
         {tabs.map(([id, label, ico]) => (
-          <div key={id} className={'tb-tab ' + (tab === id ? 'active' : '')} onClick={() => setTab(id)} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+          <button key={id} type="button" className={'tb-tab ' + (tab === id ? 'active' : '')} onClick={() => setTab(id)} style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
             <Ico n={ico} s={15} />{label}
-          </div>
+          </button>
         ))}
       </div>
       <div style={{ flex: 1, minHeight: 0, paddingTop: 16, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

@@ -6,12 +6,15 @@ import assertk.assertions.hasLength
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotInstanceOf
+import assertk.assertions.startsWith
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.Test
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.device.decodeShellTrampoline
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -48,19 +51,29 @@ class AdbShellTrailblazeToolTest {
 
   private val trailblazeYaml = createTrailblazeYaml(setOf(AdbShellTrailblazeTool::class))
 
+  /** The recorded step's single tool, as the adb-shell tool under test. */
+  private fun decodeSingleTool(yaml: String): AdbShellTrailblazeTool =
+    trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.single()
+      .trailblazeTool as AdbShellTrailblazeTool
+
   @Test
   fun `decodes minimal command from trail YAML`() {
     val yaml = """
-      - tools:
-          - android_adbShell:
-              command:
-                - am
-                - force-stop
-                - com.example.app
+      config: {}
+      trail:
+        - step: recorded
+          recording:
+            android:
+              - android_adbShell:
+                  command:
+                    - am
+                    - force-stop
+                    - com.example.app
     """.trimIndent()
 
-    val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AdbShellTrailblazeTool
+    val tool = decodeSingleTool(yaml)
 
     assertThat(tool.command).isEqualTo(listOf("am", "force-stop", "com.example.app"))
     assertThat(tool.runAs).isEqualTo(null)
@@ -69,16 +82,19 @@ class AdbShellTrailblazeToolTest {
   @Test
   fun `decodes runAs override from trail YAML`() {
     val yaml = """
-      - tools:
-          - android_adbShell:
-              command:
-                - cat
-                - /data/data/com.example.app/files/state.json
-              runAs: com.example.app
+      config: {}
+      trail:
+        - step: recorded
+          recording:
+            android:
+              - android_adbShell:
+                  command:
+                    - cat
+                    - /data/data/com.example.app/files/state.json
+                  runAs: com.example.app
     """.trimIndent()
 
-    val tool = (trailblazeYaml.decodeTrail(yaml).single() as TrailYamlItem.ToolTrailItem)
-      .tools.single().trailblazeTool as AdbShellTrailblazeTool
+    val tool = decodeSingleTool(yaml)
 
     assertThat(tool.command).isEqualTo(listOf("cat", "/data/data/com.example.app/files/state.json"))
     assertThat(tool.runAs).isEqualTo("com.example.app")
@@ -197,19 +213,22 @@ class AdbShellTrailblazeToolTest {
   //
   // The underlying AndroidDeviceCommandExecutor.executeShellCommand returns only the
   // combined stdout — no exit-code channel. AdbShellTrailblazeTool wraps the joined
-  // command with `; echo __TBZ_ADBSHELL_EXIT__$?` and parses the trailing sentinel
+  // command with `; printf '\n__TBZ_ADBSHELL_EXIT__%s\n' $?` and parses the trailing sentinel
   // line out of the output. These tests pin the parser logic (pure function, no
   // executor needed) for every realistic shape: success, non-zero, missing sentinel,
   // multi-line output, output that incidentally contains the token mid-stream.
   // ─────────────────────────────────────────────────────────────────────────────
 
   @Test
-  fun `wrapWithExitSentinel appends echo of dollar-question-mark using semicolon (not amp-amp)`() {
+  fun `wrapWithExitSentinel appends printf of dollar-question-mark using semicolon (not amp-amp)`() {
     val wrapped = AdbShellTrailblazeTool.wrapWithExitSentinel("am force-stop com.example")
-    // Semicolon is load-bearing — `&& echo $?` would skip on non-zero exits and we'd
-    // lose the exit code. `;` runs the echo unconditionally so we always get the
-    // user command's `$?`.
-    assertThat(wrapped).isEqualTo("am force-stop com.example; echo __TBZ_ADBSHELL_EXIT__\$?")
+    // Semicolon is load-bearing — `&& printf` would skip on non-zero exits and we'd
+    // lose the exit code. The leading `\n` in the printf format is equally load-bearing:
+    // it forces the sentinel onto a fresh line even when the command's stdout doesn't
+    // end in a newline, so the line-anchored parser can always find it. A single printf
+    // (not `echo; echo $?`) keeps `$?` intact — an intermediate command would reset it.
+    assertThat(wrapped)
+      .isEqualTo("am force-stop com.example; printf '\\n__TBZ_ADBSHELL_EXIT__%s\\n' \$?")
   }
 
   @Test
@@ -245,6 +264,39 @@ class AdbShellTrailblazeToolTest {
     )
     assertThat(parsed.output).isEqualTo("package:com.example")
     assertThat(parsed.exitCode).isEqualTo(0)
+  }
+
+  @Test
+  fun `parseExitSentinel handles stdout without its own trailing newline (wrap forces the sentinel onto a fresh line)`() {
+    // A command like `printf foo` emits no trailing newline. The wrap's leading `\n`
+    // (see wrapWithExitSentinel) is what puts the sentinel on its own line; the device
+    // output then looks like this — regression for the glued-sentinel bug where
+    // `foo__TBZ_ADBSHELL_EXIT__0` was misreported as sentinel-missing.
+    val parsed = AdbShellTrailblazeTool.parseExitSentinel("foo\n__TBZ_ADBSHELL_EXIT__0\n")
+    assertThat(parsed.output).isEqualTo("foo")
+    assertThat(parsed.exitCode).isEqualTo(0)
+  }
+
+  @Test
+  fun `parseExitSentinel tolerates the blank line the wrap adds when stdout already ends with a newline`() {
+    // When the command's stdout DOES end with a newline, the wrap's leading `\n`
+    // produces one empty line before the sentinel. It must be trimmed away, not
+    // surfaced as command output.
+    val parsed = AdbShellTrailblazeTool.parseExitSentinel("hello\n\n__TBZ_ADBSHELL_EXIT__0\n")
+    assertThat(parsed.output).isEqualTo("hello")
+    assertThat(parsed.exitCode).isEqualTo(0)
+  }
+
+  @Test
+  fun `parseExitSentinel takes the LAST sentinel-shaped line when user output contains a full one`() {
+    // Pathological: the user's command prints a line that is exactly sentinel-shaped.
+    // The real sentinel is always the final thing the wrapped command emits, so the
+    // last match wins and the earlier fake stays in the output verbatim.
+    val parsed = AdbShellTrailblazeTool.parseExitSentinel(
+      "__TBZ_ADBSHELL_EXIT__999\nreal output\n__TBZ_ADBSHELL_EXIT__0\n",
+    )
+    assertThat(parsed.exitCode).isEqualTo(0)
+    assertThat(parsed.output).isEqualTo("__TBZ_ADBSHELL_EXIT__999\nreal output")
   }
 
   @Test
@@ -375,49 +427,62 @@ class AdbShellTrailblazeToolTest {
     // structure.
     val joined = AdbShellTrailblazeTool.joinCommandAsShellString(listOf("am", "force-stop", "com.example"))
     val wrapped = AdbShellTrailblazeTool.wrapWithExitSentinel(joined)
-    assertThat(wrapped).isEqualTo("'am' 'force-stop' 'com.example'; echo __TBZ_ADBSHELL_EXIT__\$?")
+    assertThat(wrapped)
+      .isEqualTo("'am' 'force-stop' 'com.example'; printf '\\n__TBZ_ADBSHELL_EXIT__%s\\n' \$?")
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // joinCommandRawArgv: the no-shell (on-device) render. Raw space-join, NO escaping.
-  // This is the path taken when AndroidDeviceCommandExecutor.usesShellInterpreter is
-  // false (UiAutomation → Runtime.exec). These tests pin the exact regression: shell-
-  // escaping `su` made the program name the literal `'su'`, which the device could not
-  // exec — so the raw render must NOT quote.
+  // buildShellTrampolineCommand: the no-shell (on-device) render. The sentinel-wrapped
+  // shell string rides the shared wrapShellPipelineForTransport trampoline as ONE
+  // whitespace-free `sh -c` token, so it survives Runtime.exec's whitespace split and a
+  // real device-side `sh` evaluates it — same shell semantics + exit sentinel as the
+  // host transport. These tests decode the payload back out (via the shared
+  // decodeShellTrampoline simulation) to pin that contract.
   // ─────────────────────────────────────────────────────────────────────────────
 
   @Test
-  fun `joinCommandRawArgv joins tokens with spaces and does not quote`() {
-    assertThat(AdbShellTrailblazeTool.joinCommandRawArgv(listOf("pm", "list", "packages")))
-      .isEqualTo("pm list packages")
+  fun `on-device transport evaluates the same sentinel-wrapped command as the host transport`() {
+    val joined = AdbShellTrailblazeTool.joinCommandAsShellString(listOf("am", "force-stop", "com.example"))
+
+    val script = decodeShellTrampoline(AdbShellTrailblazeTool.buildShellTrampolineCommand(joined))
+
+    // The device-side `sh` runs exactly what the host transport's `sh -c` gets — the same
+    // sentinel-wrapped string — so a non-zero exit is observable on both transports. (The exact
+    // sentinel literal is pinned by the wrapWithExitSentinel tests above.)
+    assertThat(script).isEqualTo(AdbShellTrailblazeTool.wrapWithExitSentinel(joined))
   }
 
   @Test
-  fun `joinCommandRawArgv keeps su as the bare program name for a privileged package-disable`() {
-    // Regression anchor. On the shell-less on-device transport, Runtime.exec execs the first
-    // whitespace-delimited token as the program. The raw render must leave `su` unquoted; the
-    // shell-escaped render (used only on the host transport) would produce `'su'`, which the
-    // device tried to exec literally → "Cannot run program \"'su'\"" → the launch hung.
+  fun `su keeps its program-name role through the trampoline for a privileged package-disable`() {
+    // Regression anchor for the case that forced the old raw-argv split: with no shell,
+    // shell-escaping made the program name the literal `'su'` (→ "Cannot run program \"'su'\"").
+    // With the trampoline a real `sh` evaluates the quoting, so `su` execs correctly AND the
+    // exit sentinel reports failures the raw dispatch silently swallowed.
     // (Generic placeholder package id — the real authenticator is named in the app-specific tool.)
-    val command = listOf("su", "root", "pm", "disable", "com.vendor.deviceauth")
+    val joined = AdbShellTrailblazeTool.joinCommandAsShellString(
+      listOf("su", "root", "pm", "disable", "com.vendor.deviceauth"),
+    )
 
-    assertThat(AdbShellTrailblazeTool.joinCommandRawArgv(command))
-      .isEqualTo("su root pm disable com.vendor.deviceauth")
-    // Contrast: the shell render quotes every token — correct for `sh -c`, fatal for Runtime.exec.
-    assertThat(AdbShellTrailblazeTool.joinCommandAsShellString(command))
-      .isEqualTo("'su' 'root' 'pm' 'disable' 'com.vendor.deviceauth'")
+    val script = decodeShellTrampoline(AdbShellTrailblazeTool.buildShellTrampolineCommand(joined))
+
+    // `su` stays a quoted token inside the script (evaluated by the device-side `sh`, so the
+    // quoting is honored instead of becoming part of the program name), and the script is the
+    // same sentinel-wrapped string the host transport dispatches.
+    assertThat(script).isEqualTo(AdbShellTrailblazeTool.wrapWithExitSentinel(joined))
+    assertThat(script).startsWith("'su' 'root'")
   }
 
   @Test
-  fun `whitespaceBearingTokens flags only the tokens that cannot survive the no-shell transport`() {
-    // Clean argv → empty (every element is one token Runtime.exec won't re-split).
-    assertThat(AdbShellTrailblazeTool.whitespaceBearingTokens(listOf("pm", "disable", "com.x")))
-      .isEqualTo(emptyList())
-    // An element with an embedded space (or tab) is the failure mode: Runtime.exec would re-split
-    // it into two tokens with no shell. The on-device guard rejects these for both the runAs and
-    // non-runAs branches so they fail loud identically instead of silently mis-executing.
-    assertThat(AdbShellTrailblazeTool.whitespaceBearingTokens(listOf("pm", "list packages", "x\ty")))
-      .isEqualTo(listOf("list packages", "x\ty"))
+  fun `whitespace-bearing tokens survive the trampoline intact`() {
+    // The old raw-argv dispatch had to REJECT these (Runtime.exec re-splits on whitespace with no
+    // shell to honor quoting). Inside the trampoline the whole script rides base64-packed, so the
+    // embedded space is preserved and the device-side `sh` sees one quoted argv token.
+    val joined = AdbShellTrailblazeTool.joinCommandAsShellString(listOf("log", "-t", "tag", "two words"))
+
+    val script = decodeShellTrampoline(AdbShellTrailblazeTool.buildShellTrampolineCommand(joined))
+
+    assertThat(script).isEqualTo(AdbShellTrailblazeTool.wrapWithExitSentinel(joined))
+    assertThat(script).contains("'two words'")
   }
 
   @Test

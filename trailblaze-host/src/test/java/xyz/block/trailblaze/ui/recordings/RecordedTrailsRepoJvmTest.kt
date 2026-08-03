@@ -44,11 +44,15 @@ class RecordedTrailsRepoJvmTest {
   fun `gate off writes a legacy classifier sibling in a plain trail directory`() {
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { false })
 
-    val result = repo.saveRecording(v1RecordingYaml("tapCart"), sessionInfo("flows/login", listOf("android")))
+    val items = recordingItems("tapCart")
+    val result = repo.saveRecording(items, sessionInfo("flows/login", listOf("android")))
 
     assertTrue(result.isSuccess, "save failed: ${result.exceptionOrNull()?.message}")
-    assertTrue(File(trailsRoot, "flows/login/android.trail.yaml").isFile, "expected the legacy sibling")
+    val legacy = File(trailsRoot, "flows/login/android.trail.yaml")
+    assertTrue(legacy.isFile, "expected the legacy sibling")
     assertFalse(File(trailsRoot, "flows/login/${TrailRecordings.UNIFIED_TRAIL_FILENAME}").exists())
+    // The legacy write re-encodes the lowered items to the v1 list shape (no parse round-trip).
+    assertEquals(createTrailblazeYaml().encodeToString(items), legacy.readText())
   }
 
   @Test
@@ -59,7 +63,7 @@ class RecordedTrailsRepoJvmTest {
     val bytesBefore = unified.readBytes()
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { false })
 
-    val result = repo.saveRecording(v1RecordingYaml("tapCart"), sessionInfo("flows/login", listOf("android")))
+    val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo("flows/login", listOf("android")))
 
     assertTrue(result.isFailure, "gate-off save must be refused next to a unified trail")
     assertFalse(File(trailDir, "android.trail.yaml").exists(), "no legacy sibling dropped beside the unified trail")
@@ -70,9 +74,9 @@ class RecordedTrailsRepoJvmTest {
   fun `gate on merges the classifier slot preserving other classifiers`() {
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
     // First device seeds the unified file; second device merges into the same step.
-    assertTrue(repo.saveRecording(v1RecordingYaml("iosCart"), sessionInfo("flows/login", listOf("ios"))).isSuccess)
+    assertTrue(repo.saveRecording(recordingItems("iosCart"), sessionInfo("flows/login", listOf("ios"))).isSuccess)
 
-    val result = repo.saveRecording(v1RecordingYaml("androidCart"), sessionInfo("flows/login", listOf("android")))
+    val result = repo.saveRecording(recordingItems("androidCart"), sessionInfo("flows/login", listOf("android")))
 
     assertTrue(result.isSuccess, "merge save failed: ${result.exceptionOrNull()?.message}")
     val unifiedFile = File(trailsRoot, "flows/login/${TrailRecordings.UNIFIED_TRAIL_FILENAME}")
@@ -89,7 +93,7 @@ class RecordedTrailsRepoJvmTest {
     val corrupt = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
 
-    val result = repo.saveRecording(v1RecordingYaml("tapCart"), sessionInfo("flows/login", listOf("android")))
+    val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo("flows/login", listOf("android")))
 
     assertTrue(result.isFailure, "a corrupt unified trail must not be clobbered by a merge")
     assertEquals("foo: not a unified trail\n", corrupt.readText(), "the corrupt file must be left untouched")
@@ -105,7 +109,7 @@ class RecordedTrailsRepoJvmTest {
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
 
     val result = repo.saveRecording(
-      v1RecordingYamlWithMultiToolTrailhead(listOf("clearBootstrap", "openBootstrap")),
+      recordingItemsWithMultiToolTrailhead(listOf("clearBootstrap", "openBootstrap")),
       sessionInfo("flows/login", listOf("android")),
     )
 
@@ -119,7 +123,7 @@ class RecordedTrailsRepoJvmTest {
     // and never occupying a per-test unified trail.yaml.
     val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
 
-    val result = repo.saveRecording(v1RecordingYaml("tapCart"), sessionInfo(trailId = null, classifiers = listOf("android")))
+    val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo(trailId = null, classifiers = listOf("android")))
 
     assertTrue(result.isSuccess, "fallback save failed: ${result.exceptionOrNull()?.message}")
     val saved = File(result.getOrThrow())
@@ -130,25 +134,21 @@ class RecordedTrailsRepoJvmTest {
 
   // --- fixtures ---
 
-  private fun v1RecordingYaml(toolName: String): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
-        ),
+  private fun recordingItems(toolName: String): List<TrailYamlItem> =
+    listOf(
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
+      TrailYamlItem.PromptsTrailItem(
+        listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
       ),
     )
 
-  /** A v1 recording whose trailhead carries [toolNames] (>1 has no unified representation). */
-  private fun v1RecordingYamlWithMultiToolTrailhead(toolNames: List<String>): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
-        TrailYamlItem.TrailheadTrailItem(TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) })),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
-        ),
+  /** A recording whose trailhead carries [toolNames] (>1 has no unified representation). */
+  private fun recordingItemsWithMultiToolTrailhead(toolNames: List<String>): List<TrailYamlItem> =
+    listOf(
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
+      TrailYamlItem.TrailheadTrailItem(TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) })),
+      TrailYamlItem.PromptsTrailItem(
+        listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
       ),
     )
 

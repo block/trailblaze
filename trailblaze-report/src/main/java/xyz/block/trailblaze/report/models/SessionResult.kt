@@ -24,6 +24,21 @@ data class SessionResult(
    * unrelated tests.
    */
   val test_key: String? = null,
+
+  // === JUnit Identity ===
+  // The JUnit class/method that ran this session, when it ran inside a JUnit harness
+  // (`SessionInfo.testClass` / `testName`). Carried separately from [title] because the title
+  // resolution prefers the trail's `title:`/`id:` — so a run labelled by its trail title is
+  // still identifiable as `com.example.LaunchSmokeTest#launchNoCrash` by consumers that speak
+  // the JUnit namespace (e.g. expected-tests validation against a test-runner manifest). Null
+  // for non-JUnit runs (CLI trail runs; MCP sessions carry the "MCP" sentinel class and no real
+  // method name).
+  /** Fully-qualified JUnit test class, when the session ran under a JUnit harness. */
+  val test_class: String? = null,
+
+  /** JUnit test method name, when the session ran under a JUnit harness. */
+  val test_name: String? = null,
+
   val platform: String,
   val outcome: Outcome,
 

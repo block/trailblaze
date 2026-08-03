@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.yaml
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -101,15 +100,12 @@ class TrailSerializerTest {
 
     Console.log("--- YAML ---\n$yaml\n---")
 
-    val decoded: List<TrailYamlItem> = trailblazeYamlInstance.decodeFromString(
-      ListSerializer(
-        trailblazeYamlInstance.serializersModule.getContextual(TrailYamlItem::class)
-          ?: error("Missing contextual serializer for TrailYamlItem"),
-      ),
-      yaml,
-    )
-
-    Console.log(decoded.toString())
+    // v1 list-shape decoding was removed; the encoder is retained. Assert on the emitted YAML —
+    // the encoder's observable contract — rather than round-tripping through the deleted decoder.
+    assertEquals(true, yaml.contains("customToolForTestSetup:"))
+    assertEquals(true, yaml.contains("- prompts:"))
+    assertEquals(true, yaml.contains("This is a prompt"))
+    assertEquals(true, yaml.contains("recordable: false"))
   }
 
   @Test
@@ -170,11 +166,13 @@ class TrailSerializerTest {
     )
     Console.log(yaml)
 
-    val deserialized: TrailYamlItem = trailblazeYamlInstance.decodeFromString(
-      trailToolItemSerializer,
-      yaml,
-    )
-    Console.log(deserialized.toString())
+    // v1 list-shape decoding was removed; assert on the encoder's output (its observable contract)
+    // instead of round-tripping through the deleted per-item decoder. A bare PromptsTrailItem
+    // encodes as `prompts:` (the leading `- ` only appears when it's an element of a list).
+    assertEquals(true, yaml.contains("prompts:"))
+    assertEquals(true, yaml.contains("This is a prompt"))
+    assertEquals(true, yaml.contains("verify: Check a thing"))
+    assertEquals(true, yaml.contains("inputText:"))
   }
 
   @Test
@@ -222,7 +220,7 @@ class TrailSerializerTest {
   }
 
   @Test
-  fun trailheadBuilderRoundTrips() {
+  fun trailheadBuilderEncodesTrailheadItem() {
     val built = TrailblazeYamlBuilder()
       .config(target = "example")
       .trailhead(
@@ -235,11 +233,12 @@ class TrailSerializerTest {
     val itemSerializer = trailblazeYamlInstance.serializersModule.getContextual(TrailYamlItem::class)
       ?: error("Missing contextual serializer for TrailYamlItem")
     val yaml = trailblazeYamlInstance.encodeToString(ListSerializer(itemSerializer), built)
-    assertEquals(true, yaml.contains("trailhead:"))
 
-    val decoded = trailblazeYamlInstance.decodeFromString(ListSerializer(itemSerializer), yaml)
-    val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
-    assertEquals("Launch the app signed in", th.step)
-    assertEquals(1, th.tools?.size)
+    // v1 list-shape decoding was removed; assert the encoder emits the trailhead with its step
+    // and single launch tool (its observable contract) rather than round-tripping through the
+    // deleted decoder.
+    assertEquals(true, yaml.contains("trailhead:"))
+    assertEquals(true, yaml.contains("step: Launch the app signed in"))
+    assertEquals(true, yaml.contains("launchApp:"))
   }
 }

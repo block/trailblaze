@@ -4,16 +4,18 @@
 
 # `inputTextRandom`
 
-Generate a unique random value — a prefix followed by random digits (e.g. "TBZ-481732") — type it
-into the currently focused text field, and remember it under the variable name so later steps can
-reference it as {{variable}} / ${variable} (a search field, an assertVisibleWithText, etc.).
+Generate a unique random value — an optional prefix, then random digits, then an optional suffix
+(e.g. "TBZ-481732" or "3f9a1c@example.com") — and type it into the currently focused text field.
+Optionally remember it under a variable name so later steps can reference it as
+{{variable}} / ${variable} (a search field, an assertVisibleWithText, etc.).
 
-Use this to enter a fresh unique value (a name, note, order/ticket label) that a later step must
-recall to confirm the entity THIS run created rather than a leftover from a previous run. It
-generates and types in a single step with no LLM call, so it replays deterministically and never
-leaves the field empty.
+Use this to enter a fresh unique value (a name, note, order/ticket label, email, phone digits) that
+each run needs to be distinct, optionally recalling it later to confirm the entity THIS run created
+rather than a leftover from a previous run. It generates and types in a single step with no LLM
+call, so it replays deterministically and never leaves the field empty.
 - NOTE: This does nothing unless an editable text field is focused. If the field isn't focused, tap it first.
 - NOTE: After typing, the soft keyboard is dismissed by default (like inputText); pass hideKeyboardAfter=false to keep it.
+- NOTE: For a unique email, set hex=true and suffix to the domain (e.g. suffix="@example.com").
 
 ## Source
 
@@ -28,17 +30,18 @@ leaves the field empty.
 
 ## Input schema
 
-### Required parameters
-
-- `variable` — `String`
-  The memory variable to store the generated value under (recall via {{variable}} / ${variable}).
-
 ### Optional parameters
 
 - `prefix` — `String`
   Text placed before the random digits. Defaults to "TBZ-".
 - `digitCount` — `Integer`
-  How many random decimal digits to append after the prefix. Defaults to 6.
+  How many random digits to generate after the prefix. Defaults to 6.
+- `suffix` — `String`
+  Text placed after the random digits (e.g. an email domain like "@example.com"). Defaults to empty.
+- `hex` — `Boolean`
+  Generate hexadecimal digits (0-9a-f) instead of decimal digits. Defaults to false.
+- `variable` — `String`
+  Optional memory variable to store the generated value under (recall via {{variable}} / ${variable}). Omit to type without remembering.
 - `hideKeyboardAfter` — `Boolean`
 
 ## Output

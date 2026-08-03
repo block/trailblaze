@@ -12,6 +12,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
@@ -90,8 +91,8 @@ class DesktopYamlRunner(
      * single matching tool log proves the server was in the kill-and-relaunch-only state,
      * regardless of how the session later ended (a different last-step failure, an LLM
      * call-budget exhaustion, even a nominal success if the remaining steps never touched the
-     * device). Still keyed to the exact two-phrase signature, so the strictness rationale of the
-     * status overload — never arm on ordinary failures — is preserved.
+     * device). Still keyed to terminal UiAutomation recovery failures, so the strictness
+     * rationale of the status overload — never arm on ordinary failures — is preserved.
      */
     internal fun shouldRelaunchOnDeviceServer(logs: List<TrailblazeLog>): Boolean {
       if (shouldRelaunchOnDeviceServer(logs.getSessionStatus())) return true
@@ -282,13 +283,10 @@ class DesktopYamlRunner(
       // appConfig toggles > built-in defaults. Passed to `coordinator.startForSession`
       // below so the user-visible CLI flag actually takes effect — without this, every
       // CLI run would record video even when the user opted out.
-      val captureOptionsForRun = xyz.block.trailblaze.capture.CaptureOptions(
+      val captureOptionsForRun = xyz.block.trailblaze.capture.CaptureOptions.hostCaptureOptions(
         captureVideo = desktopAppRunYamlParams.captureVideo ?: true,
         captureLogcat = desktopAppRunYamlParams.captureLogcat ?: appConfig.captureLogcat,
         captureIosLogs = desktopAppRunYamlParams.captureIosLogs ?: appConfig.captureIosLogs,
-        spriteFrameFps = 2,
-        spriteFrameHeight = 720,
-        spriteQuality = 80,
       )
 
       var sessionId: SessionId? = null
@@ -322,6 +320,9 @@ class DesktopYamlRunner(
             options = captureOptionsForRun,
             appId = appIdForCapture,
           )
+          // Experimental opt-in (gated internally, idempotent — the MCP path may have already
+          // fired it at session-resolution time).
+          SessionAnimationDisabler.startForSession(sid, trailblazeDeviceId)
           maybeStartAndroidNetworkCapture(
             runYamlRequest = runYamlRequest,
             deviceId = trailblazeDeviceId,
@@ -381,6 +382,10 @@ class DesktopYamlRunner(
                 composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
                 referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
                 noLogging = desktopAppRunYamlParams.noLogging,
+                // Thread the resolved video toggle to the web / Electron rules, which
+                // self-instrument capture (the coordinator skips WEB) and would otherwise
+                // ignore `--no-capture-video`.
+                captureVideo = captureOptionsForRun.captureVideo,
               ),
               deviceManager = trailblazeDeviceManager,
             )
@@ -521,6 +526,10 @@ class DesktopYamlRunner(
                 composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
                 referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
                 noLogging = desktopAppRunYamlParams.noLogging,
+                // Thread the resolved video toggle to the web / Electron rules, which
+                // self-instrument capture (the coordinator skips WEB) and would otherwise
+                // ignore `--no-capture-video`.
+                captureVideo = captureOptionsForRun.captureVideo,
               ),
               deviceManager = trailblazeDeviceManager,
             )

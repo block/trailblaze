@@ -32,6 +32,13 @@ class RunOnHostParams(
   val referrer: TrailblazeReferrer,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
+  /**
+   * Resolved per-run session-video toggle (CLI `--no-capture-video` > daemon appConfig > default).
+   * The web / Electron rules self-instrument their own video capture (the capture coordinator skips
+   * WEB), so this is how the user's opt-out reaches them — they gate their `ensure*VideoCaptureStarted`
+   * on it. Defaults to true to preserve capture for callers that don't thread the flag.
+   */
+  val captureVideo: Boolean = true,
 ) {
 
   val trailblazeDevicePlatform: TrailblazeDevicePlatform = device.platform

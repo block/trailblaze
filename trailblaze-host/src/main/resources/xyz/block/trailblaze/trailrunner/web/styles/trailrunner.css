@@ -8,12 +8,6 @@
  *    pair `--type-*` with `--text-*` at the component level.
  * ============================================================ */
 
-/* ─── Webfont ────────────────────────────────────────────────
- * Hanken Grotesk gives the Trail Runner UI a compact, readable
- * grotesque without depending on host-company fonts.
- * ──────────────────────────────────────────────────────────── */
-@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
-
 :root {
   /* ═══════════════════════════════════════════════════════════
    * COLORS — base neutral scale (16 perceptually-tuned steps)
@@ -99,9 +93,10 @@
   /* ═══════════════════════════════════════════════════════════
    * TYPOGRAPHY — font families
    * ═══════════════════════════════════════════════════════════ */
-  --font-display: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-ios:     -apple-system, "SF Pro", system-ui, sans-serif; /* iOS chrome only */
+  --font-ui:      -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Helvetica Neue", sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, "Helvetica Neue", sans-serif;
+  --font-mono:    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+  --font-ios:     var(--font-ui);
 
   /* ─── On-system text — used in agent workflows ────────────
    * Six core styles. Don't invent new ones. */
@@ -272,34 +267,40 @@
 
 /* ─── Light theme ────────────────────────────────────────────
  * Applied by the theme controller (shell.jsx) via html[data-theme="light"].
- * Only surface / text / hairline semantics flip; brand + status hues stay the
- * same. Everything else in the app reads these tokens, so the UI follows. */
+ * Warm neutrals keep the dense workspace calm; saturated hues are reserved for
+ * interaction and semantic state. Everything else reads these tokens. */
 html[data-theme="light"] {
-  --text-standard:       #14161a;
-  --text-subtle:         #525964;
-  --text-subtle-input:   #6b7280;
-  --text-subtle-variant: #434a55;
-  --text-disabled:       #9aa1ab;
-  /* Light mode: cool-neutral, NOT warm-tan. The text tokens are cool slate (#14161a /
-     #525964 / #6b7280), so the surfaces are tuned cool-neutral to match — a warm-tan
-     paper under cool ink reads dingy/mismatched (warm/cool clash). A faint cool bias
-     (b a few levels over r) keeps this the consistent inverse of the deliberately-neutral
-     dark theme instead of drifting yellow. The rail/window chrome is a light-gray frame;
-     the floating content sheet is clean white so it reads as elevated above the chrome —
-     the depth that bg-tiering provides in dark. */
-  --bg-window:           #edeff3;                /* rail + window chrome — cool light-gray frame */
+  --text-standard:       #3a3a36;
+  --text-subtle:         #6f6c64;
+  --text-subtle-input:   #6f6c64;
+  --text-subtle-variant: #4f4d47;
+  --text-disabled:       #a09d95;
+
+  --bg-window:           #f7f6f2;                /* canvas + rail */
   --bg-app:              #ffffff;                /* page / modal surface */
-  --bg-sheet:            #ffffff;                /* floating content sheet — clean white, floats on the gray chrome */
-  --bg-subtle:           #f1f4f8;                /* cards / list rows — faint cool well inside the sheet */
-  --bg-standard:         #ffffff;                /* inputs, crisp surfaces */
-  --bg-prominent:        #e7eaf0;                /* pills / default CTA / active nav / selected rows */
-  --bg-extra-prominent:  #dce1e9;                /* hover */
-  --bg-elevated:         #ffffff;                /* dropdowns / menus / palette / modals */
-  --bg-inverse:          #14161a;
-  /* Hairlines: cool-slate alpha (not pure black) so dividers sit inside the cool scheme. */
-  --tb-hairline:          rgba(15,23,42,.10);
-  --tb-hairline-strong:   rgba(15,23,42,.16);
-  --tb-hairline-stronger: rgba(15,23,42,.27);
+  --bg-sheet:            #ffffff;                /* primary working surface */
+  --bg-subtle:           #f7f6f2;                /* secondary rows and cards */
+  --bg-standard:         #ffffff;                /* inputs and crisp surfaces */
+  --bg-prominent:        #f2f1eb;                /* selected-neutral and controls */
+  --bg-extra-prominent:  #e9e7df;                /* hover / pressed-neutral */
+  --bg-elevated:         #ffffff;                /* dropdowns / menus / overlays */
+  --bg-inverse:          #111111;
+
+  --tb-hairline:          rgba(90,84,70,.16);
+  --tb-hairline-strong:   rgba(90,84,70,.24);
+  --tb-hairline-stronger: rgba(90,84,70,.38);
+
+  /* The light palette separates interaction from outcome: blue selects and
+     focuses, green starts work and confirms success, and state hues never swap. */
+  --tb-primary-green:          #087a4b;
+  --tb-primary-green-pressed:  #066a40;
+  --tb-primary-green-disabled: #b7ddce;
+  --status-success:            #1a7f37;
+  --status-danger:             #cf222e;
+  --status-danger-pressed:     #a40e26;
+  --status-warning:            #9a6700;
+  --status-warning-pressed:    #7d4e00;
+  /* Semantic status tokens (--tb-running, --tb-link, --tb-warning, --tb-amber, --tb-ai, ...) are defined in app/app.css. */
 }
 
 /* ============================================================

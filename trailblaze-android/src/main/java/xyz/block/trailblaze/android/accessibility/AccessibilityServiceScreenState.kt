@@ -65,6 +65,13 @@ class AccessibilityServiceScreenState(
    * the wire-level entry point.
    */
   private val includeTree: Boolean = true,
+  /**
+   * When false, skip the capture-time tree-stability gate ([TrailblazeAccessibilityService]'s
+   * `awaitTreeStable` inside [TrailblazeAccessibilityService.captureMergedScreenTrees]) and
+   * capture the tree as-is. For "immediate state" captures (post-action logging snapshots)
+   * where the caller explicitly wants the un-settled UI, the gate only adds latency.
+   */
+  private val awaitStableTree: Boolean = true,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -135,7 +142,7 @@ class AccessibilityServiceScreenState(
     // Merge all contributing windows (active app window plus any dialog/popup/sub-panel
     // windows) into a single capture so secondary-window content is visible in both tree shapes.
     // Node recycling and per-window refresh happen inside captureMergedScreenTrees().
-    val mergedTrees = TrailblazeAccessibilityService.captureMergedScreenTrees()
+    val mergedTrees = TrailblazeAccessibilityService.captureMergedScreenTrees(awaitStable = awaitStableTree)
     captureCoverage = mergedTrees.captureCoverage
 
     // Capture screenshot in parallel with hierarchy building. UiAutomation.takeScreenshot()

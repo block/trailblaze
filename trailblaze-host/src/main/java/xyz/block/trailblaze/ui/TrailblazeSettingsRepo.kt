@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
+import xyz.block.trailblaze.host.animations.EffectiveDisableAnimationsConfig
+import xyz.block.trailblaze.host.recording.EffectiveIosBaguetteVideoConfig
 import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -352,7 +354,9 @@ class TrailblazeSettingsRepo(
         // Pass null when nothing is overridden so the web path can fall back to its own default
         // (see EffectiveScreenshotScalingConfig.effectiveForWeb).
         EffectiveScreenshotScalingConfig.setEffectiveDefault(it.screenshotScalingConfigOrNull())
-        EffectiveStreamScreenshotConfig.androidEnabled = it.androidStreamScreenshotsEnabled ?: false
+        EffectiveStreamScreenshotConfig.enabled = it.streamScreenshotsEnabled ?: false
+        EffectiveIosBaguetteVideoConfig.enabled = it.iosBaguetteVideoEnabled ?: false
+        EffectiveDisableAnimationsConfig.enabled = it.disableAnimationsEnabled ?: false
       },
     ),
   ).also { serverStateFlow ->
@@ -389,8 +393,10 @@ class TrailblazeSettingsRepo(
           EffectiveScreenshotScalingConfig.setEffectiveDefault(
             newState.appConfig.screenshotScalingConfigOrNull(),
           )
-          EffectiveStreamScreenshotConfig.androidEnabled =
-            newState.appConfig.androidStreamScreenshotsEnabled ?: false
+          EffectiveStreamScreenshotConfig.enabled =
+            newState.appConfig.streamScreenshotsEnabled ?: false
+          EffectiveDisableAnimationsConfig.enabled =
+            newState.appConfig.disableAnimationsEnabled ?: false
         }
     }
   }

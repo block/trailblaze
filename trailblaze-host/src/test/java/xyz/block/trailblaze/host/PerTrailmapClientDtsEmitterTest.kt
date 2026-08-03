@@ -444,6 +444,69 @@ class PerTrailmapClientDtsEmitterTest {
   }
 
   @Test
+  fun `classpath dep's exported tools typed from its baked config flow into a filesystem consumer's binding`() {
+    // The workspace-depends-on-bundled typed surface: the loader repairs a classpath-bundled
+    // trailmap's scripted tools from its baked `targets/<id>.yaml`, so the pool hands this
+    // emitter a Classpath-sourced dep whose `target.tools` are the baked entries (name +
+    // inputSchema + classpath-anchored `script:`). The consumer's `trailblaze-client.d.ts` must
+    // type the dep's `exports:`-listed tools from those baked entries, while the dep itself gets
+    // no emitted file (can't write into a JAR).
+    val consumerTrailmapDir = newTrailmapDir("consumerapp")
+
+    val bakedSharedTool = InlineScriptToolConfig(
+      script = "trails/config/trailmaps/sharedlib/tools/sharedlib_createEntity.ts",
+      name = "sharedlib_createEntity",
+      description = "Create a fresh entity in the system.",
+      inputSchema = buildJsonObject {
+        put("type", JsonPrimitive("object"))
+        put("properties", buildJsonObject { /* no params */ })
+      },
+    )
+    val classpathDep = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "sharedlib",
+        target = TrailmapTargetConfig(displayName = "Shared Lib Pack"),
+        exports = listOf("sharedlib_createEntity"),
+      ),
+      source = TrailmapSource.Classpath(resourceDir = "trails/config/trailmaps/sharedlib"),
+      target = AppTargetYamlConfig(
+        id = "sharedlib",
+        displayName = "Shared Lib Pack",
+        tools = listOf(bakedSharedTool),
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+    val consumer = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "consumerapp",
+        target = TrailmapTargetConfig(displayName = "Consumer App"),
+        dependencies = listOf("sharedlib"),
+      ),
+      source = TrailmapSource.Filesystem(consumerTrailmapDir),
+      target = AppTargetYamlConfig(
+        id = "consumerapp",
+        displayName = "Consumer App",
+        tools = emptyList(),
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    val emitted = PerTrailmapClientDtsEmitter.emit(listOf(classpathDep, consumer))
+
+    // Only the filesystem consumer gets a file — the classpath dep is skipped for output.
+    assertEquals(1, emitted.size, "expected exactly the consumer's binding, got: $emitted")
+    val consumerRendered =
+      Files.readString(File(consumerTrailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("consumer binding should include the dep's exported tool: $consumerRendered") {
+      consumerRendered.contains("sharedlib_createEntity:")
+    }
+  }
+
+  @Test
   fun `empty resolvedTrailmaps is a no-op`() {
     val emitted = PerTrailmapClientDtsEmitter.emit(emptyList())
     assertTrue(emitted.isEmpty())

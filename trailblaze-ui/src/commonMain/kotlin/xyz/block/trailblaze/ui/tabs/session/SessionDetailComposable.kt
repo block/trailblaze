@@ -67,6 +67,7 @@ import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.recordings.ExistingTrail
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.ui.theme.LocalFontScale
 import xyz.block.trailblaze.ui.loadCaptureVideoMetadata
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -79,9 +80,11 @@ fun SessionDetailComposable(
   generateRecordingYaml: () -> String,
   // Renders the recording in the unified `trail.yaml` shape for DISPLAY + Copy, so the preview
   // matches what the save path writes to disk. `generateRecordingYaml` (v1 list shape) is still
-  // what the Save button feeds — the save path decodes that v1 then re-merges it into the unified
-  // doc. Null falls back to showing the v1 string (legacy behavior).
+  // the string shown/copied when this is null. Null falls back to showing the v1 string.
   generateUnifiedRecordingYaml: (() -> String)? = null,
+  // The lowered trail items the Save button feeds to the repo. Passing items (not a v1 string)
+  // keeps the save-back off the v1 parser. Null disables saving even when a repo is present.
+  generateRecordingItems: (() -> List<TrailYamlItem>)? = null,
   onBackClick: () -> Unit = {},
   imageLoader: ImageLoader = NetworkImageLoader(),
   // Modal callbacks
@@ -165,6 +168,8 @@ fun SessionDetailComposable(
     var recordingYamlCache by remember { mutableStateOf<String?>(null) }
     // Unified-shape rendering for display + Copy (null until computed / when no unified renderer).
     var unifiedRecordingYamlCache by remember { mutableStateOf<String?>(null) }
+    // Lowered items the Save button feeds to the repo (null until computed / when saving disabled).
+    var recordingItemsCache by remember { mutableStateOf<List<TrailYamlItem>?>(null) }
     var isLoadingRecordingYaml by remember { mutableStateOf(true) }
 
     // Background computation for LLM usage summary (used in LlmUsage view)
@@ -182,10 +187,15 @@ fun SessionDetailComposable(
       // Compute off-main, then assign Compose state on the effect's (main-dispatched) coroutine —
       // writing snapshot state from Dispatchers.Default risks partial/torn UI updates.
       val computed = withContext(Dispatchers.Default) {
-        generateRecordingYaml() to generateUnifiedRecordingYaml?.invoke()
+        Triple(
+          generateRecordingYaml(),
+          generateUnifiedRecordingYaml?.invoke(),
+          generateRecordingItems?.invoke(),
+        )
       }
       recordingYamlCache = computed.first
       unifiedRecordingYamlCache = computed.second
+      recordingItemsCache = computed.third
       isLoadingRecordingYaml = false
     }
 
@@ -436,12 +446,14 @@ fun SessionDetailComposable(
                                   // this device will merge into. See isAlreadyRecorded.
                                   val fileExists = isAlreadyRecorded(existingRecordings, expectedFileName)
 
+                                  val items = recordingItemsCache
                                   Button(
+                                    enabled = items != null,
                                     onClick = {
+                                      if (items == null) return@Button
                                       coroutineScope.launch {
-                                        val yaml = recordingYamlCache ?: ""
                                         saveResult = recordedTrailsRepo.saveRecording(
-                                          yaml,
+                                          items,
                                           sessionDetail.session,
                                         )
                                         // Refresh existing recordings after save

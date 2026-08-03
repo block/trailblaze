@@ -146,9 +146,9 @@ function LlmPanel({ llmLogs }) {
         <div className="tb-card" style={{ padding: '10px 14px', marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-subtle)', marginBottom: 6 }}>Session totals · {llmLogs.length} calls</div>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <div><div className="tb-mono" style={{ fontSize: 13, fontWeight: 700 }}>{llmFmtN(totals.inputTokens)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>input tokens</div></div>
-            <div><div className="tb-mono" style={{ fontSize: 13, fontWeight: 700 }}>{llmFmtN(totals.outputTokens)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>output tokens</div></div>
-            <div><div className="tb-mono" style={{ fontSize: 13, fontWeight: 700 }}>{llmFmtCost(totals.totalCost)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>total cost</div></div>
+            <div><div style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{llmFmtN(totals.inputTokens)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>input tokens</div></div>
+            <div><div style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{llmFmtN(totals.outputTokens)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>output tokens</div></div>
+            <div><div style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{llmFmtCost(totals.totalCost)}</div><div className="tb-sub" style={{ fontSize: 10.5 }}>total cost</div></div>
           </div>
         </div>
         {groups.map((g, gi) => (
@@ -165,7 +165,7 @@ function LlmPanel({ llmLogs }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <span style={{ fontSize: 12, fontWeight: 700, flex: '0 0 auto' }}>{idx + 1}</span>
                   <Ico n="wrench" s={11} c="var(--text-subtle)" />
-                  <span className="tb-mono" style={{ fontSize: 11.5, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{decisionOf(r)}</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{decisionOf(r)}</span>
                 </div>
                 <div className="tb-sub" style={{ fontSize: 10.5, marginTop: 3 }}>
                   in {llmFmtN(r.inputTokens)} · out {llmFmtN(r.outputTokens)}{r.durationMs > 0 ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : ''}

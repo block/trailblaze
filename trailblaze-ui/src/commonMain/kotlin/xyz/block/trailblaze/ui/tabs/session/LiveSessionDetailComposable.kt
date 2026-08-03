@@ -55,6 +55,7 @@ import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
+import xyz.block.trailblaze.yaml.TrailYamlItem
 
 @Composable
 fun LiveSessionDetailComposable(
@@ -63,6 +64,7 @@ fun LiveSessionDetailComposable(
   toMaestroYaml: (JsonObject) -> String,
   generateRecordingYaml: () -> String,
   generateUnifiedRecordingYaml: (() -> String)? = null,
+  generateRecordingItems: (() -> List<TrailYamlItem>)? = null,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader = NetworkImageLoader(),
   onDeleteSession: () -> Unit = {},
@@ -284,6 +286,7 @@ fun LiveSessionDetailComposable(
       toMaestroYaml = toMaestroYaml,
       generateRecordingYaml = generateRecordingYaml,
       generateUnifiedRecordingYaml = generateUnifiedRecordingYaml,
+      generateRecordingItems = generateRecordingItems,
       onBackClick = onBackClick,
       imageLoader = imageLoader,
       onShowDetails = handleShowDetails,

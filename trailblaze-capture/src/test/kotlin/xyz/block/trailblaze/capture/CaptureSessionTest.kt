@@ -122,16 +122,18 @@ class CaptureSessionTest {
   }
 
   @Test
-  fun `WEB platform with captureVideo on adds PlaywrightVideoCapture only`() {
+  fun `WEB platform with captureVideo on adds the screencast video stream only`() {
     val session = CaptureSession.fromOptions(
       CaptureOptions(captureVideo = true, captureLogcat = true, captureIosLogs = true),
       TrailblazeDevicePlatform.WEB,
     )
-    // logcat / iOS logs don't apply to web; only the Playwright video stream is wired.
+    // logcat / iOS logs don't apply to web; only the screencast video stream is wired. It records
+    // from the live CDP screencast and falls back to Playwright's setRecordVideoDir recorder when
+    // no feed is registered for the device (see WebScreencastVideoCapture).
     assertNotNull(session)
     val streams = streamsOf(session).map { it::class.simpleName!! }
-    assertContains(streams, "PlaywrightVideoCapture")
-    kotlin.test.assertEquals(1, streams.size, "WEB only registers the Playwright video stream")
+    assertContains(streams, "WebScreencastVideoCapture")
+    kotlin.test.assertEquals(1, streams.size, "WEB only registers the screencast video stream")
   }
 
   @Test

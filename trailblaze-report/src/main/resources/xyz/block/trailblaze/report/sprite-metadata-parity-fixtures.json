@@ -1,0 +1,672 @@
+{
+  "comment": "Cross-language behavioral contract for parsing video_sprites.txt sprite metadata and deciding whether a sprite may play as a video timeline. Consumed by BOTH the Kotlin suite (SpriteMetadataParityFixturesTest, driving SpriteSheetMetadata in :trailblaze-capture) and the bun suite (run-report-sprites.test.ts, driving run-report-sprites.ts). constants pins the acceptance thresholds: each suite asserts its implementation's actual constants equal these values, so a threshold can't drift in one language. parsed=null means the file must fail to parse. frameMapSamples are checked against the RESOLVED map (explicit frameMap, or identity when frameMapExplicit=false). rejection is one of multiSheet | degenerate | restampedDominated | null (accepted). To change a rule: update both implementations AND this fixture in the same change. sheetRowsSamples (optional) pin each sheet image's row count (full grids except the last sheet). rejectionMultiSheetCapable (optional) is the verdict for a consumer that declared multi-sheet support; when absent it equals rejection.",
+  "constants": {
+    "MIN_USEFUL_UNIQUE_FRAMES": 8,
+    "MIN_ALIASING_TOTAL_FRAMES": 60,
+    "RESTAMPED_SINGLE_FRAME_DOMINANCE_FRAC": 0.4
+  },
+  "cases": [
+    {
+      "name": "normal sprite: dedup frameMap, frameWidth present, trusted timing",
+      "txt": "fps=2\nframes=6\nheight=720\nframeWidth=328\ncolumns=2\nrows=3\nuniqueFrames=4\nsheets=1\nframeMap=0,0,1,2,2,3\nrestamped=false\n",
+      "stepScreenshotCount": 3,
+      "parsed": {
+        "fps": 2,
+        "frames": 6,
+        "height": 720,
+        "columns": 2,
+        "rows": 3,
+        "uniqueFrames": 4,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": 328,
+        "frameMapExplicit": true,
+        "frameMapLength": 6,
+        "frameMapSamples": [
+          {
+            "logical": 0,
+            "physical": 0
+          },
+          {
+            "logical": 1,
+            "physical": 0
+          },
+          {
+            "logical": 3,
+            "physical": 2
+          },
+          {
+            "logical": 5,
+            "physical": 3
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "degenerate: near-static broken screenrecord aliased across a long timeline",
+      "txt": "fps=2\nframes=234\nheight=640\ncolumns=1\nrows=3\nuniqueFrames=3\nsheets=1\nrestamped=false\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 234,
+        "height": 640,
+        "columns": 1,
+        "rows": 3,
+        "uniqueFrames": 3,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 234,
+        "frameMapSamples": [
+          {
+            "logical": 0,
+            "physical": 0
+          },
+          {
+            "logical": 100,
+            "physical": 100
+          }
+        ]
+      },
+      "rejection": "degenerate"
+    },
+    {
+      "name": "degenerate: fewer unique frames than the step screenshots they'd replace",
+      "txt": "fps=2\nframes=30\nheight=640\nuniqueFrames=4\n",
+      "stepScreenshotCount": 30,
+      "parsed": {
+        "fps": 2,
+        "frames": 30,
+        "height": 640,
+        "columns": 1,
+        "rows": 4,
+        "uniqueFrames": 4,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 30,
+        "frameMapSamples": [
+          {
+            "logical": 12,
+            "physical": 12
+          }
+        ]
+      },
+      "rejection": "degenerate"
+    },
+    {
+      "name": "restamped-dominated: guessed timing parks one physical frame across ~43% of the timeline",
+      "txt": "fps=2\nframes=102\nheight=360\ncolumns=1\nrows=15\nuniqueFrames=15\nsheets=1\nframeMap=0,0,0,1,1,2,2,3,3,4,5,6,7,8,9,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14\nrestamped=true\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 102,
+        "height": 360,
+        "columns": 1,
+        "rows": 15,
+        "uniqueFrames": 15,
+        "sheets": 1,
+        "restamped": true,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 102,
+        "frameMapSamples": [
+          {
+            "logical": 0,
+            "physical": 0
+          },
+          {
+            "logical": 20,
+            "physical": 11
+          },
+          {
+            "logical": 60,
+            "physical": 12
+          },
+          {
+            "logical": 101,
+            "physical": 14
+          }
+        ]
+      },
+      "rejection": "restampedDominated"
+    },
+    {
+      "name": "same dominated frameMap but trusted timing (restamped=false) is kept",
+      "txt": "fps=2\nframes=102\nheight=360\ncolumns=1\nrows=15\nuniqueFrames=15\nsheets=1\nframeMap=0,0,0,1,1,2,2,3,3,4,5,6,7,8,9,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14,12,13,14\nrestamped=false\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 102,
+        "height": 360,
+        "columns": 1,
+        "rows": 15,
+        "uniqueFrames": 15,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 102,
+        "frameMapSamples": [
+          {
+            "logical": 20,
+            "physical": 11
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "legacy file with only fps/frames/height: defaults + identity map",
+      "txt": "fps=2\nframes=40\nheight=600\n",
+      "stepScreenshotCount": 10,
+      "parsed": {
+        "fps": 2,
+        "frames": 40,
+        "height": 600,
+        "columns": 1,
+        "rows": 40,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 40,
+        "frameMapSamples": [
+          {
+            "logical": 5,
+            "physical": 5
+          },
+          {
+            "logical": 39,
+            "physical": 39
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "rows default falls back to uniqueFrames when rows is absent",
+      "txt": "fps=2\nframes=50\nheight=600\nuniqueFrames=20\n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 2,
+        "frames": 50,
+        "height": 600,
+        "columns": 1,
+        "rows": 20,
+        "uniqueFrames": 20,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 50,
+        "frameMapSamples": [
+          {
+            "logical": 3,
+            "physical": 3
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "multi-sheet metadata is rejected by consumers without multi-sheet support",
+      "txt": "fps=2\nframes=600\nheight=320\ncolumns=2\nrows=250\nuniqueFrames=500\nsheets=2\nrestamped=false\n",
+      "stepScreenshotCount": 10,
+      "parsed": {
+        "fps": 2,
+        "frames": 600,
+        "height": 320,
+        "columns": 2,
+        "rows": 250,
+        "uniqueFrames": 500,
+        "sheets": 2,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 600,
+        "frameMapSamples": [
+          {
+            "logical": 300,
+            "physical": 300
+          }
+        ]
+      },
+      "rejection": "multiSheet",
+      "rejectionMultiSheetCapable": null
+    },
+    {
+      "name": "missing required frames key is unparseable",
+      "txt": "fps=2\nheight=720\n",
+      "stepScreenshotCount": 0,
+      "parsed": null,
+      "rejection": null
+    },
+    {
+      "name": "non-positive height is unparseable",
+      "txt": "fps=2\nframes=10\nheight=0\n",
+      "stepScreenshotCount": 0,
+      "parsed": null,
+      "rejection": null
+    },
+    {
+      "name": "malformed frameMap entry falls back to the identity map",
+      "txt": "frames=4\nheight=600\nframeMap=0,1,x,3\n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 2,
+        "frames": 4,
+        "height": 600,
+        "columns": 1,
+        "rows": 4,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 4,
+        "frameMapSamples": [
+          {
+            "logical": 2,
+            "physical": 2
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "missing or non-positive fps defaults to 2",
+      "txt": "fps=0\nframes=12\nheight=300\n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 2,
+        "frames": 12,
+        "height": 300,
+        "columns": 1,
+        "rows": 12,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 12,
+        "frameMapSamples": [
+          {
+            "logical": 4,
+            "physical": 4
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "restamped requires strict lowercase 'true' — 'True' reads as false and the sprite is kept",
+      "txt": "fps=2\nframes=70\nheight=300\ncolumns=1\nrows=31\nuniqueFrames=31\nsheets=1\nframeMap=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30\nrestamped=True\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 70,
+        "height": 300,
+        "columns": 1,
+        "rows": 31,
+        "uniqueFrames": 31,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 70,
+        "frameMapSamples": [
+          {
+            "logical": 10,
+            "physical": 0
+          },
+          {
+            "logical": 69,
+            "physical": 30
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "restamped dominance below the aliasing floor is kept (short clip)",
+      "txt": "fps=2\nframes=30\nheight=300\ncolumns=1\nrows=6\nuniqueFrames=6\nsheets=1\nframeMap=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,5\nrestamped=true\n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 2,
+        "frames": 30,
+        "height": 300,
+        "columns": 1,
+        "rows": 6,
+        "uniqueFrames": 6,
+        "sheets": 1,
+        "restamped": true,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 30,
+        "frameMapSamples": [
+          {
+            "logical": 24,
+            "physical": 0
+          },
+          {
+            "logical": 29,
+            "physical": 5
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "uniqueFrames=0 is treated as absent (legacy no-dedup data)",
+      "txt": "fps=2\nframes=234\nheight=100\nuniqueFrames=0\n",
+      "stepScreenshotCount": 50,
+      "parsed": {
+        "fps": 2,
+        "frames": 234,
+        "height": 100,
+        "columns": 1,
+        "rows": 234,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 234,
+        "frameMapSamples": [
+          {
+            "logical": 9,
+            "physical": 9
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "blank lines and lines without '=' are skipped; keys and values are trimmed",
+      "txt": " fps = 3\n\nthis line has no equals sign\nframes=10\nheight= 200 \n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 3,
+        "frames": 10,
+        "height": 200,
+        "columns": 1,
+        "rows": 10,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 10,
+        "frameMapSamples": [
+          {
+            "logical": 6,
+            "physical": 6
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "frameMap whose length does not match frames falls back to the identity map wholesale",
+      "txt": "frames=6\nheight=400\nframeMap=0,1,2\n",
+      "stepScreenshotCount": 0,
+      "parsed": {
+        "fps": 2,
+        "frames": 6,
+        "height": 400,
+        "columns": 1,
+        "rows": 6,
+        "uniqueFrames": null,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 6,
+        "frameMapSamples": [
+          {
+            "logical": 1,
+            "physical": 1
+          },
+          {
+            "logical": 4,
+            "physical": 4
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "unique-frame floor boundary: uniqueFrames=8 on a long timeline is kept",
+      "txt": "fps=2\nframes=60\nheight=300\nuniqueFrames=8\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 60,
+        "height": 300,
+        "columns": 1,
+        "rows": 8,
+        "uniqueFrames": 8,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 60,
+        "frameMapSamples": [
+          {
+            "logical": 30,
+            "physical": 30
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "unique-frame floor boundary: uniqueFrames=7 at exactly the aliasing total (60) is degenerate",
+      "txt": "fps=2\nframes=60\nheight=300\nuniqueFrames=7\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 60,
+        "height": 300,
+        "columns": 1,
+        "rows": 7,
+        "uniqueFrames": 7,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 60,
+        "frameMapSamples": [
+          {
+            "logical": 30,
+            "physical": 30
+          }
+        ]
+      },
+      "rejection": "degenerate"
+    },
+    {
+      "name": "aliasing-total boundary: totalFrames=59 with a sub-floor unique count is kept",
+      "txt": "fps=2\nframes=59\nheight=300\nuniqueFrames=7\n",
+      "stepScreenshotCount": 5,
+      "parsed": {
+        "fps": 2,
+        "frames": 59,
+        "height": 300,
+        "columns": 1,
+        "rows": 7,
+        "uniqueFrames": 7,
+        "sheets": 1,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 59,
+        "frameMapSamples": [
+          {
+            "logical": 30,
+            "physical": 30
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "dominance boundary: exactly 24/60 (0.40) of a restamped timeline on one frame is rejected",
+      "txt": "fps=2\nframes=60\nheight=300\nuniqueFrames=37\nframeMap=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36\nrestamped=true\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 60,
+        "height": 300,
+        "columns": 1,
+        "rows": 37,
+        "uniqueFrames": 37,
+        "sheets": 1,
+        "restamped": true,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 60,
+        "frameMapSamples": [
+          {
+            "logical": 23,
+            "physical": 0
+          },
+          {
+            "logical": 24,
+            "physical": 1
+          },
+          {
+            "logical": 59,
+            "physical": 36
+          }
+        ]
+      },
+      "rejection": "restampedDominated"
+    },
+    {
+      "name": "dominance boundary: 23/60 of a restamped timeline on one frame is kept",
+      "txt": "fps=2\nframes=60\nheight=300\nuniqueFrames=38\nframeMap=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37\nrestamped=true\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 60,
+        "height": 300,
+        "columns": 1,
+        "rows": 38,
+        "uniqueFrames": 38,
+        "sheets": 1,
+        "restamped": true,
+        "frameWidth": null,
+        "frameMapExplicit": true,
+        "frameMapLength": 60,
+        "frameMapSamples": [
+          {
+            "logical": 22,
+            "physical": 0
+          },
+          {
+            "logical": 23,
+            "physical": 1
+          },
+          {
+            "logical": 59,
+            "physical": 37
+          }
+        ]
+      },
+      "rejection": null
+    },
+    {
+      "name": "rejection precedence: multiSheet wins when the degenerate condition also holds",
+      "txt": "fps=2\nframes=234\nheight=640\nuniqueFrames=3\nsheets=2\n",
+      "stepScreenshotCount": 2,
+      "parsed": {
+        "fps": 2,
+        "frames": 234,
+        "height": 640,
+        "columns": 1,
+        "rows": 3,
+        "uniqueFrames": 3,
+        "sheets": 2,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 234,
+        "frameMapSamples": [
+          {
+            "logical": 100,
+            "physical": 100
+          }
+        ]
+      },
+      "rejection": "multiSheet",
+      "rejectionMultiSheetCapable": "degenerate"
+    },
+    {
+      "name": "multi-sheet sprite is playable by a multi-sheet-capable consumer; locations span sheets",
+      "txt": "fps=2\nframes=12\nheight=100\nframeWidth=50\ncolumns=2\nrows=2\nuniqueFrames=10\nsheets=3\nrestamped=false\n",
+      "stepScreenshotCount": 3,
+      "parsed": {
+        "fps": 2,
+        "frames": 12,
+        "height": 100,
+        "columns": 2,
+        "rows": 2,
+        "uniqueFrames": 10,
+        "sheets": 3,
+        "restamped": false,
+        "frameWidth": 50,
+        "frameMapExplicit": false,
+        "frameMapLength": 12,
+        "frameMapSamples": [
+          {
+            "logical": 4,
+            "physical": 4
+          }
+        ],
+        "sheetRowsSamples": [
+          {
+            "sheet": 0,
+            "rows": 2
+          },
+          {
+            "sheet": 1,
+            "rows": 2
+          },
+          {
+            "sheet": 2,
+            "rows": 1
+          }
+        ]
+      },
+      "rejection": "multiSheet",
+      "rejectionMultiSheetCapable": null
+    },
+    {
+      "name": "multi-sheet sprite without uniqueFrames is rejected even by a capable consumer",
+      "txt": "fps=2\nframes=12\nheight=100\ncolumns=2\nrows=2\nsheets=3\nrestamped=false\n",
+      "stepScreenshotCount": 3,
+      "parsed": {
+        "fps": 2,
+        "frames": 12,
+        "height": 100,
+        "columns": 2,
+        "rows": 2,
+        "uniqueFrames": null,
+        "sheets": 3,
+        "restamped": false,
+        "frameWidth": null,
+        "frameMapExplicit": false,
+        "frameMapLength": 12,
+        "frameMapSamples": []
+      },
+      "rejection": "multiSheet",
+      "rejectionMultiSheetCapable": "multiSheet"
+    }
+  ]
+}

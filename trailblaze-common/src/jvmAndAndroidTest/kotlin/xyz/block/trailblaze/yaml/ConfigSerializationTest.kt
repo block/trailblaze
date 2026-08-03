@@ -11,54 +11,46 @@ class ConfigSerializationTest {
   private val trailblazeYaml = createTrailblazeYaml()
 
   // Config serialization
+  //
+  // These are config-only unified docs (a `config:` block with no `trail:`/`trailhead:`), the
+  // valid stepless metadata shape. Lowering always emits a ConfigTrailItem, so we read the config
+  // off it via filterIsInstance rather than positionally.
+  private fun decodeConfig(yaml: String): TrailConfig =
+    trailblazeYaml.decodeTrail(yaml)
+      .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+      .single()
+      .config
+
   @Test
   fun canDeserializeNullContext() {
     val yaml = """
-- config: {}
+config: {}
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ConfigTrailItem) {
-        assertThat(config.context).isNull()
-      }
-    }
+    assertThat(decodeConfig(yaml).context).isNull()
   }
 
   @Test
   fun canDeserializeSingleLineContext() {
     val yaml = """
-- config:
-    context: This is some custom context
+config:
+  context: This is some custom context
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ConfigTrailItem) {
-        assertThat(config.context).isEqualTo("This is some custom context")
-      }
-    }
+    assertThat(decodeConfig(yaml).context).isEqualTo("This is some custom context")
   }
 
   @Test
   fun canDeserializeMultiLineContext() {
     val yaml = """
-- config:
-    context: |
-      This is
-      some multiline
-      content
+config:
+  context: |
+    This is
+    some multiline
+    content
     """.trimIndent()
 
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.ConfigTrailItem) {
-        assertThat(config.context).isEqualTo("This is\nsome multiline\ncontent")
-      }
-    }
+    assertThat(decodeConfig(yaml).context).isEqualTo("This is\nsome multiline\ncontent")
   }
 
 }

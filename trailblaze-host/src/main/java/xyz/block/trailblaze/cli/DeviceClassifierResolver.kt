@@ -154,19 +154,26 @@ object DeviceClassifierResolver {
 
   /**
    * Warms the classifier cache for [devices] by probing any uncached entries concurrently
-   * (up to [maxParallelism]). After this returns, every entry in [devices] is in the cache
-   * and subsequent [classifiersFor] / [resolveFromSpec] calls for those (platform,
-   * instanceId) pairs return without IO.
+   * (up to [maxParallelism]). After this returns, every entry that reached a *definitive*
+   * classification is in the cache, and subsequent [classifiersFor] / [resolveFromSpec] calls
+   * for those (platform, instanceId) pairs return without IO.
+   *
+   * Non-definitive results are deliberately NOT cached, so a warmed device can still re-probe
+   * on the next lookup — [classifyByProbing] leaves the cache untouched for a transient probe
+   * failure (platform-only fallback, missing Android density) AND for a device an installed
+   * distribution override declined (indistinguishable from a raced/blank probe; see the
+   * caching guards in [classifyByProbing]). This is the same self-healing property the
+   * single-device API has: the cost is a re-probe on the next call, the payoff is that one
+   * transient miss can't lock a device into a degraded classifier for the daemon's lifetime.
    *
    * Probe results are stored via the same [classifierCache] used by the single-device API,
    * so callers don't have to thread anything through. Caller can intermix warmCache and
    * single-shot lookups freely.
    *
-   * Failures inside a probe are caught and treated as "no dims" — the affected device gets
-   * a platform-only classifier in the cache, same as the synchronous fallback. We never
-   * propagate per-device exceptions out of the warm-up because a single bad probe (e.g. a
-   * simulator that shut down between discovery and probe) should not abort the whole
-   * batch.
+   * Failures inside a probe are caught and treated as "no dims" — the affected device falls
+   * back to a platform-only classifier for this call (uncached, per above). We never propagate
+   * per-device exceptions out of the warm-up because a single bad probe (e.g. a simulator that
+   * shut down between discovery and probe) should not abort the whole batch.
    */
   fun warmCache(
     devices: List<Pair<TrailblazeDevicePlatform, String>>,
@@ -271,8 +278,9 @@ object DeviceClassifierResolver {
     // result for that device) or out of `classifiersFor` (crashing the caller); catch
     // it, log, and fall through to the dim-based path so a buggy override degrades
     // gracefully instead of breaking `device list` / plan-time.
+    val installedOverride = hostClassifierOverride
     val overrideResult = try {
-      hostClassifierOverride?.classify(platform, instanceId)
+      installedOverride?.classify(platform, instanceId)
     } catch (e: Exception) {
       Console.log("[DeviceClassifierResolver] override threw for $platform/$instanceId: ${e.message}")
       null
@@ -318,6 +326,20 @@ object DeviceClassifierResolver {
     // failure above: return the best-effort classifier but do NOT cache it, or one hiccup would lock
     // the device into the wrong `android-phone` slot for the daemon's lifetime. The next call retries.
     if (platform == TrailblazeDevicePlatform.ANDROID && dims.densityDpi == null) {
+      return classifiers
+    }
+    // A distribution override is installed but declined this probe. That is indistinguishable from a
+    // *transient* miss: an override that recognizes hardware via a `getprop`/shell probe declines
+    // whenever that probe comes back blank — which happens not only for a device the override
+    // genuinely doesn't recognize, but also when the shell isn't ready yet (right after boot, or when
+    // the device-connect races the probe). It returns the same "I don't recognize this" (null) in
+    // both cases. Caching the dim-based fallback here would lock a device the override *would* have
+    // claimed into the wrong `<platform>-<category>` slot for the daemon's entire lifetime, poisoning
+    // every later run's classifier lookup — exactly the failure the transient guards above avoid. So
+    // when an override is present but declined, return the best-effort dim classifier WITHOUT caching,
+    // letting the next call re-consult the override once the probe is reliable. Devices with no
+    // override installed keep caching: their dim answer is the definitive classification.
+    if (installedOverride != null) {
       return classifiers
     }
     classifierCache[cacheKey] = classifiers

@@ -79,7 +79,7 @@ internal data class ToolToolUsagesResponse(val usedBy: List<ToolToolRefDto> = em
 internal suspend fun buildToolToolUsagesResponse(toolId: String): ToolToolUsagesResponse {
   if (toolId.isBlank()) return ToolToolUsagesResponse()
   return withContext(Dispatchers.IO) {
-    val catalog = ToolCatalogBuilder.build()
+    val catalog = ToolCatalogCache.get()
     val catalogCallers = catalog
       .filter { it.id != toolId && ToolCatalogBuilder.referencedToolIds(it).contains(toolId) }
       .map { ToolToolRefDto(it.id, it.trailmap, it.flavor.name.lowercase()) }
@@ -107,7 +107,7 @@ internal data class ToolToolUsageCountsResponse(val counts: Map<String, Int> = e
  */
 internal suspend fun buildToolToolUsageCountsResponse(): ToolToolUsageCountsResponse =
   withContext(Dispatchers.IO) {
-    val catalog = ToolCatalogBuilder.build()
+    val catalog = ToolCatalogCache.get()
     val ids = catalog.mapTo(HashSet()) { it.id }
     val counts = HashMap<String, Int>()
     catalog.forEach { entry ->
@@ -221,20 +221,25 @@ internal suspend fun buildToolRunResponse(deps: TrailRunnerDeps, request: ToolRu
   if (yaml.isBlank()) {
     return ToolRunResponse(success = false, error = "yaml is required")
   }
-  val tools = runCatching {
-    val doc = createTrailblazeYaml().decodeTrailDocument(yaml)
-    when (doc) {
-      is xyz.block.trailblaze.yaml.unified.TrailDocument.V1 ->
-        doc.items.filterIsInstance<xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem>()
-          .flatMap { it.promptSteps }
-          .mapNotNull { it.recording }
-          .flatMap { it.tools }
-          .map { it.trailblazeTool }
-      else -> emptyList()
-    }
-  }.getOrElse { e ->
+  val doc = runCatching { createTrailblazeYaml().decodeTrailDocument(yaml) }.getOrElse { e ->
     return ToolRunResponse(success = false, error = "could not parse tool yaml: ${e.message?.lineSequence()?.first()}")
   }
+  val steps = when (doc) {
+    is xyz.block.trailblaze.yaml.unified.TrailDocument.Unified ->
+      doc.trail.trail + listOfNotNull(doc.trail.trailhead)
+  }
+  // This endpoint replays onto the ONE connected device, so the tool-run yaml must target a single
+  // device classifier. The web producers emit exactly one; refuse a multi-classifier doc rather than
+  // running another platform's tools (e.g. ios taps) against the connected device or double-executing.
+  val classifiers = steps.flatMap { it.recordings.keys }.toSet()
+  if (classifiers.size > 1) {
+    return ToolRunResponse(
+      success = false,
+      error = "tool-run yaml must target a single device classifier, but found " +
+        "${classifiers.sorted().joinToString(", ")}; run one platform at a time",
+    )
+  }
+  val tools = steps.flatMap { it.recordings.values }.flatten().map { it.trailblazeTool }
   if (tools.isEmpty()) {
     return ToolRunResponse(success = false, error = "no recorded tools found in the yaml")
   }
@@ -287,7 +292,7 @@ internal suspend fun buildRevealToolSourceResponse(request: ToolRevealRequest): 
 internal fun Route.toolRoutes(deps: TrailRunnerDeps) {
   get("$PATH_BASE/api/tools") {
     val tools = withContext(Dispatchers.IO) {
-      runCatching { ToolCatalogBuilder.build() }.getOrElse {
+      runCatching { ToolCatalogCache.get() }.getOrElse {
         Console.log("[TrailRunnerEndpoint] GET /api/tools tool-catalog build failed: ${it.message}")
         emptyList()
       }

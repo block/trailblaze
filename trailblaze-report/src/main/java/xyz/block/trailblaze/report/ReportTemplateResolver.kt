@@ -20,11 +20,12 @@ object ReportTemplateResolver {
    * Resolves the report template file, checking local git root first,
    * then Gradle build output, then falling back to the classpath (bundled in JAR).
    *
+   * @param gitRoot The git root to resolve against. Callers that also call
+   *   [findTrailblazeUiDir] should resolve [getGitRoot] once and pass it to both —
+   *   each default-argument resolution forks a `git rev-parse` subprocess.
    * @return the template [File], or null if not found.
    */
-  fun resolveTemplate(): File? {
-    val gitRoot = getGitRoot()
-
+  fun resolveTemplate(gitRoot: File? = getGitRoot()): File? {
     // 1. Check git root for local template
     val localTemplate = gitRoot?.let { File(it, TEMPLATE_FILENAME) }
     if (localTemplate?.exists() == true) {
@@ -72,10 +73,12 @@ object ReportTemplateResolver {
    * Supports both the standalone repo layout and a nested layout where
    * Trailblaze is embedded under a subdirectory of a larger repo.
    *
+   * @param gitRoot The git root to resolve against — see [resolveTemplate] for why
+   *   callers should resolve it once and share it.
    * @return the trailblaze-ui directory, or null if not found.
    */
-  fun findTrailblazeUiDir(): File? {
-    val gitRoot = getGitRoot() ?: return null
+  fun findTrailblazeUiDir(gitRoot: File? = getGitRoot()): File? {
+    if (gitRoot == null) return null
     val standalonePath = File(gitRoot, "trailblaze-ui")
     if (standalonePath.exists()) return standalonePath
     val nestedPath = File(File(gitRoot, "opensource"), "trailblaze-ui")

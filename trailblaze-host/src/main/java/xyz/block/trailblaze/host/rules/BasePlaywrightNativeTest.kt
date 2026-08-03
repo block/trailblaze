@@ -14,6 +14,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.host.recording.WebStreamScreenshotSupport
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.mcp.agent.KoogTestAgentRunner
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -106,6 +107,12 @@ open class BasePlaywrightNativeTest(
    * rule directly and is the load-bearing caller of this field.
    */
   viewportSpec: String? = null,
+  /**
+   * Whether to self-instrument session-video capture. Web self-instruments its own recording (the
+   * host capture coordinator skips WEB), so this is the only place the CLI's `--no-capture-video`
+   * opt-out can take effect for web runs. Defaults to true.
+   */
+  val captureVideo: Boolean = true,
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -172,9 +179,23 @@ open class BasePlaywrightNativeTest(
     driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
   )
 
+  /**
+   * Serves LLM-turn screenshots from the live CDP screencast when
+   * `TRAILBLAZE_WEB_STREAM_SCREENSHOT[_AB]` is set; the delegate provider untouched otherwise.
+   * Only the LLM-loop providers below use it — recorded-tool dispatch and the element
+   * comparator keep the direct capture (their screenshots aren't per-turn LLM payloads).
+   */
+  private val webStreamScreenshots by lazy {
+    WebStreamScreenshotSupport(
+      deviceId = trailblazeDeviceId,
+      pageManager = browserManager,
+      delegateProvider = browserManager::getScreenState,
+    )
+  }
+
   private val trailblazeRunner: TrailblazeRunner by lazy {
     TrailblazeRunner(
-      screenStateProvider = browserManager::getScreenState,
+      screenStateProvider = webStreamScreenshots.screenStateProvider,
       agent = playwrightAgent,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
@@ -193,7 +214,7 @@ open class BasePlaywrightNativeTest(
     KoogTestAgentRunner(
       agent = playwrightAgent,
       toolRepo = toolRepo,
-      screenStateProvider = browserManager::getScreenState,
+      screenStateProvider = webStreamScreenshots.screenStateProvider,
       elementComparator = elementComparator,
       llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
@@ -447,6 +468,7 @@ open class BasePlaywrightNativeTest(
    * Idempotent — subsequent calls within the same session are no-ops.
    */
   private fun ensurePlaywrightVideoCaptureStarted() {
+    if (!captureVideo) return
     if (ownedCaptureSession != null) return
     // Outer runner (DesktopYamlRunner via CLI/daemon) already wired capture for this
     // device. Don't double-instrument — they'll move artifacts at their own teardown.
@@ -522,6 +544,8 @@ open class BasePlaywrightNativeTest(
   }
 
   fun close() {
+    // Detach the screencast-sourced screenshot subscription (no-op when never engaged).
+    runCatching { webStreamScreenshots.close() }
     // Always try to stop capture on test teardown — even when we don't own the
     // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
     // capture was never started.

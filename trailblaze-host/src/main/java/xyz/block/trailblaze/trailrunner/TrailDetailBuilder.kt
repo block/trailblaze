@@ -1,12 +1,9 @@
 package xyz.block.trailblaze.trailrunner
 
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.yaml.DirectionStep
-import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
-import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import java.io.File
 
 object TrailDetailBuilder {
@@ -56,43 +53,33 @@ object TrailDetailBuilder {
   }
 
   private fun parseSteps(tbYaml: xyz.block.trailblaze.yaml.TrailblazeYaml, rawYaml: String): List<TrailStepEntry> {
-    val items: List<TrailYamlItem> = when (val doc = tbYaml.decodeTrailDocument(rawYaml)) {
-      is TrailDocument.V1 -> doc.items
-      is TrailDocument.Unified -> UnifiedTrailAdapter.lowerToTrailItems(doc.trail, emptyList())
+    val unified = when (val doc = tbYaml.decodeTrailDocument(rawYaml)) {
+      is TrailDocument.Unified -> doc.trail
     }
     val steps = mutableListOf<TrailStepEntry>()
-    for (item in items) {
-      when (item) {
-        // A trailhead and a root-level `- tools:` block are real steps (the runners execute them
-        // deterministically); skipping them here made recorded trails read as "No recorded steps".
-        // The trailhead keeps its own kind so the UI can render it as step 0 above the trail steps.
-        is TrailYamlItem.TrailheadTrailItem -> steps.add(
-          TrailStepEntry(
-            kind = "trailhead",
-            text = item.trailhead.step?.trim().orEmpty(),
-            tools = item.trailhead.tools?.map { it.name }.orEmpty(),
-          ),
-        )
-        is TrailYamlItem.ToolTrailItem -> steps.add(
-          TrailStepEntry(kind = "step", text = "", tools = item.tools.map { it.name }),
-        )
-        is TrailYamlItem.PromptsTrailItem -> for (promptStep in item.promptSteps) {
-          val tools = promptStep.recording?.tools?.map { it.name }.orEmpty()
-          when (promptStep) {
-            is DirectionStep -> steps.add(
-              TrailStepEntry(kind = "step", text = promptStep.step.trim(), tools = tools),
-            )
-            is VerificationStep -> steps.add(
-              TrailStepEntry(kind = "verify", text = promptStep.verify.trim(), tools = tools),
-            )
-            else -> steps.add(
-              TrailStepEntry(kind = "step", text = promptStep.prompt.trim(), tools = tools),
-            )
-          }
-        }
-        is TrailYamlItem.ConfigTrailItem -> {}
-      }
+    // The trailhead is a real (deterministically-executed) step 0; the UI renders it above the
+    // trail steps with its own kind so recorded trails don't read as "No recorded steps".
+    unified.trailhead?.let { th ->
+      steps.add(TrailStepEntry(kind = "trailhead", text = th.step.trim(), tools = unionToolNames(th)))
+    }
+    for (step in unified.trail) {
+      steps.add(
+        TrailStepEntry(
+          kind = if (step.verify) "verify" else "step",
+          text = step.step.trim(),
+          tools = unionToolNames(step),
+        ),
+      )
     }
     return steps
   }
+
+  /**
+   * Recorded tool names for a step, device-agnostic. The detail view has no device under test, so
+   * it surfaces the UNION of every classifier's recorded tools (order-preserving, de-duplicated)
+   * rather than one device's closest-wins slot — a reviewer sees every tool the trail replays on
+   * any device.
+   */
+  private fun unionToolNames(step: UnifiedTrailStep): List<String> =
+    step.recordings.values.flatten().map { it.name }.distinct()
 }

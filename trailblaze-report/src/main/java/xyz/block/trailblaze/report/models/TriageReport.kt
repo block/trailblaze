@@ -54,6 +54,32 @@ data class FailureSignatureGroup(
   val share: Double,
   /** Titles of affected tests. */
   val affected_tests: List<String>,
+  /**
+   * One entry per (test, device) failure in this group — the per-failure identity that
+   * [signature] deliberately normalizes away. [affected_tests] carries titles only, which
+   * collapses N devices of the same test into one string and drops the case ID entirely;
+   * a consumer given only a signature and a count has to guess which tests it names, and
+   * downstream triage has repeatedly guessed wrong. This is the manifest that makes the
+   * mapping explicit.
+   */
+  val affected_failures: List<AffectedFailure> = emptyList(),
+)
+
+/** One concrete (test, device) failure behind a [FailureSignatureGroup]. */
+@Serializable
+data class AffectedFailure(
+  /** Human-readable test title (may collide between unrelated tests — prefer [test_key]). */
+  val title: String,
+  /** Stable test key, e.g. `<source>/suite_71172/section_838951/case_4837766`. */
+  val test_key: String? = null,
+  /** Case ID parsed out of [test_key]'s `case_<id>` segment, when it has one. */
+  val case_id: String? = null,
+  /** Device this failure happened on, e.g. `android-tablet` / `ios-iphone`. */
+  val device: String? = null,
+  /** Session ID — the handle for this specific failure's logs and artifacts. */
+  val session_id: String? = null,
+  /** First line of THIS failure's reason, before signature normalization folded it in with others. */
+  val reason: String? = null,
 )
 
 @Serializable

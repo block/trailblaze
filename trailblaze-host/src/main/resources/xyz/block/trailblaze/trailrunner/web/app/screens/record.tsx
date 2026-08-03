@@ -7,37 +7,10 @@
 // editable inline, then saved into a trail folder (blaze.yaml + <platform>.trail.yaml).
 // Live view + dispatch reuse the daemon's recording endpoints (RecordRoutes.kt).
 
-// Quote a string as a YAML scalar when it carries metacharacters (matches buildPromptTrailYaml).
-function recordYamlValue(v) {
-  const s = String(v == null ? '' : v);
-  if (s === '' || /[:{}\[\],&*#?|<>=!%@`'"\\]/.test(s) || s.includes('\n')) return JSON.stringify(s);
-  return s;
-}
-
-// Assemble the editable step cards into one runnable trail YAML.
-function buildRecordedTrailYaml(title, target, platform, steps) {
-  const lines = ['- config:', `    title: ${recordYamlValue(title)}`];
-  if (target) lines.push(`    target: ${recordYamlValue(target)}`);
-  if (platform) lines.push(`    platform: ${recordYamlValue(platform)}`);
-  for (const s of steps) {
-    const text = (s.text || '').trim();
-    const toolItems = s.yaml ? parseRecordStepTools(s.yaml) : [];
-    if (text) {
-      // NL prompt step; if it also has tools, carry them under `recording:` (the trail-detail shape).
-      lines.push('- prompts:', `  - ${s.verify ? 'verify' : 'step'}: ${recordYamlValue(text)}`);
-      if (toolItems.length && window.jsyaml) {
-        lines.push('    recording:', '      tools:');
-        toolItems.forEach((t) => {
-          window.jsyaml.dump([{ [t.name]: t.args == null ? {} : t.args }], { lineWidth: -1 }).replace(/\n+$/, '').split('\n').forEach((l) => lines.push('      ' + l));
-        });
-      }
-    } else if (toolItems.length) {
-      const y = (s.yaml || '').trimEnd();
-      if (y) lines.push(y);
-    }
-  }
-  return lines.join('\n');
-}
+// Unified trail/blaze YAML producers live in app/trail-yaml.js (the single source of truth, shared
+// with bun tests); these thin wrappers keep the file-local names their call sites already use.
+function recordYamlValue(v) { return window.TrailYamlBuild.recordYamlValue(v); }
+function buildRecordedTrailYaml(title, target, platform, steps) { return window.TrailYamlBuild.buildRecordedTrailYaml(title, target, platform, steps); }
 
 // Editable `- tools:` YAML for a catalog tool, params emitted as fill-in placeholders.
 function buildToolStepYaml(t) {
@@ -61,40 +34,9 @@ function appendToolToStepYaml(stepYaml, tool) {
   return head + '\n  - ' + tool.id + ':\n' + params.map((p) => '      ' + p.name + ': <' + p.type + (p.required ? '' : ', optional') + '>').join('\n');
 }
 
-// Wrap a step's tool(s) in the prompts/recording/tools envelope ToolRunRequest needs (a bare
-// `- tools:` item is rejected). Returns null if the step has no parseable tool.
-function buildRunnableToolYaml(label, stepYaml) {
-  if (!window.jsyaml) return null;
-  let tools = null;
-  try {
-    const doc = window.jsyaml.load(stepYaml);
-    const items = Array.isArray(doc) ? doc : [doc];
-    for (const it of items) if (it && it.tools) tools = it.tools;
-  } catch (e) { return null; }
-  if (!tools || !tools.length) return null;
-  const lines = ['- config:', `    title: ${JSON.stringify('Run: ' + label)}`, '- prompts:', `  - step: ${JSON.stringify('Run: ' + label)}`, '    recording:', '      tools:'];
-  window.jsyaml.dump(tools, { lineWidth: -1 }).replace(/\n+$/, '').split('\n').forEach((l) => lines.push(l ? '      ' + l : l));
-  return lines.join('\n');
-}
-
-// Parse a step's stored YAML (`- tools:`) into [{name, args}] for the card display.
-function parseRecordStepTools(yaml) {
-  if (!window.jsyaml) return [];
-  try {
-    const doc = window.jsyaml.load(yaml);
-    const items = Array.isArray(doc) ? doc : [doc];
-    const out = [];
-    for (const it of items) {
-      if (it && Array.isArray(it.tools)) {
-        for (const t of it.tools) {
-          if (t && typeof t === 'object') { const name = Object.keys(t)[0]; out.push({ name, args: t[name] }); }
-          else if (typeof t === 'string') out.push({ name: t, args: null });
-        }
-      }
-    }
-    return out;
-  } catch (e) { return []; }
-}
+// See app/trail-yaml.js — thin wrappers over the shared producers.
+function buildRunnableToolYaml(label, stepYaml, platform) { return window.TrailYamlBuild.buildRunnableToolYaml(label, stepYaml, platform); }
+function parseRecordStepTools(yaml) { return window.TrailYamlBuild.parseRecordStepTools(yaml); }
 
 // Translate a selector strategy into plain language for a non-technical author: friendly name,
 // one-line "why", and a stability tier so they can pick the most durable match.
@@ -377,26 +319,9 @@ function trailheadAccountParam(params) {
 // CLASS-mode trailhead invoked by its id (`<id>: {}`) with any filled params. Dotted param names
 // (account.email) nest under their parent key - the flattened schema is a UI shape, not the tool's
 // input shape.
-function trailheadRunTools(name, tools, args) {
-  if (tools && tools.length) return tools;
-  const filled = {};
-  Object.entries(args || {}).forEach(([k, v]) => {
-    const dot = k.indexOf('.');
-    if (dot < 0) { filled[k] = v; return; }
-    const parent = k.slice(0, dot);
-    if (filled[parent] == null || typeof filled[parent] !== 'object') filled[parent] = {};
-    filled[parent][k.slice(dot + 1)] = v;
-  });
-  return [{ [name]: filled }];
-}
-
-// Wrap a trailhead's tools in the runnable trail shape so "Go to trailhead" replays it on the device.
-function buildTrailheadRunYaml(name, tools, args) {
-  if (!window.jsyaml) return null;
-  const lines = ['- config:', `    title: ${JSON.stringify('Trailhead: ' + name)}`, '- prompts:', `  - step: ${JSON.stringify('Enter trailhead: ' + name)}`, '    recording:', '      tools:'];
-  window.jsyaml.dump(trailheadRunTools(name, tools, args), { lineWidth: -1 }).replace(/\n+$/, '').split('\n').forEach((l) => lines.push(l ? '      ' + l : l));
-  return lines.join('\n');
-}
+// See app/trail-yaml.js — thin wrappers over the shared producers.
+function trailheadRunTools(name, tools, args) { return window.TrailYamlBuild.trailheadRunTools(name, tools, args); }
+function buildTrailheadRunYaml(name, tools, args, platform) { return window.TrailYamlBuild.buildTrailheadRunYaml(name, tools, args, platform); }
 
 // The required "Trailhead" step 0 at the top of the recorded-steps list: a dropdown of where it lands
 // you, plus an Account picker for its sign-in account. Required when the target has trailheads.
@@ -727,7 +652,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   async function goToTrailhead() {
     if (!selectedTh || !conn || (thRun && thRun.running)) return;
     if (thMissingRequired.length) { setThRun({ ok: false, text: 'Fill ' + thMissingRequired.map((p) => p.name).join(', ') + ' first.' }); return; }
-    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs());
+    const yaml = buildTrailheadRunYaml(selectedTh.name, thDetail && thDetail.tools, thFilledArgs(), platform);
     if (!yaml) { setThRun({ ok: false, text: 'Could not build the trailhead run.' }); return; }
     setThRun({ running: true });
     const r = await TB.runToolQuick(yaml, tbId());
@@ -1077,7 +1002,7 @@ function RecordScreen({ go, active, yamlSeed }) {
     if (!id) return;
     setBusy(true);
     // A step is a SERIES of tools — run them all in order via the per-step ▶ run path.
-    const runnable = buildRunnableToolYaml(pending.label || 'step', pending.yaml);
+    const runnable = buildRunnableToolYaml(pending.label || 'step', pending.yaml, platform);
     const r = runnable
       ? await TB.runToolQuick(runnable, id)
       : { success: false, error: 'This step has no runnable tools.' };
@@ -1198,7 +1123,7 @@ function RecordScreen({ go, active, yamlSeed }) {
   async function runStep(step) {
     const id = connDeviceRef.current;
     if (!id) return { ok: false, text: 'Connect a device first.' };
-    const runnable = buildRunnableToolYaml(step.label || 'step', step.yaml);
+    const runnable = buildRunnableToolYaml(step.label || 'step', step.yaml, platform);
     if (!runnable) return { ok: false, text: 'This step has no runnable tool (check the YAML).' };
     let r = await TB.runToolQuick(runnable, id);
     if (r.success !== true && isTransportError(r.error)) {
@@ -1217,7 +1142,7 @@ function RecordScreen({ go, active, yamlSeed }) {
     if (testing) return;
     const id = connDeviceRef.current;
     if (!id) { setSaveErr('Connect a device first to test the trail.'); return; }
-    const runnable = (s) => buildRunnableToolYaml(s.label || 'step', s.yaml);
+    const runnable = (s) => buildRunnableToolYaml(s.label || 'step', s.yaml, platform);
     if (!steps.some(runnable)) { setSaveErr('No runnable steps to test yet — add a tool step first.'); return; }
     setSaveErr(null); setShowYaml(false); setTestStatus({}); setTesting(true); testAbortRef.current = false;
     for (let i = 0; i < steps.length; i++) {
@@ -1383,7 +1308,8 @@ function RecordScreen({ go, active, yamlSeed }) {
   }, [conn, activeStage]);
 
   // ─── Render ───
-  const noDevices = deviceList.length === 0;
+  const devicesPending = devices.loading && !devices.data;
+  const noDevices = !devicesPending && deviceList.length === 0;
   // Device aspect (height/width): the real device once connected; otherwise the selected platform's
   // default (portrait phone, landscape web) so picking a device animates the frame toward its shape.
   const platRatio = (p) => (p === 'web' ? 0.62 : 2.16);
@@ -1421,7 +1347,7 @@ function RecordScreen({ go, active, yamlSeed }) {
         <span className="tb-sub" style={{ fontSize: 11 }}>runs on {(device && device.name) || 'the selected device'}</span>
       </div>
       <textarea value={adhocYaml} onChange={(e) => { setAdhocYaml(e.target.value); setAdhocErr(null); }} spellCheck={false}
-        placeholder={'- config:\n    title: "Ad hoc run"\n- prompts:\n  - step: "Open the app"'}
+        placeholder={'config:\n  title: "Ad hoc run"\ntrail:\n  - step: "Open the app"'}
         style={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', display: 'block', resize: 'none', border: 'none', outline: 'none', background: '#0a0a0a', color: '#d7dee8', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.55, tabSize: 2 }} />
     </div>
   );
@@ -1469,7 +1395,11 @@ function RecordScreen({ go, active, yamlSeed }) {
               </div>
               {/* The chooser fits its rows, capped at the device aspect height so a long list scrolls. */}
               <div style={{ width: '100%', height: connecting ? frameH : undefined, maxHeight: frameH, borderRadius: 18, background: '#000', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: frameAnim }}>
-                {noDevices ? (
+                {devicesPending ? (
+                  <div style={{ flex: 1, padding: '18px 16px' }}>
+                    <Skeleton rows={4} label="Loading devices" />
+                  </div>
+                ) : noDevices ? (
                   <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center', padding: 20 }}>
                     <div>
                       <Ico n="triangle-alert" s={22} c="var(--tb-amber)" />
@@ -1536,7 +1466,7 @@ function RecordScreen({ go, active, yamlSeed }) {
               inputRef={contextRef} cardRef={contextCardRef} ringStyle={stageStyle('context')} />
             <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.6, display: 'inline-flex', alignItems: 'flex-start', gap: 8, padding: '0 2px' }}>
               <Ico n="list-checks" s={15} c="var(--text-subtle)" style={{ flex: '0 0 auto', marginTop: 1 }} />
-              <span>{connecting ? 'Connecting to the device… meanwhile, write what this trail validates above.' : 'Pick a device and connect to start recording steps. You can write the context now.'}</span>
+              <span>{connecting ? 'Connecting to the device… meanwhile, write what this trail validates above.' : devicesPending ? 'Checking available devices…' : 'Pick a device and connect to start recording steps. You can write the context now.'}</span>
             </div>
           </div>
           )}
