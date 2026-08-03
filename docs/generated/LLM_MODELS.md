@@ -21,6 +21,7 @@ Trailblaze ships with the following built-in models. When you reference a model 
 | `gemini-3.1-flash-lite-preview` | 1M | 65K | $0.25 | $1.50 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemini-3.1-pro-preview` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemini-3.1-pro-preview-customtools` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma-4-26b-a4b-it` | 262K | 65K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## Ollama
 
