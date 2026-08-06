@@ -171,6 +171,10 @@ class OnDeviceRpcDeviceScreenStream(
       "Backspace", "Delete" -> PressKeyTrailblazeTool.PressKeyCode.BACKSPACE
       "Tab" -> PressKeyTrailblazeTool.PressKeyCode.TAB
       "Escape" -> PressKeyTrailblazeTool.PressKeyCode.ESCAPE
+      "ArrowUp" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_UP
+      "ArrowDown" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_DOWN
+      "ArrowLeft" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_LEFT
+      "ArrowRight" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_RIGHT
       else -> return
     }
     dispatchTool(PressKeyTrailblazeTool(keyCode = keyCode))

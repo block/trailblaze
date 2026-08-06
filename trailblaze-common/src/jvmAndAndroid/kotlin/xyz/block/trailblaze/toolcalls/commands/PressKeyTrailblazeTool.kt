@@ -23,6 +23,12 @@ Press a special key that isn't used for regular text input. Examples:
 - BACKSPACE: delete the character before the caret in the currently focused field.
 - TAB: move focus to the next field.
 - ESCAPE: dismiss the keyboard or current modal.
+- DPAD_UP / DPAD_DOWN / DPAD_LEFT / DPAD_RIGHT: move D-pad/remote focus on a
+  TV or other remote-driven UI. Use these instead of tap to navigate between
+  focusable elements. The currently focused element is marked `[focused]` in
+  the view hierarchy.
+- DPAD_CENTER: activate/select the currently focused element (the D-pad
+  equivalent of tap on a TV).
 """,
 )
 data class PressKeyTrailblazeTool(
@@ -42,6 +48,14 @@ data class PressKeyTrailblazeTool(
     BACKSPACE,
     TAB,
     ESCAPE,
+    // D-pad / TV remote navigation. Maestro's KeyCode already has native REMOTE_* entries
+    // wired all the way through AdbCommandUtil.pressKey (Android keycodes 19-23) — this
+    // just exposes them through the typed tool surface, same as the keys above.
+    DPAD_UP,
+    DPAD_DOWN,
+    DPAD_LEFT,
+    DPAD_RIGHT,
+    DPAD_CENTER,
     ;
 
     object Serializer : CaseInsensitiveEnumSerializer<PressKeyCode>(PressKeyCode::class)
@@ -57,6 +71,11 @@ data class PressKeyTrailblazeTool(
           PressKeyCode.BACKSPACE -> KeyCode.BACKSPACE
           PressKeyCode.TAB -> KeyCode.TAB
           PressKeyCode.ESCAPE -> KeyCode.ESCAPE
+          PressKeyCode.DPAD_UP -> KeyCode.REMOTE_UP
+          PressKeyCode.DPAD_DOWN -> KeyCode.REMOTE_DOWN
+          PressKeyCode.DPAD_LEFT -> KeyCode.REMOTE_LEFT
+          PressKeyCode.DPAD_RIGHT -> KeyCode.REMOTE_RIGHT
+          PressKeyCode.DPAD_CENTER -> KeyCode.REMOTE_CENTER
         }
       },
     ),

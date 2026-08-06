@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.android
 
+import android.app.UiModeManager
+import android.content.res.Configuration
 import android.os.Build
 import android.util.DisplayMetrics
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
@@ -52,7 +54,20 @@ object AndroidTrailblazeDeviceInfoUtil {
     }
   }
 
+  /**
+   * Same runtime check play-android itself uses (`Context.isTv()` in `ContextExtensions.kt`)
+   * to distinguish a TV from a landscape tablet — Android TV isn't a separate device category
+   * in [TrailblazeAndroidDeviceCategory], it's detected orthogonally via [UiModeManager].
+   */
+  fun isTelevision(): Boolean = withInstrumentation {
+    val uiModeManager = context.getSystemService(UiModeManager::class.java)
+    uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+  }
+
   fun getConsumerAndroidClassifiers(): List<TrailblazeDeviceClassifier> = buildList {
+    // Prepended so it becomes the headline term in the LLM-facing device description
+    // (see TrailblazeKoogLlmClientHelper.buildDeviceDescription, which reads classifiers.first()).
+    if (isTelevision()) add(TrailblazeDeviceClassifier("tv"))
     add(getDeviceCategoryClassifier())
   }
 

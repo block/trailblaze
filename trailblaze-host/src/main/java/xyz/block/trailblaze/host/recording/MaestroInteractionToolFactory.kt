@@ -111,6 +111,10 @@ class MaestroInteractionToolFactory(
       "Back" -> PressKeyTrailblazeTool.PressKeyCode.BACK
       "Enter" -> PressKeyTrailblazeTool.PressKeyCode.ENTER
       "Home" -> PressKeyTrailblazeTool.PressKeyCode.HOME
+      "ArrowUp" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_UP
+      "ArrowDown" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_DOWN
+      "ArrowLeft" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_LEFT
+      "ArrowRight" -> PressKeyTrailblazeTool.PressKeyCode.DPAD_RIGHT
       else -> return null // Unsupported key for Maestro recording
     }
     return PressKeyTrailblazeTool(keyCode = keyCode) to PressKeyTrailblazeTool::class.toolName().toolName

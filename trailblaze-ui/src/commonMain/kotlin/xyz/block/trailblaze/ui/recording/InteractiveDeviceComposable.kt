@@ -393,6 +393,26 @@ fun InteractiveDeviceComposable(
             launchIo { stream.pressKey("Tab") }
             true
           }
+          Key.DirectionUp -> {
+            pendingLiveText.clear()
+            launchIo { stream.pressKey("ArrowUp") }
+            true
+          }
+          Key.DirectionDown -> {
+            pendingLiveText.clear()
+            launchIo { stream.pressKey("ArrowDown") }
+            true
+          }
+          Key.DirectionLeft -> {
+            pendingLiveText.clear()
+            launchIo { stream.pressKey("ArrowLeft") }
+            true
+          }
+          Key.DirectionRight -> {
+            pendingLiveText.clear()
+            launchIo { stream.pressKey("ArrowRight") }
+            true
+          }
           Key.Escape -> {
             pendingLiveText.clear()
             launchIo {

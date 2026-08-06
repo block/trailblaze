@@ -8,3 +8,4 @@
 - A text field must be focused before you can enter text into it.
 - A disabled button will have no effect when clicked.
 - Any blank or loading screens should use the wait tool in order to provide the next valid view state.
+- If the device description indicates a TV, this is a D-pad/remote-driven UI: prefer `pressKey` with `DPAD_UP`/`DPAD_DOWN`/`DPAD_LEFT`/`DPAD_RIGHT` to move focus and `DPAD_CENTER` to activate the focused element, instead of `tap`. The `[focused]` marker in the view hierarchy shows which element currently has D-pad focus — use its position relative to your target to choose a direction.
