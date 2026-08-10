@@ -46,9 +46,29 @@ models:
       output_per_million: 1.50
       cached_input_per_million: 0.025
 
+  # Gemma 4 — open weights, served on the Gemini API at $0 on a rate-limited free tier.
+  # Multimodal (text + image) with native function calling; 256K context on all three.
+  # max_output_tokens is 32768 rather than the 65536 the Gemini models above use: Google
+  # publishes no output cap for Gemma 4, and 32768 is the largest figure any host documents.
+  - id: gemma-4-12b-it
+    context_length: 262144
+    max_output_tokens: 32768
+    cost:
+      input_per_million: 0.0
+      output_per_million: 0.0
+      cached_input_per_million: 0.0
+
+  - id: gemma-4-26b-a4b-it
+    context_length: 262144
+    max_output_tokens: 32768
+    cost:
+      input_per_million: 0.0
+      output_per_million: 0.0
+      cached_input_per_million: 0.0
+
   - id: gemma-4-31b-it
     context_length: 262144
-    max_output_tokens: 65536
+    max_output_tokens: 32768
     cost:
       input_per_million: 0.0
       output_per_million: 0.0

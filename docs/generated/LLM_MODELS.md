@@ -21,12 +21,17 @@ Trailblaze ships with the following built-in models. When you reference a model 
 | `gemini-3.1-flash-lite-preview` | 1M | 65K | $0.25 | $1.50 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemini-3.1-pro-preview` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemini-3.1-pro-preview-customtools` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gemma-4-31b-it` | 262K | 65K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma-4-12b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma-4-26b-a4b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma-4-31b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## Ollama
 
 | Model ID | Context | Max Output | Input $/1M | Output $/1M | Cached Input $/1M | Capabilities |
 |----------|---------|------------|-----------|------------|-------------------|--------------|
+| `gemma4:12b` | 262K | 8K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma4:26b` | 262K | 8K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemma4:31b` | 262K | 8K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-oss:120b` | 131K | 65K | free | free | free | basic-json-schema, completion, document, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-oss:20b` | 131K | 65K | free | free | free | basic-json-schema, completion, document, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `qwen3-vl:2b` | 131K | 8K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |

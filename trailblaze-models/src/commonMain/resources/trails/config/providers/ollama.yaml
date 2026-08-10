@@ -53,3 +53,16 @@ models:
   - id: "qwen3.5:latest"
     context_length: 131072
     max_output_tokens: 8192
+
+  # Gemma 4 models (vision-capable, 256K context)
+  # The edge builds (e2b/e4b — and `gemma4:latest`, which resolves to e4b) are omitted
+  # deliberately: 128K context and much weaker at screenshot-driven tool calling.
+  - id: "gemma4:12b"
+    context_length: 262144
+    max_output_tokens: 8192
+  - id: "gemma4:26b"
+    context_length: 262144
+    max_output_tokens: 8192
+  - id: "gemma4:31b"
+    context_length: 262144
+    max_output_tokens: 8192
