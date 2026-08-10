@@ -211,6 +211,19 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      - name: Cache Playwright driver
+        # The uber JAR ships without Playwright's ~200 MB driver-bundle; the CLI
+        # downloads it from Maven Central at first use and caches it under
+        # ~/.cache/trailblaze/playwright-driver. Restore it across runs so the
+        # trail isn't exposed to that download (a stalled Maven Central
+        # connection here has burned a full 10-minute no-progress timeout).
+        # The main-seeded entry comes from wikipedia-trails.yml, since caches
+        # created inside a PR are only visible to that PR.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trailblaze/playwright-driver
+          key: playwright-driver-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+
       - name: Download prebuilt uber JAR
         uses: actions/download-artifact@v4
         with:

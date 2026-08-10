@@ -113,11 +113,28 @@ object PlaywrightDriverManager {
     }
   }
 
+  /** Attempts per source URL before falling through to the next source. */
+  private const val DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE = 3
+
+  /**
+   * Stall detection window for the driver-bundle download. The connection's read timeout only
+   * fires when the socket delivers *zero* bytes for its duration; a server that trickles a few
+   * bytes per second resets it forever and can pin a download for the caller's entire timeout
+   * budget (observed in CI: a Maven Central download that normally takes ~5s hung a trail run
+   * for its full 10-minute no-progress watchdog). Requiring [STALL_MIN_BYTES_PER_WINDOW] per
+   * window kills those near-dead connections while still tolerating genuinely slow links
+   * (the floor works out to ~17 KB/s).
+   */
+  private const val STALL_WINDOW_MS = 60_000L
+  private const val STALL_MIN_BYTES_PER_WINDOW = 1L * 1024 * 1024
+
   /**
    * Downloads the `driver-bundle` JAR from a Maven-layout repository and extracts only the current
-   * platform's driver files into [driverDir]. Tries each base URL from [driverBundleRepoBaseUrls]
-   * in order, falling through to the next on any download failure. Maven Central is always the
-   * last entry, so a broken override (auth issue, wrong path, transient outage) self-heals.
+   * platform's driver files into [driverDir]. Each base URL from [driverBundleRepoBaseUrls] gets
+   * [DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE] attempts (with backoff) before falling through to the next
+   * source — a dropped or stalled connection is usually transient, and retrying beats failing a
+   * run that already booted its device. Maven Central is always the last entry, so a broken
+   * override (auth issue, wrong path, transient outage) self-heals.
    */
   private fun downloadAndExtractDriver(version: String, driverDir: Path) {
     val platform = detectPlatform()
@@ -134,21 +151,39 @@ object PlaywrightDriverManager {
     val failures = mutableListOf<String>()
     try {
       for ((index, url) in urls.withIndex()) {
-        println("[Playwright] [${index + 1}/${urls.size}] Attempting download from $url")
-        try {
-          downloadFile(url, tempJar)
-          extractPlatformDriver(tempJar, driverDir, platform)
-          println("[Playwright] Driver $version installed at $driverDir (from $url)")
-          return
-        } catch (e: Exception) {
-          // Clean up the partial tempJar so the next attempt starts from scratch.
-          Files.deleteIfExists(tempJar)
-          val detail = "${e.javaClass.simpleName}: ${e.message}"
-          failures += "$url -> $detail"
-          println("[Playwright] [${index + 1}/${urls.size}] Failed: $detail")
-          if (index < urls.size - 1) {
-            println("[Playwright] Falling through to next source")
+        for (attempt in 1..DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE) {
+          println(
+            "[Playwright] [${index + 1}/${urls.size}] Attempt " +
+              "$attempt/$DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE: downloading from $url"
+          )
+          try {
+            downloadFile(url, tempJar)
+            extractPlatformDriver(tempJar, driverDir, platform)
+            println("[Playwright] Driver $version installed at $driverDir (from $url)")
+            return
+          } catch (e: Exception) {
+            // Clean up the partial tempJar so the next attempt starts from scratch.
+            Files.deleteIfExists(tempJar)
+            val detail = "${e.javaClass.simpleName}: ${e.message}"
+            failures += "$url (attempt $attempt) -> $detail"
+            println(
+              "[Playwright] [${index + 1}/${urls.size}] Attempt " +
+                "$attempt/$DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE failed: $detail"
+            )
+            if (attempt < DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE) {
+              val backoffSeconds = 3L * attempt * attempt
+              println("[Playwright] Retrying in ${backoffSeconds}s…")
+              try {
+                Thread.sleep(backoffSeconds * 1000)
+              } catch (ie: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw e
+              }
+            }
           }
+        }
+        if (index < urls.size - 1) {
+          println("[Playwright] Source exhausted; falling through to next source")
         }
       }
       // Every source failed — clean up the destination so the next run retries cleanly, and
@@ -156,7 +191,8 @@ object PlaywrightDriverManager {
       // exactly which source rejected the request and why.
       driverDir.toFile().deleteRecursively()
       throw RuntimeException(
-        "Failed to download Playwright driver after trying ${urls.size} source(s). " +
+        "Failed to download Playwright driver after trying ${urls.size} source(s) × " +
+          "$DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE attempt(s). " +
           "You can manually place the driver at $driverDir, add " +
           "com.microsoft.playwright:driver-bundle:$version to the classpath, " +
           "or point TRAILBLAZE_PLAYWRIGHT_DRIVER_REPO at a different Maven mirror. " +
@@ -185,7 +221,15 @@ object PlaywrightDriverManager {
       }
       val totalBytes = connection.contentLengthLong
       connection.inputStream.use { input ->
-        Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
+        copyWithStallDetection(input, target, totalBytes)
+      }
+      // A Content-Length mismatch means the connection closed mid-body without an error;
+      // treat it as a failure so the retry loop gets a chance instead of extraction
+      // exploding on a truncated ZIP.
+      if (totalBytes > 0 && Files.size(target) < totalBytes) {
+        throw java.io.IOException(
+          "Truncated download: got ${Files.size(target)} of $totalBytes bytes"
+        )
       }
       if (totalBytes > 0) {
         val downloadedMB = Files.size(target) / (1024 * 1024)
@@ -193,6 +237,41 @@ object PlaywrightDriverManager {
       }
     } finally {
       connection.disconnect()
+    }
+  }
+
+  /**
+   * Streams [input] to [target], enforcing a minimum throughput of
+   * [STALL_MIN_BYTES_PER_WINDOW] per [STALL_WINDOW_MS]. Complements the socket read timeout,
+   * which only catches fully silent connections — this catches the trickling ones.
+   */
+  private fun copyWithStallDetection(input: java.io.InputStream, target: Path, totalBytes: Long) {
+    Files.newOutputStream(
+      target,
+      java.nio.file.StandardOpenOption.CREATE,
+      java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+    ).use { output ->
+      val buffer = ByteArray(256 * 1024)
+      var windowStartNanos = System.nanoTime()
+      var windowBytes = 0L
+      while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        output.write(buffer, 0, read)
+        windowBytes += read
+        val windowElapsedMs = (System.nanoTime() - windowStartNanos) / 1_000_000
+        if (windowElapsedMs >= STALL_WINDOW_MS) {
+          if (windowBytes < STALL_MIN_BYTES_PER_WINDOW) {
+            throw java.io.IOException(
+              "Download stalled: only ${windowBytes / 1024} KB received in the last " +
+                "${windowElapsedMs / 1000}s (need ≥ ${STALL_MIN_BYTES_PER_WINDOW / 1024} KB)" +
+                if (totalBytes > 0) " — expected $totalBytes bytes total" else ""
+            )
+          }
+          windowStartNanos = System.nanoTime()
+          windowBytes = 0L
+        }
+      }
     }
   }
 

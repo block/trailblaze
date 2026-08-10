@@ -40,6 +40,13 @@ jobs:
           distribution: zulu
           java-version: 17
 
+      - name: Setup Gradle
+        # Dependency + build cache reuse across runs (this workflow only runs
+        # on main, so it reads and writes the cache). Mirrors pr-checks.yml.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       - name: Setup Android SDK
         # trailblaze-desktop transitively depends on Android-targeted modules,
         # so the Android Gradle Plugin needs an SDK to evaluate the build.
@@ -51,7 +58,7 @@ jobs:
 
       - name: Build trailblaze uber JAR (with WASM template embedded)
         env:
-          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
+          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true --parallel
         run: ./scripts/install-trailblaze-source.sh
 
       - name: Stage artifact contents

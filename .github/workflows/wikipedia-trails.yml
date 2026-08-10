@@ -35,6 +35,13 @@ jobs:
           distribution: zulu
           java-version: 17
 
+      - name: Setup Gradle
+        # Dependency + build cache reuse across runs (this workflow only runs
+        # on main, so it reads and writes the cache). Mirrors pr-checks.yml.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
@@ -43,7 +50,7 @@ jobs:
 
       - name: Build trailblaze uber JAR (with WASM template embedded)
         env:
-          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
+          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true --parallel
         run: ./scripts/install-trailblaze-source.sh
 
       - name: Stage artifact contents
@@ -89,6 +96,18 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Cache Playwright driver
+        # The uber JAR ships without Playwright's ~200 MB driver-bundle; the CLI
+        # downloads it from Maven Central at first use and caches it under
+        # ~/.cache/trailblaze/playwright-driver. This main-run cache entry is
+        # what the PR-time wikipedia-trails job in pr-checks.yml restores
+        # (caches created inside a PR are only visible to that PR, so main has
+        # to seed the shared one).
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trailblaze/playwright-driver
+          key: playwright-driver-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
 
       - name: Download prebuilt uber JAR
         uses: actions/download-artifact@v4
