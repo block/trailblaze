@@ -46,6 +46,15 @@ jobs:
           distribution: zulu
           java-version: 17
 
+      - name: Setup Gradle
+        # Persists the Gradle User Home (dependency cache + local build cache)
+        # across runs. Pushes to main seed the cache; PR runs restore it
+        # read-only, so warm PR builds pull unchanged task outputs — including
+        # the ~5-minute Kotlin/WASM compile+optimize chain — from cache.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       - name: Setup Android SDK
         # trailblaze-desktop transitively depends on Android-targeted modules,
         # so the Android Gradle Plugin needs an SDK to evaluate the build.
@@ -64,9 +73,11 @@ jobs:
         # `packageUberJarForCurrentOS` and copies the launcher script
         # alongside the JAR into `trailblaze-desktop/build/release/`.
         # TRAILBLAZE_GRADLE_EXTRA_ARGS layers in `-Ptrailblaze.wasm=true` so
-        # the report template gets bundled into the JAR's classpath.
+        # the report template gets bundled into the JAR's classpath, and
+        # `--parallel` so independent modules compile concurrently (the
+        # `checks` job already runs the same task graph with `--parallel`).
         env:
-          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true
+          TRAILBLAZE_GRADLE_EXTRA_ARGS: -Ptrailblaze.wasm=true --parallel
         run: ./scripts/install-trailblaze-source.sh
 
       - name: Stage artifact contents
@@ -109,6 +120,14 @@ jobs:
           java-version: '17'
           check-latest: true
 
+      - name: Setup Gradle
+        # Dependency + build cache reuse across runs (seeded on main pushes,
+        # restored read-only on PRs) — unchanged modules restore compiled
+        # classes and test results metadata from cache instead of rebuilding.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
       - name: Setup Bun
         # bun is the sole supported JS runtime. `assemble check` triggers
         # `:trailblaze-scripting-subprocess:installTrailblazeScriptingSdk`
@@ -149,6 +168,13 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
           check-latest: true
+
+      - name: Setup Gradle
+        # Dependency + build cache reuse across runs (seeded on main pushes,
+        # restored read-only on PRs).
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Setup Bun
         # The subprocess tests `bun install` and then spawn `bun`/`tsx` for each
@@ -415,6 +441,15 @@ jobs:
         with:
           distribution: zulu
           java-version: 17
+
+      - name: Setup Gradle
+        # Dependency + build cache reuse across runs (seeded on main pushes,
+        # restored read-only on PRs). This job runs Gradle twice — the
+        # instrumentation build below and the WASM-enabled report fallback in
+        # pr_generate_trailblaze_report.sh — both benefit.
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
