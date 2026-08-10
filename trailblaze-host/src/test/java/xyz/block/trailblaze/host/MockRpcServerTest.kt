@@ -37,10 +37,15 @@ import kotlin.test.Test
  *  - **an outbound connection holding the port as its source port** — this port is a hash inside
  *    Trailblaze's device-port range, which overlaps the OS ephemeral range, so any unrelated
  *    connection on the machine can own it. A wildcard bind loses to that; a loopback-only bind
- *    doesn't, because an outbound source is the egress interface address. See the loopback-host
- *    constant in [MockRpcServer] for the measurement.
+ *    narrows it to connections whose *destination* is also loopback, which keep 127.0.0.1 as their
+ *    source. See the loopback-host constant in [MockRpcServer] for the measurement.
  *
- * Neither is a socket-option problem, and neither is fixed by waiting longer.
+ * Neither is a socket-option problem. The first isn't fixed by waiting longer; the loopback
+ * remainder of the second is — the squatting socket is unrelated to this fixture and goes away on
+ * its own — which is why `start()` waits for the port to be bindable before handing it to Ktor
+ * rather than letting the engine take the `BindException`. Doing it in that order also keeps the
+ * failure contained, since Ktor reports a failed bind on its own coroutine as well as to the
+ * caller (below).
  *
  * The second is guarded by asserting the *bind address* rather than by manufacturing a conflict — three
  * attempts at the latter all failed to earn their keep, so don't re-litigate it without a new idea. A
@@ -86,6 +91,22 @@ class MockRpcServerTest {
    */
   @Test fun `awaitListening gives up within its bound when the state never arrives`() {
     assertThat(awaitListeningWithin(NEVER_LISTENING_PORT, isListening = true)).isFalse()
+  }
+
+  /**
+   * The gate [MockRpcServer.start] applies before handing the port to Ktor. Both directions are
+   * asserted against a port this test holds and releases itself, so neither depends on machine
+   * state: a held port must read as not-bindable within the bound rather than parking, and the
+   * same port must read as bindable once released.
+   */
+  @Test fun `awaitBindable distinguishes a held port from a free one`() {
+    val held = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
+    try {
+      assertThat(awaitBindableWithin(held.localPort)).isFalse()
+    } finally {
+      held.close()
+    }
+    assertThat(awaitBindableWithin(held.localPort)).isTrue()
   }
 
   /**
@@ -155,6 +176,9 @@ class MockRpcServerTest {
 
   private fun awaitListeningWithin(port: Int, isListening: Boolean): Boolean =
     MockRpcServer.awaitListening(port, isListening = isListening, timeoutMs = SHORT_BOUND_MS)
+
+  private fun awaitBindableWithin(port: Int): Boolean =
+    MockRpcServer.awaitBindable(port, timeoutMs = SHORT_BOUND_MS)
 
   private fun deviceId(instanceId: String) =
     TrailblazeDeviceId(

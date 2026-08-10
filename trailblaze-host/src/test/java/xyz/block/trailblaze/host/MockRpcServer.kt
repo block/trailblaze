@@ -12,7 +12,9 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.runBlocking
@@ -93,6 +95,9 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
    * turn a loud failure into a hang. It isn't covered by a test on purpose — see the test class doc.
    */
   fun start() {
+    check(awaitBindable(port)) {
+      "Port $port was still held by another socket ${PORT_STATE_TIMEOUT_MS}ms into start()"
+    }
     server.start(wait = false)
     check(awaitListening(port, isListening = true)) {
       "MockRpcServer never started listening on port $port within ${PORT_STATE_TIMEOUT_MS}ms"
@@ -173,6 +178,40 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
         Thread.sleep(POLL_INTERVAL_MS)
       }
     }
+
+    /**
+     * Polls [port] until a loopback listener can actually be bound on it, so the engine is only
+     * ever started against a port that is free.
+     *
+     * Narrowing the bind to loopback rules out an *egress-interface* source port owning [port]
+     * (see [LOOPBACK_HOST]) but not a loopback one: a connection whose destination is 127.0.0.1
+     * has 127.0.0.1 as its source address too, and [port] sits inside the OS ephemeral range, so
+     * on a machine running many loopback connections at once — a CI agent running this suite —
+     * an unrelated socket can hold it. That clears on its own, so waiting is the whole fix.
+     *
+     * Waiting *here* rather than letting the engine take the `BindException` is what keeps the
+     * failure contained: Ktor reports a failed bind on its own coroutine as well as to the caller,
+     * and the uncaught half lands on whatever `runTest`-based test runs next — build 12247's
+     * collateral shape, and how one bind failure in this class took `DevicesPageEndpointTest`
+     * down with it.
+     */
+    internal fun awaitBindable(port: Int, timeoutMs: Long = PORT_STATE_TIMEOUT_MS): Boolean {
+      val deadline = System.nanoTime() + timeoutMs * 1_000_000
+      while (true) {
+        if (probeBindable(port)) return true
+        if (System.nanoTime() >= deadline) return false
+        Thread.sleep(POLL_INTERVAL_MS)
+      }
+    }
+
+    /** True when a loopback listener can be bound on [port] right now. */
+    private fun probeBindable(port: Int): Boolean =
+      try {
+        ServerSocket(port, 0, InetAddress.getByName(LOOPBACK_HOST)).close()
+        true
+      } catch (_: IOException) {
+        false
+      }
 
     /** True when something accepts a loopback connection on [port]. */
     private fun probeListening(port: Int): Boolean =

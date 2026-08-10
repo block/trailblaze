@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.logs.server
 
+import io.modelcontextprotocol.kotlin.sdk.server.Server
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -182,7 +183,100 @@ class TrailblazeMcpServerTargetScopedToolsTest {
     )
   }
 
+  @Test
+  fun `re-registering the same surface never stops advertising its tools`() {
+    // A device-connect / target-change refresh re-registers the session's tools. While that
+    // is in flight the session must keep advertising every tool the new surface also has —
+    // a client can call tools/list at any moment, and the refresh is async: it runs AFTER
+    // connectToDevice has returned, so "right after connecting" lands mid-refresh. When the
+    // re-registration tore the old surface down up front, a tools/list in that window saw
+    // only the session tools and the client concluded the device had none.
+    //
+    // Sampled through the bridge's own getDriverType(), which the server calls while
+    // resolving the new surface — i.e. exactly the point the teardown used to have already
+    // happened. Nothing else observes an intermediate state deterministically.
+    var registering = false
+    val surfacesDuringReRegistration = mutableListOf<Set<String>>()
+    lateinit var mcpServer: Server
+    val bridge = ToolSurfaceBridge(
+      driverType = androidDriver,
+      onDriverTypeRead = { if (registering) surfacesDuringReRegistration += mcpServer.tools.keys },
+    )
+    val server = newServer(bridge)
+    mcpServer = server.configureMcpServer()
+    val sessionId = McpSessionId("test-session")
+    val sessionContext = newSessionContext()
+
+    server.registerTools(mcpServer, sessionId, sessionContext)
+    val advertisedAfterFirstRegistration = mcpServer.tools.keys.toSet()
+    assertTrue(
+      advertisedAfterFirstRegistration.containsAll(DEVICE_CONTROL_TOOL_NAMES),
+      "Precondition: connecting a device advertises its device-control tools. " +
+        "Registered: $advertisedAfterFirstRegistration",
+    )
+
+    registering = true
+    server.registerTools(mcpServer, sessionId, sessionContext)
+    registering = false
+
+    assertTrue(
+      surfacesDuringReRegistration.isNotEmpty(),
+      "Precondition: the re-registration must have sampled the advertised surface at least once.",
+    )
+    surfacesDuringReRegistration.forEach { advertised ->
+      assertTrue(
+        advertised.containsAll(advertisedAfterFirstRegistration),
+        "Re-registering the same surface must never take a tool off the wire mid-refresh. " +
+          "Missing: ${advertisedAfterFirstRegistration - advertised}",
+      )
+    }
+    assertEquals(
+      advertisedAfterFirstRegistration,
+      mcpServer.tools.keys.toSet(),
+      "…and the surface must be unchanged once it finishes.",
+    )
+  }
+
+  @Test
+  fun `tools the new surface no longer contains stop being advertised`() {
+    // The other half of the swap: keeping surviving tools registered must not turn into
+    // "never remove anything". A surface that shrinks — driver unbound, target switched
+    // away from its custom tools — has to stop advertising what it dropped, or a client
+    // can still call a tool the session can't run.
+    val bridge = ToolSurfaceBridge(driverType = androidDriver)
+    val server = newServer(bridge)
+    val mcpServer = server.configureMcpServer()
+    val sessionId = McpSessionId("test-session")
+    val sessionContext = newSessionContext()
+
+    server.registerTools(mcpServer, sessionId, sessionContext)
+    assertTrue(
+      mcpServer.tools.keys.containsAll(DEVICE_CONTROL_TOOL_NAMES),
+      "Precondition: the driver's device-control tools are advertised. " +
+        "Registered: ${mcpServer.tools.keys}",
+    )
+
+    bridge.bindDriver(null)
+    server.registerTools(mcpServer, sessionId, sessionContext)
+
+    assertEquals(
+      emptySet(),
+      mcpServer.tools.keys.intersect(DEVICE_CONTROL_TOOL_NAMES),
+      "With no driver bound there is nothing to run the tools against, so none of them " +
+        "may still be advertised. Registered: ${mcpServer.tools.keys}",
+    )
+  }
+
   // ── Test scaffolding ──────────────────────────────────────────────────────
+
+  private companion object {
+    /**
+     * Device-control tools an MCP client expects to find in `tools/list` once a device is
+     * connected. Named literally because that's the external contract — a client calls them
+     * by these exact names, and the Android MCP-dispatch CI check asserts the same two.
+     */
+    val DEVICE_CONTROL_TOOL_NAMES = setOf("tap", "tapOnPoint")
+  }
 
   private class FakeSignInTool : TrailblazeTool
   private class FakeSeedDataTool : TrailblazeTool
@@ -208,12 +302,21 @@ class TrailblazeMcpServerTargetScopedToolsTest {
 
   /** Bridge stub exposing just the inputs the target-scoped resolution reads. */
   private class ToolSurfaceBridge(
-    private val driverType: TrailblazeDriverType?,
+    private var driverType: TrailblazeDriverType?,
     private val availableTargets: Set<TrailblazeHostAppTarget> = emptySet(),
     private val daemonWideTargetId: String? = null,
     private val innerAgentBuiltInToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+    private val onDriverTypeRead: () -> Unit = {},
   ) : TrailblazeMcpBridge {
-    override fun getDriverType(): TrailblazeDriverType? = driverType
+    /** Simulates a device connect/disconnect between registrations. */
+    fun bindDriver(driverType: TrailblazeDriverType?) {
+      this.driverType = driverType
+    }
+
+    override fun getDriverType(): TrailblazeDriverType? {
+      onDriverTypeRead()
+      return driverType
+    }
     override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = availableTargets
     override fun getCurrentAppTargetId(): String? = daemonWideTargetId
     override fun getSessionTargetAppIdForDevice(deviceId: TrailblazeDeviceId): String? =

@@ -1498,8 +1498,8 @@ class TrailblazeMcpServer(
     // via `config(SET llmProvider=none)`. `addTool` below only ever adds (it's idempotent
     // by name for surviving tools), so without this diff the SDK server keeps serving a
     // tool the refreshed registry dropped, and a client refetching after
-    // `tools/list_changed` still sees and can call it. TrailblazeTools are diffed
-    // separately in `registerTools` (removeTools of the prior per-session set).
+    // `tools/list_changed` still sees and can call it. TrailblazeTools are diffed the same
+    // way, at the end of `registerTools`, against the prior per-session name set.
     val previousHostToolNames = hostMcpToolRegistryBySession[mcpSessionId.sessionId]
       ?.tools?.map { it.descriptor.name }?.toSet() ?: emptySet()
     val newHostToolNames = newToolRegistry.tools.map { it.descriptor.name }.toSet()
@@ -2287,16 +2287,18 @@ class TrailblazeMcpServer(
     val registeredTrailblazeToolNames = registeredTrailblazeToolNamesBySession
       .getOrPut(mcpSessionId.sessionId) { ConcurrentHashMap.newKeySet() }
 
-    // On re-registration (mode / device / target change), remove previously registered
-    // TrailblazeTools first. Logged (like the host-tool diff) so a target switch that
-    // drops custom tools leaves a trace — otherwise "my tool disappeared" is invisible.
-    if (registeredTrailblazeToolNames.isNotEmpty()) {
-      Console.log(
-        "[TrailblazeMcpServer] Removing ${registeredTrailblazeToolNames.size} prior target-scoped tool(s) before re-register: ${registeredTrailblazeToolNames.joinToString()}",
-      )
-      mcpServer.removeTools(registeredTrailblazeToolNames.toList())
-      registeredTrailblazeToolNames.clear()
-    }
+    // On re-registration (mode / device / target change) the prior TrailblazeTools are
+    // diffed away at the END of this method, not here — same shape as the host-tool diff
+    // in addToolsAsMcpToolsFromRegistry. Removing up front instead left the session
+    // advertising NO target-scoped tools for the whole body of this method, and that gap
+    // is client-visible: the device-connect refresh runs asynchronously AFTER
+    // connectToDevice has already returned, so a client that calls tools/list right after
+    // connecting can land inside the window and see only the session tools — no `tap`, no
+    // `tapOnPoint` — and conclude the device has none. Re-registering in place is safe
+    // because the SDK's tool registry is keyed by name and addTool atomically replaces an
+    // existing entry, so a surviving tool is never duplicated and never momentarily absent.
+    val previouslyRegisteredToolNames = registeredTrailblazeToolNames.toSet()
+    val newlyRegisteredToolNames = mutableSetOf<String>()
 
     // Create the TrailblazeTool bridge for device control tools
     val trailblazeToolBridge = TrailblazeToolToMcpBridge(
@@ -2617,7 +2619,7 @@ class TrailblazeMcpServer(
       mcpServer = mcpServer,
       mcpSessionId = mcpSessionId,
     )
-    registeredTrailblazeToolNames.addAll(targetScopedToolClasses.map { it.toolName().toolName })
+    newlyRegisteredToolNames.addAll(targetScopedToolClasses.map { it.toolName().toolName })
 
     // Scripted (.ts) + YAML-defined tools become first-class MCP tools too — registered from
     // their TrailblazeToolDescriptor with real JSON Schemas, so an external MCP client
@@ -2625,7 +2627,7 @@ class TrailblazeMcpServer(
     // tool's inner agent. Scoped to the CURRENT target + bound driver (same scoping model as
     // the class-backed registration above); re-registered (with a `tools/list_changed`)
     // whenever the session's device or target changes. Tracked in the same per-session name
-    // set so the remove+re-register at the top of this method covers them.
+    // set so the end-of-method stale-tool diff covers them.
     // runBlocking: registerTools is a non-suspend API reached from several non-coroutine
     // callers. The blocking cost is normally bounded — collectSessionTargetDescriptorTools
     // launches engines/subprocesses only on a cold target switch (cached per target+driver
@@ -2648,7 +2650,7 @@ class TrailblazeMcpServer(
           collectSessionTargetDescriptorTools(sessionContext)
         }
       }
-        .filter { it.name !in registeredTrailblazeToolNames }
+        .filter { it.name !in newlyRegisteredToolNames }
       if (descriptorTools.isNotEmpty()) {
         trailblazeToolBridge.registerTrailblazeToolDescriptors(
           descriptors = descriptorTools,
@@ -2658,7 +2660,7 @@ class TrailblazeMcpServer(
             executeDescriptorBackedTool(mcpSessionId.sessionId, toolName, arguments)
           },
         )
-        registeredTrailblazeToolNames.addAll(descriptorTools.map { it.name })
+        newlyRegisteredToolNames.addAll(descriptorTools.map { it.name })
         Console.log(
           "[MCP] Registered ${descriptorTools.size} target-scoped scripted/YAML MCP tools: " +
             descriptorTools.joinToString { it.name },
@@ -2670,6 +2672,20 @@ class TrailblazeMcpServer(
           "${mcpSessionId.sessionId}: ${e.message} — continuing with the class-backed surface",
       )
     }
+
+    // The new surface is fully registered, so now drop only what it no longer contains.
+    // Logged (like the host-tool diff) so a target switch that drops custom tools leaves a
+    // trace — otherwise "my tool disappeared" is invisible.
+    val staleTrailblazeToolNames = previouslyRegisteredToolNames - newlyRegisteredToolNames
+    if (staleTrailblazeToolNames.isNotEmpty()) {
+      Console.log(
+        "[TrailblazeMcpServer] Removing ${staleTrailblazeToolNames.size} target-scoped tool(s) " +
+          "no longer in the resolved surface: ${staleTrailblazeToolNames.joinToString()}",
+      )
+      mcpServer.removeTools(staleTrailblazeToolNames.toList())
+    }
+    registeredTrailblazeToolNames.retainAll(newlyRegisteredToolNames)
+    registeredTrailblazeToolNames.addAll(newlyRegisteredToolNames)
 
     // Register MCP resources. Threading our own `findCurrentTarget` through
     // so the `currentAppTarget` field on the connected-device resource
