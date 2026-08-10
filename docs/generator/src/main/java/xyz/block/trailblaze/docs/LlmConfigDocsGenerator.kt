@@ -74,6 +74,7 @@ class LlmConfigDocsGenerator(
         providers = mapOf(
           "openai" to LlmProviderConfig(
             models = listOf(
+              LlmModelConfigEntry(id = "gpt-5.6-sol"),
               LlmModelConfigEntry(id = "gpt-5.6-terra"),
               LlmModelConfigEntry(
                 id = "gpt-5.6-luna",

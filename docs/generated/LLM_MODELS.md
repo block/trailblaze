@@ -71,6 +71,7 @@ Reference any model above by its ID:
 providers:
   "openai":
     models:
+    - id: "gpt-5.6-sol"
     - id: "gpt-5.6-terra"
     - id: "gpt-5.6-luna"
       cost:
