@@ -38,13 +38,12 @@ jobs:
           java-version: '17'
           check-latest: true
 
-      - name: Setup Gradle
-        # Dependency + build cache reuse across runs. Seeded by pushes to main;
-        # PR and tag builds restore read-only. Mirrors pr-checks.yml.
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-
+      # NOTE: deliberately no gradle/actions/setup-gradle here. This workflow
+      # publishes GitHub Releases on tag pushes, and restoring a cache into a
+      # release-publishing workflow is a cache-poisoning vector (zizmor
+      # cache-poisoning rule): a poisoned cache entry could inject content
+      # into the published JAR. Release builds stay hermetic; the other
+      # (non-publishing) workflows get Gradle caching instead.
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
