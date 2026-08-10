@@ -4,6 +4,10 @@ title: LLM Configuration
 
 Trailblaze supports configurable LLM providers and models via YAML files. This allows teams to use enterprise endpoints, custom gateways, self-hosted models, and project-specific defaults without modifying source code.
 
+> **Just want to use a model Trailblaze doesn't ship with?** You don't need a new release —
+> add it to your workspace config. [Adding a Model](adding_a_model.md) is the short,
+> task-focused version of this page.
+
 ## Configuration Loading Order
 
 Configuration is loaded from multiple locations. Later sources override earlier ones:
@@ -370,3 +374,5 @@ Trailblaze ships with a registry of models from major providers. See [Built-in L
 When referencing a built-in model by `id` in your YAML config, all specs (pricing, context length, capabilities) are inherited automatically. You only need to specify fields you want to override.
 
 Built-in model specs are updated with each Trailblaze release. If you need stable, predictable pricing or specs, override them in your workspace config.
+
+**A model missing from the registry is not blocked** — the registry only saves you from typing the specs. Declare any model your provider serves in `trails/config/trailblaze.yaml` and it works on the next run, no upgrade needed. See [Adding a Model](adding_a_model.md), which also covers contributing the model back to the built-in registry.
