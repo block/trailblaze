@@ -36,7 +36,7 @@ class LlmConfigResolverTest {
     val config = LlmConfig(
       providers = mapOf(
         "openai" to LlmProviderConfig(
-          models = listOf(LlmModelConfigEntry(id = "gpt-4.1")),
+          models = listOf(LlmModelConfigEntry(id = "gpt-5.6-terra")),
         ),
       ),
     )
@@ -45,9 +45,9 @@ class LlmConfigResolverTest {
     val openaiList = result.modelLists.single()
     assertEquals(TrailblazeLlmProvider.OPENAI, openaiList.provider)
     val model = openaiList.entries.single()
-    assertEquals("gpt-4.1", model.modelId)
+    assertEquals("gpt-5.6-terra", model.modelId)
     assertEquals(2.00, model.inputCostPerOneMillionTokens)
-    assertEquals(8.00, model.outputCostPerOneMillionTokens)
+    assertEquals(12.00, model.outputCostPerOneMillionTokens)
     assertTrue(model.contextLength > 0)
     assertTrue(model.maxOutputTokens > 0)
   }
@@ -59,7 +59,7 @@ class LlmConfigResolverTest {
         "openai" to LlmProviderConfig(
           models = listOf(
             LlmModelConfigEntry(
-              id = "gpt-4.1",
+              id = "gpt-5.6-terra",
               cost = LlmModelCostConfig(inputPerMillion = 1.50),
             ),
           ),
@@ -71,7 +71,7 @@ class LlmConfigResolverTest {
     val model = result.modelLists.single().entries.single()
     assertEquals(1.50, model.inputCostPerOneMillionTokens)
     // Output cost preserved from built-in
-    assertEquals(8.00, model.outputCostPerOneMillionTokens)
+    assertEquals(12.00, model.outputCostPerOneMillionTokens)
   }
 
   @Test
@@ -534,7 +534,7 @@ class LlmConfigResolverTest {
         "openai" to LlmProviderConfig(
           models = listOf(
             LlmModelConfigEntry(
-              id = "gpt-4.1",
+              id = "gpt-5.6-terra",
               cost = LlmModelCostConfig(cachedInputPerMillion = 0.50),
             ),
           ),
@@ -547,6 +547,6 @@ class LlmConfigResolverTest {
     assertEquals(0.50, model.cachedInputCostPerOneMillionTokens)
     // Other costs preserved from built-in
     assertEquals(2.00, model.inputCostPerOneMillionTokens)
-    assertEquals(8.00, model.outputCostPerOneMillionTokens)
+    assertEquals(12.00, model.outputCostPerOneMillionTokens)
   }
 }

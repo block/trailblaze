@@ -63,14 +63,15 @@ object AndroidLlmClientResolver {
    * Resolves the first available model from the given [candidates], falling back to
    * [resolveModel] if none match.
    *
-   * Each candidate is a model key like `"open_router/openai/gpt-4.1"` or `"openai/gpt-4.1"`.
-   * The provider is inferred from the key and checked for an available auth token.
+   * Each candidate is a model key like `"open_router/openai/gpt-oss-120b:free"` or
+   * `"openai/gpt-5.6-terra"`. The provider is inferred from the key and checked for an
+   * available auth token.
    *
    * Example:
    * ```
    * AndroidLlmClientResolver.resolveModel(
-   *   "open_router/openai/gpt-4.1",  // prefer free tier
-   *   "openai/gpt-4.1",              // fall back to paid
+   *   "open_router/openai/gpt-oss-120b:free",  // prefer free tier
+   *   "openai/gpt-5.6-terra",                  // fall back to paid
    * )
    * ```
    */
@@ -95,7 +96,7 @@ object AndroidLlmClientResolver {
    *
    * Resolution order:
    * 1. `llm.defaults.model` from `trails/config/trailblaze.yaml` classpath resource
-   * 2. Explicit `trailblaze.llm.default_model` instrumentation arg (e.g., "openai/gpt-4.1")
+   * 2. Explicit `trailblaze.llm.default_model` instrumentation arg (e.g., "openai/gpt-5.6-terra")
    * 3. Auto-detect: tries [PROVIDER_PRIORITY] in order (OpenAI → OpenRouter → Anthropic →
    *    Google → Ollama) and returns the first model whose provider has an auth token available.
    */
@@ -106,7 +107,7 @@ object AndroidLlmClientResolver {
       return findOrFallback(modelKey)
     }
 
-    // 2. Instrumentation arg from host (e.g., "openai/gpt-4.1")
+    // 2. Instrumentation arg from host (e.g., "openai/gpt-5.6-terra")
     val defaultModelArg =
       InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.DEFAULT_MODEL_ARG)
     if (defaultModelArg != null) {

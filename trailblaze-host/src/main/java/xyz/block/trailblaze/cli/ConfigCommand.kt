@@ -22,7 +22,7 @@ import kotlin.system.exitProcess
  * Examples:
  *   trailblaze config                                 - Show current settings
  *   trailblaze config target myapp                    - Set target app
- *   trailblaze config llm openai/gpt-4.1-mini         - Set LLM provider/model
+ *   trailblaze config llm openai/gpt-5.6-luna         - Set LLM provider/model
  *   trailblaze config models                           - List available LLM models
  *   trailblaze config target                           - List available target apps
  */

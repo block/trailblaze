@@ -42,10 +42,10 @@ llm:
   providers:
     openai:
       models:
-        - id: gpt-4.1
-        - id: gpt-4.1-mini
+        - id: gpt-5.6-terra
+        - id: gpt-5.6-luna
   defaults:
-    model: gpt-4.1
+    model: gpt-5.6-terra
 ```
 
 When anyone clones the repo and launches Trailblaze, they get these models by default.
@@ -66,14 +66,14 @@ llm:
       auth:
         env_var: CORP_LLM_API_KEY
       models:
-        - id: gpt-4.1
-          context_length: 1048576
-          max_output_tokens: 32768
-        - id: gpt-4.1-mini
-          context_length: 1048576
-          max_output_tokens: 32768
+        - id: gpt-5.6-terra
+          context_length: 1050000
+          max_output_tokens: 128000
+        - id: gpt-5.6-luna
+          context_length: 1050000
+          max_output_tokens: 128000
   defaults:
-    model: gpt-4.1
+    model: gpt-5.6-terra
 ```
 
 Team members only need to set `CORP_LLM_API_KEY` in their environment. The gateway URL, headers, and model selection are all defined in the project.
@@ -90,12 +90,12 @@ providers:
     auth:
       env_var: OPENAI_API_KEY
     models:
-      - id: gpt-4.1
-      - id: gpt-4.1-mini
-      - id: gpt-5
+      - id: gpt-5.6-terra
+      - id: gpt-5.6-luna
+      - id: gpt-5.6-sol
         cost:
-          input_per_million: 1.25
-          output_per_million: 10.00
+          input_per_million: 5.00
+          output_per_million: 30.00
 
   # Custom OpenAI-compatible endpoint
   azure_openai:
@@ -120,7 +120,7 @@ providers:
         max_output_tokens: 8192
 
 defaults:
-  model: gpt-4.1
+  model: gpt-5.6-terra
 ```
 
 ### Provider fields
@@ -171,7 +171,7 @@ When `id` matches a built-in model (see [Built-in Models](generated/LLM_MODELS.m
 
 ```yaml
 defaults:
-  model: gpt-4.1
+  model: gpt-5.6-terra
   screenshot:
     max_dimensions: 1536x768   # Default screenshot scaling (default if omitted)
 ```
@@ -202,14 +202,14 @@ llm:
       auth:
         env_var: ACME_AI_TOKEN
       models:
-        - id: gpt-4.1
-          context_length: 1048576
-          max_output_tokens: 32768
-        - id: gpt-4.1-mini
-          context_length: 1048576
-          max_output_tokens: 32768
+        - id: gpt-5.6-terra
+          context_length: 1050000
+          max_output_tokens: 128000
+        - id: gpt-5.6-luna
+          context_length: 1050000
+          max_output_tokens: 128000
   defaults:
-    model: gpt-4.1
+    model: gpt-5.6-terra
 ```
 
 Individual developers can still override by creating `~/.trailblaze/trailblaze.yaml` in their home directory (user-level config takes lower priority, but environment variables take highest priority).
@@ -293,10 +293,10 @@ Create `src/androidTest/resources/trails/config/trailblaze.yaml` in your test mo
 ```yaml
 llm:
   defaults:
-    model: openai/gpt-4.1
+    model: openai/gpt-5.6-terra
 ```
 
-The model key uses `provider/model_id` format (e.g., `openai/gpt-4.1`, `anthropic/claude-sonnet-4-6`). AGP strips dot-prefixed directories from classpath resources, so the config lives under `trails/config/` instead of `.trailblaze/`.
+The model key uses `provider/model_id` format (e.g., `openai/gpt-5.6-terra`, `anthropic/claude-sonnet-5`). AGP strips dot-prefixed directories from classpath resources, so the config lives under `trails/config/` instead of `.trailblaze/`.
 
 Then use `AndroidTrailblazeRule` with zero-arg defaults:
 
@@ -323,7 +323,7 @@ If you don't want a config file, pass the model as an instrumentation arg:
 
 ```bash
 adb shell am instrument \
-  -e trailblaze.llm.default_model "openai/gpt-4.1" \
+  -e trailblaze.llm.default_model "openai/gpt-5.6-terra" \
   -e trailblaze.llm.auth.token.openai "sk-..." \
   -w com.example.test/androidx.test.runner.AndroidJUnitRunner
 ```

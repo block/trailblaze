@@ -41,7 +41,7 @@ object InstrumentationArgUtil {
    * ```
    * InstrumentationArgUtil.resolveTrailblazeLlmModel(
    *     LlmAuthResolver.resolve(TrailblazeLlmProvider.OPEN_ROUTER) to OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE,
-   *     LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI) to OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
+   *     LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI) to OpenAITrailblazeLlmModelList.OPENAI_DEFAULT,
    * )
    * ```
    */

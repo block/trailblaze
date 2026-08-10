@@ -82,9 +82,9 @@ object LlmConfigLoader {
           "      providers:\n" +
           "        openai:\n" +
           "          models:\n" +
-          "            - id: gpt-4.1\n" +
+          "            - id: gpt-5.6-terra\n" +
           "      defaults:\n" +
-          "        model: openai/gpt-4.1",
+          "        model: openai/gpt-5.6-terra",
       )
       base
     }

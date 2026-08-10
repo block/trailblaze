@@ -11,5 +11,5 @@ object TrailblazeHostLlmConfig {
   /**
    * This is our "default" model.  If we want to do a global change, this is the place to do it for Host based tests.
    */
-  val DEFAULT_TRAILBLAZE_LLM_MODEL: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
+  val DEFAULT_TRAILBLAZE_LLM_MODEL: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_DEFAULT
 }

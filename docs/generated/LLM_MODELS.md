@@ -8,19 +8,20 @@ Trailblaze ships with the following built-in models. When you reference a model 
 
 | Model ID | Context | Max Output | Input $/1M | Output $/1M | Cached Input $/1M | Capabilities |
 |----------|---------|------------|-----------|------------|-------------------|--------------|
+| `claude-fable-5` | 1M | 128K | $10.00 | $50.00 | $1.00 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `claude-haiku-4-5` | 200K | 64K | $1.00 | $5.00 | $0.10 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `claude-opus-4-6` | 1M | 128K | $5.00 | $25.00 | $0.50 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `claude-sonnet-4-6` | 1M | 64K | $3.00 | $15.00 | $0.30 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `claude-opus-5` | 1M | 128K | $5.00 | $25.00 | $0.50 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `claude-sonnet-5` | 1M | 128K | $3.00 | $15.00 | $0.30 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## Google
 
 | Model ID | Context | Max Output | Input $/1M | Output $/1M | Cached Input $/1M | Capabilities |
 |----------|---------|------------|-----------|------------|-------------------|--------------|
-| `gemini-2.5-pro` | 1M | 65K | $1.25 | $10.00 | $0.13 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gemini-3-flash-preview` | 1M | 65K | $0.50 | $3.00 | $0.05 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gemini-3.1-flash-lite-preview` | 1M | 65K | $0.25 | $1.50 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemini-3.1-flash-lite` | 1M | 65K | $0.25 | $1.50 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemini-3.1-pro-preview` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gemini-3.1-pro-preview-customtools` | 1M | 65K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemini-3.5-flash` | 1M | 65K | $1.50 | $9.00 | $0.15 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemini-3.5-flash-lite` | 1M | 65K | $0.30 | $2.50 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gemini-3.6-flash` | 1M | 65K | $1.50 | $7.50 | $0.15 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemma-4-12b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemma-4-26b-a4b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gemma-4-31b-it` | 262K | 32K | free | free | free | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
@@ -51,12 +52,9 @@ Trailblaze ships with the following built-in models. When you reference a model 
 
 | Model ID | Context | Max Output | Input $/1M | Output $/1M | Cached Input $/1M | Capabilities |
 |----------|---------|------------|-----------|------------|-------------------|--------------|
-| `gpt-4.1` | 1M | 32K | $2.00 | $8.00 | $0.50 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gpt-4.1-mini` | 1M | 32K | $0.40 | $1.60 | $0.10 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gpt-5` | 400K | 128K | $1.25 | $10.00 | $0.13 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gpt-5-mini` | 400K | 128K | $0.25 | $2.00 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gpt-5-nano` | 400K | 128K | $0.05 | $0.40 | $0.01 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
-| `gpt-5.2` | 400K | 128K | $1.75 | $14.00 | $0.18 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gpt-5.6-luna` | 1M | 128K | $0.20 | $1.20 | $0.02 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gpt-5.6-sol` | 1M | 128K | $5.00 | $30.00 | $0.50 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gpt-5.6-terra` | 1M | 128K | $2.00 | $12.00 | $0.20 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## OpenRouter
 
@@ -73,8 +71,8 @@ Reference any model above by its ID:
 providers:
   "openai":
     models:
-    - id: "gpt-4.1"
-    - id: "gpt-4.1-mini"
+    - id: "gpt-5.6-terra"
+    - id: "gpt-5.6-luna"
       cost:
         input_per_million: 0.3
 ```

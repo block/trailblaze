@@ -44,9 +44,9 @@ llm:
   providers:
     openai:
       models:
-        - id: gpt-4.1
+        - id: gpt-5.6-terra
   defaults:
-    model: gpt-4.1
+    model: gpt-5.6-terra
 ```
 
 ### Top-level keys

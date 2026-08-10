@@ -32,7 +32,7 @@ data class CliRunRequest(
   val deviceId: String? = null,
   /** LLM provider override (e.g., "openai", "anthropic"). */
   val llmProvider: String? = null,
-  /** LLM model override (e.g., "gpt-4.1"). */
+  /** LLM model override (e.g., "gpt-5.6-terra"). */
   val llmModel: String? = null,
   /**
    * Tri-state replay-vs-AI control:

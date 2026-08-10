@@ -69,8 +69,8 @@ object BuiltInLlmModelRegistry {
 
   /**
    * Finds a built-in model by key, or null if not found. Accepts either:
-   * - `"provider_id/model_id"` (e.g. `"anthropic/claude-sonnet-4-6"`) — loads only that provider
-   * - `"model_id"` (e.g. `"claude-sonnet-4-6"`) — searches all providers (needs discovery)
+   * - `"provider_id/model_id"` (e.g. `"anthropic/claude-sonnet-5"`) — loads only that provider
+   * - `"model_id"` (e.g. `"claude-sonnet-5"`) — searches all providers (needs discovery)
    */
   fun find(key: String): TrailblazeLlmModel? {
     val slashIndex = key.indexOf('/')

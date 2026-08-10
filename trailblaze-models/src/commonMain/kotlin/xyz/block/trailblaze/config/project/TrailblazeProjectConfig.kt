@@ -16,7 +16,7 @@ import xyz.block.trailblaze.llm.config.LlmConfig
  * ```yaml
  * defaults:
  *   target: my-app
- *   llm: openai/gpt-4.1
+ *   llm: openai/gpt-5.6-terra
  *
  * targets:
  *   - my-app
@@ -24,7 +24,7 @@ import xyz.block.trailblaze.llm.config.LlmConfig
  *
  * llm:
  *   defaults:
- *     model: openai/gpt-4.1
+ *     model: openai/gpt-5.6-terra
  * ```
  *
  * ## `targets:` semantics

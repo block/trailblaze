@@ -146,7 +146,7 @@ llm:
   providers:
     openai:
       models:
-        - id: gpt-4.1
+        - id: gpt-5.6-terra
           max_output_tokens: 16384   # our gateway caps output lower than the default
 ```
 

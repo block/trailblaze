@@ -469,7 +469,7 @@ class CliCommandValidationTest {
     title = "Configure CLI settings",
     commands =
       [
-        "trailblaze config llm anthropic/claude-sonnet-4-6",
+        "trailblaze config llm anthropic/claude-sonnet-5",
         "trailblaze config self-heal true",
         "trailblaze config agent MULTI_AGENT_V3",
       ],

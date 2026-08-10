@@ -46,7 +46,7 @@ object LlmAuthResolver {
   /** Instrumentation arg for a custom chat completions path. */
   const val CHAT_COMPLETIONS_PATH_ARG = "trailblaze.llm.provider.chat_completions_path"
 
-  /** Instrumentation arg for the default model key (e.g., "openai/gpt-4.1"). */
+  /** Instrumentation arg for the default model key (e.g., "openai/gpt-5.6-terra"). */
   const val DEFAULT_MODEL_ARG = "trailblaze.llm.default_model"
 
   /**

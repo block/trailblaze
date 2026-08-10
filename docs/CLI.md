@@ -1155,9 +1155,9 @@ trailblaze config reset
 ```bash
 trailblaze config                                    # Show all settings
 trailblaze config llm                                # Show current LLM provider/model
-trailblaze config llm anthropic/claude-sonnet-4-6    # Set both provider + model
+trailblaze config llm anthropic/claude-sonnet-5      # Set both provider + model
 trailblaze config llm-provider openai                # Set provider only
-trailblaze config llm-model gpt-4-1                  # Set model only
+trailblaze config llm-model gpt-5.6-terra            # Set model only
 trailblaze config agent MULTI_AGENT_V3               # Set agent implementation
 trailblaze config models                             # List available LLM models
 trailblaze config agents                             # List agent implementations

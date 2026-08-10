@@ -8291,7 +8291,7 @@ public final class xyz/block/trailblaze/llm/providers/OllamaTrailblazeLlmModelLi
 public final class xyz/block/trailblaze/llm/providers/OpenAITrailblazeLlmModelList : xyz/block/trailblaze/llm/TrailblazeLlmModelList {
 	public static final field INSTANCE Lxyz/block/trailblaze/llm/providers/OpenAITrailblazeLlmModelList;
 	public fun getEntries ()Ljava/util/List;
-	public final fun getOPENAI_GPT_4_1 ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
+	public final fun getOPENAI_DEFAULT ()Lxyz/block/trailblaze/llm/TrailblazeLlmModel;
 	public fun getProvider ()Lxyz/block/trailblaze/llm/TrailblazeLlmProvider;
 }
 
