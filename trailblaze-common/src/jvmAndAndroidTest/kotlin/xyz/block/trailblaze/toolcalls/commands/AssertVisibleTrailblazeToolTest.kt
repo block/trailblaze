@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.api.toViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -321,6 +322,42 @@ class AssertVisibleTrailblazeToolTest {
     assertEquals(null, lowered?.idRegex)
   }
 
+  @Test
+  fun `ios axe ref maps to the toViewHierarchyTreeNode-converted hierarchy`() {
+    // Regression test: AxeScreenState derives viewHierarchy from the TrailblazeNode tree via
+    // toViewHierarchyTreeNode(). The converted nodes carried no legacy centerPoint string, so
+    // the ref → view-hierarchy DFS below never matched and agent-mode assertVisible threw
+    // "Could not map ref" for EVERY ref on IOS_AXE.
+    val trailblazeTree = TrailblazeNode(
+      nodeId = 1,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Application"),
+      children = listOf(
+        TrailblazeNode(
+          nodeId = 2,
+          ref = "g941",
+          bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+          driverDetail = DriverNodeDetail.IosAxe(type = "Button", label = "Settings"),
+        ),
+      ),
+    )
+    val context = contextWithTree(
+      trailblazeNodeTree = trailblazeTree,
+      // Exactly what AxeScreenState.viewHierarchy does.
+      viewHierarchy = trailblazeTree.toViewHierarchyTreeNode(),
+      platform = TrailblazeDevicePlatform.IOS,
+      driverType = TrailblazeDriverType.IOS_AXE,
+    )
+
+    val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(
+      AssertVisibleTrailblazeTool(
+        ref = "g941",
+        reasoning = "verify something is visible",
+      ).toExecutableTrailblazeTools(context).single(),
+    )
+    assertNotNull(delegated.nodeSelector)
+  }
+
   // region helpers
 
   // toExecutableTrailblazeTools never reads maestroTrailblazeAgent, so leaving it null
@@ -328,13 +365,15 @@ class AssertVisibleTrailblazeToolTest {
   private fun contextWithTree(
     trailblazeNodeTree: TrailblazeNode?,
     viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode(),
+    platform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    driverType: TrailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
   ): TrailblazeToolExecutionContext {
     val screen = object : ScreenState {
       override val screenshotBytes: ByteArray? = null
       override val deviceWidth: Int = 1000
       override val deviceHeight: Int = 1000
       override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchy
-      override val trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+      override val trailblazeDevicePlatform = platform
       override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
       override val trailblazeNodeTree: TrailblazeNode? = trailblazeNodeTree
     }
@@ -344,9 +383,9 @@ class AssertVisibleTrailblazeToolTest {
       trailblazeDeviceInfo = TrailblazeDeviceInfo(
         trailblazeDeviceId = TrailblazeDeviceId(
           instanceId = "t",
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+          trailblazeDevicePlatform = platform,
         ),
-        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        trailblazeDriverType = driverType,
         widthPixels = 1000,
         heightPixels = 1000,
       ),

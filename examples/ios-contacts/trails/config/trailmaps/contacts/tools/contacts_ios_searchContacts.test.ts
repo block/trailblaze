@@ -9,8 +9,43 @@
 
 import { describe, expect, test } from "bun:test";
 import { createMockClient, createMockContext } from "@trailblaze/scripting/testing";
+import type { MatchDescriptor, TrailblazeNodeSelector } from "@trailblaze/scripting";
 
-import { contacts_ios_searchContacts } from "./contacts_ios_searchContacts";
+import {
+  contacts_ios_searchContacts,
+  type SearchContactsArgs,
+} from "./contacts_ios_searchContacts";
+
+/** One canned `findMatches` hit — the shape the daemon returns for a visible row. */
+const ROW_MATCH: MatchDescriptor = {
+  indexPath: [0, 1],
+  bounds: { left: 0, top: 200, right: 390, bottom: 260 },
+  matchedText: "John Appleseed",
+};
+
+/** Stubs `findMatches` to report the result row as visible. */
+function stubRowVisible(client: ReturnType<typeof createMockClient>): void {
+  client.stub("findMatches", { textContent: "", structuredContent: [ROW_MATCH] });
+}
+
+/**
+ * Compiles a selector's emitted `*Regex` the way the device resolves it: node selectors
+ * full-match their pattern, so anchor it before testing candidate labels.
+ */
+function anchored(pattern: string | null | undefined): RegExp {
+  expect(typeof pattern).toBe("string");
+  return new RegExp(`^(?:${pattern})$`);
+}
+
+/** Runs the tool against a stubbed visible row and returns the selector the tap dispatched. */
+async function rowSelectorFor(args: SearchContactsArgs): Promise<TrailblazeNodeSelector> {
+  const client = createMockClient();
+  stubRowVisible(client);
+  await contacts_ios_searchContacts(args, createMockContext({ platform: "ios" }), client);
+  const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
+  expect(tapCall).toBeDefined();
+  return tapCall!.args.nodeSelector as TrailblazeNodeSelector;
+}
 
 describe("contacts_ios_searchContacts", () => {
   test("throws a descriptive no-results error when the 'No Results' banner is present", async () => {
@@ -61,11 +96,12 @@ describe("contacts_ios_searchContacts", () => {
     expect(client.calls).toHaveLength(6);
   });
 
-  test("taps the first matching row when results are present", async () => {
-    // The default mock returns success for every dispatch — including the negative
-    // no-results probe, whose success means "no banner element on screen", i.e. results
-    // ARE present. The tool then taps the row matching `rowText` and returns.
+  test("waits for and taps the matching row via a label-scoped selector", async () => {
+    // The default mock returns success for the negative no-results probe (no banner →
+    // results ARE present); `findMatches` is stubbed to report the row as visible. The
+    // tool then taps the row matching `rowText` and returns.
     const client = createMockClient();
+    stubRowVisible(client);
     const ctx = createMockContext({ platform: "ios" });
 
     const result = await contacts_ios_searchContacts(
@@ -81,11 +117,145 @@ describe("contacts_ios_searchContacts", () => {
       "tapOnElementWithText", // focus the "Search" input
       "inputText", // type the query
       "assertNotVisibleWithText", // no-results probe — passes (no banner) → results present
-      "tapOnElementWithText", // tap the result row
+      "findMatches", // wait for the result row to render
+      "tapOnElementBySelector", // tap the result row
     ]);
-    // The row tap targets `rowText`, not the raw query — the partial-prefix flow.
-    expect(client.calls[6]?.args).toMatchObject({ text: "John Appleseed" });
+    // The row tap targets `rowText`, not the raw query — the partial-prefix flow — and the
+    // wait probe uses the same selector the tap dispatches, so they can't drift apart.
+    const tapSelector = client.calls[7]?.args.nodeSelector as TrailblazeNodeSelector;
+    expect(client.calls[6]?.args.selector).toEqual(tapSelector);
+    expect(tapSelector.iosMaestro?.accessibilityTextRegex).toContain("John Appleseed");
     expect(result).toContain('opened the row matching "John Appleseed"');
+  });
+
+  test("query == rowText: the node-selector row tap cannot resolve the search field", async () => {
+    // THE regression this tool shipped with (ios-contacts-replay-smoke red 23/25 on main):
+    // `contacts_ios_openContact` passes the same full name as `query` and `rowText`, and on
+    // the host driver a bare text tap resolved the search field's own typed text (a text
+    // field's Maestro `text` attribute is its VALUE), so no navigation happened. The
+    // contract pinned here: the row tap is `tapOnElementBySelector` matching on the AX
+    // *label* only — a text field's label is its placeholder, never the typed value — with
+    // no text/value-shaped predicate the typed query could satisfy, and no bare text tap of
+    // `rowText` is dispatched at all. The framework's Maestro fallback lowers
+    // `accessibilityTextRegex` to legacy `textRegex` (text | hintText | accessibilityText),
+    // which the search field's typed value CAN satisfy — but the same lowering carries the
+    // results-list `childOf` scope through, so the field stays out of the candidate set on
+    // that path too (see the results-list scope test below).
+    const client = createMockClient();
+    stubRowVisible(client);
+    const ctx = createMockContext({ platform: "ios" });
+
+    await contacts_ios_searchContacts(
+      { query: "John Appleseed", rowText: "John Appleseed" },
+      ctx,
+      client,
+    );
+
+    // No bare text tap ever targets the row text (the only tapOnElementWithText allowed is
+    // the "Search" field focus).
+    const bareTextTaps = client.calls
+      .filter((c) => c.tool === "tapOnElementWithText")
+      .map((c) => c.args.text);
+    expect(bareTextTaps).toEqual(["Search"]);
+
+    const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
+    expect(tapCall).toBeDefined();
+    const selector = tapCall!.args.nodeSelector as TrailblazeNodeSelector;
+    // Label-scoped only: no predicate that a text field's typed value can satisfy.
+    expect(selector.iosMaestro?.accessibilityTextRegex).toBeDefined();
+    expect(selector.iosMaestro?.textRegex).toBeUndefined();
+    expect(selector.iosMaestro?.hintTextRegex).toBeUndefined();
+    // Deterministic single-node resolution when the cell and its inner label both match.
+    expect(selector.index).toBe(0);
+  });
+
+  test("row selector matches the row label literally, anywhere in the label (contains)", async () => {
+    // The emitted accessibilityTextRegex is a wire contract the device resolves. Verify its
+    // BEHAVIOR (not its exact string). Node selectors full-match their regex, so the emitted
+    // pattern must preserve the CONTAINS semantics the old `tapOnElementWithText` had:
+    // `rowText` may appear anywhere in the row label — a last-name-only query (rowText
+    // defaults to the query) must match the full-name row, and labels may append detail
+    // text after the name. A name containing regex metacharacters is matched literally,
+    // not as a pattern.
+    const client = createMockClient();
+    stubRowVisible(client);
+    const ctx = createMockContext({ platform: "ios" });
+
+    await contacts_ios_searchContacts(
+      { query: "Dr", rowText: "Dr. O'Brien (Work)" },
+      ctx,
+      client,
+    );
+
+    const tapCall = client.calls.find((c) => c.tool === "tapOnElementBySelector");
+    const selector = tapCall!.args.nodeSelector as TrailblazeNodeSelector;
+    const pattern = anchored(selector.iosMaestro?.accessibilityTextRegex);
+    expect(pattern.test("Dr. O'Brien (Work)")).toBe(true);
+    expect(pattern.test("Dr. O'Brien (Work), mobile")).toBe(true);
+    // Contains, not prefix: the label may carry text BEFORE rowText too.
+    expect(pattern.test("Prof. Dr. O'Brien (Work)")).toBe(true);
+    // "." must not act as a wildcard — a literal-escape regression would match this.
+    expect(pattern.test("DrX O'Brien (Work)")).toBe(false);
+  });
+
+  test("a last-name-only rowText still matches the full-name row", async () => {
+    // The canonical contains case, and the one a prefix-shaped pattern would break: searching
+    // by surname (rowText defaults to the query) must still match the row whose label leads
+    // with the first name.
+    const selector = await rowSelectorFor({ query: "Appleseed" });
+    const pattern = anchored(selector.iosMaestro?.accessibilityTextRegex);
+    expect(pattern.test("John Appleseed")).toBe(true);
+    expect(pattern.test("Appleseed")).toBe(true);
+    expect(pattern.test("Kate Bell")).toBe(false);
+  });
+
+  test("a rowText that also matches the search field's label is scoped to the results list", async () => {
+    // Contains matching on the label is necessary (previous test) but not sufficient. Any
+    // `rowText` that is a substring of the search chrome's labels — "ear" for a "Teddy Bear"
+    // row is a substring of the field's "Search" placeholder, of the "Search results" panel
+    // label, and of the "Clear text" button — makes the label predicate alone ambiguous. Both
+    // `findMatches` and the tap use this selector with `index: 0`, so if the search field were
+    // still a candidate the topmost match could be the field: the wait would succeed, the tap
+    // would only focus it, and the tool would report success without opening the row.
+    const selector = await rowSelectorFor({ query: "ear" });
+
+    // The ambiguity is real — this is why the extra constraint exists, not a regression.
+    const rowPattern = anchored(selector.iosMaestro?.accessibilityTextRegex);
+    expect(rowPattern.test("Teddy Bear")).toBe(true);
+    expect(rowPattern.test("Search")).toBe(true);
+    expect(rowPattern.test("Clear text")).toBe(true);
+
+    // What removes the search field is the structural scope, not a narrower text match: the
+    // match must be a DESCENDANT of the search-results panel. On the real Contacts hierarchy
+    // the rows live under that panel while the search field and its chrome live under a
+    // sibling "Toolbar" branch, so the whole field/chrome family is out of the candidate set
+    // before `index: 0` is applied. The scope anchor is the panel and only the panel — it can
+    // never resolve to the search field itself, and `childOf` excludes the anchor, so the
+    // full-screen panel node can't be tapped either.
+    const scopePattern = anchored(selector.childOf?.iosMaestro?.accessibilityTextRegex);
+    expect(scopePattern.test("Search results")).toBe(true);
+    expect(scopePattern.test("Search")).toBe(false);
+    expect(scopePattern.test("Search: ear")).toBe(false);
+    expect(scopePattern.test("Clear text")).toBe(false);
+    expect(scopePattern.test("Toolbar")).toBe(false);
+
+    // Index stays the last-resort row disambiguator (cell vs. its inner StaticText).
+    expect(selector.index).toBe(0);
+  });
+
+  test("throws a descriptive error when results exist but the rowText row never appears", async () => {
+    // No banner (all the tool actually established) but `findMatches` reports no row labeled
+    // `rowText` within the wait budget — the "wrong rowText" failure, distinct from "wrong
+    // query". No tap may be dispatched against a row that never rendered.
+    const client = createMockClient();
+    client.stub("findMatches", { textContent: "", structuredContent: [] });
+    const ctx = createMockContext({ platform: "ios" });
+
+    await expect(
+      contacts_ios_searchContacts({ query: "John", rowText: "Johnny Nonexistent" }, ctx, client),
+    ).rejects.toThrow(/shows no "No Results" banner, but no row labeled "Johnny Nonexistent"/);
+
+    expect(client.calls.map((c) => c.tool)).not.toContain("tapOnElementBySelector");
   });
 
   test("returns early without probing No Results when openFirstResult is false", async () => {
@@ -114,6 +284,7 @@ describe("contacts_ios_searchContacts", () => {
 
   test("applies module defaults when args fields are omitted", async () => {
     const client = createMockClient();
+    stubRowVisible(client);
     const ctx = createMockContext({ platform: "ios" });
 
     // No `query` → tool falls back to its `DEFAULT_QUERY` module constant. Under the

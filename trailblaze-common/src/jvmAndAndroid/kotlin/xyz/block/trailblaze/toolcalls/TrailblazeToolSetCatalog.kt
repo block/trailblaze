@@ -69,14 +69,26 @@ object TrailblazeToolSetCatalog {
    * workspace overlay wins — same precedence rule as the filesystem resource source layering
    * in `AppTargetDiscovery` and the YAML-tool overlay in `TrailblazeSerializationInitializer`.
    */
-  fun defaultEntries(): List<ToolSetCatalogEntry> {
+  fun defaultEntries(): List<ToolSetCatalogEntry> = mergedWithClasspath(workspaceCatalogEntries)
+
+  /**
+   * Merges [workspaceEntries] over the classpath snapshot and returns the result WITHOUT
+   * touching the registered overlay. Same precedence as [defaultEntries] — workspace wins on
+   * an id collision — because that method is implemented in terms of this one; there is one
+   * merge rule, not two.
+   *
+   * For callers that resolve a workspace themselves and want a catalog scoped to it rather
+   * than a process-global mutation: `trailblaze compile` / `trailblaze check` pass the result
+   * straight to `PerTrailmapClientDtsEmitter.emit(catalog = ...)`, so a one-shot CLI compile
+   * can't leave a stale overlay behind for a later session (or a later test) in the same JVM.
+   */
+  fun mergedWithClasspath(workspaceEntries: List<ToolSetCatalogEntry>): List<ToolSetCatalogEntry> {
     val classpath = defaultEntriesCache
-    val overlay = workspaceCatalogEntries
-    if (overlay.isEmpty()) return classpath
+    if (workspaceEntries.isEmpty()) return classpath
     // Merge by id with workspace winning. `associateBy` + `+` is the kotlin-idiomatic
     // last-write-wins for Map shape; convert back to a sorted list to keep stable iteration
     // order (`defaultEntries()` callers depend on it for log determinism).
-    val merged = (classpath + overlay).associateBy { it.id }
+    val merged = (classpath + workspaceEntries).associateBy { it.id }
     return merged.values.sortedBy { it.id }
   }
 

@@ -4,7 +4,6 @@ import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
-import assertk.assertions.isLessThan
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -21,8 +20,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
-import kotlin.system.measureTimeMillis
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 /**
  * Faithful, `bun`-backed coverage of the MCP `initialize` handshake bound — the fix for the
@@ -94,19 +93,18 @@ class McpSubprocessHandshakeTimeoutTest {
       )
       val capture = StderrCapture()
 
-      val elapsedMs = measureTimeMillis {
-        assertFailure {
-          McpSubprocessSession.connect(
-            spawnedProcess = spawned,
-            stderrCapture = capture,
-            handshakeTimeoutMillis = 1_000,
-          )
-        }.isInstanceOf(McpSubprocessHandshakeTimeoutException::class)
+      val thrown = assertFailsWith<McpSubprocessHandshakeTimeoutException> {
+        McpSubprocessSession.connect(
+          spawnedProcess = spawned,
+          stderrCapture = capture,
+          handshakeTimeoutMillis = 1_000,
+        )
       }
 
-      // Bounded on the 1s handshake window + teardown ladder — nowhere near "forever", which is
-      // what an unbounded connect against a never-exiting subprocess would take.
-      assertThat(elapsedMs).isLessThan(15_000L)
+      // Attributable: the failure names the culprit script and the bound it blew, so the
+      // session-startup error points at this fixture rather than "something timed out".
+      assertThat(thrown.scriptName).isEqualTo(hangingFixture.name)
+      assertThat(thrown.timeoutMillis).isEqualTo(1_000L)
       // The watchdog force-destroyed the subprocess — no orphaned `bun` left behind.
       assertThat(spawned.process.isAlive).isEqualTo(false)
       // Teardown closed the stderr capture on the way out.

@@ -405,6 +405,14 @@ export interface QueuedFindMatchesClient extends TrailblazeClient {
    * moving UI across both. Like the findMatches queue, exhaustion is loud (throws with the args).
    */
   queueWaitUntilNotVisible(responses: boolean[]): void;
+  /**
+   * Queue rejections for the next calls to `toolName`, modelling a tool that fails on device — a tap
+   * whose selector resolved nothing, say. Each queued message rejects one call with the production
+   * client's `"tool failed: <message>"` wording; once the queue drains, later calls resolve normally.
+   * That drain is the point: it is what lets a test pin how a retry loop behaves across a failure,
+   * rather than only its all-succeed and all-fail ends.
+   */
+  queueToolFailure(toolName: string, messages: string[]): void;
 }
 
 /**
@@ -419,9 +427,14 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const findMatchesQueue: Array<MatchDescriptor[]> = [];
   const waitUntilNotVisibleQueue: boolean[] = [];
+  const failureQueues = new Map<string, string[]>();
 
   const dispatch = (name: string, args: Record<string, unknown>): unknown => {
     calls.push({ tool: name, args });
+    const queuedFailure = failureQueues.get(name)?.shift();
+    if (queuedFailure !== undefined) {
+      throw new Error(`trailblaze.client.callTool("${name}") tool failed: ${queuedFailure}`);
+    }
     if (name === "findMatches") {
       if (findMatchesQueue.length === 0) {
         throw new Error(
@@ -461,6 +474,14 @@ export function createQueuedFindMatchesClient(): QueuedFindMatchesClient {
     },
     queueWaitUntilNotVisible(responses) {
       waitUntilNotVisibleQueue.push(...responses);
+    },
+    queueToolFailure(toolName, messages) {
+      const existing = failureQueues.get(toolName);
+      if (existing) {
+        existing.push(...messages);
+      } else {
+        failureQueues.set(toolName, [...messages]);
+      }
     },
   };
 }

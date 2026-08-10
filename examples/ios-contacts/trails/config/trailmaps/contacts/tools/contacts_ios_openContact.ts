@@ -43,9 +43,13 @@ export const contacts_ios_openContact = trailblaze.tool<OpenContactArgs>(
       openFirstResult: true,
     });
     // Confirm we actually reached the contact DETAIL screen before trusting the
-    // heading. A name-only check is NOT sufficient: when the contact doesn't exist
-    // the row tap lands on the search field (no navigation) and the typed query keeps
-    // `name` visible, so a heading assert still passes — a false "opened". The detail
+    // heading. A name-only check is NOT sufficient: the typed query keeps `name`
+    // visible in the search field, so if navigation silently failed a heading
+    // assert would still pass — a false "opened". (The search tool's row tap is
+    // label-scoped so its node-selector path can no longer resolve the search
+    // field; the framework's Maestro fallback lowers it to a legacy text match
+    // that still could, which is why this anchor stays as the independent
+    // destination check.) The detail
     // screen's top-right "Edit" button is the reliable detail-only anchor (the
     // list/search screens surface "Add"/"Cancel" there, never "Edit"). We resolve it
     // via `findMatches` against the iOS accessibility tree — `assertVisibleWith-

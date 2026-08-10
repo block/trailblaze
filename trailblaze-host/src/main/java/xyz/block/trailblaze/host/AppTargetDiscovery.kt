@@ -25,6 +25,7 @@ import java.io.File
 import java.nio.file.Paths
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import kotlin.reflect.KClass
 
@@ -310,6 +311,58 @@ object AppTargetDiscovery {
   }
 
   /**
+   * Resolves a workspace's on-disk toolsets and returns them merged over the classpath
+   * snapshot, WITHOUT running target discovery and WITHOUT registering a catalog overlay.
+   *
+   * [discover] is the usual path, but it also loads targets, companions and custom tool classes
+   * — work a deviceless caller has no use for. `trailblaze compile` / `trailblaze check` need
+   * the toolsets because the typed-surface emitter expands a trailmap's
+   * `platforms.<p>.tool_sets:` through [TrailblazeToolSetCatalog], whose default entries are the
+   * classpath snapshot alone; they need nothing else [discover] produces. Returning the catalog
+   * instead of mutating the process-global overlay keeps a one-shot CLI compile from leaving
+   * state behind for a later session — or a later test — in the same JVM.
+   *
+   * **Scope: on-disk YAML only.** This walks the `toolsets/` and `tools/` directories under each
+   * `trailmaps/<id>/`. Unlike [discover] it does NOT fold in a workspace
+   * `trailblaze.yaml`'s inline `toolsets:` / `tools:`, nor CLASS-mode custom tool classes. That
+   * matches what the compile path can see: both `TrailblazeCompiler.compile` and the CLI's
+   * codegen re-resolution build a synthetic [TrailblazeProjectConfig], so `trailblaze.yaml` is
+   * not read on that path at all and an inline toolset fails reference validation before it
+   * could reach the emitter.
+   *
+   * Registers the workspace's YAML-defined tools first for the same reason [discover] does — the
+   * resolver snapshots the known YAML tool names at construction, so a workspace `.tool.yaml`
+   * that isn't registered by then can't be referenced by name from a workspace toolset. That
+   * registration IS a process-global mutation (the resolver reads the global registry, so there
+   * is no scoped alternative today); tests exercising more than one workspace per JVM should
+   * reset it with `TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())`.
+   *
+   * Best-effort: a discovery failure logs and falls back to the classpath-only catalog rather
+   * than taking the caller down, matching the log-and-continue posture of the rest of this
+   * object.
+   */
+  fun workspaceToolSetCatalog(
+    resourceSource: ConfigResourceSource,
+    logPrefix: String = "[AppTargetDiscovery]",
+  ): List<ToolSetCatalogEntry> = try {
+    registerWorkspaceYamlTools(resourceSource, logPrefix)
+    val resolver = ToolNameResolver.fromBuiltInAndCustomTools(resourceSource = resourceSource)
+    val toolSets = ToolSetYamlLoader.discoverAndLoadAll(
+      toolNameResolver = resolver,
+      resourceSource = resourceSource,
+    )
+    val entries = toolSets.values.map { it.toCatalogEntry() }
+    logWorkspaceToolSets(entries, logPrefix, verb = "Resolved")
+    TrailblazeToolSetCatalog.mergedWithClasspath(entries)
+  } catch (e: Exception) {
+    Console.error(
+      "$logPrefix Workspace toolset resolution failed (${e::class.simpleName}: ${e.message}); " +
+        "continuing with classpath toolsets only.\n${e.stackTraceToString()}",
+    )
+    TrailblazeToolSetCatalog.defaultEntries()
+  }
+
+  /**
    * Converts the already-resolved workspace-aware toolset map (classpath + filesystem,
    * computed at line ~102 of `discover()` with the composite resource source) into
    * `TrailblazeToolSetCatalog` entries and registers them as the workspace overlay.
@@ -324,18 +377,32 @@ object AppTargetDiscovery {
   ) {
     val entries = toolSets.values.map { it.toCatalogEntry() }
     TrailblazeToolSetCatalog.registerWorkspaceToolSets(entries)
+    logWorkspaceToolSets(entries, logPrefix, verb = "Registered")
+  }
+
+  /**
+   * Shared breakdown log for the two callers that resolve workspace toolsets —
+   * [registerWorkspaceToolSets] (installs the global overlay) and [workspaceToolSetCatalog]
+   * (returns a scoped catalog). [verb] is the only difference, so the workspace-only vs
+   * classpath-override accounting can't drift between them.
+   */
+  private fun logWorkspaceToolSets(
+    entries: List<ToolSetCatalogEntry>,
+    logPrefix: String,
+    verb: String,
+  ) {
     if (entries.isEmpty()) return
     val classpathIds = TrailblazeToolSetCatalog.getClasspathEntries().map { it.id }.toSet()
-    val overrides = entries.map { it.id }.toSet().intersect(classpathIds)
-    val workspaceOnlyIds = entries.map { it.id }.toSet() - classpathIds
+    val ids = entries.map { it.id }.toSet()
+    val overrides = ids.intersect(classpathIds)
     val overrideSuffix = if (overrides.isNotEmpty()) {
       " (overrides classpath: ${overrides.sorted()})"
     } else {
       ""
     }
     Console.log(
-      "$logPrefix Registered ${entries.size} toolset(s) into catalog overlay " +
-        "(workspace-only: ${workspaceOnlyIds.sorted()})$overrideSuffix",
+      "$logPrefix $verb ${entries.size} toolset(s) from the layered config source " +
+        "(workspace-only: ${(ids - classpathIds).sorted()})$overrideSuffix",
     )
   }
 

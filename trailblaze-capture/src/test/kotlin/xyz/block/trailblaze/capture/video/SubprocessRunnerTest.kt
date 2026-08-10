@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.capture.video
 
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -49,17 +48,12 @@ class SubprocessRunnerTest {
 
   @Test
   fun `timeout destroys the subprocess and returns null`() {
-    // 10s sleep against a 1s timeout — the helper must destroy the subprocess and return
-    // null. Measure elapsed wall-clock to confirm we didn't sit on the sleep (would mean
-    // destroyForcibly wasn't reached).
-    val start = System.nanoTime()
+    // 10s sleep against a 1s timeout — the helper must take the timeout branch, destroy the
+    // subprocess and return null. The null return IS the discriminator, no wall-clock needed:
+    // `sleep 10` exits 0, so a helper that sat on it (the readText-before-waitFor shape) would
+    // see `finished == true` and hand back a SubprocessResult with exitCode 0 instead of null.
     val result = runSubprocessWithTimeout(listOf("sh", "-c", "sleep 10"), timeoutSeconds = 1)
-    val elapsedSeconds = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - start)
     assertNull(result, "expected null when the subprocess times out")
-    assertTrue(
-      elapsedSeconds < 5,
-      "expected the helper to return within ~1s+slack on timeout; took ${elapsedSeconds}s — destroyForcibly probably didn't fire",
-    )
   }
 
   @Test

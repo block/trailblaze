@@ -7,6 +7,7 @@ import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.host.AppTargetDiscovery
 import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
 import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
 import xyz.block.trailblaze.host.ResolvedTargetReportEmitter
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.nio.file.Path
@@ -142,10 +144,27 @@ class CompileCommand : Callable<Int> {
           "TRAILBLAZE_SDK_DIR carries node_modules/ts-json-schema-generator.",
       )
     }
+    // Reference validation and the typed-surface emitter below both have to see toolsets and
+    // tools this workspace authored on disk, not only the ids the framework jar bundles. Layer
+    // classpath / workspace / workspace-dist (later wins on a same-relPath collision) through the
+    // same shared factory `AppTargetDiscovery.discover` uses, so the CLI and the daemon resolve a
+    // workspace identically. `WorkspaceCompileBootstrap` builds a hand-rolled 2-layer composite
+    // for the daemon-init recompile and its comment names the failure this avoids: a trailmap
+    // referencing its own workspace toolset would fail compile with "unknown toolset" even though
+    // the toolset is right there on disk.
+    //
+    // Anchored on `resolvedInputDir` rather than `platformConfigResourceSource()` because
+    // `--input` is authoritative here: the platform default resolves the workspace by walking
+    // up from the CWD, which is the wrong tree whenever the caller pointed `--input` somewhere
+    // else. Collapses to classpath-only when the input dir doesn't exist.
+    val configSource = workspaceLayeredConfigResourceSource(
+      configDir = resolvedInputDir,
+      logPrefix = "trailblaze $commandLabel:",
+    )
     val result = TrailblazeCompiler.compile(
       trailmapsDir = trailmapsDir,
       outputDir = resolvedOutputDir,
-      referenceSource = ClasspathConfigResourceSource,
+      referenceSource = configSource,
       commandLabel = commandLabel,
       scriptedToolEnrichment = scriptedToolEnrichment,
     )
@@ -219,8 +238,31 @@ class CompileCommand : Callable<Int> {
       return EXIT_COMPILE_ERROR
     }
 
+    // Resolve this workspace's own toolsets for the emitter. It expands each trailmap's
+    // `platforms.<p>.tool_sets:` through `TrailblazeToolSetCatalog`, whose default entry set is
+    // the classpath snapshot only — the workspace overlay is normally installed by
+    // `AppTargetDiscovery.discover()`, which this command never runs. Without them, a tool that
+    // reaches a trailmap via one of its OWN toolsets is absent from the generated
+    // `trailblaze-client.d.ts`, and a `ctx.tools.<name>(...)` call on it fails the typecheck
+    // phase with `Property '<name>' does not exist` even though runtime dispatch resolves it
+    // fine through the global registry.
+    //
+    // Passed explicitly rather than registered as the process-global overlay: a one-shot
+    // compile has no business leaving catalog state behind for whatever runs next in this JVM
+    // (a daemon session, or the next test). Same merge rule either way — `mergedWithClasspath`
+    // is what `defaultEntries()` is implemented in terms of. Scope is on-disk YAML toolsets and
+    // tools; see the function's KDoc for why `trailblaze.yaml` inline toolsets are out of reach
+    // on this path.
+    val toolSetCatalog = AppTargetDiscovery.workspaceToolSetCatalog(
+      resourceSource = configSource,
+      logPrefix = "trailblaze $commandLabel:",
+    )
+
     val emitted = try {
-      PerTrailmapClientDtsEmitter.emit(resolvedTrailmaps = resolvedTrailmaps)
+      PerTrailmapClientDtsEmitter.emit(
+        resolvedTrailmaps = resolvedTrailmaps,
+        catalog = toolSetCatalog,
+      )
     } catch (e: Exception) {
       Console.error("trailblaze $commandLabel: typed-bindings codegen failed: ${e.message ?: e.javaClass.simpleName}")
       return EXIT_COMPILE_ERROR

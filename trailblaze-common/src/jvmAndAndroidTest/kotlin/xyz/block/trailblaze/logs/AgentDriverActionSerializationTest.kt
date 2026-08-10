@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Test
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.TapDispatchRoute
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -30,6 +31,38 @@ class AgentDriverActionSerializationTest {
     assertEquals(100, deserialized.x)
     assertEquals(200, deserialized.y)
     assertEquals(AgentActionType.TAP_POINT, deserialized.type)
+  }
+
+  @Test
+  fun `TapPoint carries the dispatch route that actually delivered the tap`() {
+    val action = AgentDriverAction.TapPoint(
+      x = 540,
+      y = 1790,
+      dispatchRoute = TapDispatchRoute.GESTURE_AFTER_ACTION_CLICK_MISS,
+    )
+    val serialized = json.encodeToString(AgentDriverAction.serializer(), action)
+    val deserialized = json.decodeFromString(AgentDriverAction.serializer(), serialized)
+    assertIs<AgentDriverAction.TapPoint>(deserialized)
+    assertEquals(
+      TapDispatchRoute.GESTURE_AFTER_ACTION_CLICK_MISS,
+      deserialized.dispatchRoute,
+      "A silent ACTION_CLICK lookup miss has to survive into the log — it is indistinguishable " +
+        "from a plain gesture otherwise.",
+    )
+  }
+
+  @Test
+  fun `a tap with no route emits no key and reads back as no route`() {
+    // A route-less encoding is byte-identical to what a session recorded before the field existed
+    // wrote, so decoding it back is the compatibility check: those logs still have to load.
+    val serialized = json.encodeToString(
+      AgentDriverAction.serializer(),
+      AgentDriverAction.TapPoint(x = 1, y = 2),
+    )
+    assertEquals(false, serialized.contains("dispatchRoute"), "Payload was: $serialized")
+    val deserialized = json.decodeFromString(AgentDriverAction.serializer(), serialized)
+    assertIs<AgentDriverAction.TapPoint>(deserialized)
+    assertEquals(null, deserialized.dispatchRoute)
   }
 
   @Test

@@ -22,7 +22,7 @@ function buildRunCommand(cfg) {
   if (cfg.useRecordedSteps === 'replay') parts.push('--use-recorded-steps');
   else if (cfg.useRecordedSteps === 'ai') parts.push('--no-use-recorded-steps');
   if (cfg.agent && cfg.agent !== 'TRAILBLAZE_RUNNER') parts.push('--agent', cfg.agent);
-  if (cfg.maxLlmCalls !== '' && String(cfg.maxLlmCalls) !== '50') parts.push('--max-llm-calls', String(cfg.maxLlmCalls));
+  if (cfg.maxLlmCalls !== '' && String(cfg.maxLlmCalls) !== String(DEFAULT_MAX_LLM_CALLS)) parts.push('--max-llm-calls', String(cfg.maxLlmCalls));
   if ((cfg.llm || '').trim()) parts.push('--llm', shQuote(cfg.llm.trim()));
   if (cfg.verbose) parts.push('--verbose');
   if (cfg.devicePlatform === 'web' && !cfg.headless) parts.push('--no-headless');

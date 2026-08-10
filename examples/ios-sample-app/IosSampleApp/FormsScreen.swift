@@ -56,6 +56,12 @@ struct FormsScreen: View {
             .accessibilityIdentifier("tv_submission_result")
         }
 
+        // Kept below the form so the field/button selectors above it stay put.
+        NavigationLink("Open Web Content") {
+          WebContentScreen()
+        }
+        .accessibilityIdentifier("link_web_content")
+
         Spacer()
       }
       .padding(16)

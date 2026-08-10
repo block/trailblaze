@@ -10,6 +10,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.axe.AxeCli
 import xyz.block.trailblaze.host.axe.AxeJsonMapper
+import xyz.block.trailblaze.host.axe.AxeViewportClamp
 import java.nio.file.Files
 import java.nio.file.Paths
 
@@ -26,6 +27,8 @@ class AxeScreenState(
   private val udid: String,
   override val deviceWidth: Int,
   override val deviceHeight: Int,
+  // Injectable for tests only — production always shells out to the AXe CLI.
+  private val describeUi: () -> AxeCli.Result = { AxeCli.describeUi(udid) },
 ) : ScreenState {
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.IOS
@@ -33,7 +36,7 @@ class AxeScreenState(
 
   /** Raw TrailblazeNode tree straight from AXe — no refs yet. */
   private val parsedTree: TrailblazeNode? by lazy {
-    val res = AxeCli.describeUi(udid)
+    val res = describeUi()
     if (!res.success) {
       System.err.println("[AxeScreenState] axe describe-ui failed: ${res.stderr.trim()}")
       null
@@ -48,7 +51,34 @@ class AxeScreenState(
   }
 
   /**
-   * Compact element list built once over [parsedTree]. Feeds both the text representation
+   * [parsedTree] with off-viewport nodes pruned — the ONLY tree this screen state exposes.
+   * `axe describe-ui` spans the whole scroll content, while the Maestro/XCUITest path never
+   * sees below-fold content in the first place (XCTest doesn't materialize it) and filters
+   * the stragglers via `filterOutOfBounds`. Every consumer of this state — the compact
+   * element list and its refs, `findMatches` / waypoint matching over [trailblazeNodeTree],
+   * the Maestro-shaped [viewHierarchy] — must therefore see only on-screen content, or
+   * off-viewport elements match on IOS_AXE in exactly the flows the clamp exists to fix
+   * (e.g. a sub-10%-visible edge straddler earning a ref whose tap falls back to a blind
+   * off-screen coordinate tap).
+   *
+   * When the clamp prunes EVERY node (transient zero-size frames, a synthetic multi-app
+   * root with no bounds), fall back to the unclamped tree — Maestro parity again:
+   * `ViewHierarchy.from` keeps the unfiltered tree when `filterOutOfBounds` filters
+   * everything (`filtered ?: it`).
+   */
+  private val clampedTree: TrailblazeNode? by lazy {
+    val parsed = parsedTree ?: return@lazy null
+    val clamped = AxeViewportClamp.clamp(parsed, deviceWidth, deviceHeight)
+    if (clamped == null) {
+      System.err.println(
+        "[AxeScreenState] viewport clamp pruned every node — falling back to the unclamped tree (Maestro parity)",
+      )
+    }
+    clamped ?: parsed
+  }
+
+  /**
+   * Compact element list built once over [clampedTree]. Feeds both the text representation
    * (for LLM prompts and snapshot output) and the ref mapping that gets stamped onto
    * [trailblazeNodeTree] so tools like `tap ref=e964` can find their target.
    *
@@ -59,7 +89,7 @@ class AxeScreenState(
    * [xyz.block.trailblaze.api.SnapshotDetail] set.
    */
   private val compactElements: CompactScreenElements? by lazy {
-    val tree = parsedTree ?: return@lazy null
+    val tree = clampedTree ?: return@lazy null
     CompactScreenElements.buildForIosAxe(
       tree = tree,
       screenHeight = deviceHeight,
@@ -68,18 +98,28 @@ class AxeScreenState(
   }
 
   /**
-   * Tree with refs applied from [compactElements]. Consumers (e.g. `TapTrailblazeTool`)
-   * look up nodes by ref — without the refs stamped on, `tap ref=e964` can't find
-   * the element even though the snapshot output shows the ref.
+   * [clampedTree] with refs applied from [compactElements]. Consumers (e.g.
+   * `TapTrailblazeTool`) look up nodes by ref — without the refs stamped on, `tap ref=e964`
+   * can't find the element even though the snapshot output shows the ref. Selector
+   * consumers (`findMatches`, waypoint matching) resolve against this tree too, so it must
+   * be the clamped one: the host driver's equivalent carries no below-fold content, and an
+   * unclamped tree here would let off-viewport elements match on IOS_AXE only.
    *
    * Lazy because `applyRefsToTree` is O(n) over the tree and multiple consumers
    * (tool dispatch, logging, SoM annotation) all read this on the hot path.
    */
   override val trailblazeNodeTree: TrailblazeNode? by lazy {
-    val tree = parsedTree ?: return@lazy null
+    val tree = clampedTree ?: return@lazy null
     compactElements?.applyRefsToTree(tree) ?: tree
   }
 
+  /**
+   * The Maestro-shaped tree, built from the same clamped tree: on the Maestro/XCUITest
+   * path this hierarchy comes pre-filtered to on-screen nodes (maestro-client's
+   * `ViewHierarchy.from` applies `filterOutOfBounds`), and consumers rely on that — e.g.
+   * `scrollUntilTextIsVisible`'s manual loop picks the first match from this tree, so an
+   * unclamped below-fold duplicate would hijack the scroll target.
+   */
   override val viewHierarchy: ViewHierarchyTreeNode by lazy {
     trailblazeNodeTree?.toViewHierarchyTreeNode()
       ?: error("AxeScreenState: axe describe-ui did not produce a usable view hierarchy")

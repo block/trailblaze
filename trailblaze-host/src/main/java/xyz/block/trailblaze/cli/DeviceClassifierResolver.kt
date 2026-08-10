@@ -17,6 +17,7 @@ import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.CoreSimulatorTempFiles
 
 /**
  * Resolves the full classifier list (e.g. `[ios, iphone]`) for a `--device` spec or a
@@ -459,14 +460,17 @@ object DeviceClassifierResolver {
    */
   private fun probeIosDims(instanceId: String): DeviceProbe? {
     val tempFile = try {
+      // Boot-volume temp via CoreSimulatorTempFiles — the PNG is written by CoreSimulator's
+      // processes, which can't write non-boot volumes an embedder may point java.io.tmpdir at.
       // `deleteOnExit()` is a safety net for normal JVM shutdown — the `finally` block
       // deletes the file in the success/failure paths, but a process killed before
       // `finally` runs (e.g., a JVM exception in the parent code path before we enter
-      // the try) would otherwise leak `/tmp/trailblaze-dims-probe-*.png` files. Doesn't
+      // the try) would otherwise leak `trailblaze-dims-probe-*.png` files. Doesn't
       // help on `kill -9` (shutdown hooks don't fire); a startup sweep would cover that,
       // but the per-file cost is small (~375KB) and `kill -9` is rare enough that the
       // hook alone is sufficient defense.
-      File.createTempFile("trailblaze-dims-probe-$instanceId-", ".png").apply { deleteOnExit() }
+      CoreSimulatorTempFiles.createTempFile("trailblaze-dims-probe-$instanceId-", ".png")
+        .apply { deleteOnExit() }
     } catch (e: Exception) {
       Console.log("[DeviceClassifierResolver] ios temp file create failed for $instanceId: ${e.message}")
       return null
@@ -492,7 +496,12 @@ object DeviceClassifierResolver {
         return null
       }
       if (process.exitValue() != 0) {
-        Console.log("[DeviceClassifierResolver] ios screenshot exit=${process.exitValue()} for $instanceId")
+        // Include the target path: the resolved temp dir is the whole fix for the non-boot-volume
+        // regression, so a failing fleet probe should show where the write actually landed.
+        Console.log(
+          "[DeviceClassifierResolver] ios screenshot exit=${process.exitValue()} for $instanceId " +
+            "(target=${tempFile.absolutePath})"
+        )
         return null
       }
       readPngDimensions(tempFile)

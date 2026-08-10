@@ -15,6 +15,7 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TapDispatchRoute
 import xyz.block.trailblaze.api.TargetTypeGuard
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -224,6 +225,7 @@ class AccessibilityDeviceManager(
   data class ExecutionResult(
     val resolvedX: Int? = null,
     val resolvedY: Int? = null,
+    val dispatchRoute: TapDispatchRoute? = null,
   )
 
   /**
@@ -872,8 +874,13 @@ class AccessibilityDeviceManager(
             warnIfTapPointOccluded(
               unfilteredTree, result.node, center.first, center.second, action.nodeSelector.description(),
             )
-            tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
-            return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
+            val route =
+              tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
+            return ExecutionResult(
+              resolvedX = center.first,
+              resolvedY = center.second,
+              dispatchRoute = route,
+            )
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
             val chosen = pickPreferredMatch(result.nodes)
@@ -886,8 +893,13 @@ class AccessibilityDeviceManager(
             warnIfTapPointOccluded(
               unfilteredTree, chosen, center.first, center.second, action.nodeSelector.description(),
             )
-            tapOrLongPressOnResolvedNode(chosen, center.first, center.second, action.longPress)
-            return ExecutionResult(resolvedX = center.first, resolvedY = center.second)
+            val route =
+              tapOrLongPressOnResolvedNode(chosen, center.first, center.second, action.longPress)
+            return ExecutionResult(
+              resolvedX = center.first,
+              resolvedY = center.second,
+              dispatchRoute = route,
+            )
           }
           is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
             // Element not found yet, will retry after sleep
@@ -958,10 +970,11 @@ class AccessibilityDeviceManager(
     centerX: Int,
     centerY: Int,
     longPress: Boolean,
-  ) {
+  ): TapDispatchRoute {
     if (actionClickRouteDisabled()) {
       Console.log("[tap-route] kill-switch set, using gesture at ($centerX,$centerY)")
-      return tapOrLongPress(centerX, centerY, longPress)
+      tapOrLongPress(centerX, centerY, longPress)
+      return TapDispatchRoute.GESTURE
     }
     val plan = planActionClickRoute(resolvedNode, longPress)
     if (plan == null) {
@@ -973,9 +986,10 @@ class AccessibilityDeviceManager(
         "[tap-route] gesture at ($centerX,$centerY) — gate declined ACTION_CLICK " +
           "(${describeNodeForRouteLog(resolvedNode, longPress)})",
       )
-      return tapOrLongPress(centerX, centerY, longPress)
+      tapOrLongPress(centerX, centerY, longPress)
+      return TapDispatchRoute.GESTURE
     }
-    dispatchAndAwaitSettleBlocking {
+    return dispatchAndAwaitSettleBlocking {
       val dispatched = TrailblazeAccessibilityService.tapByActionClickOnBounds(
         plan.bounds.toAndroidRect(),
         plan.className,
@@ -983,6 +997,7 @@ class AccessibilityDeviceManager(
       )
       if (dispatched) {
         Console.log("[tap-route] ACTION_CLICK dispatched on ${plan.className ?: "<no-class>"}")
+        TapDispatchRoute.ACTION_CLICK
       } else {
         // Live tree didn't carry a node matching the resolved identity (tree mutated between
         // resolve and dispatch, or node no longer advertises ACTION_CLICK). Fall back to the
@@ -999,6 +1014,7 @@ class AccessibilityDeviceManager(
           TrailblazeAccessibilityService.tap(centerX, centerY),
           "gesture-fallback tap at ($centerX, $centerY) after an ACTION_CLICK lookup miss",
         )
+        TapDispatchRoute.GESTURE_AFTER_ACTION_CLICK_MISS
       }
     }
   }
@@ -1136,8 +1152,8 @@ internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): A
  *   respects z-order, ACTION_CLICK would bypass that and fire the hidden node directly),
  * - the node is not editable (EditText caret placement requires the touch offset; ACTION_CLICK
  *   merely focuses the field without honoring it),
- * - the node carries its own text or contentDescription — distinguishes interactive **leaf**
- *   elements (`ExploreByTouchHelper` virtual buttons that emit a per-button
+ * - the node carries its own text or contentDescription, **or** is checkable — distinguishes
+ *   interactive **leaf** elements (`ExploreByTouchHelper` virtual buttons that emit a per-button
  *   `contentDescription`, standard `<Button text="Submit"/>`, Compose
  *   `Button { Text("Hello") }` merged-semantics nodes whose accessibility text is the merged
  *   label) from **container wrappers** whose `clickable=true` is set declaratively but whose
@@ -1149,6 +1165,35 @@ internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): A
  *   re-introducing the canvas-widget failure mode this routing was originally designed to
  *   fix (virtual views emit their contentDescription as part of the helper's accessibility
  *   contract, so they pass).
+ *
+ *   A **checkable node that publishes its own checked state** is exempt from that requirement,
+ *   because the accessibility contract for such a node is that `ACTION_CLICK` toggles it —
+ *   that is how a screen reader activates a checkbox, radio row, or option row, so a stateful
+ *   checkable node whose `ACTION_CLICK` did nothing would be unusable with a screen reader.
+ *   This exemption is what lets an unmerged-semantics option row route via `ACTION_CLICK` — a
+ *   Compose `selectable` row surfaces as a textless `android.view.View` carrying `isCheckable`
+ *   plus its state, with the label on a child text node, so it fails the leaf-text check while
+ *   being exactly the shape `ACTION_CLICK` handles best. What makes that shape safe is that
+ *   `Modifier.selectable` / `toggleable` install the role, the state and the click handler on
+ *   the **same** semantics node, so `View.performClick()` reaches the real handler.
+ *
+ *   The **state** half is load-bearing, not decoration: `isCheckable` alone is a flag any view
+ *   may set, and the reasoning above only holds for a node that actually publishes the state
+ *   the flag claims. Requiring `isChecked` or a `stateDescription` is what separates the two
+ *   populations. Every one of the 12 checkable nodes in the committed downstream android
+ *   waypoint fixtures qualifies (each carries `stateDescription` "Selected" or "Not selected";
+ *   10 of the 12 are textless, so the exemption is what routes them). A stateless
+ *   `isCheckable` container does not, and that shape occurs in the wild: an **accordion option
+ *   row** — a textless clickable `android.view.View` with `isCheckable=true` and neither
+ *   `isChecked` nor `stateDescription` — answers `ACTION_CLICK` by selecting the option, while
+ *   only a real touch expands the row to reveal the sub-options. Routing that semantically
+ *   performs a different action than the recording captured, and the recorded follow-up tap on
+ *   a sub-option then finds nothing.
+ *
+ *   Erring toward gesture is the cheap direction here: a stateful node wrongly sent to gesture
+ *   still taps correctly, while a stateless container wrongly sent to `ACTION_CLICK` changes
+ *   what the tap does. A misrouting node is diagnosable from the `[tap-route]` log and the
+ *   whole route is revertible with `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE`.
  */
 internal fun planActionClickRoute(node: TrailblazeNode, longPress: Boolean): ActionClickPlan? {
   if (longPress) return null
@@ -1158,7 +1203,15 @@ internal fun planActionClickRoute(node: TrailblazeNode, longPress: Boolean): Act
   if (!detail.isEnabled) return null
   if (detail.isEditable) return null
   if (!detail.isVisibleToUser) return null
-  if (detail.text.isNullOrBlank() && detail.contentDescription.isNullOrBlank()) return null
+  val publishesCheckedState =
+    detail.isCheckable && (detail.isChecked || !detail.stateDescription.isNullOrBlank())
+  if (
+    detail.text.isNullOrBlank() &&
+    detail.contentDescription.isNullOrBlank() &&
+    !publishesCheckedState
+  ) {
+    return null
+  }
   return ActionClickPlan(bounds, detail.className, detail.resourceId)
 }
 
@@ -1187,15 +1240,18 @@ internal fun pickPreferredMatch(nodes: List<TrailblazeNode>): TrailblazeNode =
  * Builds a one-line diagnostic string of the gate-relevant fields on [node] so a `[tap-route]`
  * decline log entry can name the failing condition without re-running the session. Each field
  * lines up with one of the checks in [planActionClickRoute]'s kdoc — `text=null,
- * contentDescription=null` → new leaf-text gate fired; `isVisibleToUser=false` → overlay gate;
- * etc. Pure function, kept top-level alongside [planActionClickRoute] for the same JVM-unit-
- * testability reasons.
+ * contentDescription=null, isCheckable=false` → leaf-text gate fired; the same three with
+ * `isCheckable=true, isChecked=false, stateDescription=null` → the checkable exemption was
+ * declined for want of published state; `isVisibleToUser=false` → overlay gate; etc. Pure
+ * function, kept top-level alongside [planActionClickRoute] for the same JVM-unit-testability
+ * reasons.
  */
 internal fun describeNodeForRouteLog(node: TrailblazeNode, longPress: Boolean): String {
   val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
   return "longPress=$longPress, hasBounds=${node.bounds != null}, " +
     "className=${detail?.className}, text=${detail?.text}, contentDescription=${detail?.contentDescription}, " +
     "isEnabled=${detail?.isEnabled}, isEditable=${detail?.isEditable}, " +
-    "isVisibleToUser=${detail?.isVisibleToUser}, " +
+    "isVisibleToUser=${detail?.isVisibleToUser}, isCheckable=${detail?.isCheckable}, " +
+    "isChecked=${detail?.isChecked}, stateDescription=${detail?.stateDescription}, " +
     "hasActionClick=${detail?.actions?.contains(ACTION_CLICK_NAME)}"
 }

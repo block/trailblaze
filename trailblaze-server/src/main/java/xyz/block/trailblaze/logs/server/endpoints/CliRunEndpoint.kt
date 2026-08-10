@@ -131,4 +131,21 @@ data class CliRunResponse(
   val error: String? = null,
   /** Device classifiers from the session (e.g., ["android"], ["ios", "iphone"]) for recording filename. */
   val deviceClassifiers: List<String> = emptyList(),
-)
+  /**
+   * Machine-readable failure class, so callers that surface exit codes can distinguish a
+   * request the daemon REJECTED as invalid ([ERROR_KIND_MISUSE], e.g. an unrecognized driver
+   * name) from a run that was attempted and failed. Null for ordinary run failures — and for
+   * responses from older daemons, so absent always means "attempted and failed" (exit code 1
+   * on the CLI). Kept a nullable string rather than an enum so old/new client-daemon pairs
+   * degrade gracefully in both directions.
+   */
+  val errorKind: String? = null,
+) {
+  companion object {
+    /**
+     * [errorKind] value for a request rejected as invalid before any run was attempted
+     * (bad flags / malformed input). CLI callers map it to their misuse exit code (3).
+     */
+    const val ERROR_KIND_MISUSE = "misuse"
+  }
+}

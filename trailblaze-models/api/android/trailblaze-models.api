@@ -2627,11 +2627,15 @@ public final class xyz/block/trailblaze/api/AgentDriverAction$Swipe$Companion {
 public final class xyz/block/trailblaze/api/AgentDriverAction$TapPoint : xyz/block/trailblaze/api/AgentDriverAction, xyz/block/trailblaze/api/HasClickCoordinates {
 	public static final field Companion Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint$Companion;
 	public fun <init> (II)V
+	public fun <init> (IILxyz/block/trailblaze/api/TapDispatchRoute;)V
+	public synthetic fun <init> (IILxyz/block/trailblaze/api/TapDispatchRoute;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()I
 	public final fun component2 ()I
-	public final fun copy (II)Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;IIILjava/lang/Object;)Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;
+	public final fun component3 ()Lxyz/block/trailblaze/api/TapDispatchRoute;
+	public final fun copy (IILxyz/block/trailblaze/api/TapDispatchRoute;)Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;IILxyz/block/trailblaze/api/TapDispatchRoute;ILjava/lang/Object;)Lxyz/block/trailblaze/api/AgentDriverAction$TapPoint;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDispatchRoute ()Lxyz/block/trailblaze/api/TapDispatchRoute;
 	public fun getType ()Lxyz/block/trailblaze/api/AgentActionType;
 	public fun getX ()I
 	public fun getY ()I
@@ -3874,6 +3878,20 @@ public final class xyz/block/trailblaze/api/SnapshotDetail : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/api/SnapshotDetail;
 	public static fun values ()[Lxyz/block/trailblaze/api/SnapshotDetail;
+}
+
+public final class xyz/block/trailblaze/api/TapDispatchRoute : java/lang/Enum {
+	public static final field ACTION_CLICK Lxyz/block/trailblaze/api/TapDispatchRoute;
+	public static final field Companion Lxyz/block/trailblaze/api/TapDispatchRoute$Companion;
+	public static final field GESTURE Lxyz/block/trailblaze/api/TapDispatchRoute;
+	public static final field GESTURE_AFTER_ACTION_CLICK_MISS Lxyz/block/trailblaze/api/TapDispatchRoute;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/api/TapDispatchRoute;
+	public static fun values ()[Lxyz/block/trailblaze/api/TapDispatchRoute;
+}
+
+public final class xyz/block/trailblaze/api/TapDispatchRoute$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
 public final class xyz/block/trailblaze/api/TargetTemplateContext {
@@ -5743,6 +5761,7 @@ public final class xyz/block/trailblaze/devices/TrailblazeAndroidDeviceCategory 
 
 public final class xyz/block/trailblaze/devices/TrailblazeClassifierLineage {
 	public static final field INSTANCE Lxyz/block/trailblaze/devices/TrailblazeClassifierLineage;
+	public static final field UNIVERSAL_ROOT Ljava/lang/String;
 	public final fun chainFor-rGW_nls (Ljava/lang/String;Ljava/util/Map;)Ljava/util/List;
 	public static synthetic fun chainFor-rGW_nls$default (Lxyz/block/trailblaze/devices/TrailblazeClassifierLineage;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Ljava/util/List;
 	public final fun getParentOverrides ()Ljava/util/Map;
@@ -7845,6 +7864,8 @@ public final class xyz/block/trailblaze/llm/config/ClasspathResourceDiscovery {
 	public static synthetic fun discoverFilenamesRecursive$default (Lxyz/block/trailblaze/llm/config/ClasspathResourceDiscovery;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Class;ILjava/lang/Object;)Ljava/util/Set;
 	public final fun loadResource (Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/String;
 	public static synthetic fun loadResource$default (Lxyz/block/trailblaze/llm/config/ClasspathResourceDiscovery;Ljava/lang/String;Ljava/lang/Class;ILjava/lang/Object;)Ljava/lang/String;
+	public final fun resourceExists (Ljava/lang/String;Ljava/lang/Class;)Z
+	public static synthetic fun resourceExists$default (Lxyz/block/trailblaze/llm/config/ClasspathResourceDiscovery;Ljava/lang/String;Ljava/lang/Class;ILjava/lang/Object;)Z
 }
 
 public final class xyz/block/trailblaze/llm/config/CompositeConfigResourceSource : xyz/block/trailblaze/llm/config/ConfigResourceSource {
@@ -10909,12 +10930,15 @@ public final class xyz/block/trailblaze/model/TrailExecutionResult$Cancelled : x
 }
 
 public final class xyz/block/trailblaze/model/TrailExecutionResult$Failed : xyz/block/trailblaze/model/TrailExecutionResult {
-	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;
-	public static synthetic fun copy$default (Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;Ljava/lang/String;ILjava/lang/Object;)Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;
+	public static synthetic fun copy$default (Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;Ljava/lang/String;ZILjava/lang/Object;)Lxyz/block/trailblaze/model/TrailExecutionResult$Failed;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getErrorMessage ()Ljava/lang/String;
+	public final fun getMisuse ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -11415,6 +11439,7 @@ public final class xyz/block/trailblaze/toolcalls/CoreTools {
 	public static final field PRESS_BACK Ljava/lang/String;
 	public static final field PRESS_KEY Ljava/lang/String;
 	public static final field SCROLL_UNTIL_VISIBLE Ljava/lang/String;
+	public static final field SLEEP Ljava/lang/String;
 	public static final field STOP_APP Ljava/lang/String;
 	public static final field SWIPE Ljava/lang/String;
 	public static final field TAP Ljava/lang/String;

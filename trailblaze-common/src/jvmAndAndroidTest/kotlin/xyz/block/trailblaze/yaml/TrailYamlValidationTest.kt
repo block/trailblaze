@@ -118,4 +118,41 @@ class TrailYamlValidationTest {
     // The lenient default drops the unknown key instead of throwing — this is what strictness fixes.
     createTrailblazeYaml().decodeTrailDocument(knownBad)
   }
+
+  /**
+   * `assertMatchCount` is a closed, classpath-registered shape, so a misspelled bound is rejected
+   * rather than dropped. This matters more than for a presence assert: a silently-dropped `exact`
+   * leaves the surviving `min` as a weaker-but-still-passing assertion, which is the false-green
+   * this tool exists to catch. Also pins that the documented authoring shape parses under strict.
+   */
+  @Test
+  fun `strict parser accepts the documented assertMatchCount shape and rejects a misspelled bound`() {
+    val documented = """
+      config:
+        id: probe/assert-match-count
+        title: probe
+        target: square
+      trail:
+        - step: s
+          recording:
+            android:
+              - assertMatchCount:
+                  reason: The report should list at least one item row.
+                  min: 1
+                  nodeSelector:
+                    androidAccessibility:
+                      textRegex: Net sales by item
+    """.trimIndent()
+
+    createTrailblazeYaml(strict = true).decodeTrailDocument(documented)
+
+    val misspelledBound = documented.replace("min: 1", "exsct: 3")
+    val strictFailure = assertFailsWith<Exception> {
+      createTrailblazeYaml(strict = true).decodeTrailDocument(misspelledBound)
+    }
+    assertTrue(
+      strictFailure.message?.contains("exsct") == true,
+      "Strict parse should fail on the misspelled bound, but was: ${strictFailure.message}",
+    )
+  }
 }

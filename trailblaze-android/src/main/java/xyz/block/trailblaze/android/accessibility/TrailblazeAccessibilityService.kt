@@ -1136,10 +1136,11 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * DFS for a node whose `getBoundsInScreen` equals [targetBounds], whose `className`
-     * matches [targetClassName] (when supplied), whose `viewIdResourceName` matches
-     * [targetResourceId] (when supplied), and which advertises `ACTION_CLICK`. Returns null
-     * when no such node exists in the subtree rooted at [node].
+     * Finds the **unique** node in the subtree rooted at [node] whose `getBoundsInScreen`
+     * equals [targetBounds], whose `className` matches [targetClassName] (when supplied),
+     * whose `viewIdResourceName` matches [targetResourceId] (when supplied), and which
+     * advertises `ACTION_CLICK`. Returns null when no such node exists — or when more than
+     * one does.
      *
      * Returns an independent [AccessibilityNodeInfo.obtain] copy on success so the caller
      * owns a handle that's lifecycle-independent from [node] and its descendants — the
@@ -1153,10 +1154,18 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      *   (mid-scroll, animation tick) means the resolved identity is stale and we want to
      *   miss + fall back to gesture rather than tap a different node whose bounds happen
      *   to overlap.
-     * - `(bounds, className, resourceId)` is not strictly unique in Compose merged-semantics
-     *   trees (a `Row { Button(); Button() }` layout could theoretically produce overlapping
-     *   siblings with identical class+id+rect). DFS pre-order wins on collision, which
-     *   matches the selector's own first-match semantic.
+     * - `(bounds, className, resourceId)` is **not** unique in general, and both tiebreakers
+     *   collapse for the shape that needs them most: a textless `android.view.View` with a
+     *   null `resourceId` matches on bounds alone (null is a wildcard here), so an
+     *   identical-bounds clickable ancestor is indistinguishable from the intended node.
+     *   That is reachable rather than theoretical, because the selector resolves against the
+     *   `filterImportantForAccessibility` view — which drops label-less clickable nodes —
+     *   while this walk runs on the raw live tree where they still advertise `ACTION_CLICK`.
+     *   So the whole subtree is searched and **more than one match is a miss**: ambiguity
+     *   returns null and the caller gesture-falls-back, which is what the node would have
+     *   gotten anyway before it qualified for this route. Picking a winner would tap a
+     *   silently-wrong node and report success, since `performAction` returning true is
+     *   never checked against any post-tap state.
      */
     private fun findClickableNodeWithBounds(
       node: AccessibilityNodeInfo,
@@ -1164,17 +1173,51 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       targetClassName: String?,
       targetResourceId: String?,
     ): AccessibilityNodeInfo? {
+      val matches = mutableListOf<AccessibilityNodeInfo>()
+      collectClickableNodesWithBounds(node, targetBounds, targetClassName, targetResourceId, matches)
+      if (matches.size == 1) return matches.single()
+      if (matches.size > 1) {
+        Console.log(
+          "[tapByActionClickOnBounds] ambiguous identity: ${matches.size} live nodes match " +
+            "bounds=$targetBounds className=$targetClassName resourceId=$targetResourceId, " +
+            "caller will gesture-fall-back",
+        )
+      }
+      matches.forEach { it.recycle() }
+      return null
+    }
+
+    /**
+     * Appends an [AccessibilityNodeInfo.obtain] copy of every node in the subtree rooted at
+     * [node] whose identity matches, to [into]. Descends past a match on purpose — an
+     * identical-bounds ancestor and descendant both matching is exactly the ambiguity
+     * [findClickableNodeWithBounds] needs to see. Ownership of each appended copy passes to
+     * the caller.
+     */
+    private fun collectClickableNodesWithBounds(
+      node: AccessibilityNodeInfo,
+      targetBounds: Rect,
+      targetClassName: String?,
+      targetResourceId: String?,
+      into: MutableList<AccessibilityNodeInfo>,
+    ) {
       val nodeBounds = Rect().also(node::getBoundsInScreen)
       val classMatches = targetClassName == null || node.className?.toString() == targetClassName
       val resourceMatches = targetResourceId == null || node.viewIdResourceName == targetResourceId
       val advertisesClick =
         node.actionList?.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } == true
       if (nodeBounds == targetBounds && classMatches && resourceMatches && advertisesClick) {
-        return AccessibilityNodeInfo.obtain(node)
+        into += AccessibilityNodeInfo.obtain(node)
       }
-      return (0 until node.childCount).firstNotNullOfOrNull { i ->
+      for (i in 0 until node.childCount) {
         node.getChild(i)?.useRecycling { child ->
-          findClickableNodeWithBounds(child, targetBounds, targetClassName, targetResourceId)
+          collectClickableNodesWithBounds(
+            child,
+            targetBounds,
+            targetClassName,
+            targetResourceId,
+            into,
+          )
         }
       }
     }

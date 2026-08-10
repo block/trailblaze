@@ -4,7 +4,7 @@
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
 import { RUN_REPORT_CSS } from './run-report-css';
-import { slimLlmForShare, slimTraceForShare } from './run-report-extract';
+import { slimLlmForShare, slimTraceForShare, traceStepCount, traceToolCallCount } from './run-report-extract';
 import { tbBootLoaderHtml, toInertJson } from './run-report-payload';
 import { embeddedViewerScript } from './run-report-viewer-bundle.macro' with { type: 'macro' };
 
@@ -18,12 +18,9 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 // contract. Optional generic event streams and the authored/recorded YAML ride alongside the trace,
 // LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in the browser and bun.
 function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null }): string {
-  // Recording YAML rides in on meta.recordingYaml; lift it into the dedicated session field and drop
-  // it from meta so the (potentially large) string isn't embedded twice in the payload.
-  const { recordingYaml = null, originalYaml = null, ...metaRest } = meta || {};
   return buildMultiReportHtml({
-    generatedAt: metaRest.generatedAt || '',
-    sessions: [{ meta: metaRest, trace, llmLogs, shots, recordingYaml, originalYaml, events }],
+    generatedAt: (meta || {}).generatedAt || '',
+    sessions: [{ meta, trace, llmLogs, shots, events }],
   });
 }
 
@@ -35,13 +32,18 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null }: { me
 function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string {
   const list: SessionPayload[] = (sessions || []).map((s) => {
     const trace = s.trace || [];
+    // Recording/original YAML may ride in on meta (buildRunReportHtml callers, the zip importer's
+    // buildRunMeta); lift it into the dedicated session fields and drop it from meta so the
+    // (potentially large) strings aren't embedded twice — and never reach the #tb-index copy of
+    // meta, which must stay small for every session in the report.
+    const { recordingYaml = null, originalYaml = null, ...metaRest } = s.meta || {};
     return {
-      meta: { generatedAt: generatedAt || '', ...(s.meta || {}), steps: trace.length || (s.meta && s.meta.steps) || 0 },
+      meta: { generatedAt: generatedAt || '', ...metaRest, steps: trace.length || metaRest.steps || 0 },
       trace: slimTraceForShare(trace),
       llm: slimLlmForShare(s.llmLogs),
       shots: s.shots || {},
-      recordingYaml: s.recordingYaml || null,
-      originalYaml: s.originalYaml || null,
+      recordingYaml: s.recordingYaml || recordingYaml,
+      originalYaml: s.originalYaml || originalYaml,
       deviceLog: s.deviceLog || null,
       deviceLogGz: s.deviceLogGz || null,
       network: s.network || null,
@@ -64,20 +66,37 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt
       s.video = { ...s.video, sprites: s.video.sprites.map((sp) => ({ ...sp, uri: '' })) };
     }
   });
-  const payload = { generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), sessions: list };
-  // Embed the payload as an inert JSON <script> the viewer reads back with JSON.parse. That keeps
-  // megabytes of data out of the JS parser on the critical boot path (a JS object literal blocks
-  // evaluation — and paint — until fully parsed). Security-wise this is equivalent to the old
-  // object-literal embed: textContent → JSON.parse is not an HTML sink (nothing is reinterpreted
-  // as markup), and every user-supplied field is still escaped at render time. toInertJson keeps
-  // the `</script>`-closes-the-element escape in one place.
-  const json = toInertJson(payload);
-  const spritesJson = toInertJson(sprites);
+  // Split the document so boot time is independent of report size. The tiny #tb-index chunk (per
+  // session: meta + per-call LLM token/cost summaries + the two trace-derived counts the run list
+  // shows) and the viewer script come FIRST, so on a streaming multi-megabyte document the browser
+  // can boot the viewer and paint the full run index while the heavy per-session chunks
+  // (#tb-session-<i>, #tb-sprites-<i>) are still arriving. The viewer JSON.parses one session
+  // chunk only when that run is opened, so a 100-session report never parses 100 sessions' bytes
+  // to show the list — and no single JSON string ever approaches the JS engine's
+  // max-string-length ceiling.
+  const indexEntries = list.map((s) => ({
+    meta: s.meta,
+    // The run list reads exactly three numeric fields per LLM call (call count, token totals, and
+    // the cost total/sort). Instructions and response text stay in the session chunk, so the boot
+    // index doesn't scale with LLM log size.
+    llm: s.llm.map(({ inputTokens, outputTokens, totalCost }) => ({ inputTokens, outputTokens, totalCost })),
+    stepCount: s.trace.length ? traceStepCount(s.trace) : null,
+    toolCallCount: s.trace.length ? traceToolCallCount(s.trace) : (s.meta.steps != null ? s.meta.steps : null),
+  }));
+  // Every embedded JSON chunk is an inert <script type="application/json"> the viewer reads back
+  // with JSON.parse. That keeps megabytes of data out of the JS parser on the critical boot path
+  // (a JS object literal blocks evaluation — and paint — until fully parsed). Security-wise this
+  // is equivalent to the old object-literal embed: textContent → JSON.parse is not an HTML sink
+  // (nothing is reinterpreted as markup), and every user-supplied field is still escaped at
+  // render time. toInertJson keeps the `</script>`-closes-the-element escape in one place.
+  const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), sessions: indexEntries });
+  const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>`
+    + (sprites[String(i)] ? `\n<script type="application/json" id="tb-sprites-${i}">${toInertJson(sprites[String(i)])}</script>` : '')).join('\n');
   const escText = (s: string) => s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
   const heading = list.length === 1 ? (list[0].meta.title || 'Trailblaze run') : 'Trailblaze Report';
   const title = escText(list.length === 1 ? heading + ' · Trailblaze run' : heading);
-  // The #tb-boot loader lives INSIDE #app and BEFORE the data script: it's plain markup styled by
-  // the already-parsed head CSS (theme included), so it paints while the payload is still being
+  // The #tb-boot loader lives INSIDE #app and BEFORE the data scripts: it's plain markup styled by
+  // the already-parsed head CSS (theme included), so it paints while the index is still being
   // parsed. The viewer's first render replaces #app's content, which removes it.
   return `<!doctype html>
 <html lang="en">
@@ -90,9 +109,9 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt
 </head>
 <body>
 <div id="app">${tbBootLoaderHtml(heading)}</div>
-<script type="application/json" id="tb-run-data">${json}</script>
-<script type="application/json" id="tb-sprites">${spritesJson}</script>
+<script type="application/json" id="tb-index">${indexJson}</script>
 <script>${RUN_REPORT_VIEWER_SCRIPT}</script>
+${sessionChunks}
 </body>
 </html>`;
 }

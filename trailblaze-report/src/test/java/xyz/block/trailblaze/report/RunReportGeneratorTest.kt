@@ -24,6 +24,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
+import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.RecordingSkipReason
+import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -52,6 +55,16 @@ class RunReportGeneratorTest {
     trailblazeDeviceId = deviceInfo?.trailblazeDeviceId,
   )
 
+  /** What [SessionRecordingInfo.fromLogs] reports for a run that emitted no self-heal log. */
+  private val noSelfHeal = SessionRecordingInfo(available = true, skipReason = null, usedSelfHeal = false)
+
+  /** What it reports for a run that did self-heal, whatever status the session ended with. */
+  private val selfHealLogged = SessionRecordingInfo(
+    available = true,
+    skipReason = RecordingSkipReason.EXECUTION_FAILED,
+    usedSelfHeal = true,
+  )
+
   @Test
   fun statusLabel_mapsEachTerminalStatusToAViewerBadgeClass() {
     assertEquals("passed", RunReportGenerator.statusLabel(SessionStatus.Ended.Succeeded(1)))
@@ -73,7 +86,7 @@ class RunReportGeneratorTest {
 
   @Test
   fun sessionMetaJson_carriesTitleStatusDurationAndRerunCommand() {
-    val meta = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(12_345)), SessionStatus.Ended.Succeeded(12_345))
+    val meta = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(12_345)), SessionStatus.Ended.Succeeded(12_345), noSelfHeal)
     // Title falls back to the trail file's short name when there's no explicit config title.
     assertEquals("Login/login", meta["title"]!!.jsonPrimitive.content)
     assertEquals("passed", meta["status"]!!.jsonPrimitive.content)
@@ -90,6 +103,7 @@ class RunReportGeneratorTest {
     val android = RunReportGenerator.sessionMetaJson(
       info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos", versionName = "5.58.0.0", versionCode = "67500009")),
       passed,
+      noSelfHeal,
     )
     assertEquals("com.example.pos", android["appId"]!!.jsonPrimitive.content)
     assertEquals("5.58.0.0 (67500009)", android["appVersion"]!!.jsonPrimitive.content)
@@ -97,17 +111,19 @@ class RunReportGeneratorTest {
     val ios = RunReportGenerator.sessionMetaJson(
       info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos", versionName = "6.94", versionCode = "6940515", buildNumber = "6515")),
       passed,
+      noSelfHeal,
     )
     assertEquals("6.94 (6515)", ios["appVersion"]!!.jsonPrimitive.content)
     // App resolved but version probe came up empty: id still carried, no version row.
     val idOnly = RunReportGenerator.sessionMetaJson(
       info(passed, targetAppInfo = TrailblazeTargetAppInfo(appId = "com.example.pos")),
       passed,
+      noSelfHeal,
     )
     assertEquals("com.example.pos", idOnly["appId"]!!.jsonPrimitive.content)
     assertNull(idOnly["appVersion"])
     // Sessions without a captured target app carry neither field.
-    val none = RunReportGenerator.sessionMetaJson(info(passed), passed)
+    val none = RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)
     assertNull(none["appId"])
     assertNull(none["appVersion"])
   }
@@ -131,6 +147,7 @@ class RunReportGeneratorTest {
         ),
       ),
       passed,
+      noSelfHeal,
     )
     assertEquals("android", meta["platform"]!!.jsonPrimitive.content)
     assertEquals("emulator-5554", meta["device"]!!.jsonPrimitive.content)
@@ -161,7 +178,7 @@ class RunReportGeneratorTest {
   @Test
   fun sessionMetaJson_surfacesFailureReasonAsErrorBanner() {
     val failed = SessionStatus.Ended.Failed(900, "Could not find Pay button")
-    val meta = RunReportGenerator.sessionMetaJson(info(failed), failed)
+    val meta = RunReportGenerator.sessionMetaJson(info(failed), failed, noSelfHeal)
     assertEquals("failed", meta["status"]!!.jsonPrimitive.content)
     assertTrue(meta["error"]!!.jsonPrimitive.content.contains("Pay button"))
   }
@@ -172,26 +189,62 @@ class RunReportGeneratorTest {
     val meta = RunReportGenerator.sessionMetaJson(
       info(passed).copy(trailConfig = TrailConfig(metadata = mapOf("owner" to "payments-team", "accountToken" to "AT_123"))),
       passed,
+      noSelfHeal,
     )
     val metadata = meta["metadata"] as JsonObject
     assertEquals("payments-team", metadata["owner"]!!.jsonPrimitive.content)
     assertEquals("AT_123", metadata["accountToken"]!!.jsonPrimitive.content)
     // No metadata (or an empty map) emits no key at all.
-    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed)["metadata"])
+    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)["metadata"])
     assertNull(
-      RunReportGenerator.sessionMetaJson(info(passed).copy(trailConfig = TrailConfig(metadata = emptyMap())), passed)["metadata"],
+      RunReportGenerator.sessionMetaJson(info(passed).copy(trailConfig = TrailConfig(metadata = emptyMap())), passed, noSelfHeal)["metadata"],
     )
   }
 
   @Test
   fun sessionMetaJson_marksSelfHealRunsWithoutChangingTheirPassFailBadge() {
     val healed = SessionStatus.Ended.SucceededWithSelfHeal(5_000)
-    val meta = RunReportGenerator.sessionMetaJson(info(healed), healed)
+    val meta = RunReportGenerator.sessionMetaJson(info(healed), healed, noSelfHeal)
     assertEquals("passed", meta["status"]!!.jsonPrimitive.content)
     assertEquals(true, meta["selfHeal"]!!.jsonPrimitive.content.toBoolean())
     // A plain pass carries no self-heal marker.
-    val plain = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(1)), SessionStatus.Ended.Succeeded(1))
+    val plain = RunReportGenerator.sessionMetaJson(info(SessionStatus.Ended.Succeeded(1)), SessionStatus.Ended.Succeeded(1), noSelfHeal)
     assertNull(plain["selfHeal"])
+  }
+
+  @Test
+  fun sessionMetaJson_marksSelfHealEvidencedOnlyByTheLogsNotTheStatus() {
+    // A run can self-heal and still end on a plain Succeeded status. Reading the status alone left
+    // every self-heal surface in the viewer — index outcome, tally, filter, timeline panel — blank
+    // on exactly the runs they exist to flag, while the results JSON reported SELF_HEAL.
+    val passed = SessionStatus.Ended.Succeeded(5_000)
+    val healed = RunReportGenerator.sessionMetaJson(info(passed), passed, selfHealLogged)
+    assertEquals("passed", healed["status"]!!.jsonPrimitive.content)
+    assertEquals(true, healed["selfHeal"]!!.jsonPrimitive.content.toBoolean())
+    // Negative control: same status, no self-heal log — the key must stay absent, since the viewer
+    // reads its presence as "this run needed AI to get through".
+    assertNull(RunReportGenerator.sessionMetaJson(info(passed), passed, noSelfHeal)["selfHeal"])
+  }
+
+  @Test
+  fun sessionMetaJson_selfHealMarkerAgreesWithTheReportedExecutionMode() {
+    // The HTML report and the results JSON must never disagree about whether a run self-healed.
+    // Both ask ExecutionMode.selfHealed, so this pins them together over every combination that
+    // used to diverge rather than trusting them to stay in step.
+    val cases = listOf(
+      SessionStatus.Ended.Succeeded(1) to noSelfHeal,
+      SessionStatus.Ended.Succeeded(1) to selfHealLogged,
+      SessionStatus.Ended.SucceededWithSelfHeal(1) to noSelfHeal,
+      SessionStatus.Ended.SucceededWithSelfHeal(1) to selfHealLogged,
+      SessionStatus.Ended.Failed(1, "boom") to noSelfHeal,
+      SessionStatus.Ended.Failed(1, "boom") to selfHealLogged,
+      SessionStatus.Ended.FailedWithSelfHeal(1, "boom") to noSelfHeal,
+    )
+    cases.forEach { (status, recordingInfo) ->
+      val marked = RunReportGenerator.sessionMetaJson(info(status), status, recordingInfo)["selfHeal"] != null
+      val mode = ExecutionMode.classify(status, hasRecordedSteps = true, recordingInfo = recordingInfo)
+      assertEquals(mode == ExecutionMode.SELF_HEAL, marked, "disagreed for $status / $recordingInfo")
+    }
   }
 
   /**

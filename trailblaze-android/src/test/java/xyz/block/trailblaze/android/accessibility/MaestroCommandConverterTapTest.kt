@@ -4,7 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
 
@@ -17,6 +19,10 @@ import maestro.orchestra.TapOnElementCommand
  */
 class MaestroCommandConverterTapTest {
 
+  /** Unwraps a supported command's conversion, failing the test if it reads as unsupported. */
+  private fun convert(command: Command): List<AccessibilityAction> =
+    assertNotNull(MaestroCommandConverter.convert(command))
+
   @Test
   fun `convertTapOnElement preserves optional=true`() {
     val command = TapOnElementCommand(
@@ -24,7 +30,7 @@ class MaestroCommandConverterTapTest {
       optional = true,
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val tap = assertIs<AccessibilityAction.TapOnElement>(actions.single())
@@ -37,7 +43,7 @@ class MaestroCommandConverterTapTest {
       selector = ElementSelector(textRegex = "Continue"),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val tap = assertIs<AccessibilityAction.TapOnElement>(actions.single())

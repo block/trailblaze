@@ -152,9 +152,11 @@ object TrailIndexBuilder {
    * Backfills a platform for a trail that doesn't declare `config.platform`. Recorded variants are
    * conventionally named after the device classifier they were recorded on (`android-phone`,
    * `ios-iphone`, or a hardware classifier a downstream build registers a lineage override for), so
-   * resolving the filename stem through [TrailblazeClassifierLineage] and checking whether its
-   * family root is a platform recovers the platform without hardcoding any classifier names here.
-   * Unknown stems resolve to no known platform and stay platform-agnostic, as before.
+   * resolving the filename stem through [TrailblazeClassifierLineage] and looking for a platform
+   * ancestor recovers the platform without hardcoding any classifier names here. Unknown stems
+   * resolve to no known platform and stay platform-agnostic, as before. (Every chain now ends at
+   * the universal root `all`, so the platform is the first platform-rooted ancestor on the chain,
+   * not the chain's last entry.)
    */
   private val PLATFORM_ROOTS = setOf("android", "ios", "web")
 
@@ -162,8 +164,8 @@ object TrailIndexBuilder {
     if (!fileName.endsWith(TRAIL_SUFFIX)) return null
     val stem = fileName.removeSuffix(TRAIL_SUFFIX).lowercase()
     if (stem.isBlank()) return null
-    val root = TrailblazeClassifierLineage.chainFor(TrailblazeDeviceClassifier(stem)).lastOrNull() ?: return null
-    return root.classifier.takeIf { it in PLATFORM_ROOTS }
+    return TrailblazeClassifierLineage.chainFor(TrailblazeDeviceClassifier(stem))
+      .firstOrNull { it.classifier in PLATFORM_ROOTS }?.classifier
   }
 
   private data class CachedConfig(

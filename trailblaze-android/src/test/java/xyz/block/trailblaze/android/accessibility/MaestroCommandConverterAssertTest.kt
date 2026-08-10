@@ -3,8 +3,10 @@ package xyz.block.trailblaze.android.accessibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import maestro.orchestra.AssertConditionCommand
+import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.ElementSelector
 import xyz.block.trailblaze.api.DriverNodeMatch
@@ -21,6 +23,10 @@ import xyz.block.trailblaze.api.DriverNodeMatch
  */
 class MaestroCommandConverterAssertTest {
 
+  /** Unwraps a supported command's conversion, failing the test if it reads as unsupported. */
+  private fun convert(command: Command): List<AccessibilityAction> =
+    assertNotNull(MaestroCommandConverter.convert(command))
+
   @Test
   fun `converts visible condition to AssertVisible action`() {
     val command = AssertConditionCommand(
@@ -29,7 +35,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertVisible>(actions.single())
@@ -45,7 +51,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertNotVisible>(actions.single())
@@ -65,7 +71,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertVisible>(actions.single())
@@ -86,7 +92,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertNotVisible>(actions.single())
@@ -106,7 +112,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertVisible>(actions.single())
@@ -124,7 +130,7 @@ class MaestroCommandConverterAssertTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.AssertVisible>(actions.single())
@@ -134,15 +140,15 @@ class MaestroCommandConverterAssertTest {
   }
 
   @Test
-  fun `skips unsupported condition and returns empty list`() {
+  fun `unsupported condition reads as unsupported`() {
     // A condition with neither visible nor notVisible set
     val command = AssertConditionCommand(
       condition = Condition(),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val out = MaestroCommandConverter.convert(command)
 
-    assertTrue(actions.isEmpty())
+    assertNull(out, "assert with an unsupported condition should read as unsupported, got: $out")
   }
 
   @Test

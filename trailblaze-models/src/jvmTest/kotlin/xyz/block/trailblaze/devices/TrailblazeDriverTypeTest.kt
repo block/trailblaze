@@ -20,8 +20,19 @@ class TrailblazeDriverTypeTest {
     }
   }
 
+  /**
+   * Exact-membership tripwire. `when` branches over [TrailblazeDriverType] spell this set's
+   * members out individually so the `when` stays compile-time exhaustive (e.g. the screen-state
+   * capture arm in `TrailblazeDeviceManager.getCurrentScreenState`). A brand-new enum entry
+   * breaks those `when`s at compile time, but adding an EXISTING enum entry to this set would
+   * silently route it through whichever arm already handles it. If this test fails because you
+   * added a member, update every branch that spells out the set's members, then this expectation.
+   */
   @Test
-  fun `IOS_AXE is a host-native iOS driver`() {
-    assertTrue(TrailblazeDriverType.IOS_AXE in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES)
+  fun `IOS_HOST_NATIVE_DRIVER_TYPES membership is pinned`() {
+    assertEquals(
+      setOf(TrailblazeDriverType.IOS_AXE),
+      TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES,
+    )
   }
 }

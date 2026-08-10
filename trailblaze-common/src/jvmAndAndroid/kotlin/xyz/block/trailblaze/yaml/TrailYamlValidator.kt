@@ -91,8 +91,8 @@ object TrailYamlValidator {
       // Validate PARSING via the format-native decoder, not decodeTrail(): decodeTrail lowers a
       // unified trail to v1 for a specific device and guards against being called with no device
       // classifiers (it would otherwise silently drop every recording). This validator has no
-      // device — it only checks the file parses — so it must use decodeTrailDocument, which
-      // parses both v1 and unified shapes without the execution-lowering guard.
+      // device — it only checks the file parses — so it uses decodeTrailDocument, which parses the
+      // unified shape without the execution-lowering guard (v1's list root is no longer accepted).
       parser.decodeTrailDocument(yamlContent)
       null // Success
     } catch (e: Exception) {

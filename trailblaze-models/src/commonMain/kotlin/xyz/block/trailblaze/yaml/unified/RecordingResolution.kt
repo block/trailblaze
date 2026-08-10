@@ -44,20 +44,38 @@ data class RecordingResolution(
   val toolCount: Int? get() = toolNames?.size
 
   /**
-   * `true` when this step replays a conditional wrapper, so its inner tools re-evaluate their
-   * condition on every run instead of firing blind.
+   * `true` when this step replays at least one tool that re-evaluates its condition on every run
+   * instead of firing blind.
    *
    * A conditional NL step does NOT automatically produce one: the recorder captures the concrete
    * path it happened to take, unguarded, and `block_runIf` is `surfaceToLlm: false`, so the agent
    * can't choose it either. A step whose text describes a condition but whose recording has no
    * guard has silently become unconditional.
+   *
+   * Deliberately `any`, not `all`: a step that mixes a guard with a blind tap still has the blind
+   * tap. This answers "does this step re-evaluate anything", not "is every tool in it guarded".
    */
   val isConditionallyGuarded: Boolean
     get() = toolNames?.any { it in CONDITIONAL_TOOL_NAMES } == true
 
   companion object {
-    /** Recorded wrappers that re-evaluate a condition at replay time. */
-    val CONDITIONAL_TOOL_NAMES = setOf("block_runIf", "runIf")
+    /**
+     * Recorded tools that re-evaluate their condition at replay time, in either of the two shapes
+     * that exist: a **wrapper** that gates inner recorded tools (`block_runIf`), and a
+     * **self-guarding** tool that probes and no-ops when its target is absent
+     * (`block_dismissIfPresent`). Both mean the step doesn't fire blind, which is the only property
+     * [isConditionallyGuarded] and [TrailRecordingResolution.lostGuardsVersus] depend on — so
+     * limiting this to wrappers would report a device that used the self-guarding form as having
+     * lost a guard it never lost.
+     *
+     * **A floor, not a complete set.** Membership is by name, and this module is published
+     * open-source, where `scripts/scan_opensource_sensitive_terms.sh` bars target-specific prefixes —
+     * so a target's own self-guarding tools cannot be enumerated here even when they meet the
+     * criterion above. Read a `false` [isConditionallyGuarded] as "no *enumerated* guard", and any
+     * conditional count derived from it as a lower bound. Making this complete needs the property to
+     * travel as tool metadata rather than a name list; see #5269.
+     */
+    val CONDITIONAL_TOOL_NAMES = setOf("block_runIf", "runIf", "block_dismissIfPresent")
   }
 }
 
@@ -107,6 +125,16 @@ data class TrailRecordingResolution(
    * imperatively, and missed a quarter of the steps that are provably conditional. A sibling
    * device's own recording is evidence instead of a guess.
    *
+   * **Read this as an upper bound, not a defect count.** A sibling's guard proves the step is
+   * *conditional*; it does not prove this device is *missing* a guard. Two legitimate shapes land
+   * here: a per-device flow difference that moves the guard to an adjacent step, and a dialog that
+   * only exists on one platform (an iOS-only promo, a tablet-only side menu), where the other
+   * devices correctly have no guard because the dialog never appears. Both are topologically
+   * indistinguishable from a dropped guard — the discriminating information is the step's intent,
+   * not the shape of the recordings. Measured on this corpus: 14 of 14 candidates were legitimate
+   * divergence and none was a defect. Use this to *list* candidates for a human to read; do not
+   * gate on it.
+   *
    * @param siblings the same trail's resolution for other devices.
    */
   fun lostGuardsVersus(siblings: List<TrailRecordingResolution>): List<RecordingResolution> {
@@ -115,25 +143,49 @@ data class TrailRecordingResolution(
       .flatMap { sibling -> sibling.conditionallyGuarded.map { it.stepIndex } }
       .toSet()
     return steps.filter {
-      it.resolvedClassifier != null && !it.isConditionallyGuarded && it.stepIndex in guardedElsewhere
+      // A matched-EMPTY recording replays nothing, so it has no guard to have lost. Including it
+      // would be the same null/empty conflation this file exists to prevent, one level up.
+      it.toolNames?.isNotEmpty() == true &&
+        !it.isConditionallyGuarded &&
+        it.stepIndex in guardedElsewhere
     }
   }
 
   /**
    * One-line census for a log or report column. Named counts rather than a bare total, because the
    * total is the number that hid all four shapes in the first place.
+   *
+   * The outcome counts **partition** the steps — each step lands in exactly one of exact /
+   * family-alias / zero-tool no-op / unmatched / never-recorded, so they sum to the step total. They
+   * used to overlap: a matched-empty exact key was counted as both `exact` and `zero-tool no-op`, so
+   * a 5-step trail printed 6 labels and anyone adding up the line got a wrong number. `conditional`
+   * is reported separately in parentheses because it is a property *of* the matched steps, not a
+   * sixth bucket.
+   *
+   * The step total counts `trail:` steps only; the trailhead is called out by name so the count
+   * lines up with the step numbering every other artifact uses.
    */
   fun summarize(): String = buildString {
-    append("${steps.size} step(s)")
-    val exact = steps.count { it.resolvedClassifier != null && it.resolvedClassifier == deviceClassifier }
+    append("${steps.count { it.stepIndex != null }} step(s)")
+    if (steps.any { it.stepIndex == null }) append(" + trailhead")
+    val exact =
+      steps.count {
+        // The null guard matters for an empty classifier list, where deviceClassifier is also null
+        // and an unmatched step would otherwise read as an exact match.
+        it.resolvedClassifier != null &&
+          it.resolvedClassifier == deviceClassifier &&
+          it.toolCount != 0
+      }
     if (exact > 0) append(", $exact exact")
-    familyAliased.groupingBy { it.resolvedClassifier }.eachCount().forEach { (key, n) ->
-      append(", $n via family alias '$key'")
-    }
+    familyAliased
+      .filter { it.toolCount != 0 }
+      .groupingBy { it.resolvedClassifier }
+      .eachCount()
+      .forEach { (key, n) -> append(", $n via family alias '$key'") }
     if (deterministicNoOps.isNotEmpty()) append(", ${deterministicNoOps.size} zero-tool no-op")
-    if (conditionallyGuarded.isNotEmpty()) append(", ${conditionallyGuarded.size} conditional")
     if (unresolvedDeclared.isNotEmpty()) append(", ${unresolvedDeclared.size} unmatched -> LLM")
     val never = steps.count { it.declaredClassifiers.isEmpty() }
     if (never > 0) append(", $never never recorded")
+    if (conditionallyGuarded.isNotEmpty()) append(" (${conditionallyGuarded.size} conditional)")
   }
 }

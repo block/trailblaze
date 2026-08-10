@@ -19,6 +19,8 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
@@ -202,7 +204,7 @@ class RunReportGenerator(
     val originalYaml = logs.getSessionStartedInfo()?.rawYaml?.takeIf { it.isNotBlank() }
 
     return buildJsonObject {
-      put("meta", sessionMetaJson(sessionInfo, status, reportProvenanceJson(environment)))
+      put("meta", sessionMetaJson(sessionInfo, status, SessionRecordingInfo.fromLogs(logs), reportProvenanceJson(environment)))
       if (recordingYaml != null) put("recordingYaml", recordingYaml)
       if (originalYaml != null) put("originalYaml", originalYaml)
       put("sessionDir", sessionDir.absolutePath)
@@ -371,6 +373,7 @@ class RunReportGenerator(
     internal fun sessionMetaJson(
       sessionInfo: xyz.block.trailblaze.logs.model.SessionInfo,
       status: SessionStatus,
+      recordingInfo: SessionRecordingInfo,
       provenance: JsonObject = JsonObject(emptyMap()),
     ): JsonObject = buildJsonObject {
       put("title", sessionInfo.displayName)
@@ -412,8 +415,10 @@ class RunReportGenerator(
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
       failureReason(status)?.let { put("error", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
-      // badge in the viewer — the legacy report's SelfHealChip distinction.
-      if (status is SessionStatus.Ended.SucceededWithSelfHeal || status is SessionStatus.Ended.FailedWithSelfHeal) {
+      // badge in the viewer — the legacy report's SelfHealChip distinction. Asking
+      // ExecutionMode.selfHealed keeps this key in step with the `SELF_HEAL` execution mode the
+      // results JSON reports for the same run.
+      if (ExecutionMode.selfHealed(status, recordingInfo)) {
         put("selfHeal", true)
       }
       provenance.forEach { (key, value) -> put(key, value) }

@@ -29,8 +29,19 @@ sealed class TrailExecutionResult {
     val toolStructuredContent: JsonElement? = null,
   ) : TrailExecutionResult()
 
-  /** Trail failed with an error. */
-  data class Failed(val errorMessage: String?) : TrailExecutionResult()
+  /**
+   * Trail failed with an error.
+   *
+   * [misuse] marks a run the runner REJECTED as invalid before attempting it (e.g. a trail
+   * whose driver pin names no known driver) — as opposed to a run that was attempted and
+   * failed. Exit-code-surfacing callers map it to their misuse code (the CLI's
+   * `TrailblazeExitCode.MISUSE`, the daemon's `CliRunResponse.ERROR_KIND_MISUSE`); a misuse
+   * rejection also guarantees no session was created for the run.
+   */
+  data class Failed(
+    val errorMessage: String?,
+    val misuse: Boolean = false,
+  ) : TrailExecutionResult()
 
   /** Trail was cancelled. */
   data object Cancelled : TrailExecutionResult()

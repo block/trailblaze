@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import picocli.CommandLine
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -100,6 +101,36 @@ class TrailblazeExitCodePolicyTest {
   @CommandLine.Command(name = "throwing-test")
   private class ThrowingTestCommand : java.util.concurrent.Callable<Int> {
     override fun call(): Int = throw java.net.SocketTimeoutException("simulated")
+  }
+
+  // ---------------------------------------------------------------------------
+  // daemonRunFailureExitCode — failure-class mapping for daemon-delegated runs
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `daemon misuse rejection maps to MISUSE`() {
+    val response = CliRunResponse(
+      success = false,
+      error = "unknown driver type 'axe'",
+      errorKind = CliRunResponse.ERROR_KIND_MISUSE,
+    )
+    assertEquals(TrailblazeExitCode.MISUSE, daemonRunFailureExitCode(response))
+  }
+
+  @Test
+  fun `daemon failure without an errorKind maps to ASSERTION_FAILED`() {
+    // Covers ordinary attempted-run failures AND responses from older daemons
+    // that don't send the field.
+    val response = CliRunResponse(success = false, error = "assertion failed")
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED, daemonRunFailureExitCode(response))
+  }
+
+  @Test
+  fun `daemon failure with an unrecognized errorKind maps to ASSERTION_FAILED`() {
+    // A future daemon sending a kind this CLI doesn't know must degrade to the
+    // attempted-run default, never to success or a random code.
+    val response = CliRunResponse(success = false, error = "boom", errorKind = "some-future-kind")
+    assertEquals(TrailblazeExitCode.ASSERTION_FAILED, daemonRunFailureExitCode(response))
   }
 
   // ---------------------------------------------------------------------------

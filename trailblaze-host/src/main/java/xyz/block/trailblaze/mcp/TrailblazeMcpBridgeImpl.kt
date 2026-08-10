@@ -1539,11 +1539,15 @@ class TrailblazeMcpBridgeImpl(
    * The context carries a fresh [ScreenState] so tools that need to read the current
    * tree (e.g. `tap ref=e964`) can find their target.
    *
-   * **POC limitation:** session logging is not wired through this path — trails executed on
-   * host-native iOS drivers while a session is active will not emit per-tool logs or screen
-   * states to the session directory. A one-time stderr warning is emitted on first call so
-   * users notice before their session directory comes up empty. Proper wire-up is tracked as
-   * a follow-up.
+   * **Known gap — session logging (#2325):** this one-shot path deliberately
+   * short-circuits `runYamlInternal`, so it never gets the per-run `TrailblazeLoggingRule` +
+   * session wiring the IOS_HOST path gets; it runs with [noOpTrailblazeLogger] and a synthetic
+   * [iosNativeSession]. Tool calls executed here while `trailblaze session start` is active
+   * therefore emit no per-tool logs or screen states to the session directory. A one-time
+   * stderr warning surfaces this on first call so nobody is surprised by empty session
+   * artifacts. Wiring it up is not a local fix — the daemon has no component that knows the
+   * currently-active session, so every option requires new session/logger plumbing; the
+   * options and acceptance criteria are laid out in #2325.
    */
   private suspend fun executeToolViaIosNativeDriver(tool: TrailblazeTool, trailblazeDeviceId: TrailblazeDeviceId): String {
     val persistentDevice = persistentDevices[trailblazeDeviceId.instanceId] as? IosNativeConnectedDevice
@@ -1551,12 +1555,14 @@ class TrailblazeMcpBridgeImpl(
     val driverType = persistentDevice.trailblazeDriverType
     val deviceManager = persistentDevice.createDeviceManager()
     val agent = buildIosNativeAgent(deviceManager, persistentDevice)
-    val screenState = persistentDevice.screenState()
-    // POC limitation: this path short-circuits runYamlInternal, which means the
-    // TrailblazeLoggingRule + session wiring that IOS_HOST gets doesn't apply here.
-    // If a session is active, its directory will NOT capture per-tool-call logs for
-    // these actions. Surface that loudly once per daemon lifetime so nobody is
-    // surprised by empty session artifacts after running against a host-native driver.
+    // Reuse the manager built above — `persistentDevice.screenState()` constructs a second
+    // device manager internally, which is redundant work per tool call and a subtle
+    // inconsistency risk if a future driver's manager becomes stateful.
+    val screenState = deviceManager.getScreenState()
+    // Known gap: no session logging on this path (no-op logger + synthetic session) — see
+    // the kdoc above and #2325 for why, and for the wiring options. Surface it loudly
+    // once per daemon lifetime so nobody is surprised by empty session artifacts after
+    // running against a host-native driver.
     warnIosNativeSessionLoggingGapOnce(driverType)
     Console.log("[$driverType] Executing ${tool::class.simpleName} on ${persistentDevice.udid}")
     val ctx = TrailblazeToolExecutionContext(
@@ -1592,7 +1598,7 @@ class TrailblazeMcpBridgeImpl(
    * placeholder forwarded by callers without their own repo (e.g. `BridgeUiActionExecutor`'s
    * no-repo fallback) resolves to its concrete tool before dispatch — the same contract the
    * Maestro-driver agents honor. Target-specific custom tools are not wired on this one-shot
-   * path (same POC scope as the missing session logging, see [executeToolViaIosNativeDriver]).
+   * path (a known gap alongside the missing session logging, see [executeToolViaIosNativeDriver]).
    */
   private fun buildIosNativeAgent(
     deviceManager: IosDeviceManager,
@@ -1707,7 +1713,7 @@ class TrailblazeMcpBridgeImpl(
       System.err.println(
         "⚠️  [$driverType] Session logging is NOT wired on this driver's one-shot MCP path — if you " +
           "have `trailblaze session start` active, tool-call steps executed on $driverType will NOT " +
-          "be captured in the session directory. Proper wire-up is planned as a follow-up.",
+          "be captured in the session directory. Wire-up is tracked in #2325.",
       )
     }
   }

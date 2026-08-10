@@ -79,7 +79,7 @@ class SubagentOrchestrator(
 
   companion object {
     /** Maximum number of LLM requests before giving up (safety valve) */
-    const val MAX_ITERATIONS = 50
+    const val MAX_ITERATIONS = 25
 
     /** Base system prompt - tool descriptions are appended dynamically */
     private const val SYSTEM_PROMPT_BASE = """You are a mobile UI automation assistant. You can see the current screen state and must determine the single best action to accomplish the given objective.

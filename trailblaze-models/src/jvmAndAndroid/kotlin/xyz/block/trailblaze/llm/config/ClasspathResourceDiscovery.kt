@@ -73,6 +73,19 @@ object ClasspathResourceDiscovery {
   }
 
   /**
+   * Whether a classpath resource exists at [path]. Same classloader resolution as [loadResource]
+   * (context classloader, then [anchorClass]'s) but only probes for the URL — nothing is read, so a
+   * large resource isn't loaded into memory just to test for presence.
+   */
+  fun resourceExists(
+    path: String,
+    anchorClass: Class<*> = ClasspathResourceDiscovery::class.java,
+  ): Boolean {
+    return (Thread.currentThread().contextClassLoader?.getResource(path)
+      ?: anchorClass.classLoader?.getResource(path)) != null
+  }
+
+  /**
    * Discovers all files matching [suffix] under [directoryPath] and loads their contents.
    * Returns a map of `strippedFilename → content`.
    *

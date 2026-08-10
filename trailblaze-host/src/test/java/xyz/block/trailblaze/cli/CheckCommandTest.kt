@@ -12,6 +12,7 @@ import kotlin.test.assertTrue
 import picocli.CommandLine
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.host.TrailTscValidator
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * Tests for [CheckCommand] — the unified compile-+-typecheck-+-test CLI entry point that
@@ -37,6 +38,62 @@ class CheckCommandTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
+    // `check` delegates its compile half to `CompileCommand`, which registers the workspace's
+    // `*.tool.yaml` files on the process-global YAML-tool registry (the resolver snapshots it at
+    // construction, so there's no scoped alternative). Clear it so a later test in the same JVM
+    // doesn't resolve names against this test's temp workspace.
+    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
+  }
+
+  @Test
+  fun `check resolves a toolset the workspace authored, same as compile`() {
+    // `trailblaze check` is the invocation that surfaced this in a consumer repo's CI, and it
+    // reaches the workspace-toolset resolution only through its delegation to `CompileCommand`.
+    // Pinning it here keeps a future refactor from fixing `compile` while leaving `check`'s
+    // delegation on a classpath-only path.
+    //
+    // `web_requestDetails` for the same reason `CompileCommandTest`'s sibling case uses it:
+    // class-backed, not recordable, and its only classpath home (`web/toolsets/web_core.yaml`) is
+    // not `always_enabled`, so `beta_extra` is its only route into beta's surface. A recordable
+    // tool, an `always_enabled` toolset member, or any YAML-defined tool would land there
+    // regardless of `tool_sets:` and make the assertion vacuous.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "beta", withTarget = false)
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/beta")
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "toolsets").mkdirs()
+    File(trailmapDir, "toolsets/beta_extra.yaml").writeText(
+      """
+      id: beta_extra
+      description: "Toolset authored by the beta workspace trailmap."
+      tools:
+        - web_requestDetails
+      """.trimIndent(),
+    )
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: beta
+      target:
+        display_name: Beta
+        platforms:
+          android:
+            app_ids: [com.example.beta]
+            tool_sets: [beta_extra]
+      """.trimIndent(),
+    )
+
+    // `--no-typecheck` so this doesn't require `bun`/`node` on the test agent; the compile half
+    // is the part that resolves toolsets and emits the typed surface.
+    val exit = CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+      CommandLine(CheckCommand()).execute("--no-typecheck")
+    }
+
+    assertEquals(0, exit, "`check` should resolve a workspace-authored toolset just like `compile`")
+    val typedSurface = File(trailmapDir, "tools/trailblaze-client.d.ts")
+    assertTrue(
+      typedSurface.exists() && typedSurface.readText().contains("web_requestDetails"),
+      "`check` should emit beta's typed surface with its toolset's tool; got:\n" +
+        (if (typedSurface.exists()) typedSurface.readText() else "<no file>"),
+    )
   }
 
   @Test
@@ -1104,6 +1161,54 @@ class CheckCommandTest {
     // skips) rather than throwing and taking down the whole validation phase.
     val empty = File(workDir, "no-trailmaps").apply { mkdirs() }
     assertEquals(emptySet(), CheckCommand().listAllWorkspaceTrailmapIds(empty))
+  }
+
+  /**
+   * The regression guard for the defect itself: a framework JAR built without its bundled tsc
+   * payload must fail the run, not pass it.
+   *
+   * Mainline builds went green with the entire trail-recording validation phase skipped — sampled
+   * directly, builds 12050 and 12280 logged `bundled tsc payload missing` for every workspace
+   * while 12362 ran the phase. Nothing caught it: the CI step runs `check --no-typecheck`, which
+   * skips the one phase ([CheckCommand.runTypecheckPhase]) that treated the missing payload as
+   * fatal, and this phase then returned `EXIT_OK`. Asserted on the phase (with its payload resolver
+   * injected) rather than on the classifier alone, so re-wiring this branch back to `EXIT_OK` fails.
+   */
+  @Test fun `the validation phase is operational, not OK, when no tsc payload shipped`() {
+    val exit = CheckCommand().runTrailRecordingValidationPhase(
+      workspaceRoot = newWorkspaceWithTrailmap("alpha"),
+      trailmaps = emptyList(),
+      allWorkspaceScope = false,
+      extractTscJs = { null },
+      resolveRuntime = { "bun" },
+    )
+    assertEquals(CheckCommand.EXIT_OPERATIONAL_ERROR, exit)
+  }
+
+  /**
+   * A missing `bun` is a property of the machine, not a build defect, so it stays a skip — an
+   * external consumer without bun shouldn't have their whole `check` fail.
+   */
+  @Test fun `the validation phase skips when bun is absent`() {
+    val exit = CheckCommand().runTrailRecordingValidationPhase(
+      workspaceRoot = newWorkspaceWithTrailmap("alpha"),
+      trailmaps = emptyList(),
+      allWorkspaceScope = false,
+      extractTscJs = { File(workDir, "_tsc.js").toPath() },
+      resolveRuntime = { null },
+    )
+    assertEquals(CheckCommand.EXIT_OK, exit)
+  }
+
+  /**
+   * Precedence, not an incidental ordering: on a host missing both, the build defect is the more
+   * actionable signal, so it must not be masked by the environmental one.
+   */
+  @Test fun `a missing tsc payload outranks a missing js runtime`() {
+    assertEquals(
+      CheckCommand.TrailRecordingPreflight.MissingTscPayload,
+      CheckCommand().trailRecordingPreflight(tscJs = null, jsRuntime = null),
+    )
   }
 
   private fun newWorkspaceWithTrailmap(trailmapId: String, withTarget: Boolean = false): File {

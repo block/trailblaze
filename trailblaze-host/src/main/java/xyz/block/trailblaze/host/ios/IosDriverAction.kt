@@ -137,6 +137,9 @@ sealed interface IosDriverAction {
   /**
    * [stopFirst] mirrors Maestro's `LaunchAppCommand.stopApp` (FORCE_RESTART / REINSTALL launch
    * modes): terminate the app before launching so it cold-starts instead of resuming prior state.
+   * Defaults to true to match Maestro's own treatment of an omitted `stopApp`, so a producer that
+   * leaves it off cold-starts rather than reintroducing the warm-resume inversion; warm resume has
+   * to be asked for explicitly.
    * [clearState] mirrors `LaunchAppCommand.clearState` (REINSTALL, the tool's default mode):
    * wipe app state via terminate + reinstall-from-installed-bundle before launching.
    * [clearKeychain] mirrors `LaunchAppCommand.clearKeychain`: reset the simulator keychain before
@@ -145,9 +148,18 @@ sealed interface IosDriverAction {
    */
   data class LaunchApp(
     val bundleId: String,
-    val stopFirst: Boolean = false,
+    val stopFirst: Boolean = true,
     val clearState: Boolean = false,
     val clearKeychain: Boolean = false,
+    /**
+     * Maestro `LaunchAppCommand.permissions` passthrough (permission name → value, e.g.
+     * `location` → `always`, `notifications` → `allow`). Null keeps Maestro's default of
+     * `all: allow`. Applied by the executor before every launch — after the [clearState]
+     * reinstall wipes prior TCC grants — via `simctl privacy` plus notification-alert
+     * auto-dismissal (see [IosSimulatorPermissions]), so REINSTALL launches stay dialog-free
+     * the way Maestro's are.
+     */
+    val permissions: Map<String, String>? = null,
   ) : IosDriverAction {
     override val description get() = "Launch app $bundleId" +
       when {

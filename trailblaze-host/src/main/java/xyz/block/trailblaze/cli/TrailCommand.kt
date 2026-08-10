@@ -323,7 +323,7 @@ open class TrailCommand : Callable<Int> {
     description = [
       "Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. " +
         "Useful on metered or expensive providers to cut off a stuck self-heal loop. " +
-        "Must be a positive integer. Default: 50 (the runner's built-in cap). " +
+        "Must be a positive integer. Default: 25 (the runner's built-in cap). " +
         "Not compatible with --agent MULTI_AGENT_V3."
     ]
   )
@@ -602,6 +602,19 @@ open class TrailCommand : Callable<Int> {
     maxLlmCalls?.let { cap ->
       if (cap <= 0) {
         Console.error("Error: --max-llm-calls must be a positive integer (got $cap).")
+        return TrailblazeExitCode.MISUSE.code
+      }
+    }
+
+    // Validate --driver early so a typo exits MISUSE on BOTH execution paths. The
+    // in-process path re-validates per file (the trail config / app setting can also
+    // contribute a driver string), but the daemon-delegated path forwards the raw flag
+    // value — without this check a bad --driver only surfaces as the daemon's run
+    // failure, not as the usage error it is.
+    when (val resolution = CliRunDriverResolver.resolve(driverType)) {
+      is CliRunDriverResolution.Resolved -> Unit
+      is CliRunDriverResolution.Unrecognized -> {
+        reportCliError(verb = "Trail run", reason = resolution.reason, hint = resolution.hint)
         return TrailblazeExitCode.MISUSE.code
       }
     }
@@ -989,12 +1002,13 @@ open class TrailCommand : Callable<Int> {
     var failed = 0
     var skipped = 0
     // Same per-file worst-code tracking as the in-process path above. The daemon
-    // RPC currently only signals success/failure (boolean `response.success`), so
-    // we don't yet have a per-file ASSERTION-vs-INFRA distinction from this side;
-    // map every failure to ASSERTION_FAILED for now so a real trail-assertion
-    // failure stays distinguishable from a daemon outage (which surfaces as an
-    // exception from `daemon.runSync` and routes to INFRA via the IO envelope).
-    // When the daemon RPC grows a typed exit code in its response, swap this in.
+    // RPC signals a partial failure class (`response.errorKind`): a daemon-side
+    // MISUSE rejection maps to MISUSE via daemonRunFailureExitCode, but attempted
+    // runs don't yet carry an ASSERTION-vs-INFRA distinction from this side; those
+    // map to ASSERTION_FAILED so a real trail-assertion failure stays
+    // distinguishable from a daemon outage (which surfaces as an exception from
+    // `daemon.runSync` and routes to INFRA via the IO envelope). When the daemon
+    // RPC grows a full typed exit code in its response, swap this in.
     var worstExitCode = TrailblazeExitCode.SUCCESS.code
 
     // Register Ctrl+C handler to cancel the in-flight daemon run
@@ -1131,7 +1145,7 @@ open class TrailCommand : Callable<Int> {
                 Console.error("❌ FAILED: $err")
               }
               failed++
-              worstExitCode = chooseWorseExitCode(worstExitCode, TrailblazeExitCode.ASSERTION_FAILED.code)
+              worstExitCode = chooseWorseExitCode(worstExitCode, daemonRunFailureExitCode(response).code)
             }
           }
         }
@@ -1514,16 +1528,12 @@ open class TrailCommand : Callable<Int> {
         .appConfig.selectedTrailblazeDriverTypes[platform]
     }
     val driverString = driverType ?: trailConfig?.driver ?: appSettingDriverType?.name
-    val trailDriverType = driverString?.let { ds ->
-      TrailblazeDriverType.fromString(ds)
-        ?: run {
-          reportCliError(
-            verb = "Trail run",
-            reason = "unknown driver type '$ds'",
-            hint = "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}",
-          )
-          return TrailblazeExitCode.MISUSE.code to emptyList()
-        }
+    val trailDriverType = when (val resolution = CliRunDriverResolver.resolve(driverString)) {
+      is CliRunDriverResolution.Resolved -> resolution.driverType
+      is CliRunDriverResolution.Unrecognized -> {
+        reportCliError(verb = "Trail run", reason = resolution.reason, hint = resolution.hint)
+        return TrailblazeExitCode.MISUSE.code to emptyList()
+      }
     }
 
     // Derive platform: driver takes precedence, then fall back to config platform string.

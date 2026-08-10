@@ -246,6 +246,24 @@ class TapOnPointTrailblazeToolTest {
     assertEquals(5000 to 5000, agent.lastTapPoint, "raw tap still fires at the original coordinates")
   }
 
+  @Test
+  fun `raw-coordinate fallback (no selector upgrade) warns the author at record time`() {
+    // The null-resolve branch: no element was resolved at the tap point, so a raw tapOnPoint is
+    // recorded. The author gets a diagnostic that the step is brittle (won't survive reflow).
+    assertNotNull(
+      TapOnPointTrailblazeTool.rawCoordinateTapWarning(selectorUpgraded = false, x = 42, y = 99),
+    )
+  }
+
+  @Test
+  fun `selector-upgraded tap stays silent at record time`() {
+    // The resolved branch: the tap was upgraded to a selector-based step, which is reflow-safe —
+    // nothing to warn about.
+    assertNull(
+      TapOnPointTrailblazeTool.rawCoordinateTapWarning(selectorUpgraded = true, x = 42, y = 99),
+    )
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------

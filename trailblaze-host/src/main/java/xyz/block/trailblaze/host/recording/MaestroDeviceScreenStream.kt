@@ -35,6 +35,9 @@ import xyz.block.trailblaze.recording.DeviceScreenStream
 class MaestroDeviceScreenStream(
   private val driver: Driver,
   private val frameIntervalMs: Long = 200,
+  // Simulator UDID enabling the iOS AXe tree overlay; null (or non-iOS) leaves the tree
+  // Maestro-only. See [MaestroScreenStateProvider].
+  private val iosUdid: String? = null,
 ) : DeviceScreenStream {
 
   private val driverMutex = Mutex()
@@ -44,6 +47,7 @@ class MaestroDeviceScreenStream(
   private val provider = MaestroScreenStateProvider(
     driver = driver,
     driverMutex = driverMutex,
+    iosUdid = iosUdid,
   )
 
   override val deviceWidth: Int get() = provider.deviceInfo.widthGrid
@@ -123,9 +127,13 @@ class MaestroDeviceScreenStream(
   }
 
   override suspend fun getTrailblazeNodeTree(): TrailblazeNode? {
-    val cached = lastResponse?.trailblazeNodeTree
-    if (cached != null) return cached
-    return refreshScreenState()?.trailblazeNodeTree
+    // Record/tree drives selector generation, so take a fresh AXe-enriched capture rather than
+    // reusing the frame loop's Maestro-only cached tree — otherwise a selector recorded on
+    // bottom-sheet content XCUITest drops would have nothing to bind to. The 200ms mirror loop uses
+    // getScreenState (Maestro-only, no axe); only this record/tree fetch enriches.
+    return provider.getEnrichedScreenState(includeScreenshot = false)
+      ?.also { lastResponse = it }
+      ?.trailblazeNodeTree
   }
 
   override suspend fun getScreenshot(): ByteArray {

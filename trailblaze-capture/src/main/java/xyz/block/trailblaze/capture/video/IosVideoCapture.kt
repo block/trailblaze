@@ -11,6 +11,7 @@ import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.CoreSimulatorTempFiles
 import xyz.block.trailblaze.util.isMacOs
 
 /**
@@ -54,13 +55,12 @@ class IosVideoCapture(
     this.videoFile = output
     // Record into a temp file on the boot volume, moved onto [output] at stop. The mp4 is
     // written by CoreSimulator's SimRender process — not this JVM or its simctl child — and
-    // SimRender's file access can be narrower than ours: when the session dir sits on a
-    // non-boot volume (e.g. a CI workspace on /Volumes/...), recordVideo fails at start with
-    // NSCocoaErrorDomain 513 / OSStatus -12204 ("The file couldn't be saved because you don't
-    // have permission") even though this JVM writes the same dir fine. The per-user temp dir
-    // is on the boot volume, and the move at stop runs in this JVM, which owns the session dir.
+    // SimRender can't write non-boot volumes (e.g. a CI workspace on /Volumes/...); see
+    // [CoreSimulatorTempFiles]. The boot-volume guarantee comes from that helper (TMPDIR env,
+    // never java.io.tmpdir — embedders redirect the latter back onto the forbidden volume via
+    // -Djava.io.tmpdir), and the move at stop runs in this JVM, which owns the session dir.
     // The "video_" prefix keeps [staleRecordingPgrepPattern] matching a crashed temp recorder.
-    val recordingTarget = File.createTempFile("video_", ".mp4")
+    val recordingTarget = createRecordingTempFile()
     this.recordingFile = recordingTarget
 
     // Detect simulator orientation before recording starts so we can rotate
@@ -173,7 +173,8 @@ class IosVideoCapture(
    */
   private fun detectSimulatorLandscape(deviceId: String): Boolean {
     try {
-      val tempFile = File.createTempFile("tb_orient_", ".png")
+      // Written by CoreSimulator, not this JVM — must be boot-volume (see CoreSimulatorTempFiles).
+      val tempFile = CoreSimulatorTempFiles.createTempFile("tb_orient_", ".png")
       try {
         val proc =
           ProcessBuilder(
@@ -242,6 +243,17 @@ class IosVideoCapture(
      */
     internal fun staleRecordingPgrepPattern(deviceId: String): String =
       "simctl io $deviceId recordVideo .*/video[^/]*\\.mp4"
+
+    /**
+     * The recording temp target — boot-volume via [CoreSimulatorTempFiles] because SimRender is
+     * the writer (see the comment in [start]). Extracted so a unit test can pin that the created
+     * path still matches [staleRecordingPgrepPattern].
+     */
+    internal fun createRecordingTempFile(): File =
+      // deleteOnExit is the SIGTERM-timeout safety net: every in-JVM path already deletes the
+      // temp recording, but a JVM killed mid-session would otherwise leak it into the
+      // host-global temp dir (which, unlike the old workspace tmp, CI teardown never wipes).
+      CoreSimulatorTempFiles.createTempFile("video_", ".mp4").apply { deleteOnExit() }
 
     /** True when [commandLine] would be matched by [staleRecordingPgrepPattern] (pgrep -f is unanchored). */
     internal fun matchesStaleTrailblazeRecording(deviceId: String, commandLine: String): Boolean =

@@ -1281,10 +1281,13 @@ export interface Swipe {
   type?: AgentActionType;
 }
 
+export type TapDispatchRoute = "ACTION_CLICK" | "GESTURE" | "GESTURE_AFTER_ACTION_CLICK_MISS";
+
 export interface TapPoint {
   class: "xyz.block.trailblaze.api.AgentDriverAction.TapPoint";
   x: number;
   y: number;
+  dispatchRoute?: TapDispatchRoute | null;
   type?: AgentActionType;
 }
 

@@ -462,9 +462,25 @@ val generateVersionProperties by tasks.registering {
 // failing here would block every other host build on a fresh checkout that hasn't run
 // `bun install` yet, which the existing `copyTypescriptSdkResources` (in
 // `:trailblaze-models`) also avoids.
+//
+// That tolerance is why the ORDERING below is load-bearing rather than cosmetic. Without it
+// this Copy could run before anything had populated `node_modules/typescript/`, go NO-SOURCE,
+// and ship a JAR with no `_tsc.js` — silently, because the tolerance turns a packaging defect
+// into an empty resource instead of an error. Downstream, `trailblaze check --no-typecheck`
+// (what `pr_validate_ts_tooling.sh` runs) skips the phase that would have caught the missing
+// payload, so trail-recording validation skipped itself and the build still went green: 2 of 3
+// sampled mainline builds (12050, 12280) skipped it for every workspace with
+// `bundled tsc payload missing`, while 12362 ran it. Ordering the install first is what makes
+// the payload deterministic; `CheckCommand` treats a missing payload as fatal now that it can
+// only mean this task was bypassed.
 val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
   group = "trailblaze"
   description = "Stages typescript@6.0.3's tsc + lib.*.d.ts files into build/ for inclusion in this module's JAR resources."
+  // `bundleTrailblazeSdkDts` owns the SDK devDependency install (`bun install --frozen-lockfile`
+  // in `sdks/typescript/`), so run after it instead of racing a cold checkout where
+  // `node_modules/typescript` is not populated yet. Same ordering the sibling
+  // `bundleScriptedToolAnalyzerShim` (in `:trailblaze-models`) takes on the same directory.
+  dependsOn(":trailblaze-models:bundleTrailblazeSdkDts")
   // Path relative to `:trailblaze-host` project dir → `../sdks/typescript/...`
   from(layout.projectDirectory.dir("../sdks/typescript/node_modules/typescript")) {
     // Top-level package metadata + license — tsc loads `package.json` for its own version
@@ -478,6 +494,44 @@ val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
     include("lib/diagnosticMessages.generated.json")
   }
   into(layout.buildDirectory.dir("generated-resources/typecheck/trails/config/typecheck/typescript"))
+}
+
+// The ordering above is necessary but NOT sufficient, which is why this exists as a separate task.
+// `bundleTrailblazeSdkDts` tracks `src/` + `package.json` + `bun.lock` as inputs and `dist/` as
+// outputs — `node_modules/` is neither, and its install-skip probe looks for `.bin/esbuild` and
+// `.bin/dts-bundle-generator`, never `node_modules/typescript`. So with `dist/` present and
+// `node_modules/` deleted (exactly what the documented `rm -rf node_modules` recovery in AGENTS.md
+// leaves behind, and what any cache that keeps `dist/` but not `node_modules/` reproduces), that task
+// reports UP-TO-DATE, `bun install` never runs, and the Copy above goes NO-SOURCE.
+//
+// A `doLast` on the Copy cannot catch that: Gradle skips a NO-SOURCE task's actions entirely. So the
+// assertion lives in its own always-executing task, wired ahead of resource processing. It fails the
+// build with the one-line recovery rather than shipping a JAR whose `trailblaze check` reports a
+// confusing operational error later — the payload being silently absent is the whole defect this
+// change set exists to close.
+val verifyTypescriptCompilerPayload by tasks.registering {
+  group = "verification"
+  description = "Fails the build if the bundled tsc payload did not get staged into JAR resources."
+  dependsOn(copyTypescriptCompilerResources)
+  val tscJs = layout.buildDirectory.file(
+    "generated-resources/typecheck/trails/config/typecheck/typescript/lib/_tsc.js",
+  )
+  // Resolved paths, not repo-relative strings: this file is mirrored to the public repo, where the
+  // SDK sits at a different prefix.
+  val sdkDir = layout.projectDirectory.dir("../sdks/typescript").asFile
+  inputs.files(copyTypescriptCompilerResources)
+  outputs.upToDateWhen { false }
+  doLast {
+    val staged = tscJs.get().asFile
+    if (!staged.isFile || staged.length() == 0L) {
+      throw GradleException(
+        "The bundled tsc payload was not staged (expected $staged).\n" +
+          "That means ${File(sdkDir, "node_modules/typescript")} is missing or incomplete, so " +
+          "`copyTypescriptCompilerResources` had nothing to copy.\n" +
+          "Recover with: (cd $sdkDir && bun install --frozen-lockfile)",
+      )
+    }
+  }
 }
 
 // Stage the single shared scripted-tool registration-wrapper template as a JAR resource so
@@ -593,6 +647,7 @@ sourceSets {
 tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
   dependsOn(generateVersionProperties)
   dependsOn(copyTypescriptCompilerResources)
+  dependsOn(verifyTypescriptCompilerPayload)
   dependsOn(copyScriptedToolWrapperTemplate)
   dependsOn(copyAgentSkillResources)
   dependsOn(zipTrailblazeSkill)

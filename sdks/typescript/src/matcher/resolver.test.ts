@@ -1106,6 +1106,23 @@ describe("resolve — IosMaestro selector against IosAxe tree (cross-dialect bri
     expect(asSingleMatch(result).nodeId).toBe(searchField.nodeId);
   });
 
+  test("hintTextRegex matches a text input's placeholder-as-value", () => {
+    resetIds();
+    // Older iOS runtimes (18.x) leave an empty text field's AXLabel null and surface the
+    // placeholder as AXValue instead (the Contacts search field: label=null, value="Search",
+    // help=null). The type gate still keeps the decorative magnifying-glass Image
+    // (label="Search") — or one carrying the hint as its VALUE — from false-matching.
+    const searchField = nodeOf({ class: "iosAxe", type: "TextField", value: "Search" });
+    const searchIcon = nodeOf({ class: "iosAxe", type: "Image", label: "Search" });
+    const valueDecoy = nodeOf({ class: "iosAxe", type: "Image", value: "Search" });
+    const root = nodeOf(
+      { class: "iosAxe" },
+      { children: [searchIcon, valueDecoy, searchField] },
+    );
+    const result = resolve(root, selectors.iosMaestro({ hintTextRegex: "Search" }));
+    expect(asSingleMatch(result).nodeId).toBe(searchField.nodeId);
+  });
+
   test("MAESTRO dialect is case-insensitive", () => {
     resetIds();
     const target = nodeOf({ class: "iosAxe", label: "Log In" });

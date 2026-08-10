@@ -6,10 +6,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToStream
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -25,6 +27,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.Writer
+import java.util.Base64 as JavaBase64
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import kotlin.io.encoding.Base64
@@ -57,6 +60,11 @@ object WasmReport {
   private val compactJsonReformatter = Json {
     prettyPrint = false
     ignoreUnknownKeys = true
+  }
+
+  /** Compact twin of the pretty-printed [TrailblazeJsonInstance] — same module and discriminator. */
+  private val compactTrailblazeJson: Json by lazy {
+    Json(from = TrailblazeJsonInstance) { prettyPrint = false }
   }
 
   private fun compactJson(prettyJson: String): String {
@@ -210,11 +218,24 @@ object WasmReport {
     perSessionData: Map<String, PerSessionData>,
   ): Map<String, String> = runBlocking(Dispatchers.Default) {
     perSessionData.entries.map { (sessionId, data) ->
-      async {
-        val logsJson = compactJson(TrailblazeJsonInstance.encodeToString(data.logs))
-        sessionId to compressStringToBase64(logsJson)
-      }
+      async { sessionId to compressLogsToBase64(data.logs) }
     }.awaitAll().toMap()
+  }
+
+  /**
+   * Serializes straight into the gzip+base64 stream. Buffering a session's JSON as one String
+   * first asks for a ~590MB contiguous array while sibling coroutines hold the Deflater's JNI
+   * critical section, which stalls GC and fails the allocation at any heap size.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  internal fun compressLogsToBase64(logs: List<TrailblazeLog>): String {
+    val base64Out = ByteArrayOutputStream()
+    JavaBase64.getEncoder().wrap(base64Out).use { base64Stream ->
+      GZIPOutputStream(base64Stream).use { gzipStream ->
+        compactTrailblazeJson.encodeToStream(logs, gzipStream)
+      }
+    }
+    return base64Out.toString(Charsets.US_ASCII)
   }
 
   private fun generateFromTemplate(

@@ -7,8 +7,10 @@
 Wait until the UI has settled after your action. Use this instead of a fixed-duration wait when
 you've triggered an action (a new screen loads, content updates, a list scrolls) and want to block
 until the UI is quiet again. Returns immediately if the UI is already settled when this runs.
-Known limit: it cannot wait for a delayed async change that hasn't started yet — for that, use a
-specific-element wait (e.g. assertVisible on the element you expect to appear).
+Known limit: it returns as soon as the UI is quiet, so it cannot wait out a change that has not
+started yet. For that, poll the actual state — assertNotVisibleWithText to wait a loading indicator
+out, or take a fresh snapshot and assertVisible a ref that is present (assertVisible checks the
+current snapshot and does not itself wait for an element to appear).
 
 ## Source
 

@@ -1,13 +1,35 @@
 // The standalone report viewer. run-report-viewer-boot.ts bundles this module (and everything it
 // imports) into a self-executing classic script that buildMultiReportHtml embeds into every
 // exported report, so the exported file runs offline anywhere — plain DOM only, no React, no
-// external scripts. It reads its data from the inert #tb-run-data JSON script (window fallback
-// for in-app embedders).
+// external scripts. It reads its data from inert JSON scripts: the #tb-index boot chunk plus
+// lazily-parsed per-session #tb-session-<i> chunks (with #tb-run-data and window.__TB_RUN_DATA__
+// as monolithic fallbacks for older files and in-app embedders).
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
-import { localRunAgentPrompt, yamlRootSection } from './run-report-extract';
+import { isLlmTurnRow, localRunAgentPrompt, traceStepCount, traceToolCallCount, yamlRootSection } from './run-report-extract';
 import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzText, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, toInertJson } from './run-report-payload';
 import { buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
+
+// Run `fn` once the document has finished streaming (immediately when it already has). A chunked
+// report's UI is interactive while the document tail — later sessions' #tb-session-<i> /
+// #tb-sprites-<i> chunks — is still arriving, so work that snapshots the whole document (export)
+// must wait for readyState 'complete': by then every chunk that will ever exist is in the DOM.
+// One pending slot, latest call wins: re-invoking while armed replaces the deferred work rather
+// than queueing a second snapshot.
+let pendingWhenComplete: (() => void) | null = null;
+export function whenDocumentComplete(fn: () => void): void {
+  if (String(document.readyState || 'complete') === 'complete') { fn(); return; }
+  const armed = pendingWhenComplete != null;
+  pendingWhenComplete = fn;
+  if (armed) return;
+  const poll = () => {
+    if (String(document.readyState || 'complete') !== 'complete') { setTimeout(poll, 50); return; }
+    const run = pendingWhenComplete;
+    pendingWhenComplete = null;
+    if (run) run();
+  };
+  setTimeout(poll, 50);
+}
 
 export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // First paint must be the static #tb-boot loader, not a frozen blank page: on a multi-megabyte
@@ -35,12 +57,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (!el) return null;
     try { return JSON.parse(el.textContent || ''); } catch (_) { return null; }
   };
-  // The payload ships as an inert JSON script (#tb-run-data) so the JS parser never sees megabytes
-  // of data on the boot path. textContent → JSON.parse is not an HTML sink (nothing is
-  // reinterpreted as markup); render-time escaping still covers every user-supplied field. The
-  // window global remains as the fallback for embedders that inject the payload directly.
-  const readPayload = (): Partial<ReportPayload> => readJsonScript('tb-run-data') || window.__TB_RUN_DATA__ || {};
-  const RAW: Partial<ReportPayload> = readPayload();
+  // The payload ships as inert JSON scripts so the JS parser never sees megabytes of data on the
+  // boot path. Chunked documents (buildMultiReportHtml) split it: #tb-index (per-session meta +
+  // per-call LLM token/cost summaries + trace-derived counts — everything the run list renders) arrives BEFORE
+  // this script, and each session's heavy remainder rides in its own #tb-session-<i> chunk AFTER
+  // it, JSON.parsed only when that run opens (hydrateSession). Older layouts keep working: a
+  // monolithic #tb-run-data document and the window.__TB_RUN_DATA__ fallback (for embedders that
+  // inject the payload directly) both boot fully hydrated. textContent → JSON.parse is not an
+  // HTML sink (nothing is reinterpreted as markup); render-time escaping still covers every
+  // user-supplied field.
+  const INDEX_PAYLOAD: Partial<ReportPayload> | null = readJsonScript('tb-index');
+  const RAW: Partial<ReportPayload> = INDEX_PAYLOAD || readJsonScript('tb-run-data') || window.__TB_RUN_DATA__ || {};
   const root = document.getElementById('app') as HTMLElement;
   const esc = (s: unknown) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
   const safeHref = (value: unknown) => {
@@ -48,22 +75,73 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     catch (e) { return null; }
   };
 
-  // Normalize to a sessions[] array. New reports embed { generatedAt, sessions:[...] }; tolerate the
-  // older single-run shape ({ meta, trace, llm, shots }) so previously-exported files still open.
+  // Normalize to a sessions[] array. Chunked documents list index stubs (hydrated on open);
+  // monolithic payloads embed full sessions; tolerate the older single-run shape
+  // ({ meta, trace, llm, shots }) so previously-exported files still open.
   const SESSIONS: SessionPayload[] = (RAW.sessions && RAW.sessions.length)
-    ? RAW.sessions
+    ? RAW.sessions.map((s) => INDEX_PAYLOAD ? { trace: [], llm: [], shots: {}, recordingYaml: null, originalYaml: null, ...s } : s)
     : [{ meta: RAW.meta || {}, trace: RAW.trace || [], llm: RAW.llm || [], shots: RAW.shots || {}, recordingYaml: (RAW.meta && RAW.meta.recordingYaml) || null, originalYaml: (RAW.meta && RAW.meta.originalYaml) || null }];
   const MULTI = SESSIONS.length > 1;
-  // Sprite sheets are hoisted out of the boot payload into the inert #tb-sprites JSON chunk (see
-  // buildMultiReportHtml), keyed by session index (one URI array per session, in sheet order), so
-  // boot never parses their bytes. Resolved lazily — the chunk is only JSON.parsed on the first
-  // frame render that needs a sprite — and cached. Payloads that still carry video.sprites URIs
-  // inline (in-app embedders, older exports) short-circuit before the store is touched.
+  // Sessions still awaiting their #tb-session-<i> chunk. Hydration assigns the chunk's fields
+  // INTO the existing stub (object identity preserved — the inflater caches and `D` hold object
+  // references) and removes the entry. Empty for monolithic payloads (everything starts hydrated).
+  const unhydrated = new Set<number>(INDEX_PAYLOAD && RAW.sessions && RAW.sessions.length ? SESSIONS.map((_, i) => i) : []);
+  // Parse a session's chunk into its stub. Returns true once the session is usable: synchronously
+  // when the chunk is already in the DOM (the common case), or — document fully loaded but the
+  // chunk genuinely absent/malformed — by giving up on hydration so the run opens with what the
+  // index carries instead of hanging.
+  const hydrateSession = (i: number): boolean => {
+    if (!unhydrated.has(i)) return true;
+    const docComplete = String(document.readyState || 'complete') === 'complete';
+    const full = readJsonScript(`tb-session-${i}`);
+    if (full) {
+      // Blanked sprite URIs mean this session's frames ride in the #tb-sprites-<i> chunk directly
+      // after this one (see buildMultiReportHtml) — usually the bulk of the session's bytes, so on
+      // a streaming document it can lag well behind. The video pane resolves each frame's URL only
+      // at render, so hydrating early would paint blank frames that nothing ever re-renders. Hold
+      // until the sprites chunk parses (primeSpriteChunk caches it, so the render won't re-parse);
+      // a completed document without one is the truncated-download case — open degraded, as below.
+      const awaitingSprites = !docComplete && full.video && full.video.sprites.length
+        && full.video.sprites.every((sp) => !sp.uri) && !primeSpriteChunk(i);
+      if (awaitingSprites) return false;
+      Object.assign(SESSIONS[i], full); unhydrated.delete(i); return true;
+    }
+    if (docComplete) { unhydrated.delete(i); return true; }
+    return false;
+  };
+  // Await a chunk that hasn't streamed in yet (the run was opened while the document tail is
+  // still downloading). Cheap 50ms poll — it only ever runs during that streaming window, which
+  // hydrateSession's readyState check bounds.
+  const awaitSessionChunk = (i: number): Promise<void> => new Promise((resolve) => {
+    const poll = () => { if (hydrateSession(i)) resolve(); else setTimeout(poll, 50); };
+    poll();
+  });
+  // Sprite sheets are hoisted out of the boot payload into inert JSON chunks (see
+  // buildMultiReportHtml): one #tb-sprites-<i> per session (one URI array in sheet order), so boot
+  // never parses their bytes. Resolved lazily — a chunk is only JSON.parsed on the first frame
+  // render that needs it — and cached (misses are NOT cached: the chunk may still be streaming
+  // in). Older exports carry a single #tb-sprites map keyed by session index; payloads that still
+  // carry video.sprites URIs inline (in-app embedders) short-circuit before any store is touched.
   let spriteStoreCache: Record<string, string[]> | null = null;
   const spriteStore = () => spriteStoreCache || (spriteStoreCache = readJsonScript('tb-sprites') || {});
+  const spriteChunkCache: Record<string, string[]> = {};
+  // Parse-and-cache a session's sprite chunk once it has streamed in. hydrateSession (above)
+  // holds a hoisted-sprites session on this, so the detail render never sees frames whose chunk
+  // hasn't arrived.
+  const primeSpriteChunk = (i: number): boolean => {
+    const key = String(i);
+    if (spriteChunkCache[key]) return true;
+    const chunk = readJsonScript(`tb-sprites-${key}`);
+    if (chunk) spriteChunkCache[key] = chunk;
+    return Boolean(chunk);
+  };
   const spriteUrls = (v: VideoInfo | null | undefined, sessionIndex?: number): string[] => {
     if (v && v.sprites.some((sp) => sp.uri)) return v.sprites.map((sp) => sp.uri);
-    return spriteStore()[String(sessionIndex == null ? st.session : sessionIndex)] || [];
+    const key = String(sessionIndex == null ? st.session : sessionIndex);
+    if (spriteChunkCache[key]) return spriteChunkCache[key];
+    const chunk = readJsonScript(`tb-sprites-${key}`);
+    if (chunk) { spriteChunkCache[key] = chunk; return chunk; }
+    return spriteStore()[key] || [];
   };
   const spriteUrl = (v: VideoInfo | null | undefined, sheet: number, sessionIndex?: number) => spriteUrls(v, sessionIndex)[sheet] || '';
   const generatedAt = RAW.generatedAt || (SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta.generatedAt) || '';
@@ -97,26 +175,53 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const a = document.createElement('a'); a.href = url; a.download = filename; a.style.display = 'none';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
   };
-  const exportReport = (sessions, filename, title) => {
+  // Deferred through whenDocumentComplete: exporting while the document tail is still streaming
+  // would clone a DOM missing later #tb-session-<i>/#tb-sprites-<i> chunks — a truncated file.
+  // The exported runs travel as the `sessions` array (captured at click), so a deferred export
+  // can't follow the user's later navigation to another run.
+  const exportReport = (sessions, filename, title) => whenDocumentComplete(() => {
     const clone = document.documentElement.cloneNode(true) as HTMLElement;
     // Re-seed the static boot loader (the live document's first render replaced it) so the
     // exported file also paints a loader instead of a blank page while it boots.
     const heading = sessions.length === 1 ? (sessions[0].meta.title || 'Trailblaze run') : 'Trailblaze Report';
     const app = clone.querySelector('#app');
     if (app) app.innerHTML = tbBootLoaderHtml(heading);
+    const titleEl = clone.querySelector('title'); if (titleEl) titleEl.textContent = title;
+    const index = clone.querySelector('#tb-index');
+    if (index) {
+      // Chunked layout. A FULL export ships the clone as-is: every #tb-session-<i> /
+      // #tb-sprites-<i> chunk (and the canonical share URL in #tb-index) is already in place. A
+      // single-run export renumbers instead: the exported run becomes run 0, so its chunks are
+      // re-id'd, every other session's chunks are dropped, and the index is rewritten to just its
+      // entry — shareUrl dropped, since a grafted deep link would point at a different run in the
+      // hosted original. Session identity is stable across hydration (chunks Object.assign into
+      // the boot stubs), so indexOf recovers the exported run's index.
+      if (sessions.length !== SESSIONS.length) {
+        const exportSession = SESSIONS.indexOf(sessions[0]);
+        const entries = (readJsonScript('tb-index') || {}).sessions || [];
+        index.textContent = toInertJson({ generatedAt, sessions: [entries[exportSession] || { meta: sessions[0].meta, llm: sessions[0].llm }] });
+        clone.querySelectorAll('[id^="tb-session-"], [id^="tb-sprites-"]').forEach((el) => {
+          if (el.id === `tb-session-${exportSession}`) el.id = 'tb-session-0';
+          else if (el.id === `tb-sprites-${exportSession}`) el.id = 'tb-sprites-0';
+          else el.remove();
+        });
+      }
+      downloadBlob(['<!doctype html>\n' + clone.outerHTML], 'text/html;charset=utf-8', filename);
+      return;
+    }
     const data = clone.querySelector('#tb-run-data');
     if (!data) return;
-    // The canonical share URL only survives a FULL export: a single-run export out of a multi-run
-    // report renumbers sessions (the exported run becomes run=0), so a grafted deep link would
-    // point at a different run in the hosted original.
+    // Legacy monolithic layout (older exported files, in-app embed re-exports). The canonical
+    // share URL only survives a FULL export: a single-run export out of a multi-run report
+    // renumbers sessions (the exported run becomes run=0), so a grafted deep link would point at
+    // a different run in the hosted original.
     data.textContent = toInertJson({ generatedAt, ...(SHARE_URL && sessions.length === SESSIONS.length ? { shareUrl: SHARE_URL } : {}), sessions });
     // Re-key the hoisted sprite chunk for the exported subset (session indices shift when a single
     // run is exported out of a multi-run report).
     const spriteData = clone.querySelector('#tb-sprites');
     if (spriteData) spriteData.textContent = toInertJson(rekeySprites(sessions, SESSIONS, spriteUrls));
-    const titleEl = clone.querySelector('title'); if (titleEl) titleEl.textContent = title;
     downloadBlob(['<!doctype html>\n' + clone.outerHTML], 'text/html;charset=utf-8', filename);
-  };
+  });
   const fileSlug = (value) => String(value || 'run').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'run';
   const screenshotEntries = (session) => (session.trace || []).filter((step) => step.screenshotFile && /^data:image\//.test(String((session.shots || {})[step.screenshotFile] || '')))
     .map((step, index) => [`${index + 1}. ${step.label || step.screenshotFile}`, session.shots[step.screenshotFile]]);
@@ -193,7 +298,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `D` is the session currently in view; every renderer reads D.trace / D.llm / D.shots / D.meta /
   // D.recordingYaml, so the single-run renderers below are unchanged across a session switch.
   let D: SessionPayload = SESSIONS[0];
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, llmSel: 0, tlStreams: [], tlMenuOpen: false, trailheadOpen: true, trailOpen: true, collapsedGroups: [], lightboxAll: false, lightboxZoom: 1, runSort: 'grouped', runFilter: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, llmSel: 0, tlStreams: [], tlMenuOpen: false, trailheadOpen: true, trailOpen: true, lightboxAll: false, lightboxZoom: 1, runSort: 'grouped', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
   // Timeline playback stop handle (the active rAF engine run's stop function). Declared up here
   // (before openSession, which stops it) so the init-time openSession() call for a single-session
   // report doesn't hit a temporal-dead-zone ref.
@@ -228,13 +333,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return objIdx;
   };
 
-  // Open a session's detail. Failed runs lead with the actionable tool; passing runs start at the
-  // authored trail so any recovery summary remains the first thing visible above it. Incidental
-  // failed polling rows (a passing run, or a passing step of a failed run) are intentionally ignored.
-  const openSession = (i) => {
-    // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
-    // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); spriteAspect = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.collapsedGroups = []; st.lightboxAll = false;
+  // A route into a not-yet-hydrated session, parked until the chunk lands: the step/llm bounds
+  // checks in applyDetailRoute need the real trace, so seedSessionDetail re-applies it.
+  let pendingDetailRoute = null;
+  // Seed the detail view of the (hydrated) session in D. Failed runs lead with the actionable
+  // tool; passing runs start at the authored trail so any recovery summary remains the first
+  // thing visible above it. Incidental failed polling rows (a passing run, or a passing step of a
+  // failed run) are intentionally ignored.
+  const seedSessionDetail = () => {
     spriteAspectFromMeta(D.video);
     ensureEventsInflated(D);
     ensureLogsInflated(D);
@@ -249,6 +355,27 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // authored Trail remains the dominant content. A setup failure overrides that default.
     st.trailheadOpen = trailStart < 0 || failureIsInTrailhead || trailheadActions <= 12;
     if (firstFail < 0 && !st.trailheadOpen && trailStart >= 0) st.step = D.trace[trailStart].i;
+    if (pendingDetailRoute) { const r = pendingDetailRoute; pendingDetailRoute = null; applyDetailRoute(r); }
+  };
+  // Open a session's detail view.
+  const openSession = (i) => {
+    // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
+    // preference, unlike the per-session lightboxAll expansion.
+    stopTimeline(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.lightboxAll = false;
+    // Chunked documents hydrate on open: synchronous when the session's chunk has already
+    // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
+    // chunk lands, then the seed + re-render below run.
+    if (!hydrateSession(i)) {
+      const session = D;
+      awaitSessionChunk(i).then(() => {
+        if (D !== session || st.view !== 'detail') return;
+        seedSessionDetail();
+        writeRoute(true);
+        render();
+      });
+      return;
+    }
+    seedSessionDetail();
   };
   const revealTimelineStep = (stepId) => {
     const index = D.trace.findIndex((t) => t.i === stepId);
@@ -256,23 +383,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
     if (trailStart >= 0 && index >= trailStart) st.trailOpen = true;
     else if (D.trace.some((t) => t.objective && t.trailhead)) st.trailheadOpen = true;
-    let objective = null;
-    for (let i = index; i >= 0; i--) { if (D.trace[i].objective) { objective = D.trace[i]; break; } }
-    if (objective) st.collapsedGroups = st.collapsedGroups.filter((id) => id !== objective.i);
   };
 
   // Report state lives in query parameters so copied URLs communicate their selected run, view,
   // and step. Only these owned keys are changed: signed-artifact parameters such as `jwt` survive
   // every navigation. Legacy hash routes remain readable and are canonicalized on initial load.
   const routeKeys = ['view', 'runs', 'run', 'tab', 'step', 'streams', 'llm', 'stream', 'sort', 'filter'];
-  // 'stream' (the retired Events tab's selected-stream index) stays in routeKeys so legacy URLs
-  // that carry it are still canonicalized away, but it is no longer read or written.
+  // 'stream' (the retired Events tab's selected-stream index) and 'filter' (the retired
+  // Self-healed index filter) stay in routeKeys so legacy URLs that carry them are still
+  // canonicalized away, but they are no longer read or written.
   const readRoute = () => {
     if (typeof location === 'undefined') return null;
     const query = new URLSearchParams(String(location.search || ''));
     const hasQueryRoute = routeKeys.some((key) => query.has(key));
     const p = hasQueryRoute ? query : new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
-    if (p.get('view') === 'runs' || p.has('runs')) return { view: 'index', sort: p.get('sort') || 'grouped', filter: p.get('filter') || '' };
+    if (p.get('view') === 'runs' || p.has('runs')) return { view: 'index', sort: p.get('sort') || 'grouped' };
     if (!p.has('run') && !p.has('tab') && !p.has('step')) return null;
     return {
       view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || 'timeline',
@@ -281,17 +406,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       streams: p.get('streams'),
     };
   };
-  const applyRoute = () => {
-    const r = readRoute();
-    if (!r) return;
-    if (r.view === 'index' && MULTI) {
-      stopTimeline(); st.view = 'index';
-      if (['grouped', 'original', 'name', 'owner'].indexOf(r.sort) >= 0) st.runSort = r.sort;
-      st.runFilter = r.filter === 'self-healed' ? 'self-healed' : '';
-      return;
-    }
-    const si = Number.isFinite(r.session) ? Math.max(0, Math.min(SESSIONS.length - 1, r.session)) : 0;
-    openSession(si);
+  // Apply the detail-view parts of a parsed route (tab/step/llm/streams) to the open session.
+  // Split out of applyRoute because a route into a not-yet-hydrated session parks here and
+  // re-applies from seedSessionDetail once the chunk lands.
+  const applyDetailRoute = (r) => {
     const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab;
     // Legacy 'events' routes land on the timeline, where inline event streams now live.
     const allowed = ['timeline', 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'info'];
@@ -303,6 +421,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // indices).
     if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0);
   };
+  const applyRoute = () => {
+    const r = readRoute();
+    if (!r) return;
+    if (r.view === 'index' && MULTI) {
+      stopTimeline(); st.view = 'index';
+      if (['grouped', 'original', 'name', 'owner', 'cost'].indexOf(r.sort) >= 0) st.runSort = r.sort;
+      return;
+    }
+    const si = Number.isFinite(r.session) ? Math.max(0, Math.min(SESSIONS.length - 1, r.session)) : 0;
+    openSession(si);
+    if (unhydrated.has(si)) pendingDetailRoute = r;
+    else applyDetailRoute(r);
+  };
   // The viewer's owned route state, serialized. The single source both the URL writer and the
   // Copy-link grafter consume — the grafter can't read the state back off location.search in a
   // sandboxed embed, where writeRoute's history write is refused (see below).
@@ -311,7 +442,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (st.view === 'index') {
       params.set('view', 'runs');
       if (st.runSort !== 'grouped') params.set('sort', st.runSort);
-      if (st.runFilter) params.set('filter', st.runFilter);
     } else {
       params.set('run', String(st.session));
       params.set('tab', st.tab);
@@ -765,17 +895,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const failed = g.header ? (!g.header.ok || (runFailed && g.items.indexOf(anchorRow) >= 0)) : g.items.some((t) => !t.ok);
         const selfHealed = !!(g.header && g.header.selfHeal);
         const isTrailhead = g.header && g.header.trailhead;
-        const groupOpen = !g.header || st.collapsedGroups.indexOf(g.header.i) < 0;
         const groupSelected = g.header && g.header.i === st.step;
-        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}${groupSelected ? ' sel' : ''}" data-group="${g.header.i}" aria-expanded="${groupOpen}"${groupSelected ? ' aria-current="step"' : ''}>
+        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}${groupSelected ? ' sel' : ''}" data-group="${g.header.i}"${groupSelected ? ' aria-current="step"' : ''}>
             <span class="chip">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span>
             <span class="dot" style="background:${failed ? 'var(--fail)' : selfHealed ? 'var(--amber)' : 'var(--pass)'}"></span>
             ${g.items.length ? `<span style="font-size:11px;color:var(--sub)">${g.items.length} action${g.items.length === 1 ? '' : 's'}</span>` : ''}
-            <span class="groupchev" aria-hidden="true"></span>
             <span class="lbl" style="width:100%">${esc(g.header.label)}</span>
           </button>` : '';
         const headerEvents = g.header ? streamGroupHtml(buckets[idxOf(g.header.i)] || []) : '';
-        return `<div class="stepgroup${failed ? ' failed' : selfHealed ? ' selfhealed' : ''}">${hdr}<div class="stepgroupbody"${groupOpen ? '' : ' hidden'}>${headerEvents}${g.items.map((t) => withEvents(t, hasSteps)).join('')}</div></div>`;
+        return `<div class="stepgroup${failed ? ' failed' : selfHealed ? ' selfhealed' : ''}">${hdr}<div class="stepgroupbody">${headerEvents}${g.items.map((t) => withEvents(t, hasSteps)).join('')}</div></div>`;
       }).join('');
       const trailheadGroups = groups.filter((g) => g.header && g.header.trailhead);
       const trailGroups = groups.filter((g) => !g.header || !g.header.trailhead);
@@ -1104,33 +1232,57 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // the section key for the "Owner" sort.
   const runOwner = (s) => String((s.meta && s.meta.metadata && s.meta.metadata.owner) || '').trim();
   const runPlatform = (s) => String((s.meta && s.meta.platform) || '').trim();
-  // Mirrors indexGroupKey's device leg so a matrix column is exactly one retry-group identity.
-  const runDevice = (s) => String((s.meta && (s.meta.device || s.meta.deviceType)) || '');
+  // A run's device identity, in two flavors. The INSTANCE leg (`meta.device` — a simulator UDID or
+  // adb serial) names one concrete device and keys retry groups: two runs on two instances are
+  // independent runs, never each other's attempt history. The LANE leg prefers the stable device
+  // classifier (`meta.deviceType` — "iphone", "phone", "tablet") and keys matrix columns, so a
+  // build sharded across N interchangeable simulators is ONE column instead of N mostly-dashed
+  // ones (every CI shard creates a fresh UDID). Either leg falls back to the other when a payload
+  // carries only one of them.
+  const runDeviceInstance = (s) => String((s.meta && (s.meta.device || s.meta.deviceType)) || '');
+  const runLane = (s) => String((s.meta && (s.meta.deviceType || s.meta.device)) || '');
+  // Real step / tool-call counts come from the trace (traceStepCount/traceToolCallCount in
+  // run-report-extract — shared with buildMultiReportHtml so the run list and detail view always
+  // agree). Chunked index stubs precompute both counts at build time (s.stepCount/s.toolCallCount)
+  // since the run list renders before any trace is hydrated; older payloads without either keep
+  // meta.steps as the tool-call fallback.
+  const isLlmTurn = isLlmTurnRow;
+  const runStepCount = (s) => { const trace = s.trace || []; return trace.length ? traceStepCount(trace) : (s.stepCount != null ? s.stepCount : null); };
+  const runToolCallCount = (s) => {
+    const trace = s.trace || [];
+    if (trace.length) return traceToolCallCount(trace);
+    if (s.toolCallCount != null) return s.toolCallCount;
+    return s.meta && s.meta.steps != null ? s.meta.steps : null;
+  };
+  const runLlmCallCount = (s) => (s.llm || []).length;
   // A mixed-platform report renders one row per trail with a per-platform cell matrix; a
   // single-platform report keeps the flat per-run rows (the header already names the platform once).
   const mixedPlatforms = new Set(SESSIONS.map(runPlatform).filter(Boolean)).size > 1;
   const allPlatforms = Array.from(new Set(SESSIONS.map(runPlatform))).sort((a, b) => Number(!a) - Number(!b) || a.localeCompare(b));
+  const runTarget = (s) => String((s.meta && s.meta.target) || '').trim();
+  const allTargets = Array.from(new Set(SESSIONS.map(runTarget).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const platformLabel = (platform) => platform || 'other';
-  // A matrix column is a platform+device pair, so two devices on the same platform stay separate
-  // cells instead of masquerading as each other's retry history. encodeURIComponent keeps the key
-  // collision-free (':' never appears in its output) and safe to round-trip through the expansion
-  // chevron's data attribute; a device-less run keys on the platform alone.
+  // A matrix column is a platform+lane pair, so two device classes on the same platform (an iPhone
+  // and an iPad, a phone and a tablet) stay separate cells instead of masquerading as each other's
+  // retry history, while interchangeable instances of one class share a column. encodeURIComponent
+  // keeps the key collision-free (':' never appears in its output) and safe to round-trip through
+  // the expansion chevron's data attribute; a device-less run keys on the platform alone.
   const matrixColKey = (s) => {
-    const device = runDevice(s);
-    return device ? `${encodeURIComponent(runPlatform(s))}:${encodeURIComponent(device)}` : encodeURIComponent(runPlatform(s));
+    const lane = runLane(s);
+    return lane ? `${encodeURIComponent(runPlatform(s))}:${encodeURIComponent(lane)}` : encodeURIComponent(runPlatform(s));
   };
-  // Column order: alphabetical by platform then device, platform-less runs last. The device
-  // qualifies the label only when a platform ran on more than one device.
+  // Column order: alphabetical by platform then lane, platform-less runs last. The lane qualifies
+  // the label only when a platform ran on more than one lane.
   const matrixColumns = () => {
     const byKey = new Map<string, any>();
     SESSIONS.forEach((s) => {
       const key = matrixColKey(s);
-      if (!byKey.has(key)) byKey.set(key, { key, platform: runPlatform(s), device: runDevice(s) });
+      if (!byKey.has(key)) byKey.set(key, { key, platform: runPlatform(s), lane: runLane(s) });
     });
-    const cols: any[] = Array.from(byKey.values()).sort((a: any, b: any) => Number(!a.platform) - Number(!b.platform) || a.platform.localeCompare(b.platform) || a.device.localeCompare(b.device));
+    const cols: any[] = Array.from(byKey.values()).sort((a: any, b: any) => Number(!a.platform) - Number(!b.platform) || a.platform.localeCompare(b.platform) || a.lane.localeCompare(b.lane));
     const perPlatform = new Map<string, number>();
     cols.forEach((col: any) => perPlatform.set(col.platform, (perPlatform.get(col.platform) || 0) + 1));
-    cols.forEach((col: any) => { col.label = col.device && (perPlatform.get(col.platform) as number) > 1 ? `${platformLabel(col.platform)} · ${col.device}` : platformLabel(col.platform); });
+    cols.forEach((col: any) => { col.label = col.lane && (perPlatform.get(col.platform) as number) > 1 ? `${platformLabel(col.platform)} · ${col.lane}` : platformLabel(col.platform); });
     return cols;
   };
   const sharedMeta = (key) => {
@@ -1152,7 +1304,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const renderIndexHeader = () => {
     const platformEntry = mixedPlatforms ? ['Platforms', allPlatforms.filter(Boolean).join(', ')] : ['Platform', sharedMeta('platform')];
-    const meta = [['Target', sharedMeta('target')], ['App version', sharedMeta('appVersion')], platformEntry, ['Bundle / package ID', sharedMeta('appId')]]
+    const targetEntry = allTargets.length > 1 ? ['Targets', allTargets.join(', ')] : ['Target', sharedMeta('target') || allTargets[0]];
+    const meta = [targetEntry, ['App version', sharedMeta('appVersion')], platformEntry, ['Bundle / package ID', sharedMeta('appId')]]
       .filter(([, value]) => value).map(([label, value]) => `<div><div class="k">${label}</div><div class="v">${esc(value)}</div></div>`).join('');
     const buildUrl = safeHref(sharedMeta('buildUrl'));
     const commitUrl = safeHref(sharedMeta('commitUrl'));
@@ -1211,11 +1364,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return fmtN(calls.reduce((sum, call) => sum + Number(call.inputTokens) + Number(call.outputTokens), 0));
   };
 
-  const llmCostLabel = (calls) => {
-    if (!calls.length) return fmtCost(0);
-    if (calls.some((call) => call.totalCost == null || String(call.totalCost).trim() === '' || !Number.isFinite(Number(call.totalCost)))) return '—';
-    return fmtCost(calls.reduce((sum, call) => sum + Number(call.totalCost), 0));
-  };
+  // Null when any call lacks a finite cost — a partial sum would understate real spend.
+  const llmCostTotal = (calls) => calls.some((call) => call.totalCost == null || String(call.totalCost).trim() === '' || !Number.isFinite(Number(call.totalCost))) ? null : calls.reduce((sum, call) => sum + Number(call.totalCost), 0);
+  const llmCostLabel = (calls) => { const total = llmCostTotal(calls); return total == null ? '—' : fmtCost(total); };
+  // Compact cost for index rows; sub-dollar runs (the common case) keep 4 decimals so small
+  // per-trail costs stay comparable at a glance.
+  const fmtCostShort = (c) => c == null ? '—' : c === 0 ? '$0.00' : c < 1 ? `$${c.toFixed(4)}` : `$${c.toFixed(2)}`;
 
   const aggregateLlmCostLabel = () => llmCostLabel(SESSIONS.flatMap((s) => s.llm || []));
 
@@ -1229,14 +1383,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Only an explicit trail identity is safe to coalesce. Older exports without trailId can carry
     // independent same-title runs; keeping them separate avoids hiding a failure as retry history.
     if (!m.trailId) return `session:${index}`;
-    // Platform/device legs go through the same normalizers as matrixColKey, keeping the
-    // "retry-group identity == matrix column" guarantee even for whitespace-padded metadata.
-    return [m.trailId, m.target || '', runPlatform(s), runDevice(s)].join('\u0001');
+    // The device leg is the INSTANCE id, not the column's lane: attempts only ever coalesce
+    // within one device, so a second simulator's run can never slip into another's attempt
+    // history. indexMatrixRows folds a lane's instance groups into one column afterwards.
+    return [m.trailId, m.target || '', runPlatform(s), runDeviceInstance(s)].join('\u0001');
   };
 
   const attemptTime = (attempt) => {
     const parsed = Date.parse(String(attempt.s.meta && attempt.s.meta.ranAt || ''));
     return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  // Chronological attempt order, falling back to payload order when any attempt lacks a timestamp
+  // (a partially dated set can't be ordered by time without inventing a position for the undated
+  // ones). Shared by retry groups and by the lane cells that fold several groups together.
+  const sortAttempts = (attempts) => {
+    const allDated = attempts.every((attempt) => attemptTime(attempt) != null);
+    return attempts.slice().sort((a, b) => allDated ? attemptTime(a) - attemptTime(b) || a.i - b.i : a.i - b.i);
   };
 
   const indexRunGroups = () => {
@@ -1247,8 +1410,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       byTest.get(key).attempts.push({ s, i, outcome: indexOutcome(s) });
     });
     return Array.from(byTest.values()).map((group) => {
-      const allDated = group.attempts.every((attempt) => attemptTime(attempt) != null);
-      const attempts = group.attempts.sort((a, b) => allDated ? attemptTime(a) - attemptTime(b) || a.i - b.i : a.i - b.i);
+      const attempts = sortAttempts(group.attempts);
       const latest = attempts[attempts.length - 1];
       return { ...group, attempts, latest, outcome: latest.outcome };
     });
@@ -1256,10 +1418,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const outcomeRank = { failed: 0, selfheal: 1, passed: 2, other: 3 };
   // Mixed-platform reports coalesce a trail's per-platform runs into one row: a cell per
-  // platform+device column, each holding that retry group's attempt history (within a row,
-  // indexGroupKey's identity leaves exactly platform+device, so a group IS a cell). Sessions
-  // without an explicit trail identity stay solo rows (same rule as indexGroupKey). The worst cell
-  // outcome sections the row — a trail that failed anywhere is a failed trail.
+  // platform+lane column, holding the attempt history of every retry group that ran in that lane
+  // (one group in the normal case - a sharded build only sends a trail to a single device per
+  // platform). Sessions without an explicit trail identity stay solo rows (same rule as
+  // indexGroupKey). The worst cell outcome sections the row — a trail that failed anywhere is a
+  // failed trail.
   const indexMatrixRows = () => {
     const byTrail = new Map();
     indexRunGroups().forEach((group) => {
@@ -1268,10 +1431,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (!byTrail.has(key)) byTrail.set(key, { key, first: group.first, cells: new Map<string, any>() });
       const row = byTrail.get(key);
       row.first = Math.min(row.first, group.first);
-      row.cells.set(matrixColKey(group.latest.s), { attempts: group.attempts });
+      const colKey = matrixColKey(group.latest.s);
+      if (!row.cells.has(colKey)) row.cells.set(colKey, { groups: [] });
+      row.cells.get(colKey).groups.push(group);
     });
     return Array.from(byTrail.values()).map((row: any) => {
-      row.cells.forEach((cell) => { cell.latest = cell.attempts[cell.attempts.length - 1]; cell.outcome = cell.latest.outcome; });
+      // When a lane did hold more than one device, the cell takes the WORST group's outcome and
+      // opens that group's latest attempt: the same rule the row applies across its cells, so
+      // another device's later pass can never bury a failure the way plain attempt order would.
+      row.cells.forEach((cell) => {
+        const worst = cell.groups.reduce((acc, group) => outcomeRank[group.outcome] < outcomeRank[acc.outcome] ? group : acc);
+        cell.attempts = cell.groups.length > 1 ? sortAttempts(cell.groups.flatMap((group) => group.attempts)) : cell.groups[0].attempts;
+        cell.latest = worst.latest;
+        cell.outcome = worst.outcome;
+      });
       const cells: any[] = Array.from(row.cells.values());
       const outcome = cells.reduce((worst: any, cell: any) => outcomeRank[cell.outcome] < outcomeRank[worst] ? cell.outcome : worst, cells[0].outcome);
       return { ...row, outcome, latest: cells.reduce((last: any, cell: any) => cell.latest.i > last.i ? cell.latest : last, cells[0].latest) };
@@ -1286,15 +1459,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const entryHasRetries = (entry) => mixedPlatforms
       ? Array.from(entry.cells.values()).some((cell: any) => cell.attempts.length > 1)
       : entry.attempts.length > 1;
-    // A matrix row involves self-healing if ANY platform's latest attempt self-healed, even when
-    // another platform's failure makes the row's sectioning outcome worse.
-    const entrySelfHealed = (entry) => mixedPlatforms
-      ? Array.from(entry.cells.values()).some((cell: any) => cell.outcome === 'selfheal')
-      : entry.outcome === 'selfheal';
-    const filtered = st.runFilter === 'self-healed' ? allRuns.filter(entrySelfHealed) : allRuns;
-    const ordered = filtered.sort((a, b) => {
+    // Every LLM call a row paid for: all attempts, and on a matrix row all platforms' cells —
+    // the total the row subtitle shows and the Cost sort orders by.
+    const entryLlmCalls = (entry) => (mixedPlatforms
+      ? Array.from(entry.cells.values()).flatMap((cell: any) => cell.attempts)
+      : entry.attempts).flatMap((attempt) => attempt.s.llm || []);
+    const ordered = allRuns.sort((a, b) => {
       if (st.runSort === 'grouped') return outcomeRank[a.outcome] - outcomeRank[b.outcome] || Number(entryHasRetries(b)) - Number(entryHasRetries(a)) || a.first - b.first;
       if (st.runSort === 'name') return String(a.latest.s.meta.title || '').localeCompare(String(b.latest.s.meta.title || '')) || a.first - b.first;
+      if (st.runSort === 'cost') {
+        const aCost = llmCostTotal(entryLlmCalls(a));
+        const bCost = llmCostTotal(entryLlmCalls(b));
+        // Most expensive first; rows whose cost is unknowable sort last.
+        return Number(aCost == null) - Number(bCost == null) || (bCost || 0) - (aCost || 0) || a.first - b.first;
+      }
       if (st.runSort === 'owner') {
         const aOwner = runOwner(a.latest.s);
         const bOwner = runOwner(b.latest.s);
@@ -1311,16 +1489,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         .filter((v) => v != null && v !== '').join(' ').toLowerCase();
     };
     const facts = (pairs) => `<div class="idxfacts">${pairs.map(([label, value]) => `<div class="idxfact"><div class="k">${label}</div><div class="v">${esc(value != null && value !== '' ? value : '—')}</div></div>`).join('')}</div>`;
-    // `meta.steps` is the flat trace length (action rows AND step headers), which overstates what a
-    // reader calls a step. Count real test steps (objective rows, trailhead excluded) and actions
-    // from the trace; older payloads without a trace keep meta.steps as actions. Terminal
-    // snapshot/error rows ('Final state', 'Failure state', 'Error') are the only rows extractTrace
-    // emits with an empty tool, so requiring a tool keeps them out of the action count.
-    const runFacts = (s) => {
-      const trace = s.trace || [];
-      const steps = trace.length ? trace.filter((t) => t.objective && !t.trailhead).length : null;
-      const actions = trace.length ? trace.filter((t) => !t.objective && t.tool).length : (s.meta.steps != null ? s.meta.steps : null);
-      return facts([['Duration', s.meta.duration], ['Steps', steps], ['Actions', actions]]);
+    const runFacts = (s) => facts([['Duration', s.meta.duration], ['Tools', runToolCallCount(s)], ['LLM', runLlmCallCount(s)]]);
+    // Steps + LLM cost under the trail id: steps from the latest attempt's trace, cost summed
+    // across every attempt on the row (all platforms) — the same total the Cost sort orders by.
+    const entryStats = (entry) => {
+      const steps = runStepCount(entry.latest.s);
+      const parts = [...(steps != null ? [`${steps} step${steps === 1 ? '' : 's'}`] : []), fmtCostShort(llmCostTotal(entryLlmCalls(entry)))];
+      return `<div class="idxstats">${esc(parts.join(' · '))}</div>`;
     };
     const attemptRows = (attempts) => attempts.map((attempt, attemptIndex) => {
       const label = indexOutcomeLabel(attempt.outcome);
@@ -1331,13 +1506,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
             <span class="arr" aria-hidden="true">→</span>
           </div>`;
     }).join('');
-    const renderRow = ({ attempts, latest, outcome }) => {
+    const renderRow = (entry) => {
+      const { attempts, latest, outcome } = entry;
       const { s, i } = latest;
       const outcomeLabel = indexOutcomeLabel(outcome);
       const search = attempts.map((attempt) => searchText(attempt.s, attempt.outcome)).join(' ');
       // The owner subtitle is redundant inside its own owner section — the section head already says it.
       const owner = st.runSort === 'owner' ? '' : runOwner(s);
-      const rowMain = `<div class="idxmain"><div class="nm">${esc(s.meta.title || ('Run ' + (i + 1)))}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}</div>`;
+      const rowMain = `<div class="idxmain"><div class="nm">${esc(s.meta.title || ('Run ' + (i + 1)))}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}${entryStats(entry)}</div>`;
       if (attempts.length > 1) {
         const attemptLabels = attempts.map((attempt) => indexOutcomeLabel(attempt.outcome));
         const attemptDots = attempts.map((attempt, attemptIndex) => `<span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true" title="Attempt ${attemptIndex + 1}: ${esc(attemptLabels[attemptIndex])}"></span>`).join('');
@@ -1378,7 +1554,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // The open-latest and expand controls are sibling <button>s inside a plain wrapper — nesting
       // an interactive chevron inside a role="button" cell would be invalid HTML (two tab stops
       // with ambiguous activation for keyboard and screen-reader users).
-      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><button class="idxcellopen" type="button" data-session="${cell.latest.i}" aria-label="Open latest ${esc(col.label)} run, ${esc(outcomeLabel)}"><span class="pk">${esc(col.label)}</span><span class="pv">${value}${duration ? esc(duration) : ''}</span></button>${chev}</div>`;
+      const tools = runToolCallCount(cell.latest.s);
+      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><button class="idxcellopen" type="button" data-session="${cell.latest.i}" aria-label="Open latest ${esc(col.label)} run, ${esc(outcomeLabel)}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? esc(duration) : ''}</span><span class="pcounts">${runLlmCallCount(cell.latest.s)} LLM</span></button>${chev}</div>`;
     };
     const renderMatrixRow = (row) => {
       const title = row.latest.s.meta.title || ('Run ' + (row.latest.i + 1));
@@ -1393,7 +1570,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ? `<div class="idxattempts idxmatrixattempts">${openPanels.map((col) => `<div class="idxatthead">${esc(col.label)}</div>${attemptRows(row.cells.get(col.key).attempts)}`).join('')}</div>`
         : '';
       return `<div class="idxentry" data-run-entry data-search="${esc(search)}">
-          <div class="idxrow idxmatrixrow"><div class="idxmain"><div class="nm">${esc(title)}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}</div><div class="idxcells">${cells}</div></div>
+          <div class="idxrow idxmatrixrow"><div class="idxmain"><div class="nm">${esc(title)}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>
           ${panel}</div>`;
     };
     const renderEntry = mixedPlatforms ? renderMatrixRow : renderRow;
@@ -1420,8 +1597,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : `<div class="idx">${ordered.map(renderEntry).join('')}</div>`;
     return `<div class="idxfilter">
         <input id="runsearch" type="search" aria-label="Search runs" placeholder="Search runs…" autocomplete="off" />
-        <button class="idxhealedfilter" type="button" aria-pressed="${st.runFilter === 'self-healed'}" data-run-filter="self-healed">Self-healed</button>
-        <details class="idxsort" id="runsort" data-runsort><summary aria-label="Sort runs" aria-haspopup="listbox"><span>${st.runSort === 'original' ? 'Run order' : st.runSort === 'name' ? 'Name A–Z' : st.runSort === 'owner' ? 'Owner' : 'Status groups'}</span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu" role="listbox" aria-label="Sort runs"><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'grouped'}" data-run-sort="grouped">Status groups</button><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'original'}" data-run-sort="original">Run order</button><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'name'}" data-run-sort="name">Name A–Z</button>${allRuns.some((run) => runOwner(run.latest.s)) ? `<button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'owner'}" data-run-sort="owner">Owner</button>` : ''}</div></details>
+        <details class="idxsort" id="runsort" data-runsort><summary aria-label="Sort runs" aria-haspopup="listbox"><span>${st.runSort === 'original' ? 'Run order' : st.runSort === 'name' ? 'Name A–Z' : st.runSort === 'owner' ? 'Owner' : st.runSort === 'cost' ? 'Cost' : 'Status groups'}</span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu" role="listbox" aria-label="Sort runs"><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'grouped'}" data-run-sort="grouped">Status groups</button><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'original'}" data-run-sort="original">Run order</button><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'name'}" data-run-sort="name">Name A–Z</button><button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'cost'}" data-run-sort="cost">Cost</button>${allRuns.some((run) => runOwner(run.latest.s)) ? `<button class="idxsortoption" type="button" role="option" aria-selected="${st.runSort === 'owner'}" data-run-sort="owner">Owner</button>` : ''}</div></details>
       </div>
       <div class="idxsections">${rows}<div class="empty" id="runempty" ${ordered.length ? 'hidden' : ''}>No runs match these filters.</div></div>`;
   };
@@ -1444,6 +1620,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ${renderIndexHeader()}
         <main><div class="indexshell">${renderIndex()}</div></main>
         <footer class="indexfooter"><div class="indexshell indexfootercontent">${renderIndexSummary()}${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
+      wire();
+      return;
+    }
+    if (unhydrated.has(st.session)) {
+      // The session's #tb-session chunk hasn't streamed in yet (openSession is awaiting it): hold
+      // the detail view with its header + a loading note instead of rendering empty-trace panes.
+      const outcome = indexOutcome(D);
+      root.innerHTML = `
+        <header class="detailheader">
+          <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? '<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs"><span class="backarrow" aria-hidden="true">←</span></button></div>' : ''}<div class="runidentity"><span class="badge ${esc(outcome)}">${esc(indexOutcomeLabel(outcome))}</span><h1>${esc((D.meta || {}).title)}</h1></div><div class="detailactions">${renderThemeToggle()}</div></div>
+        </header>
+        <main><div class="empty">Loading run…</div></main>`;
       wire();
       return;
     }
@@ -1602,7 +1790,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     handle = requestAnimationFrame(tick);
     return () => { if (!live) return; live = false; if (handle != null) cancelAnimationFrame(handle); };
   };
-  // Playback-time counterpart of revealTimelineStep: apply the same phase/group expansion to the
+  // Playback-time counterpart of revealTimelineStep: apply the same phase expansion to the
   // LIVE DOM so the advancing selection is visible without a full re-render.
   const revealTimelineStepInPlace = () => {
     revealTimelineStep(st.step);
@@ -1610,12 +1798,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const open = control.dataset.phase === 'trailhead' ? st.trailheadOpen : st.trailOpen;
       control.setAttribute('aria-expanded', String(open));
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
-      if (body) body.hidden = !open;
-    });
-    root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => {
-      const open = st.collapsedGroups.indexOf(+control.dataset.group) < 0;
-      control.setAttribute('aria-expanded', String(open));
-      const body = control.closest('.stepgroup')?.querySelector<HTMLElement>('.stepgroupbody');
       if (body) body.hidden = !open;
     });
   };
@@ -1777,10 +1959,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         st.runSort = option.dataset.runSort || 'grouped'; runSort.open = false; writeRoute(false); render();
       });
     }
-    const runFilter = root.querySelector<HTMLElement>('[data-run-filter]');
-    if (runFilter) runFilter.onclick = () => {
-      st.runFilter = st.runFilter === 'self-healed' ? '' : 'self-healed'; writeRoute(false); render();
-    };
     const runSearch = document.getElementById('runsearch') as HTMLInputElement | null;
     if (runSearch) runSearch.oninput = () => {
       const terms = runSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -1824,13 +2002,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;
     });
+    // Clicking a step header selects the step's first tool call — skipping agent-reasoning rows
+    // and trailing terminal snapshots, falling back to the header row itself when the step has no
+    // actions — so the preview pane jumps to that screenshot.
     root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => control.onclick = () => {
-      const id = +control.dataset.group;
-      const open = control.getAttribute('aria-expanded') !== 'true';
-      st.collapsedGroups = open ? st.collapsedGroups.filter((v) => v !== id) : [...st.collapsedGroups, id];
-      control.setAttribute('aria-expanded', String(open));
-      const body = control.closest('.stepgroup')?.querySelector<HTMLElement>('.stepgroupbody');
-      if (body) body.hidden = !open;
+      const at = D.trace.findIndex((t) => t.i === +control.dataset.group);
+      if (at < 0) return;
+      let next = D.trace[at];
+      for (let j = at + 1; j < D.trace.length && !D.trace[j].objective; j++) {
+        if (!D.trace[j].terminal && !isLlmTurn(D.trace[j])) { next = D.trace[j]; break; }
+      }
+      stopTimeline(); st.step = next.i; revealTimelineStep(st.step); writeRoute(true); render(true);
     });
     const streamSelect = root.querySelector<HTMLDetailsElement>('[data-streamselect]');
     if (streamSelect) streamSelect.ontoggle = () => { st.tlMenuOpen = streamSelect.open; };

@@ -443,7 +443,7 @@ class TrailblazeRunner(
      * resolves to this when the caller didn't specify one, and host/on-device wiring reads it from
      * here so the in-process, daemon, and on-device paths agree.
      */
-    const val DEFAULT_MAX_STEPS: Int = 50
+    const val DEFAULT_MAX_STEPS: Int = 25
 
     /**
      * Sliding window over the last N tool fingerprints, used by `detectActionCycleHint`

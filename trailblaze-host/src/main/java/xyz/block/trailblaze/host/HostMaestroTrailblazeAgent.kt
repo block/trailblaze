@@ -15,6 +15,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
+import xyz.block.trailblaze.host.recording.AxeTreeOverlay
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -83,7 +84,7 @@ class HostMaestroTrailblazeAgent(
     longPress: Boolean,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
-    val tree = getCurrentTrailblazeNodeTree() ?: return null
+    val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null
     val node = resolveSingleMatch(tree, nodeSelector) ?: return null
     val center = node.centerPoint() ?: return null
     return executeMaestroCommands(
@@ -102,7 +103,7 @@ class HostMaestroTrailblazeAgent(
     timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
-    val tree = getCurrentTrailblazeNodeTree() ?: return null
+    val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null
     return when (val result = TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
       is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
         logAssertScreenState(nodeSelector = nodeSelector, matchedNode = result.node, isVisible = true)
@@ -129,7 +130,7 @@ class HostMaestroTrailblazeAgent(
     timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
-    val tree = getCurrentTrailblazeNodeTree() ?: return null
+    val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null
     return when (TrailblazeNodeSelectorResolver.resolve(tree, nodeSelector, templateContext)) {
       is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> {
         logAssertScreenState(nodeSelector = nodeSelector, matchedNode = null, isVisible = false)
@@ -196,18 +197,31 @@ class HostMaestroTrailblazeAgent(
   }
 
   /**
-   * Queries the Maestro driver directly for the current iOS view hierarchy and converts
-   * to a [TrailblazeNode] tree. This is a lightweight operation (no screenshot, no
-   * stabilization) — just a hierarchy query and conversion.
+   * Queries the Maestro driver directly for the current iOS view hierarchy and converts to a
+   * [TrailblazeNode] tree. When [nodeSelector] was recorded against overlay-provided (AXe-dialect)
+   * content, the live capture is re-enriched with AXe the same way the record path was — otherwise
+   * a selector targeting bottom-sheet content XCUITest drops would resolve against nothing. A
+   * Maestro-dialect selector skips AXe, so a trail that never touched dropped content pays no cost.
    *
    * Returns null for non-iOS devices or if the hierarchy is empty.
    */
-  private fun getCurrentTrailblazeNodeTree(): TrailblazeNode? {
+  private suspend fun getCurrentTrailblazeNodeTree(nodeSelector: TrailblazeNodeSelector): TrailblazeNode? {
     val impl = maestroHostRunner as? MaestroHostRunnerImpl ?: return null
     val driver = impl.loggingDriver
-    if (driver.deviceInfo().platform != Platform.IOS) return null
-    val rawTree = driver.contentDescriptor(false)
-    return rawTree.toTrailblazeNodeIosMaestro()
+    val deviceInfo = driver.deviceInfo()
+    if (deviceInfo.platform != Platform.IOS) return null
+    val maestroTree = driver.contentDescriptor(false).toTrailblazeNodeIosMaestro()
+    val udid = impl.iosUdid
+    return if (udid != null && AxeTreeOverlay.selectorReferencesIosAxe(nodeSelector)) {
+      AxeTreeOverlay.enrichIosTree(
+        maestroTree = maestroTree,
+        udid = udid,
+        screenWidth = deviceInfo.widthGrid,
+        screenHeight = deviceInfo.heightGrid,
+      )
+    } else {
+      maestroTree
+    }
   }
 
   /**

@@ -84,6 +84,14 @@ class MaestroHostRunnerImpl(
       ?: error("MaestroHostRunner requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
   }
 
+  /** iOS Simulator UDID for the AXe tree overlay, or null on non-iOS. Matches the udid the record
+   * stream uses (see MaestroDeviceScreenStream) so replay re-enriches with the same source. */
+  val iosUdid: String?
+    get() = trailblazeDeviceId.instanceId
+      .takeIf {
+        it.isNotBlank() && trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS
+      }
+
   companion object {
     var callCount = 0
 

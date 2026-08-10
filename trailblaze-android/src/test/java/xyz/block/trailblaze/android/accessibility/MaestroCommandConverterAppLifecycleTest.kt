@@ -3,7 +3,9 @@ package xyz.block.trailblaze.android.accessibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import maestro.orchestra.ClearStateCommand
+import maestro.orchestra.Command
 import maestro.orchestra.KillAppCommand
 import maestro.orchestra.StopAppCommand
 
@@ -13,11 +15,15 @@ import maestro.orchestra.StopAppCommand
  */
 class MaestroCommandConverterAppLifecycleTest {
 
+  /** Unwraps a supported command's conversion, failing the test if it reads as unsupported. */
+  private fun convert(command: Command): List<AccessibilityAction> =
+    assertNotNull(MaestroCommandConverter.convert(command))
+
   @Test
   fun `converts StopAppCommand to StopApp action`() {
     val command = StopAppCommand(appId = "com.example.app")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.StopApp>(actions.single())
@@ -28,7 +34,7 @@ class MaestroCommandConverterAppLifecycleTest {
   fun `converts KillAppCommand to KillApp action`() {
     val command = KillAppCommand(appId = "com.example.app")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.KillApp>(actions.single())
@@ -39,7 +45,7 @@ class MaestroCommandConverterAppLifecycleTest {
   fun `converts ClearStateCommand to ClearState action`() {
     val command = ClearStateCommand(appId = "com.example.app")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.ClearState>(actions.single())

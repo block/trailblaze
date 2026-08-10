@@ -34,6 +34,7 @@ import maestro.orchestra.WaitForAnimationToEndCommand
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -43,8 +44,9 @@ import xyz.block.trailblaze.util.Console
  * This is the bridge layer that allows existing `MapsToMaestroCommands` tools and trail
  * files (which generate Maestro commands) to run through the Maestro-free accessibility path.
  *
- * Conversion is best-effort: unsupported commands (e.g. `SetLocationCommand`) are skipped with
- * a warning since the accessibility service cannot perform all system-level operations.
+ * Commands the accessibility service can't perform (e.g. `SetLocationCommand`) fail the batch,
+ * naming the command — so trail authors see what's missing. Mirrors the iOS twin,
+ * `MaestroCommandToIosDriverActionConverter`.
  */
 object MaestroCommandConverter {
 
@@ -52,12 +54,10 @@ object MaestroCommandConverter {
   private const val DEFAULT_ERASE_COUNT = 50
 
   /**
-   * Converts a single Maestro [Command] to zero or more [AccessibilityAction]s.
-   *
-   * Returns an empty list for commands that have no accessibility equivalent, allowing
-   * the caller to skip them gracefully or log a warning.
+   * Converts one command. Returns null when the driver can't service the command (unsupported —
+   * [convertAll] fails the batch), and an empty list for an intentional successful no-op.
    */
-  fun convert(command: Command): List<AccessibilityAction> {
+  fun convert(command: Command): List<AccessibilityAction>? {
     return when (command) {
       // LaunchAppCommand is handled separately by AccessibilityTrailblazeAgent.executeLaunchAppViaAdb()
       // before commands reach this converter. It requires ADB shell access for stop/clear/permissions
@@ -125,26 +125,24 @@ object MaestroCommandConverter {
       }
       else -> {
         Console.log(
-          "MaestroCommandConverter: Skipping unsupported command: ${command::class.simpleName}"
+          "MaestroCommandConverter: Unsupported command: ${command::class.simpleName}"
         )
-        emptyList()
+        null
       }
     }
   }
 
   /**
-   * Converts a list of Maestro [Command]s, flattening into a single action list.
-   * Unsupported commands are skipped with logging.
+   * Converts every command, failing loudly on the first one the driver can't service (a null
+   * per-command conversion); skipping an unsupported command would report Success for a
+   * partially-run batch. An empty (non-null) conversion is an intentional no-op and is skipped.
    */
-  fun convertAll(commands: List<Command>): List<AccessibilityAction> {
-    val actions = commands.flatMap { convert(it) }
-    if (actions.isEmpty() && commands.isNotEmpty()) {
-      val skippedTypes = commands.map { it::class.simpleName }.distinct().joinToString(", ")
-      Console.log(
-        "WARNING: MaestroCommandConverter: All ${commands.size} commands produced no actions. Skipped types: $skippedTypes"
+  fun convertAll(commands: List<Command>): List<AccessibilityAction> = commands.flatMap { command ->
+    convert(command)
+      ?: throw TrailblazeException(
+        "Maestro command ${command::class.simpleName} is unsupported by the accessibility driver — " +
+          "failing the batch instead of silently skipping it.",
       )
-    }
-    return actions
   }
 
   private fun convertTapOnPointV2(command: TapOnPointV2Command): AccessibilityAction {
@@ -211,7 +209,7 @@ object MaestroCommandConverter {
     )
   }
 
-  private fun convertSwipe(command: SwipeCommand): List<AccessibilityAction> {
+  private fun convertSwipe(command: SwipeCommand): List<AccessibilityAction>? {
     return when {
       // Absolute start/end points
       command.startPoint != null && command.endPoint != null -> {
@@ -268,7 +266,7 @@ object MaestroCommandConverter {
       }
       else -> {
         Console.log("MaestroCommandConverter: Cannot convert SwipeCommand — no direction or points")
-        emptyList()
+        null
       }
     }
   }
@@ -282,7 +280,7 @@ object MaestroCommandConverter {
     }
   }
 
-  private fun convertAssertCondition(command: AssertConditionCommand): List<AccessibilityAction> {
+  private fun convertAssertCondition(command: AssertConditionCommand): List<AccessibilityAction>? {
     val condition = command.condition
     val timeoutMs = command.timeoutMs() ?: 5_000L
     return when {
@@ -300,9 +298,9 @@ object MaestroCommandConverter {
       }
       else -> {
         Console.log(
-          "MaestroCommandConverter: Skipping AssertConditionCommand with unsupported condition: $condition"
+          "MaestroCommandConverter: AssertConditionCommand with unsupported condition: $condition"
         )
-        emptyList()
+        null
       }
     }
   }

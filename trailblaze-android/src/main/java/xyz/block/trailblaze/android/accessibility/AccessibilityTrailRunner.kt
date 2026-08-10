@@ -235,7 +235,7 @@ object AccessibilityTrailRunner {
         if (action.longPress) {
           AgentDriverAction.LongPressPoint(x = x, y = y)
         } else {
-          AgentDriverAction.TapPoint(x = x, y = y)
+          AgentDriverAction.TapPoint(x = x, y = y, dispatchRoute = executionResult.dispatchRoute)
         }
       }
 

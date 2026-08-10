@@ -72,6 +72,26 @@ class AxeDeviceManagerTest {
     }
   }
 
+  // --- pixelFromPercent (relative tap / swipe percent → pixel conversion) ---
+
+  @Test
+  fun `in-range percents convert proportionally`() {
+    assertEquals(width / 2, AxeDeviceManager.pixelFromPercent(50.0, width))
+    assertEquals(0, AxeDeviceManager.pixelFromPercent(0.0, width))
+  }
+
+  @Test
+  fun `100 percent clamps to the last on-screen pixel`() {
+    // Unclamped, 100% would yield `deviceWidth` — one past the edge.
+    assertEquals(width - 1, AxeDeviceManager.pixelFromPercent(100.0, width))
+  }
+
+  @Test
+  fun `out-of-range percents clamp to the device bounds`() {
+    assertEquals(0, AxeDeviceManager.pixelFromPercent(-10.0, width))
+    assertEquals(width - 1, AxeDeviceManager.pixelFromPercent(150.0, width))
+  }
+
   // --- isTreeReady (launch / open-link readiness poll) ---
 
   private fun node(children: List<TrailblazeNode> = emptyList(), label: String? = null) =
@@ -101,6 +121,82 @@ class AxeDeviceManagerTest {
   fun `a tree with too few content-bearing nodes is not ready`() {
     val root = node(children = listOf(node(label = "Loading"), node(), node()))
     assertFalse(AxeDeviceManager.isTreeReady(root))
+  }
+
+  @Test
+  fun `a populated tree of blank-string containers is not ready`() {
+    // Mid-render, AXe can report label as "" or whitespace before real text lands — blank
+    // is not content, exactly as the readiness kdoc promises.
+    val root = node(children = listOf(node(label = ""), node(label = "  "), node(label = "")))
+    assertFalse(AxeDeviceManager.isTreeReady(root))
+  }
+
+  // --- isTreeReadyAfterAction (pre-launch baseline) ---
+
+  private fun readyTree(vararg labels: String) =
+    node(children = labels.map { node(label = it) })
+
+  @Test
+  fun `a ready tree identical to the pre-action baseline is not ready-after-action`() {
+    // The stale-tree trap: after launchApp the PREVIOUS screen's tree is already "ready",
+    // so a baseline-less gate returns immediately and selectors resolve against it.
+    val preLaunch = readyTree("Sign In", "Welcome", "Settings")
+    val baseline = AxeDeviceManager.treeContentSignature(preLaunch)
+    assertFalse(AxeDeviceManager.isTreeReadyAfterAction(readyTree("Sign In", "Welcome", "Settings"), baseline))
+  }
+
+  @Test
+  fun `a ready tree that differs from the baseline is ready-after-action`() {
+    val baseline = AxeDeviceManager.treeContentSignature(readyTree("Sign In", "Welcome", "Settings"))
+    assertTrue(AxeDeviceManager.isTreeReadyAfterAction(readyTree("Home", "Activity", "Money"), baseline))
+  }
+
+  @Test
+  fun `without a baseline a ready tree is ready-after-action`() {
+    assertTrue(AxeDeviceManager.isTreeReadyAfterAction(readyTree("Home", "Activity", "Money"), null))
+  }
+
+  @Test
+  fun `a changed but still-blank tree is not ready-after-action`() {
+    val baseline = AxeDeviceManager.treeContentSignature(readyTree("Sign In", "Welcome", "Settings"))
+    assertFalse(AxeDeviceManager.isTreeReadyAfterAction(node(children = listOf(node(), node())), baseline))
+  }
+
+  @Test
+  fun `a null capture is never ready-after-action`() {
+    assertFalse(AxeDeviceManager.isTreeReadyAfterAction(null, null))
+  }
+
+  @Test
+  fun `the tree signature ignores capture-assigned nodeIds`() {
+    // nodeIds are counter-assigned per capture, so two captures of the SAME screen carry
+    // different ids — the signature must still read them as unchanged.
+    val a = TrailblazeNode(
+      nodeId = 0,
+      driverDetail = DriverNodeDetail.IosAxe(),
+      children = listOf(TrailblazeNode(nodeId = 1, driverDetail = DriverNodeDetail.IosAxe(label = "Home"))),
+    )
+    val b = TrailblazeNode(
+      nodeId = 7,
+      driverDetail = DriverNodeDetail.IosAxe(),
+      children = listOf(TrailblazeNode(nodeId = 8, driverDetail = DriverNodeDetail.IosAxe(label = "Home"))),
+    )
+    assertEquals(AxeDeviceManager.treeContentSignature(a), AxeDeviceManager.treeContentSignature(b))
+  }
+
+  // --- off-viewport failure reporting ---
+
+  @Test
+  fun `off-viewport failure description distinguishes in-tree from on-screen`() {
+    val message = AxeDeviceManager.offViewportDescription(
+      bounds = TrailblazeNode.Bounds(left = 16, top = 1036, right = 386, bottom = 1080),
+      viewportWidth = 402,
+      viewportHeight = 874,
+    )
+    assertTrue(message.contains("accessibility tree"), "must say the element IS in the tree")
+    assertTrue(message.contains("outside the viewport"), "must say it is NOT on screen")
+    assertTrue(message.contains("402x874"), "must report the viewport for triage")
+    assertTrue(message.contains("1036"), "must report the element bounds for triage")
   }
 
   // IntArray destructuring — mirrors the private extensions in AxeDeviceManager so the

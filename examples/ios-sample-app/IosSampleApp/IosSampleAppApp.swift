@@ -4,7 +4,9 @@ import SwiftUI
 struct IosSampleAppApp: App {
   var body: some Scene {
     WindowGroup {
-      FormsScreen()
+      NavigationStack {
+        FormsScreen()
+      }
     }
   }
 }

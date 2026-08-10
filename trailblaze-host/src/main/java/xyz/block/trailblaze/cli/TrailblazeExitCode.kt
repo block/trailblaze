@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.cli
 
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+
 /**
  * Canonical exit-code policy for the Trailblaze CLI.
  *
@@ -46,6 +48,25 @@ internal fun chooseWorseExitCode(a: Int, b: Int): Int {
   val rankB = exitCodeRank(b)
   return if (rankA >= rankB) a else b
 }
+
+/**
+ * Exit code for a daemon-delegated run whose [CliRunResponse] came back failed.
+ *
+ * The daemon signals its failure class via [CliRunResponse.errorKind]: a request it
+ * REJECTED as invalid ([CliRunResponse.ERROR_KIND_MISUSE], e.g. an unrecognized driver
+ * name validated daemon-side) maps to [TrailblazeExitCode.MISUSE], matching the
+ * in-process path's exit code for the same mistake. Everything else — including
+ * responses from older daemons that don't send the field — stays
+ * [TrailblazeExitCode.ASSERTION_FAILED] (the daemon RPC doesn't yet distinguish
+ * assertion-vs-infra failures for attempted runs; see the daemon-loop comment in
+ * TrailCommand).
+ */
+internal fun daemonRunFailureExitCode(response: CliRunResponse): TrailblazeExitCode =
+  if (response.errorKind == CliRunResponse.ERROR_KIND_MISUSE) {
+    TrailblazeExitCode.MISUSE
+  } else {
+    TrailblazeExitCode.ASSERTION_FAILED
+  }
 
 private fun exitCodeRank(code: Int): Int = when (code) {
   TrailblazeExitCode.SUCCESS.code -> 0

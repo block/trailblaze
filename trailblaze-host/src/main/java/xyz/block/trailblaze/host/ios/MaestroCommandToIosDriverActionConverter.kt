@@ -66,12 +66,13 @@ object MaestroCommandToIosDriverActionConverter {
     is InputTextCommand -> listOf(IosDriverAction.InputText(command.text))
     is InputRandomCommand -> listOf(IosDriverAction.InputText(command.genRandomString()))
     is EraseTextCommand -> listOf(IosDriverAction.EraseText(command.charactersToErase ?: DEFAULT_ERASE_COUNT))
-    // iOS has no native "back" button — a tap at top-left is the usual convention, but trails
-    // normally use a UI back button. We'll map BackPressCommand to a Home press as the safest
-    // system-level navigation; authored trails should prefer explicit taps.
+    // iOS has no native "back" button, and Maestro's own iOS driver no-ops BACK. Mirror that
+    // (log + skip) so a shared trail behaves identically on IOS_HOST and this driver — mapping
+    // to Home would background the app mid-trail. Authored trails should tap the app's own
+    // back affordance instead.
     is BackPressCommand -> {
-      Console.log("[IosDriverConverter] BackPressCommand has no iOS equivalent — mapping to Home")
-      listOf(IosDriverAction.PressHome)
+      Console.log("[IosDriverConverter] BackPressCommand has no iOS equivalent — skipping (Maestro parity)")
+      emptyList()
     }
     is HideKeyboardCommand -> {
       // AXe has no direct "dismiss keyboard" — a tap-outside in the upper-left is a common
@@ -89,9 +90,11 @@ object MaestroCommandToIosDriverActionConverter {
     is LaunchAppCommand -> listOf(
       IosDriverAction.LaunchApp(
         command.appId,
-        stopFirst = command.stopApp == true,
+        // Maestro's default for an omitted stopApp is stop-then-launch (cold start).
+        stopFirst = command.stopApp != false,
         clearState = command.clearState == true,
         clearKeychain = command.clearKeychain == true,
+        permissions = command.permissions,
       ),
     )
     is StopAppCommand -> listOf(IosDriverAction.StopApp(command.appId))
@@ -194,7 +197,7 @@ object MaestroCommandToIosDriverActionConverter {
   }
 
   /** Parses a Maestro relative point ("50%,47%", spaces tolerated) into x/y percentages. */
-  internal fun parseRelativePoint(relative: String): Pair<Double, Double>? {
+  private fun parseRelativePoint(relative: String): Pair<Double, Double>? {
     val parts = relative.split(",").map { it.trim().removeSuffix("%") }
     if (parts.size != 2) return null
     val x = parts[0].toDoubleOrNull() ?: return null
@@ -233,10 +236,8 @@ object MaestroCommandToIosDriverActionConverter {
     KeyCode.ESCAPE -> listOf(IosDriverAction.PressKey.ESCAPE)
     KeyCode.HOME -> listOf(IosDriverAction.PressHome)
     KeyCode.LOCK, KeyCode.POWER -> listOf(IosDriverAction.PressLock)
-    KeyCode.BACK -> {
-      Console.log("[IosDriverConverter] pressKey(BACK) has no iOS equivalent — mapping to Home")
-      listOf(IosDriverAction.PressHome)
-    }
+    // BACK deliberately falls through to the skip below — Maestro's iOS driver no-ops it, and
+    // mapping it to Home would background the app mid-trail (see BackPressCommand above).
     else -> {
       Console.log("[IosDriverConverter] pressKey(${command.code.name}) has no iOS mapping — skipping")
       emptyList()

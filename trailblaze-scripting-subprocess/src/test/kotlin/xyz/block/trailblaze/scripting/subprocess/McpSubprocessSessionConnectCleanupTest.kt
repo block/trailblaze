@@ -4,7 +4,7 @@ import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
-import assertk.assertions.isLessThan
+import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNotInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.messageContains
@@ -14,7 +14,6 @@ import org.junit.Rule
 import org.junit.rules.Timeout
 import java.io.File
 import java.util.concurrent.TimeUnit
-import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 
@@ -84,7 +83,8 @@ class McpSubprocessSessionConnectCleanupTest {
    * stream event will ever complete — and the watchdog's force-destroy is a no-op on a dead
    * process. The interleaving inside the SDK is timing-dependent (usually the EOF error beats the
    * orphaning), so this can't pin WHICH failure surfaces; the behavior under test is that connect
-   * always fails within its bound instead of parking forever, with no orphan and a closed capture.
+   * fails at all instead of parking forever — the class's [perTestHangGuard] is what converts a
+   * park back into a failure — with no orphan and a closed capture.
    */
   @Test fun `connect fails within its bound when the subprocess is already dead`() {
     assumeTrue("POSIX `true` is required to produce a dead-on-arrival subprocess", binTrue != null)
@@ -100,19 +100,16 @@ class McpSubprocessSessionConnectCleanupTest {
         )
         val capture = StderrCapture()
 
-        val elapsedMs = measureTimeMillis {
-          assertFailure {
-            McpSubprocessSession.connect(
-              spawnedProcess = spawned,
-              stderrCapture = capture,
-              handshakeTimeoutMillis = 2_000,
-            )
-          }
+        assertFailure {
+          McpSubprocessSession.connect(
+            spawnedProcess = spawned,
+            stderrCapture = capture,
+            handshakeTimeoutMillis = 2_000,
+          )
         }
 
-        // Organic EOF failure (fast) or watchdog timeout (2s) plus the teardown ladder — either
-        // way bounded, never "forever".
-        assertThat(elapsedMs).isLessThan(30_000L)
+        // Organic EOF failure or watchdog timeout — either way it returned, with no orphan and a
+        // closed capture.
         assertThat(process.isAlive).isEqualTo(false)
         assertThat(capture.isClosed).isEqualTo(true)
       } finally {
@@ -129,9 +126,12 @@ class McpSubprocessSessionConnectCleanupTest {
    *
    * Also the regression guard for the mechanism itself: `client.connect` parks on a blocking,
    * non-cancellable native read of the subprocess's stdout, so a plain `withTimeout` around it
-   * does NOT fire until the subprocess exits on its own (empirically ~30s here). The watchdog
-   * force-destroys the subprocess at the timeout, unblocking that read. If the fix regressed to
-   * a bare `withTimeout`, `elapsedMs` would jump to ~30s and this test would fail.
+   * does NOT fire until the subprocess exits on its own. The watchdog force-destroys the
+   * subprocess at the timeout, unblocking that read. The subprocess's **exit status** is what
+   * separates the two without timing anything: a `sleep` that ran to completion exits 0, while one
+   * the watchdog SIGKILLed exits non-zero. So if the fix regressed to a bare `withTimeout`,
+   * connect would unwind only once the sleep finished on its own and the exit status would be 0 —
+   * failing the assertion below.
    *
    * Gated on POSIX `sleep` availability — skipped on Windows.
    */
@@ -147,22 +147,20 @@ class McpSubprocessSessionConnectCleanupTest {
         )
         val capture = StderrCapture()
 
-        lateinit var thrown: McpSubprocessHandshakeTimeoutException
-        val elapsedMs = measureTimeMillis {
-          thrown = assertFailsWith<McpSubprocessHandshakeTimeoutException> {
-            McpSubprocessSession.connect(
-              spawnedProcess = spawned,
-              stderrCapture = capture,
-              handshakeTimeoutMillis = 250,
-            )
-          }
+        val thrown = assertFailsWith<McpSubprocessHandshakeTimeoutException> {
+          McpSubprocessSession.connect(
+            spawnedProcess = spawned,
+            stderrCapture = capture,
+            handshakeTimeoutMillis = 250,
+          )
         }
 
-        // Failed fast on the 250ms bound plus the bounded teardown ladder — nowhere near the 30s
-        // sleep, so the handshake was genuinely cancelled rather than run to completion.
-        assertThat(elapsedMs).isLessThan(20_000L)
         // The subprocess was torn down by the timeout cleanup — no orphan left behind.
         assertThat(process.isAlive).isEqualTo(false)
+        // Force-destroyed on the 250ms bound, NOT waited out: `sleep 30` running to completion
+        // exits 0, so a non-zero (signal) status is the direct evidence that the watchdog's kill is
+        // what unblocked the handshake read.
+        assertThat(process.exitValue()).isNotEqualTo(0)
         // And the stderr capture was closed on the way out.
         assertThat(capture.isClosed).isEqualTo(true)
         // Attributable: the timeout names the culprit script and the bound it blew, and preserves the

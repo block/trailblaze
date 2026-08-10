@@ -240,14 +240,21 @@ class WorkspaceTypeScriptSetupTest {
   @Test
   fun `extractTypecheck writes the bundled tsc payload under dot-trailblaze-typecheck when shipped`() {
     // The framework JAR ships typescript@6.0.3's `_tsc.js` + `lib.*.d.ts` via the
-    // `copyTypescriptCompilerResources` Gradle task in `:trailblaze-host`. CI's
-    // `pr_static_checks.sh` runs `bun install` in `sdks/typescript/` before the Gradle
-    // build, so the payload is always populated in CI runs of this test. A local dev who
-    // hasn't run `bun install` will see `extractTypecheck` return `null` — the early
-    // return below skips assertions in that case so the test stays passing.
+    // `copyTypescriptCompilerResources` Gradle task in `:trailblaze-host`, which is wired into this
+    // module's main resources — so the payload is on this test's classpath by construction.
+    //
+    // This assertion used to be `?: return`, on the belief that CI's `bun install` made the payload
+    // present and only a local dev could see it absent. That was backwards: the payload went missing
+    // in CI (the Copy task raced the install), and the early return meant the one test named after
+    // shipping the payload passed while it wasn't shipped. It is now unconditional, because
+    // `copyTypescriptCompilerResources` orders itself after the install that populates its source.
     val workspace = newWorkspaceRoot()
 
-    val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspace.toPath()) ?: return
+    val tscJs =
+      requireNotNull(WorkspaceTypeScriptSetup.extractTypecheck(workspace.toPath())) {
+        "the framework did not ship a bundled tsc payload — expected it on the classpath from " +
+          ":trailblaze-host:copyTypescriptCompilerResources"
+      }
 
     val tscRoot = File(workspace, ".trailblaze/typecheck/typescript")
     assertTrue(tscRoot.isDirectory, "expected typecheck root at $tscRoot")

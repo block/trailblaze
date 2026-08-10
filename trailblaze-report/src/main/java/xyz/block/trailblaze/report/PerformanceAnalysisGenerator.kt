@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
 
@@ -77,6 +78,7 @@ class PerformanceAnalysisGenerator(
               RunReportGenerator.sessionMetaJson(
                 sessionInfo,
                 logs.getSessionStatus(),
+                SessionRecordingInfo.fromLogs(logs),
                 RunReportGenerator.reportProvenanceJson(environment),
               ),
             )

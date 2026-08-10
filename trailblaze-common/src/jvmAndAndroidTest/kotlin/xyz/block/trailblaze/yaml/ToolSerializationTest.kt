@@ -11,6 +11,7 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.toolcalls.commands.AssertMatchCountTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -20,6 +21,7 @@ import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibility
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
+import xyz.block.trailblaze.toolcalls.commands.SleepTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
@@ -686,6 +688,72 @@ trail:
   }
 
   @Test
+  fun deserializeSleepDefaults() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep: {}
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(),
+      ),
+    )
+  }
+
+  @Test
+  fun deserializeSleepWithDuration() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep:
+            durationMs: 12000
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(durationMs = 12000),
+      ),
+    )
+  }
+
+  @Test
+  fun sleepRoundTrip() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - sleep:
+            durationMs: 12000
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0]).isEqualTo(
+      TrailblazeToolYamlWrapper(
+        name = "sleep",
+        trailblazeTool = SleepTrailblazeTool(durationMs = 12000),
+      ),
+    )
+  }
+
+  @Test
   fun deserializeLaunchAppTool() {
     val yaml = """
 config: {}
@@ -1053,5 +1121,55 @@ trail:
     val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
     assertThat(match.textRegex).isEqualTo("ALARM")
     assertThat(match.resourceIdRegex).isEqualTo("android:id/text1")
+  }
+
+  @Test
+  fun deserializeAssertMatchCountWithNodeSelector() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertMatchCount:
+            reason: The report should list at least one item row.
+            min: 1
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Net sales by item"
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    assertThat(tools.size).isEqualTo(1)
+    assertThat(tools[0].name).isEqualTo("assertMatchCount")
+    val tool = tools[0].trailblazeTool as AssertMatchCountTrailblazeTool
+    assertThat(tool.reason).isEqualTo("The report should list at least one item row.")
+    assertThat(tool.min).isEqualTo(1)
+    val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.textRegex).isEqualTo("Net sales by item")
+  }
+
+  @Test
+  fun assertMatchCountExactRoundTrip() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - assertMatchCount:
+            exact: 3
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Item row"
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0].name).isEqualTo("assertMatchCount")
+    val tool = reDecoded[0].trailblazeTool as AssertMatchCountTrailblazeTool
+    assertThat(tool.exact).isEqualTo(3)
+    assertThat(tool.min).isEqualTo(null)
   }
 }

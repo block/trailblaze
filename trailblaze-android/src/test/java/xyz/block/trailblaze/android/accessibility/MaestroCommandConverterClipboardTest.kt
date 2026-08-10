@@ -3,6 +3,8 @@ package xyz.block.trailblaze.android.accessibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import maestro.orchestra.Command
 import maestro.orchestra.CopyTextFromCommand
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.PasteTextCommand
@@ -15,11 +17,15 @@ import xyz.block.trailblaze.api.DriverNodeMatch
  */
 class MaestroCommandConverterClipboardTest {
 
+  /** Unwraps a supported command's conversion, failing the test if it reads as unsupported. */
+  private fun convert(command: Command): List<AccessibilityAction> =
+    assertNotNull(MaestroCommandConverter.convert(command))
+
   @Test
   fun `converts SetClipboardCommand to SetClipboard action`() {
     val command = SetClipboardCommand(text = "Hello, World!")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetClipboard>(actions.single())
@@ -30,7 +36,7 @@ class MaestroCommandConverterClipboardTest {
   fun `converts PasteTextCommand to PasteText action`() {
     val command = PasteTextCommand()
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     assertIs<AccessibilityAction.PasteText>(actions.single())
@@ -42,7 +48,7 @@ class MaestroCommandConverterClipboardTest {
       selector = ElementSelector(textRegex = "Account Balance"),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.CopyTextFrom>(actions.single())
@@ -59,7 +65,7 @@ class MaestroCommandConverterClipboardTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.CopyTextFrom>(actions.single())
@@ -77,7 +83,7 @@ class MaestroCommandConverterClipboardTest {
       ),
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.CopyTextFrom>(actions.single())

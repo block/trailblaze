@@ -295,7 +295,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution failed: ${e.message}")
       loggingRule.captureFailureScreenshot(session, screenshotProvider)
       if (sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
+        loggingRule.endSession(session, isSuccess = false, exception = e)
       }
       // Re-throw so the failure propagates to DesktopYamlRunner.runYaml's outer catch,
       // which sets executionResult = Failed. Returning null here was the silent-failure
@@ -519,7 +519,7 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         playwrightTest.loggingRule.captureFinalScreenshot(session, playwrightTest.browserManager::getScreenState)
-        playwrightTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
+        playwrightTest.loggingRule.endSession(session, isSuccess = true)
       }
 
       val customToolClasses = runOnHostParams.targetTestApp
@@ -654,7 +654,7 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         electronTest.loggingRule.captureFinalScreenshot(session, electronTest.browserManager::getScreenState)
-        electronTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
+        electronTest.loggingRule.endSession(session, isSuccess = true)
       }
 
       val customToolClasses = runOnHostParams.targetTestApp
@@ -962,7 +962,6 @@ object TrailblazeHostYamlRunner {
         trailblazeYaml = trailblazeYaml,
         trailItems = trailItems,
         trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
       )
 
       for (item in trailItems) {
@@ -1011,7 +1010,7 @@ object TrailblazeHostYamlRunner {
         } else {
           loggingRule.captureFailureScreenshot(session, screenStateProvider)
         }
-        loggingRule.sessionManager.endSession(session, isSuccess = goldenPassed)
+        loggingRule.endSession(session, isSuccess = goldenPassed)
       }
 
       if (!goldenPassed) {
@@ -1293,7 +1292,6 @@ object TrailblazeHostYamlRunner {
           trailblazeYaml = trailblazeYaml,
           trailItems = trailItems,
           trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-          trailUrl = trailConfig?.metadata?.get("testRailUrl"),
         )
 
         for (item in trailItems) {
@@ -1327,7 +1325,7 @@ object TrailblazeHostYamlRunner {
 
         if (runYamlRequest.config.sendSessionEndLog) {
           loggingRule.captureFinalScreenshot(session, screenStateProvider)
-          loggingRule.sessionManager.endSession(session, isSuccess = true)
+          loggingRule.endSession(session, isSuccess = true)
         }
 
         generateAndSaveRecording(
@@ -1530,7 +1528,7 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         hostTbRunner.loggingRule.captureFinalScreenshot(session, hostTbRunner.screenStateProvider)
-        hostTbRunner.loggingRule.sessionManager.endSession(session, isSuccess = true)
+        hostTbRunner.loggingRule.endSession(session, isSuccess = true)
       }
 
       sessionId?.let {
@@ -1902,16 +1900,15 @@ object TrailblazeHostYamlRunner {
       }
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        val sessionManager = loggingRule.sessionManager
         val v3ScreenStateProvider = {
           runBlocking { executor.captureScreenState() } ?: error("No screen state available")
         }
         if (trailSuccess) {
           loggingRule.captureFinalScreenshot(session, v3ScreenStateProvider)
-          sessionManager.endSession(session, isSuccess = true)
+          loggingRule.endSession(session, isSuccess = true)
         } else {
           loggingRule.captureFailureScreenshot(session, v3ScreenStateProvider)
-          sessionManager.endSession(
+          loggingRule.endSession(
             session,
             isSuccess = false,
             exception = Exception(trailErrorMessage ?: "Trail execution failed"),
@@ -2329,7 +2326,6 @@ object TrailblazeHostYamlRunner {
         trailblazeYaml = trailblazeYaml,
         trailItems = trailItems,
         trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
       )
 
       // Fire the session-started callback BEFORE dispatching trail items but AFTER
@@ -2385,7 +2381,7 @@ object TrailblazeHostYamlRunner {
 
       if (runYamlRequest.config.sendSessionEndLog) {
         loggingRule.captureFinalScreenshot(session, agent.screenStateProvider)
-        loggingRule.sessionManager.endSession(session, isSuccess = true)
+        loggingRule.endSession(session, isSuccess = true)
       }
 
       generateAndSaveRecording(
@@ -2484,13 +2480,11 @@ object TrailblazeHostYamlRunner {
     trailblazeYaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
     trailItems: List<TrailYamlItem>,
     trailName: String?,
-    trailUrl: String?,
   ) {
     if (!trailblazeYaml.hasActionableSteps(trailItems)) {
       throw TrailblazeException(
         "Trail '${trailName ?: "unknown"}' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file." +
-          (trailUrl?.let { " $it" } ?: ""),
+          "Add prompts or tool steps to this trail file.",
       )
     }
   }

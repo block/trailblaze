@@ -1,7 +1,25 @@
-import { trailblaze } from "@trailblaze/scripting";
+import { trailblaze, type TrailblazeNodeSelector } from "@trailblaze/scripting";
 import { ensureContactsRoot, nonEmptyString, tryOrFalse } from "./contacts_ios_shared";
 
 const DEFAULT_QUERY = "John";
+
+/** Wait budget for the matching result row to render after the query is typed. */
+const ROW_WAIT_MS = 5000;
+
+/**
+ * Accessibility label of the container iOS Contacts wraps the search-result rows in.
+ * Used as the row selector's `childOf` scope so a substring `rowText` can only ever
+ * resolve to a result row, never to the search field or its toolbar chrome.
+ *
+ * Deliberately a bare literal, not a contains pattern: node selectors full-match, and
+ * this string is exact. Provenance is the captured Contacts hierarchy in
+ * `trails/config/trailmaps/contacts/waypoints/ios/contacts_ios_search_results_with_clear.example.json`
+ * — exactly one node carries this label, the result-row cell and its inner StaticText are
+ * both inside its subtree, and the search field (with its magnifying-glass and "Clear text"
+ * children) is a sibling outside it. Six waypoints in that directory already match the
+ * same string as an exact literal.
+ */
+const RESULTS_LIST_LABEL = "Search results";
 
 export interface SearchContactsArgs {
   /** Query to type into the contacts list's pull-down search field. */
@@ -64,13 +82,13 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
       return `Typed "${query}" into Contacts search and stopped (no result tapped).`;
     }
 
-    // Pre-flight: surface the no-results state before the row tap below. This is
-    // load-bearing — without it, a query that matches nothing falls through to
-    // `tapOnElementWithText(rowText)`, which then matches the query text still
-    // showing in the *search field* (not a contact row), so no navigation
-    // happens and a caller's open-and-verify-name probe false-positives on that
-    // same search-field text. (That's exactly how the create-then-delete
-    // defensive teardown failed on a fresh simulator.)
+    // Pre-flight: surface the no-results state before the row tap below, so a
+    // query that matches nothing fails with "wrong query" instead of falling
+    // through to the row wait and reporting "wrong rowText". (Historically this
+    // was also the only guard against the not-found tap resolving the query text
+    // still showing in the *search field* — the label-scoped, results-list-scoped
+    // row selector below now rules that out, but the distinct error stays
+    // valuable.)
     //
     // iOS renders the banner as `No Results for "<query>"`, so we must match it
     // as a substring/regex. `assertVisibleWithAccessibilityText` is exact-match
@@ -87,7 +105,90 @@ export const contacts_ios_searchContacts = trailblaze.tool<SearchContactsArgs>(
       );
     }
 
-    await ctx.tools.tapOnElementWithText({ text: rowText });
+    // Tap the result ROW via its accessibility label, scoped to the results list — never via
+    // a bare text match.
+    //
+    // 1. LABEL, not text. A bare `tapOnElementWithText(rowText)` matches any node whose
+    //    text / hintText / accessibilityText contains `rowText` — and on the host
+    //    (Maestro/XCUITest) tree a text field's `text` attribute is its typed VALUE, so when
+    //    `query == rowText` (e.g. `contacts_ios_openContact` passing the same full name to
+    //    both) the tap resolved the search field's own typed text instead of the result row,
+    //    no navigation happened, and the caller's detail-screen anchor never appeared.
+    //    `accessibilityTextRegex` matches the AX *label* on both iOS drivers (host:
+    //    `accessibilityText` = AXLabel; AXe: the iosMaestro→AXe bridge maps it to `.label`),
+    //    and a search field's label is its placeholder ("Search") — never the typed value.
+    //    The captured hierarchy cited on `RESULTS_LIST_LABEL` above shows this directly: the
+    //    search field is one node carrying `accessibilityText: "Search"`, `hintText: "Search"`,
+    //    and `text: "Kate"` (the query that had been typed when the capture was taken).
+    //
+    // 2. CONTAINS, not prefix. Node selectors full-match their regex, so a bare `rowText`
+    //    would only match labels that equal (or, with a trailing `.*`, start with) it —
+    //    breaking substring queries like a last name (`rowText: "Appleseed"` must still match
+    //    the "John Appleseed" row) and labels that append detail text after the name. The
+    //    surrounding `.*` restores the old `tapOnElementWithText` CONTAINS contract.
+    //
+    // 3. SCOPED to the results list. Contains-matching on the label is necessary but not
+    //    sufficient: the search field's own label ("Search") contains plenty of substrings a
+    //    caller may legitimately pass as `rowText` — `rowText: "ear"` opening a "Teddy Bear"
+    //    row also matches "Search", and so do "Search results" and the "Clear text" button.
+    //    Since `findMatches` and the tap share this selector with `index: 0`, the topmost of
+    //    those could be the search field: the wait would succeed, the tap would only focus the
+    //    field, and the tool would report success without ever opening the row. `childOf`
+    //    fixes that structurally instead of narrowing the text match: on the real Contacts
+    //    hierarchy every result row is a descendant of the "Search results" container, while
+    //    the search field and all its chrome (the magnifying-glass image, "Clear text",
+    //    "close") live under a sibling "Toolbar" branch — so scoping the search to that
+    //    container's descendants removes the whole search-field/chrome family from the
+    //    candidate set. `childOf` also excludes the anchor itself, so the full-screen
+    //    "Search results" container can't be picked either.
+    //
+    //    Both iOS drivers evaluate this scope, and both via the same underlying AX attribute:
+    //    on the host tree `accessibilityText` is the XCUIElement label; on an AXe tree the
+    //    iosMaestro→AXe bridge routes `accessibilityTextRegex` to `.label` (AXLabel). Fields
+    //    that only exist on one side were rejected for exactly this reason — `classNameRegex`
+    //    is unusable here because the host iOS tree reports no `class` attribute for this app
+    //    at all, so a class constraint would match nothing on the host driver.
+    //
+    // With the scope in place, `index: 0` is only disambiguating rows: it pins the topmost
+    // match so the tap resolves a single node even when the row cell and its inner StaticText
+    // both carry the label.
+    //
+    // The guarantee survives the Maestro fallback too. Under the default PREFER_NODE_SELECTOR
+    // mode, if the node-selector tap returns no node (transient tree-fetch failure, row stops
+    // resolving between the `findMatches` probe and the tap), `TapOnByElementSelector` falls
+    // back to Maestro — whose lowering turns `accessibilityTextRegex` into legacy `textRegex`
+    // (text | hintText | accessibilityText), which a typed query CAN satisfy. But the same
+    // lowering also carries `childOf` through, so even there the match set stays inside the
+    // results list and excludes the search field.
+    const rowSelector: TrailblazeNodeSelector = {
+      iosMaestro: { accessibilityTextRegex: `.*${escapeRegExp(rowText)}.*` },
+      childOf: { iosMaestro: { accessibilityTextRegex: RESULTS_LIST_LABEL } },
+      index: 0,
+    };
+    // Bounded wait for the row to render (`findMatches` re-polls the live hierarchy
+    // until a match appears or the budget elapses — no fixed sleep),
+    // plus a distinct error for "results exist but none is labeled `rowText`" — a different
+    // failure from the no-results branch above (wrong rowText vs wrong query).
+    const rows = await ctx.tools.findMatches({
+      selector: rowSelector,
+      timeoutMs: ROW_WAIT_MS,
+    });
+    if (rows.length === 0) {
+      throw new Error(
+        `contacts_ios_searchContacts: query "${query}" shows no "No Results" banner, ` +
+          `but no row labeled "${rowText}" appeared in the "${RESULTS_LIST_LABEL}" list ` +
+          `within ${ROW_WAIT_MS}ms.`,
+      );
+    }
+    await ctx.tools.tapOnElementBySelector({
+      reason: `Open the "${rowText}" search result row.`,
+      nodeSelector: rowSelector,
+    });
     return `Searched for "${query}" and opened the row matching "${rowText}".`;
   },
 );
+
+/** Escapes regex metacharacters so a contact name is matched literally. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

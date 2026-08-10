@@ -79,6 +79,9 @@ class IosDriverTrailblazeAgent(
     } catch (e: TrailblazeException) {
       return TrailblazeToolResult.Error.ExceptionThrown(
         errorMessage = e.message ?: "Unsupported Maestro command on the AXe driver",
+        // Distinguishes a converter bug from a genuinely-unsupported command in session logs,
+        // matching every other ExceptionThrown producer on this driver (e.g. IosDriverTrailRunner).
+        stackTrace = e.stackTraceToString(),
       )
     }
     return IosDriverTrailRunner.runActions(

@@ -99,7 +99,7 @@ class DirectMcpAgent(
 
   companion object {
     /** Maximum number of iterations before giving up */
-    const val MAX_ITERATIONS = 50
+    const val MAX_ITERATIONS = 25
 
     /** Maximum length of objective text to prevent prompt injection via oversized input */
     private const val MAX_OBJECTIVE_LENGTH = 2000

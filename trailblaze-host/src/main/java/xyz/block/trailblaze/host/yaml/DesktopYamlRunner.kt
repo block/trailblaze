@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.cli.CliRunDriverResolution
+import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -104,24 +106,30 @@ class DesktopYamlRunner(
     }
 
     /**
-     * The driver [trailYaml] pins for the device described by [deviceClassifiers], or null when
-     * it pins none reachable from that device's classifier chain. Covers both formats: a v1
-     * `driver:` scalar (classifier-independent) and a unified per-classifier `devices:` map
-     * (closest-wins). A YAML that fails to parse resolves to null — the trail decode inside the
-     * run surfaces the real error.
+     * The driver [trailYaml] pins for the device described by [deviceClassifiers]. Covers both
+     * formats: a v1 `driver:` scalar (classifier-independent) and a unified per-classifier
+     * `devices:` map (closest-wins). Three outcomes:
+     * - [CliRunDriverResolution.Resolved] with a driver type — the pin names a known driver.
+     * - [CliRunDriverResolution.Resolved] with null — no pin reachable from this device's
+     *   classifier chain, or the YAML fails to parse (the trail decode inside the run surfaces
+     *   the real error).
+     * - [CliRunDriverResolution.Unrecognized] — the pin names NO known driver. Callers must fail
+     *   loud (never silently fall back to the default driver): a typo'd pin used to keep a CI
+     *   step green while replaying on a different driver entirely.
      *
      * This is the runner's own read of the pin because upstream request builders (the daemon's
      * `/cli/run` handler, the desktop Run path) extract trail config without a device and so
      * send `RunYamlRequest.driverType = null` for every unified trail; the connected device is
      * only concrete here.
      */
-    internal fun trailPinnedDriverType(
+    internal fun trailPinnedDriverResolution(
       trailYaml: String,
       deviceClassifiers: List<TrailblazeDeviceClassifier>,
-    ): TrailblazeDriverType? = runCatching {
-      createTrailblazeYaml().extractTrailConfig(trailYaml, deviceClassifiers)
-        ?.driver?.let { TrailblazeDriverType.fromString(it) }
-    }.getOrNull()
+    ): CliRunDriverResolution = CliRunDriverResolver.resolve(
+      runCatching {
+        createTrailblazeYaml().extractTrailConfig(trailYaml, deviceClassifiers)?.driver
+      }.getOrNull(),
+    )
   }
 
   /**
@@ -242,19 +250,31 @@ class DesktopYamlRunner(
       // Resolve driver type: request (CLI --driver / trail config) > the trail's own driver pin
       // resolved against THIS device > app setting > connected device default. The trail-pin rung
       // matches the CLI in-process precedence (trail config over app setting) — see
-      // [trailPinnedDriverType] for why unified pins can only resolve here.
+      // [trailPinnedDriverResolution] for why unified pins can only resolve here. A pin naming an
+      // unknown driver fails the run loud instead of falling through to the default driver.
       val appConfig = trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
       val appSettingDriverType = appConfig.selectedTrailblazeDriverTypes[
         trailblazeDeviceId.trailblazeDevicePlatform
       ]
-      val trailblazeDriverType = runYamlRequest.driverType
-        ?: trailPinnedDriverType(
+      val trailblazeDriverType = runYamlRequest.driverType ?: run {
+        val pinResolution = trailPinnedDriverResolution(
           trailYaml = runYamlRequest.yaml,
           deviceClassifiers = DeviceClassifierResolver.classifiersFor(
             platform = connectedTrailblazeDevice.platform,
             instanceId = connectedTrailblazeDevice.instanceId,
           ),
         )
+        when (pinResolution) {
+          is CliRunDriverResolution.Unrecognized -> {
+            prefixedProgressMessage("Trail driver pin rejected: ${pinResolution.message}")
+            Console.log("❌ COROUTINE ENDING (unrecognized trail driver pin) for device: ${trailblazeDeviceId.instanceId}")
+            executionResult = TrailExecutionResult.Failed(pinResolution.message, misuse = true)
+            onComplete?.invoke(executionResult)
+            return@launch
+          }
+          is CliRunDriverResolution.Resolved -> pinResolution.driverType
+        }
+      }
         ?: appSettingDriverType
         ?: connectedTrailblazeDevice.trailblazeDriverType
 

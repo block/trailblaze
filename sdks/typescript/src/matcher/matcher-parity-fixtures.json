@@ -316,5 +316,89 @@
       "nativeMatches": true,
       "maestroMatches": true
     }
+  ],
+  "_iosMaestroHintBridgeComment": "Node-shaped contract for the iosMaestro→iosAxe bridge's hintTextRegex leg: help matches on any type; label/value match ONLY on text-input types (placeholder surfaces as AXLabel on newer iOS runtimes, as the empty field's AXValue on older ones). Consumed by the same two suites as `cases`. If either implementation's type gate or property set drifts, that side's suite fails.",
+  "iosMaestroHintBridgeCases": [
+    {
+      "name": "placeholder surfaced as AXLabel (newer runtimes) matches a text input",
+      "hintTextRegex": "Search",
+      "type": "TextField",
+      "label": "Search",
+      "value": null,
+      "help": null,
+      "matches": true
+    },
+    {
+      "name": "placeholder surfaced as AXValue (older runtimes) matches an empty text input",
+      "hintTextRegex": "Search",
+      "type": "TextField",
+      "label": null,
+      "value": "Search",
+      "help": null,
+      "matches": true
+    },
+    {
+      "name": "help carries the hint regardless of element type",
+      "hintTextRegex": "Search",
+      "type": "Image",
+      "label": null,
+      "value": null,
+      "help": "Search",
+      "matches": true
+    },
+    {
+      "name": "decorative Image carrying the hint as its label does not match",
+      "hintTextRegex": "Search",
+      "type": "Image",
+      "label": "Search",
+      "value": null,
+      "help": null,
+      "matches": false
+    },
+    {
+      "name": "decorative Image carrying the hint as its value does not match",
+      "hintTextRegex": "Search",
+      "type": "Image",
+      "label": null,
+      "value": "Search",
+      "help": null,
+      "matches": false
+    },
+    {
+      "name": "StaticText is not a text-input type",
+      "hintTextRegex": "Search",
+      "type": "StaticText",
+      "label": "Search",
+      "value": null,
+      "help": null,
+      "matches": false
+    },
+    {
+      "name": "SecureTextField is a text-input type (placeholder-as-value)",
+      "hintTextRegex": "Passcode",
+      "type": "SecureTextField",
+      "label": null,
+      "value": "Passcode",
+      "help": null,
+      "matches": true
+    },
+    {
+      "name": "hint bridge keeps the Maestro dialect on the value leg (case-insensitive)",
+      "hintTextRegex": "Search",
+      "type": "TextField",
+      "label": null,
+      "value": "search",
+      "help": null,
+      "matches": true
+    },
+    {
+      "name": "a filled field whose typed value differs from the hint does not match",
+      "hintTextRegex": "Search",
+      "type": "TextField",
+      "label": null,
+      "value": "Steve",
+      "help": null,
+      "matches": false
+    }
   ]
 }

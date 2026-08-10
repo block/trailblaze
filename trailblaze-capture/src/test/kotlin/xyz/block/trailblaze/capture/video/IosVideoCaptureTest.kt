@@ -52,6 +52,21 @@ class IosVideoCaptureTest {
   }
 
   @Test
+  fun `recording temp target still matches the stale-recording pattern`() {
+    // The temp target moved off java.io.tmpdir (CoreSimulatorTempFiles, boot-volume) — the
+    // stale-recording cleanup must keep matching a crashed recorder at the new location.
+    val target = IosVideoCapture.createRecordingTempFile()
+    try {
+      assertTrue(
+        IosVideoCapture.matchesStaleTrailblazeRecording(deviceId, cmd(target.absolutePath)),
+        "a recorder writing to ${target.absolutePath} must be cleaned up as stale",
+      )
+    } finally {
+      target.delete()
+    }
+  }
+
+  @Test
   fun `wildcard stays within a single path component`() {
     assertFalse(
       IosVideoCapture.matchesStaleTrailblazeRecording(deviceId, cmd("/sessions/video-run/other.mp4")),

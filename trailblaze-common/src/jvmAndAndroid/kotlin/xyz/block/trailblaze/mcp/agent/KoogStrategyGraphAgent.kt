@@ -198,7 +198,7 @@ class KoogStrategyGraphAgent private constructor(
 
   companion object {
     /** Default maximum graph iterations before the agent gives up. */
-    const val DEFAULT_MAX_ITERATIONS = 50
+    const val DEFAULT_MAX_ITERATIONS = 25
 
     /**
      * Message count above which the running conversation is compressed. A turn is roughly two

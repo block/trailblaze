@@ -256,6 +256,26 @@ class AssertToolNodeSelectorTest {
     assertNull(command.condition.visible, "Maestro path must NOT assert visible")
   }
 
+  @Test
+  fun `AssertNotVisibleBySelector forwards timeoutMs to the Maestro path`() = runBlocking {
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Email Marketing"),
+    )
+
+    val budgeted = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = 60_000)
+    assertEquals(
+      "60000",
+      assertIs<AssertConditionCommand>(budgeted.toMaestroCommands().single()).timeout,
+      "an author-set disappearance budget must reach Maestro rather than being replaced by its default",
+    )
+
+    val unbudgeted = AssertNotVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
+    assertNull(
+      assertIs<AssertConditionCommand>(unbudgeted.toMaestroCommands().single()).timeout,
+      "an unset timeoutMs must leave Maestro on its own default",
+    )
+  }
+
   // endregion
 
   // region allDriverMatches (drives the AccessibilityTrailblazeAgent not-visible driver guard)

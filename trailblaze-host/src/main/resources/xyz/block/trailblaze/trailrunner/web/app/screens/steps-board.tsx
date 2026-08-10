@@ -1205,7 +1205,7 @@ function RecordConfigDialog({ devices, bundleTarget, busy, trailheads, defaultTr
   const [trailhead, setTrailhead] = React.useState(defaultTrailhead || 'none'); // tool id | 'none' | 'fresh'
   const [captureVideo, setCaptureVideo] = React.useState(true);
   const [selfHeal, setSelfHeal] = React.useState(false);
-  const [maxLlmCalls, setMaxLlmCalls] = React.useState('50');
+  const [maxLlmCalls, setMaxLlmCalls] = React.useState(String(DEFAULT_MAX_LLM_CALLS));
   const [starting, setStarting] = React.useState(false);
   const isMobile = primary && primary.platform !== 'web';
   React.useEffect(() => {
@@ -1223,7 +1223,7 @@ function RecordConfigDialog({ devices, bundleTarget, busy, trailheads, defaultTr
     const isRealTrailhead = !!trailhead && !TRAILHEAD_SENTINELS.includes(trailhead);
     const fresh = trailhead === 'fresh' && isMobile && !!targetApp;
     onRecord({
-      captureVideo, selfHeal, maxLlmCalls: Number.isFinite(n) && n > 0 ? n : null,
+      captureVideo, selfHeal, maxLlmCalls: Number.isFinite(n) && n > 0 && n !== DEFAULT_MAX_LLM_CALLS ? n : null,
       trailheadId: isRealTrailhead ? trailhead : null,
       freshInstall: fresh, clearAppId: fresh ? targetApp : null,
     });

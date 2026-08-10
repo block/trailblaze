@@ -14,6 +14,7 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.commands.allDriverMatches
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
@@ -86,18 +87,46 @@ class AccessibilityTrailblazeAgent(
     )
 
   /**
+   * The base implementation dispatches one command at a time, which would let earlier commands
+   * of a batch execute before a later unsupported one fails conversion — and every tool call
+   * site ([xyz.block.trailblaze.toolcalls.MapsToMaestroCommands.execute],
+   * `MaestroTrailblazeTool`, etc.) lands here, not on [executeMaestroCommands]. Validate the
+   * whole batch up front (conversion is pure), then keep the base per-command dispatch: unlike
+   * the iOS twin's delegate-the-whole-batch approach, this preserves recorded ordering —
+   * [executeMaestroCommands] hoists launch commands within a batch, which would reorder a
+   * recording that launches an app after UI commands.
+   */
+  override suspend fun runMaestroCommands(
+    maestroCommands: List<Command>,
+    traceId: TraceId?,
+  ): TrailblazeToolResult {
+    convertBatchOrError(maestroCommands)?.let { return it }
+    return super.runMaestroCommands(maestroCommands, traceId)
+  }
+
+  /**
    * Processes Maestro commands, routing each to the appropriate execution path:
    * - [LaunchAppCommand] → ADB shell commands (app lifecycle is test setup, not UI interaction)
    * - All other commands → accessibility actions via [MaestroCommandConverter]
    *
-   * This is called by:
-   * - `MapsToMaestroCommands.execute()` when existing tools run through this agent
-   * - `MaestroTrailblazeAgent.runMaestroCommands()` for trail items containing Maestro commands
+   * Reached through [runMaestroCommands] above (whole-batch validation, then the base
+   * per-command loop lands here one command at a time).
    */
   override suspend fun executeMaestroCommands(
     commands: List<Command>,
     traceId: TraceId?,
   ): TrailblazeToolResult {
+    // Convert the batch's UI commands before ANY dispatch — including app launches — so an
+    // unconvertible command fails loudly before earlier commands execute side effects. A
+    // partially-run batch reporting Success is the bug this closes. Mirrors the iOS twin
+    // (IosDriverTrailblazeAgent.executeMaestroCommands).
+    val actions: List<AccessibilityAction>
+    try {
+      actions = MaestroCommandConverter.convertAll(uiCommandsOf(commands))
+    } catch (e: TrailblazeException) {
+      return conversionError(e)
+    }
+
     // Handle LaunchAppCommand via ADB shell commands, matching Maestro Orchestra behavior.
     // The accessibility driver replaces UI interactions (taps, swipes, text input), not test
     // setup operations like app lifecycle management and permission granting.
@@ -106,22 +135,11 @@ class AccessibilityTrailblazeAgent(
       executeLaunchAppViaAdb(launch)
     }
 
-    val uiCommands = commands.filter { it !is LaunchAppCommand && it !is ApplyConfigurationCommand }
-    if (uiCommands.isEmpty()) return TrailblazeToolResult.Success()
+    if (actions.isEmpty()) return TrailblazeToolResult.Success()
 
     Console.log(
-      "AccessibilityTrailblazeAgent: Converting ${uiCommands.size} Maestro command(s) to accessibility actions"
+      "AccessibilityTrailblazeAgent: Converted ${actions.size} accessibility action(s) from Maestro commands"
     )
-
-    val actions = MaestroCommandConverter.convertAll(uiCommands)
-    if (actions.isEmpty() && uiCommands.isNotEmpty()) {
-      val skippedTypes = uiCommands.map { it::class.simpleName }.distinct().joinToString(", ")
-      return TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage =
-          "All ${uiCommands.size} UI command(s) are unsupported by the accessibility driver " +
-            "and produced no actions. Unsupported types: $skippedTypes"
-      )
-    }
 
     return AccessibilityTrailRunner.runActions(
       actions = actions,
@@ -131,6 +149,29 @@ class AccessibilityTrailblazeAgent(
       deviceManager = deviceManager,
     )
   }
+
+  /** Commands the converter services — launches and config are handled outside the converter. */
+  private fun uiCommandsOf(commands: List<Command>): List<Command> =
+    commands.filter { it !is LaunchAppCommand && it !is ApplyConfigurationCommand }
+
+  /**
+   * Converts the batch's UI commands purely as validation, returning the loud failure result
+   * when any command is unsupported and null when the whole batch converts. Conversion is pure,
+   * so re-running it per command at dispatch time costs nothing observable.
+   */
+  private fun convertBatchOrError(commands: List<Command>): TrailblazeToolResult.Error? = try {
+    MaestroCommandConverter.convertAll(uiCommandsOf(commands))
+    null
+  } catch (e: TrailblazeException) {
+    conversionError(e)
+  }
+
+  private fun conversionError(e: TrailblazeException): TrailblazeToolResult.Error.ExceptionThrown =
+    TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = e.message ?: "Unsupported Maestro command on the accessibility driver",
+      // Distinguishes a converter bug from a genuinely-unsupported command in session logs.
+      stackTrace = e.stackTraceToString(),
+    )
 
   /**
    * Handles [LaunchAppCommand] via ADB shell commands, replicating Maestro Orchestra's behavior:

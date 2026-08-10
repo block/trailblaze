@@ -16,6 +16,10 @@ function setPendingRunSession(sessionId) { if (_pendingRun && sessionId) _pendin
 // started (e.g. the device couldn't be reached), instead of a marker that just vanishes.
 function failPendingRun(error) { if (_pendingRun) _pendingRun = { ..._pendingRun, error: error || 'Run failed to start' }; }
 
+// Mirrors TrailblazeRunner.DEFAULT_MAX_STEPS. Sending this value explicitly is equivalent to
+// sending nothing, so the UI omits it and lets the framework own the default.
+const DEFAULT_MAX_LLM_CALLS = 25;
+
 const API = {
   status: '/cli/status',
   sessions: '/trailrunner/api/sessions',

@@ -264,6 +264,18 @@ describe("run meta derivation", () => {
     expect(maxCalls.error).toContain("Tap Save");
   });
 
+  test("a heal the run recovered from cleanly still reports the self-heal", () => {
+    const selfHealLog = {
+      class: "xyz.block.trailblaze.logs.client.TrailblazeLog.SelfHealInvokedLog",
+      promptStep: { prompt: "Tap Save" },
+      session: SESSION_ID,
+      timestamp: "2026-06-30T20:22:00.000000Z",
+    };
+    const meta = Zip.buildRunMeta([startedLog(), selfHealLog, endedLog("Ended.Succeeded")], {});
+    expect(meta.status).toBe("passed");
+    expect(meta.selfHeal).toBe(true);
+  });
+
   test("running session (no Ended log) reads as running", () => {
     expect(Zip.buildRunMeta([startedLog()], {}).status).toBe("running");
   });

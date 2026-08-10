@@ -49,6 +49,7 @@ data class TapOnPointTrailblazeTool(
     // tool itself is NOT a DelegatingTrailblazeTool — the swap happens via
     // `recordedToolOverride` on the execution context. A follow-up converts this to proper
     // DelegatingTrailblazeTool dispatch.
+    var upgraded = false
     toolExecutionContext.screenState?.trailblazeNodeTree?.let { tree ->
       val res = TrailblazeNodeSelectorGenerator.resolveFromTap(tree, x, y)
       if (res != null && res.roundTripValid) {
@@ -91,9 +92,11 @@ data class TapOnPointTrailblazeTool(
             relativePoint = relativePoint,
             longPress = longPress,
           )
+          upgraded = true
         }
       }
     }
+    rawCoordinateTapWarning(upgraded, x, y)?.let { Console.log(it) }
 
     val result = super.execute(toolExecutionContext)
     if (result.isSuccess()) {
@@ -111,6 +114,19 @@ data class TapOnPointTrailblazeTool(
      * precisely. On a 200px element this is 1% — a deliberate off-center tap still registers.
      */
     private const val CENTER_TOLERANCE_PX = 2
+
+    /**
+     * Record-time diagnostic for a raw-coordinate tap that could NOT be selector-upgraded:
+     * null when [selectorUpgraded] (nothing to warn), else the author-facing warning line.
+     */
+    internal fun rawCoordinateTapWarning(selectorUpgraded: Boolean, x: Int, y: Int): String? =
+      if (selectorUpgraded) {
+        null
+      } else {
+        "### tapOnPoint: recorded a raw-coordinate tap at ($x, $y) with no element resolved at " +
+          "that point — the step is pinned to screen coordinates. It won't survive UI reflow, and " +
+          "the target is likely missing from the captured view tree. Prefer a selector-based tap."
+      }
 
     /**
      * Computes [offset]/[span] as a percent quantized to tenths, clamped to [0, 100], and

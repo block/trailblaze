@@ -299,7 +299,8 @@ class DeviceConnectionService(private val deviceManager: TrailblazeDeviceManager
         "Recording currently requires a Maestro-backed device; got ${connectedDevice::class.simpleName}",
       )
     val driver = maestroDevice.getMaestroDriver()
-    val stream = MaestroDeviceScreenStream(driver)
+    // instanceId is the Simulator UDID on this iOS path — enables the AXe tree overlay.
+    val stream = MaestroDeviceScreenStream(driver, iosUdid = maestroDevice.instanceId)
     val toolFactory = MaestroInteractionToolFactory(
       deviceWidth = stream.deviceWidth,
       deviceHeight = stream.deviceHeight,

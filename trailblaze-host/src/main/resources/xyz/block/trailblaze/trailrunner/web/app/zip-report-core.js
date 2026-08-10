@@ -168,6 +168,7 @@
   // ---- Layer 3: run meta (Kotlin: SessionInfo.kt + RunReportGenerator.sessionMetaJson) --------
 
   var STATUS_CHANGE_LOG_CLASS = 'xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeSessionStatusChangeLog';
+  var SELF_HEAL_LOG_CLASS = 'xyz.block.trailblaze.logs.client.TrailblazeLog.SelfHealInvokedLog';
   var STATUS_CLASS_PREFIX = 'xyz.block.trailblaze.logs.model.SessionStatus.';
   var MCP_TEST_CLASS_NAME = 'MCP';
 
@@ -182,6 +183,15 @@
       if (logs[i].class === STATUS_CHANGE_LOG_CLASS) return logs[i].sessionStatus;
     }
     return null; // SessionStatus.Unknown
+  }
+
+  // Mirrors SessionRecordingInfo.usedSelfHeal: a heal the run recovered from cleanly leaves the
+  // terminal status plain Succeeded, so this log is the only evidence it happened.
+  function usedSelfHeal(logs) {
+    for (var i = 0; i < logs.length; i++) {
+      if (logs[i].class === SELF_HEAL_LOG_CLASS) return true;
+    }
+    return false;
   }
 
   function getSessionStartedInfo(logs) {
@@ -317,7 +327,9 @@
     var error = failureReason(status);
     if (error) meta.error = error;
     var kind = statusKind(status);
-    if (kind === 'Ended.SucceededWithSelfHeal' || kind === 'Ended.FailedWithSelfHeal') meta.selfHeal = true;
+    if (kind === 'Ended.SucceededWithSelfHeal' || kind === 'Ended.FailedWithSelfHeal' || usedSelfHeal(logs)) {
+      meta.selfHeal = true;
+    }
     if (extras.recordingYaml != null) meta.recordingYaml = extras.recordingYaml;
     if (extras.originalYaml != null) meta.originalYaml = extras.originalYaml;
     meta.generatedAt = extras.generatedAt || new Date().toLocaleString();

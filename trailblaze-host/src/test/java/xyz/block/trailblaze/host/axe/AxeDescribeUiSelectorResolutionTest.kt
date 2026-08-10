@@ -75,6 +75,109 @@ class AxeDescribeUiSelectorResolutionTest {
     assertEquals(16 + 370 / 2 to 300 + 44 / 2, center, "tap center is the row's center, not screen center")
   }
 
+  // Real `axe describe-ui` capture (axe 1.8.0, iOS 18.5 simulator, system Contacts app) of the
+  // search-field subtree, verbatim, wrapped in the capture's own Application root fields. This
+  // is the node shape that broke the `hintTextRegex` bridge in CI: the empty search
+  // field carries its placeholder as AXValue with AXLabel null (newer runtimes mirror it onto
+  // AXLabel instead), help is null, and a decorative sibling Image carries AXLabel "Search".
+  private val contactsSearchDescribeUiJson = """
+    [
+      {
+        "AXFrame": "{{0, 0}, {402, 874}}",
+        "AXLabel": "Contacts",
+        "AXUniqueId": null,
+        "AXValue": null,
+        "content_required": false,
+        "custom_actions": [],
+        "enabled": true,
+        "frame": {"height": 874, "width": 402, "x": 0, "y": 0},
+        "help": null,
+        "pid": 81282,
+        "role": "AXApplication",
+        "role_description": "application",
+        "subrole": null,
+        "title": null,
+        "traits": [],
+        "type": "Application",
+        "children": [
+          {
+            "AXFrame": "{{16, 153.33333333333334}, {370, 36}}",
+            "AXLabel": null,
+            "AXUniqueId": null,
+            "AXValue": "Search",
+            "content_required": false,
+            "custom_actions": [],
+            "enabled": true,
+            "frame": {"height": 36, "width": 370, "x": 16, "y": 153.33333333333334},
+            "help": null,
+            "pid": 81282,
+            "role": "AXTextField",
+            "role_description": "search text field",
+            "subrole": "AXSearchField",
+            "title": null,
+            "traits": [],
+            "type": "TextField",
+            "children": [
+              {
+                "AXFrame": "{{360.66666666666669, 160.33333333333334}, {17.333333333333314, 22}}",
+                "AXLabel": "Dictate",
+                "AXUniqueId": "Dictate",
+                "AXValue": null,
+                "children": [],
+                "content_required": false,
+                "custom_actions": [],
+                "enabled": true,
+                "frame": {"height": 22, "width": 17.333333333333314, "x": 360.6666666666667, "y": 160.33333333333334},
+                "help": "Double-tap to start dictation. Double-tap with two fingers when finished.",
+                "pid": 81282,
+                "role": "AXButton",
+                "role_description": "button",
+                "subrole": null,
+                "title": null,
+                "traits": [],
+                "type": "Button"
+              },
+              {
+                "AXFrame": "{{22, 161.66666666666669}, {20.333333333333329, 18.666666666666657}}",
+                "AXLabel": "Search",
+                "AXUniqueId": "magnifyingglass",
+                "AXValue": null,
+                "children": [],
+                "content_required": false,
+                "custom_actions": [],
+                "enabled": true,
+                "frame": {"height": 18.666666666666657, "width": 20.33333333333333, "x": 22, "y": 161.66666666666669},
+                "help": null,
+                "pid": 81282,
+                "role": "AXImage",
+                "role_description": "image",
+                "subrole": null,
+                "title": null,
+                "traits": [],
+                "type": "Image"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  """.trimIndent()
+
+  @Test
+  fun `bridged hint selector resolves the iOS 18 search field carrying its placeholder as AXValue`() {
+    val tree = AxeJsonMapper.parse(contactsSearchDescribeUiJson)
+
+    val result = TrailblazeNodeSelectorResolver.resolve(
+      tree,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(hintTextRegex = "Search")),
+    )
+
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    val detail = assertIs<DriverNodeDetail.IosAxe>(result.node.driverDetail)
+    assertEquals("TextField", detail.type, "must resolve the search field, not the magnifying-glass Image")
+    assertEquals("AXSearchField", detail.subrole)
+  }
+
   @Test
   fun `bridged Maestro text selector also skips the Application root`() {
     val tree = AxeJsonMapper.parse(describeUiJson)

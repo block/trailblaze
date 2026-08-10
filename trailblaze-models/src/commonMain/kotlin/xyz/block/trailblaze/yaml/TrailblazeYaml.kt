@@ -281,9 +281,10 @@ class TrailblazeYaml internal constructor(
   }
 
   /**
-   * Version-aware trail decode. Legacy v1 input passes through as-is; unified
-   * input is lowered to the v1 shape using closest-wins resolution against
-   * [deviceClassifiers].
+   * Decode a trail to the lowered [TrailYamlItem] shape. The input must be the
+   * unified shape — a legacy v1 list-root file is rejected by
+   * [decodeTrailDocument] — and its steps are lowered using closest-wins
+   * resolution against [deviceClassifiers].
    *
    * **Guarded against silent LLM-mode fallback.** If the input is the unified
    * format and any step has a non-empty classifier recording but
@@ -303,7 +304,7 @@ class TrailblazeYaml internal constructor(
    *
    * Unified trails that have only `recordable: false` steps (no recordings to
    * lose) pass through with empty classifiers — there's nothing to silently
-   * drop. v1 input never trips the guard regardless of classifiers.
+   * drop.
    */
   fun decodeTrail(
     yaml: String,
@@ -514,8 +515,9 @@ class TrailblazeYaml internal constructor(
    * list of steps, the one key that makes the file a test).
    * See [docs/devlog/2026-05-22-trail-yaml-unified-syntax.md].
    *
-   * Throws on malformed input — callers that need version-agnostic parsing
-   * should use [decodeTrailDocument] instead.
+   * Throws on malformed input. [decodeTrailDocument] wraps this same result in a
+   * [TrailDocument]; there is no version-agnostic alternative — the legacy v1 list
+   * shape is no longer accepted.
    */
   fun decodeUnifiedTrail(yaml: String): UnifiedTrail {
     val rootNode = yamlInstance.parseToYamlNode(yaml)

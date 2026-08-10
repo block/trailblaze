@@ -11,7 +11,11 @@ import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -57,7 +61,7 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
   }
 
   private val server =
-    embeddedServer(CIO, port = port) {
+    embeddedServer(CIO, host = LOOPBACK_HOST, port = port) {
       install(ContentNegotiation) { json(TrailblazeJsonInstance) }
       routing {
         post("/rpc/{path...}") {
@@ -75,12 +79,110 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
       }
     }
 
+  /**
+   * Starts the server and returns only once [port] actually accepts a connection.
+   *
+   * This used to sleep a flat 300ms and return regardless of whether the bind had landed — a
+   * wall-clock guess a loaded CI agent can outrun, leaving the first request of a test racing a
+   * server that isn't listening yet. Polling an observable condition removes the guess.
+   *
+   * [awaitListening] is a *port* probe, not an identity probe: a foreign listener already on [port]
+   * would satisfy it. That gap is closed by `start(wait = false)` itself, which propagates a failed
+   * bind to this caller rather than returning (measured). Don't reach for `resolvedConnectors()` as a
+   * stronger gate here: on a failed bind it never completes (measured: no answer in 5s), so it would
+   * turn a loud failure into a hang. It isn't covered by a test on purpose — see the test class doc.
+   */
   fun start() {
     server.start(wait = false)
-    Thread.sleep(300)
+    check(awaitListening(port, isListening = true)) {
+      "MockRpcServer never started listening on port $port within ${PORT_STATE_TIMEOUT_MS}ms"
+    }
   }
 
+  /** The address the engine actually bound, so a test can assert the bind is loopback-only. */
+  internal fun boundHosts(): List<String> = runBlocking {
+    server.engine.resolvedConnectors().map { it.host }
+  }
+
+  /**
+   * Stops the server and returns only once [port] has stopped accepting connections.
+   *
+   * The wait is the half that made a whole test class fall over: `stop()` used to return as soon as
+   * Ktor's own 500ms shutdown bound elapsed, so the next test's [start] could race a listener that
+   * was still up and take a `BindException` — which surfaces on a server thread, so the test failed
+   * later and unrecognizably (an `UninitializedPropertyAccessException` in `tearDown`).
+   */
   fun stop() {
-    server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
+    server.stop(gracePeriodMillis = 0, timeoutMillis = STOP_GRACE_TIMEOUT_MS)
+    check(awaitListening(port, isListening = false)) {
+      "MockRpcServer was still listening on port $port ${PORT_STATE_TIMEOUT_MS}ms after stop()"
+    }
+  }
+
+  companion object {
+
+    /**
+     * Bind loopback-only rather than the wildcard `0.0.0.0` Ktor defaults to.
+     *
+     * [port] is a hash of the device id inside Trailblaze's device-port range (52530-59529), which
+     * sits inside the OS ephemeral range (49152-65535 on macOS, 32768-60999 on Linux). So any
+     * unrelated *outbound* connection on the machine can be assigned this port as its source port,
+     * and a wildcard bind then fails with `BindException` through no fault of any test. Measured
+     * directly: with a VPN tunnel holding `100.96.155.178:54782` as an outbound source port,
+     * binding `0.0.0.0:54782` fails while `127.0.0.1:54782` succeeds — an outbound socket's source
+     * is the egress interface address, never loopback.
+     *
+     * Narrowing the bind loses nothing: `0.0.0.0` is the IPv4 wildcard, so every client that
+     * reaches this fixture today (`http://localhost:$port` via `OnDeviceRpcClient`, `127.0.0.1`
+     * directly in tests) is already arriving over IPv4 loopback.
+     */
+    private const val LOOPBACK_HOST = "127.0.0.1"
+
+    /**
+     * Hang containment, not a performance bound. Reaching either port state takes milliseconds in
+     * practice; this only exists so a genuinely wedged bind fails the test with an attributable
+     * message instead of parking forever. Deliberately generous — a tight bound here would
+     * reintroduce exactly the CI timing flake this fixture was fixed to remove.
+     */
+    private const val PORT_STATE_TIMEOUT_MS = 60_000L
+
+    /** Ktor's own shutdown bound. Separate from [PORT_STATE_TIMEOUT_MS], which covers the result. */
+    private const val STOP_GRACE_TIMEOUT_MS = 5_000L
+
+    private const val POLL_INTERVAL_MS = 25L
+
+    /** Connect timeout per probe. Loopback either answers immediately or isn't listening. */
+    private const val PROBE_CONNECT_TIMEOUT_MS = 250
+
+    /**
+     * Polls [port] on loopback until it is (or is not) accepting connections, per [isListening].
+     *
+     * Returns false if the state wasn't reached within [timeoutMs] — callers turn that into an
+     * attributable failure. Extracted and `internal` so the wait itself is directly unit-testable
+     * against a hand-controlled [java.net.ServerSocket], with no Ktor server involved.
+     */
+    internal fun awaitListening(
+      port: Int,
+      isListening: Boolean,
+      timeoutMs: Long = PORT_STATE_TIMEOUT_MS,
+    ): Boolean {
+      val deadline = System.nanoTime() + timeoutMs * 1_000_000
+      while (true) {
+        if (probeListening(port) == isListening) return true
+        if (System.nanoTime() >= deadline) return false
+        Thread.sleep(POLL_INTERVAL_MS)
+      }
+    }
+
+    /** True when something accepts a loopback connection on [port]. */
+    private fun probeListening(port: Int): Boolean =
+      try {
+        Socket().use {
+          it.connect(InetSocketAddress(LOOPBACK_HOST, port), PROBE_CONNECT_TIMEOUT_MS)
+          true
+        }
+      } catch (_: IOException) {
+        false
+      }
   }
 }

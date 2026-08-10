@@ -104,6 +104,115 @@ class PlanActionClickRouteTest {
   }
 
   @Test
+  fun `routes to ACTION_CLICK for a checked option row whose label lives on a child node`() {
+    // An unmerged-semantics option row: the node owns the checked state but not the label, so
+    // it fails the leaf-text check while being exactly the shape ACTION_CLICK handles best.
+    // A Compose `selectable` row surfaces this way — `android.view.View` carrying
+    // isCheckable/isChecked, with the label on a child text node — so a
+    // `{containsChild: {textRegex: "<label>"}}` selector resolves to the textless parent.
+    val plan = planActionClickRoute(
+      node = node(
+        bounds = TrailblazeNode.Bounds(40, 1720, 1040, 1860),
+        detail = androidA11y(
+          className = "android.view.View",
+          actions = listOf(ACTION_CLICK_NAME),
+          isCheckable = true,
+          isChecked = true,
+        ),
+      ),
+      longPress = false,
+    )
+    assertEquals(
+      ActionClickPlan(
+        bounds = TrailblazeNode.Bounds(40, 1720, 1040, 1860),
+        className = "android.view.View",
+        resourceId = null,
+      ),
+      plan,
+      "A checkable node publishing its state must keep ACTION_CLICK even with no text of its own.",
+    )
+  }
+
+  @Test
+  fun `routes to ACTION_CLICK for an unchecked option row that publishes a stateDescription`() {
+    // The other half of the population: a not-currently-selected row reports isChecked=false but
+    // still advertises its state via stateDescription. Every textless checkable node in the
+    // committed downstream android waypoint fixtures carries "Selected" or "Not selected" this
+    // way, so gating on isChecked alone would send the unselected ones back to gesture.
+    val plan = planActionClickRoute(
+      node = node(
+        bounds = TrailblazeNode.Bounds(40, 1720, 1040, 1860),
+        detail = androidA11y(
+          className = "android.view.View",
+          actions = listOf(ACTION_CLICK_NAME),
+          isCheckable = true,
+          isChecked = false,
+          stateDescription = "Not selected",
+        ),
+      ),
+      longPress = false,
+    )
+    assertEquals(
+      ActionClickPlan(
+        bounds = TrailblazeNode.Bounds(40, 1720, 1040, 1860),
+        className = "android.view.View",
+        resourceId = null,
+      ),
+      plan,
+      "An unselected option row that publishes stateDescription still qualifies.",
+    )
+  }
+
+  @Test
+  fun `declines a checkable container that publishes no checked state`() {
+    // The exemption's justification is that ACTION_CLICK toggles a node which owns the state it
+    // claims. A textless container that sets isCheckable but reports neither isChecked nor a
+    // stateDescription has made no such claim, and its real handler may sit elsewhere. An
+    // accordion option row is this shape: ACTION_CLICK selects the option while only a real
+    // touch expands the row holding the sub-options, so a recorded follow-up tap on a
+    // sub-option finds nothing.
+    val plan = planActionClickRoute(
+      node = node(
+        bounds = TrailblazeNode.Bounds(80, 1115, 1000, 1260),
+        detail = androidA11y(
+          className = "android.view.View",
+          actions = listOf(ACTION_CLICK_NAME),
+          isCheckable = true,
+        ),
+      ),
+      longPress = false,
+    )
+    assertNull(
+      plan,
+      "A stateless checkable container must use the gesture path like any other wrapper.",
+    )
+  }
+
+  @Test
+  fun `checkable exemption does not bypass the other gate conditions`() {
+    // The exemption is scoped to the leaf-text check alone. A checkable node that fails a
+    // different condition must still decline — here `isVisibleToUser=false`, the overlay gate,
+    // where ACTION_CLICK would bypass the OS hit-test's z-order and fire an occluded node.
+    val plan = planActionClickRoute(
+      node = node(
+        bounds = TrailblazeNode.Bounds(40, 1720, 1040, 1860),
+        detail = androidA11y(
+          className = "android.view.View",
+          actions = listOf(ACTION_CLICK_NAME),
+          isCheckable = true,
+          isChecked = true,
+          isVisibleToUser = false,
+        ),
+      ),
+      longPress = false,
+    )
+    assertNull(
+      plan,
+      "Checkable only exempts the leaf-text check — every other condition still gates.",
+    )
+  }
+
+  @Test
   fun `routes to ACTION_CLICK when node has both text and contentDescription`() {
     // The most common real-world shape: `<ImageButton android:contentDescription="…"/>`
     // with explicit text, or a Compose `Button { Text("Save") }` whose merged-semantics node
@@ -307,6 +416,9 @@ class PlanActionClickRouteTest {
     isEnabled: Boolean = true,
     isEditable: Boolean = false,
     isVisibleToUser: Boolean = true,
+    isCheckable: Boolean = false,
+    isChecked: Boolean = false,
+    stateDescription: String? = null,
   ): DriverNodeDetail.AndroidAccessibility = DriverNodeDetail.AndroidAccessibility(
     className = className,
     resourceId = resourceId,
@@ -316,5 +428,8 @@ class PlanActionClickRouteTest {
     isEnabled = isEnabled,
     isEditable = isEditable,
     isVisibleToUser = isVisibleToUser,
+    isCheckable = isCheckable,
+    isChecked = isChecked,
+    stateDescription = stateDescription,
   )
 }

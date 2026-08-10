@@ -3,10 +3,12 @@ package xyz.block.trailblaze.android.accessibility
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import maestro.device.DeviceOrientation
 import maestro.ScrollDirection
 import maestro.orchestra.AirplaneValue
+import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.ScrollUntilVisibleCommand
@@ -22,11 +24,15 @@ import xyz.block.trailblaze.api.DriverNodeMatch
  */
 class MaestroCommandConverterDeviceSettingsTest {
 
+  /** Unwraps a supported command's conversion, failing the test if it reads as unsupported. */
+  private fun convert(command: Command): List<AccessibilityAction> =
+    assertNotNull(MaestroCommandConverter.convert(command))
+
   @Test
   fun `converts OpenLinkCommand to OpenLink action`() {
     val command = OpenLinkCommand(link = "https://example.com/deep-link")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.OpenLink>(actions.single())
@@ -37,7 +43,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `converts SetOrientationCommand portrait to rotation 0`() {
     val command = SetOrientationCommand(orientation = DeviceOrientation.PORTRAIT)
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetOrientation>(actions.single())
@@ -48,7 +54,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `converts SetOrientationCommand landscape_left to rotation 1`() {
     val command = SetOrientationCommand(orientation = DeviceOrientation.LANDSCAPE_LEFT)
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetOrientation>(actions.single())
@@ -59,7 +65,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `converts SetAirplaneModeCommand enable`() {
     val command = SetAirplaneModeCommand(value = AirplaneValue.Enable)
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetAirplaneMode>(actions.single())
@@ -70,7 +76,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `converts SetAirplaneModeCommand disable`() {
     val command = SetAirplaneModeCommand(value = AirplaneValue.Disable)
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.SetAirplaneMode>(actions.single())
@@ -81,7 +87,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `converts ToggleAirplaneModeCommand`() {
     val command = ToggleAirplaneModeCommand()
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     assertIs<AccessibilityAction.ToggleAirplaneMode>(actions.single())
@@ -98,7 +104,7 @@ class MaestroCommandConverterDeviceSettingsTest {
       centerElement = false,
     )
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertEquals(1, actions.size)
     val action = assertIs<AccessibilityAction.ScrollUntilVisible>(actions.single())
@@ -113,7 +119,7 @@ class MaestroCommandConverterDeviceSettingsTest {
   fun `TakeScreenshotCommand produces no actions`() {
     val command = TakeScreenshotCommand(path = "/tmp/screenshot.png")
 
-    val actions = MaestroCommandConverter.convert(command)
+    val actions = convert(command)
 
     assertTrue(actions.isEmpty())
   }

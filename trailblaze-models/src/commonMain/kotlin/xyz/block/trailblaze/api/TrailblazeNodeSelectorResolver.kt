@@ -22,7 +22,7 @@ object TrailblazeNodeSelectorResolver {
   /** Maximum nesting depth for recursive resolve() calls (spatial/hierarchy selectors). */
   private const val MAX_RESOLVE_DEPTH = 10
 
-  /** XCUIElementType names whose AXLabel carries the placeholder while the field is empty. */
+  /** XCUIElementType names whose AXLabel/AXValue carries the placeholder while the field is empty. */
   private val IOS_TEXT_INPUT_TYPES = setOf("TextField", "SecureTextField", "SearchField", "TextView")
 
   /**
@@ -440,7 +440,9 @@ object TrailblazeNodeSelectorResolver {
    *   actually carry (see [MAESTRO_IOS_CLASS_ALIASES]): Maestro's iOS tree reports the *label
    *   view* (`LabelView`, `UILabel`, `UIButtonLabel`, `UITextFieldLabel`) where AXe reports the
    *   semantic element (`StaticText`, `Button`, `TextField`).
-   * - `hintText` matches `.help`.
+   * - `hintText` matches `.help`, or — on text-input types only — `.label`/`.value`, the
+   *   properties iOS actually mirrors a placeholder onto (version-dependent; see the
+   *   `hintTextRegex` branch below).
    *
    * Uses [MatchDialect.MAESTRO] throughout: the selector was authored under Maestro's lenient
    * semantics, and that's what it should still mean here.
@@ -493,12 +495,20 @@ object TrailblazeNodeSelectorResolver {
     }
     match.hintTextRegex?.let { pattern ->
       // iOS surfaces a text input's placeholder (Maestro's hintText / XCUITest's
-      // placeholderValue) as AXLabel, not AXHelp — so accept label too, but only on
+      // placeholderValue) on the input element itself, not on AXHelp — but WHICH
+      // property carries it varies by AXe/iOS version: newer runtimes expose the
+      // placeholder on AXLabel, while older ones leave AXLabel null and surface it
+      // only as the empty field's AXValue (the Contacts search field: label=null,
+      // value="Search"). Accept help, plus label OR value — the latter two only on
       // text-input types so a decorative node whose label happens to equal the hint
-      // (e.g. a magnifying-glass Image labeled "Search") can't false-match.
+      // (e.g. a magnifying-glass Image labeled "Search") can't
+      // false-match. Empty fields only: once the field has text, AXValue is the typed
+      // text and AXLabel stays null on older runtimes, so a hint~ lookup of that same
+      // field won't match there. Nothing in the AXe tree still carries the placeholder.
       val matchesHelp = requirePattern(pattern, detail.help, dialect)
       val matchesPlaceholder =
-        detail.type in IOS_TEXT_INPUT_TYPES && requirePattern(pattern, detail.label, dialect)
+        detail.type in IOS_TEXT_INPUT_TYPES &&
+          matchesAnyPattern(pattern, dialect, detail.label, detail.value)
       if (!matchesHelp && !matchesPlaceholder) return false
     }
 

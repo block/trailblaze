@@ -10,6 +10,13 @@ package xyz.block.trailblaze.api
 fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
   val b = this.bounds
 
+  // Derived from the same integer bounds as TrailblazeNode.centerPoint(), so ref → node
+  // mapping by center point is exact. Intentionally set despite ViewHierarchyTreeNode KDoc
+  // preferring x1/y1/x2/y2: CenterPointMatcher, tap tools, and selector strategies read this
+  // string field directly (see the same note in Ext.toViewHierarchyTreeNode). Do not remove
+  // until those consumers are migrated to use bounds.
+  val centerPoint = b?.let { "${it.centerX},${it.centerY}" }
+
   return when (val detail = driverDetail) {
     is DriverNodeDetail.IosMaestro -> ViewHierarchyTreeNode(
       nodeId = nodeId,
@@ -17,6 +24,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -39,6 +47,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -60,6 +69,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -81,6 +91,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.ariaRole,
       text = detail.ariaName,
       children = children.map { it.toViewHierarchyTreeNode() },
@@ -91,6 +102,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.role,
       resourceId = detail.testTag,
       text = detail.text ?: detail.editableText,
@@ -107,6 +119,7 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       y1 = b?.top ?: 0,
       x2 = b?.right ?: 0,
       y2 = b?.bottom ?: 0,
+      centerPoint = centerPoint,
       className = detail.type,
       resourceId = detail.uniqueId,
       text = detail.label,

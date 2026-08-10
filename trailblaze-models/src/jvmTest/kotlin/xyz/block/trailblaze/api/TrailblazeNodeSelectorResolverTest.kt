@@ -1060,6 +1060,29 @@ class TrailblazeNodeSelectorResolverTest {
   }
 
   @Test
+  fun `IosMaestro bridge - hintTextRegex matches a text input's placeholder-as-value`() {
+    nextId = 1L
+    // Older iOS runtimes (18.x — the CI fleet) leave an empty text field's AXLabel null and
+    // surface the placeholder as AXValue instead (the Contacts search field: label=null,
+    // value="Search", help=null). The type gate still keeps the decorative magnifying-glass
+    // Image (label="Search") — or one carrying the hint as its VALUE — from false-matching.
+    val searchField = nodeOf(detail = DriverNodeDetail.IosAxe(type = "TextField", value = "Search"))
+    val searchIcon = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Image", label = "Search"))
+    val valueDecoy = nodeOf(detail = DriverNodeDetail.IosAxe(type = "Image", value = "Search"))
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosAxe(),
+      children = listOf(searchIcon, valueDecoy, searchField),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(hintTextRegex = "Search"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(searchField.nodeId, result.node.nodeId)
+  }
+
+  @Test
   fun `IosMaestro bridge - MAESTRO dialect is case-insensitive`() {
     nextId = 1L
     val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Log In"))

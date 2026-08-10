@@ -594,6 +594,7 @@ open class CliReportGenerator {
       session_id = sessionId,
       title = title,
       test_key = sessionInfo.stableTestKey,
+      metadata = sessionInfo.trailConfig?.metadata,
       test_class = sessionInfo.testClass?.takeIf { it.isNotBlank() },
       test_name = sessionInfo.testName?.takeIf { it.isNotBlank() },
       platform = platform,

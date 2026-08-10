@@ -245,8 +245,10 @@ class CheckCommand : Callable<Int> {
     // by default when a NON-exempt target has findings or can't be validated; per-target
     // `trail_validation.exempt` (in trailmap.yaml) and a central transitional allow-list opt targets
     // out. Opt out of the whole phase with TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION=1.
-    // Infrastructure problems inside the phase stay non-fatal (skip + log) — only genuine findings
-    // flip the exit code. See [TrailTscValidator].
+    // Infrastructure problems inside the phase stay non-fatal (skip + log) with ONE exception: a
+    // missing bundled tsc payload is fatal, because it can only mean the JAR was built without its
+    // tsc resources. Treating that as a skip is what let this phase vanish from green mainline
+    // builds. See [runTrailRecordingValidationPhase] and [TrailTscValidator].
     val validationExit = if (isTrailRecordingValidationDisabled()) {
       EXIT_OK
     } else {
@@ -660,6 +662,34 @@ class CheckCommand : Callable<Int> {
    * that has no `tools/tsconfig.json` to pin the phase's `"trailblaze check: ..."`
    * stderr prefix against accidental drift back to `"trailblaze typecheck:"`.
    */
+  /**
+   * What the trail-recording validation phase can do with the handles it resolved.
+   *
+   * The two unavailable cases are deliberately NOT interchangeable: a missing tsc payload means the
+   * framework JAR was built wrong (fatal), while a missing `bun` is a property of the machine (skip).
+   * [Ready] carries the handles so the caller needs no re-assertion that they are non-null.
+   */
+  internal sealed interface TrailRecordingPreflight {
+    data class Ready(val tscJs: Path, val jsRuntime: String) : TrailRecordingPreflight
+
+    object MissingTscPayload : TrailRecordingPreflight
+
+    object MissingJsRuntime : TrailRecordingPreflight
+  }
+
+  /**
+   * Pure classification of the phase's preconditions.
+   *
+   * Payload-missing outranks runtime-missing: a JAR without tsc is a build defect worth surfacing
+   * even on a host that also has no `bun`.
+   */
+  internal fun trailRecordingPreflight(tscJs: Path?, jsRuntime: String?): TrailRecordingPreflight =
+    when {
+      tscJs == null -> TrailRecordingPreflight.MissingTscPayload
+      jsRuntime == null -> TrailRecordingPreflight.MissingJsRuntime
+      else -> TrailRecordingPreflight.Ready(tscJs, jsRuntime)
+    }
+
   /** True when `TRAILBLAZE_DISABLE_TRAIL_RECORDING_VALIDATION` is set to `1`/`true` (case-insensitive). */
   private fun isTrailRecordingValidationDisabled(): Boolean {
     val v = System.getenv(TrailTscValidator.DISABLE_ENV_VAR)?.trim()?.lowercase()
@@ -673,28 +703,45 @@ class CheckCommand : Callable<Int> {
    * target that can't be validated at all. Everything else returns [EXIT_OK]:
    *  - Findings on exempt targets and missing surfaces for exempt targets are reported but non-fatal
    *    (the validator computes this).
-   *  - Infrastructure problems (bun/tsc missing) and any unexpected exception in the phase are
-   *    logged and treated as non-fatal, so a transient environment issue can't spuriously fail a
-   *    build — the typecheck phase already gated bun/tsc presence upstream.
+   *  - A missing `bun` and any unexpected exception in the phase are logged and treated as
+   *    non-fatal, so a transient environment issue can't spuriously fail a build.
+   *  - A missing bundled tsc payload is [EXIT_OPERATIONAL_ERROR], NOT a skip. It can only mean the
+   *    JAR was built without its tsc resources, and skipping it is how an entire phase disappeared
+   *    from green mainline builds: the upstream gate in [runTypecheckPhase] is bypassed by
+   *    `--no-typecheck`, which is exactly what the CI step invoking this runs.
    *
    * See [TrailTscValidator] for the exemption model and [buildTrailValidationManifestContext] for
    * how the exemption set and known-manifest set are assembled.
    */
-  private fun runTrailRecordingValidationPhase(
+  internal fun runTrailRecordingValidationPhase(
     workspaceRoot: File,
     trailmaps: List<Path>,
     allWorkspaceScope: Boolean,
+    // Injected so the fatal-vs-skip split is testable on the real phase. Driving the payload-missing
+    // branch through the production resolver would mean hiding a JAR resource from the test
+    // classpath, which is why that branch went unguarded long enough to hide the whole phase from
+    // green mainline builds. Defaults are the production resolvers.
+    extractTscJs: (Path) -> Path? = { WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = it) },
+    resolveRuntime: () -> String? = { resolveJsRuntime() },
   ): Int {
     return try {
       val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
-      val tscJs = WorkspaceTypeScriptSetup.extractTypecheck(workspaceRoot = trailsRoot)
-      val jsRuntime = resolveJsRuntime()
-      if (tscJs == null || jsRuntime == null) {
-        Console.error(
-          "trailblaze check: trail-recording validation skipped — " +
-            (if (jsRuntime == null) "bun not on PATH" else "bundled tsc payload missing") + ".",
-        )
-        return EXIT_OK
+      val ready = when (val preflight = trailRecordingPreflight(extractTscJs(trailsRoot), resolveRuntime())) {
+        TrailRecordingPreflight.MissingTscPayload -> {
+          Console.error(
+            "trailblaze check: trail-recording validation could not run — the framework JAR did not " +
+              "ship a bundled tsc payload. If you built the framework from source, rebuild (the " +
+              "JAR's tsc resources are staged by " +
+              "`:trailblaze-host:copyTypescriptCompilerResources`); pre-built distributions always " +
+              "ship tsc.",
+          )
+          return EXIT_OPERATIONAL_ERROR
+        }
+        TrailRecordingPreflight.MissingJsRuntime -> {
+          Console.error("trailblaze check: trail-recording validation skipped — bun not on PATH.")
+          return EXIT_OK
+        }
+        is TrailRecordingPreflight.Ready -> preflight
       }
       // Fold in the validation surfaces the compile phase materialized for classpath-bundled
       // trailmaps (app-bundled targets like `square` that have no workspace `tools/` dir of their
@@ -719,8 +766,8 @@ class CheckCommand : Callable<Int> {
       val report = TrailTscValidator.validate(
         trailsRoot = trailsRoot.toFile(),
         trailmaps = trailmaps + classpathSurfaces,
-        jsRuntime = jsRuntime,
-        tscJs = tscJs,
+        jsRuntime = ready.jsRuntime,
+        tscJs = ready.tscJs,
         exemptTargets = manifestContext.exemptTargets,
         // Every target with a reachable manifest — a trail whose target: is absent here has no
         // manifest at all and is reported as a permanent skip, not a fatal missing surface.

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.PlatformConfig
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
@@ -527,6 +528,7 @@ object TrailblazeProjectConfigLoader {
     // out entirely (atomic-per-trailmap), but doesn't take siblings down with it.
     val resolvedTrailmaps = mutableListOf<ResolvedTrailmap>()
     val recoveredWaypoints = mutableListOf<WaypointDefinition>()
+    val recoveredToolsets = mutableListOf<ToolSetYamlConfig>()
     loadedById.values.forEach { loadedManifest ->
       try {
         resolvedTrailmaps += resolveTrailmapSiblings(loadedManifest, scriptedToolEnrichment)
@@ -536,15 +538,17 @@ object TrailblazeProjectConfigLoader {
           "Warning: Failed to resolve trailmap '${loadedManifest.manifest.id}' " +
             "from ${loadedManifest.source.describe()}: ${e.message}$causeHint",
         )
-        // Recover waypoints ONLY for the classpath scripted-tool skip — the one failure that's a
-        // by-product of the uber-JAR runtime, not an authoring mistake. Every other
-        // TrailblazeProjectConfigException (missing system_prompt_file, missing toolset, invalid
-        // operational tool YAML, …) keeps the atomic-per-trailmap contract: the trailmap drops
-        // whole, waypoints included. The runCatching guard still applies so a malformed-waypoint
-        // trailmap recovers nothing.
+        // Recover waypoints AND trailmap-local toolsets ONLY for the classpath scripted-tool skip —
+        // both are trailmap-local declarations independent of the failing `target.tools:`, so the
+        // recoverable-exception contract keeps them (see ClasspathScriptedToolUnavailableException).
+        // Every other TrailblazeProjectConfigException (missing system_prompt_file, missing toolset
+        // ref, invalid operational tool YAML, …) keeps the atomic-per-trailmap drop. The runCatching
+        // guards still apply so a malformed sibling recovers nothing.
         if (e is ClasspathScriptedToolUnavailableException) {
           recoveredWaypoints +=
             runCatching { discoverTrailmapWaypoints(loadedManifest) }.getOrDefault(emptyList())
+          recoveredToolsets +=
+            runCatching { discoverTrailmapToolsets(loadedManifest) }.getOrDefault(emptyList())
         }
       }
     }
@@ -599,6 +603,7 @@ object TrailblazeProjectConfigLoader {
       logResolvedTrailmapMarker(trailmap)
     }
     waypoints += recoveredWaypoints
+    toolsets += recoveredToolsets
 
     return ResolvedTrailmapArtifacts(
       successfulTargetIds = successfulTargetIds,
@@ -880,8 +885,7 @@ object TrailblazeProjectConfigLoader {
         resolvedSystemPrompt = resolvedSystemPrompt,
       )
       ?.let { config -> if (rewrittenPlatforms != null) config.copy(platforms = rewrittenPlatforms) else config }
-    val resolvedToolsets = loadedManifest.manifest.toolsets
-      .map { path -> loadTrailmapSibling(path, loadedManifest.source, ToolSetYamlConfig.serializer(), "trailmap toolset") }
+    val resolvedToolsets = discoverTrailmapToolsets(loadedManifest)
 
     // Operational tool YAMLs auto-discovered from three sibling directories, one per
     // operational class:
@@ -956,6 +960,20 @@ object TrailblazeProjectConfigLoader {
     }
   }
 
+  /**
+   * Toolset resolution, extracted from [resolveTrailmapSiblings] so a `target.tools:` resolution
+   * failure inside that method can't take a trailmap's trailmap-local toolsets down with it — the
+   * Step-4 catch in [resolveRuntime] re-runs this best-effort to pool the toolsets anyway, the same
+   * way [discoverTrailmapWaypoints] recovers waypoints. Toolsets are orthogonal to trailmap type, so
+   * (unlike waypoints) there's no library-trailmap guard here.
+   */
+  private fun discoverTrailmapToolsets(
+    loadedManifest: LoadedTrailblazeTrailmapManifest,
+  ): List<ToolSetYamlConfig> =
+    loadedManifest.manifest.toolsets.map { path ->
+      loadTrailmapSibling(path, loadedManifest.source, ToolSetYamlConfig.serializer(), "trailmap toolset")
+    }
+
   /** `_meta` key (post-shortcut-merge) that carries a scripted tool's supported platforms. */
   private const val META_SUPPORTED_PLATFORMS = "trailblaze/supportedPlatforms"
 
@@ -965,9 +983,15 @@ object TrailblazeProjectConfigLoader {
    * no analyzer-enriched config). Mirrors the build-time generator's `resolveScriptedToolByName`.
    *
    * Analyzer-enriched descriptors (meta-only / partial) ride [ScriptedToolRegistryEntry.enrichedConfig];
-   * otherwise the typed descriptor is expanded and filtered to the matching entry. Relative `script:`
-   * paths are resolved against the descriptor YAML's parent directory for filesystem-backed trailmaps
-   * (the only variant the runtime bundler reads today); classpath-backed sources pass through unchanged.
+   * otherwise the typed descriptor is expanded and filtered to the matching entry.
+   *
+   * A descriptor-relative `script:` is rewritten into a form the runtime can actually open, per
+   * source variant: filesystem-backed trailmaps absolutize against the descriptor YAML's parent
+   * directory, classpath-backed trailmaps anchor onto the trailmap's classpath resource directory
+   * ([anchorClasspathScriptedToolSource]). Both variants need it — passing the raw relative path
+   * through on the classpath variant left every downstream consumer resolving `./<tool>.ts` against
+   * the JVM working directory, so a workspace consuming a JAR-bundled trailmap lost every trail at
+   * session start with `Scripted-tool source not found: <workspace>/./<tool>.ts`.
    */
   private fun resolveScriptedToolConfigsByName(
     toolName: String,
@@ -990,17 +1014,75 @@ object TrailblazeProjectConfigLoader {
         "'$toolName' but its decoded config(s) name no entry that matches — registry/descriptor " +
         "name index has drifted. This is a logic bug in the trailmap loader, not an author error."
     }
-    return if (source is TrailmapSource.Filesystem) {
-      val yamlDir = File(source.trailmapDir, match.relativePath).parentFile ?: source.trailmapDir
-      configs.map { cfg ->
-        val raw = File(cfg.script)
-        if (raw.isAbsolute) cfg else cfg.copy(
-          script = File(yamlDir, cfg.script).toPath().normalize().toFile().absolutePath,
-        )
+    return when (source) {
+      is TrailmapSource.Filesystem -> {
+        val yamlDir = File(source.trailmapDir, match.relativePath).parentFile ?: source.trailmapDir
+        configs.map { cfg ->
+          val raw = File(cfg.script)
+          if (raw.isAbsolute) cfg else cfg.copy(
+            script = File(yamlDir, cfg.script).toPath().normalize().toFile().absolutePath,
+          )
+        }
       }
-    } else {
-      configs
+      is TrailmapSource.Classpath -> configs.map { cfg ->
+        anchorClasspathScriptedToolSource(cfg, source, match.relativePath)
+      }
     }
+  }
+
+  /**
+   * Classpath counterpart to the filesystem `script:` absolutization in
+   * [resolveScriptedToolConfigsByName]: rewrite a descriptor-relative `script:` (`./<tool>.ts`)
+   * into the trailmap's own classpath resource path, e.g.
+   * `trails/config/trailmaps/<id>/tools/<tool>.ts`.
+   *
+   * That anchored form is the one every downstream consumer already knows how to read — the host
+   * launcher's classpath extraction (`HostScriptedToolLauncher.resolveScriptFile`), the precompiled
+   * `.bundle.js` lookup, and the on-device asset lookup (both via
+   * [ScriptedToolNameDiscoverer.bundleResourcePathForScript]) all key off the
+   * `trails/config/trailmaps/` segment and find nothing without it.
+   *
+   * Two shapes pass through untouched. A `script:` that already carries that segment is a
+   * build-time-baked target entry ([loadBakedClasspathTargetTools]) whose repo-relative prefix the
+   * launcher strips itself. A `script:` [resolveDescriptorScriptToTrailmapRelative] can't reduce to
+   * a trailmap-relative path (blank, absolute, escaping the trailmap root) isn't a sibling
+   * reference at all, and carries its own downstream diagnostic.
+   *
+   * @throws ClasspathScriptedToolUnavailableException when the declared source is genuinely absent
+   *   from the bundle — neither the `.ts` nor its precompiled `.bundle.js` is on the classpath, so no
+   *   route can serve the tool. This is the recoverable subtype (a jar-packaging by-product, not an
+   *   authoring mistake), so the per-trailmap catch drops only this target and keeps the trailmap's
+   *   waypoints/toolsets. Anchoring it silently would only defer the failure to a bundler error
+   *   naming a working-directory path instead of the tool, its descriptor, and its trailmap.
+   */
+  private fun anchorClasspathScriptedToolSource(
+    cfg: InlineScriptToolConfig,
+    source: TrailmapSource.Classpath,
+    descriptorRelativePath: String,
+  ): InlineScriptToolConfig {
+    if (cfg.script.replace('\\', '/').contains("${TrailblazeConfigPaths.TRAILMAPS_DIR}/")) return cfg
+    val trailmapRelative =
+      resolveDescriptorScriptToTrailmapRelative(descriptorRelativePath, cfg.script) ?: return cfg
+    val resourcePath = "${source.resourceDir}/$trailmapRelative"
+    // Containment is already settled: `resolveDescriptorScriptToTrailmapRelative` rejects anything
+    // that normalizes outside the trailmap root, so this probe can go straight at the classpath.
+    // The `.bundle.js` leg matters because the esbuild-absent route (an installed uber-JAR daemon)
+    // serves a tool from its precompiled bundle and never opens the `.ts` — a jar that ships only
+    // bundles is missing nothing.
+    if (!ClasspathResourceDiscovery.resourceExists(resourcePath) &&
+      !ClasspathResourceDiscovery.resourceExists(
+        ScriptedToolNameDiscoverer.bundleResourcePathForScript(resourcePath),
+      )
+    ) {
+      throw ClasspathScriptedToolUnavailableException(
+        "Trailmap descriptor '$descriptorRelativePath' (${source.describe()}) declares scripted " +
+          "tool '${cfg.name}' with `script: ${cfg.script}`, but neither that source nor its " +
+          "precompiled bundle is on the classpath (looked for '$resourcePath'). The jar carries " +
+          "this trailmap's manifest without its `tools/` sources — rebuild it so " +
+          "`<trailmap>/tools/` ships alongside `trailmap.yaml`.",
+      )
+    }
+    return cfg.copy(script = resourcePath)
   }
 
   /**

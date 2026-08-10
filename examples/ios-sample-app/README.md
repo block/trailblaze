@@ -1,14 +1,15 @@
 # ios-sample-app
 
-Minimal SwiftUI app that mirrors the [`android-sample-app`](../android-sample-app/) Forms tab. Built to serve as a controlled target for Trailblaze iOS evals — currently just the [clipboard round-trip](../../../trails/eval/ios/sample-app/clipboard-round-trip.trail.yaml).
+Minimal SwiftUI app that mirrors the [`android-sample-app`](../android-sample-app/) Forms tab. Built to serve as a controlled target for Trailblaze iOS evals: the [clipboard round-trip](../../../trails/eval/ios/sample-app/clipboard-round-trip.trail.yaml) and the [WKWebView content descent](../../../trails/eval/ios/sample-app/webview-content.trail.yaml).
 
 ## What's here
 
 ```
 ios-sample-app/
 ├── IosSampleApp/               ← SwiftUI sources (add new .swift files here)
-│   ├── IosSampleAppApp.swift   ← @main app entry
-│   ├── FormsScreen.swift       ← single screen: Name + Email, Submit, Clear All
+│   ├── IosSampleAppApp.swift   ← @main app entry (NavigationStack root)
+│   ├── FormsScreen.swift       ← Name + Email, Submit, Clear All, link to Web Content
+│   ├── WebContentScreen.swift  ← WKWebView fixture: page content in a separate process
 │   └── Assets.xcassets/
 ├── IosSampleApp.xcodeproj/     ← Xcode project (uses synchronized folder groups)
 └── build-and-install.sh        ← xcodebuild + simctl install wrapper
@@ -29,12 +30,17 @@ Bundle id: `xyz.block.trailblaze.examples.iossampleapp`.
 
 The script builds for `iphonesimulator` and installs the resulting `.app` onto the booted simulator. xcodebuild output is captured to `build/build.log`; on failure the last 80 lines are written to stderr so build problems are visible.
 
-## Running the clipboard eval against this app
+## Running the evals against this app
 
 ```bash
 ./examples/ios-sample-app/build-and-install.sh
 ./trailblaze run trails/eval/ios/sample-app/clipboard-round-trip.trail.yaml --device ios
+./trailblaze run trails/eval/ios/sample-app/webview-content.trail.yaml --device ios
 ```
+
+The web-content eval needs an `axe` whose `describe-ui` accepts `--include-web-content`; without it,
+`WKWebView` page content never reaches the accessibility tree and the trail fails at its first web
+assertion. CI skips that trail automatically on an agent whose `axe` predates the flag.
 
 ## Adding new screens
 

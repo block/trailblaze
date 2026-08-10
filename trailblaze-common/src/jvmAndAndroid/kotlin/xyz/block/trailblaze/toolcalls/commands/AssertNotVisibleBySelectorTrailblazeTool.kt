@@ -45,8 +45,10 @@ data class AssertNotVisibleBySelectorTrailblazeTool(
   /**
    * Maximum time (in milliseconds) to wait for the element to DISAPPEAR. The driver polls
    * the screen until either the element is gone or this timeout elapses. When `null` the
-   * call is unopinionated and each agent applies its own idle/wait policy. The Maestro
-   * fallback path ignores this field (Maestro's own assert timeout is used there).
+   * call is unopinionated and each agent applies its own idle/wait policy. Forwarded to the
+   * Maestro fallback path too — without that, a driver that resolves the selector but does
+   * not itself poll (the iOS host agent returns null on a match, by design) silently got
+   * Maestro's default budget instead of the one the author asked for.
    */
   val timeoutMs: Long? = null,
 ) : MapsToMaestroCommands() {
@@ -57,7 +59,10 @@ data class AssertNotVisibleBySelectorTrailblazeTool(
           "not set — malformed recording.",
       )
     return listOf(
-      AssertConditionCommand(condition = Condition(notVisible = maestroSelector.toMaestroElementSelector())),
+      AssertConditionCommand(
+        condition = Condition(notVisible = maestroSelector.toMaestroElementSelector()),
+        timeout = timeoutMs?.toString(),
+      ),
     )
   }
 

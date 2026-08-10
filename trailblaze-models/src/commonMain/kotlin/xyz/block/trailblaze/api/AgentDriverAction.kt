@@ -32,6 +32,24 @@ interface HasClickCoordinates {
 }
 
 /**
+ * Which dispatch mechanism actually delivered a selector-resolved tap. `ACTION_CLICK` invokes the
+ * node's accessibility click action and never enters pointer routing; both gesture values inject a
+ * MotionEvent that goes through the window hit-test. A tap that reports success but leaves the UI
+ * unchanged looks identical either way in the session log, so without this the two are
+ * indistinguishable after the fact — and the silent `ACTION_CLICK` lookup miss is invisible.
+ *
+ * `null` on a tap that never reached the routing gate: a raw coordinate primitive
+ * (`AccessibilityAction.Tap` / `TapRelative`), a recorded-coordinate fallback, or a non-Android
+ * driver.
+ */
+@Serializable
+enum class TapDispatchRoute {
+  ACTION_CLICK,
+  GESTURE,
+  GESTURE_AFTER_ACTION_CLICK_MISS,
+}
+
+/**
  * Right now used just for logging
  */
 @Serializable
@@ -94,10 +112,19 @@ sealed interface AgentDriverAction {
   }
 
   @Serializable
-  data class TapPoint(override val x: Int, override val y: Int) :
-    AgentDriverAction,
+  data class TapPoint(
+    override val x: Int,
+    override val y: Int,
+    val dispatchRoute: TapDispatchRoute? = null,
+  ) : AgentDriverAction,
     HasClickCoordinates {
     override val type = AgentActionType.TAP_POINT
+
+    /**
+     * Preserves the pre-`dispatchRoute` binary signature `TapPoint(x, y)`. Written out explicitly
+     * rather than via `@JvmOverloads`, which commonMain can't use on the wasmJs target.
+     */
+    constructor(x: Int, y: Int) : this(x, y, dispatchRoute = null)
   }
 
   @Serializable

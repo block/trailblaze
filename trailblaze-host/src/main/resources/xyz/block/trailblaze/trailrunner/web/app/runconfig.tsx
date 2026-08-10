@@ -140,7 +140,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
   const [selfHeal, setSelfHeal] = React.useState(false);
   const [useRecordedSteps, setUseRecordedSteps] = React.useState(seed && seed.replay ? 'replay' : 'auto');
   const [agent, setAgent] = React.useState('TRAILBLAZE_RUNNER');
-  const [maxLlmCalls, setMaxLlmCalls] = React.useState('50');
+  const [maxLlmCalls, setMaxLlmCalls] = React.useState(String(DEFAULT_MAX_LLM_CALLS));
   const [llm, setLlm] = React.useState('');
   const [verbose, setVerbose] = React.useState(false);
   const [headless, setHeadless] = React.useState(true);
@@ -209,7 +209,7 @@ function RunConfigDialog({ trail: initialTrail, seed, pinnedId, go, close, closi
       const opts = {
         selfHeal: cfg.selfHeal,
         useRecordedSteps: cfg.useRecordedSteps === 'replay' ? true : cfg.useRecordedSteps === 'ai' ? false : null,
-        maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && String(cfg.maxLlmCalls) !== '50') ? maxCalls : null,
+        maxLlmCalls: (!isNaN(maxCalls) && maxCalls > 0 && maxCalls !== DEFAULT_MAX_LLM_CALLS) ? maxCalls : null,
         agent: cfg.agent,
         captureVideo: cfg.captureVideo,
         captureLogcat: cfg.captureLogcat,

@@ -77,6 +77,42 @@ abstract class TrailblazeLoggingRule(
   }
 
   /**
+   * Ends [startedSession], reporting the state carried by this rule's live [session] reference
+   * whenever that reference is the same session.
+   *
+   * **Prefer this over calling [sessionManager].endSession directly.** [TrailblazeSession] is
+   * immutable, so state accrued mid-run produces a *new* instance that only the holder of the live
+   * reference sees. The one that matters in practice is [TrailblazeSession.withSelfHealUsed]:
+   * `TrailblazeRunnerUtil` marks self-heal by publishing a copy through [setSession], so a caller
+   * that ends the session with the instance it started with reports `usedSelfHeal = false` and a
+   * run that self-heal actually rescued lands as plain [SessionStatus.Ended.Succeeded] instead of
+   * [SessionStatus.Ended.SucceededWithSelfHeal] — indistinguishable, in the session list and the
+   * report, from a clean pass. (The JUnit path in [afterTestExecution] never had the bug because it
+   * ends from the live field; every host-runner path did.)
+   *
+   * Falls back to [startedSession] when the live reference is absent, or belongs to a *different*
+   * session — a reused rule must never end a session other than the one the caller started.
+   */
+  fun endSession(
+    startedSession: TrailblazeSession,
+    isSuccess: Boolean,
+    exception: Throwable? = null,
+  ) {
+    sessionManager.endSession(
+      session = liveStateFor(startedSession),
+      isSuccess = isSuccess,
+      exception = exception,
+    )
+  }
+
+  /**
+   * The most current known instance of [startedSession] — the live [session] reference when it
+   * refers to the same session, otherwise [startedSession] itself. See [endSession].
+   */
+  private fun liveStateFor(startedSession: TrailblazeSession): TrailblazeSession =
+    session?.takeIf { it.sessionId == startedSession.sessionId } ?: startedSession
+
+  /**
    * Transient observers notified of every emitted [TrailblazeLog] for the duration of a
    * [withLogObserver] call. Backed by a copy-on-write list so a register/remove on one thread is
    * safe against the emit on another (the device dispatch can emit from a different coroutine

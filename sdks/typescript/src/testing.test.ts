@@ -10,7 +10,12 @@
 import { describe, expect, test } from "bun:test";
 
 import { _unwrapToolResult, type TrailblazeCallToolResult } from "./client.js";
-import { createMockClient, createMockContext, type MockStubResponse } from "./testing.js";
+import {
+  createMockClient,
+  createMockContext,
+  createQueuedFindMatchesClient,
+  type MockStubResponse,
+} from "./testing.js";
 
 describe("createMockClient: call recording", () => {
   test("records every tool call in order with the args verbatim", async () => {
@@ -285,4 +290,38 @@ describe("mock unwrap parity with production _unwrapToolResult", () => {
       expect(mockResult).toEqual(expected);
     });
   }
+});
+
+describe("createQueuedFindMatchesClient: queueToolFailure", () => {
+  test("rejects only the queued calls, then resolves normally", async () => {
+    // The drain is the behavior under test: a retry loop can only be pinned across a failure if a
+    // later call to the same tool succeeds.
+    const client = createQueuedFindMatchesClient();
+    client.queueToolFailure("tapOnElementBySelector", ["no node matched the selector"]);
+    const tap = (client.tools as Record<string, (a: Record<string, unknown>) => Promise<unknown>>)[
+      "tapOnElementBySelector"
+    ]!;
+
+    await expect(tap({ attempt: 1 })).rejects.toThrow("no node matched the selector");
+    await tap({ attempt: 2 });
+
+    // Both dispatches are recorded — a rejected call still counts as an attempt.
+    expect(client.calls.map((c) => c.tool)).toEqual([
+      "tapOnElementBySelector",
+      "tapOnElementBySelector",
+    ]);
+  });
+
+  test("a queued failure on findMatches pre-empts its response queue", async () => {
+    const client = createQueuedFindMatchesClient();
+    client.queueFindMatches([[{ indexPath: [0] }]]);
+    client.queueToolFailure("findMatches", ["driver not ready"]);
+    const findMatches = (
+      client.tools as Record<string, (a: Record<string, unknown>) => Promise<unknown>>
+    )["findMatches"]!;
+
+    await expect(findMatches({})).rejects.toThrow("driver not ready");
+    // The queued response is untouched, so the next call still serves it.
+    expect(await findMatches({})).toEqual([{ indexPath: [0] }]);
+  });
 });

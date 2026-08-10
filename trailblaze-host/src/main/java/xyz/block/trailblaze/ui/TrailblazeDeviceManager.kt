@@ -784,17 +784,14 @@ class TrailblazeDeviceManager(
         // Use direct Maestro driver access for host drivers
         getCurrentScreenStateViaDriver(trailblazeDeviceId)
       }
+      // The IOS_HOST_NATIVE_DRIVER_TYPES member, spelled out so this `when` stays
+      // compile-time exhaustive — a new driver (or new set member) must add a branch here.
       TrailblazeDriverType.IOS_AXE -> {
         // This manager only holds device *summaries*; a host-native iOS driver's screen state
         // lives on its live IosNativeConnectedDevice in the MCP bridge's persistent-device
         // registry, and the bridge serves it before delegating here. Reaching this arm means
         // no live connection exists for the device.
         Console.log("⚠️ $driverType has no live connected device to capture screen state from")
-        null
-      }
-      TrailblazeDriverType.COMPOSE -> {
-        // Not currently supported for direct screen capture
-        Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
         null
       }
       TrailblazeDriverType.REVYL_ANDROID,
@@ -807,6 +804,11 @@ class TrailblazeDeviceManager(
           Console.log("No active Revyl session for ${trailblazeDeviceId.instanceId}, screen state unavailable")
           null
         }
+      }
+      TrailblazeDriverType.COMPOSE -> {
+        // No capture path wired for the Compose desktop driver.
+        Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
+        null
       }
     }
   }

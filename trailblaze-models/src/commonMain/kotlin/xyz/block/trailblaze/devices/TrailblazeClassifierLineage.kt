@@ -25,6 +25,19 @@ package xyz.block.trailblaze.devices
  *  2. the **string-derived** parent — drop the trailing `-segment`
  *     (`android-phone-37` → `android-phone` → `android`).
  *
+ * Every chain then ends at [UNIVERSAL_ROOT] (`all`), the implicit ancestor of
+ * every classifier family — so an entry keyed `all:` in any classifier-keyed
+ * map (step recordings, waypoint blocks, driver pins, skip reasons) applies to
+ * every device, at the lowest priority. It is a default, not an override: any
+ * explicitly-declared classifier on the chain wins over it, which is what lets
+ * platforms that genuinely share an entry declare it once while a diverging
+ * platform still keys its own. One nuance: what "wins" means is the consumer's
+ * contract, not the lineage's — recordings replace whole entries, but waypoint
+ * blocks resolve **per field** (`WaypointDefinition.resolveFor`), so a
+ * device-keyed block overrides an `all:` block field-by-field, still inherits
+ * the fields it doesn't declare, and an empty `required`/`forbidden` list
+ * reads as "not declared" rather than as an override.
+ *
  * String-derivation means **arbitrary classifier depth works for free** with
  * no schema or parser change: a deeper classifier (`android-phone-37`)
  * resolves up through every intermediate (`android-phone`) to its family
@@ -35,7 +48,8 @@ package xyz.block.trailblaze.devices
  * ## Totality
  *
  * For a non-blank classifier, [chainFor] is total: it returns a non-empty list
- * whose first element is the input classifier, and it always terminates —
+ * whose first element is the input classifier and whose last is
+ * [UNIVERSAL_ROOT], and it always terminates —
  * string-derivation strictly shortens the string each step, and a cycle in the
  * override map is broken by a visited-set so a malformed override can never
  * hang resolution. A blank classifier has no identity to resolve and yields an
@@ -51,6 +65,14 @@ package xyz.block.trailblaze.devices
  * identity (`ios-iphone`) and then expands it through the lineage.
  */
 object TrailblazeClassifierLineage {
+
+  /**
+   * The universal root classifier — the implicit, lowest-priority ancestor every chain ends at.
+   * `all` is already the format's "every one of them" meta-key (see `DriverTypeKey`'s `drivers:`
+   * vocabulary); here it makes an `all:`-keyed entry resolvable from any device while every
+   * explicitly-declared classifier still outranks it.
+   */
+  const val UNIVERSAL_ROOT = "all"
 
   /**
    * Globally-registered explicit parent overrides (child classifier → parent
@@ -91,6 +113,9 @@ object TrailblazeClassifierLineage {
     require(child != parent) {
       "Lineage override child and parent must differ (got `$child` → `$parent`)"
     }
+    require(child != UNIVERSAL_ROOT) {
+      "`$UNIVERSAL_ROOT` is the universal root and cannot be given a parent"
+    }
     registeredOverrides = registeredOverrides + (child to parent)
   }
 
@@ -107,7 +132,8 @@ object TrailblazeClassifierLineage {
     classifier: TrailblazeDeviceClassifier,
     overrides: Map<String, String> = registeredOverrides,
   ): List<TrailblazeDeviceClassifier> =
-    chainForString(classifier.classifier, overrides).map { TrailblazeDeviceClassifier(it) }
+    withUniversalRoot(chainForString(classifier.classifier, overrides))
+      .map { TrailblazeDeviceClassifier(it) }
 
   /**
    * Resolution chain for a device's [deviceClassifiers] — the broad-first
@@ -144,8 +170,21 @@ object TrailblazeClassifierLineage {
     for (segment in segments.asReversed()) {
       ordered.addAll(chainForString(segment.classifier, overrides))
     }
-    return ordered.map { TrailblazeDeviceClassifier(it) }
+    // The universal root is appended HERE, once, after every explicit classifier — not inside
+    // chainForString — so `all` can never outrank a lower-priority segment fallback (step 2's
+    // entries must still beat it).
+    return withUniversalRoot(ordered.toList()).map { TrailblazeDeviceClassifier(it) }
   }
+
+  /**
+   * Append [UNIVERSAL_ROOT] as the final, lowest-priority entry of a non-empty chain. An empty
+   * chain stays empty (no device identity to resolve → nothing to fall back from). A chain that
+   * already reaches `all` mid-chain (an explicit override routed through it before lower-priority
+   * fallbacks were merged in) has it **moved** to the end, not left in place — strictly-last is
+   * unconditional, so `all` can never outrank an explicitly-declared classifier.
+   */
+  private fun withUniversalRoot(chain: List<String>): List<String> =
+    if (chain.isEmpty()) chain else chain.filterNot { it == UNIVERSAL_ROOT } + UNIVERSAL_ROOT
 
   private fun chainForString(classifier: String, overrides: Map<String, String>): List<String> {
     if (classifier.isBlank()) return emptyList()

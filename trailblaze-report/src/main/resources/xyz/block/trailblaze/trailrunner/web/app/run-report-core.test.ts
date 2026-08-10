@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 // graph embeds the prebuilt viewer script through a bun macro, and bun 1.3.14's sync CJS loader
 // spins forever on a require()'d graph that combines a macro import with sibling imports.
 import * as RUN_REPORT_CORE_MODULE from "./run-report-core";
+import { whenDocumentComplete } from "./run-report-viewer";
 
 const core = RUN_REPORT_CORE_MODULE as unknown as {
   originalYamlFromLogs: (logs: unknown[]) => string | null;
@@ -113,10 +114,10 @@ type PlaybackDriveContext = {
   clickShot: () => void;
 };
 
-type ViewerOptions = { session?: number; step?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string>; deferBoot?: boolean };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[] };
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string> } {
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {} };
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void } {
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; group: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, group: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -170,6 +171,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-step]") return [...this._h.matchAll(/data-step="(\d+)"/g)].map((m: any) => ({ dataset: { step: m[1] }, set onclick(fn: () => void) { handlers.step[m[1]] = fn; } }));
+      if (sel === "[data-group]") return [...this._h.matchAll(/data-group="(\d+)"/g)].map((m: any) => ({ dataset: { group: m[1] }, set onclick(fn: () => void) { handlers.group[m[1]] = fn; } }));
       if (sel === "[data-tlstream]") return [...this._h.matchAll(/data-tlstream="(\d+)"/g)].map((m: any) => ({ dataset: { tlstream: m[1] }, set onclick(fn: () => void) { handlers.tlStream[m[1]] = fn; } }));
       if (sel === "[data-shot]") return [...this._h.matchAll(/data-shot="([^"]+)"(?: data-shot-token="([^"]*)")?(?: data-shot-label="([^"]*)")?(?: data-shot-tool="([^"]*)")?/g)].map((m: any) => ({ dataset: { shot: m[1], shotToken: m[2], shotLabel: m[3], shotTool: m[4] }, set onclick(fn: () => void) { handlers.shot[m[1]] = fn; } }));
       if (sel === "[data-cell-toggle]") return [...this._h.matchAll(/data-cell-toggle="([^"]+)"/g)].map((m: any) => ({ dataset: { cellToggle: m[1] }, set onclick(fn: (e: any) => void) { handlers.cellToggle[m[1]] = fn; }, set onkeydown(_fn: unknown) {} }));
@@ -257,10 +259,29 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     };
     return node;
   };
+  // Chunked-layout delivery (opts.chunks, extracted from real builder output by chunksOf): serve
+  // #tb-index plus per-session chunks; opts.holdChunks / opts.holdSpriteChunks list session
+  // indices whose #tb-session / #tb-sprites chunk hasn't "streamed in" yet — releaseChunks()
+  // (returned below) makes them appear, the way the parser would as the document tail downloads.
+  const heldChunks = new Set((opts.holdChunks || []).map(String));
+  const heldSpriteChunks = new Set((opts.holdSpriteChunks || []).map(String));
+  const chunkElement = (id: string) => {
+    if (!opts.chunks) return null;
+    if (id === "tb-index") return { textContent: opts.chunks.index };
+    const session = id.match(/^tb-session-(\d+)$/);
+    if (session) return opts.chunks.sessions[session[1]] != null && !heldChunks.has(session[1]) ? { textContent: opts.chunks.sessions[session[1]] } : null;
+    const sprites = id.match(/^tb-sprites-(\d+)$/);
+    if (sprites) return opts.chunks.sprites[sprites[1]] != null && !heldSpriteChunks.has(sprites[1]) ? { textContent: opts.chunks.sprites[sprites[1]] } : null;
+    return null;
+  };
   (globalThis as Record<string, unknown>).document = {
     activeElement,
-    getElementById: (id: string) => id === "app" ? app
-      : id === "tb-run-data" && !opts.payloadViaGlobal ? { textContent: dataJson }
+    // While a held chunk is pending the document reads as still loading, so the viewer keeps
+    // polling instead of giving up on hydration.
+    get readyState() { return heldChunks.size || heldSpriteChunks.size ? "loading" : undefined; },
+    getElementById: (id: string) => (opts.chunks && chunkElement(id))
+      || (id === "app" ? app
+      : id === "tb-run-data" && !opts.payloadViaGlobal && !opts.chunks ? { textContent: dataJson }
       : id === "tb-sprites" && opts.sprites ? { textContent: JSON.stringify(opts.sprites).replace(/</g, "\\u003c") }
       : id === "tb-boot" ? bootNode
       : id === "tlvframe" && app._h.includes('id="tlvframe"') ? tlvframeNode
@@ -272,7 +293,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : id === "copylocalprompt" && app._h.includes('id="copylocalprompt"') ? { textContent: "", set onclick(fn: () => void) { handlers.copyLocalPrompt = fn; } }
       : (id === "copylink" || id === "copylinkrun") && app._h.includes(`id="${id}"`) ? copyBtn
       : id === "exportlogs" && app._h.includes('id="exportlogs"') ? { set onclick(fn: () => void) { handlers.exportLogs = fn; } }
-      : null,
+      : null),
     addEventListener: (name: string, fn: (e: any) => void) => { if (name === "keydown") handlers.documentKey = fn; },
     createElement,
     body: { appendChild(el: any) { zoomRoot = el; } },
@@ -314,6 +335,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.session != null && handlers.session[String(opts.session)]) handlers.session[String(opts.session)]();
   if (opts.timelineScrollTop != null) timelineList.scrollTop = opts.timelineScrollTop;
   if (opts.step != null && handlers.step[String(opts.step)]) handlers.step[String(opts.step)]();
+  if (opts.clickGroup != null && handlers.group[String(opts.clickGroup)]) handlers.group[String(opts.clickGroup)]();
   if (opts.tlStreamBeforeTab != null && handlers.tlStream[String(opts.tlStreamBeforeTab)]) handlers.tlStream[String(opts.tlStreamBeforeTab)]();
   if (opts.tab && handlers.tab[opts.tab]) handlers.tab[opts.tab]();
   if (opts.lightboxAll && handlers.gridMode) handlers.gridMode();
@@ -367,7 +389,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); } };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -403,18 +425,40 @@ const tapLogs = [
   { class: `${T}.MaestroDriverLog`, traceId: "t1", action: { class: "xyz.AgentDriverAction.TapPoint", x: 270, y: 600 }, deviceWidth: 1080, deviceHeight: 2400, screenshotFile: "a.png", timestamp: "2024-01-01T00:00:00.100Z" },
 ];
 
-// Pull the embedded JSON payload back out of a generated report so we can assert the data contract.
-function payloadOf(html: string): { generatedAt: string; sessions: Array<Record<string, any>> } {
-  const m = html.match(/<script type="application\/json" id="tb-run-data">([\s\S]*?)<\/script>/);
-  if (!m) throw new Error("no tb-run-data block in report HTML");
-  return JSON.parse(m[1]);
+// Extract the chunked layout's inert JSON scripts — the #tb-index boot chunk plus the raw text of
+// every per-session #tb-session-<i> / #tb-sprites-<i> chunk — so tests can assert the layout and
+// the harness can serve the REAL builder output through the fake DOM.
+function chunksOf(html: string): { index: string; sessions: Record<string, string>; sprites: Record<string, string> } {
+  const index = html.match(/<script type="application\/json" id="tb-index">([\s\S]*?)<\/script>/);
+  if (!index) throw new Error("no tb-index block in report HTML");
+  const sessions: Record<string, string> = {};
+  const sprites: Record<string, string> = {};
+  for (const m of html.matchAll(/<script type="application\/json" id="tb-(session|sprites)-(\d+)">([\s\S]*?)<\/script>/g)) {
+    (m[1] === "session" ? sessions : sprites)[m[2]] = m[3];
+  }
+  return { index: index[1], sessions, sprites };
 }
 
-// The hoisted sprite chunk (session index → sprite data URI) the viewer resolves lazily.
-function spritesOf(html: string): Record<string, string> {
-  const m = html.match(/<script type="application\/json" id="tb-sprites">([\s\S]*?)<\/script>/);
-  if (!m) throw new Error("no tb-sprites block in report HTML");
-  return JSON.parse(m[1]);
+// Pull the embedded JSON payload back out of a generated report so we can assert the data
+// contract. The chunked layout splits it (#tb-index stubs + one #tb-session-<i> chunk per run —
+// exactly what hydrateSession assembles when a run opens); reassemble the logical whole here.
+function payloadOf(html: string): { generatedAt: string; sessions: Array<Record<string, any>> } {
+  const chunks = chunksOf(html);
+  const payload = JSON.parse(chunks.index);
+  payload.sessions = payload.sessions.map((stub: Record<string, any>, i: number) => {
+    const chunk = chunks.sessions[String(i)];
+    if (!chunk) throw new Error(`no tb-session-${i} block in report HTML`);
+    return { ...stub, ...JSON.parse(chunk) };
+  });
+  return payload;
+}
+
+// The hoisted sprite chunks (session index → sprite data URI array) the viewer resolves lazily.
+function spritesOf(html: string): Record<string, string[]> {
+  const { sprites } = chunksOf(html);
+  const out: Record<string, string[]> = {};
+  for (const [key, text] of Object.entries(sprites)) out[key] = JSON.parse(text);
+  return out;
 }
 
 // The report's executable script (embedded helper declarations + the viewer IIFE) — the exact code
@@ -471,6 +515,214 @@ describe("extractTrace", () => {
     const last = trace[trace.length - 1];
     expect(last.screenshotFile).toBe("final.png");
     expect(String(last.label)).toContain("Final");
+  });
+
+  test("surfaces the tool calls the traceId fold merged in as children", () => {
+    // A traceId is allocated per LLM request (one turn's tool batch), not per tool call, so a turn's
+    // whole batch shares one traceId and folds onto its first tool. Without children, the other calls
+    // are absent from the payload entirely and the fold increments no count to reveal it.
+    const tool = (name: string, raw: Record<string, unknown>, s: number) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: name, traceId: "obj8", successful: true,
+      durationMs: 10, trailblazeTool: { raw }, timestamp: `2024-01-01T00:00:0${s}Z`,
+    });
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Edit the end time" }, timestamp: "2024-01-01T00:00:00Z" },
+      tool("assertVisibleBySelector", { selector: { text: "End time" } }, 1),
+      { class: `${T}.MaestroDriverLog`, traceId: "obj8", action: { class: "xyz.AgentDriverAction.TapPoint", x: 1, y: 2 }, deviceWidth: 10, deviceHeight: 20, timestamp: "2024-01-01T00:00:02Z" },
+      tool("tapOnElementBySelector", { selector: { text: "End time" } }, 3),
+      tool("swipe", { swipeOnElementText: "00 minutes" }, 4),
+      tool("mobile_maestro", { commands: "tapOn 50%,91%" }, 5),
+    ];
+    const trace = core.extractTrace(logs);
+    // Still one folded row per traceId — this fix adds detail, it does not split the row.
+    const row = trace.find((r) => r.label === "assertVisibleBySelector");
+    expect(trace.filter((r) => !r.objective).length).toBe(1);
+    // The three calls that actually did the work are now followable.
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+    // Device actions stay folded: the row already names the action, so they are not children.
+    expect((row.children as unknown[]).length).toBe(3);
+    // And they survive the share slimming — the standalone report renders from the slimmed shape.
+    const slim = (core as any).slimTraceForShare(trace);
+    expect(slim.find((r: any) => r.label === "assertVisibleBySelector").children.map((c: any) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe", "mobile_maestro"]);
+  });
+
+  test("a delegating tool's executor is one child, not one per source", () => {
+    // On-device instrumentation logs the DelegatingTrailblazeToolLog and, under the same traceId,
+    // the executor's own TrailblazeToolLog (TrailCommand.kt:1836) — so it arrives twice.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap the row" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tapOnElementWithNodeId", traceId: "objD",
+        trailblazeTool: { toolName: "tapOnElementWithNodeId", raw: { nodeId: 7 } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objD", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "swipe", traceId: "objD", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { swipeOnElementText: "list" } }, timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "tapOnElementWithNodeId");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "swipe"]);
+  });
+
+  test("a delegating wrapper folded mid-objective is not a child alongside its executor", () => {
+    // The wrapper can arrive at any position in the batch, not just first. It is a dispatch record,
+    // not a step — SessionCombinedView.kt:893 and TrailblazeRecordingGenerator.kt:211 both skip it.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Check then tap" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objM", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tapOnElementWithNodeId", traceId: "objM",
+        trailblazeTool: { toolName: "tapOnElementWithNodeId", raw: { nodeId: 7 } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objM", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector"]);
+  });
+
+  test("a delegating tool whose executor never logged still shows what it dispatched", () => {
+    // The fallback that keeps the dedupe from hiding work: some tools route around the device's
+    // tool-log emit site (HostOnDeviceRpcTrailblazeAgent.kt:743), so only the declaration exists.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objF", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objF",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z639" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector"]);
+  });
+
+  test("repeated polls keep their ×N count instead of becoming N children", () => {
+    // The assertion fold already annotates the row, so expanding it would trade a readable count
+    // for noise. Only the silent tool-into-tool fold gets children.
+    const poll = (s: number) => ({
+      class: `${T}.MaestroDriverLog`, durationMs: 5, deviceWidth: 10, deviceHeight: 20,
+      action: { class: "xyz.AgentDriverAction.AssertCondition", conditionDescription: "shows 5:00 PM", succeeded: true, x: 1, y: 1 },
+      timestamp: `2024-01-01T00:00:${String(s).padStart(2, "0")}Z`,
+    });
+    const trace = core.extractTrace([poll(1), poll(2), poll(3)]);
+    expect(trace.length).toBe(1);
+    expect(trace[0].note).toBe("×3");
+    expect(trace[0].children).toBeUndefined();
+  });
+
+  test("an MCP tool's response log is not a child of itself", () => {
+    // McpToolCallRequestLog / McpToolCallResponseLog share one traceId and the same toolName
+    // (TrailblazeMcpServer.kt:1615), so folding on "anything with a toolName" would nest the row's
+    // own tool under itself. Only a TrailblazeToolLog is an executed child.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Connect the device" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.McpToolCallRequestLog`, toolName: "trailblaze_connect_device", traceId: "mcp1", timestamp: "2024-01-01T00:00:01Z" },
+      { class: `${T}.McpToolCallResponseLog`, toolName: "trailblaze_connect_device", traceId: "mcp1", timestamp: "2024-01-01T00:00:02Z" },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "trailblaze_connect_device");
+    expect(row).toBeDefined();
+    expect(row.children).toBeUndefined();
+  });
+
+  test("a repeated primitive with one unlogged dispatch still shows the dispatched call", () => {
+    // One tapOnElementBySelector logged its executor; a second (different selector) was dispatched
+    // via a delegating wrapper whose executor never logged. A name-only dedupe drops the second as
+    // "already ran"; matching on name AND args keeps it, so the dispatched-but-unlogged call shows.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap two rows" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objP", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "Header" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objP", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "First" } } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objP",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z2" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Second" } } }],
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["tapOnElementBySelector", "tapOnElementBySelector"]);
+    // The args distinguish them: both dispatches survive, not just the one that logged.
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.tool))
+      .toEqual(["text: First", "text: Second"]);
+  });
+
+  test("children render in dispatch order, not declarations-first", () => {
+    // swipe ran and logged first; a later delegating wrapper dispatched tapOnElementBySelector whose
+    // executor never logged. Concatenating declarations ahead of executions would list the tap first
+    // even though the swipe happened first — order children by log position instead.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Swipe then tap by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "assertVisibleBySelector", traceId: "objO", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "List" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "swipe", traceId: "objO", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { swipeOnElementText: "list" } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objO",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z3" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Row" } } }],
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "assertVisibleBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label))
+      .toEqual(["swipe", "tapOnElementBySelector"]);
+  });
+
+  test("a ref dispatch that reuses the row's own primitive name is not filtered as self", () => {
+    // logs[0] is a directly-invoked tapOnElementBySelector, so it labels the row. A later ref-based
+    // tap resolves to the same primitive with a DIFFERENT selector and its executor never logged.
+    // Filtering every declaration named like the row would drop this genuine second call; the
+    // self-filter must key on the row's own name AND args, not the name alone.
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap one directly, one by ref" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "objS", successful: true,
+        durationMs: 10, trailblazeTool: { raw: { selector: { text: "First" } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.DelegatingTrailblazeToolLog`, toolName: "tap", traceId: "objS",
+        trailblazeTool: { toolName: "tap", raw: { ref: "z9" } },
+        executableTools: [{ toolName: "tapOnElementBySelector", raw: { selector: { text: "Second" } } }],
+        timestamp: "2024-01-01T00:00:02Z",
+      },
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "tapOnElementBySelector");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.label)).toEqual(["tapOnElementBySelector"]);
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.tool)).toEqual(["text: Second"]);
   });
 });
 
@@ -556,22 +808,37 @@ describe("buildRunReportHtml (single run)", () => {
 
   test("is a self-contained document embedding the viewer + data", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);
-    // The payload is an inert JSON script the viewer JSON.parses, never a JS literal the parser
-    // must evaluate before first paint.
-    expect(html).toContain('<script type="application/json" id="tb-run-data">');
+    // The payload rides in inert JSON scripts the viewer JSON.parses, never a JS literal the
+    // parser must evaluate before first paint: a tiny #tb-index boot chunk plus one per-session
+    // #tb-session-<i> chunk parsed lazily when that run opens.
+    expect(html).toContain('<script type="application/json" id="tb-index">');
+    expect(html).toContain('<script type="application/json" id="tb-session-0">');
     expect(html).not.toContain("window.__TB_RUN_DATA__ =");
     expect(html).toContain("function RUN_REPORT_VIEWER");
     expect(html).toContain("My run"); // title in <title>
   });
 
-  test("paints a static loader before the data script, themed and titled", () => {
+  test("boot never waits on session bytes: loader, index, and viewer all precede the session chunks", () => {
     const boot = html.indexOf('id="tb-boot"');
     expect(boot).toBeGreaterThan(-1);
-    expect(boot).toBeLessThan(html.indexOf('id="tb-run-data"'));
+    expect(boot).toBeLessThan(html.indexOf('id="tb-index"'));
+    expect(html.indexOf('id="tb-index"')).toBeLessThan(html.indexOf("function RUN_REPORT_VIEWER"));
+    expect(html.indexOf("function RUN_REPORT_VIEWER")).toBeLessThan(html.indexOf('id="tb-session-0"'));
     // Loader carries the run title and is styled from the head CSS (present before it parses).
     expect(html.slice(boot, boot + 300)).toContain("My run");
     expect((core as any).RUN_REPORT_CSS).toContain("#tb-boot");
     expect((core as any).RUN_REPORT_CSS).toContain(".tb-boot-spinner");
+  });
+
+  test("the index chunk carries the run list's data but no traces, screenshots, or logs", () => {
+    const index = JSON.parse(chunksOf(html).index);
+    expect(index.sessions).toHaveLength(1);
+    expect(index.sessions[0].meta.title).toBe("My run");
+    expect(index.sessions[0].stepCount).toBeGreaterThan(0);
+    expect(index.sessions[0].toolCallCount).toBeGreaterThan(0);
+    expect(index.sessions[0].trace).toBeUndefined();
+    expect(index.sessions[0].shots).toBeUndefined();
+    expect(chunksOf(html).index).not.toContain("data:image/png;base64,AAAA");
   });
 
   test("with rAF available, boot yields first (the loader owns the first frame) and renders after", () => {
@@ -668,6 +935,102 @@ describe("buildMultiReportHtml (multi run)", () => {
   });
 });
 
+describe("chunked session hydration (lazy #tb-session parsing)", () => {
+  const trace = core.extractTrace(sampleLogs);
+  const html = core.buildMultiReportHtml({
+    generatedAt: "2024-01-01 00:00:00",
+    sessions: [
+      { meta: { title: "Run A", status: "passed", platform: "android" }, trace, llmLogs: [], shots: {} },
+      { meta: { title: "Run B", status: "failed", platform: "ios" }, trace, llmLogs: [], shots: {} },
+    ],
+  });
+
+  test("the run index rendered from #tb-index stubs matches the fully-hydrated render", () => {
+    const chunked = renderViewer(null, { chunks: chunksOf(html) });
+    expect(chunked).toContain("Run A");
+    expect(chunked).toContain("Run B");
+    // Byte-identical to the same report booted from a monolithic payload: the index never needs
+    // a session chunk (step/tool counts come precomputed on the stubs).
+    expect(chunked).toBe(renderViewer(payloadOf(html)));
+  });
+
+  test("opening a run parses its #tb-session chunk and renders the full detail", () => {
+    const out = renderViewer(null, { chunks: chunksOf(html), session: 1 });
+    expect(out).toContain("Run B");
+    expect(out).toContain("Tap login"); // trace content only the session chunk carries
+  });
+
+  test("a deep link into a chunked report hydrates the routed run", () => {
+    const out = renderViewer(null, { chunks: chunksOf(html), query: "?run=1&tab=info" });
+    expect(out).toContain("Run B");
+  });
+
+  test("a run opened before its chunk streams in holds a loading shell, then hydrates when it lands", async () => {
+    const state = renderViewerState(null, { chunks: chunksOf(html), holdChunks: [1], session: 1 });
+    expect(state.html).toContain("Loading run");
+    expect(state.html).toContain("Run B"); // the header renders from the index stub immediately
+    state.releaseChunks();
+    // The viewer polls for the chunk while the document is still streaming (its own 50ms timer).
+    for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).toContain("Tap login");
+  });
+
+  test("a chunk missing from a fully-loaded document opens with index data instead of hanging", () => {
+    const chunks = chunksOf(html);
+    delete chunks.sessions["1"];
+    const out = renderViewer(null, { chunks, session: 1 });
+    expect(out).not.toContain("Loading run");
+    expect(out).toContain("Run B");
+  });
+
+  test("a single-run chunked document auto-opens and hydrates its only session", () => {
+    const single = core.buildRunReportHtml({ meta: { title: "Solo run", status: "passed" }, trace, llmLogs: [], shots: {} });
+    const out = renderViewer(null, { chunks: chunksOf(single) });
+    expect(out).toContain("Solo run");
+    expect(out).toContain("Tap login");
+  });
+
+  test("YAML riding in on meta (zip importer shape) is lifted to session fields, never the index", () => {
+    // The zip importer's buildRunMeta puts recordingYaml/originalYaml on meta AND passes them as
+    // dedicated session fields; the index copies meta per session, so leaving them there would
+    // make the boot chunk scale with recording size.
+    const withYamlMeta = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [
+        { meta: { title: "Run A", status: "passed", recordingYaml: "RECYAML: 1\n", originalYaml: "ORIGYAML: 1\n" }, trace, llmLogs: [], shots: {}, recordingYaml: "RECYAML: 1\n", originalYaml: "ORIGYAML: 1\n" },
+        { meta: { title: "Run B", status: "failed" }, trace, llmLogs: [], shots: {} },
+      ],
+    });
+    const chunks = chunksOf(withYamlMeta);
+    expect(chunks.index).not.toContain("RECYAML");
+    expect(chunks.index).not.toContain("ORIGYAML");
+    const session = JSON.parse(chunks.sessions["0"]);
+    expect(session.recordingYaml).toBe("RECYAML: 1\n");
+    expect(session.originalYaml).toBe("ORIGYAML: 1\n");
+    expect(session.meta.recordingYaml).toBeUndefined();
+    expect(session.meta.originalYaml).toBeUndefined();
+  });
+
+  test("the index carries only per-call token/cost summaries — LLM text stays in the session chunk", () => {
+    const llmLogs = [{ model: "gpt", inputTokens: 11, outputTokens: 7, cacheReadTokens: 0, totalCost: 0.5, durationMs: 1200, label: "Turn 1", instructions: "SYSTEM PROMPT TEXT", response: [{ kind: "text" as const, text: "LONG RESPONSE TEXT" }] }];
+    const withLlm = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [
+        { meta: { title: "Run A", status: "passed" }, trace, llmLogs, shots: {} },
+        { meta: { title: "Run B", status: "failed" }, trace, llmLogs: [], shots: {} },
+      ],
+    });
+    const chunks = chunksOf(withLlm);
+    expect(JSON.parse(chunks.index).sessions[0].llm).toEqual([{ inputTokens: 11, outputTokens: 7, totalCost: 0.5 }]);
+    expect(chunks.index).not.toContain("SYSTEM PROMPT TEXT");
+    expect(chunks.index).not.toContain("LONG RESPONSE TEXT");
+    expect(chunks.sessions["0"]).toContain("SYSTEM PROMPT TEXT");
+    // The summaries are everything the run list renders: token/cost totals and the cost sort
+    // come out byte-identical to the same report booted fully hydrated.
+    expect(renderViewer(null, { chunks })).toBe(renderViewer(payloadOf(withLlm)));
+  });
+});
+
 describe("sprite hoist + frame aspect", () => {
   const trace = core.extractTrace(sampleLogs);
   const video = { sprites: [{ uri: "data:image/webp;base64,SPRITEBYTES", rows: 2 }], fps: 2, frames: 2, columns: 1, rows: 2, frameHeight: 40, frameMap: [0, 1], startFrame: 0, endFrame: 1, startMs: 1704067200000 };
@@ -679,9 +1042,10 @@ describe("sprite hoist + frame aspect", () => {
     ],
   });
 
-  test("the boot payload carries no sprite bytes; they ride in the #tb-sprites chunk", () => {
-    const dataScript = html.match(/<script type="application\/json" id="tb-run-data">([\s\S]*?)<\/script>/)![1];
-    expect(dataScript).not.toContain("SPRITEBYTES");
+  test("the boot payload carries no sprite bytes; they ride in the per-session #tb-sprites chunk", () => {
+    const chunks = chunksOf(html);
+    expect(chunks.index).not.toContain("SPRITEBYTES");
+    expect(chunks.sessions["1"]).not.toContain("SPRITEBYTES");
     const p = payloadOf(html);
     expect(p.sessions[1].video.sprites).toEqual([{ uri: "", rows: 2 }]);
     expect(spritesOf(html)).toEqual({ "1": ["data:image/webp;base64,SPRITEBYTES"] });
@@ -690,6 +1054,16 @@ describe("sprite hoist + frame aspect", () => {
   test("the viewer resolves the hoisted sprite lazily when the session's frames render", () => {
     const out = renderViewer(payloadOf(html), { sprites: spritesOf(html), session: 1 });
     expect(out).toContain("background-image:url('data:image/webp;base64,SPRITEBYTES')");
+  });
+
+  test("a video run holds its loading shell until the sprite chunk lands, then renders real frames", async () => {
+    // The session chunk alone isn't enough: frame URLs resolve once at render, so hydrating
+    // before #tb-sprites-<i> parses would paint blank frames that nothing ever re-renders.
+    const state = renderViewerState(null, { chunks: chunksOf(html), holdSpriteChunks: [1], session: 1 });
+    expect(state.html).toContain("Loading run");
+    state.releaseChunks();
+    for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).toContain("background-image:url('data:image/webp;base64,SPRITEBYTES')");
   });
 
   test("a recorded frameWidth sizes the frame box without decoding the sprite", () => {
@@ -752,6 +1126,25 @@ describe("rekeySprites (export re-keying)", () => {
   });
 });
 
+describe("whenDocumentComplete (export deferral while the document streams)", () => {
+  test("holds work while streaming, runs only the latest request once complete, immediate when already complete", async () => {
+    // A chunked report's UI is live while the document tail (later #tb-session chunks) is still
+    // arriving; exportReport routes through this gate so a Share click can't snapshot a
+    // half-streamed DOM into a truncated file.
+    let ready: string | undefined = "loading";
+    (globalThis as Record<string, unknown>).document = { get readyState() { return ready; } };
+    const ran: string[] = [];
+    whenDocumentComplete(() => ran.push("first click"));
+    whenDocumentComplete(() => ran.push("second click"));
+    expect(ran).toEqual([]);
+    ready = undefined; // parser finished (a live DOM reports 'complete'; the gate treats absent as complete)
+    for (let i = 0; i < 100 && !ran.length; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(ran).toEqual(["second click"]);
+    whenDocumentComplete(() => ran.push("post-load click"));
+    expect(ran).toEqual(["second click", "post-load click"]);
+  });
+});
+
 describe("RUN_REPORT_VIEWER (rendered output)", () => {
   const trace = core.extractTrace(sampleLogs);
   const slim = (core as any).slimTraceForShare(trace);
@@ -792,7 +1185,8 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('aria-label="Sort runs"');
     expect(out).not.toContain("<span>Sort</span>");
     expect(out).toContain('role="option" aria-selected="true" data-run-sort="grouped">Status groups</button>');
-    expect(out).toContain('data-run-filter="self-healed">Self-healed</button>');
+    expect(out).toContain('data-run-sort="cost">Cost</button>');
+    expect(out).not.toContain("data-run-filter");
     expect(out).toContain('data-index-section="failed"');
     expect(out).toContain('data-index-section="passed"');
     expect(out.indexOf('data-session="1"')).toBeLessThan(out.indexOf('data-session="0"'));
@@ -903,6 +1297,10 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="idxcell failed"><button class="idxcellopen" type="button" data-session="1"');
     expect(out).toContain('<span class="pk">android</span>');
     expect(out).toContain('<span class="pk">ios</span>');
+    // Each cell counts its run's tool and LLM calls; the row subtitle carries steps + cost.
+    expect(out.match(/<span class="pcounts">1 tool<\/span>/g)).toHaveLength(2);
+    expect(out.match(/<span class="pcounts">0 LLM<\/span>/g)).toHaveLength(2);
+    expect(out).toContain('<div class="idxstats">1 step · $0.00</div>');
     expect(out).toContain('data-index-section="failed"');
     expect(out).not.toContain('data-index-section="passed"');
     // The footer tallies rows, matching the section counts.
@@ -911,6 +1309,49 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     // No far-left status dot column and no per-run Platform sort on a matrix index.
     expect(out).not.toContain('class="idxstatus"');
     expect(out).not.toContain('data-run-sort="platform"');
+  });
+
+  test("a cell's tool count includes the calls a traceId fold merged into children", () => {
+    const on = (title: string, status: string, platform: string) => ({
+      ...session(title, status),
+      meta: { title, status, platform, trailId: "login/login", target: "demo" },
+    });
+    const folded = on("login/login", "passed", "android");
+    // One visible row standing in for a batched turn (the fold kept two more executed calls as
+    // children), plus a no-arg tool (empty summary, still a call) and a terminal snapshot (not one).
+    folded.trace = [
+      ...folded.trace.map((t: any) => t.label === "tapOnElement" ? {
+        ...t, children: [{ label: "swipe", tool: "up" }, { label: "assertVisible", tool: "text: Done" }],
+      } : t),
+      { i: 90, label: "pressBack", tool: "", objective: false, trailhead: false, ok: true, ts: 90, ms: 50 },
+      { i: 91, label: "Final state", tool: "", terminal: true, objective: false, trailhead: false, ok: true, ts: 91, ms: 0 },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions: [folded, on("login/login", "failed", "ios")] });
+    expect(out).toContain('<span class="pcounts">4 tools</span>');
+    expect(out).toContain('<span class="pcounts">1 tool</span>');
+  });
+
+  test("mixed targets list every target in the report header", () => {
+    const on = (title: string, target: string) => ({
+      ...session(title, "passed"),
+      meta: { title, status: "passed", platform: "android", target },
+    });
+    const out = renderViewer({ generatedAt: "now", sessions: [on("A", "beta"), on("B", "alpha")] });
+    expect(out).toContain('<div class="k">Targets</div><div class="v">alpha, beta</div>');
+  });
+
+  test("Cost sort orders rows most expensive first with unknowable costs last", () => {
+    const sessions = [
+      { ...session("Cheap", "passed"), llm: [{ totalCost: 0.001 }, { totalCost: 0.002 }] },
+      { ...session("Pricey", "passed"), llm: [{ totalCost: 0.05 }] },
+      { ...session("Unknown", "passed"), llm: [{ inputTokens: 5 }] },
+    ];
+    const out = renderViewer({ generatedAt: "now", sessions }, { query: "?view=runs&sort=cost" });
+    expect(out).toContain('aria-selected="true" data-run-sort="cost">Cost</button>');
+    expect(out.indexOf('data-session="1"')).toBeLessThan(out.indexOf('data-session="0"'));
+    expect(out.indexOf('data-session="0"')).toBeLessThan(out.indexOf('data-session="2"'));
+    // A row whose cost can't be summed shows the dash, not a partial total.
+    expect(out).toContain('<div class="idxstats">1 step · —</div>');
   });
 
   test("a platform that never ran a trail renders a dashed placeholder cell", () => {
@@ -981,6 +1422,68 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('data-index-section="passed"');
   });
 
+  test("a build sharded across interchangeable simulators keeps ONE column per platform", () => {
+    // Every CI shard creates its own simulator, so the same iOS lane arrives under two UDIDs. The
+    // device CLASS is what a reader compares, so both shards share the `ios` column instead of
+    // splitting into two columns that are three-quarters dashes.
+    const on = (trailId: string, platform: string, deviceType: string, device: string) => ({
+      ...session(trailId, "passed"),
+      meta: { title: trailId, status: "passed", trailId, target: "demo", platform, deviceType, device },
+    });
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [
+        on("login/login", "ios", "iphone", "0AE1DC9E-01D5-4C3E-9E4B-7A0F1D2E3B4C"),
+        on("send-money/send", "ios", "iphone", "A9189CF7-5B22-4D71-8E90-2C3D4E5F6A7B"),
+        on("login/login", "android", "phone", "emulator-5554"),
+      ],
+    });
+    expect(out).toContain('<span class="pk">ios</span>');
+    expect(out).not.toContain("0AE1DC9E");
+    expect(out).not.toContain("A9189CF7");
+    // Two rows, and the only dashed cell is the android side of the trail it never ran.
+    expect(out.match(/idxcell passed/g)).toHaveLength(3);
+    expect(out.match(/idxcell missing/g)).toHaveLength(1);
+    // Distinct simulators are still distinct runs, never each other's attempt history.
+    expect(out).not.toContain("data-cell-toggle");
+  });
+
+  test("device classes on one platform stay separate columns", () => {
+    const on = (deviceType: string, device: string) => ({
+      ...session("Checkout", "passed"),
+      meta: { title: "Checkout", status: "passed", trailId: "checkout", target: "demo", platform: "ios", deviceType, device },
+    });
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [on("iphone", "UDID-1"), on("ipad", "UDID-2"), { ...session("Checkout", "passed"), meta: { title: "Checkout", status: "passed", trailId: "checkout", target: "demo", platform: "android", deviceType: "phone", device: "emulator-5554" } }],
+    });
+    expect(out).toContain('<span class="pk">ios · ipad</span>');
+    expect(out).toContain('<span class="pk">ios · iphone</span>');
+    expect(out).toContain('<span class="pk">android</span>');
+  });
+
+  test("when one lane did hold two devices, the cell reports the worst of them", () => {
+    const on = (status: string, device: string, ranAt: string) => ({
+      ...session("Checkout", status),
+      meta: { title: "Checkout", status, trailId: "checkout", target: "demo", platform: "ios", deviceType: "iphone", device, ranAt, duration: "20s" },
+    });
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [
+        on("failed", "UDID-1", "2026-07-17 10:00:00"),
+        on("passed", "UDID-2", "2026-07-17 10:05:00"),
+        { ...session("Checkout", "passed"), meta: { title: "Checkout", status: "passed", trailId: "checkout", target: "demo", platform: "android", deviceType: "phone", ranAt: "2026-07-17 10:01:00" } },
+      ],
+    });
+    // The later pass on the OTHER simulator does not bury the failure: the cell opens the failed
+    // run and the row sections under Failed, exactly as two columns would have.
+    expect(out).toContain('<div class="idxcell failed retried"><button class="idxcellopen" type="button" data-session="0"');
+    expect(out).toContain('data-index-section="failed"');
+    expect(out).not.toContain('data-index-section="passed"');
+    // Both runs stay in the cell's history, in time order.
+    expect(out).toContain('class="idxcelldots" role="img" aria-label="Attempt history: failed, passed"');
+  });
+
   test("owner metadata composes with matrix rows: subtitle on the row, Owner sort sections matrix entries", () => {
     const on = (platform: string) => ({
       ...session("Checkout", "passed"),
@@ -1040,7 +1543,6 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('<div class="idxsectionhead passed">Passed <span class="idxsectioncount">1</span>');
     expect(out).toContain('<span class="idxstatus" aria-label="self-healed" title="self-healed"><span class="idxstatusdot selfheal" aria-hidden="true"></span></span>');
     expect(out).toContain('<strong>1</strong> self-healed');
-    expect(out).toContain('aria-pressed="false" data-run-filter="self-healed"');
     expect(out.indexOf('data-session="2"')).toBeLessThan(out.indexOf('data-session="1"'));
     expect(out.indexOf('data-session="1"')).toBeLessThan(out.indexOf('data-session="0"'));
   });
@@ -1147,7 +1649,11 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out.indexOf(">Target<")).toBeLessThan(out.indexOf(">App version<"));
     expect(out.indexOf(">App version<")).toBeLessThan(out.indexOf(">Platform<"));
     expect(out.match(/>Platform</g)).toHaveLength(1); // shared context is rendered once in the header
-    expect(out.match(/class="idxfact"><div class="k">Steps/g)).toHaveLength(2);
+    expect(out.match(/class="idxfact"><div class="k">Tools/g)).toHaveLength(2);
+    expect(out.match(/class="idxfact"><div class="k">LLM/g)).toHaveLength(2);
+    // Steps + cost live in the row subtitle, under the title.
+    expect(out).toContain('<div class="idxstats">1 step · $0.0010</div>');
+    expect(out).toContain('<div class="idxstats">1 step · $0.0025</div>');
     expect(out).toContain("42.3s");
     expect(out).toContain("51.8s");
     expect(out).toContain('<span class="k">Total duration</span><span class="v">1m 34s</span>');
@@ -1163,20 +1669,23 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out.indexOf('id="exportall"')).toBeLessThan(out.indexOf('id="runsearch"'));
   });
 
-  test("index row facts show real test steps and actions, not the flat trace length", () => {
+  test("index row facts show real tool calls, not the flat trace length", () => {
     const row = (i: number, extra: Record<string, unknown> = {}) => ({ i, label: `row ${i}`, tool: "t", note: null, ms: 0, ts: null, ok: true, err: null, screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [], ...extra });
-    // 1 trailhead step + 1 trailhead action, 2 test steps, 4 trail actions, and a terminal
-    // 'Final state' snapshot (tool-less, not an action) → 9 trace rows total.
+    // 1 trailhead step + 1 trailhead action, 2 test steps, 3 trail tool calls, 1 LLM turn, and a
+    // terminal 'Final state' snapshot (tool-less, not an action) → 9 trace rows total.
     const trace = [
       row(1, { objective: true, trailhead: true }), row(2),
       row(3, { objective: true }), row(4), row(5),
-      row(6, { objective: true }), row(7), row(8),
-      row(9, { label: "Final state", tool: "", screenshotFile: "final.png" }),
+      row(6, { objective: true }), row(7), row(8, { tool: "llm · gpt-test" }),
+      row(9, { label: "Final state", tool: "", terminal: true, screenshotFile: "final.png" }),
     ];
     const mk = (title: string) => ({ meta: { title, status: "passed", duration: "10s", steps: trace.length }, trace, llm: [], shots: {}, recordingYaml: null });
     const out = renderViewer({ generatedAt: "now", sessions: [mk("A"), mk("B")] });
-    expect(out).toContain('<div class="k">Steps</div><div class="v">2</div>');
-    expect(out).toContain('<div class="k">Actions</div><div class="v">5</div>');
+    // Tools counts only real tool calls: no objectives, no LLM turns, no terminal snapshot.
+    expect(out).toContain('<div class="k">Tools</div><div class="v">4</div>');
+    expect(out).toContain('<div class="k">LLM</div><div class="v">0</div>');
+    // Steps live in the row subtitle; a run with no LLM calls costs $0.00.
+    expect(out).toContain('<div class="idxstats">2 steps · $0.00</div>');
     // meta.steps (the flat trace length) no longer leaks into the facts.
     expect(out).not.toContain('<div class="v">9</div>');
   });
@@ -1404,7 +1913,10 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('data-phase="trailhead" aria-expanded="false"');
     expect(out).toContain('class="tlphasebody" hidden');
     expect(out).toContain('data-phase="trail" aria-expanded="true"');
-    expect(out).toContain('class="grphdr sel" data-group="22" aria-expanded="true"');
+    expect(out).toContain('class="grphdr sel" data-group="22"');
+    // Step headers are permanent landmarks now: no collapse affordance on them.
+    expect(out).not.toContain('data-group="22" aria-expanded');
+    expect(out).not.toContain("groupchev");
     expect(out).toContain('aria-current="step"');
     expect(out).toContain('class="scrubline setup"');
     expect(out).toContain('class="scrubline trail"');
@@ -1413,6 +1925,45 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('aria-valuetext="Trail, item 22 of 23: Complete checkout"');
     expect(out).not.toContain('<button type="button" class="scrubtick"');
     expect(out).not.toContain('class="scrubfill"');
+  });
+
+  test("clicking a step header selects the step's first tool call", () => {
+    const trace = [
+      { i: 1, label: "Complete checkout", objective: true, trailhead: false, ok: true, ts: 1, ms: 0 },
+      { i: 2, label: "tapOnElement", tool: "text: Pay", objective: false, trailhead: false, ok: true, ts: 2, ms: 100 },
+      { i: 3, label: "assertVisible", tool: "text: Done", objective: false, trailhead: false, ok: true, ts: 3, ms: 100 },
+      { i: 4, label: "Review the order", objective: true, trailhead: false, ok: true, ts: 4, ms: 0 },
+    ];
+    const payload = { generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm: [], shots: {} }] };
+    const clicked = renderViewerState(payload, { clickGroup: 1 });
+    expect(clicked.html).toContain('class="step sel child" data-step="2"');
+    expect(clicked.route).toContain("step=2");
+    // A step with no actions keeps the selection on the header itself.
+    const empty = renderViewerState(payload, { clickGroup: 4 });
+    expect(empty.html).toContain('class="grphdr sel" data-group="4"');
+    expect(empty.route).toContain("step=4");
+    // An agent step's leading reasoning row is not a tool call either: the first real action wins.
+    const agentStep = {
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed" }, trace: [
+        { i: 1, label: "Complete checkout", objective: true, trailhead: false, ok: true, ts: 1, ms: 0 },
+        { i: 2, label: "the login button is visible", tool: "llm · gpt-test", objective: false, trailhead: false, ok: true, ts: 2, ms: 100 },
+        { i: 3, label: "tapOnElement", tool: "text: Pay", objective: false, trailhead: false, ok: true, ts: 3, ms: 100 },
+      ], llm: [], shots: {} }],
+    };
+    const reasoned = renderViewerState(agentStep, { clickGroup: 1 });
+    expect(reasoned.route).toContain("step=3");
+    // A trailing terminal snapshot after an action-less final step is not a "first tool call".
+    const withSnapshot = {
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed" }, trace: [
+        ...trace,
+        { i: 5, label: "Final state", tool: "", terminal: true, objective: false, trailhead: false, ok: true, ts: 5, ms: 0 },
+      ], llm: [], shots: {} }],
+    };
+    const snapped = renderViewerState(withSnapshot, { clickGroup: 4 });
+    expect(snapped.html).toContain('class="grphdr sel" data-group="4"');
+    expect(snapped.route).toContain("step=4");
   });
 
   test("selecting a low timeline row preserves the list scroll position", () => {

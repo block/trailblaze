@@ -25,6 +25,15 @@ data class SessionResult(
    */
   val test_key: String? = null,
 
+  /**
+   * The trail's `config.metadata` map — arbitrary author-supplied key/value pairs from the trail
+   * YAML — or null when the trail declared none (or the session didn't run from a trail config).
+   * Carried through onto the result row so downstream consumers can key off durable trail-authoring
+   * metadata that survives a trail moving to another repo or being re-keyed under a new [test_key],
+   * without that identity having to be re-encoded into [test_key] itself.
+   */
+  val metadata: Map<String, String>? = null,
+
   // === JUnit Identity ===
   // The JUnit class/method that ran this session, when it ran inside a JUnit harness
   // (`SessionInfo.testClass` / `testName`). Carried separately from [title] because the title

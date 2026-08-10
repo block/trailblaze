@@ -27,27 +27,60 @@ object AxeJsonMapper {
 
   private val json = Json { ignoreUnknownKeys = true }
 
-  /** Parses AXe JSON and returns a single root [TrailblazeNode]. */
+  /** Parses AXe JSON and returns a single root [TrailblazeNode], with true duplicates collapsed. */
   fun parse(rawJson: String): TrailblazeNode {
     val counter = NodeIdCounter()
     val root = json.parseToJsonElement(rawJson)
-    val rootObject: JsonObject? = when (root) {
+    val tree = when (root) {
       is JsonArray -> {
         // AXe wraps the tree in an array — unwrap to the first element when it's an
         // object, or build a synthetic root for multi-element / non-object cases.
         val single = root.singleOrNull() as? JsonObject
-        if (single != null) single
-        else return TrailblazeNode(
-          nodeId = counter.next(),
-          driverDetail = emptyIosAxe(),
-          children = root.mapNotNull { (it as? JsonObject)?.let { obj -> mapNode(obj, counter) } },
-          bounds = null,
-        )
+        single?.let { mapNode(it, counter) }
+          ?: TrailblazeNode(
+            nodeId = counter.next(),
+            driverDetail = emptyIosAxe(),
+            children = root.mapNotNull { (it as? JsonObject)?.let { obj -> mapNode(obj, counter) } },
+            bounds = null,
+          )
       }
-      is JsonObject -> root
+      is JsonObject -> mapNode(root, counter)
       else -> error("Unexpected AXe JSON root: ${root::class.simpleName}")
     }
-    return mapNode(rootObject!!, counter)
+    return dedupeTree(tree)
+  }
+
+  /**
+   * Collapses TRUE duplicate nodes — AXe sometimes reports the same physical element twice
+   * (observed as a StaticText appearing twice with identical frames, typically an overlapping
+   * parent/child re-projection), which makes a host-unique selector spuriously ambiguous.
+   *
+   * The dedupe rule is deliberately narrow so legitimately repeated UI is never touched. A
+   * node is dropped only when ALL of:
+   * - an earlier node (pre-order) carried the exact same [DriverNodeDetail] AND the exact
+   *   same non-null bounds — two distinct real elements of the same type with identical text
+   *   can't share the identical frame, while identical list rows differ in frame and survive;
+   * - it carries matchable text (label/value/title/uniqueId) — content-less structural
+   *   containers (nested Groups, Window-in-Application) legitimately share frames;
+   * - it has no children — a subtree-bearing "duplicate" might be the only path to its
+   *   children, so it is kept even at the cost of a rare residual ambiguity.
+   */
+  internal fun dedupeTree(root: TrailblazeNode): TrailblazeNode {
+    val seen = HashSet<Pair<DriverNodeDetail, TrailblazeNode.Bounds>>()
+    fun visit(node: TrailblazeNode): TrailblazeNode? {
+      val key = dedupeKey(node)
+      if (key != null && !seen.add(key) && node.children.isEmpty()) return null
+      val children = node.children.mapNotNull(::visit)
+      return if (children == node.children) node else node.copy(children = children)
+    }
+    return visit(root)!! // the root is always first-seen, never dropped
+  }
+
+  private fun dedupeKey(node: TrailblazeNode): Pair<DriverNodeDetail, TrailblazeNode.Bounds>? {
+    val detail = node.driverDetail as? DriverNodeDetail.IosAxe ?: return null
+    val bounds = node.bounds ?: return null
+    if (!detail.hasIdentifiableProperties) return null
+    return detail to bounds
   }
 
   private class NodeIdCounter {

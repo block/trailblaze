@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
 
@@ -29,6 +30,12 @@ class CompileCommandTest {
 
   @AfterTest fun cleanup() {
     workDir.deleteRecursively()
+    // `CompileCommand` registers this workspace's `*.tool.yaml` files on the process-global
+    // YAML-tool registry (the resolver snapshots it at construction, so there's no scoped
+    // alternative). Clear it so a later test in the same JVM doesn't resolve names against this
+    // test's temp workspace. The toolset catalog needs no reset — compile passes its catalog to
+    // the emitter explicitly instead of installing the global overlay.
+    TrailblazeSerializationInitializer.registerWorkspaceYamlTools(emptyMap())
   }
 
   @Test
@@ -231,6 +238,74 @@ class CompileCommandTest {
 
     assertEquals(0, exit)
     assertTrue(File(expectedOutputDir, "alpha.yaml").exists(), "Default output dir should land at workspace-root/trails/config/dist/targets")
+  }
+
+  @Test
+  fun `compile resolves a toolset the workspace authored and puts its tools in the typed surface`() {
+    // A trailmap is allowed to ship its own toolsets at `trailmaps/<id>/toolsets/<name>.yaml`
+    // and reference them from `platforms.<p>.tool_sets:`. Both halves of that promise are
+    // pinned here, because both used to be broken and only showed up in a workspace that had
+    // no same-id copy of the trailmap on the classpath to accidentally supply the ids:
+    //
+    //   1. compile succeeds — reference validation finds `alpha_extra` on disk instead of
+    //      failing with "references unknown toolset".
+    //   2. the tool that toolset carries lands in the trailmap's generated typed surface, so a
+    //      scripted tool can call `ctx.tools.mobile_setClipboard(...)` and typecheck. Runtime
+    //      dispatch always resolved it through the global registry; only the emitted `.d.ts`
+    //      disagreed.
+    //
+    // Picking the asserted tool is the whole trick, because `tool_sets:` is only ONE of the three
+    // sources `resolveKotlinToolDescriptorsForTrailmap` unions: it also adds every recordable
+    // framework class tool and every YAML-defined tool that isn't `isRecordable: false`, both
+    // regardless of `tool_sets:`. So a recordable tool, an `always_enabled` toolset member
+    // (`mobile_setClipboard`), or any YAML-defined tool (`dumpMemory`, or one this workspace
+    // authored) all land in the surface whether or not the workspace catalog reached the emitter —
+    // each would be a vacuous assertion.
+    //
+    // `web_requestDetails` is the discriminating case: class-backed, not recordable, and its only
+    // classpath home is `web/toolsets/web_core.yaml`, which is not `always_enabled` (its sibling
+    // `web_framework` is, so don't reach for `web_evaluate`). Toolset expansion here is
+    // driver-agnostic — the emitter calls `TrailblazeToolSetCatalog.resolve`, not
+    // `resolveForDriver` — so a web tool reached from an Android target is resolved on membership
+    // alone, which is exactly the edge under test. With `alpha` declaring no `dependencies:`,
+    // `alpha_extra` is its only possible route in. Negative control: pass
+    // `TrailblazeToolSetCatalog.defaultEntries()` to the emitter in `CompileCommand` instead of
+    // the resolved workspace catalog and this goes red.
+    val workspaceRoot = File(workDir, "workspace").apply { mkdirs() }
+    val trailmapDir = File(workspaceRoot, "trails/config/trailmaps/alpha").apply { mkdirs() }
+    File(trailmapDir, "tools").mkdirs()
+    File(trailmapDir, "toolsets").mkdirs()
+    File(trailmapDir, "toolsets/alpha_extra.yaml").writeText(
+      """
+      id: alpha_extra
+      description: "Toolset authored by the alpha workspace trailmap."
+      tools:
+        - web_requestDetails
+      """.trimIndent(),
+    )
+    File(trailmapDir, "trailmap.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+            tool_sets: [alpha_extra]
+      """.trimIndent(),
+    )
+
+    val command = CompileCommand().apply { inputDir = File(workspaceRoot, "trails/config") }
+    val exit = command.call()
+
+    assertEquals(0, exit, "A trailmap referencing its own workspace toolset should compile")
+    val typedSurface = File(trailmapDir, "tools/trailblaze-client.d.ts")
+    assertTrue(typedSurface.exists(), "alpha should get a generated typed surface")
+    assertTrue(
+      typedSurface.readText().contains("web_requestDetails"),
+      "The tool carried by the workspace-authored toolset should be declared in alpha's typed " +
+        "surface; got:\n${typedSurface.readText()}",
+    )
   }
 
   @Test

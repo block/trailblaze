@@ -160,7 +160,7 @@ removed in a future release.
                                legacy TRAILBLAZE_RUNNER agent. Useful on
                                metered or expensive providers to cut off a
                                stuck self-heal loop. Must be a positive
-                               integer. Default: 50 (the runner's built-in
+                               integer. Default: 25 (the runner's built-in
                                cap). Not compatible with --agent MULTI_AGENT_V3.
       --memory=KEY=VAL       Pre-populate trail memory with KEY=VAL before any
                                step runs. Repeatable (`--memory user=sam

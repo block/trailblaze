@@ -15,12 +15,20 @@ import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 
 /**
- * Tests for the consolidated [TrailblazeLoggingRule.captureFailureScreenshot] — the
- * single entry point shared by all run methods (JUnit hook, on-device RPC, host CLI).
- * Regressions here would silently break failure-screenshot capture across every path,
- * so cover the behavioral branches directly.
+ * Tests for the two consolidated entry points shared by all run methods (JUnit hook, on-device
+ * RPC, host CLI):
+ *
+ * - [TrailblazeLoggingRule.captureFailureScreenshot] — regressions here would silently break
+ *   failure-screenshot capture across every path.
+ * - [TrailblazeLoggingRule.endSession] — regressions here silently mislabel a run's outcome. The
+ *   original bug: host runners ended the session with the immutable instance they started with, so
+ *   a mid-run `withSelfHealUsed()` copy (published via [TrailblazeLoggingRule.setSession]) was
+ *   dropped and a self-healed pass reported as plain `Succeeded`.
+ *
+ * Both cover the behavioral branches directly.
  */
 class TrailblazeLoggingRuleTest {
 
@@ -95,10 +103,100 @@ class TrailblazeLoggingRuleTest {
     rule.captureFailureScreenshot(session())
   }
 
+  // -- endSession: self-heal state must survive to the emitted end status --
+
+  @Test
+  fun `endSession reports SucceededWithSelfHeal when self-heal was marked mid-run`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    val started = session()
+    rule.setSession(started)
+
+    // What TrailblazeRunnerUtil.markSelfHealUsed does: publish an immutable COPY carrying the flag.
+    rule.setSession(started.withSelfHealUsed())
+
+    // The caller still holds the pre-copy instance — the situation every host runner is in.
+    rule.endSession(started, isSuccess = true)
+
+    // The status TYPE is the contract consumers branch on (report labels, and
+    // AiGeneratedTrails deciding whether to re-record); duration is wall-clock, so don't pin it.
+    assertTrue(
+      endStatus(captured) is SessionStatus.Ended.SucceededWithSelfHeal,
+      "a self-healed run must not be reported as a clean pass; got ${endStatus(captured)}",
+    )
+  }
+
+  @Test
+  fun `endSession reports FailedWithSelfHeal when a self-healed run still fails`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    val started = session()
+    rule.setSession(started.withSelfHealUsed())
+
+    rule.endSession(started, isSuccess = false, exception = RuntimeException("boom"))
+
+    assertTrue(
+      endStatus(captured) is SessionStatus.Ended.FailedWithSelfHeal,
+      "expected FailedWithSelfHeal; got ${endStatus(captured)}",
+    )
+  }
+
+  @Test
+  fun `endSession reports plain Succeeded when self-heal never fired`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    val started = session()
+    rule.setSession(started)
+
+    rule.endSession(started, isSuccess = true)
+
+    assertTrue(
+      endStatus(captured) is SessionStatus.Ended.Succeeded,
+      "a clean run must stay plain Succeeded; got ${endStatus(captured)}",
+    )
+  }
+
+  @Test
+  fun `endSession ignores a live reference belonging to a different session`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    val started = session()
+    // A reused rule pointing at some OTHER session that happens to have self-healed. Its state
+    // must not leak into this session's verdict, and the emitted log must name THIS session.
+    rule.setSession(session(id = "other_session").withSelfHealUsed())
+
+    rule.endSession(started, isSuccess = true)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>().single()
+    assertTrue(
+      log.sessionStatus is SessionStatus.Ended.Succeeded,
+      "another session's self-heal must not be attributed here; got ${log.sessionStatus}",
+    )
+    assertEquals(started.sessionId, log.session, "must end the session the caller started")
+  }
+
+  @Test
+  fun `endSession falls back to the caller's session when no live reference is set`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    val rule = TestLoggingRule(additionalLogEmitter = LogEmitter(captured::add))
+    val started = session()
+    // No setSession at all — the end call must still emit rather than throw or drop the log.
+
+    rule.endSession(started, isSuccess = true)
+
+    val log = captured.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>().single()
+    assertEquals(started.sessionId, log.session)
+  }
+
   // -- Fixtures --
 
-  private fun session(): TrailblazeSession = TrailblazeSession(
-    sessionId = SessionId("test_session"),
+  private fun endStatus(captured: List<TrailblazeLog>): SessionStatus =
+    captured.filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .single()
+      .sessionStatus
+
+  private fun session(id: String = "test_session"): TrailblazeSession = TrailblazeSession(
+    sessionId = SessionId(id),
     startTime = Clock.System.now(),
   )
 

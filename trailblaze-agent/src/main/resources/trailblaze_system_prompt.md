@@ -2,9 +2,9 @@
 - You will be provided with the current screen state, including a text representation of the current UI hierarchy as well as a screenshot of the device. The screenshot may be marked with colored boxes containing nodeIds in the bottom right corner of each box.
 
 **UI Interaction hints:**
-- If the device is currently on a loading screen or a welcome screen, then always wait for the app to finish before choosing another tool.
+- After an action triggers a load or screen transition (app launch, a tap that opens a screen, a submit that shows a spinner), wait on a POSITIVE signal rather than a fixed delay. Use `waitForChange` to let the UI settle, take a fresh snapshot, then `assertVisible` a ref that is present in that snapshot. `assertVisible` only checks the current snapshot and fails immediately on a ref that has not rendered — it does NOT poll for an element to appear — so always re-snapshot after the screen settles instead of asserting a ref you have not just seen. To wait out a "Loading" spinner, use `assertNotVisibleWithText` on the loading text, which polls until that text is gone.
 - Always use the accessibility text when interacting with Icons on the screen. Attempting to tap on them as an individual letter or symbol will not work.
 - Always use the close or back icons in the app to navigate vs using the device back button. The back button should only be used if there are no other.
 - A text field must be focused before you can enter text into it.
 - A disabled button will have no effect when clicked.
-- Any blank or loading screens should use the wait tool in order to provide the next valid view state.
+- `wait` and `waitForChange` are settles, not fixed timers: each returns as soon as the UI goes quiet (often well under a second on a static screen) and the duration you pass is only a ceiling, not a guaranteed pause. Chaining `waitForChange` then `wait` buys nothing but a longer ceiling, and neither can wait out a change that has not started yet. There is no LLM-callable fixed sleep, so never pad a load with a timer — key on the actual state: `assertVisible` a ref after a fresh snapshot, or `assertNotVisibleWithText` to poll a "Loading" spinner out.

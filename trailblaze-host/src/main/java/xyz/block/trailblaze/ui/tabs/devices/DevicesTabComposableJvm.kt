@@ -204,7 +204,8 @@ private fun MobileDevicePreviewPanel(
                 when (connectedDevice) {
                   is MaestroConnectedDevice -> {
                     val driver = connectedDevice.getMaestroDriver()
-                    val stream = MaestroDeviceScreenStream(driver)
+                    // instanceId is the Simulator UDID on iOS; the provider ignores it on non-iOS.
+                    val stream = MaestroDeviceScreenStream(driver, iosUdid = connectedDevice.instanceId)
                     previewState = MobilePreviewState.Connected(driver, stream)
                   }
                   is IosNativeConnectedDevice -> {

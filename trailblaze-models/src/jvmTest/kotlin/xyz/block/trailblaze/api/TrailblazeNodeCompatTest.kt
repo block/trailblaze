@@ -184,6 +184,39 @@ class TrailblazeNodeCompatTest {
   }
 
   // ======================================================================
+  // centerPoint population (ref → view-hierarchy mapping contract)
+  // ======================================================================
+
+  @Test
+  fun `conversion populates centerPoint matching TrailblazeNode centerPoint`() {
+    // Tap/assert tools map a ref-resolved TrailblazeNode back to the converted hierarchy by
+    // comparing TrailblazeNode.centerPoint() against the legacy centerPoint string. The two
+    // must agree exactly, or every ref fails to map.
+    val node = TrailblazeNode(
+      nodeId = 8,
+      bounds = TrailblazeNode.Bounds(left = 101, top = 200, right = 300, bottom = 261),
+      children = emptyList(),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Button", label = "Settings"),
+    )
+
+    val vh = node.toViewHierarchyTreeNode()
+    val (cx, cy) = node.centerPoint()!!
+    assertEquals("$cx,$cy", vh.centerPoint)
+  }
+
+  @Test
+  fun `conversion leaves centerPoint null when bounds are null`() {
+    val node = TrailblazeNode(
+      nodeId = 9,
+      bounds = null,
+      children = emptyList(),
+      driverDetail = DriverNodeDetail.IosAxe(type = "Other"),
+    )
+
+    assertNull(node.toViewHierarchyTreeNode().centerPoint)
+  }
+
+  // ======================================================================
   // Round-trip: ViewHierarchyTreeNode → IosMaestro → ViewHierarchyTreeNode
   // ======================================================================
 

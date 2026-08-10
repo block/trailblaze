@@ -24,6 +24,7 @@ import xyz.block.trailblaze.testing.ClasspathFixture
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
+import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.llm.config.LlmModelConfigEntry
 import xyz.block.trailblaze.util.Console
 
@@ -1655,6 +1656,196 @@ class TrailblazeProjectConfigLoaderTest {
       "framework/home" !in waypointIds,
       "Waypoint from a trailmap that failed for an unrelated reason (missing system_prompt_file) " +
         "must NOT be recovered; recovery is narrowed to the classpath scripted-tool skip. Got: $waypointIds",
+    )
+  }
+
+  @Test
+  fun `classpath trailmap resolves a relative scripted-tool script to a readable classpath source`() {
+    // A workspace consuming a JAR-bundled trailmap: the trailmap ships a full-YAML scripted-tool
+    // descriptor whose `script:` is relative to the descriptor (`./<tool>.ts`, how they're authored).
+    // The resolved config's `script:` must name something the runtime can actually open. Before the
+    // fix the relative path passed through verbatim, so every consumer resolved it against the JVM
+    // working directory and the session died at `Scripted-tool source not found: <ws>/./<tool>.ts`
+    // — one unresolvable source taking down every trail in the workspace at session start.
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        tools:
+          - framework_addItemToCart
+      """.trimIndent(),
+    )
+    val toolsDir = File(classpathTrailmapDir, "tools").apply { mkdirs() }
+    File(toolsDir, "framework_addItemToCart.yaml").writeText(
+      """
+      script: ./framework_addItemToCart.ts
+      name: framework_addItemToCart
+      description: Add an item to the cart
+      inputSchema:
+        itemName:
+          type: string
+          description: Item to add.
+      """.trimIndent(),
+    )
+    val toolSource = "export const framework_addItemToCart = trailblaze.tool({}, async () => {})"
+    File(toolsDir, "framework_addItemToCart.ts").writeText(toolSource)
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolvedScript = withClasspathRoot(classpathRoot) {
+      val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+      assertNotNull(resolved)
+      val target = assertNotNull(resolved.targets.singleOrNull { it.id == "framework" })
+      val tool = assertNotNull(target.tools?.singleOrNull { it.name == "framework_addItemToCart" })
+      // Read through the same classpath the runtime will: the resolved `script:` has to name a
+      // real bundled resource, not a path that only means something relative to the CWD.
+      tool.script to ClasspathResourceDiscovery.loadResource(tool.script)
+    }
+
+    assertEquals(
+      toolSource,
+      resolvedScript.second,
+      "Resolved `script:` '${resolvedScript.first}' must load from the classpath the trailmap was " +
+        "bundled on; a descriptor-relative path only resolves against the JVM working directory.",
+    )
+  }
+
+  @Test
+  fun `classpath trailmap whose scripted-tool source is missing from the bundle fails naming the tool`() {
+    // The other half of the anchoring contract: a trailmap bundled without its `tools/` sources
+    // must say so, naming the tool and where it looked. Anchoring silently would defer the failure
+    // to a bundler error naming a working-directory path with no tool or trailmap in it.
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        tools:
+          - framework_addItemToCart
+      """.trimIndent(),
+    )
+    // Descriptor present, `.ts` source absent — a jar built without the trailmap's tool sources.
+    File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "framework_addItemToCart.yaml").writeText(
+      """
+      script: ./framework_addItemToCart.ts
+      name: framework_addItemToCart
+      description: Add an item to the cart
+      inputSchema:
+        itemName:
+          type: string
+          description: Item to add.
+      """.trimIndent(),
+    )
+    // A waypoint that must survive the failed target resolution: a missing bundled source is a
+    // jar-packaging by-product, not an authoring mistake, so only the target drops.
+    File(File(classpathTrailmapDir, "waypoints").apply { mkdirs() }, "home.waypoint.yaml").writeText(
+      """
+      id: "framework/home"
+      description: "Framework home screen."
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    var targetIds: List<String> = emptyList()
+    var waypointIds: Set<String> = emptySet()
+    val log = captureConsoleLog {
+      withClasspathRoot(classpathRoot) {
+        val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+          configFile = configFile,
+          includeClasspathTrailmaps = true,
+        )
+        targetIds = resolved?.targets.orEmpty().map { it.id }
+        waypointIds = resolved?.waypoints.orEmpty().map(WaypointDefinition::id).toSet()
+      }
+    }
+
+    assertContains(log, "framework_addItemToCart")
+    assertContains(log, "trails/config/trailmaps/framework/tools/framework_addItemToCart.ts")
+    assertTrue(
+      "framework" !in targetIds,
+      "A trailmap whose declared scripted-tool source isn't bundled must drop its target rather " +
+        "than deliver one that can't dispatch. Got: $targetIds",
+    )
+    // Target-level drop, not whole-trailmap drop: the recoverable-exception path recovers the
+    // waypoint even though the target is gone.
+    assertContains(waypointIds, "framework/home")
+  }
+
+  @Test
+  fun `classpath trailmap whose scripted-tool source is missing still recovers its trailmap-local toolsets`() {
+    // The recoverable-exception contract (ClasspathScriptedToolUnavailableException) promises the
+    // dropped trailmap's toolsets survive alongside its waypoints: a missing bundled tool source is a
+    // jar-packaging by-product, so only the target drops, not the trailmap's independent toolset
+    // declarations. Same fixture as the missing-source test, plus a trailmap-local `toolsets:` entry.
+    val classpathRoot = newTempDir()
+    val classpathTrailmapDir = File(classpathRoot, "trails/config/trailmaps/framework").apply { mkdirs() }
+    File(classpathTrailmapDir, "trailmap.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Trailmap
+        tools:
+          - framework_addItemToCart
+      toolsets:
+        - toolsets/framework_toolset.yaml
+      """.trimIndent(),
+    )
+    // Descriptor present, `.ts` source absent — triggers the recoverable classpath scripted-tool skip.
+    File(File(classpathTrailmapDir, "tools").apply { mkdirs() }, "framework_addItemToCart.yaml").writeText(
+      """
+      script: ./framework_addItemToCart.ts
+      name: framework_addItemToCart
+      description: Add an item to the cart
+      inputSchema:
+        itemName:
+          type: string
+          description: Item to add.
+      """.trimIndent(),
+    )
+    // A trailmap-local toolset that must survive the failed target resolution, exactly like the waypoint.
+    File(File(classpathTrailmapDir, "toolsets").apply { mkdirs() }, "framework_toolset.yaml").writeText(
+      """
+      id: framework_toolset
+      description: Framework-local toolset.
+      tools:
+        - some_tool
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathTrailmaps = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    // Target still drops: its declared scripted-tool source isn't bundled.
+    assertTrue(
+      resolved.targets.none { it.id == "framework" },
+      "A trailmap whose declared scripted-tool source isn't bundled must drop its target. " +
+        "Got: ${resolved.targets.map { it.id }}",
+    )
+    // The trailmap-local toolset is recovered despite the dropped target, per the recoverable-exception
+    // contract that names both waypoints and toolsets.
+    val toolsetIds = resolved.projectConfig.toolsets
+      .map { assertIs<ToolsetEntry.Inline>(it).config.id }
+    assertContains(
+      toolsetIds,
+      "framework_toolset",
+      "A recoverable classpath scripted-tool skip must keep the trailmap's toolsets, not just its " +
+        "waypoints. Got: $toolsetIds",
     )
   }
 

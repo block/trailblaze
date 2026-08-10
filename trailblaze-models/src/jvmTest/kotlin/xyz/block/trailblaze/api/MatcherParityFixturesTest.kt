@@ -29,7 +29,21 @@ class MatcherParityFixturesTest {
   )
 
   @Serializable
-  private data class ParityFixtures(val cases: List<ParityCase>)
+  private data class HintBridgeCase(
+    val name: String,
+    val hintTextRegex: String,
+    val type: String? = null,
+    val label: String? = null,
+    val value: String? = null,
+    val help: String? = null,
+    val matches: Boolean,
+  )
+
+  @Serializable
+  private data class ParityFixtures(
+    val cases: List<ParityCase>,
+    val iosMaestroHintBridgeCases: List<HintBridgeCase> = emptyList(),
+  )
 
   @Test
   fun `matching behavior agrees with the shared parity fixtures`() {
@@ -118,6 +132,58 @@ class MatcherParityFixturesTest {
           failures.forEach { appendLine(it) }
           append(
             "Either the resolver's matching semantics drifted, or the fixture was changed without " +
+              "updating this implementation. Fix the resolver (or the fixture) and keep the TS mirror " +
+              "(sdks/typescript/src/matcher/resolver.ts) in lockstep.",
+          )
+        },
+      )
+    }
+  }
+
+  // Node-shaped contract for the iosMaestro→iosAxe bridge's hintTextRegex leg (help on any
+  // type; label/value only on text-input types). Same source of truth and drift guarantee as
+  // `cases` — the TS mirror is matcher-parity.test.ts.
+  @Test
+  fun `hint bridge behavior agrees with the shared parity fixtures`() {
+    val fixtureFile = locate("sdks/typescript/src/matcher/matcher-parity-fixtures.json")
+    val fixtures = Json { ignoreUnknownKeys = true }.decodeFromString<ParityFixtures>(fixtureFile.readText())
+    check(fixtures.iosMaestroHintBridgeCases.isNotEmpty()) { "hint-bridge parity section is empty: $fixtureFile" }
+
+    val failures = fixtures.iosMaestroHintBridgeCases.mapNotNull { case ->
+      val target = TrailblazeNode(
+        nodeId = 2,
+        bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+        driverDetail = DriverNodeDetail.IosAxe(
+          type = case.type,
+          label = case.label,
+          value = case.value,
+          help = case.help,
+        ),
+      )
+      val root = TrailblazeNode(
+        nodeId = 1,
+        bounds = TrailblazeNode.Bounds(0, 0, 200, 100),
+        children = listOf(target),
+        driverDetail = DriverNodeDetail.IosAxe(),
+      )
+      val selector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.IosMaestro(hintTextRegex = case.hintTextRegex))
+      val matched =
+        TrailblazeNodeSelectorResolver.resolve(root, selector) is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch
+      if (matched != case.matches) {
+        "  ${case.name}: hintTextRegex=[${case.hintTextRegex}] type=[${case.type}] label=[${case.label}] " +
+          "value=[${case.value}] help=[${case.help}] expected matches=${case.matches}, got $matched"
+      } else {
+        null
+      }
+    }
+
+    if (failures.isNotEmpty()) {
+      fail(
+        buildString {
+          appendLine("${failures.size} hint-bridge parity fixture case(s) disagree with the Kotlin resolver:")
+          failures.forEach { appendLine(it) }
+          append(
+            "Either the bridge's hintTextRegex leg drifted, or the fixture was changed without " +
               "updating this implementation. Fix the resolver (or the fixture) and keep the TS mirror " +
               "(sdks/typescript/src/matcher/resolver.ts) in lockstep.",
           )

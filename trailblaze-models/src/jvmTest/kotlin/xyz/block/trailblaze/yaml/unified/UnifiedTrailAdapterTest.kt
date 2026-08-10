@@ -84,6 +84,34 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
+  fun `an all recording resolves on every device, and any platform key overrides it`() {
+    // The author-facing payoff of the universal root: a trail whose platforms share a recording
+    // declares it ONCE under `all:`; a platform that genuinely diverges keys its own, which wins
+    // on that platform while the others keep the shared entry.
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "Tap something",
+          recordings = linkedMapOf(
+            "all" to listOf(toolNamed("shared")),
+            "ios" to listOf(toolNamed("ios-divergent")),
+          ),
+        ),
+      ),
+    )
+    fun resolvedToolFor(vararg segments: String): String? {
+      val items = UnifiedTrailAdapter.lowerToTrailItems(unified, segments.map { classifier(it) })
+      val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+        .promptSteps.single() as DirectionStep
+      return step.recording?.tools?.singleOrNull()?.name
+    }
+    assertEquals("shared", resolvedToolFor("android", "phone"))
+    assertEquals("shared", resolvedToolFor("web"))
+    assertEquals("ios-divergent", resolvedToolFor("ios", "iphone"), "a platform key must beat `all:`")
+  }
+
+  @Test
   fun `no classifier match leaves recording null — executor falls back to LLM mode`() {
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
@@ -670,6 +698,30 @@ class UnifiedTrailAdapterTest {
         listOf(classifier("android"), classifier("phone")),
       ),
     )
+  }
+
+  @Test
+  fun `a trailhead recorded once under all lowers deterministically on every platform`() {
+    // The trailhead is the deterministic step 0 and — being one tool call per device — the place
+    // cross-platform trails duplicate the most. One `all:` slot must reach both platforms.
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "x", target = "y"),
+      trailhead = UnifiedTrailStep(
+        step = "Launch",
+        recordings = mapOf("all" to listOf(toolNamed("launch"))),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "LLM only")),
+    )
+    for (segments in listOf(listOf("android", "phone"), listOf("ios", "iphone"))) {
+      val items = UnifiedTrailAdapter.lowerToTrailItems(unified, segments.map { classifier(it) })
+      val trailhead = items.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
+      assertEquals(
+        listOf("launch"),
+        trailhead.tools?.map { it.name },
+        "the all-keyed trailhead must lower for $segments",
+      )
+      assertTrue(UnifiedTrailAdapter.hasRecordingForDevice(unified, segments.map { classifier(it) }))
+    }
   }
 
   @Test

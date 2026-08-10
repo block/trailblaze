@@ -86,3 +86,35 @@ for (const c of fixtures.cases) {
     });
   }
 }
+
+// Node-shaped contract for the iosMaestro→iosAxe bridge's hintTextRegex leg (help on any
+// type; label/value only on text-input types). Same source of truth and drift guarantee as
+// `cases` above — the Kotlin mirror is MatcherParityFixturesTest.
+for (const c of fixtures.iosMaestroHintBridgeCases) {
+  test(`parity (hint bridge): ${c.name}`, () => {
+    const target: TrailblazeNode = {
+      nodeId: 2,
+      children: [],
+      bounds: { left: 0, top: 0, right: 100, bottom: 50 },
+      driverDetail: {
+        class: "iosAxe",
+        type: c.type,
+        label: c.label,
+        value: c.value,
+        help: c.help,
+      },
+    };
+    const root: TrailblazeNode = {
+      nodeId: 1,
+      children: [target],
+      bounds: { left: 0, top: 0, right: 200, bottom: 100 },
+      driverDetail: { class: "iosAxe" },
+    };
+    const result = resolve(root, selectors.iosMaestro({ hintTextRegex: c.hintTextRegex }));
+    const matched = result.kind === "singleMatch";
+    expect(
+      matched,
+      `hintTextRegex=[${c.hintTextRegex}] type=[${c.type}] label=[${c.label}] value=[${c.value}] help=[${c.help}] expected matches=${c.matches}, got ${matched}`,
+    ).toBe(c.matches);
+  });
+}

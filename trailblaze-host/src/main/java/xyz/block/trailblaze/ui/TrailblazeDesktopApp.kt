@@ -7,12 +7,13 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.cli.CliReportGenerator
 import xyz.block.trailblaze.cli.CliRunDeviceResolution
 import xyz.block.trailblaze.cli.CliRunDeviceResolver
+import xyz.block.trailblaze.cli.CliRunDriverResolution
+import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.cli.DaemonClient
 import xyz.block.trailblaze.cli.DaemonSettingsBridge
 import xyz.block.trailblaze.cli.TrailblazeCli
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailDeviceSelector
-import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -177,7 +178,7 @@ abstract class TrailblazeDesktopApp(
     // Determine YAML content
     val yamlContent = request.yamlContent
       ?: request.runYamlRequest?.yaml
-      ?: return@withContext CliRunResponse(success = false, error = "No YAML content provided")
+      ?: return@withContext cliRunNoYamlResponse()
 
     // Resolve templates up front so device selection and execution read the same trail content.
     // Unconditional: bare submissions (no trailFilePath) resolve against the daemon's environment;
@@ -191,7 +192,15 @@ abstract class TrailblazeDesktopApp(
       null
     }
     val driverString = request.driverType ?: request.runYamlRequest?.driverType?.name ?: trailConfig?.driver
-    val trailDriverType = driverString?.let { TrailblazeDriverType.fromString(it) }
+    // Fail loud on an unrecognized driver name — same contract as the CLI's --driver
+    // validation (shared seam: CliRunDriverResolver). Silently falling back to the default
+    // driver here let a typo'd driver in a CI script keep its step green while replaying
+    // on a different driver entirely.
+    val trailDriverType = when (val resolution = CliRunDriverResolver.resolve(driverString)) {
+      is CliRunDriverResolution.Resolved -> resolution.driverType
+      is CliRunDriverResolution.Unrecognized ->
+        return@withContext cliRunMisuseResponse(resolution.message)
+    }
 
     // Resolve device
     // Fully-resolved mode hands this request object straight to the runner, so the resolved
@@ -229,14 +238,9 @@ abstract class TrailblazeDesktopApp(
           resolution.device
         }
         is CliRunDeviceResolution.MultipleDevices -> {
-          // Same fail-loud contract as the CLI: never silently pick one of several devices.
           val specs = resolution.candidates.map { it.platform.toFullyQualifiedDeviceId(it.instanceId) }
           Console.log("[device-select] /cli/run: ambiguous among $specs; requiring an explicit device")
-          return@withContext CliRunResponse(
-            success = false,
-            error = "Multiple devices connected: ${specs.joinToString(", ")}. " +
-              "Specify which device to run on (e.g. --device ${specs.first()} from the CLI).",
-          )
+          return@withContext cliRunMultipleDevicesResponse(specs)
         }
         is CliRunDeviceResolution.NoMatch -> {
           Console.log("[device-select] /cli/run: no device (${resolution.reason})")
@@ -328,6 +332,7 @@ abstract class TrailblazeDesktopApp(
     val completionLatch = CountDownLatch(1)
     var success = false
     var errorMessage: String? = null
+    var completionResult: TrailExecutionResult? = null
 
     val logsRepo = deviceManager.logsRepo
 
@@ -362,6 +367,7 @@ abstract class TrailblazeDesktopApp(
       },
         additionalInstrumentationArgs = desktopAppConfig.additionalInstrumentationArgs(),
       onComplete = { result ->
+        completionResult = result
         when (result) {
           is TrailExecutionResult.Success -> success = true
           is TrailExecutionResult.Failed -> errorMessage = result.errorMessage
@@ -373,6 +379,13 @@ abstract class TrailblazeDesktopApp(
 
     desktopYamlRunner.runYaml(params)
     completionLatch.await()
+
+    // A run the runner rejected as invalid before attempting it (e.g. an unrecognized
+    // unified-trail driver pin, which is only concrete against the connected device and so is
+    // validated runner-side — see [DesktopYamlRunner.trailPinnedDriverResolution]). Return the
+    // misuse rejection immediately so the delegated CLI exits MISUSE: no session was created,
+    // so the session-log poll below would stall its full window on a session that never existed.
+    completionResult?.let { cliRunRunnerRejectionResponse(it) }?.let { return@withContext it }
 
     // When --no-logging is active, no session files are written so there is nothing to poll.
     // Return the success/failure result from the latch directly.

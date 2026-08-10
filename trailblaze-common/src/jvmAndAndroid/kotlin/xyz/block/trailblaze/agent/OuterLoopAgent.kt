@@ -69,7 +69,7 @@ class OuterLoopAgent(
 
   companion object {
     /** Maximum number of iterations before giving up */
-    const val MAX_ITERATIONS = 50
+    const val MAX_ITERATIONS = 25
   }
 
   /**

@@ -173,9 +173,10 @@ class MaestroCommandToIosDriverActionConverterTest {
   }
 
   @Test
-  fun `BackPressCommand maps to PressHome (iOS has no back)`() {
+  fun `BackPressCommand is skipped (Maestro iOS parity)`() {
+    // Maestro's iOS driver no-ops BACK; mapping it to Home would background the app mid-trail.
     val out = convert(BackPressCommand())
-    assertEquals(IosDriverAction.PressHome, out.single())
+    assertTrue(out.isEmpty())
   }
 
   @Test
@@ -253,10 +254,29 @@ class MaestroCommandToIosDriverActionConverterTest {
 
   @Test
   fun `LaunchAppCommand maps to LaunchApp`() {
+    // Maestro treats a launchApp with no stopApp field as stop-then-launch (cold start), so the
+    // omitted-field default must be stopFirst=true — a warm resume here is a parity break that
+    // turns deterministic replays into state-dependent ones.
     val cmd = LaunchAppCommand(appId = "com.example.app")
     val action = assertIs<IosDriverAction.LaunchApp>(convert(cmd).single())
     assertEquals("com.example.app", action.bundleId)
+    assertEquals(true, action.stopFirst)
+  }
+
+  @Test
+  fun `LaunchAppCommand with explicit stopApp=false warm-resumes`() {
+    val cmd = LaunchAppCommand(appId = "com.example.app", stopApp = false)
+    val action = assertIs<IosDriverAction.LaunchApp>(convert(cmd).single())
+    assertEquals("com.example.app", action.bundleId)
     assertEquals(false, action.stopFirst)
+  }
+
+  @Test
+  fun `LaunchApp constructed without stopFirst cold-starts`() {
+    // A producer that omits stopFirst gets Maestro's omitted-stopApp behavior. Flipping this
+    // default back to false is what reintroduces the warm-resume inversion, and it would do so
+    // silently — every call site below keeps compiling.
+    assertEquals(true, IosDriverAction.LaunchApp(bundleId = "com.example.app").stopFirst)
   }
 
   @Test
@@ -313,6 +333,22 @@ class MaestroCommandToIosDriverActionConverterTest {
   }
 
   @Test
+  fun `LaunchAppCommand permissions map carries through for pre-granting`() {
+    // Maestro pre-grants app permissions before every launch (dropping the map silently
+    // reintroduces the permission dialogs the pre-grant exists to prevent). Null stays null —
+    // the executor owns Maestro's all=allow default.
+    val cmd = LaunchAppCommand(
+      appId = "com.example.app",
+      permissions = mapOf("location" to "always", "notifications" to "allow"),
+    )
+    val action = assertIs<IosDriverAction.LaunchApp>(convert(cmd).single())
+    assertEquals(mapOf("location" to "always", "notifications" to "allow"), action.permissions)
+
+    val defaulted = assertIs<IosDriverAction.LaunchApp>(convert(LaunchAppCommand(appId = "com.example.app")).single())
+    assertNull(defaulted.permissions)
+  }
+
+  @Test
   fun `LaunchAppCommand with clearKeychain carries the flag through`() {
     // Sign-in flows rely on clearKeychain to force a signed-out start — iOS keychain entries
     // survive even the clearState reinstall, so dropping this flag silently resumes the previous
@@ -360,9 +396,9 @@ class MaestroCommandToIosDriverActionConverterTest {
   }
 
   @Test
-  fun `PressKeyCommand BACK maps to Home (iOS has no back)`() {
+  fun `PressKeyCommand BACK is skipped (Maestro iOS parity)`() {
     val out = convert(PressKeyCommand(code = KeyCode.BACK))
-    assertEquals(IosDriverAction.PressHome, out.single())
+    assertTrue(out.isEmpty())
   }
 
   @Test

@@ -102,6 +102,8 @@ interface TraceStep {
   selfHealError?: string | null;
   /** True only on the recorded tool row whose failure triggered self-heal. */
   selfHealSource?: boolean;
+  /** True for trailing non-action rows (final/failure snapshots, errors) — never a step's "first tool call". */
+  terminal?: boolean;
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;
@@ -262,10 +264,11 @@ interface VideoInfo {
    * data: URIs of the sprite sheet image(s), in sheet order, each with that sheet's actual row
    * count (`columns`/`rows` describe one FULL sheet, so physical frame N lives on sheet
    * `N / (columns*rows)`; only the final sheet may have fewer rows). Usually length 1. Callers
-   * hand full URIs to buildMultiReportHtml; in the emitted document the URIs are hoisted into the
-   * inert `#tb-sprites` JSON chunk (keyed by session index, one URI array per session) and the
-   * embedded payload carries `uri: ''` — the viewer resolves them lazily on first access, so
-   * booting never parses sprite bytes.
+   * hand full URIs to buildMultiReportHtml; in the emitted document the URIs are hoisted into a
+   * per-session inert `#tb-sprites-<i>` JSON chunk (one URI array per session; older exports use
+   * a single `#tb-sprites` map keyed by session index) and the embedded payload carries
+   * `uri: ''` — the viewer resolves them lazily on first access, so booting never parses sprite
+   * bytes.
    */
   sprites: Array<{ uri: string; rows: number }>;
   fps: number;
@@ -296,6 +299,14 @@ interface SessionPayload {
   meta: RunMeta;
   trace: TraceStep[];
   llm: LlmCall[];
+  /**
+   * Index-chunk precomputes (chunked documents only): the run list's step / tool-call counts,
+   * derived from the trace at build time (traceStepCount/traceToolCallCount) so the index renders
+   * before any session chunk is hydrated. Absent on monolithic payloads, where the viewer derives
+   * both from the trace directly.
+   */
+  stepCount?: number | null;
+  toolCallCount?: number | null;
   /** screenshotFile → data: URI. */
   shots: Record<string, string>;
   recordingYaml: string | null;
@@ -335,10 +346,14 @@ interface SessionInput {
 }
 
 /**
- * The run payload the self-contained report embeds. The primary source is the inert
- * `<script type="application/json" id="tb-run-data">` element the viewer JSON.parses at boot;
- * `window.__TB_RUN_DATA__` is a fallback read only, kept for out-of-repo embedders that set the
- * global directly instead of shipping the JSON script element.
+ * The run payload the self-contained report embeds. Chunked documents (buildMultiReportHtml)
+ * split it across inert JSON script elements: `#tb-index` (this shape, with each session reduced
+ * to a stub of meta + per-call LLM token/cost summaries + stepCount/toolCallCount) is JSON.parsed
+ * at boot, and each session's
+ * full payload rides in its own `#tb-session-<i>` element, parsed into the stub when that run
+ * opens. Fallback reads, in order: a monolithic `#tb-run-data` element (older exported files),
+ * then `window.__TB_RUN_DATA__` (out-of-repo embedders that set the global directly instead of
+ * shipping a JSON script element).
  */
 interface ReportPayload {
   generatedAt: string;
