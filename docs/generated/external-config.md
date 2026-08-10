@@ -8,6 +8,8 @@ title: External Config
 
 Trailblaze's desktop/CLI binary currently builds the effective app-target config from three layers, in order: framework-bundled `trails/config/**` resources, an optional workspace `trails/config/` directory, and the current workspace's `trails/config/trailblaze.yaml` entries. Later layers override earlier ones by id / filename.
 
+> This page covers the `trails/config/` **directory** — authoring targets, toolsets, and tools. The `trailblaze.yaml` **file** itself (its keys, workspace defaults, and precedence) is documented in [Configuration](../configuration.md).
+
 The intended split is now the live split: `trails/` is the workspace anchor, `trails/config/trailblaze.yaml` is the workspace manifest, and `trails/config/` is the artifact directory that holds concrete trailmap, target, toolset, and tool files, plus the reserved location for provider YAMLs.
 
 ## Lookup Order for Filesystem Config

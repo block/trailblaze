@@ -56,6 +56,14 @@ class ExternalConfigDocsGenerator(
         )
         appendLine()
         appendLine(
+          "> This page covers the `${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` **directory** — " +
+            "authoring targets, toolsets, and tools. The " +
+            "`${TrailblazeProjectConfigLoader.CONFIG_FILENAME}` **file** itself (its keys, " +
+            "workspace defaults, and precedence) is documented in " +
+            "[Configuration](../configuration.md).",
+        )
+        appendLine()
+        appendLine(
           "The intended split is now the live split: ${workspaceAnchorDir()} is the workspace anchor, " +
             "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE}` is the workspace manifest, and " +
             "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` is the artifact directory that holds " +
