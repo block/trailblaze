@@ -54,7 +54,7 @@ llm:
 | Key | Type | What it does |
 |---|---|---|
 | `defaults` | map | Workspace-wide defaults — see below |
-| `targets` | list of ids | Target-trailmap ids this workspace opts into. **Omit to auto-discover** every target trailmap under `<workspace>/trailmaps/`. Listing ids is how a workspace with many trailmaps loads only a subset. Each id must be a *target* trailmap (one with a `target:` block); library trailmaps reach scope through a target's `dependencies:`. |
+| `targets` | list of ids | Target-trailmap ids this workspace opts into. **Omit to auto-discover** every target trailmap under `<workspace>/trails/config/trailmaps/`. Listing ids is how a workspace with many trailmaps loads only a subset. Each id must be a *target* trailmap (one with a `target:` block); library trailmaps reach scope through a target's `dependencies:`. |
 | `toolsets` | list | Extra toolsets, either written inline or pulled in with `ref: path/to/toolset.yaml` |
 | `tools` | list | Extra tools, same inline-or-`ref:` shape |
 | `providers` | list | Reserved for standalone LLM provider files. Provider and model definitions are read from the `llm:` block today — put them there. |

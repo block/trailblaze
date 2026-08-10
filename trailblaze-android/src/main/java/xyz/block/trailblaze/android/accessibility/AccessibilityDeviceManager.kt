@@ -21,6 +21,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -875,7 +876,9 @@ class AccessibilityDeviceManager(
               unfilteredTree, result.node, center.first, center.second, action.nodeSelector.description(),
             )
             val route =
-              tapOrLongPressOnResolvedNode(result.node, center.first, center.second, action.longPress)
+              tapOrLongPressOnResolvedNode(
+                result.node, center.first, center.second, action.longPress, action.tapRoute,
+              )
             return ExecutionResult(
               resolvedX = center.first,
               resolvedY = center.second,
@@ -894,7 +897,9 @@ class AccessibilityDeviceManager(
               unfilteredTree, chosen, center.first, center.second, action.nodeSelector.description(),
             )
             val route =
-              tapOrLongPressOnResolvedNode(chosen, center.first, center.second, action.longPress)
+              tapOrLongPressOnResolvedNode(
+                chosen, center.first, center.second, action.longPress, action.tapRoute,
+              )
             return ExecutionResult(
               resolvedX = center.first,
               resolvedY = center.second,
@@ -970,21 +975,27 @@ class AccessibilityDeviceManager(
     centerX: Int,
     centerY: Int,
     longPress: Boolean,
+    tapRoute: TapRouteOverride?,
   ): TapDispatchRoute {
     if (actionClickRouteDisabled()) {
       Console.log("[tap-route] kill-switch set, using gesture at ($centerX,$centerY)")
       tapOrLongPress(centerX, centerY, longPress)
       return TapDispatchRoute.GESTURE
     }
-    val plan = planActionClickRoute(resolvedNode, longPress)
+    val plan = planActionClickRoute(resolvedNode, longPress, tapRoute)
     if (plan == null) {
       // Surface the gate-relevant fields of the resolved node so an oncall debugging
       // "why did this tap go via gesture?" can map each value to the matching condition
       // in `planActionClickRoute`'s kdoc without re-running the session. The 7-condition
       // gate makes a generic "declined" message uninformative.
+      val why = if (tapRoute == TapRouteOverride.GESTURE) {
+        "recording pinned gesture"
+      } else {
+        "gate declined ACTION_CLICK"
+      }
       Console.log(
-        "[tap-route] gesture at ($centerX,$centerY) — gate declined ACTION_CLICK " +
-          "(${describeNodeForRouteLog(resolvedNode, longPress)})",
+        "[tap-route] gesture at ($centerX,$centerY) — $why " +
+          "(${describeNodeForRouteLog(resolvedNode, longPress, tapRoute)})",
       )
       tapOrLongPress(centerX, centerY, longPress)
       return TapDispatchRoute.GESTURE
@@ -1194,23 +1205,37 @@ internal fun scrollToSwipeDirection(direction: AccessibilityAction.Direction): A
  *   still taps correctly, while a stateless container wrongly sent to `ACTION_CLICK` changes
  *   what the tap does. A misrouting node is diagnosable from the `[tap-route]` log and the
  *   whole route is revertible with `TRAILBLAZE_DISABLE_ACTION_CLICK_ROUTE`.
+ *
+ * [tapRoute] lets a single recorded step pin its own route for the case this gate cannot decide:
+ * two rows that need opposite routes presenting identical fields (see [TapRouteOverride]). The pin
+ * reaches only the leaf-vs-container judgement above. Every check before it is a precondition for
+ * `ACTION_CLICK` being dispatchable at all, so a step that pins `ACTION_CLICK` on a long-press, an
+ * editable field, an invisible node, or a node that doesn't advertise the action still routes to
+ * gesture rather than dispatching an action the node can't answer.
  */
-internal fun planActionClickRoute(node: TrailblazeNode, longPress: Boolean): ActionClickPlan? {
+internal fun planActionClickRoute(
+  node: TrailblazeNode,
+  longPress: Boolean,
+  tapRoute: TapRouteOverride? = null,
+): ActionClickPlan? {
   if (longPress) return null
+  if (tapRoute == TapRouteOverride.GESTURE) return null
   val bounds = node.bounds ?: return null
   val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility ?: return null
   if (ACTION_CLICK_NAME !in detail.actions) return null
   if (!detail.isEnabled) return null
   if (detail.isEditable) return null
   if (!detail.isVisibleToUser) return null
-  val publishesCheckedState =
-    detail.isCheckable && (detail.isChecked || !detail.stateDescription.isNullOrBlank())
-  if (
-    detail.text.isNullOrBlank() &&
-    detail.contentDescription.isNullOrBlank() &&
-    !publishesCheckedState
-  ) {
-    return null
+  if (tapRoute != TapRouteOverride.ACTION_CLICK) {
+    val publishesCheckedState =
+      detail.isCheckable && (detail.isChecked || !detail.stateDescription.isNullOrBlank())
+    if (
+      detail.text.isNullOrBlank() &&
+      detail.contentDescription.isNullOrBlank() &&
+      !publishesCheckedState
+    ) {
+      return null
+    }
   }
   return ActionClickPlan(bounds, detail.className, detail.resourceId)
 }
@@ -1246,9 +1271,13 @@ internal fun pickPreferredMatch(nodes: List<TrailblazeNode>): TrailblazeNode =
  * function, kept top-level alongside [planActionClickRoute] for the same JVM-unit-testability
  * reasons.
  */
-internal fun describeNodeForRouteLog(node: TrailblazeNode, longPress: Boolean): String {
+internal fun describeNodeForRouteLog(
+  node: TrailblazeNode,
+  longPress: Boolean,
+  tapRoute: TapRouteOverride? = null,
+): String {
   val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
-  return "longPress=$longPress, hasBounds=${node.bounds != null}, " +
+  return "tapRoute=$tapRoute, longPress=$longPress, hasBounds=${node.bounds != null}, " +
     "className=${detail?.className}, text=${detail?.text}, contentDescription=${detail?.contentDescription}, " +
     "isEnabled=${detail?.isEnabled}, isEditable=${detail?.isEditable}, " +
     "isVisibleToUser=${detail?.isVisibleToUser}, isCheckable=${detail?.isCheckable}, " +

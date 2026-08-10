@@ -884,10 +884,7 @@ fun RecordingScreenComposable(
                   is TapOnByElementSelector -> {
                     recorder.replaceInteractionTool(
                       interaction = interaction,
-                      newTool = TapOnByElementSelector(
-                        nodeSelector = candidate.selector,
-                        longPress = original.longPress,
-                      ),
+                      newTool = original.retargetedAt(candidate.selector),
                       newToolName = TapOnByElementSelector::class.toolName().toolName,
                     )
                     generatedTrailYaml = null // Invalidate stale LLM output

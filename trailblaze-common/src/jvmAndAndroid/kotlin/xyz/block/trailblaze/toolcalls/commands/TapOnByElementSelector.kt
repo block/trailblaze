@@ -6,6 +6,7 @@ import maestro.orchestra.Command
 import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -33,6 +34,15 @@ import xyz.block.trailblaze.util.Console
 data class TapOnByElementSelector(
   val reason: String? = null,
   val longPress: Boolean = false,
+  /**
+   * Pins how this tap is dispatched, overriding the Android accessibility driver's automatic
+   * route choice for this one step. Unset (the default) leaves that choice to the driver, which
+   * is right for essentially every tap — see [TapRouteOverride] for when a step needs the pin.
+   *
+   * Only the Android accessibility driver routes taps; every other driver dispatches a gesture
+   * unconditionally and ignores this.
+   */
+  val tapRoute: TapRouteOverride? = null,
   /**
    * Rich driver-native selector generated from [TrailblazeNode] trees.
    *
@@ -87,6 +97,7 @@ data class TapOnByElementSelector(
         val accessibilityResult = agent.executeNodeSelectorTap(
           nodeSelector = nodeSelector,
           longPress = longPress,
+          tapRoute = tapRoute,
           traceId = toolExecutionContext.traceId,
         )
         if (accessibilityResult != null) return accessibilityResult
@@ -116,6 +127,7 @@ data class TapOnByElementSelector(
           val result = agent.executeNodeSelectorTap(
             nodeSelector = nodeSelector,
             longPress = longPress,
+            tapRoute = tapRoute,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result
@@ -127,6 +139,7 @@ data class TapOnByElementSelector(
           val result = agent.executeNodeSelectorTap(
             nodeSelector = nodeSelector,
             longPress = longPress,
+            tapRoute = tapRoute,
             traceId = toolExecutionContext.traceId,
           )
           if (result != null) return result

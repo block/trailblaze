@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.model.ResolvedTarget
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -100,6 +101,8 @@ class IosDriverTrailblazeAgent(
   override suspend fun executeNodeSelectorTap(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
+    // Ignored — the iOS driver has only one dispatch path, so there is no route to pin.
+    tapRoute: TapRouteOverride?,
     traceId: TraceId?,
   ): TrailblazeToolResult = IosDriverTrailRunner.runActions(
     actions = listOf(IosDriverAction.TapOnElement(nodeSelector, longPress = longPress)),

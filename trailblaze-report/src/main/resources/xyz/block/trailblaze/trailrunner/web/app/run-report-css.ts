@@ -348,12 +348,14 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxmatrixrow { grid-template-columns: minmax(220px,1fr) minmax(0,auto); cursor: default; }
 .idxmatrixrow .nm { font-weight: 550; }
 .idxcells { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.idxcell { position: relative; width: 158px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--bg3); transition: border-color 120ms ease-out, background-color 120ms ease-out; }
+.idxcell { position: relative; width: 164px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 8px; background: var(--bg3); transition: border-color 120ms ease-out, background-color 120ms ease-out; }
 .idxcell:hover { border-color: var(--run); }
 .idxcellopen { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; width: 100%; box-sizing: border-box; margin: 0; padding: 9px 14px; border: 0; border-radius: 7px; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .idxcellopen:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .idxcell .pk { font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.idxcell .pv { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--sub2); font-variant-numeric: tabular-nums; }
+.idxcell .pv { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 500; color: var(--sub2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.idxcell .pv .idxstatusdot { flex: none; }
+.idxcell .pv .pvtxt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .idxcell .pcounts { justify-self: end; text-align: right; font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .idxcell .idxstatusdot { box-shadow: none; }
 .idxcell.failed { border-color: rgba(255,91,106,.35); background: rgba(255,91,106,.06); }
@@ -361,16 +363,15 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxcell.missing { display: flex; flex-direction: column; gap: 4px; padding: 9px 14px; border-style: dashed; background: transparent; }
 .idxcell.missing:hover { border-color: var(--line2); }
 .idxcell.missing .pv { color: var(--sub); opacity: .7; }
-.idxcell.retried .idxcellopen { padding-right: 34px; }
-.idxcelldots { display: inline-flex; align-items: center; gap: 4px; }
-.idxcelldots .idxstatusdot { width: 6px; height: 6px; }
-.idxcelldots .idxstatusdot:not(:last-child) { opacity: .5; }
-.idxcellmore { margin-right: 1px; font-size: 10px; font-weight: 600; color: var(--sub); font-variant-numeric: tabular-nums; }
-.idxcellchev { position: absolute; right: 0; top: 0; bottom: 0; width: 27px; display: flex; align-items: center; justify-content: center; border: 0; border-left: 1px solid var(--line2); border-radius: 0 7px 7px 0; padding: 0; background: transparent; cursor: pointer; }
+.idxcell.retried .idxcellopen { padding-right: 40px; }
+.idxcellcount { font-size: 11px; font-weight: 600; line-height: 1; color: var(--sub); font-variant-numeric: tabular-nums; }
+/* The rail stacks the attempt history over the expand glyph (::after), so the history reads as
+   "what this control reveals" and the main button's stats line keeps its full width. */
+.idxcellchev { position: absolute; right: 0; top: 0; bottom: 0; width: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 0; border-left: 1px solid var(--line2); border-radius: 0 7px 7px 0; padding: 0; background: transparent; cursor: pointer; }
 .idxcellchev:hover { background: var(--button-hover); }
 .idxcellchev:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.idxcellchev::before { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--sub); transform: rotate(45deg) translate(-1px,-1px); transition: transform 120ms ease-out, color 120ms ease-out; }
-.idxcellchev.open::before { color: var(--ai); transform: rotate(225deg) translate(-1px,-1px); }
+.idxcellchev::after { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; color: var(--sub); transform: rotate(45deg) translate(-1px,-1px); transition: transform 120ms ease-out, color 120ms ease-out; }
+.idxcellchev.open::after { color: var(--ai); transform: rotate(225deg) translate(-1px,-1px); }
 .idxcell.failed .idxcellchev { border-left-color: rgba(255,91,106,.35); }
 .idxcell.selfheal .idxcellchev { border-left-color: rgba(242,184,75,.3); }
 .idxatthead { padding: 10px var(--space-4) 3px 28px; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); }
@@ -407,7 +408,6 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxattemptstatus.failed { color: var(--fail); }
 .idxattemptstatus.selfheal { color: var(--amber); }
 .idxattemptstatus.passed { color: var(--pass); }
-.idxattempttime { min-width: 0; overflow: hidden; color: var(--sub); font-size: var(--type-micro); text-overflow: ellipsis; white-space: nowrap; }
 .detailheader { padding-top: var(--space-4); }
 .detailheader h1 { font-size: 20px; }
 .detailheader nav { margin-top: var(--space-3); }

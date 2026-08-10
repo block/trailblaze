@@ -7,6 +7,7 @@ import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
+import ai.koog.prompt.executor.ollama.client.ContextWindowStrategy
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.host.llm.OpenAICompatibleLlmClientFactory
@@ -16,6 +17,7 @@ import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.LlmConfigResolver
 import xyz.block.trailblaze.llm.config.LlmProviderType
+import xyz.block.trailblaze.llm.config.OllamaContextWindow
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 
@@ -94,6 +96,16 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
         OllamaClient(
           baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
           httpClientFactory = httpClientFactory,
+          // Request num_ctx on every call — without it Ollama sizes the window to the
+          // memory it has available, which on a modest machine is below a single agent
+          // turn (~20K tokens) and fails with exceed_context_size_error no matter what
+          // the registry entry declares. Fixed (not per-prompt) because Ollama reloads
+          // the model whenever the requested context changes; koog clamps it to the
+          // model's declared max.
+          // See OllamaContextWindow for the rationale and TRAILBLAZE_OLLAMA_NUM_CTX.
+          contextWindowStrategy = ContextWindowStrategy.Companion.Fixed(
+            OllamaContextWindow.resolveNumCtx(System.getenv(OllamaContextWindow.ENV_VAR)),
+          ),
         )
       } else {
         null

@@ -1501,7 +1501,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const label = indexOutcomeLabel(attempt.outcome);
       return `<div class="idxattemptrow" data-session="${attempt.i}" data-outcome="${esc(attempt.outcome)}" role="button" tabindex="0" aria-label="Open attempt ${attemptIndex + 1}, ${esc(label)}">
             <span class="idxstatus" aria-label="${esc(label)}" title="${esc(label)}"><span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true"></span></span>
-            <div class="idxattemptmain"><span class="idxattemptlabel">Attempt ${attemptIndex + 1}</span><span class="idxattemptstatus ${esc(attempt.outcome)}">${esc(label)}</span>${attempt.s.meta.ranAt ? `<span class="idxattempttime">${esc(attempt.s.meta.ranAt)}</span>` : ''}</div>
+            <div class="idxattemptmain"><span class="idxattemptlabel">Attempt ${attemptIndex + 1}</span><span class="idxattemptstatus ${esc(attempt.outcome)}">${esc(label)}</span></div>
             ${runFacts(attempt.s)}
             <span class="arr" aria-hidden="true">→</span>
           </div>`;
@@ -1534,7 +1534,6 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // --- mixed-platform matrix rows ---------------------------------------------------------
     const matrixCols = mixedPlatforms ? matrixColumns() : [];
     const cellKey = (row, col) => `${row.key}:${col.key}`;
-    const MAX_CELL_DOTS = 4;
     const renderCell = (row, col) => {
       const cell = row.cells.get(col.key);
       if (!cell) return `<div class="idxcell missing"><span class="pk">${esc(col.label)}</span><span class="pv">—</span></div>`;
@@ -1542,20 +1541,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const open = retried && st.idxOpen.indexOf(cellKey(row, col)) >= 0;
       const outcomeLabel = indexOutcomeLabel(cell.outcome);
       const duration = cell.latest.s.meta.duration;
-      // Past MAX_CELL_DOTS attempts the cell shows a "+N" prefix and only the last three dots; the
-      // chevron panel holds the complete inventory.
-      const shown = cell.attempts.length > MAX_CELL_DOTS ? cell.attempts.slice(-3) : cell.attempts;
-      const more = cell.attempts.length - shown.length;
-      const attemptLabels = cell.attempts.map((attempt) => indexOutcomeLabel(attempt.outcome));
-      const value = retried
-        ? `<span class="idxcelldots" role="img" aria-label="Attempt history: ${esc(attemptLabels.join(', '))}">${more ? `<span class="idxcellmore">+${more}</span>` : ''}${shown.map((attempt) => `<span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true"></span>`).join('')}</span>`
-        : `<span class="idxstatusdot ${esc(cell.outcome)}" aria-hidden="true"></span>`;
-      const chev = retried ? `<button class="idxcellchev${open ? ' open' : ''}" type="button" data-cell-toggle="${esc(cellKey(row, col))}" aria-expanded="${open}" aria-label="Show ${cell.attempts.length} ${esc(col.label)} attempts"></button>` : '';
+      // The main button always reads latest-outcome dot + duration; the chevron rail — the control
+      // that expands the attempt history — previews it as a bare attempt count, so the stats line
+      // never shares width with variable-length history (long durations were wrapping mid-value).
+      // Per-attempt outcomes live only in the expanded panel.
+      const value = `<span class="idxstatusdot ${esc(cell.outcome)}" aria-hidden="true"></span>`;
+      const chev = retried ? `<button class="idxcellchev${open ? ' open' : ''}" type="button" data-cell-toggle="${esc(cellKey(row, col))}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} ${cell.attempts.length} ${esc(col.label)} attempts"><span class="idxcellcount" aria-hidden="true">${cell.attempts.length}</span></button>` : '';
       // The open-latest and expand controls are sibling <button>s inside a plain wrapper — nesting
       // an interactive chevron inside a role="button" cell would be invalid HTML (two tab stops
       // with ambiguous activation for keyboard and screen-reader users).
       const tools = runToolCallCount(cell.latest.s);
-      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><button class="idxcellopen" type="button" data-session="${cell.latest.i}" aria-label="Open latest ${esc(col.label)} run, ${esc(outcomeLabel)}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? esc(duration) : ''}</span><span class="pcounts">${runLlmCallCount(cell.latest.s)} LLM</span></button>${chev}</div>`;
+      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><button class="idxcellopen" type="button" data-session="${cell.latest.i}" aria-label="Open latest ${esc(col.label)} run, ${esc(outcomeLabel)}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? `<span class="pvtxt">${esc(duration)}</span>` : ''}</span><span class="pcounts">${runLlmCallCount(cell.latest.s)} LLM</span></button>${chev}</div>`;
     };
     const renderMatrixRow = (row) => {
       const title = row.latest.s.meta.title || ('Run ' + (row.latest.i + 1));

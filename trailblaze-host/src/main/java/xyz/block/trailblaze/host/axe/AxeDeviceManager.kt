@@ -33,6 +33,20 @@ class AxeDeviceManager(
 ) : IosDeviceManager {
 
   companion object {
+    /**
+     * Env knob selecting how `clearState` is satisfied. Default (unset / any other value) is
+     * the byte-identical existing behavior: [SimctlCli.clearAppState]'s uninstall + bundle
+     * copy + reinstall. `container` routes to [SimctlCli.clearAppDataContainer] — an in-place
+     * delete of the data container's children (the host path's `mobile_clearAppData` wipe),
+     * measured ~9s cheaper per clear on a 1.3GB app bundle. Read on every clear (not cached
+     * at JVM start), so it can be flipped between runs.
+     */
+    private const val CLEAR_STATE_MODE_ENV = "TRAILBLAZE_IOS_CLEAR_STATE_MODE"
+
+    /** Pure gate for [CLEAR_STATE_MODE_ENV] — `container` (case-insensitive, trimmed) opts in. */
+    internal fun useContainerClearState(raw: String?): Boolean =
+      raw?.trim()?.equals("container", ignoreCase = true) == true
+
     /** Polling interval for element-resolution loops. Balances responsiveness with CPU usage. */
     private const val POLL_INTERVAL_MS = 150L
 
@@ -298,7 +312,7 @@ class AxeDeviceManager(
           // REINSTALL semantics — same clean-state guarantee Maestro's clearAppState gives.
           // Hard-fail on error: silently launching against dirty state is the bug this closes.
           // (clearAppState terminates the app itself, so stopFirst is subsumed.)
-          SimctlCli.clearAppState(udid, action.bundleId).throwIfError("clearState ${action.bundleId}")
+          clearStateViaConfiguredMode(action.bundleId)
         } else if (action.stopFirst) {
           // Best-effort: `simctl terminate` exits nonzero when the app isn't running,
           // which is a fine starting state for a force restart.
@@ -344,12 +358,13 @@ class AxeDeviceManager(
       }
       is IosDriverAction.ClearState -> {
         // Standalone clearState — no launch afterwards, so no tree-readiness wait either.
-        SimctlCli.clearAppState(udid, action.bundleId).throwIfError("clearState ${action.bundleId}")
+        clearStateViaConfiguredMode(action.bundleId)
         // Maestro resets permissions to unset on a standalone clearState (Orchestra's
         // clearAppStateCommand, for Android parity). This path is deliberately MORE lenient
-        // than Maestro — Orchestra propagates setPermissions failures, but here the reinstall
-        // above already wiped the app's TCC rows, so this is redundant hardening not worth
-        // failing a completed wipe. Also disarms the notification auto-dismiss.
+        // than Maestro — Orchestra propagates setPermissions failures, but here the wipe
+        // above already reset the app's TCC rows (both modes do), so this is redundant
+        // hardening not worth failing a completed wipe. Also disarms the notification
+        // auto-dismiss.
         val privacyReset = SimctlCli.privacy(udid, "reset", "all", action.bundleId)
         if (!privacyReset.success) {
           Console.log(
@@ -394,6 +409,21 @@ class AxeDeviceManager(
         .throwIfError("privacy ${cmd.action} ${cmd.service} ${action.bundleId}")
     }
     notificationsAutoDismiss = plan.notificationsValue
+  }
+
+  /**
+   * Routes a clearState request per [CLEAR_STATE_MODE_ENV] (see [useContainerClearState]):
+   * default = uninstall/reinstall via [SimctlCli.clearAppState]; `container` = in-place data
+   * container wipe. Both hard-fail on error — silently launching against dirty state is the
+   * bug clearState closes.
+   */
+  private fun clearStateViaConfiguredMode(bundleId: String) {
+    if (useContainerClearState(System.getenv(CLEAR_STATE_MODE_ENV))) {
+      Console.log("[AxeDeviceManager] clearState via data-container wipe ($CLEAR_STATE_MODE_ENV=container) for $bundleId")
+      SimctlCli.clearAppDataContainer(udid, bundleId).throwIfError("clearState(container) $bundleId")
+    } else {
+      SimctlCli.clearAppState(udid, bundleId).throwIfError("clearState $bundleId")
+    }
   }
 
   /**

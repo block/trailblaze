@@ -231,10 +231,13 @@ llm:
       models:
         - id: qwen3-vl:8b
         - id: qwen3.5:27b
-        - id: llama3.2:latest
   defaults:
     model: qwen3-vl:8b
 ```
+
+Both ids above are in the built-in registry, so they need no spec. A model the registry
+doesn't know falls back to a generic context length — give those an explicit spec, as
+[Custom model specs](#custom-model-specs) below shows.
 
 Models that are not installed will show a warning in the desktop app UI indicating the model is not available via Ollama. Developers can install them with:
 
@@ -253,6 +256,64 @@ For Ollama models not in the built-in registry, provide context length and outpu
   context_length: 131072
   max_output_tokens: 8192
 ```
+
+For a text-only model, also set `vision: false` — otherwise Trailblaze attaches screenshots
+to requests (including AI-backed assertions) and Ollama rejects them with a 400.
+
+### Context window (`num_ctx`)
+
+Trailblaze requests a 64K context window (`num_ctx: 65536`) on every Ollama call, clamped
+down to the model's declared `context_length` when that is lower.
+
+**Trailblaze now owns this setting.** A `num_ctx` on the request sits at the top of
+Ollama's precedence chain — above a `PARAMETER num_ctx` in the model's Modelfile, and above
+the server's `OLLAMA_CONTEXT_LENGTH` — so neither of those takes effect for Trailblaze's
+requests any more. Use `TRAILBLAZE_OLLAMA_NUM_CTX` (below) rather than a server-side
+setting, which will look like it is being ignored.
+
+The clamp only applies to a model whose `context_length` Trailblaze knows: one in the
+built-in registry, or one you declared with an explicit spec. A model with neither falls
+back to a generic context length, and the clamp does nothing for it — so if such a model's
+real window is smaller than the requested value, declare its `context_length` (see
+[Custom model specs](#custom-model-specs)) instead of relying on the clamp.
+
+When a request doesn't ask for a context window, Ollama picks one itself, sized to the
+memory it has available rather than to what the model supports — so the same model gets a
+large window on a workstation and a very small one on a laptop. A single Trailblaze agent
+turn (screenshot + view hierarchy + tool definitions) is ~20K tokens on a content-heavy
+screen, which is more than the low end of that range, and the turn fails with
+`exceed_context_size_error`. Asking explicitly is what makes the context predictable
+across machines instead of a property of the developer's hardware.
+
+64K is a deliberate middle: several multi-turn agent loops fit, and the KV cache still
+fits a laptop. On a machine with a lot of memory Ollama's automatic choice can be larger
+than 64K, and an explicit request replaces it — raise it with the override below if you
+run very long loops on such a machine.
+
+Override the requested value with `TRAILBLAZE_OLLAMA_NUM_CTX`:
+
+```bash
+TRAILBLAZE_OLLAMA_NUM_CTX=32768 trailblaze run --no-daemon login.trail.yaml
+```
+
+Lower it if your machine can't afford the 64K KV cache for a larger model; raise it for
+very long agent loops. Malformed or non-positive values fall back to the default.
+
+The value is read from the process that builds the Ollama client. `trailblaze run`
+normally hands the run to a background daemon, which inherits the environment it was
+started with — so a one-shot prefix like the above only applies with `--no-daemon`. To
+change it for daemon-backed runs, restart the daemon with the variable set:
+
+```bash
+trailblaze stop
+TRAILBLAZE_OLLAMA_NUM_CTX=32768 trailblaze app start
+```
+
+The override applies to host-side clients only. Android on-device runs always request the
+64K default, because the instrumentation process has no host environment to read. If you
+set the override *and* run on-device AI legs against the same Ollama server, the two ends
+request different context lengths and Ollama reloads the model on every alternation — leave
+it unset for those runs.
 
 ## Environment Variables
 

@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.model.ResolvedTarget
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -140,6 +141,11 @@ abstract class MaestroTrailblazeAgent(
   open suspend fun executeNodeSelectorTap(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
+    /**
+     * Route pin carried by the recording. Only the accessibility driver chooses between dispatch
+     * routes; drivers that always dispatch a gesture ignore this.
+     */
+    tapRoute: TapRouteOverride? = null,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 

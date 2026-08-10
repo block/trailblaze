@@ -1382,14 +1382,21 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     // Only the retried iOS cell gets a chevron; the single-attempt android cell does not.
     expect(collapsed.match(/data-cell-toggle/g)).toHaveLength(1);
     expect(collapsed).toContain('data-cell-toggle="trail:checkout:demo:ios"');
-    // The retried cell links to the latest attempt and shows the attempt-history dots.
+    // The retried cell links to the latest attempt; the chevron rail (the control that expands
+    // the history) previews it as a bare attempt count.
     expect(collapsed).toContain('<div class="idxcell passed retried"><button class="idxcellopen" type="button" data-session="1"');
-    expect(collapsed).toContain('class="idxcelldots" role="img" aria-label="Attempt history: failed, passed"');
+    expect(collapsed).toContain('aria-label="Show 2 ios attempts"');
+    expect(collapsed.match(/<button class="idxcellchev"[^>]*><span class="idxcellcount"[^>]*>2<\/span><\/button>/)).not.toBeNull();
+    // The value line carries exactly the latest-outcome dot + duration — the history cluster must
+    // not creep back into the main button (that's the wrapping regression this layout fixes).
+    expect(collapsed).toContain('<span class="pv"><span class="idxstatusdot passed" aria-hidden="true"></span><span class="pvtxt">20s</span></span>');
     // Collapsed by default: no attempt panel.
     expect(collapsed).not.toContain('class="idxatthead"');
 
     const expanded = renderViewer({ generatedAt: "now", sessions }, { toggleCell: "trail:checkout:demo:ios" });
     expect(expanded).toContain('class="idxcellchev open"');
+    // The rail narrates its current action: Show when collapsed, Hide when expanded.
+    expect(expanded).toContain('aria-label="Hide 2 ios attempts"');
     expect(expanded).toContain('<div class="idxatthead">ios</div>');
     expect(expanded).not.toContain('<div class="idxatthead">android</div>');
     expect(expanded).toContain('class="idxattemptrow" data-session="0"');
@@ -1481,7 +1488,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).toContain('data-index-section="failed"');
     expect(out).not.toContain('data-index-section="passed"');
     // Both runs stay in the cell's history, in time order.
-    expect(out).toContain('class="idxcelldots" role="img" aria-label="Attempt history: failed, passed"');
+    expect(out).toContain('aria-label="Show 2 ios attempts"');
   });
 
   test("owner metadata composes with matrix rows: subtitle on the row, Owner sort sections matrix entries", () => {
@@ -1499,7 +1506,7 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(byOwner).not.toContain('class="idxowner"');
   });
 
-  test("past four attempts the cell compresses history into a +N prefix and the last three dots", () => {
+  test("the rail previews history as the bare attempt count; per-attempt outcomes live only in the panel", () => {
     const attempt = (status: string, minute: number) => ({
       ...session("Checkout", status),
       meta: { title: "Checkout", trailId: "checkout", target: "demo", status, platform: "ios", ranAt: `2026-07-17 10:${String(minute).padStart(2, "0")}:00` },
@@ -1510,9 +1517,11 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       { ...session("Other", "passed"), meta: { title: "Other", status: "passed", platform: "android", trailId: "other", target: "demo" } },
     ];
     const out = renderViewer({ generatedAt: "now", sessions });
-    expect(out).toContain('<span class="idxcellmore">+3</span>');
-    // Three dots follow the prefix; the full six-attempt inventory lives in the expandable panel.
-    expect(out.match(/idxcelldots[^>]*>(?:<span class="idxcellmore">\+3<\/span>)(<span class="idxstatusdot [a-z]+" aria-hidden="true"><\/span>){3}/)).not.toBeNull();
+    expect(out.match(/<button class="idxcellchev"[^>]*><span class="idxcellcount"[^>]*>6<\/span><\/button>/)).not.toBeNull();
+    expect(out).toContain('aria-label="Show 6 ios attempts"');
+    // No dot cluster in the rail (the count-span-only match above pins the button's full content);
+    // the six-attempt outcome inventory lives in the expandable panel.
+    expect(out).not.toContain('idxcelldots');
   });
 
   test("a single-platform report keeps flat per-run rows without platform cells", () => {

@@ -180,6 +180,26 @@ class AssertToolNodeSelectorTest {
     assertTrue(agent.maestroCommandsExecuted, "Should have fallen back to Maestro after null")
   }
 
+  @Test
+  fun `AssertVisibleBySelector forwards timeoutMs to the Maestro path`() = runBlocking {
+    val nodeSelector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(textRegex = "Authorizing"),
+    )
+
+    val budgeted = AssertVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector, timeoutMs = 60_000)
+    assertEquals(
+      "60000",
+      assertIs<AssertConditionCommand>(budgeted.toMaestroCommands().single()).timeout,
+      "an author-set appearance budget must reach Maestro rather than being replaced by its default",
+    )
+
+    val unbudgeted = AssertVisibleBySelectorTrailblazeTool(nodeSelector = nodeSelector)
+    assertNull(
+      assertIs<AssertConditionCommand>(unbudgeted.toMaestroCommands().single()).timeout,
+      "an unset timeoutMs must leave Maestro on its own default",
+    )
+  }
+
   // endregion
 
   // region AssertNotVisibleBySelectorTrailblazeTool

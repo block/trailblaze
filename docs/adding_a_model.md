@@ -38,8 +38,14 @@ Set the provider's API key (`GOOGLE_API_KEY` here — see the
 
 ## How your entry combines with the built-ins
 
-Workspace config **adds to** the built-in registry — it does not replace it. Entries are
-matched by `id`:
+Declaring an `llm.providers` block **replaces** the built-in catalog: the models Trailblaze
+offers become exactly the ones you list, under exactly the providers you declare. With no
+`llm.providers` block at all you get the built-in catalog unchanged. So if you want your
+model *alongside* the built-ins rather than instead of them, list the built-in models you
+still want next to it.
+
+The built-in registry still does work for you on each entry — ids are matched against it, so
+you only spell out what differs:
 
 | Your `id` | Result |
 |---|---|
@@ -109,10 +115,10 @@ llm:
     model: "gemma4:31b"
 ```
 
-Quote Ollama ids — the `:` makes them look like YAML mappings otherwise. Trailblaze also
-discovers whatever `ollama list` reports at runtime, so a model already pulled locally shows
-up without any config; listing it explicitly is how you tell teammates which model the
-project expects. Nothing is auto-downloaded — they run `ollama pull gemma4:31b`.
+Quote Ollama ids — the `:` makes them look like YAML mappings otherwise. Trailblaze offers
+the Ollama models in the built-in catalog plus whatever you list here; pulling a model
+locally does not make it selectable on its own, so an id outside the built-in catalog has to
+be declared. Nothing is auto-downloaded either — teammates run `ollama pull gemma4:31b`.
 
 ### A model behind your own gateway
 
@@ -161,8 +167,11 @@ The workspace file wins over the user file; environment variables win over both.
 precedence table: [Configuration → Precedence](configuration.md#precedence).
 
 Committing the workspace file is the recommended shape for teams — everyone who clones the
-repo gets a working model with no per-machine setup, and the project is pinned to models you
-have actually validated rather than to whatever the current release happens to ship.
+repo sees the same set of models, and the project is pinned to models you have actually
+validated rather than to whatever the current release happens to ship. Each person still
+picks their active model once with `trailblaze config llm` (that selection is persisted per
+machine); `llm.defaults.model` is read by the Android on-device runner, not by the desktop
+app or CLI.
 
 ## Verifying
 

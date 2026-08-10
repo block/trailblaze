@@ -29,6 +29,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.host.recording.StreamFrameMonitor
 import xyz.block.trailblaze.host.recording.StreamScreenshotScreenState
 import xyz.block.trailblaze.host.recording.DeviceStreamScreenshotSource
@@ -543,6 +544,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   override suspend fun executeNodeSelectorTap(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
+    tapRoute: TapRouteOverride?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     // Accessibility-shaped selectors are recorded under the accessibility driver and must
@@ -565,6 +567,7 @@ class HostOnDeviceRpcTrailblazeAgent(
         tool = TapOnByElementSelector(
           nodeSelector = nodeSelector,
           longPress = longPress,
+          tapRoute = tapRoute,
         ),
         traceId = traceId,
       )

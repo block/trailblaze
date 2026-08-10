@@ -9,6 +9,7 @@ import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
@@ -251,8 +252,13 @@ abstract class TrailblazeDesktopAppConfig(
         ?: defaultProviderModelList
 
     val selectedTrailblazeLlmModel: TrailblazeLlmModel =
-      currentProviderModelList.entries.firstOrNull { it.modelId == savedModelId }
-        ?: defaultLlmModel
+      resolveSavedModelWithinProvider(
+        entries = currentProviderModelList.entries,
+        savedModelId = savedModelId,
+        providerDefaultModelId = BuiltInLlmModelRegistry.defaultModelForProvider(
+          currentProviderModelList.provider,
+        ),
+      ) ?: defaultLlmModel
     return selectedTrailblazeLlmModel
   }
 
@@ -517,3 +523,23 @@ abstract class TrailblazeDesktopAppConfig(
     }
   }
 }
+
+/**
+ * Resolves a persisted model selection against the models its provider currently offers.
+ *
+ * Exact id match wins. When the saved id is gone — the catalog retired it, or a workspace
+ * `llm.providers` block narrowed the provider to a different set — this falls back to the
+ * provider's own `default_model` rather than letting the caller drop to its global default.
+ * That global default is `NONE` in the OSS desktop distribution, so without this step
+ * retiring a model id silently disables a user's LLM on upgrade instead of moving them to
+ * the current default for the provider they chose.
+ *
+ * Returns null only when neither the saved id nor the provider default is present, which
+ * leaves the caller's own fallback in charge.
+ */
+internal fun resolveSavedModelWithinProvider(
+  entries: List<TrailblazeLlmModel>,
+  savedModelId: String,
+  providerDefaultModelId: String?,
+): TrailblazeLlmModel? = entries.firstOrNull { it.modelId == savedModelId }
+  ?: providerDefaultModelId?.let { defaultId -> entries.firstOrNull { it.modelId == defaultId } }

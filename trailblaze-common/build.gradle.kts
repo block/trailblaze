@@ -17,6 +17,7 @@ import org.gradle.api.tasks.OutputFiles
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
@@ -431,6 +432,16 @@ configurations.named("jvmAndAndroidImplementation") {
 dependencyGuard {
   configuration("jvmRuntimeClasspath") {
     modules = true
+  }
+}
+
+// Gradle's default console output for a failed test is `AssertionError at Foo.kt:42` with the message
+// dropped, which hides exactly the part an assertion writes for the reader (see TrailYamlValidationTest,
+// whose failures name the offending tool and file).
+tasks.withType<Test>().configureEach {
+  testLogging {
+    events("failed")
+    exceptionFormat = TestExceptionFormat.FULL
   }
 }
 

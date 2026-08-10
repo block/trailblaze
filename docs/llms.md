@@ -28,7 +28,7 @@ import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 
-private val trailblazeLlmModel: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
+private val trailblazeLlmModel: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_DEFAULT
 private val llmClient: LLMClient = OpenAILLMClient("API_KEY_HERE")
 TrailblazeRunner(
     llmClient = llmClient,

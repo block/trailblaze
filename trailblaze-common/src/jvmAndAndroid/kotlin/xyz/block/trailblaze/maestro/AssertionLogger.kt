@@ -131,6 +131,7 @@ class AssertionLogger(
           durationMs = 0,
           timestamp = kotlinx.datetime.Clock.System.now(),
           session = session.sessionId,
+          captureCoverage = screenState.captureCoverage,
           deviceWidth = screenState.deviceWidth,
           deviceHeight = screenState.deviceHeight,
         )

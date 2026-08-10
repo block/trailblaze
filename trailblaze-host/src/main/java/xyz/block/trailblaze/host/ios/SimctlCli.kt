@@ -1,10 +1,14 @@
 package xyz.block.trailblaze.host.ios
 
+import java.io.IOException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.CopyActionResult
 import kotlin.io.path.ExperimentalPathApi
@@ -65,6 +69,96 @@ object SimctlCli {
    */
   fun keychainReset(udid: String, timeoutSeconds: Long = 10): Result =
     run(listOf("xcrun", "simctl", "keychain", udid, "reset"), timeoutSeconds)
+
+  /**
+   * Cheap clearState: terminate, then delete the *children* of the app's data container AND of
+   * each of its app-group containers, in place. Skips the uninstall + bundle copy + reinstall
+   * that [clearAppState] pays (measured ~9s for a 1.3GB bundle vs ~0.1s for this), at the cost
+   * of not resetting the bundle container itself. The group-container wipe is load-bearing:
+   * uninstall removes group containers, and an app whose group-container DB survives a
+   * data-container-only wipe + keychain reset comes back with undecryptable residue (observed
+   * on a large production app: "Failed to decrypt encrypted SyncEntity" + a sign-in flow that
+   * skips its verification gate). Also resets the app's TCC privacy grants (`simctl privacy
+   * reset all`), which uninstall would have dropped implicitly. Keychain is handled separately
+   * by callers (clearKeychain), matching [clearAppState]'s contract.
+   */
+  fun clearAppDataContainer(udid: String, bundleId: String): Result {
+    terminate(udid, bundleId) // nonzero when the app isn't running — a fine starting state
+    // Same reason [clearAppState] polls: `terminate` returns as soon as the signal is sent, and a
+    // still-dying process can flush state back to disk after the wipe. That matters MORE here —
+    // there is no reinstall behind this wipe to overwrite whatever got flushed.
+    ensureStopped(udid, bundleId)
+    val container = run(listOf("xcrun", "simctl", "get_app_container", udid, bundleId, "data"), 10)
+    if (!container.success) return container
+    val dataPath = Paths.get(container.stdout.trim())
+    if (!Files.isDirectory(dataPath)) {
+      return Result(-1, "", "data container not found at $dataPath")
+    }
+    // `groups` lists one `<group-id>\t<path>` per app-group container and exits 0 with EMPTY
+    // stdout when the app declares none (verified against simctl on a live device), so a
+    // nonzero exit is always a real failure (unknown bundle, timeout) — propagate it rather
+    // than silently skip a load-bearing wipe.
+    val groups = run(listOf("xcrun", "simctl", "get_app_container", udid, bundleId, "groups"), 10)
+    if (!groups.success) return groups
+    val wipeRoots = listOf(dataPath) +
+      groups.stdout.lineSequence()
+        .mapNotNull { line -> line.substringAfter('\t', "").trim().takeIf { it.isNotEmpty() } }
+        .map { Paths.get(it) }
+        .filter { Files.isDirectory(it) }
+    val undeleted = mutableListOf<String>()
+    wipeRoots.forEach { root -> deleteChildrenWithoutFollowingLinks(root, undeleted) }
+    if (undeleted.isNotEmpty()) {
+      // Same hard-fail contract as clearAppState: a partial wipe that reports success would
+      // launch the next trail against dirty state, which is the exact bug clearState closes.
+      return Result(-1, "", "failed to delete: ${undeleted.joinToString(", ")}")
+    }
+    // Uninstall implicitly drops the app's TCC privacy grants (location, camera, ...), so flows
+    // that expect a fresh permission prompt would silently keep a prior trail's grant under an
+    // in-place wipe. Reset them explicitly to keep [clearAppState]'s fresh-install semantics.
+    return run(listOf("xcrun", "simctl", "privacy", udid, "reset", "all", bundleId), 10)
+  }
+
+  /**
+   * Deletes everything under [root] (keeping [root] itself) without following symlinks.
+   * Container contents are app-controlled, and `File.deleteRecursively()` follows symlinks —
+   * a link inside the container pointing outside it would get its *target* tree deleted (same
+   * hazard `CliReportGenerator`'s cleanup documents). [Files.walkFileTree]'s default options
+   * visit a symlink as a plain entry without descending into its target, so the link itself is
+   * removed and the target is untouched. Failures are collected into [undeleted] rather than
+   * thrown so the caller's error names every path that survived the wipe.
+   */
+  private fun deleteChildrenWithoutFollowingLinks(root: Path, undeleted: MutableList<String>) {
+    Files.newDirectoryStream(root).use { children ->
+      children.forEach { child ->
+        Files.walkFileTree(
+          child,
+          object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+              if (!tryDelete(file)) undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
+              undeleted += file.toString()
+              return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+              if (exc != null || !tryDelete(dir)) undeleted += dir.toString()
+              return FileVisitResult.CONTINUE
+            }
+          },
+        )
+      }
+    }
+  }
+
+  private fun tryDelete(path: Path): Boolean = try {
+    Files.deleteIfExists(path)
+    true
+  } catch (e: IOException) {
+    false
+  }
 
   /**
    * Clears app state the way Maestro does on simulators (`LocalSimulatorUtils.clearAppState`):

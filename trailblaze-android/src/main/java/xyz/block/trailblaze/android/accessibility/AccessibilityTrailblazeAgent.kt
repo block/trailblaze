@@ -19,6 +19,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.ResolvedTarget
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
@@ -234,11 +235,13 @@ class AccessibilityTrailblazeAgent(
   override suspend fun executeNodeSelectorTap(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
+    tapRoute: TapRouteOverride?,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val action = AccessibilityAction.TapOnElement(
       nodeSelector = nodeSelector,
       longPress = longPress,
+      tapRoute = tapRoute,
     )
 
     return AccessibilityTrailRunner.runActions(

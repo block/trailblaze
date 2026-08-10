@@ -16,6 +16,8 @@ import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberBySelectorTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
 import kotlin.reflect.KClass
 
 @Suppress("ktlint:standard:property-naming")
@@ -53,6 +55,8 @@ abstract class TrailblazeToolSet(
       AssertVisibleBySelectorTrailblazeTool::class,
       AssertNotVisibleBySelectorTrailblazeTool::class,
       AssertMatchCountTrailblazeTool::class,
+      RememberTextBySelectorTrailblazeTool::class,
+      RememberNumberBySelectorTrailblazeTool::class,
       TapOnByElementSelector::class,
       SwipeWithRelativeCoordinatesTool::class,
       AndroidSystemUiDemoModeTrailblazeTool::class,

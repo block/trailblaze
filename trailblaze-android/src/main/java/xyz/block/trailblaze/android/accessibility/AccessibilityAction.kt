@@ -2,6 +2,7 @@ package xyz.block.trailblaze.android.accessibility
 
 import maestro.KeyCode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.model.TapRouteOverride
 
 /**
  * Default timeout for actions that poll the accessibility tree waiting for an element to appear
@@ -127,6 +128,11 @@ sealed interface AccessibilityAction {
      * out, and the trail fails on what's supposed to be a best-effort step.
      */
     val optional: Boolean = false,
+    /**
+     * Pins the dispatch route for this tap instead of letting [planActionClickRoute] choose it
+     * from the resolved node's fields. Carried from the recording; null means the gate decides.
+     */
+    val tapRoute: TapRouteOverride? = null,
   ) : AccessibilityAction {
     override val description: String
       get() = "${if (longPress) "Long press" else "Tap"} on ${nodeSelector.description()}"

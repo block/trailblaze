@@ -629,14 +629,23 @@ class LogsRepo(
    */
   fun getSessionInfoSummary(sessionId: SessionId): SessionInfo? {
     val files = readLogFilesFromDisk(sessionId)
-    val statusLogs = files
-      .filter { it.name.contains("TrailblazeSessionStatusChangeLog") }
-      .mapNotNull { parseTrailblazeLogFromFile(it) }
-      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+    val statusLogs = readSessionStatusLogs(files)
     if (statusLogs.isEmpty()) return null
     val lastActivityMs = files.maxOfOrNull { it.lastModified() } ?: 0L
     return buildSessionInfo(statusLogs, lastActivityMsOverride = lastActivityMs)
   }
+
+  /**
+   * The session-status logs among [logFiles], selected by filename so the large driver logs are
+   * never deserialized. Every writer that puts log files in a session directory embeds the log
+   * class's simple name: [saveLogToDisk] here, and the CI on-device log reshaper.
+   */
+  private fun readSessionStatusLogs(
+    logFiles: List<File>,
+  ): List<TrailblazeLog.TrailblazeSessionStatusChangeLog> = logFiles
+    .filter { it.name.contains("TrailblazeSessionStatusChangeLog") }
+    .mapNotNull { parseTrailblazeLogFromFile(it) }
+    .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
 
   fun getSessionInfo(sessionId: SessionId): SessionInfo? {
     // Use cached logs from the flow if available, otherwise read from disk
@@ -776,9 +785,10 @@ class LogsRepo(
     // appends are dropped. Without this, cancelling a run lets the killed runner's async failure
     // land an Ended.Failed on top of the user's Ended.Cancelled, and the run reads as Failed.
     // Read disk (not the cached flow) — the cache can lag the just-written status.
+    // Status logs only: deserializing the whole session here exhausted a 512 MB trail-driver heap
+    // at session end, when the heap is already at its fullest.
     if (logEvent is TrailblazeLog.TrailblazeSessionStatusChangeLog && logEvent.sessionStatus is SessionStatus.Ended) {
-      val alreadyEnded = getLogsForSession(logEvent.session)
-        .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      val alreadyEnded = readSessionStatusLogs(readLogFilesFromDisk(logEvent.session))
         .any { it.sessionStatus is SessionStatus.Ended }
       if (alreadyEnded) {
         Console.log(
@@ -806,6 +816,14 @@ class LogsRepo(
       TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
         logEvent,
       ),
+    )
+    // Streamed to stdout because only `api`-source CI builds upload session logs at all, and stdout
+    // also survives a hard kill: on every other build this is the sole record of capture size vs heap.
+    val runtime = Runtime.getRuntime()
+    Console.log(
+      "[log-size] ${logEvent::class.java.simpleName} ${jsonLogFilename.length() / 1024}KB " +
+        "heap ${(runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)}/" +
+        "${runtime.maxMemory() / (1024 * 1024)}MB ${jsonLogFilename.name}",
     )
     // The flow will be updated automatically via the file watcher
     return jsonLogFilename

@@ -8193,6 +8193,13 @@ public final class xyz/block/trailblaze/llm/config/LlmScreenshotConfig$Companion
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class xyz/block/trailblaze/llm/config/OllamaContextWindow {
+	public static final field DEFAULT_NUM_CTX J
+	public static final field ENV_VAR Ljava/lang/String;
+	public static final field INSTANCE Lxyz/block/trailblaze/llm/config/OllamaContextWindow;
+	public final fun resolveNumCtx (Ljava/lang/String;)J
+}
+
 public final class xyz/block/trailblaze/llm/config/PlatformConfigResourceSource_jvmKt {
 	public static final fun bundledConfigResourceSource ()Lxyz/block/trailblaze/llm/config/ConfigResourceSource;
 	public static final fun platformConfigResourceSource ()Lxyz/block/trailblaze/llm/config/ConfigResourceSource;
@@ -10933,6 +10940,19 @@ public final class xyz/block/trailblaze/model/ResolvedTarget {
 
 public final class xyz/block/trailblaze/model/SetOfMarkConfig {
 	public static final field INSTANCE Lxyz/block/trailblaze/model/SetOfMarkConfig;
+}
+
+public final class xyz/block/trailblaze/model/TapRouteOverride : java/lang/Enum {
+	public static final field ACTION_CLICK Lxyz/block/trailblaze/model/TapRouteOverride;
+	public static final field Companion Lxyz/block/trailblaze/model/TapRouteOverride$Companion;
+	public static final field GESTURE Lxyz/block/trailblaze/model/TapRouteOverride;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lxyz/block/trailblaze/model/TapRouteOverride;
+	public static fun values ()[Lxyz/block/trailblaze/model/TapRouteOverride;
+}
+
+public final class xyz/block/trailblaze/model/TapRouteOverride$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
 public abstract class xyz/block/trailblaze/model/TrailExecutionResult {

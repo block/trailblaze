@@ -22,6 +22,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.model.TapRouteOverride
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -82,6 +83,8 @@ class HostMaestroTrailblazeAgent(
   override suspend fun executeNodeSelectorTap(
     nodeSelector: TrailblazeNodeSelector,
     longPress: Boolean,
+    // Ignored — this agent has only the coordinate-gesture path, so there is no route to pin.
+    tapRoute: TapRouteOverride?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree(nodeSelector) ?: return null

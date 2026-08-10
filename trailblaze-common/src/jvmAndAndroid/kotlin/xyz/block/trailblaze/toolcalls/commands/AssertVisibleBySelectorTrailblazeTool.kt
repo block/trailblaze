@@ -45,8 +45,10 @@ data class AssertVisibleBySelectorTrailblazeTool(
    * settle (e.g. an "Authorizing" overlay clearing) before the target text renders.
    *
    * When `null` the call is unopinionated about timeout and each agent applies its own
-   * idle/wait policy (per-driver default). The Maestro fallback path ignores this field
-   * entirely — Maestro's own assert timeout is always used there.
+   * idle/wait policy (per-driver default). Forwarded to the Maestro fallback path too —
+   * without that, a driver that resolves the selector but does not itself poll (the iOS host
+   * agent returns null when the element is not on screen yet, by design) silently got
+   * Maestro's default budget instead of the one the author asked for.
    */
   val timeoutMs: Long? = null,
   /**
@@ -88,7 +90,12 @@ data class AssertVisibleBySelectorTrailblazeTool(
     val maestroElement = maestroSelector.toMaestroElementSelector().let { base ->
       if (expectedText != null) base.copy(textRegex = maestroTextRegexFor()) else base
     }
-    return listOf(AssertConditionCommand(condition = Condition(visible = maestroElement)))
+    return listOf(
+      AssertConditionCommand(
+        condition = Condition(visible = maestroElement),
+        timeout = timeoutMs?.toString(),
+      ),
+    )
   }
 
   override suspend fun execute(

@@ -2676,7 +2676,13 @@ class TrailblazeMcpServer(
     // The new surface is fully registered, so now drop only what it no longer contains.
     // Logged (like the host-tool diff) so a target switch that drops custom tools leaves a
     // trace — otherwise "my tool disappeared" is invisible.
-    val staleTrailblazeToolNames = previouslyRegisteredToolNames - newlyRegisteredToolNames
+    val liveHostToolNames = hostMcpToolRegistryBySession[mcpSessionId.sessionId]
+      ?.tools?.map { it.descriptor.name }?.toSet() ?: emptySet()
+    val staleTrailblazeToolNames = computeStaleToolNamesToRemove(
+      previouslyRegisteredToolNames = previouslyRegisteredToolNames,
+      newlyRegisteredToolNames = newlyRegisteredToolNames,
+      liveHostToolNames = liveHostToolNames,
+    )
     if (staleTrailblazeToolNames.isNotEmpty()) {
       Console.log(
         "[TrailblazeMcpServer] Removing ${staleTrailblazeToolNames.size} target-scoped tool(s) " +
@@ -3096,3 +3102,20 @@ class TrailblazeMcpServer(
     }
   }
 }
+
+/**
+ * The target-scoped tool names a re-registration should un-advertise: what the session
+ * advertised before, minus what the freshly-resolved surface still contains, minus every
+ * tool name the host registry is currently serving.
+ *
+ * Subtracting [liveHostToolNames] is the part that isn't obvious. Host tools are registered
+ * earlier in the same re-registration pass, and MCP tools live in one flat name-keyed map —
+ * so a stale target-scoped name that happens to equal a live host tool's name would remove
+ * the host tool that had just taken that name. The host surface runs its own diff in
+ * `addToolsAsMcpToolsFromRegistry`; this removal must not reach into it.
+ */
+internal fun computeStaleToolNamesToRemove(
+  previouslyRegisteredToolNames: Set<String>,
+  newlyRegisteredToolNames: Set<String>,
+  liveHostToolNames: Set<String>,
+): Set<String> = previouslyRegisteredToolNames - newlyRegisteredToolNames - liveHostToolNames

@@ -31,7 +31,9 @@ import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
@@ -1171,5 +1173,56 @@ trail:
     val tool = reDecoded[0].trailblazeTool as AssertMatchCountTrailblazeTool
     assertThat(tool.exact).isEqualTo(3)
     assertThat(tool.min).isEqualTo(null)
+  }
+
+  @Test
+  fun rememberTextBySelectorRoundTrip() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - rememberTextBySelector:
+            reason: Capture the currently selected check-reporting option.
+            variable: currentOption
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Print when the order is ready"
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0].name).isEqualTo("rememberTextBySelector")
+    val tool = reDecoded[0].trailblazeTool as RememberTextBySelectorTrailblazeTool
+    assertThat(tool.variable).isEqualTo("currentOption")
+    assertThat(tool.reason).isEqualTo("Capture the currently selected check-reporting option.")
+    val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertThat(match.textRegex).isEqualTo("Print when the order is ready")
+  }
+
+  @Test
+  fun rememberNumberBySelectorRoundTrip() {
+    val yaml = """
+config: {}
+trail:
+  - step: recorded
+    recording:
+      android:
+        - rememberNumberBySelector:
+            variable: total
+            nodeSelector:
+              androidAccessibility:
+                textRegex: "Total .*"
+    """.trimIndent()
+
+    val tools = decodeRecordedTools(yaml)
+    val reDecoded = trailblazeYaml.decodeTools(trailblazeYaml.encodeTools(tools))
+    assertThat(reDecoded.size).isEqualTo(1)
+    assertThat(reDecoded[0].name).isEqualTo("rememberNumberBySelector")
+    val tool = reDecoded[0].trailblazeTool as RememberNumberBySelectorTrailblazeTool
+    assertThat(tool.variable).isEqualTo("total")
+    assertThat(tool.reason).isEqualTo(null)
   }
 }

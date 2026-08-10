@@ -1,0 +1,2 @@
+id: rememberTextBySelector
+class: xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrailblazeTool
