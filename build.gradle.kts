@@ -181,11 +181,18 @@ subprojects
             }
           }
 
+          // A real javadoc jar, not None(): Central Portal validation REJECTS a deployment whose
+          // JVM jars carry no javadoc entry ("Javadocs must be provided but not found in
+          // entries") — the v2026.08.11 release failed on exactly this, across every KotlinJvm
+          // module and every KMP -jvm variant. Dokka is already applied to every subproject (top
+          // of this file), so the -javadoc classifier ships Dokka's rendered HTML — the standard
+          // Kotlin-ecosystem shape for Central. Android AARs are exempt from the requirement
+          // (they passed the same validation), so publishJavadocJar stays false below.
           if (plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
             publishing.configure(
               KotlinJvm(
                 sourcesJar = true,
-                javadocJar = JavadocJar.None(),
+                javadocJar = JavadocJar.Dokka("dokkaHtml"),
               )
             )
           }
@@ -194,7 +201,7 @@ subprojects
             publishing.configure(
               KotlinMultiplatform(
                 sourcesJar = true,
-                javadocJar = JavadocJar.None(),
+                javadocJar = JavadocJar.Dokka("dokkaHtml"),
               )
             )
           } else if (plugins.hasPlugin("com.android.library")) {
