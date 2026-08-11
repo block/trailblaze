@@ -61,8 +61,19 @@ jobs:
             echo "::error::version= in gradle.properties must be a -SNAPSHOT version; got '$(grep '^version=' gradle.properties)'"
             exit 1
           fi
-          echo "version=${base}-${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "Publishing Maven artifacts as ${base}-${GITHUB_REF_NAME#v}"
+          version="${base}-${GITHUB_REF_NAME#v}"
+          # Belt and braces with `gradle/maven-version-guard.gradle.kts`, which fails the publish
+          # tasks themselves. Asserting here too means a bad version dies before Gradle starts,
+          # and keeps the rule visible to anyone editing this file rather than only enforced three
+          # directories away.
+          case "$version" in
+            [0-9][0-9][0-9][0-9].*)
+              echo "::error::Refusing to publish '$version': a bare CalVer coordinate sorts above any future 1.0.0 in Gradle and Maven. Expected <major>.<minor>.<patch>-<date>."
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing Maven artifacts as $version"
 
       - name: Publish Artifacts
         # `-Pversion` is the one input that reaches BOTH this build and the composite-included

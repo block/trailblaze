@@ -109,6 +109,12 @@ apply(from = "gradle/dependency-resolution.gradle.kts")
 // Apply shared git version computation
 apply(from = "gradle/git-version.gradle.kts")
 
+// Hard-fail any Maven Central publish attempted at a bare CalVer version. Applied AFTER
+// git-version.gradle.kts, which is the thing most likely to produce one: it sets
+// `version = 2026.08.11` on every build made from a `v*` tag, which is exactly the state a
+// release runs in.
+apply(from = "gradle/maven-version-guard.gradle.kts")
+
 subprojects
   .forEach {
     it.plugins.withId("com.android.library") {

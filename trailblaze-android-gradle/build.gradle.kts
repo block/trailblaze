@@ -7,6 +7,11 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
 }
 
+// Same bare-CalVer publish gate the including build applies. This is a separate Gradle build, so
+// the root's `apply(from = ...)` does not reach it — and it is the build most exposed to the
+// mistake, since it takes its release version from a `-Pversion` that propagates in from outside.
+apply(from = "../gradle/maven-version-guard.gradle.kts")
+
 gradlePlugin {
   // The public-facing OSS plugin id. External consumers reach this via:
   //   plugins { id("xyz.block.trailblaze.android-gradle") version "..." }
