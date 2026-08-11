@@ -17,10 +17,15 @@ dependencies {
 }
 ```
 Releases are published to Maven Central under the
-[`xyz.block.trailblaze`](https://central.sonatype.com/namespace/xyz.block.trailblaze) group and
-share the `YYYY.MM.DD` version of the matching `trailblaze` CLI release. Builds off `main` are
-published as `0.1.0-SNAPSHOT` to
+[`xyz.block.trailblaze`](https://central.sonatype.com/namespace/xyz.block.trailblaze) group, and
+versioned `MAJOR.MINOR.PATCH-YYYY.MM.DD` — for example `0.1.0-2026.08.11`. The semver prefix is
+the API-compatibility signal; the date records when that build was cut. While the prefix is
+`0.x`, treat the API as unstable: any release may change it.
+
+Builds off `main` are published as `0.1.0-SNAPSHOT` to
 `https://central.sonatype.com/repository/maven-snapshots/` if you want to track unreleased work.
+Maven timestamps each snapshot deployment, so you can also pin an exact build
+(`0.1.0-20260811.010555-1`) rather than the moving `-SNAPSHOT`.
 ### Pass your LLM Provider API Key to Instrumentation
 1. Set up your provider API key on the development machine in your shell environment.
    The environment variable names are defined in `LlmProviderEnvVarUtil`.

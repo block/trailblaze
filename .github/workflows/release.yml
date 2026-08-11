@@ -36,13 +36,41 @@ jobs:
       - name: Generate WASM Report Template
         run: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true
 
+      - name: Compute Maven release version
+        id: maven_version
+        # Maven coordinate = <semver base from gradle.properties>-<date from the tag>, e.g.
+        # `0.1.0-2026.08.11`. Two independent jobs, deliberately:
+        #
+        #   * the semver base carries the API-compatibility signal and is bumped by hand in
+        #     gradle.properties when the contract moves;
+        #   * the tag's date records when the build was cut.
+        #
+        # The semver prefix is load-bearing, not decoration. A bare CalVer coordinate
+        # (`2026.08.11`) sorts ABOVE any future `1.0.0` in both Gradle's conflict resolution and
+        # Maven's ComparableVersion — 2026 > 1 on the first numeric part — which would foreclose
+        # a stable semver line permanently, with no epoch escape hatch short of renaming the
+        # artifacts. `0.9.0-<date>` < `1.0.0`, so this shape keeps that door open.
+        #
+        # Corollary worth knowing before changing this: a dated build of the SAME base outranks
+        # the bare version (`1.0.0-2026.11.01` > `1.0.0`). So don't ship dated builds of the
+        # version you intend to release bare — use `-rc-<date>`, which both tools do sort below
+        # the final release.
+        run: |
+          base="$(sed -n 's/^version=\(.*\)-SNAPSHOT$/\1/p' gradle.properties)"
+          if [ -z "$base" ]; then
+            echo "::error::version= in gradle.properties must be a -SNAPSHOT version; got '$(grep '^version=' gradle.properties)'"
+            exit 1
+          fi
+          echo "version=${base}-${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "Publishing Maven artifacts as ${base}-${GITHUB_REF_NAME#v}"
+
       - name: Publish Artifacts
-        # The release coordinate comes from the tag, passed explicitly instead of relying on
-        # `gradle/git-version.gradle.kts`'s git-describe fallback. `-Pversion` is the one input
-        # that reaches BOTH this build and the composite-included `trailblaze-android-gradle`
-        # build, so the Gradle plugin ships under the same version as the libraries rather than
-        # re-publishing the SNAPSHOT default from its own `gradle.properties`.
-        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Pversion="${GITHUB_REF_NAME#v}" -Ptrailblaze.wasm=true
+        # `-Pversion` is the one input that reaches BOTH this build and the composite-included
+        # `trailblaze-android-gradle` build, so the Gradle plugin ships under the same version as
+        # the libraries instead of re-publishing the SNAPSHOT default from its own
+        # `gradle.properties`. It also outranks `gradle/git-version.gradle.kts`'s git-describe
+        # tag override, which would otherwise set the bare CalVer version.
+        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Pversion="${{ steps.maven_version.outputs.version }}" -Ptrailblaze.wasm=true
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_CENTRAL_PASSWORD }}
