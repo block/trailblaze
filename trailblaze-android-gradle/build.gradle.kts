@@ -55,7 +55,11 @@ dependencies {
 // jar is on; javadoc jar is off because the only public API is the plugin's id + extension
 // (documented in this module's README).
 mavenPublishing {
-  publishToMavenCentral()
+  // `automaticRelease = true` matches the root `opensource/build.gradle.kts` subprojects block.
+  // Without it the Central Portal deployment uploads as USER_MANAGED and waits for a manual
+  // Publish click while the build reports success — see the comment there. Inert for SNAPSHOT
+  // versions, which bypass the deployment flow entirely.
+  publishToMavenCentral(automaticRelease = true)
   // Signing only kicks in when signing credentials are present (`signing.signingInMemoryKey`
   // etc.). `build` / `check` still work in CI without secrets — only the `publish` task
   // requires them. Matches the posture every other vanniktech-published module in this repo

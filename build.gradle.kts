@@ -81,24 +81,25 @@ subprojects {
 }
 
 // The OSS release workflow on `block/trailblaze` runs
-// `./gradlew publishAllPublicationsToMavenCentralRepository` from this root. That command
-// finds matching tasks across all subprojects in this build, but composite-included builds
-// (registered via `settings.gradle.kts`'s `pluginManagement.includeBuild(...)`) are isolated
-// — their publish tasks must be delegated explicitly or external consumers never receive the
-// published artifact + plugin marker. Register a root-level aggregator per included plugin
-// build so the existing release command transitively picks them up.
-val trailblazeAndroidGradlePluginPublishMavenCentral =
-  tasks.register("trailblazeAndroidGradlePluginPublishMavenCentral") {
-    group = "publishing"
-    description =
-      "Publishes the included trailblaze-android-gradle build to Maven Central."
-    dependsOn(
-      gradle.includedBuild("trailblaze-android-gradle")
-        .task(":publishAllPublicationsToMavenCentralRepository"),
-    )
-  }
-tasks.matching { it.name == "publishAllPublicationsToMavenCentralRepository" }.configureEach {
-  dependsOn(trailblazeAndroidGradlePluginPublishMavenCentral)
+// `./gradlew publishAllPublicationsToMavenCentralRepository` from this root. Gradle resolves that
+// name against every project in *this* build, but composite-included builds (registered via
+// `settings.gradle.kts`'s `pluginManagement.includeBuild(...)`) are isolated — their publish tasks
+// must be delegated explicitly or external consumers never receive the published artifact + plugin
+// marker.
+//
+// Registering the delegating aggregator under the SAME name the release command already asks for
+// is what pulls the included build in. The root project applies no `maven-publish`/vanniktech
+// plugin, so it contributes no task of that name to collide with; the name match is the whole
+// mechanism. (A previous `tasks.matching { name == ... }.configureEach { dependsOn(...) }` hook
+// here never fired for exactly that reason — the root task container it filtered was empty — so
+// `trailblaze-android-gradle` was silently absent from every release.)
+tasks.register("publishAllPublicationsToMavenCentralRepository") {
+  group = "publishing"
+  description = "Publishes the included trailblaze-android-gradle build to Maven Central."
+  dependsOn(
+    gradle.includedBuild("trailblaze-android-gradle")
+      .task(":publishAllPublicationsToMavenCentralRepository"),
+  )
 }
 
 // Apply shared dependency-resolution forces (version pins) so every configuration resolves the
@@ -126,7 +127,17 @@ subprojects
     it.afterEvaluate {
       if (it.plugins.hasPlugin("com.vanniktech.maven.publish.base")) {
         it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
-          publishing.publishToMavenCentral()
+          // `automaticRelease = true` is what actually makes a tagged release land on Maven
+          // Central. Without it the Central Portal deployment is uploaded as USER_MANAGED and
+          // parks in https://central.sonatype.com/publishing/deployments waiting for someone to
+          // click Publish — the Gradle build still reports BUILD SUCCESSFUL, which is how every
+          // release between 0.0.2 and now produced no consumable artifact. `validateDeployment`
+          // stays at its default `true` so the build blocks on the deployment reaching a terminal
+          // state and goes red on FAILED instead of succeeding into the void.
+          //
+          // SNAPSHOT builds are unaffected: they publish straight to the snapshot repository and
+          // never create a deployment, so the flag is inert on the `main` snapshot workflow.
+          publishing.publishToMavenCentral(automaticRelease = true)
           publishing.signAllPublications()
           publishing.pom {
             url.set("https://www.github.com/block/trailblaze")

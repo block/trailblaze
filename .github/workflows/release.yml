@@ -3,7 +3,10 @@ name: release
 on:
   push:
     tags:
-      - '**'
+      # Release tags only. `**` also matched throwaway tags (`backup/…`), which would have run a
+      # publish at the SNAPSHOT version from `gradle.properties` — a Maven Central release happens
+      # when, and only when, a `vYYYY.MM.DD` release tag is pushed.
+      - 'v*'
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false -Dkotlin.incremental=false"
@@ -34,7 +37,12 @@ jobs:
         run: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true
 
       - name: Publish Artifacts
-        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Ptrailblaze.wasm=true
+        # The release coordinate comes from the tag, passed explicitly instead of relying on
+        # `gradle/git-version.gradle.kts`'s git-describe fallback. `-Pversion` is the one input
+        # that reaches BOTH this build and the composite-included `trailblaze-android-gradle`
+        # build, so the Gradle plugin ships under the same version as the libraries rather than
+        # re-publishing the SNAPSHOT default from its own `gradle.properties`.
+        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Pversion="${GITHUB_REF_NAME#v}" -Ptrailblaze.wasm=true
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_CENTRAL_PASSWORD }}

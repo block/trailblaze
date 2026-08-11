@@ -40,9 +40,11 @@ pure-boilerplate ones.
 
 ## Apply
 
-The plugin is published to Maven Central. The plugin marker is not on the
-Gradle Plugin Portal, so add Maven Central to your `pluginManagement` block
-first (skip this step if your `settings.gradle.kts` already lists it):
+The plugin is published to Maven Central as
+[`xyz.block.trailblaze:trailblaze-android-gradle`](https://central.sonatype.com/artifact/xyz.block.trailblaze/trailblaze-android-gradle),
+versioned in lockstep with the rest of the `xyz.block.trailblaze` artifacts. The plugin marker is
+not on the Gradle Plugin Portal, so add Maven Central to your `pluginManagement` block first
+(skip this step if your `settings.gradle.kts` already lists it):
 
 ```kotlin
 // settings.gradle.kts

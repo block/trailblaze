@@ -35,6 +35,9 @@ jobs:
         run: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true
 
       - name: Publish Artifacts
+        # No `-Pversion` here — snapshots publish at the `gradle.properties` SNAPSHOT version, which
+        # goes straight to the snapshot repository. Only a `v*` tag (see release.yml) produces a
+        # Maven Central release.
         run: ./gradlew publishAllPublicationsToMavenCentralRepository -Ptrailblaze.wasm=true
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_CENTRAL_USERNAME }}

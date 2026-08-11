@@ -6,6 +6,21 @@ Install `trailblaze` on your `PATH` first — `brew install block/tap/trailblaze
 quickest path. The instructions below assume the CLI is reachable so on-device
 instrumentation tests can be authored and run against the sample project under
 `examples/`.
+### Add the instrumentation dependency
+`trailblaze-android` carries the on-device driver and `AndroidTrailblazeRule`. Everything a
+test source set touches is exposed as an `api` dependency, so this one coordinate is the whole
+dependency story:
+```kotlin
+// build.gradle.kts
+dependencies {
+  androidTestImplementation("xyz.block.trailblaze:trailblaze-android:<version>")
+}
+```
+Releases are published to Maven Central under the
+[`xyz.block.trailblaze`](https://central.sonatype.com/namespace/xyz.block.trailblaze) group and
+share the `YYYY.MM.DD` version of the matching `trailblaze` CLI release. Builds off `main` are
+published as `0.1.0-SNAPSHOT` to
+`https://central.sonatype.com/repository/maven-snapshots/` if you want to track unreleased work.
 ### Pass your LLM Provider API Key to Instrumentation
 1. Set up your provider API key on the development machine in your shell environment.
    The environment variable names are defined in `LlmProviderEnvVarUtil`.
