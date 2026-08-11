@@ -11,7 +11,9 @@ on:
   push:
     branches: [ "main" ]
     tags:
-      - 'v*'
+      # Digit required so a non-release tag that merely starts with `v` (`vendor-x`) can't cut a
+      # GitHub Release + Homebrew bump. Matches release.yml's trigger.
+      - 'v[0-9]*'
 
   # Allows manual triggering from Actions tab
   workflow_dispatch:

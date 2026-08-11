@@ -5,8 +5,15 @@ on:
     tags:
       # Release tags only. `**` also matched throwaway tags (`backup/…`), which would have run a
       # publish at the SNAPSHOT version from `gradle.properties` — a Maven Central release happens
-      # when, and only when, a `vYYYY.MM.DD` release tag is pushed.
-      - 'v*'
+      # when, and only when, a `vYYYY.MM.DD` release tag is pushed. The digit in the pattern keeps
+      # non-release tags that merely start with `v` (`vendor-x`) from triggering at all; the
+      # compute step below enforces the full tag shape.
+      - 'v[0-9]*'
+
+# The job publishes to Maven Central via its own secrets; the GITHUB_TOKEN needs nothing beyond
+# checkout.
+permissions:
+  contents: read
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false -Dkotlin.incremental=false"
@@ -57,9 +64,19 @@ jobs:
         # `1.0.0-rc.2`), which both tools sort below the final release. The dot is load-bearing:
         # it's what keeps `rc.10` above `rc.2`.
         run: |
+          # Only vYYYY.MM.DD[.N] tags may publish. With `automaticRelease = true` there is no
+          # portal gate after this step, and Maven Central is immutable — a stray tag that merely
+          # starts with `v` (e.g. `vendor-x`) would otherwise ship `0.1.0-endor-x` forever. This
+          # also neutralizes shell-metacharacter tag names before the version reaches any shell.
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match vYYYY.MM.DD[.N]; refusing to publish."
+            exit 1
+          fi
           base="$(sed -n 's/^version=\(.*\)-SNAPSHOT$/\1/p' gradle.properties)"
-          if [ -z "$base" ]; then
-            echo "::error::version= in gradle.properties must be a -SNAPSHOT version; got '$(grep '^version=' gradle.properties)'"
+          # Strict <major>.<minor>.<patch> only. Also catches a duplicate version= line (sed then
+          # emits two lines) and a malformed base that neither CalVer check would spot.
+          if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version= in gradle.properties must be <major>.<minor>.<patch>-SNAPSHOT; extracted base '$base'"
             exit 1
           fi
           version="${base}-${GITHUB_REF_NAME#v}"
@@ -82,8 +99,14 @@ jobs:
         # the libraries instead of re-publishing the SNAPSHOT default from its own
         # `gradle.properties`. It also outranks `gradle/git-version.gradle.kts`'s git-describe
         # tag override, which would otherwise set the bare CalVer version.
-        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Pversion="${{ steps.maven_version.outputs.version }}" -Ptrailblaze.wasm=true
+        #
+        # The version rides in via env rather than `${{ }}` interpolation into the script text:
+        # it derives from the tag name, and inlining untrusted input into a `run:` that holds the
+        # publish secrets is the classic template-injection shape (zizmor). The strict tag check
+        # above already constrains it, but the env route costs nothing.
+        run: ./gradlew publishAllPublicationsToMavenCentralRepository -Pversion="$MAVEN_VERSION" -Ptrailblaze.wasm=true
         env:
+          MAVEN_VERSION: ${{ steps.maven_version.outputs.version }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SECRET_KEY }}

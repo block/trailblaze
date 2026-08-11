@@ -7,15 +7,19 @@ quickest path. The instructions below assume the CLI is reachable so on-device
 instrumentation tests can be authored and run against the sample project under
 `examples/`.
 ### Add the instrumentation dependency
-`trailblaze-android` carries the on-device driver and `AndroidTrailblazeRule`. Everything a
-test source set touches is exposed as an `api` dependency, so this one coordinate is the whole
-dependency story:
+`trailblaze-android` carries the on-device driver and `AndroidTrailblazeRule`, and exposes what
+the rule's API surface touches (JUnit, UiAutomator, `trailblaze-common`) as `api` dependencies.
+Add `androidx.test:runner` alongside it — the `AndroidJUnitRunner` that executes the tests is
+not part of the published graph:
 ```kotlin
 // build.gradle.kts
 dependencies {
   androidTestImplementation("xyz.block.trailblaze:trailblaze-android:<version>")
+  androidTestRuntimeOnly("androidx.test:runner:1.7.0")
 }
 ```
+(If you pass a custom `llmClient` to the rule, also declare the matching
+`ai.koog:prompt-executor-*-client` dependency — the client implementations are not re-exported.)
 Releases are published to Maven Central under the
 [`xyz.block.trailblaze`](https://central.sonatype.com/namespace/xyz.block.trailblaze) group, and
 versioned `MAJOR.MINOR.PATCH-YYYY.MM.DD` — for example `0.1.0-2026.08.11`. The semver prefix is

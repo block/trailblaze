@@ -93,13 +93,25 @@ subprojects {
 // mechanism. (A previous `tasks.matching { name == ... }.configureEach { dependsOn(...) }` hook
 // here never fired for exactly that reason — the root task container it filtered was empty — so
 // `trailblaze-android-gradle` was silently absent from every release.)
-tasks.register("publishAllPublicationsToMavenCentralRepository") {
-  group = "publishing"
-  description = "Publishes the included trailblaze-android-gradle build to Maven Central."
-  dependsOn(
-    gradle.includedBuild("trailblaze-android-gradle")
-      .task(":publishAllPublicationsToMavenCentralRepository"),
-  )
+//
+// vanniktech also registers `publishToMavenCentral` / `publishAndReleaseToMavenCentral` aliases
+// on every publishing subproject, so those names are delegated too — otherwise a manual
+// `./gradlew publishToMavenCentral` would silently reintroduce the missing-plugin bug for that
+// invocation.
+//
+// NOTE: `--dry-run` does NOT extend into the included build — Gradle executes delegated
+// included-build tasks for REAL even under `-m`. Don't "sanity check" these aggregators with
+// publish credentials exported.
+listOf(
+  "publishAllPublicationsToMavenCentralRepository",
+  "publishToMavenCentral",
+  "publishAndReleaseToMavenCentral",
+).forEach { publishTaskName ->
+  tasks.register(publishTaskName) {
+    group = "publishing"
+    description = "Publishes the included trailblaze-android-gradle build to Maven Central."
+    dependsOn(gradle.includedBuild("trailblaze-android-gradle").task(":$publishTaskName"))
+  }
 }
 
 // Apply shared dependency-resolution forces (version pins) so every configuration resolves the

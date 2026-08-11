@@ -28,7 +28,10 @@
 val calVerLeadingComponent = 1000
 
 fun assertNotCalendarVersion(target: String, version: String) {
-  val leading = version.substringBefore('.').toIntOrNull() ?: return
+  // Gradle and Maven both split version parts on `.`, `-`, AND `_`, so a dash/underscore CalVer
+  // (`2026-08-11`) outranks `1.0.0` exactly like the dotted form and must be caught too. A plain
+  // `substringBefore('.')` would let it through: "2026-08-11".toIntOrNull() is null.
+  val leading = version.split('.', '-', '_').first().toIntOrNull() ?: return
   if (leading < calVerLeadingComponent) return
   throw GradleException(
     """
