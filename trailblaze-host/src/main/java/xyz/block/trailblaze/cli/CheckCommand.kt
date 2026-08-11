@@ -269,15 +269,21 @@ class CheckCommand : Callable<Int> {
     // kill-switch. See [TrailArgTokens].
     val argTokenExit = runArgTokenValidationPhase(workspaceRoot = resolved.workspaceRoot)
 
-    // WARNING-only selector-dialect lint: Maestro-dialect selectors in a trail pinning a native
-    // driver for the same platform (see [SelectorDialectLint]). Deliberately excluded from the
-    // exit-code fold below — it is a shadow lint (never fatal) until promoted.
-    runSelectorDialectLintPhase(workspaceRoot = resolved.workspaceRoot)
+    // Selector-dialect gate: a device that resolves a recording leg whose dialect its driver cannot
+    // match (an androidMaestro: selector under ANDROID_ONDEVICE_ACCESSIBILITY never matches) fails
+    // the build. Now leg-aware, so it reports only genuine breakage — see [SelectorDialectLint] for
+    // why the previous trail+platform granularity had to stay a warning. Opt out with
+    // TRAILBLAZE_DISABLE_SELECTOR_DIALECT_GATE=1.
+    val dialectExit = if (isSelectorDialectGateDisabled()) {
+      EXIT_OK
+    } else {
+      runSelectorDialectLintPhase(workspaceRoot = resolved.workspaceRoot)
+    }
 
     // Worst-of-all wins. Exit codes are ordered OK(0) < TYPE_ERROR(1) < USAGE(2) <
     // OPERATIONAL_ERROR(3), so max() surfaces the most-severe / most-operator-fixable outcome across
     // the phases over a plain success.
-    return maxOf(typecheckExit, testExit, validationExit, argTokenExit)
+    return maxOf(typecheckExit, testExit, validationExit, argTokenExit, dialectExit)
   }
 
   /**
@@ -869,15 +875,17 @@ class CheckCommand : Callable<Int> {
   }
 
   /**
-   * WARNING-only selector-dialect lint (see [SelectorDialectLint]): walks every trail file under
-   * `<workspace>/trails/`, lints each parsed trail, and renders one warning per offending trail.
-   * ALWAYS returns [EXIT_OK] — findings are warnings, never fatal, and the call site deliberately
-   * excludes this phase from the exit-code fold, so `check`'s exit code can never change because of
-   * this lint (the shadow-then-promote pattern; promotion to a gate is a separate, explicit
-   * decision). A trail that fails to parse yields no findings here — the parse-level validators own
-   * that error.
+   * Selector-dialect gate (see [SelectorDialectLint]): walks every trail file under
+   * `<workspace>/trails/`, lints each parsed trail, and returns [EXIT_TYPE_ERROR] when any trail has
+   * a finding — a device resolving a recording leg whose dialect its driver cannot match, which
+   * fails on every run rather than intermittently.
    *
-   * Internal (not private) so the always-[EXIT_OK] contract is directly testable — same visibility
+   * Fatal because the lint is now leg-aware and reports zero findings across the internal corpus:
+   * a finding is real breakage, not a heuristic. Infrastructure problems inside the phase stay
+   * non-fatal (logged, [EXIT_OK]) — a trail that fails to parse yields no findings here, since the
+   * parse-level validators own that error.
+   *
+   * Internal (not private) so the exit-code contract is directly testable — same visibility
    * rationale as [runArgTokenValidationPhase].
    */
   internal fun runSelectorDialectLintPhase(workspaceRoot: File): Int {
@@ -899,19 +907,28 @@ class CheckCommand : Callable<Int> {
             // Unparseable trail — the parse-level validators own that error; double-reporting is
             // noise. Throwable (not Exception): decodeTrailDocument surfaces unknown-tool failures
             // as non-Exception Throwables (see SessionProgressHelpers / YamlEditorCommon), and one
-            // bad trail must not crash a warning-only phase.
+            // bad trail must not crash the phase.
           }
         }
       if (findings.isNotEmpty()) {
-        Console.info(SelectorDialectLint.renderWarnings(findings))
+        Console.error(SelectorDialectLint.renderFailures(findings))
+        return EXIT_TYPE_ERROR
       }
     } catch (e: Exception) {
+      // An infrastructure failure inside the phase (I/O, an unexpected exception) must not fail the
+      // build on its own — only a real finding does.
       Console.error(
-        "trailblaze check: selector-dialect lint failed (ignored): " +
+        "trailblaze check: selector-dialect gate failed (ignored): " +
           (e.message ?: e::class.simpleName),
       )
     }
     return EXIT_OK
+  }
+
+  /** Kill-switch for the selector-dialect gate — see [SelectorDialectLint.DISABLE_ENV_VAR]. */
+  private fun isSelectorDialectGateDisabled(): Boolean {
+    val v = System.getenv(SelectorDialectLint.DISABLE_ENV_VAR)?.trim()?.lowercase()
+    return v == "1" || v == "true"
   }
 
   /**

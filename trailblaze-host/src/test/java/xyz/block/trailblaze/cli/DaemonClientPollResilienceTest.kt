@@ -18,7 +18,6 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
-import java.net.ServerSocket
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
@@ -59,9 +58,11 @@ class DaemonClientPollResilienceTest {
 
     @Volatile var runId: String = UUID.randomUUID().toString()
 
-    val port: Int = ServerSocket(0).use { it.localPort }
+    /** Assigned by Ktor's own bind in [start], never probed ahead of it — see [startOnEphemeralPort]. */
+    var port: Int = EPHEMERAL_PORT
+      private set
 
-    private val server = embeddedServer(CIO, port = port) {
+    private val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
       install(ContentNegotiation) { json(TrailblazeJsonInstance) }
       routing {
         get(CliEndpoints.PING) {
@@ -84,7 +85,7 @@ class DaemonClientPollResilienceTest {
     }
 
     fun start() {
-      server.start(wait = false)
+      port = server.startOnEphemeralPort()
       // Wait until /ping is actually reachable instead of a fixed sleep.
       val deadline = System.currentTimeMillis() + 5_000
       while (System.currentTimeMillis() < deadline) {

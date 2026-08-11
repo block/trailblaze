@@ -129,6 +129,20 @@ object PlaywrightDriverManager {
   private const val STALL_MIN_BYTES_PER_WINDOW = 1L * 1024 * 1024
 
   /**
+   * Bytes a window must carry to clear the stall check, scaled to how long the window actually
+   * ran.
+   *
+   * The window is only evaluated when a read returns, so its real duration routinely overshoots
+   * [STALL_WINDOW_MS] — a sender that delivers a burst and then goes quiet until just before the
+   * socket read timeout stretches it toward twice that. Against a flat threshold that pattern
+   * clears the check forever at half the intended floor, and repeating it drags a large download
+   * out for hours. Scaling the requirement with the elapsed time keeps the enforced rate at
+   * ~[STALL_MIN_BYTES_PER_WINDOW] per [STALL_WINDOW_MS] however the reads happen to land.
+   */
+  internal fun requiredBytesForWindow(windowElapsedMs: Long): Long =
+    STALL_MIN_BYTES_PER_WINDOW * windowElapsedMs / STALL_WINDOW_MS
+
+  /**
    * Downloads the `driver-bundle` JAR from a Maven-layout repository and extracts only the current
    * platform's driver files into [driverDir]. Each base URL from [driverBundleRepoBaseUrls] gets
    * [DOWNLOAD_MAX_ATTEMPTS_PER_SOURCE] attempts (with backoff) before falling through to the next
@@ -261,10 +275,11 @@ object PlaywrightDriverManager {
         windowBytes += read
         val windowElapsedMs = (System.nanoTime() - windowStartNanos) / 1_000_000
         if (windowElapsedMs >= STALL_WINDOW_MS) {
-          if (windowBytes < STALL_MIN_BYTES_PER_WINDOW) {
+          val requiredBytes = requiredBytesForWindow(windowElapsedMs)
+          if (windowBytes < requiredBytes) {
             throw java.io.IOException(
               "Download stalled: only ${windowBytes / 1024} KB received in the last " +
-                "${windowElapsedMs / 1000}s (need ≥ ${STALL_MIN_BYTES_PER_WINDOW / 1024} KB)" +
+                "${windowElapsedMs / 1000}s (need ≥ ${requiredBytes / 1024} KB)" +
                 if (totalBytes > 0) " — expected $totalBytes bytes total" else ""
             )
           }

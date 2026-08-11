@@ -217,11 +217,13 @@ data class YamlDefinedTrailblazeTool(
 
   private fun unsupportedPrefixMessage(prefix: String, name: String): String = when (prefix) {
     "memory", "device" ->
-      "YAML tool '${config.id}' uses {{$prefix.$name}} — memory/device interpolation is not yet " +
-        "wired up in this build. Only {{params.*}} is supported today."
+      "YAML tool '${config.id}' uses {{$prefix.$name}} in its 'tools:' body — a YAML-defined " +
+        "tool's 'tools:' body interpolates only {{params.*}}. (Recalling a remembered value in a " +
+        "trail step via {{var}} / \${var} is a separate mechanism that does work; this limit is " +
+        "only about the 'tools:' body of a YAML tool definition.)"
     else ->
       "YAML tool '${config.id}' uses unknown interpolation prefix '$prefix' in {{$prefix.$name}}. " +
-        "Supported prefixes: params (today), memory/device (future)."
+        "A YAML-defined tool's 'tools:' body supports only {{params.*}}."
   }
 
   companion object {

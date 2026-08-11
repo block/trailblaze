@@ -11,7 +11,6 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import java.io.File
-import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -50,9 +49,11 @@ class DaemonClientShutdownTest {
    */
   private inner class MockDaemon {
     val shutdownCalled = AtomicBoolean(false)
-    val port: Int = ServerSocket(0).use { it.localPort }
+    /** Assigned by Ktor's own bind in [start], never probed ahead of it — see [startOnEphemeralPort]. */
+    var port: Int = EPHEMERAL_PORT
+      private set
 
-    private val server = embeddedServer(CIO, port = port) {
+    private val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
       install(ContentNegotiation) { json(TrailblazeJsonInstance) }
       routing {
         CliShutdownEndpoint.register(this, onShutdownRequest = { shutdownCalled.set(true) })
@@ -60,7 +61,7 @@ class DaemonClientShutdownTest {
     }
 
     fun start() {
-      server.start(wait = false)
+      port = server.startOnEphemeralPort()
       val deadline = System.currentTimeMillis() + 5_000
       while (System.currentTimeMillis() < deadline) {
         try {

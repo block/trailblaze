@@ -247,15 +247,15 @@ trail:
   }
 
   @Test
-  fun `REJECTED - memory prefix is recognized but not yet wired up`() {
+  fun `REJECTED - memory prefix is not valid in a YAML tool's tools body`() {
     expandFailureMessage(tokenTool(""""{{memory.foo}}""""))
-      .contains("memory/device interpolation is not yet")
+      .contains("'tools:' body interpolates only")
   }
 
   @Test
-  fun `REJECTED - device prefix is recognized but not yet wired up`() {
+  fun `REJECTED - device prefix is not valid in a YAML tool's tools body`() {
     expandFailureMessage(tokenTool(""""{{device.foo}}""""))
-      .contains("memory/device interpolation is not yet")
+      .contains("'tools:' body interpolates only")
   }
 
   @Test

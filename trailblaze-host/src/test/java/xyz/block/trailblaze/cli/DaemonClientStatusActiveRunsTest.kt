@@ -9,7 +9,6 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
-import java.net.ServerSocket
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -33,9 +32,14 @@ class DaemonClientStatusActiveRunsTest {
     "trails/checkout/smoke.trail.yaml — running for 12s, session abc — tapping Charge",
     "trails/login/login.trail.yaml — pending for 1s",
   )
-  private val port: Int = ServerSocket(0).use { it.localPort }
+  /**
+   * Assigned by Ktor's own bind below, never probed ahead of it — see [startOnEphemeralPort].
+   * `@Volatile` because the status handler reads it from a Ktor worker thread, while the write
+   * below happens on the constructor thread after the engine is already up.
+   */
+  @Volatile private var port: Int = EPHEMERAL_PORT
 
-  private val server = embeddedServer(CIO, port = port) {
+  private val server = embeddedServer(CIO, port = EPHEMERAL_PORT) {
     install(ContentNegotiation) { json(TrailblazeJsonInstance) }
     routing {
       CliStatusEndpoint.register(this) {
@@ -50,7 +54,7 @@ class DaemonClientStatusActiveRunsTest {
       }
     }
   }.also {
-    it.start(wait = false)
+    port = it.startOnEphemeralPort()
     val deadline = System.currentTimeMillis() + 5_000
     while (System.currentTimeMillis() < deadline) {
       try {

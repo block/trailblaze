@@ -20,6 +20,7 @@ look up the results of a past CI run.
 - [Sessions are auto-created on first device action](#sessions-are-auto-created-on-first-device-action)
 - [Saving a session as a `.trail.yaml`](#saving-a-session-as-a-trailyaml)
 - [Replaying a trail](#replaying-a-trail)
+- [Remember a value in one step, recall it in a later step](#remember-a-value-in-one-step-recall-it-in-a-later-step)
 - [Inspecting a session — generate an HTML report](#inspecting-a-session--generate-an-html-report)
 - [Inspecting a session in the desktop Trace Viewer](#inspecting-a-session-in-the-desktop-trace-viewer)
 - [Looking up past results](#looking-up-past-results)
@@ -137,6 +138,43 @@ becomes unavailable mid-run, `run` halts at the failing step and the
 partial session is inspectable via `trailblaze session info --id <id>`
 and `trailblaze report --id <id>` — the recording up to the failure
 point is intact.
+
+## Remember a value in one step, recall it in a later step
+
+A trail often needs a value produced in one step to be used in a later
+step — a name you typed into a form and then assert on, a number read
+off the screen and compared, an id you search for after creating it.
+This is memory. **Recall** is always LLM-free — a stored variable is
+substituted at the dispatch boundary before the tool runs. What differs
+between the sources is how the value gets **stored** in the first place:
+
+- **`--memory KEY=VAL` / `--secret KEY=VAL`** seed a value from
+  *outside* the trail (see above) — usernames, search terms, passwords
+  supplied per run. No LLM.
+- **`inputTextRandom`** — **generate a unique-per-run value** (a
+  prefix followed by random digits, optionally a suffix such as an
+  `@example.com` email with `hex=true`), type it into the focused
+  field, and — when you pass `variable:` — remember it. No LLM, so it
+  replays deterministically and produces a fresh value each run: a
+  trail on a **persistent account/device never collides with a
+  leftover** from a previous run the way a hard-coded literal would.
+- **`rememberText` / `rememberNumber`** — read a value already on
+  screen, located by a natural-language prompt. Resolving that prompt
+  goes through the LLM-backed element locator, so these **do call the
+  LLM at replay** even though what they store is real screen text.
+  Don't reach for them in an LLM-disabled run.
+- **`rememberWithAi`** — let the agent invent/pick a value. Also
+  **calls the LLM at replay**.
+
+So for a trail that must replay with no LLM, seed the value with
+`--memory` or generate it with `inputTextRandom`.
+
+Recall a stored variable in any later step by interpolating it as
+`{{variable}}` or `${variable}` — in an `inputText`, a search field, an
+`assertVisibleWithText`, etc. The token is substituted at the dispatch
+boundary before the step's tool executes. (This trail-step recall is a
+separate mechanism from a YAML-*defined* tool's `tools:` body, which
+interpolates only `{{params.*}}`.)
 
 ## Inspecting a session — generate an HTML report
 
