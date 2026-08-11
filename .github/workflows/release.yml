@@ -53,8 +53,9 @@ jobs:
         #
         # Corollary worth knowing before changing this: a dated build of the SAME base outranks
         # the bare version (`1.0.0-2026.11.01` > `1.0.0`). So don't ship dated builds of the
-        # version you intend to release bare — use `-rc-<date>`, which both tools do sort below
-        # the final release.
+        # version you intend to release bare — use numbered `-rc.N` qualifiers (`1.0.0-rc.1`,
+        # `1.0.0-rc.2`), which both tools sort below the final release. The dot is load-bearing:
+        # it's what keeps `rc.10` above `rc.2`.
         run: |
           base="$(sed -n 's/^version=\(.*\)-SNAPSHOT$/\1/p' gradle.properties)"
           if [ -z "$base" ]; then
