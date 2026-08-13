@@ -2,7 +2,12 @@ package xyz.block.trailblaze.scripting.fetch
 
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.function
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -19,7 +24,7 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * Installs a real, WHATWG-shaped `globalThis.fetch` into a scripted-tool QuickJS engine, backed by
- * an [OkHttpClient] on the host. The clean replacement for tools that today shell `curl` through
+ * an [OkHttpClient] (on the host JVM or on-device ART). The clean replacement for tools that today shell `curl` through
  * `ctx.tools.exec` to reach an HTTP endpoint (e.g. a device bridge listening on `localhost:<port>`).
  *
  * **How it's wired.** Pass an instance to [xyz.block.trailblaze.quickjs.tools.QuickJsToolHost.connect]
@@ -44,16 +49,20 @@ import xyz.block.trailblaze.util.Console
  * when a restrictive allow-list is supplied they are NOT followed, so a permitted host can't 30x
  * past the allow-list to a denied one (see [httpClient]).
  *
- * **Kill-switch.** Set [DISABLE_ENV_VAR] (`TRAILBLAZE_DISABLE_FETCH=1`) to bind a `fetch` that
- * rejects instead — an operator lever for a new outbound-network capability, read when the engine
- * is created (restart the daemon to flip it).
+ * **TLS.** Certificates are validated normally for every real host. Validation is skipped for
+ * **device-local hosts only** ([isDeviceLocalHost]) — loopback, plus the emulator's host alias when
+ * running on Android — which is where Trailblaze's own HTTPS surfaces live and where they present
+ * self-signed certificates by construction (the on-device server, and the host daemon reached over
+ * `adb reverse`). Every other Trailblaze HTTP client disables validation *globally* for that same
+ * reason; scoping it to the addresses that need it keeps a tool's call to a real API fully
+ * validated. See [tlsRelaxedClient].
  *
- * **Logging.** Each request emits a daemon-log breadcrumb (quiet-suppressed; `-v` or the log file
- * to see it): `<METHOD> <status> <full-url> (<ms>ms)`, e.g.
- * `POST 200 https://host.com/path?one=two (123ms)`; failures and allow-list denials log the same
- * shape with `FAILED` / `BLOCKED` in the status slot. The **full URL incl. query string** is
- * logged, so a credential passed as a query param appears in the daemon log — an accepted tradeoff
- * for request visibility. Request/response **headers and bodies are never logged**.
+ * **Logging.** Each request emits a log breadcrumb (quiet-suppressed on the host; `-v` or the log
+ * file to see it): `<METHOD> <status> <url> (<ms>ms)`, e.g. `POST 200 https://host.com/path
+ * (123ms)`; failures and allow-list denials log the same shape with `FAILED` / `BLOCKED` in the
+ * status slot. **Userinfo, the query string and the fragment are stripped** — see [logSafeUrl],
+ * which explains why (on-device these lines reach logcat, which CI uploads) and notes the one case
+ * the surviving path does not cover. Request/response **headers and bodies are never logged**.
  *
  * **Scope: basic.** GET/POST/… with headers and a string body; response `status` / `statusText` /
  * `ok` / `headers` / `text()` / `json()`. Streaming bodies and `arrayBuffer()` are out of scope —
@@ -100,16 +109,43 @@ class OkHttpFetchExtension(
       client.newBuilder().followRedirects(false).followSslRedirects(false).build()
     }
 
-  override suspend fun install(quickJs: QuickJs) {
-    // Operator kill-switch (mirrors the repo's `TRAILBLAZE_DISABLE_*` convention). When set, bind
-    // a `fetch` that rejects with a clear message rather than leaving it undefined — so a tool that
-    // depended on it fails legibly instead of with "fetch is not a function". Read when the engine
-    // is created (per scripted-tool host); restart the daemon to flip it.
-    if (isFetchDisabled(System.getenv(DISABLE_ENV_VAR))) {
-      Console.log("[OkHttpFetchExtension] fetch disabled via $DISABLE_ENV_VAR — binding a stub that rejects.")
-      quickJs.evaluate<Any?>(DISABLED_FETCH_SHIM_JS, "trailblaze-fetch-disabled-shim.js", false)
-      return
+  /**
+   * [httpClient] with certificate and hostname verification disabled, used **only** for requests to
+   * a device-local host ([isDeviceLocalHost]).
+   *
+   * Trailblaze's HTTPS surfaces on those addresses present self-signed certificates — the on-device
+   * server, and the host daemon a device reaches over `adb reverse` (`localhost`) or the emulator
+   * alias (`10.0.2.2`). No trust store can validate them, which is why every other Trailblaze HTTP
+   * client (`TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient`, used by the logging
+   * rule and the on-device LLM client) turns validation off outright. Doing that globally here would
+   * silently downgrade a tool's call to a real API, so the relaxation is scoped to the hosts that
+   * require it: a self-signed loopback cert already implies code running on the device.
+   *
+   * Lazy, so a run whose tools never touch a device-local host never builds an insecure SSL context.
+   * `newBuilder()` shares [httpClient]'s connection pool and dispatcher.
+   */
+  private val tlsRelaxedClient: OkHttpClient by lazy {
+    val trustAll = @Suppress("CustomX509TrustManager") object : X509TrustManager {
+      @Suppress("TrustAllX509TrustManager")
+      override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+
+      @Suppress("TrustAllX509TrustManager")
+      override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+
+      override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
+    val sslContext = SSLContext.getInstance("TLS").apply {
+      init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
+    }
+    httpClient.newBuilder()
+      .sslSocketFactory(sslContext.socketFactory, trustAll)
+      // A self-signed cert for a local port rarely carries a matching SAN either; verifying the
+      // hostname against it would fail the handshake for the same reason the trust check does.
+      .hostnameVerifier { _, _ -> true }
+      .build()
+  }
+
+  override suspend fun install(quickJs: QuickJs) {
     // Native side: takes the JS-stringified request, returns the JS-parseable response (or a
     // `{ __fetchError }` envelope). Same `(string) -> string` binding shape as `__trailblazeCall`,
     // so QuickJS can `await` it from the shim. Synchronous binding, NOT asyncFunction — quickjs-kt
@@ -147,24 +183,25 @@ class OkHttpFetchExtension(
     if (!allowlist.isAllowed(httpUrl.host)) {
       // Only reachable when a restrictive allow-list was opted into. Same shape as the success line,
       // BLOCKED in the status slot.
-      Console.log("[OkHttpFetchExtension] $method BLOCKED ${request.url} — host '${httpUrl.host}' not in allow-list")
+      Console.log("[OkHttpFetchExtension] $method BLOCKED ${logSafeUrl(httpUrl)} — host '${httpUrl.host}' not in allow-list")
       return errorJson(
         "host '${httpUrl.host}' is not permitted by this fetch allow-list. (fetch is unrestricted " +
           "by default; this run opted into a FetchHostAllowlist — add the host via " +
           "FetchHostAllowlist.allowHosts(...) if it should be reachable.)",
       )
     }
+    // Device-local HTTPS is the self-signed case; everything else keeps full validation.
+    val callClient =
+      if (httpUrl.isHttps && isDeviceLocalHost(httpUrl.host)) tlsRelaxedClient else httpClient
     return try {
       withContext(Dispatchers.IO) {
         val startedMs = System.currentTimeMillis()
-        httpClient.newCall(buildRequest(httpUrl, request)).execute().use { response ->
+        callClient.newCall(buildRequest(httpUrl, request)).execute().use { response ->
           val bodyText = response.body.string()
-          // Per-request breadcrumb: `METHOD status full-url (ms)`, e.g.
-          // `POST 200 https://host.com/path?one=two (123ms)`. The FULL URL (incl. query string) is
-          // logged so the daemon log shows exactly what each tool hit — a query-param credential
-          // therefore appears here (quiet-suppressed daemon log; `curl`-via-`exec` exposes URLs
-          // anyway). Request/response HEADERS and BODIES are never logged.
-          Console.log("[OkHttpFetchExtension] $method ${response.code} ${request.url} (${System.currentTimeMillis() - startedMs}ms)")
+          // Per-request breadcrumb: `METHOD status url (ms)`, e.g.
+          // `POST 200 https://host.com/path (123ms)`. See [logSafeUrl] for why the query string is
+          // redacted. Request/response HEADERS and BODIES are never logged.
+          Console.log("[OkHttpFetchExtension] $method ${response.code} ${logSafeUrl(httpUrl)} (${System.currentTimeMillis() - startedMs}ms)")
           JSON.encodeToString(
             FetchResponsePayload.serializer(),
             FetchResponsePayload(
@@ -181,10 +218,53 @@ class OkHttpFetchExtension(
       // Transport failure (timeout, connection refused, DNS). Same shape, FAILED in the status slot.
       // The author still gets the thrown error; this makes a silently swallowed `fetch().catch(...)`
       // debuggable from the daemon log.
-      Console.log("[OkHttpFetchExtension] $method FAILED ${request.url} — ${e::class.simpleName}: ${e.message}")
+      Console.log("[OkHttpFetchExtension] $method FAILED ${logSafeUrl(httpUrl)} — ${e::class.simpleName}: ${e.message}")
       errorJson("${e::class.simpleName ?: "Error"}: ${e.message}")
     }
   }
+
+  /**
+   * The request URL as it is safe to log: scheme, host, port and path only. The three URL
+   * components that can carry a credential are stripped — **userinfo** (`user:password@`), the
+   * **query string** (replaced by a `?<redacted>` marker when one was present, so the log still
+   * shows that parameters existed), and the **fragment** (never sent to the server anyway, so it
+   * has no diagnostic value here).
+   *
+   * These used to be logged in full, on the reasoning that this was a local, quiet-suppressed
+   * daemon log. That reasoning does not hold on-device, where this binding also runs: `Console.log`
+   * maps to `Log.i` on Android and `enableQuietMode` is a no-op there, so every line is emitted to
+   * logcat unconditionally — and logcat is streamed into the session's `device.log`, which CI zips
+   * and uploads as a build artifact. A credential anywhere in the URL would therefore leave the
+   * device.
+   *
+   * The path is deliberately kept: it identifies which endpoint a tool hit, which is the whole
+   * point of the breadcrumb. Note that this is a real tradeoff rather than a safe default — a
+   * webhook-shaped URL carries its secret *in the path*, so a tool that fetches one will log it.
+   * A tool handling a path-embedded secret should not rely on this redaction.
+   *
+   * `internal` so it's unit-testable as a pure function ([OkHttpFetchExtensionRedactionTest])
+   * without driving a real request — the redaction is the security-load-bearing part of the
+   * logging, so it's pinned directly rather than via the emitted log line.
+   */
+  internal fun logSafeUrl(httpUrl: HttpUrl): String {
+    val hadQuery = httpUrl.querySize > 0
+    val stripped =
+      httpUrl.newBuilder().username("").password("").query(null).fragment(null).build()
+    return if (hadQuery) "$stripped?<redacted>" else stripped.toString()
+  }
+
+  /**
+   * Whether [host] names the device itself or the machine hosting it — the only addresses whose
+   * certificates [tlsRelaxedClient] accepts unvalidated.
+   *
+   * A literal set rather than an `InetAddress` lookup on purpose: this decides which client a
+   * request uses, so it must not perform a blocking DNS resolution, and a name that *resolves* to
+   * loopback (a public DNS record pointing at `127.0.0.1`) is not the local trust domain this
+   * relaxation is scoped to. The emulator's `10.0.2.2` host alias is included **only on Android**
+   * ([EMULATOR_HOST_ALIASES]) — it names the host machine when the caller is the emulator, and is
+   * an ordinary routable address to the host JVM running this same extension.
+   */
+  internal fun isDeviceLocalHost(host: String): Boolean = host.lowercase() in DEVICE_LOCAL_HOSTS
 
   private fun buildRequest(httpUrl: HttpUrl, payload: FetchRequestPayload): Request {
     val builder = Request.Builder().url(httpUrl)
@@ -244,26 +324,26 @@ class OkHttpFetchExtension(
 
     /**
      * Opt-in convenience: an extension constrained to loopback hosts only. Not the default (the
-     * host launchers install an unrestricted `OkHttpFetchExtension()`); use this when a deployment
+     * host and on-device launchers install an unrestricted `OkHttpFetchExtension()`); use this when a deployment
      * deliberately wants to limit `fetch` to a local device bridge on `localhost:<port>`.
      */
     fun localhostOnly(client: OkHttpClient = DEFAULT_CLIENT): OkHttpFetchExtension =
       OkHttpFetchExtension(client = client, allowlist = FetchHostAllowlist.localhostOnly())
 
-    /** Operator kill-switch env var. `1`/`true` (case-insensitive) disables `fetch`. */
-    const val DISABLE_ENV_VAR: String = "TRAILBLAZE_DISABLE_FETCH"
+    /**
+     * Hosts [isDeviceLocalHost] treats as the device / its host machine. Lowercase.
+     *
+     * Loopback in every spelling a URL can carry, plus [EMULATOR_HOST_ALIASES] — which is
+     * Android-only, since `10.0.2.2` names the host machine only when the caller is the emulator
+     * and is an ordinary routable address to the host JVM that installs this same extension.
+     */
+    private val DEVICE_LOCAL_HOSTS: Set<String> =
+      setOf("localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1") + EMULATOR_HOST_ALIASES
 
     private val METHODS_REQUIRING_BODY: Set<String> =
       setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
 
     private val JSON: Json = Json { ignoreUnknownKeys = true }
-
-    /**
-     * Pure parse of the kill-switch env value, split out so it's unit-testable without touching the
-     * process environment. `1` / `true` (case-insensitive, trimmed) → disabled.
-     */
-    internal fun isFetchDisabled(envValue: String?): Boolean =
-      envValue?.trim()?.lowercase().let { it == "1" || it == "true" }
 
     /**
      * Process-wide shared client (OkHttp pools connections and is designed to be shared across the
@@ -280,22 +360,6 @@ class OkHttpFetchExtension(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     }
-
-    /**
-     * Stub installed in place of the real `fetch` when [DISABLE_ENV_VAR] is set: a `fetch` that
-     * rejects with a clear message, so a tool that depended on it fails legibly.
-     */
-    internal val DISABLED_FETCH_SHIM_JS: String =
-      """
-      (function () {
-        globalThis.fetch = function () {
-          return Promise.reject(new TypeError(
-            'fetch is disabled on this runtime ($DISABLE_ENV_VAR); ' +
-            'use ctx.tools.exec or a runtime: subprocess tool instead.'
-          ));
-        };
-      })();
-      """.trimIndent()
 
     /**
      * The JS shim defining `globalThis.fetch`. Deliberately avoids template literals / `$` (so it

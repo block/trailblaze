@@ -383,4 +383,41 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
       Zip.buildReportHtmlFromZipBytes(zip, { render: fakeRenderer({}), inflateRaw }),
     ).rejects.toThrow("No Trailblaze session logs");
   });
+
+  // Stage one on its own — what a home that renders IN PLACE consumes (the viewer shell hydrating
+  // itself) instead of an HTML string.
+  test("derives the same session inputs without either HTML builder", async () => {
+    const dir = SESSION_ID + "/";
+    const zip = buildZip([
+      { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
+      { name: dir + "002_Log.json", text: JSON.stringify(endedLog("Ended.Succeeded")) },
+      { name: dir + "shot_1.webp", data: new Uint8Array([1, 2, 3, 4]) },
+    ]);
+    // Deliberately NO buildRunReportHtml / buildMultiReportHtml: a shell embeds only the viewer
+    // bundle, so this stage must never reach for them.
+    const derivationOnly = {
+      extractTrace: () => [{ screenshotFile: "shot_1.webp", label: "in-zip" }],
+      extractLlmLogs: () => [{ id: "llm-1" }],
+      originalYamlFromLogs: () => "orig: yaml",
+    };
+    const built = await Zip.buildSessionInputsFromZipBytes(zip, {
+      render: derivationOnly, inflateRaw, generatedAt: "FIXED-TS",
+    });
+
+    expect(built.sessions.length).toBe(1);
+    expect(built.zipBytes).toBe(zip.length);
+    expect(built.generatedAt).toBe("FIXED-TS");
+    const [session] = built.sessions;
+    expect(session.meta.generatedAt).toBe("FIXED-TS");
+    expect(session.llmLogs).toEqual([{ id: "llm-1" }]);
+    expect(session.originalYaml).toBe("orig: yaml");
+    expect(session.shots["shot_1.webp"]).toBe("data:image/webp;base64," + Buffer.from([1, 2, 3, 4]).toString("base64"));
+  });
+
+  test("stage one rejects an archive with no session logs", async () => {
+    const zip = buildZip([{ name: "not-a-session/readme.txt", text: "hi" }]);
+    await expect(
+      Zip.buildSessionInputsFromZipBytes(zip, { render: fakeRenderer({}), inflateRaw }),
+    ).rejects.toThrow("No Trailblaze session logs");
+  });
 });

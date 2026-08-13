@@ -43,7 +43,11 @@ internal suspend fun buildDeviceAppsResponse(
   return withContext(Dispatchers.IO) {
     runCatching {
       val deviceId = TrailblazeDeviceId(id, resolvedPlatform)
-      val installed = MobileDeviceUtils.getInstalledAppIds(deviceId)
+      // One shared inventory probe (installed IDs + target-relevant versions): populates the
+      // manager's flows and coalesces with any concurrent probe, instead of this route paying
+      // its own `listapps`/`pm list` plus a per-target version fallback on every request. A
+      // failed probe (null) yields no targets, matching this route's benign-empty contract.
+      val installed = deviceManager.refreshAppInventory(deviceId) ?: emptySet()
       val versions = deviceManager.appVersionInfoByDeviceFlow.value
       val targets = deviceManager.availableAppTargets.mapNotNull { t ->
         val appId = t.getAppIdIfInstalled(resolvedPlatform, installed) ?: return@mapNotNull null

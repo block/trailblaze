@@ -66,7 +66,9 @@
 <!-- Session-zip → run-report assembly (window.TbZipReport): ZIP reader + the LogsRepo/SessionInfo
      read-slice ports that turn a downloaded session archive into buildRunReportHtml inputs. Plain
      JS with a sibling zip-report-core.test.ts; loaded before the babel screens so the zip-report
-     screen sees it. -->
+     screen sees it. Served from :trailblaze-report's resources at this same classpath path (like
+     run-report-core.js), because the report viewer shell inlines it at transpile time — one copy of
+     the pipeline, whichever home loads it. -->
 <script src="./app/zip-report-core.js"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/ui.tsx"></script>
 <script type="text/babel" data-presets="react,typescript,env" src="./app/data-core.tsx"></script>

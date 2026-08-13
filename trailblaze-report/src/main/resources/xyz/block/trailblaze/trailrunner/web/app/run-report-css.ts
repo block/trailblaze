@@ -240,20 +240,121 @@ button.btn:not(:disabled):hover { border-color: var(--run); background: var(--bu
 .pvctl button.btn:not(:disabled):hover { border-left-color: var(--player-line); }
 button.btn:not(:disabled):active { transform: translateY(1px); }
 button.btn.play { border-color: var(--run); background: var(--accent-surface); color: var(--run); min-width: 84px; }
-.llm { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
 .card { border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); padding: 10px 13px; }
 .totals { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
 .totals .n { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .totals .t { font-size: 10.5px; color: var(--sub); }
-.callrow { padding: 9px 11px; margin-top: 5px; cursor: pointer; border: 1px solid transparent; border-radius: var(--r-md); background: var(--bg2); transition: background-color 120ms ease-out, border-color 120ms ease-out; }
-.callrow:hover { background: var(--bg3); border-color: var(--line2); }
-.callrow.sel { background: var(--bg3); border-color: rgba(57,209,109,.45); }
-.callrow .d { font-size: 11.5px; font-weight: 600; }
-.callrow .m { font-size: 10.5px; color: var(--sub); margin-top: 3px; }
-.resp { border: 1px solid rgba(181,140,255,.3); background: rgba(181,140,255,.07); border-radius: 10px; padding: 11px 13px; margin-top: 10px; }
-.resp .h { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ai); margin-bottom: 8px; }
-.resp .reason { font-size: 12.5px; line-height: 1.55; margin-bottom: 6px; }
-.resp .tool { font-size: 12px; font-weight: 700; margin: 4px 0; }
+/* Which model(s) produced the session's calls, in the repo's provider/model form. */
+.llmmodels { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 11px; }
+.llmmodels .k { font-size: 10.5px; font-weight: 600; color: var(--sub); }
+.llmmodels .v { font-weight: 600; overflow-wrap: anywhere; }
+.llmbreak { margin-top: 20px; }
+.llmbreakbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0 12px; background: var(--bg3); }
+.llmbreakbar span { display: block; height: 100%; min-width: 2px; }
+.llmbreakcat { display: flex; align-items: baseline; gap: 10px; font-size: 11.5px; padding: 3px 0; }
+.llmbreakdot { width: 8px; height: 8px; border-radius: 50%; align-self: center; flex: none; }
+.llmbreaklabel { min-width: 110px; font-weight: 600; }
+.llmbreakcat .llmbreaktokens { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.llmbreakcat .llmbreakpct { min-width: 44px; text-align: right; color: var(--sub); font-variant-numeric: tabular-nums; }
+.llmbreakcat .llmbreakcount { color: var(--sub); }
+.llmbreaktotal { margin-top: 8px; font-size: 10.5px; color: var(--sub); }
+.llmbreaknote { margin-top: 6px; font-size: 10.5px; line-height: 1.5; color: var(--sub2); }
+.llmtablewrap { margin-top: 20px; overflow-x: auto; }
+.llmtable { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11.5px; }
+.llmtable th { text-align: left; font-size: 10.5px; color: var(--sub); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+.llmtable td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; vertical-align: top; }
+.llmtable th.num, .llmtable td.num { text-align: right; }
+.llmtable td.llmreq { font-weight: 600; }
+.llmtable td.llmmodel { color: var(--sub); font-size: 10.5px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.llmtable tr.llmrow { cursor: pointer; }
+.llmtable tr.llmrow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.llmtable tr.llmrow:hover td { background: var(--bg3); }
+.llmtable tr.llmrow.sel td { background: var(--bg3); }
+.llmtable .llmcached { display: block; font-size: 10px; color: var(--sub); }
+/* ── LLM transcript lightbox + its triggers ──────────────────────────────────────────────── */
+/* Trigger buttons: a sibling of the interactive row it belongs to (never nested inside a
+   role="button" row), mirroring the WASM report's per-row Chat History icon. */
+.txopenbtn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); color: var(--sub); cursor: pointer; }
+.txopenbtn svg { width: 14px; height: 14px; }
+.txopenbtn:hover { background: var(--bg3); color: var(--txt); }
+.txopenbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Timeline LLM-call rows: row + trigger side by side; the wrap takes over the row separator. */
+.steprow { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+.steprow > .step { flex: 1; min-width: 0; border-top: none; }
+.steprow .txopenbtn { align-self: center; margin: 0 10px 0 4px; }
+.llmtable td.txcell { text-align: center; }
+.srlabel { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Objective groups — the per-request table groups by the objective each call ran under, with
+   per-objective subtotals (which objective burned the budget). Each objective is its own <tbody>
+   so the nesting is structural: a banded header row states the objective, a hairline rail runs the
+   height of the group, and the calls inside are inset from it. */
+.llmgroupmeta { color: var(--sub); font-weight: 500; font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.llmtable tbody.llmgroup + tbody.llmgroup tr.llmgrouprow td { padding-top: 14px; }
+.llmtable tr.llmgrouprow td { background: var(--bg3); border-bottom: 1px solid var(--line2); font-weight: 700; font-size: 11px; }
+.llmtable tr.llmgrouprow td .lbl { display: block; max-width: 62ch; line-height: 1.4; overflow-wrap: anywhere; }
+.llmtable tr.llmgrouprow td .llmgroupmeta { display: block; margin-top: 3px; }
+/* Containment: a hairline rail runs the height of the group (one segment per row, so it is
+   continuous) with a short elbow into each inset request cell. */
+.llmtable tr.llmrow.grouped td.llmreq { padding-left: 26px; position: relative; }
+.llmtable tr.llmrow.grouped td.llmreq::before { content: ""; position: absolute; left: 11px; top: 0; bottom: -1px; width: 1px; background: var(--line2); }
+.llmtable tr.llmrow.grouped td.llmreq::after { content: ""; position: absolute; left: 11px; top: 13px; width: 9px; height: 1px; background: var(--line2); }
+.llmtable tbody.llmgroup tr.llmrow.grouped:last-child td.llmreq::before { bottom: 50%; }
+/* The dialog itself: modal over the current view (the report's zoom-overlay language); dismissed
+   by Escape or the close button only — scrim clicks are inert, like the WASM Chat History dialog. */
+.txoverlay { position: fixed; inset: 0; background: rgba(2,6,12,.72); display: flex; align-items: center; justify-content: center; z-index: 99; backdrop-filter: blur(4px); }
+.txpanel { display: flex; flex-direction: column; width: min(940px, 94vw); max-height: 90vh; background: var(--bg); border: 1px solid var(--line2); border-radius: 14px; box-shadow: 0 24px 64px rgba(0,0,0,.45); overflow: hidden; }
+.txpanelhead { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.txpaneltitle { flex: 1; min-width: 0; }
+.txpaneltitle .h { font-size: 13px; font-weight: 700; }
+.txpaneltitle .txof { color: var(--sub); font-weight: 500; }
+.txpanelmeta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.txclose { flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); color: var(--sub); font-size: 16px; line-height: 1; cursor: pointer; }
+.txclose:hover { background: var(--bg3); color: var(--txt); }
+.txclose:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.txscroll { overflow: auto; padding: 10px 16px 16px; }
+.txnote { color: var(--sub); font-size: 12px; padding: 8px 0; }
+/* Message bubbles (rendered only inside the dialog) — conversational, chat-app style. Two
+   voices: what the model authored (assistant + its tool calls) sits left with the --ai accent;
+   what the agent/harness supplied (user turns + tool results) sits right with the blue accent;
+   the system prompt is a quiet full-width preamble. Same split the WASM LlmMessageComposable
+   drew with avatars + user-right alignment. */
+.txmsg { border: 1px solid var(--line2); border-radius: 12px; background: var(--bg2); margin-top: 8px; overflow: hidden; }
+.txmsg.voice-llm { max-width: 86%; margin-right: auto; background: rgba(181,140,255,.08); border-color: rgba(181,140,255,.32); border-bottom-left-radius: 4px; }
+.txmsg.voice-user { max-width: 86%; margin-left: auto; background: rgba(77,139,255,.08); border-color: rgba(77,139,255,.30); border-bottom-right-radius: 4px; }
+.txmsg.voice-sys { background: var(--bg2); border-color: var(--line); color: var(--sub); }
+.txmsg.voice-llm pre, .txmsg.voice-user pre { background: transparent; }
+.txavatar { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; align-self: center; font-size: 8.5px; font-weight: 800; letter-spacing: 0; }
+.txavatar.llm { background: rgba(181,140,255,.22); color: var(--ai); }
+.txavatar.user { background: rgba(77,139,255,.22); color: var(--run); }
+.txavatar.sys { background: var(--bg3); color: var(--sub); }
+/* Verbatim escape hatch for cleaned tool-result envelopes. */
+.txraw summary { font-size: 10px; color: var(--sub2); cursor: pointer; padding: 4px 10px 6px; list-style: none; }
+.txraw summary::-webkit-details-marker { display: none; }
+.txraw summary::before { content: '› '; }
+.txraw[open] summary::before { content: '⌄ '; }
+.txraw pre { border-top: 1px dashed var(--line); }
+.txmsg .txhead { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px 0; }
+.txmsg summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.txmsg summary::-webkit-details-marker { display: none; }
+.txmsg summary::after { content: '›'; color: var(--sub2); font-size: 15px; line-height: 1; margin-left: auto; transition: transform 120ms ease-out; }
+.txmsg[open] summary::after { transform: rotate(90deg); }
+/* Inset ring: .txmsg clips overflow, so an outset ring on the summary would be invisible. */
+.txmsg summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.txrole { font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); white-space: nowrap; }
+.txrole.user { color: var(--run); }
+.txrole.assistant { color: var(--ai); }
+.txrole.tool { color: var(--pass); }
+.txrole.system { color: var(--sub2); }
+/* Tool names keep their authored casing — never run through the role label's uppercase. */
+.txtool { font-size: 11px; color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.txpeek { font-size: 11px; color: var(--sub2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+/* The one-line preview duplicates the expanded body — hide it while open. */
+.txmsg[open] summary .txpeek { display: none; }
+.txlen { font-size: 10px; color: var(--sub2); white-space: nowrap; }
+.txmsg pre { margin: 0; border: 0; border-radius: 0; max-height: 420px; background: var(--code-surface); color: var(--code-text); }
+/* An expander the reader opened means "show me everything": uncap — the dialog body scrolls. */
+details.txmsg[open] pre { max-height: none; }
+details.txmsg pre { border-top: 1px solid var(--line); }
 pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .rows { display: grid; max-width: var(--content-reading); overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); }
 .rows .r { display: grid; grid-template-columns: 160px minmax(0,1fr); gap: var(--space-4); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); font-size: var(--type-small); }
@@ -558,7 +659,7 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .yamlcolhead .eyebrow { margin: 0; }
 .yamlcopy { min-height: 24px; padding: 3px 7px; border-radius: 6px; font-size: 10px; }
 .yamlcol .cmd { max-width: none; }
-@media (min-width: 820px) { .yamlcompare { grid-template-columns: repeat(2,minmax(0,1fr)); } .llm { grid-template-columns: 300px 1fr; } }
+@media (min-width: 820px) { .yamlcompare { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (min-width: 960px) {
   main.timelinemain { overflow: hidden; }
   .timelinemain .tl { height: 100%; min-height: 0; grid-template-columns: minmax(320px,1fr) minmax(340px,42%); grid-template-rows: minmax(0,1fr); gap: 24px; align-items: stretch; }
@@ -581,7 +682,7 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .zoom .zoomwrap { position: relative; }
 .zoom .zoomwrap img { display: block; }
 button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } }
+@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .txopenbtn, .txclose, .steprow .inspectlink { min-width: 44px; min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back { animation: none; } }
 @media (max-width: 640px) {
   :root { --page-x: 18px; --page-y: 20px; }
@@ -590,4 +691,69 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
   .detailheader h1 { font-size: 18px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+/* ── UI Inspector (per-step view-hierarchy overlay) ─────────────────────────────────────────── */
+/* A timeline row can carry two affordances (the transcript button, this one), so both are flex
+   items of the shared .steprow — laying either one out absolutely would leave a dead gutter on rows
+   that only have the other. */
+.steprow .inspectlink { flex: none; align-self: center; margin: 0 10px 0 4px; min-height: 22px; display: inline-flex; align-items: center; border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 2px 7px; background: var(--bg2); color: var(--sub2); font: inherit; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.steprow .inspectlink:hover { color: var(--txt); border-color: var(--run); }
+.steprow .inspectlink:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.inspector { position: fixed; inset: 0; background: rgba(2,6,12,.72); display: flex; align-items: center; justify-content: center; z-index: 99; backdrop-filter: blur(4px); padding: 24px; }
+.insppanel { display: flex; flex-direction: column; width: min(1240px, 100%); height: 100%; max-height: 94vh; background: var(--bg); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--shadow-raised); overflow: hidden; }
+.insphead { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.insptitle { font-size: 14px; font-weight: 700; }
+.inspcontext { font-size: 12px; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.inspactions { display: flex; gap: 8px; flex-shrink: 0; }
+.inspbody { display: grid; grid-template-columns: minmax(220px, 34%) minmax(0, 1fr); gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+.insppane { min-height: 0; overflow: auto; }
+.inspshotpane { display: flex; align-items: flex-start; justify-content: center; }
+.inspshotwrap { position: relative; max-width: 100%; cursor: crosshair; }
+.inspshotwrap img { display: block; max-width: 100%; max-height: calc(94vh - 120px); border-radius: var(--r-sm); border: 1px solid var(--line2); }
+/* Panel geometry adapts to the CAPTURE's shape (insp-* set from the hierarchy's device extent) and
+   the screenshot pane is the priority claimant on space — hovering it is the primary interaction,
+   so when space is tight the DATA column is the one that caps (its own scroll), never the image.
+   - insp-landscape (web / tablet): the panel takes the full padded viewport (~96vw) and the grid
+     flips — image column gets the free space, data column caps at a readable width.
+   - insp-tall (a scrolled full-page web capture, e.g. 936×3694): scaling to the panel height would
+     leave a sliver, so the image renders at pane width and the pane scrolls vertically. The bounds
+     rects live inside .inspshotwrap (percentage-positioned against the image), so they scroll with
+     it and stay glued. */
+.insppanel.insp-landscape, .insppanel.insp-tall { width: 100%; }
+.insppanel.insp-landscape .inspbody, .insppanel.insp-tall .inspbody { grid-template-columns: minmax(0, 1fr) minmax(260px, 26rem); }
+.insppanel.insp-tall .inspshotwrap { width: 100%; }
+.insppanel.insp-tall .inspshotwrap img { width: 100%; max-height: none; }
+/* overflow:hidden — a web tree's page-relative bounds run past the viewport capture, so rects for
+   below-the-fold nodes land outside the image and must clip rather than paint over the panel. */
+.insprects { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+/* Every node has a rect, but only the hovered / selected one paints — drawing them all turned the
+   screenshot into a wireframe. Hover (dashed, cool) and selection (solid, accent) read apart. */
+.insprect { position: absolute; border: 0 solid transparent; }
+.insprect.hov { border: 2px dashed var(--pass); background: color-mix(in srgb, var(--pass) 12%, transparent); z-index: 1; }
+.insprect.sel { border: 2px solid var(--run); background: color-mix(in srgb, var(--run) 18%, transparent); z-index: 2; }
+.insphovlabel { position: absolute; display: none; transform: translateY(-100%); max-width: 90%; margin-top: -3px; padding: 1px 5px; border-radius: var(--r-sm); background: var(--pass); color: var(--bg); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 3; }
+.insphovlabel.on { display: block; }
+.inspdatapane { display: flex; flex-direction: column; gap: 12px; }
+.inspdetails { flex-shrink: 0; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); padding: 10px 12px; max-height: 38%; overflow: auto; }
+.inspdetails .rows { display: grid; gap: 4px; }
+.inspdetails .r { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px; font-size: 12px; }
+.inspdetails .r .k { color: var(--sub); }
+.inspdetails .r .v { word-break: break-word; }
+.inspdetails .r.inspreview .k, .inspdetails .r.inspreview .v { color: var(--pass); font-weight: 600; }
+.inspflag { display: inline-block; margin: 0 4px 2px 0; padding: 1px 6px; border-radius: 99px; background: var(--accent-surface); color: var(--run); font-size: 10.5px; font-weight: 600; }
+.insptree { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); padding: 8px 10px; font-size: 12px; }
+.insptree details { margin: 0; }
+.insptree summary { list-style: revert; cursor: default; }
+.inspkids { margin-left: 14px; border-left: 1px solid var(--line); padding-left: 6px; }
+.inspleaf { margin-left: 15px; }
+.inspnoderow { display: inline-flex; gap: 8px; align-items: baseline; padding: 1px 6px; border-radius: var(--r-sm); cursor: pointer; max-width: 100%; }
+/* .hov marks the row of the node currently previewed by hovering the SCREENSHOT — it locates that
+   node in the hierarchy. Pointing at a row is not a hover source and never sets it. .sel is the
+   committed selection and wins the background. */
+.inspnoderow.hov { background: var(--success-surface); box-shadow: inset 0 0 0 1px var(--pass); }
+.inspnoderow.sel { background: var(--accent-surface); box-shadow: none; }
+.inspnoderow .inspkey { color: var(--sub); font-size: 10.5px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.inspnoderow .insplabel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inspraw { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-surface); color: var(--code-text); padding: 10px 12px; font-size: 11.5px; margin: 0; }
+.inspnote { color: var(--sub); font-size: 12.5px; padding: 12px; }
+@media (max-width: 760px) { .inspbody { grid-template-columns: 1fr; } .inspshotwrap img { max-height: 38vh; } }
 `;

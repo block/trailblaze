@@ -36,7 +36,6 @@ import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedTrailItems
-import xyz.block.trailblaze.yaml.generateRecordedYaml
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -464,14 +463,8 @@ fun WasmSessionDetailView(
         toMaestroYaml = toMaestroYaml,
         onBackClick = onBackClick,
         generateRecordingYaml = {
-          // Generate recording YAML on-the-fly from logs (no JVM pre-generation needed)
-          logs.generateRecordedYaml(
-            trailblazeYaml = trailblazeYaml,
-            sessionTrailConfig = sessionInfo?.trailConfig,
-          )
-        },
-        generateUnifiedRecordingYaml = {
-          // Preview in the unified `trail.yaml` shape (what the save path writes to disk).
+          // Generate recording YAML on-the-fly from logs (no JVM pre-generation needed), in the
+          // unified `trail.yaml` shape the save path writes to disk.
           logs.generateUnifiedRecordedYaml(
             trailblazeYaml = trailblazeYaml,
             sessionTrailConfig = sessionInfo?.trailConfig,

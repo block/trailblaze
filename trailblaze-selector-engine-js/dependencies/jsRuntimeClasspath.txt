@@ -1,0 +1,7 @@
+org.jetbrains.kotlin:kotlin-dom-api-compat:2.4.0
+org.jetbrains.kotlin:kotlin-stdlib-js:2.4.0
+org.jetbrains.kotlin:kotlin-stdlib:2.4.0
+org.jetbrains.kotlinx:kotlinx-serialization-core-js:1.11.0
+org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0
+org.jetbrains.kotlinx:kotlinx-serialization-json-js:1.11.0
+org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0

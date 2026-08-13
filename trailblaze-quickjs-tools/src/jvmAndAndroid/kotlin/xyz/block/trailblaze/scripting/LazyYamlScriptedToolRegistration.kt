@@ -352,8 +352,11 @@ class LazyYamlScriptedToolRegistration private constructor(
         bundleJs = bundlePath.readText(),
         bundleFilename = "${toolConfig.name}.bundle.js",
         hostBinding = binding,
-        // Optional engine extension (e.g. host-side `fetch`). Null on-device; the host launchers
-        // pass one so in-process scripted tools can reach a bound `fetch` instead of shelling curl.
+        // Optional engine extension (e.g. the OkHttp-backed `fetch`), so in-process scripted tools
+        // can reach a bound `fetch` instead of shelling curl. This registration path is
+        // host-launcher-only in production (`HostScriptedToolLauncher`); the on-device launchers
+        // install the same extension via `QuickJsToolBundleLauncher.launchAll`, so `fetch` is
+        // available in both runtimes.
         engineExtension = engineExtension,
       )
       return LazyYamlScriptedToolRegistration(toolConfig, host, binding)

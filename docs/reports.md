@@ -81,8 +81,47 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 
 [**Open the full interactive report →**](report-assets/wikipedia/report.html)
 
-*Want this for your own app? Every `trailblaze run` produces a session you can export
-the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
+---
+
+## Open one of your own sessions in the browser
+
+The reports above are exported files. If what you have is a **session archive** — the `.zip`
+a run leaves behind, or one downloaded from CI — you don't need to export anything to read
+it:
+
+[**Open the report viewer →**](report-viewer/index.html)
+
+**Drop the `.zip` on that page** (or use its file picker) and every log, screenshot, LLM
+call, and step timeline in the archive renders as a full interactive report. This is the
+path that always works: the archive is read in your browser, nothing is uploaded, and no
+request leaves the page. It works offline, and on an archive you'd never put on a network.
+
+The viewer is one self-contained file — the same stylesheet and the same renderer an
+exported report carries, with no run baked into it. So it can't drift from the reports it
+renders, and you can host or keep your own copy:
+
+```
+./scripts/build-viewer-shell.sh out    # writes out/index.html — serve it anywhere, or just open it
+```
+
+### Loading by URL (`?zip=`), and when it works
+
+Appending `?zip=<archive-url>` (or pasting a URL into the viewer's field) loads an archive
+over the network instead, which is what makes a report **shareable as a link**. Viewer
+route params ride alongside it, so a link can open on a specific place in the report:
+
+```
+.../report-viewer/?zip=https://example.com/runs/my-session.zip&tab=lightbox
+```
+
+This path is **opt-in on the archive host's side**, because the fetch is cross-origin: it
+only works if whatever serves the `.zip` sends an `Access-Control-Allow-Origin` header that
+permits the viewer's page. Plenty of artifact stores don't, and that's not something the
+viewer can work around — the browser blocks the read before the page sees any bytes. When it
+happens, the viewer says so and you can still drop the file.
+
+*Want the exports above for your own app? Every `trailblaze run` produces a session you can
+export the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
 and its `--storyboard` / `--webp` / `--gif` / `--video` flags.*
 
 *Optimizing a slow trail? The same session logs also feed an Instruments-style time

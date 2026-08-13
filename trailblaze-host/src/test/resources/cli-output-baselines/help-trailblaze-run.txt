@@ -10,11 +10,11 @@ Usage: trailblaze run [-hvV] [--all-devices] [--capture-all] [--[no-]
                       capture-network] [--[no-]capture-video]
                       [--full-report-payloads] [--[no-]headless] [--markdown]
                       [--no-daemon] [--no-logging] [--no-report] [--[no-]
-                      save-recording] [--self-heal] [--[no-]unified-recordings]
-                      [--[no-]use-recorded-steps] [-a=<agent>]
-                      [--args-file=<file>] [--compose-port=<composePort>]
-                      [--driver=<driverType>] [--llm=<llm>]
-                      [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
+                      save-recording] [--self-heal] [--[no-]use-recorded-steps]
+                      [-a=<agent>] [--args-file=<file>]
+                      [--compose-port=<composePort>] [--driver=<driverType>]
+                      [--llm=<llm>] [--llm-model=<llmModel>]
+                      [--llm-provider=<llmProvider>]
                       [--max-llm-calls=<maxLlmCalls>]
                       [--test-name=<testNameOverride>] [--arg=KEY=VAL]...
                       [-d=<device>[,<device>...]]... [--memory=KEY=VAL]...
@@ -184,8 +184,7 @@ removed in a future release.
                                the recording is only saved when --self-heal was
                                enabled OR this device isn't recorded yet —
                                deterministic re-runs no-op the write so they
-                               can't clobber a hand-edited source. See
-                               --unified-recordings for the on-disk format.
+                               can't clobber a hand-edited source.
       --secret=KEY=VAL       Pre-populate trail memory with a SENSITIVE KEY=VAL
                                before any step runs. Same shape as --memory;
                                the value is redacted in logs (via
@@ -214,18 +213,6 @@ removed in a future release.
                                environments where the caller can supply a
                                richer identifier (e.g. including
                                suite/section/case context).
-      --[no-]unified-recordings
-                             Save new recordings in the unified format: the
-                               device's slot is merged into the unified trail.
-                               yaml (a directory that still has legacy
-                               <classifier>.trail.yaml files keeps using them).
-                               Default: on. Opt out with
-                               --no-unified-recordings,
-                               TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze
-                               config unified-recordings false' to save legacy
-                               <classifier>.trail.yaml siblings instead —
-                               nothing is ever written next to an existing
-                               unified trail.yaml.
       --[no-]use-recorded-steps
                              Three-way switch for replay vs. AI-driven
                                execution:

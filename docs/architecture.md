@@ -302,9 +302,15 @@ The `recording:` block is keyed by device classifier (`android`, `ios-iphone`, `
 …). A device with a matching slot replays the recorded tool calls with no LLM in the
 loop; a device without one runs the step's prose through the agent — so a single file
 covers every platform. The full spec is in the
-[unified trail syntax devlog](devlog/2026-05-22-trail-yaml-unified-syntax.md); the
-legacy formats (per-device `<classifier>.trail.yaml` recordings written as a YAML list
-of `- prompts:` / `- tools:` blocks, plus the NL-only `blaze.yaml`) remain replayable.
+[unified trail syntax devlog](devlog/2026-05-22-trail-yaml-unified-syntax.md).
+
+This is the only trail format that can be loaded. The legacy shape — a YAML *list* of
+`- config:` / `- prompts:` / `- tools:` blocks, written per device as
+`<classifier>.trail.yaml` — is no longer readable: its parser was removed in #5043, so a
+legacy file now fails to load rather than replaying. As of PRs #5422 and #5738, every
+path that saves a trail (recording save-back, the migrator, the step editor) emits
+unified only. A few older utility paths still hand-build the legacy shape and therefore
+produce output the runtime rejects; #5773 tracks fixing them.
 
 #### Trailhead — the deterministic step 0
 

@@ -33,22 +33,12 @@ fun SessionStatus.Started.toRecordingTrailConfig(titleOverride: String? = null):
     platform = trailblazeDeviceInfo.platform.name.lowercase(),
   )
 
-fun List<TrailblazeLog>.generateRecordedYaml(
-  trailblazeYaml: TrailblazeYaml,
-  sessionTrailConfig: TrailConfig? = null,
-): String = try {
-  trailblazeYaml.encodeToString(generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig))
-} catch (e: Exception) {
-  Console.error("Failed to generate recording: ${e.stackTraceToString()}")
-  ""
-}
-
 /**
  * The classifier slot key a unified recording preview/save uses for this session — the device's
  * classifier segments joined with `-` (e.g. `ios-iphone-sim`), read from the session's
  * [SessionStatus.Started] log, matching how the save path keys the on-disk `recordings:` slot.
  * Blank when the session logged no device classifiers, in which case [generateUnifiedRecordedYaml]
- * falls back to the v1 shape.
+ * has no slot to key the recording on and renders nothing.
  *
  * Blank segments are dropped before joining, mirroring
  * [xyz.block.trailblaze.devices.TrailblazeClassifierLineage.resolutionChain] — otherwise a stray
@@ -61,13 +51,13 @@ private fun List<TrailblazeLog>.recordingClassifier(): String =
     .joinToString("-") { it.classifier }
 
 /**
- * Unified-format sibling of [generateRecordedYaml]: renders the same recording as the unified
- * `trail.yaml` document (`config:` / `trailhead:` / `trail:`, each step carrying per-classifier
- * `recordings:`) that the save path writes to disk — so the recording PREVIEW shown in reports and
- * the desktop Recording tab matches the unified artifact the save path produces, instead of the
- * legacy v1 list shape. The classifier slot is derived from the session's device classifiers (the
- * same key the save path uses via [UnifiedTrailAdapter.mergeRecordedClassifier]); pass
- * [classifierOverride] only to force a specific slot (tests).
+ * Renders this session's recording as the unified `trail.yaml` document (`config:` / `trailhead:` /
+ * `trail:`, each step carrying per-classifier `recordings:`) that the save path writes to disk — so
+ * a recording PREVIEW shown in reports and the desktop Recording tab matches the artifact the save
+ * path produces. The classifier slot is derived from the session's device classifiers (the same key
+ * the save path uses via [UnifiedTrailAdapter.mergeRecordedClassifier]); pass [classifierOverride]
+ * when the caller knows the device but the logs don't carry a `Started` entry (the interactive
+ * recorder), or to force a specific slot in a test.
  *
  * **Preserves the other platforms.** A run only re-records the one device it ran on, but the
  * unified `trail.yaml` it ran against can already hold recordings for other classifiers. The merge
@@ -78,20 +68,15 @@ private fun List<TrailblazeLog>.recordingClassifier(): String =
  * from and the preview shows this classifier alone — the same as the first write of a brand-new
  * unified trail.
  *
- * **This is a best-effort preview, not a byte-guarantee of the saved file.** Two windows where the
- * rendered doc can differ from what the save path ultimately writes: (1) it seeds from `rawYaml`
- * (the file as of run launch) whereas the save path seeds from the file on disk *at save time*, so
- * a concurrent re-record of another device between launch and save won't show here — commonMain has
- * no filesystem to read the live file; (2) it always renders the unified shape regardless of the
- * transitional save-gate (`TRAILBLAZE_UNIFIED_RECORDINGS` / `unifiedRecordingsEnabled`), so with the
- * gate reverted to legacy the preview still shows the go-forward unified form. Both are intentional.
+ * **This is a best-effort preview, not a byte-guarantee of the saved file.** It seeds from `rawYaml`
+ * (the file as of run launch) whereas the save path seeds from the file on disk *at save time*, so a
+ * concurrent re-record of another device between launch and save won't show here — commonMain has no
+ * filesystem to read the live file.
  *
- * Falls back to the v1 encoding whenever the unified shape can't be produced — the classifier is
- * blank (no slot to key on), the recording lowers to no steps (an empty `trail:` is unparseable), or
- * the unified render itself throws. The last case is the one the save path also handles: a
- * self-healed/retried trailhead that recorded more than one tool is rejected by the unified emitter
- * (`MultiToolTrailheadUnsupported`, since a trailhead allows at most one tool per classifier), so the
- * preview must degrade to the v1 recording rather than showing an empty box and copying nothing.
+ * Returns an empty string when no unified document can be produced: the classifier is blank (no slot
+ * to key the recording on) or the render throws — the latter being the same shape the save path
+ * refuses, a self-healed/retried trailhead that recorded more than one tool
+ * (`MultiToolTrailheadUnsupported`, since a trailhead allows at most one tool per classifier).
  */
 fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
@@ -104,14 +89,14 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     Console.error("Failed to build recording items: ${e.stackTraceToString()}")
     return ""
   }
-  val v1 = try {
-    trailblazeYaml.encodeToString(items)
-  } catch (e: Exception) {
-    Console.error("Failed to encode v1 recording: ${e.stackTraceToString()}")
+  val classifier = classifierOverride ?: recordingClassifier()
+  if (classifier.isBlank()) {
+    Console.error(
+      "Can't render this recording: a unified trail keys each device's tools under a classifier " +
+        "slot and this session logged no device classifiers.",
+    )
     return ""
   }
-  val classifier = classifierOverride ?: recordingClassifier()
-  if (classifier.isBlank()) return v1
   return try {
     val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
       existing = existingUnifiedTrailFromRawYaml(trailblazeYaml),
@@ -123,12 +108,10 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     // be represented (the emitter throws) and drops into the catch below.
     trailblazeYaml.encodeUnifiedTrailToString(merged)
   } catch (e: Exception) {
-    // The unified shape couldn't be produced (e.g. multi-tool trailhead). Fall back to the v1
-    // preview instead of returning empty — the save path preserves v1 for the same case.
-    Console.error(
-      "Failed to render unified recording; falling back to v1 preview: ${e.stackTraceToString()}",
-    )
-    v1
+    // The unified shape couldn't be produced (e.g. multi-tool trailhead) — the same shape the save
+    // path refuses.
+    Console.error("Failed to render unified recording: ${e.stackTraceToString()}")
+    ""
   }
 }
 
@@ -161,9 +144,8 @@ private fun List<TrailblazeLog>.existingUnifiedTrailFromRawYaml(
 
 /**
  * Builds the lowered [TrailYamlItem] runtime spine for this session's logs (config, optional
- * trailhead, prompts). Shared source of truth for both [generateRecordedYaml] (encode to the v1
- * list shape) and [generateUnifiedRecordedYaml] (merge + encode to the unified shape), so the two
- * rendered formats can never diverge in content.
+ * trailhead, prompts) — the merge input [generateUnifiedRecordedYaml] folds into a unified
+ * document, and what save-back callers holding the logs in-process feed straight to the merge.
  *
  * Save-back callers that already hold the session logs in-process should feed these items STRAIGHT
  * into the unified-recording merge (`UnifiedRecordingWriter.mergeIntoUnified`, in the higher
@@ -449,7 +431,7 @@ private fun fingerprintForDedup(
   trailblazeYaml: TrailblazeYaml,
 ): String {
   val rawYaml = try {
-    trailblazeYaml.encodeToString(listOf(TrailYamlItem.ToolTrailItem(listOf(wrapper))))
+    trailblazeYaml.encodeTools(listOf(wrapper))
   } catch (_: Exception) {
     wrapper.name
   }

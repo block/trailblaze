@@ -38,23 +38,10 @@ data class TrailblazeServerState(
     val llmModel: String = TrailblazeLlmProvider.NONE.id,
     val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
     /**
-     * Persisted user preference for unified-format recording save-back. Tri-state on purpose:
-     * `null` (default) means "no preference recorded" and inherits the current framework default
-     * (on — see [xyz.block.trailblaze.recordings.UnifiedRecordingWriter.resolveGate], the single
-     * place that default lives). An explicit `true`/`false` from
-     * `trailblaze config unified-recordings <value>` is a non-default value, so it survives
-     * serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what the user
-     * said even if the framework default ever changes. When enabled, a successful run merges the
-     * device's recording slot into the unified `trail.yaml` (directories that still hold legacy
-     * `<classifier>.trail.yaml` files keep using them); when disabled, the legacy per-classifier
-     * save-back is restored.
-     */
-    val unifiedRecordingsEnabled: Boolean? = null,
-    /**
      * Experimental: serve host-driven agent-loop screenshots from the device's live video stream
      * instead of a per-capture direct screenshot. One toggle covers Android, iOS, and web — they
      * share the stream engine, and platforms whose feed isn't available decline per capture and
-     * fall back to direct screenshots. Tri-state like [unifiedRecordingsEnabled]: `null`
+     * fall back to direct screenshots. Tri-state: `null`
      * (default) means off; an explicit `true`/`false` from
      * `trailblaze config stream-screenshots <value>` is a non-default value, so it survives
      * serialization (`encodeDefaults = false` omits only `null`) and keeps meaning what the user

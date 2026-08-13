@@ -235,13 +235,43 @@ class SelectorTsCodegenTest {
   }
 
   @Test
+  fun `selector-analysis DTOs emit typed interfaces referencing the grammar types`() {
+    val rendered = SelectorTsCodegen.generate(
+      trailblazeNodeSelectorKt = SELECTOR_SOURCE,
+      matchDescriptorKt = MATCH_DESCRIPTOR_SOURCE,
+      trailblazeNodeKt = NODE_SOURCE,
+      selectorAnalysisKt = ANALYSIS_SOURCE,
+    )
+    assertTrue(
+      rendered.contains("export interface TrailblazeSelectorOption {"),
+      "Expected TrailblazeSelectorOption interface. Got:\n$rendered",
+    )
+    assertTrue(
+      rendered.contains("selector: TrailblazeNodeSelector;"),
+      "Non-nullable selector field must be required and reference the grammar type. Got:\n$rendered",
+    )
+    assertTrue(
+      rendered.contains("matchingNodeIds: number[];"),
+      "List<Long> must map to number[]. Got:\n$rendered",
+    )
+    assertTrue(
+      rendered.contains("options: TrailblazeSelectorOption[];"),
+      "Analysis aggregate must reference the option interface. Got:\n$rendered",
+    )
+    assertTrue(
+      rendered.contains("error?: string | null;"),
+      "Nullable fields must stay optional. Got:\n$rendered",
+    )
+  }
+
+  @Test
   fun `runSelectorTsCodegen fails loud when an input file is missing`() {
     val tempDir = java.nio.file.Files.createTempDirectory("selector-codegen-missing-test").toFile()
     try {
       val exists = java.io.File(tempDir, "exists.kt").apply { writeText("// empty") }
       val missing = java.io.File(tempDir, "does-not-exist.kt")
       val e = assertFailsWith<IllegalArgumentException> {
-        runSelectorTsCodegen(exists, missing, exists)
+        runSelectorTsCodegen(exists, missing, exists, exists)
       }
       assertTrue(
         e.message!!.contains("does-not-exist.kt"),
@@ -492,5 +522,44 @@ class SelectorTsCodegenTest {
         val bottom: Int,
       )
     }
+  """.trimIndent()
+
+  private val ANALYSIS_SOURCE = """
+    package xyz.block.trailblaze.api
+
+    import kotlinx.serialization.Serializable
+
+    @Serializable
+    internal data class TrailblazeSelectorOption(
+      val selector: TrailblazeNodeSelector,
+      val strategy: String = "",
+      val isBest: Boolean = false,
+      val matchCount: Int = 0,
+      val matchingNodeIds: List<Long> = emptyList(),
+      val resolvedCenterX: Int? = null,
+      val resolvedCenterY: Int? = null,
+      val hitsTarget: Boolean = false,
+    )
+
+    @Serializable
+    internal data class TrailblazeSelectorAnalysis(
+      val options: List<TrailblazeSelectorOption> = emptyList(),
+      val error: String? = null,
+    )
+
+    @Serializable
+    internal data class TrailblazeSelectorTapResolution(
+      val targetNodeId: Long? = null,
+      val selector: TrailblazeNodeSelector? = null,
+      val roundTripValid: Boolean = false,
+      val error: String? = null,
+    )
+
+    @Serializable
+    internal data class TrailblazeSelectorResolution(
+      val matchCount: Int = 0,
+      val matchingNodeIds: List<Long> = emptyList(),
+      val error: String? = null,
+    )
   """.trimIndent()
 }

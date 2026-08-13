@@ -13,6 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
@@ -59,8 +60,8 @@ class InteractionRecorderTest {
     assertEquals(original.timestamp, updated.timestamp)
     assertEquals(original.screenshotBytes, updated.screenshotBytes)
 
-    // The underlying log was rewritten so generateRecordedYaml will pick up the new tool.
-    val yaml = recorder.generateTrailYaml()
+    // The underlying log was rewritten so generateTrailYaml will pick up the new tool.
+    val yaml = recorder.generateTrailYaml(classifier = "android")
     // The fake tool serializes with toLogPayload; we just need to confirm the new tool name
     // appears (and the old one is gone). YAML formatting can vary; substring check is enough.
     assertEquals(true, yaml.contains("replacedToolName"), "yaml should contain new tool name: $yaml")
@@ -86,6 +87,42 @@ class InteractionRecorderTest {
 
     // No changes to the recorded list.
     assertEquals(before, recorder.interactions)
+  }
+
+  // -- generateTrailYaml --
+
+  /**
+   * The interactive recorder is the one production source of a recording with tools but no
+   * objective, so it's what exercises the unified adapter's placeholder step. Pin the whole
+   * document — that it decodes at all, that the tools land under the requested classifier in order,
+   * and that the step names itself as a placeholder the author is meant to replace.
+   */
+  @Test
+  fun `generateTrailYaml renders a decodable one-step trail under the requested classifier`() {
+    // Real registered tools, since this asserts on the DECODED document (see realInteraction).
+    val recorder = newRecorder()
+    recorder.insertInteraction(realInteraction(TapOnPointTrailblazeTool(x = 10, y = 20), timestamp = 1L))
+    recorder.insertInteraction(realInteraction(InputTextTrailblazeTool(text = "hi"), timestamp = 2L))
+
+    val decoded = TrailblazeYaml.Default.decodeUnifiedTrail(recorder.generateTrailYaml(classifier = "android"))
+
+    val step = decoded.trail.single()
+    assertTrue(
+      step.step.contains("no objective captured", ignoreCase = true),
+      "expected a replace-me placeholder step, got: ${step.step}",
+    )
+    assertEquals(listOf("tapOnPoint", "inputText"), step.recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `generateTrailYaml renders nothing without a classifier`() {
+    // Every unified recording is keyed by classifier, so a classifier-less save has nowhere to put
+    // its tools — better an empty render the caller can refuse than an unreplayable document.
+    val recorder = newRecorder()
+    recorder.startRecording()
+    recorder.buffer.onTap(node = null, x = 1, y = 1, screenshot = null, hierarchyText = null)
+
+    assertEquals("", recorder.generateTrailYaml(classifier = ""))
   }
 
   // -- insertInteraction --
@@ -118,7 +155,7 @@ class InteractionRecorderTest {
     // The inserted tool's log MUST land in the parallel logs list at the same position so
     // generateTrailYaml emits it in order; without that, mid-list inserts would silently
     // surface at the end of the saved YAML.
-    val yaml = recorder.generateTrailYaml()
+    val yaml = recorder.generateTrailYaml(classifier = "android")
     val tapIndex = yaml.indexOf("tap")
     val insertedIndex = yaml.indexOf("inserted")
     val trailingTapIndex = yaml.lastIndexOf("tap")
@@ -273,9 +310,9 @@ class InteractionRecorderTest {
       trailheadToolId = "sample_launchAppSignedIn",
       interactions = emptyList(),
     )
-    // No interactions → just the trailhead in a single tools block. Useful for "I picked a
+    // No interactions → just the trailhead as a one-entry tool envelope. Useful for "I picked a
     // trailhead but recorded nothing — verify the trailhead alone gets me to the destination."
-    assertTrue(yaml.contains("- tools:") && yaml.contains("sample_launchAppSignedIn"))
+    assertEquals("- sample_launchAppSignedIn\n", yaml)
   }
 
   /**

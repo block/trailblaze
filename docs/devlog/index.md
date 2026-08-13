@@ -11,6 +11,8 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-08-12 | [`trailblaze-config/` — a standalone workspace config dir alongside `trails/config/`](2026-08-12-standalone-trailblaze-config-dir.md) | Decision |
+| 2026-08-12 | [The Selector Engine, Compiled to JavaScript](2026-08-12-selector-engine-js.md) | Decision |
 | 2026-08-06 | [`all:` — the universal root classifier](2026-08-06-all-universal-root-classifier.md) | Decision |
 | 2026-07-03 | [Batched tool-execution scope: one context + one snapshot frame per recording](2026-07-03-batched-tool-execution-scope.md) | Decision |
 | 2026-07-01 | [Type-checking trail recordings by transpiling them to TypeScript](2026-07-01-trail-recording-type-validation.md) | Decision |

@@ -112,7 +112,13 @@ async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress
     originalYaml,
     generatedAt: new Date().toLocaleString(),
   };
-  return buildRunReportHtml({ meta, trace, llmLogs, shots, events });
+  // Compress the per-step view hierarchies before they're serialized into the document (same gz
+  // side-channel the CLI-built report carries; run-report-core's packSessionInputsHierarchies) —
+  // inline hierarchies would otherwise dominate the export's size AND be JSON.parse'd every time
+  // the exported file's session opens.
+  const input = { meta, trace, llmLogs, shots, events };
+  if (typeof packSessionInputsHierarchies === 'function') await packSessionInputsHierarchies([input]);
+  return buildRunReportHtml(input);
 }
 
 // POST the built HTML to the daemon, which writes it into the run's folder and returns the filename.

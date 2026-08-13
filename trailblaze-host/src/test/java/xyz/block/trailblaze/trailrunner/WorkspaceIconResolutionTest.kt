@@ -411,4 +411,20 @@ class WorkspaceIconResolutionTest {
   fun `resolveExplicitIosBundleId passes through a null value`() {
     assertNull(resolveExplicitIosBundleId(null, listOf("com.example.app.prod")))
   }
+
+  @Test
+  fun `workspaceRootOfConfigDir maps a legacy config dir to its grandparent`() {
+    val root = tmp.newFolder("ws")
+    val configDir = File(root, "trails/config").apply { mkdirs() }
+
+    assertEquals(root, workspaceRootOfConfigDir(configDir))
+  }
+
+  @Test
+  fun `workspaceRootOfConfigDir maps a standalone config dir to its parent`() {
+    val root = tmp.newFolder("ws")
+    val configDir = File(root, "trailblaze-config").apply { mkdirs() }
+
+    assertEquals(root, workspaceRootOfConfigDir(configDir))
+  }
 }

@@ -168,9 +168,10 @@ object QuickJsToolBundleLauncher {
     advertisementOverrides: Map<ToolName, QuickJsToolAdvertisement> = emptyMap(),
     /**
      * Optional engine extension installed into each launched bundle's QuickJS engine BEFORE the
-     * bundle evaluates (e.g. an OkHttp-backed `fetch`; see [QuickJsEngineExtension]). Default
-     * `null` preserves the current on-device behavior — the on-device launchers don't bind
-     * `fetch`. A host (or an on-device caller that opts in) passes one to make it available.
+     * bundle evaluates (e.g. an OkHttp-backed `fetch`; see [QuickJsEngineExtension]). Every
+     * production launcher — host and on-device alike — passes the fetch extension so scripted
+     * tools see the same standard `fetch` surface everywhere. Default `null` gives a bare engine
+     * (tests, or a caller that deliberately wants no extra bindings).
      */
     engineExtension: QuickJsEngineExtension? = null,
   ): LaunchedQuickJsToolRuntime {

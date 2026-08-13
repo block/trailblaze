@@ -96,4 +96,24 @@ class CliConfigHelperDefaultsTest {
       "rewritten CLI settings should preserve the default WEB driver",
     )
   }
+
+  @Test
+  fun `a settings file carrying a retired key still deserializes`() {
+    // `unifiedRecordingsEnabled` was dropped from SavedTrailblazeAppConfig once unified became the
+    // only recording format. Anyone whose settings file still carries it must keep loading — an
+    // unknown key is ignored, not a hard read failure that resets every other setting.
+    val appDataDir = tempFolder.newFolder("retired-key", "appdata")
+    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+    File(appDataDir, "trailblaze-settings.json").writeText(
+      """
+      {
+        "unifiedRecordingsEnabled": false,
+        "selectedTrailblazeDriverTypes": { "ANDROID": "ANDROID_ONDEVICE_INSTRUMENTATION" },
+        "selectedTargetAppId": "myapp"
+      }
+      """.trimIndent(),
+    )
+
+    assertEquals("myapp", CliConfigHelper.readConfigRaw()?.selectedTargetAppId)
+  }
 }

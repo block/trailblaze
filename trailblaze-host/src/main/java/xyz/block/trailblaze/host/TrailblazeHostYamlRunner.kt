@@ -2,7 +2,11 @@ package xyz.block.trailblaze.host
 
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -55,6 +59,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
+import xyz.block.trailblaze.cli.DeviceClassifierResolver
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
@@ -1595,7 +1600,7 @@ object TrailblazeHostYamlRunner {
     // (they have a single recording per step), so this re-ordering is a no-op
     // for the existing format.
     val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+      hostProbedAndroidClassifiers(trailblazeDeviceId)
     }
 
     // Decode trail YAML to extract prompt steps for V3. Envelope-tolerant so single-tool MCP
@@ -1969,7 +1974,7 @@ object TrailblazeHostYamlRunner {
     // Query device classifiers up-front so a v3 trail can be lowered with the
     // right closest-wins recording for THIS device. v1 trails ignore the list.
     val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+      hostProbedAndroidClassifiers(trailblazeDeviceId)
     }
 
     // Envelope-tolerant decode: single-tool MCP dispatch decodes via decodeTools, not the legacy
@@ -2410,11 +2415,91 @@ object TrailblazeHostYamlRunner {
         result.data.deviceClassifiers?.map { TrailblazeDeviceClassifier(it) } ?: emptyList()
       }
       is RpcResult.Failure -> {
+        // Names the RPC cause only. The caller's fallback logs what it recovers with, so
+        // stating the recovery here too would be both duplicative and wrong.
         Console.log(
-          "[Trailblaze] Failed to query device classifiers from on-device agent; " +
-            "falling back to default classifiers. RPC failure: ${result.message}",
+          "[Trailblaze] Failed to query device classifiers from on-device agent. " +
+            "RPC failure: ${result.message}",
         )
         emptyList()
+      }
+    }
+  }
+
+  /**
+   * Bound on the host-side classifier probe in [hostProbedAndroidClassifiers]. Sized as hang
+   * containment, not a latency budget: the resolver's own `wm size`/`wm density` calls are bounded
+   * at 3s each with one retry (~12s worst case), so a probe still running at 15s is wedged rather
+   * than slow. See [hostProbedAndroidClassifiers] for why an unbounded wait here is unsafe.
+   */
+  private const val HOST_CLASSIFIER_PROBE_TIMEOUT_MS = 15_000L
+
+  /**
+   * Fallback for when [queryDeviceClassifiers] returns nothing (transient RPC failure or an
+   * older on-device agent): classify from the host via the canonical [DeviceClassifierResolver]
+   * (adb `wm size`/`wm density`), so the session — and the test-result telemetry built from it —
+   * still records a specific classifier (e.g. `android-phone`) instead of the bare platform.
+   * Degrades to platform-only when the host probe fails, times out, or yields nothing — i.e. the
+   * worst case is exactly the bare `[android]` this fallback replaced, never a stalled run.
+   *
+   * [probe] and [probeTimeoutMs] are injectable so the timeout and degrade branches are
+   * unit-testable without a device (and without a real 15s wait); production callers use the
+   * defaults.
+   */
+  internal suspend fun hostProbedAndroidClassifiers(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    probeTimeoutMs: Long = HOST_CLASSIFIER_PROBE_TIMEOUT_MS,
+    probe: (TrailblazeDeviceId) -> List<TrailblazeDeviceClassifier> = { deviceId ->
+      DeviceClassifierResolver.classifiersFor(
+        platform = TrailblazeDevicePlatform.ANDROID,
+        instanceId = deviceId.instanceId,
+      )
+    },
+  ): List<TrailblazeDeviceClassifier> {
+    val platformOnly = listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+    Console.log(
+      "[DeviceClassifierResolver] On-device classifier probe returned nothing; " +
+        "classifying ${trailblazeDeviceId.instanceId} via host-side probe",
+    )
+    // The probe must be bounded, and the bound has to be on the WAIT rather than the work: the
+    // resolver consults any installed distribution override first, and an override may shell out
+    // via the UNBOUNDED `execAdbShellCommand` (a `getprop` pair is the typical shape). A wedged
+    // dadb transport hangs on read instead of throwing, so neither `withDadb`'s IOException retry
+    // nor coroutine cancellation can unwind it — `withTimeout` around a blocking body would just
+    // wait for that body anyway. This fallback runs precisely when the device RPC already failed,
+    // i.e. exactly when a wedged transport is most likely, so an unbounded wait here would trade a
+    // wrong-but-instant classifier for a stalled run. Bounding the wait via a detached future
+    // (the same idiom `DeviceClassifierResolver.warmCache` uses) guarantees we proceed; an
+    // abandoned probe thread is the acceptable cost of that guarantee, and is once per run.
+    val classifiers = withContext(Dispatchers.IO) {
+      val pending = CompletableFuture.supplyAsync({ probe(trailblazeDeviceId) }, ForkJoinPool.commonPool())
+      try {
+        pending.get(probeTimeoutMs, TimeUnit.MILLISECONDS)
+      } catch (e: Exception) {
+        Console.log(
+          "[DeviceClassifierResolver] Host-side probe failed for ${trailblazeDeviceId.instanceId} " +
+            "(${e::class.simpleName}: ${e.message}); using platform-only classifier",
+        )
+        null
+      }
+    }
+    // An override is free to return an empty list, which downstream reads as device-AGNOSTIC (a
+    // `resolveSkip` on any classifier would then apply). The expression this replaced was
+    // unconditionally non-empty, so keep that contract.
+    return (classifiers ?: platformOnly).ifEmpty { platformOnly }.also { resolved ->
+      // Log the OUTCOME, not just the attempt: a probe that degrades to platform-only reproduces
+      // the very bare-`android` row this fallback exists to eliminate, and that has to be visible
+      // when triaging a mis-classified telemetry row.
+      if (resolved == platformOnly) {
+        Console.log(
+          "[DeviceClassifierResolver] Host-side probe did not resolve a specific classifier for " +
+            "${trailblazeDeviceId.instanceId}; telemetry will record the bare platform",
+        )
+      } else {
+        Console.log(
+          "[DeviceClassifierResolver] Host-side probe resolved ${trailblazeDeviceId.instanceId} " +
+            "as ${resolved.joinToString("-") { it.classifier }}",
+        )
       }
     }
   }
@@ -2528,13 +2613,22 @@ object TrailblazeHostYamlRunner {
 
       val sessionTrailConfig = startedStatus?.toRecordingTrailConfig()
 
-      // Write the on-disk intermediate in the unified shape (falls back to the v1 list shape only
-      // when the session has no resolvable device classifier). The save-back step re-reads this file
-      // and merges it, so emitting unified here keeps that re-decode off the legacy v1 parser.
+      // The on-disk intermediate is a unified trail document; the save-back step re-reads it and
+      // merges this device's slot. Blank when the session has no device classifier to key the
+      // recording on, or when the recording has a shape a trail can't hold — nothing to write.
       val recordingYaml = logs.generateUnifiedRecordedYaml(
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
       )
+      if (recordingYaml.isBlank()) {
+        // info, not log: no recording artifact is written at all for this session, so the line has
+        // to be at least as visible as the "Recording saved" line it stands in for.
+        Console.info(
+          "No recording written for session ${sessionId.value}: the run produced no unified " +
+            "recording (no device classifier, or a shape the trail format can't hold).",
+        )
+        return null
+      }
 
       // Save to session directory
       val sessionRecordingFile = File(sessionDir, "recording.trail.yaml")

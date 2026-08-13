@@ -107,6 +107,18 @@ interface TraceStep {
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;
+  /**
+   * Index into the session's llm call list (extractLlmLogs order) for LLM-call rows — the link
+   * that lets the timeline open this call's transcript/usage. Absent on every other row.
+   */
+  llm?: number | null;
+  /**
+   * Device/viewport extent of this row's capture (the log's deviceWidth×deviceHeight) — the
+   * coordinate space the screenshot shows. The UI Inspector anchors its bounds overlay and
+   * hit-testing on it, because a web trailblazeNodeTree's own extent is page-relative and
+   * polluted by off-viewport nodes. Present only on rows that carried a hierarchy.
+   */
+  viewport?: { w: number; h: number } | null;
   children: TraceChild[];
 }
 
@@ -114,6 +126,10 @@ interface TraceStep {
 interface RawTraceRow extends Partial<Omit<TraceStep, "children">> {
   label: string;
   children?: TraceChild[] | null;
+  /** Raw view-hierarchy JSON captured with this row's log (viewHierarchyFiltered ||
+   * trailblazeNodeTree || viewHierarchy). Lifted into SessionPayload.hierarchies at share time
+   * (traceHierarchies); never embedded on the row itself. */
+  viewHierarchy?: unknown;
   _logs?: unknown[];
 }
 
@@ -126,25 +142,80 @@ interface LlmResponsePart {
   text?: string;
 }
 
+/**
+ * Per-call input-token composition — what filled the request's context window. Small numbers
+ * only, never the messages themselves: sourced from the runtime-computed LlmInputTokenBreakdown
+ * stored on the request log when present, else re-estimated from the log's flattened messages at
+ * extraction time (estimateLlmComp). Token values are estimates scaled so the categories sum to
+ * the LLM-reported input total; `est` is that sum, which therefore equals the reported input total
+ * by construction (why the LLM tab shows no estimate-total column).
+ */
+interface LlmComp {
+  /** Estimated tokens per category. */
+  system: number;
+  user: number;
+  tools: number;
+  images: number;
+  /** Item counts per category (messages / messages / tool descriptors / images). */
+  systemCount: number;
+  userCount: number;
+  toolsCount: number;
+  imagesCount: number;
+  /** Sum of the four token categories — the estimated input total. */
+  est: number;
+}
+
 /** One LLM call after slimLlmForShare — the embedded shape the LLM tab renders. */
 interface LlmCall {
   model: string;
+  /**
+   * Provider id (`TrailblazeLlmProvider.id`, e.g. "openai") that owns `model`, forming the
+   * repo's canonical `<provider>/<model>` identity. Absent when the log carried no provider (older
+   * payloads, modelName-only logs) — render the bare model id then, never a guessed prefix.
+   */
+  provider?: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
   cacheReadTokens: number;
   totalCost: number | null;
+  /** Input-side cost of this call (cache-discounted), when the log carried per-call costs. */
+  promptCost: number | null;
+  /** Output-side cost of this call, when the log carried per-call costs. */
+  completionCost: number | null;
+  /** USD saved by cached input reads vs full-rate input pricing (0 when nothing cached / no pricing). */
+  cacheSavings: number;
+  /** Input-token composition, or null when the log had neither a stored breakdown nor messages. */
+  comp: LlmComp | null;
   durationMs: number;
   label: string;
   instructions: string | null;
   response: LlmResponsePart[];
 }
 
-/** Rows as extractLlmLogs produces them (superset of LlmCall; messages are dropped at share time). */
+/** Rows as extractLlmLogs produces them (superset of LlmCall; messages move to LlmTranscripts at share time). */
 interface RawLlmRow extends Omit<LlmCall, "response"> {
-  promptCost?: number | null;
-  completionCost?: number | null;
   messages?: unknown[];
   response?: LlmResponsePart[];
+}
+
+/** One transcript message: role + index into LlmTranscripts.texts (+ tool name on tool turns). */
+interface LlmTranscriptMessage {
+  role: string;
+  /** Index into LlmTranscripts.texts (message texts are pooled — see extractLlmTranscripts). */
+  t: number;
+  toolName?: string | null;
+}
+
+/**
+ * A session's full LLM chat transcripts, one message list per call, aligned by index with the slim
+ * `llm` array. The conversation history accumulates across calls (call N repeats every earlier
+ * turn verbatim), so message texts are pooled: `texts` holds each distinct text once and each
+ * call's messages reference it by index. Image data URIs inside messages are replaced with a
+ * placeholder at extraction time (screenshots are already embedded separately in the report).
+ */
+interface LlmTranscripts {
+  texts: string[];
+  calls: LlmTranscriptMessage[][];
 }
 
 /** One network.ndjson event, reduced to the fields the Network tab renders. */
@@ -322,6 +393,16 @@ interface SessionPayload {
   /** gzip(JSON.stringify(EventStream[])) as base64 — used instead of `events` past the driver's
    * inline threshold; the viewer inflates it lazily via DecompressionStream. */
   eventsGz?: string | null;
+  /** Per-call LLM chat transcripts (see LlmTranscripts), inline below the driver's threshold. */
+  llmMessages?: LlmTranscripts | null;
+  /** gzip(JSON.stringify(LlmTranscripts)) as base64 — see deviceLogGz. */
+  llmMessagesGz?: string | null;
+  /** Per-step view-hierarchy snapshots for the UI Inspector, keyed by TraceStep.i (stringified).
+   * Each value is the raw hierarchy JSON captured with that step's log. */
+  hierarchies?: Record<string, unknown> | null;
+  /** gzip(JSON.stringify(hierarchies)) as base64 — used instead of `hierarchies` past the
+   * driver's inline threshold; the viewer inflates it lazily when an inspector is opened. */
+  hierarchiesGz?: string | null;
   video?: VideoInfo | null;
 }
 
@@ -342,6 +423,17 @@ interface SessionInput {
   events?: EventStream[] | null;
   /** See SessionPayload.eventsGz. */
   eventsGz?: string | null;
+  /** See SessionPayload.llmMessages. When neither transcript field is supplied, toSessionPayloads
+   * derives the transcripts from `llmLogs` (the browser/zip paths); the bun driver supplies them
+   * pre-packed instead. */
+  llmMessages?: LlmTranscripts | null;
+  /** See SessionPayload.llmMessagesGz. */
+  llmMessagesGz?: string | null;
+  /** See SessionPayload.hierarchies. When neither this nor hierarchiesGz is supplied,
+   * toSessionPayloads lifts hierarchies off the trace rows itself. */
+  hierarchies?: Record<string, unknown> | null;
+  /** See SessionPayload.hierarchiesGz. */
+  hierarchiesGz?: string | null;
   video?: VideoInfo | null;
 }
 
@@ -378,6 +470,21 @@ interface TrailblazeLogRecord {
   [key: string]: any;
 }
 
+/**
+ * The zip pipeline (`zip-report-core.js`), loaded as a classic script beside the viewer. Only the
+ * members the shell calls are declared; the module's full surface is exercised from its own tests.
+ */
+interface ZipReportExports {
+  buildSessionInputsFromZipBytes: (
+    zipBytes: Uint8Array,
+    options?: { render?: unknown; onStage?: (stage: string) => void; inflateRaw?: unknown; generatedAt?: string },
+  ) => Promise<{ sessions: SessionInput[]; generatedAt: string; zipBytes: number }>;
+}
+
 interface Window {
   __TB_RUN_DATA__?: ReportPayload;
+  /** Set by run-report-viewer-boot; the viewer shell's handoff into the report once a payload is in place. */
+  __TB_BOOT_REPORT__?: () => void;
+  /** Published by zip-report-core.js. */
+  TbZipReport?: ZipReportExports;
 }

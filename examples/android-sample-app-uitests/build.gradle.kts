@@ -289,7 +289,13 @@ dependencies {
   // The MCP-free QuickJS-tool runtime. Tests here exercise `QuickJsToolHost` and the
   // launcher path on-device through the new `AndroidAssetBundleSource` resolver.
   androidTestImplementation(project(":trailblaze-quickjs-tools"))
+  // The OkHttp-backed `fetch` binding the on-device launchers install — this module's androidTest
+  // APK is where "OkHttp inside QuickJS on ART" gets proven on a real device.
+  androidTestImplementation(project(":trailblaze-scripting-fetch"))
   androidTestImplementation(libs.junit)
+  // `HeldCertificate`, so OnDeviceFetchBindingTest can stand up a real self-signed HTTPS server on
+  // the device — the shape of every Trailblaze endpoint an on-device `fetch` reaches.
+  androidTestImplementation(libs.okhttp.tls)
   androidTestImplementation(libs.koog.prompt.executor.ollama)
   androidTestImplementation(libs.koog.prompt.executor.openai)
   androidTestImplementation(libs.koog.prompt.executor.openrouter)

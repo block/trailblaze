@@ -314,8 +314,7 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--max-llm-calls` | Cap the number of LLM calls per objective for the legacy TRAILBLAZE_RUNNER agent. Useful on metered or expensive providers to cut off a stuck self-heal loop. Must be a positive integer. Default: 25 (the runner's built-in cap). Not compatible with --agent MULTI_AGENT_V3. | - |
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--full-report-payloads` | Embed full event payloads in the after-run HTML report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so an existing session can also be regenerated in full later via `trailblaze report --full-report-payloads`. Applies to in-process runs; a run delegated to an already-running daemon doesn't generate a report from this process. | - |
-| `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. See --unified-recordings for the on-disk format. | - |
-| `--unified-recordings` | Save new recordings in the unified format: the device's slot is merged into the unified trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using them). Default: on. Opt out with --no-unified-recordings, TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze config unified-recordings false' to save legacy <classifier>.trail.yaml siblings instead — nothing is ever written next to an existing unified trail.yaml. | - |
+| `--save-recording` | Save the recording back to the trail source directory after a successful run. Default: on. Use --no-save-recording to skip. Even when on, the recording is only saved when --self-heal was enabled OR this device isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a hand-edited source. | - |
 | `--no-logging` | Disable session logging — no files written to logs/, session does not appear in Sessions tab | - |
 | `--markdown` | Generate a markdown report after execution | - |
 | `--no-daemon` | Run in-process without delegating to or starting a persistent daemon. The server shuts down when the run completes. | - |
@@ -1136,7 +1135,6 @@ trailblaze config reset
 | `android-driver` | Android driver type | accessibility, instrumentation |
 | `ios-driver` | iOS driver type | host, axe |
 | `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
-| `unified-recordings` | Save new recordings in the unified trail.yaml format (default: on); set false to save legacy <classifier>.trail.yaml siblings | true, false, or 'unset' to inherit the default |
 | `require-steps` | Require -s/--step on every tool / step / ask / verify call (default: false) | true, false |
 | `max-llm-calls` | Per-objective LLM call cap for the legacy TRAILBLAZE_RUNNER agent | positive integer, or 'unset' to clear |
 | `annotated-screenshots` | Save set-of-mark annotated screenshots to logs (LLM always receives annotated) | true, false |
@@ -1483,14 +1481,14 @@ trailblaze check [OPTIONS] [<<trailmap-id>>]
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailmap-id>>` | Name of the trailmap to scope the type-check to (directory name under <workspace>/trails/config/trailmaps/). Omit when running from inside a trailmap tree (auto-detected) or pass --all to type-check every trailmap. Mutually exclusive with --all. | No |
+| `<<trailmap-id>>` | Name of the trailmap to scope the type-check to (directory name under the workspace's trailblaze-config/trailmaps/ or legacy trails/config/trailmaps/). Omit when running from inside a trailmap tree (auto-detected) or pass --all to type-check every trailmap. Mutually exclusive with --all. | No |
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--all` | Type-check every trailmap in the discovered workspace, even when running from inside a specific trailmap tree. Mutually exclusive with the positional <trailmap-id>. | - |
-| `--workspace` | Pin the workspace root explicitly (the directory containing `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
+| `--workspace` | Pin the workspace root explicitly (the directory containing `trailblaze-config/trailmaps/` or the legacy `trails/config/trailmaps/`). Used by CI scripts that run with a fixed cwd; interactive users should rely on the cwd walk-up instead. | - |
 | `--no-typecheck` | Skip the bundled-tsc typecheck pass — materialize the workspace's SDK + per-trailmap typed bindings and still run `*.test.ts` unit tests via bun. Intended for CI scripts that run tsc with custom settings (e.g., excluding legacy embedded sub-projects); interactive users should leave this off. | - |
 | `--show-typed-tools` | Print the typed scripted tools (`trailblaze.tool<I, O>({...})`) discovered in each trailmap, with a compact one-line schema summary per tool. Useful as a diagnostic when authoring a new tool or chasing a missing-tool / wrong-schema bug; off by default because the per-trailmap subprocess spawn it requires adds noticeable latency to `check`. Has no effect when node, the SDK shim, or the SDK's `ts-json-schema-generator` install are missing — the analyzer skips cleanly with an explanatory log line. | - |
 | `-h`, `--help` | Show this help message and exit. | - |

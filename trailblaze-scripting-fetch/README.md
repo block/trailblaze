@@ -10,20 +10,22 @@ bridge listening on `localhost:<port>`.
 The in-process scripted-tool runtime is QuickJS (`io.github.dokar3:quickjs-kt`), wrapped by
 `QuickJsToolHost` in `:trailblaze-quickjs-tools`. quickjs-kt ships **no networking** — the host
 binds only `__trailblazeCall` (the `ctx.tools` bridge) and a `console` shim. Networking is added
-here, in its own module, so the lean engine module (which the on-device APK depends on) stays
-**OkHttp-free**. A runtime opts in by passing an `OkHttpFetchExtension` to
-`QuickJsToolHost.connect(engineExtension = …)`:
+here, in its own module, so the lean engine module stays **OkHttp-free** for any runtime that
+doesn't want networking. A runtime installs `fetch` by passing an `OkHttpFetchExtension` to
+`QuickJsToolHost.connect(engineExtension = …)` (or to `QuickJsToolBundleLauncher.launchAll`):
 
 - **Host daemon: yes** — the host scripted-tool launchers install it (unrestricted).
-- **On-device: opt-in** — the on-device launchers pass `null` by default; a caller can opt in
-  (OkHttp runs on ART), which is why this module is `jvmAndAndroid` like the engine module.
+- **On-device: yes** — the on-device launchers (`AndroidTrailblazeRule`,
+  `OnDeviceScriptedToolBundleLauncher`) install the same extension, so a tool gets the same
+  `fetch` whether it runs on-device or host-dispatched. OkHttp runs on ART, which is why this
+  module is `jvmAndAndroid` like the engine module.
 
 ## What it gives the author
 
 The WHATWG `fetch` surface, kept basic:
 
 ```ts
-const res = await fetch("http://localhost:8080/command", {
+const res = await fetch("https://localhost:8080/command", {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ flag: "some_flag", value: true }),
@@ -43,6 +45,20 @@ into `@trailblaze/scripting`'s `.d.ts`.
 
 - **Author-only.** Like `ctx.tools.exec`, `fetch` is surfaced to scripted-tool authors, never to
   the LLM.
+- **TLS: validated, except on device-local hosts.** Certificates are checked normally for every
+  real host. Validation (and hostname verification) is skipped for `localhost` / `127.0.0.1` /
+  `::1` only — plus `10.0.2.2` when running on Android, since the emulator's host alias is an
+  ordinary routable address to the host JVM that installs this same extension. Those are the
+  addresses where Trailblaze's own HTTPS surfaces live and present
+  **self-signed** certs no trust store can validate (the on-device server; the host daemon over
+  `adb reverse`). Turning validation off globally, as the rest of the Trailblaze HTTP stack does,
+  would silently downgrade a tool's call to a real API. This is what lets a purely on-device run —
+  a device farm, no `adb reverse`, no host to proxy through — reach a local endpoint with nothing
+  installed on the device.
+- **Speak `https`, not `http`, from a tool that runs on-device.** Android denies cleartext from
+  targetSdk 28, so a plain-`http` call fails before any socket opens while the identical call
+  works host-side. With self-signed certs accepted on loopback (above), `https` covers the
+  local-bridge case without a cleartext opt-in in the runner APK.
 - **Host access: unrestricted by default.** `fetch` reaches any host, exactly like the
   `ctx.tools.exec` + `curl` it replaces — it isn't artificially weaker than the escape hatch, and
   keeping a recorded run replay-deterministic is the author's responsibility (same as `exec`). A
@@ -54,16 +70,16 @@ into `@trailblaze/scripting`'s `.d.ts`.
   to a denied one (the list checks the request URL's host only). Under a restrictive list, a tool
   that must follow a redirect reads `res.status` / `res.headers.get("location")` and issues a
   second `fetch` (re-checked).
-- **Kill-switch.** `TRAILBLAZE_DISABLE_FETCH=1` binds a `fetch` that rejects with a clear message —
-  an operator lever for this outbound-network capability. Read when the engine is created, so
-  restart the daemon to flip it.
-- **Logging.** Each request emits a daemon-log breadcrumb (quiet-suppressed; visible with `-v` or in
-  the log file): `[OkHttpFetchExtension] <METHOD> <status> <full-url> (<ms>ms)` — e.g.
-  `POST 200 https://host.com/path/goes/here?one=two (123ms)`. Failures and allow-list denials log
-  the same shape with `FAILED` / `BLOCKED` in the status slot. The **full URL including query
-  string** is logged, so a credential passed as a query param appears in the daemon log — an
-  accepted tradeoff for visibility (it's a local, quiet-suppressed log, and `ctx.tools.exec` + curl
-  expose URLs anyway). Request/response **headers and bodies are never logged**.
+- **Logging.** Each request emits a breadcrumb (quiet-suppressed on the host; visible with `-v` or in
+  the log file): `[OkHttpFetchExtension] <METHOD> <status> <url> (<ms>ms)` — e.g.
+  `POST 200 https://host.com/path/goes/here?<redacted> (123ms)`. Failures and allow-list denials log
+  the same shape with `FAILED` / `BLOCKED` in the status slot. **Userinfo (`user:pass@`), the query
+  string and the fragment are stripped**: this binding also runs on-device, where `Console.log` goes
+  to logcat, quiet mode is a no-op, and logcat is streamed into the session's `device.log` — which CI
+  zips and uploads as a build artifact. So a credential in any of those would otherwise leave the
+  device. Scheme/host/port/path are kept because they identify the endpoint — which is a **tradeoff,
+  not a safe default**: a webhook-shaped URL carries its secret in the path and will be logged, so
+  don't rely on this redaction for one. Request/response **headers and bodies are never logged**.
 
 ## Customizing the client (timeouts, etc.)
 

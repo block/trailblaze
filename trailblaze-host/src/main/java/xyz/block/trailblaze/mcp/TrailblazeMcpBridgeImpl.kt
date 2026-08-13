@@ -1392,7 +1392,19 @@ class TrailblazeMcpBridgeImpl(
 
   override suspend fun getInstalledAppIds(): Set<String> {
     val trailblazeDeviceId = assertDeviceIsSelected()
-    return trailblazeDeviceManager.getInstalledAppIdsFlow(trailblazeDeviceId).value
+    // On-demand probe: discovery no longer populates the inventory flows eagerly (OSS issue
+    // block/trailblaze#216), and a fresh probe also reflects apps installed/removed since the
+    // last enumeration. Version info is skipped — every consumer of this method reads only the
+    // ID set, and this is called per agent `launchApp`, where an iOS version fan-out would be
+    // one extra `simctl listapps` per relevant target on every launch.
+    //
+    // A failed probe throws rather than returning empty: callers gate on membership (most
+    // sharply `launchApp` validation, which rejects a launch non-recoverably when the app isn't
+    // in this set), so a wedged `simctl listapps` must not read as an authoritative "0 apps
+    // installed". Every caller either treats the throw as best-effort-validation-unavailable or
+    // surfaces the error, both of which beat a confident wrong answer.
+    return trailblazeDeviceManager.refreshAppInventory(trailblazeDeviceId, includeVersionInfo = false)
+      ?: throw DeviceAppProbeFailedException(trailblazeDeviceId)
   }
 
   override suspend fun executeTrailblazeTool(

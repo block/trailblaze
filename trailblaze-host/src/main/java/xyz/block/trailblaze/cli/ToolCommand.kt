@@ -7,7 +7,6 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.config.project.WorkspaceRoot
 import xyz.block.trailblaze.config.project.findWorkspaceRoot
-import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 import java.nio.file.Files
 import java.nio.file.Path
@@ -318,7 +317,7 @@ class ToolCommand : Callable<Int> {
 internal fun workspaceHasToolDefinitions(startPath: Path): Boolean = runCatching {
   val ws = findWorkspaceRoot(startPath)
   if (ws !is WorkspaceRoot.Configured) return@runCatching false
-  val configDir = ws.dir.resolve(TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR)
+  val configDir = ws.configDir
   if (!Files.isDirectory(configDir)) return@runCatching false
   // The only authoring layout: `trailmaps/<id>/{tools,toolsets}/<file>.<kind>.yaml`.
   // Walked at depth 4 to catch `trailmaps/<id>/tools/<file>` plus one extra level of

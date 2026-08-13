@@ -216,6 +216,14 @@ fun RecordingScreenComposable(
   // Wraps `onSaveTrail` so the click handlers don't have to repeat the path-or-error
   // bookkeeping. Returns nothing because the click handlers don't act on it.
   fun saveTrailWithFeedback(yaml: String) {
+    // The generator returns an empty document when it can't render the recording (no device
+    // classifier, or a shape the trail format can't hold). Writing it would leave an empty file
+    // behind a green "saved to …" confirmation.
+    if (yaml.isBlank()) {
+      lastSavedPath = null
+      lastSaveError = "Save Trail failed — this recording didn't produce a trail. See the log for details."
+      return
+    }
     val path = onSaveTrail(yaml)
     if (path != null) {
       lastSavedPath = path
@@ -466,7 +474,7 @@ fun RecordingScreenComposable(
               if (selectedTrailhead == null && !noTrailheadSaveAcknowledged) {
                 saveConfirmOpen = true
               } else {
-                val yaml = generatedTrailYaml ?: recorder.generateTrailYaml()
+                val yaml = generatedTrailYaml ?: recorder.generateTrailYaml(driverType.platform.asTrailblazeDeviceClassifier().classifier)
                 saveTrailWithFeedback(yaml)
               }
             },
@@ -481,7 +489,7 @@ fun RecordingScreenComposable(
               isTransforming = true
               transformError = null
               generatedTrailYaml = null
-              val yamlToTransform = recorder.generateTrailYaml()
+              val yamlToTransform = recorder.generateTrailYaml(driverType.platform.asTrailblazeDeviceClassifier().classifier)
               scope.launch {
                 try {
                   val result = llmService.transformToNaturalLanguageTrail(
@@ -706,7 +714,7 @@ fun RecordingScreenComposable(
             Button(onClick = {
               noTrailheadSaveAcknowledged = true
               saveConfirmOpen = false
-              val yaml = generatedTrailYaml ?: recorder.generateTrailYaml()
+              val yaml = generatedTrailYaml ?: recorder.generateTrailYaml(driverType.platform.asTrailblazeDeviceClassifier().classifier)
               saveTrailWithFeedback(yaml)
             }) {
               Text("Save Anyway")

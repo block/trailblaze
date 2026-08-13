@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared behavioral contract for text-pattern matching in the node-selector resolvers. ONE source of truth for expected behavior, consumed by BOTH implementations' test suites: Kotlin `TrailblazeNodeSelectorResolver.matchesPattern` (via MatcherParityFixturesTest in trailblaze-models jvmTest) and the TS mirror `resolver.ts` (via matcher-parity.test.ts). Every case runs through the REAL resolver in BOTH dialects: `nativeMatches` is asserted via native selector shapes (androidAccessibility), `maestroMatches` via Maestro shapes (androidMaestro), which carry Maestro's Orchestra semantics (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE + toRegexSafe invalid-regex escape). If either implementation drifts, that side's suite fails. Add a case here whenever matching semantics change - never encode new semantics in only one language's tests.",
+  "_comment": "Shared behavioral contract for text-pattern matching in the node-selector resolvers. ONE source of truth for expected behavior, consumed by ALL THREE implementations' test suites: Kotlin/JVM `TrailblazeNodeSelectorResolver.matchesPattern` (via MatcherParityFixturesTest in trailblaze-models jvmTest), the TS mirror `resolver.ts` (via matcher-parity.test.ts), and the Kotlin/JS compile of the same resolver in trailblaze-selector-engine-js (via engine-parity.test.ts, exercising the ECMAScript regex-translation actual). Every case runs through the REAL resolver in BOTH dialects: `nativeMatches` is asserted via native selector shapes (androidAccessibility), `maestroMatches` via Maestro shapes (androidMaestro), which carry Maestro's Orchestra semantics (IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE + toRegexSafe invalid-regex escape). If either implementation drifts, that side's suite fails. Add a case here whenever matching semantics change - never encode new semantics in only one language's tests.",
   "cases": [
     {
       "name": "exact literal text matches",
@@ -313,6 +313,34 @@
       "name": "unsupported leading flag (?x) is dropped harmlessly for plain patterns",
       "pattern": "(?x)abc",
       "text": "abc",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "unicode property escape matches letters (JS needs the u flag; Java is native)",
+      "pattern": "\\p{L}+",
+      "text": "abc",
+      "nativeMatches": true,
+      "maestroMatches": true
+    },
+    {
+      "name": "unicode property escape does not match digits",
+      "pattern": "\\p{L}+",
+      "text": "123",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "stray closing quote is a compile error, not an identity escape: 'foo\\E' must not regex-match 'fooE'",
+      "pattern": "foo\\E",
+      "text": "fooE",
+      "nativeMatches": false,
+      "maestroMatches": false
+    },
+    {
+      "name": "stray closing quote still resolves via the fallback against its own literal text",
+      "pattern": "foo\\E",
+      "text": "foo\\E",
       "nativeMatches": true,
       "maestroMatches": true
     }

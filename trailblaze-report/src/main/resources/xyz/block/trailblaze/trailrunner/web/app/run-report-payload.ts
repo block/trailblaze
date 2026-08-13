@@ -140,12 +140,204 @@ async function inflateEventsGz(b64: string): Promise<EventStream[] | null> {
   return (await inflateGzJsonArray(b64)) as EventStream[] | null;
 }
 
+// Inflate a session's compressed LLM transcripts (SessionPayload.llmMessagesGz: gzip'd
+// LlmTranscripts JSON as base64 — see packLlmMessages in run-report-cli.ts). Null when inflation
+// fails or the payload isn't the pooled transcript shape — including any per-call entry that
+// isn't itself an array, so a malformed blob degrades to the "could not decompress" note instead
+// of throwing during render/export.
+async function inflateLlmMessagesGz(b64: string): Promise<LlmTranscripts | null> {
+  const text = await inflateGzText(b64);
+  if (text == null) return null;
+  try {
+    const parsed = JSON.parse(text);
+    const wellFormed = parsed && Array.isArray(parsed.texts) && Array.isArray(parsed.calls)
+      && parsed.calls.every((call) => Array.isArray(call));
+    return wellFormed ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The mirror of inflateGzText for the producers that run in a browser (the in-app Share button,
+// the zip pipeline's HTML export): gzip text and return it base64-encoded, the same transport the
+// bun driver's packGz emits. Null when the runtime lacks CompressionStream or compression fails,
+// so callers can fall back to embedding the payload inline.
+async function deflateGzText(text: string): Promise<string | null> {
+  try {
+    if (typeof CompressionStream === 'undefined') return null;
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    let bin = '';
+    // Chunked fromCharCode: one spread of a multi-megabyte payload would blow the arg-count limit.
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[]);
+    return btoa(bin);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Inflate one gzip+base64 blob carrying a JSON object map (SessionPayload.hierarchiesGz) back to
+// the parsed record. Null when inflation fails or the payload isn't a plain object.
+async function inflateGzJsonRecord(b64: string): Promise<Record<string, unknown> | null> {
+  const text = await inflateGzText(b64);
+  if (text == null) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Display YAML — tool calls render exactly like a trail-file tool entry.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Faithful TypeScript port of TrailblazeYaml.jsonToYaml (trailblaze-models
+// commonMain/.../yaml/TrailblazeYaml.kt) — the emitter the WASM report's LLM-actions display
+// uses (formatLlmActionsYaml in SessionCombinedView.kt), whose output matches what the recorder
+// writes into trail files. The report renders tool calls with it so a transcript entry reads
+// exactly like the same call in a trail.yaml / recordingYaml. The self-contained report can't
+// reuse the Trail Runner web app's js-yaml (a CDN UMD global; exported reports run offline),
+// hence a local port; if the Kotlin emitter's rules change, change these to match.
+//
+// Kotlin needsYamlQuoting, ported rule for rule: quote empty strings, any ':' / '#' / newline
+// anywhere, leading flow/indicator characters, the lowercase YAML keywords, and anything that
+// parses as a number. (Deliberately NOT quoted, matching the recorder: leading '-' or '^',
+// leading/trailing spaces, mixed-case keywords.)
+function yamlNeedsQuote(s: string): boolean {
+  return s === ''
+    || s.indexOf(':') >= 0 || s.indexOf('#') >= 0 || s.indexOf('\n') >= 0
+    || /^[{\["'*&!|>%@]/.test(s)
+    || s === 'true' || s === 'false' || s === 'null' || s === '~'
+    || s === 'yes' || s === 'no' || s === 'on' || s === 'off'
+    || yamlParsesAsNumber(s);
+}
+
+// Kotlin's `toLongOrNull() != null || toDoubleOrNull() != null` (Double.parseDouble trims and
+// accepts Infinity/NaN spellings).
+function yamlParsesAsNumber(s: string): boolean {
+  const t = s.trim();
+  if (t === '') return false;
+  return !Number.isNaN(Number(t)) || t === 'NaN' || /^[+-]?Infinity$/.test(t);
+}
+
+// Port of appendJsonElementAsYaml: 2-space indent per level; object values that are non-empty
+// containers break onto the next line; array items are `- ` with the first key inlined on the
+// dash line; quoted strings escape only backslash, quote, and newline.
+function jsonToYaml(value: unknown): string {
+  let out = '';
+  const scalar = (v: any): string => {
+    if (v == null) return 'null';
+    if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+    const s = String(v);
+    if (!yamlNeedsQuote(s)) return s;
+    return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+  };
+  const isEmptyContainer = (v: any) => Array.isArray(v) ? v.length === 0 : (v != null && typeof v === 'object' && Object.keys(v).length === 0);
+  const append = (element: any, indent: number, inlineFirst = false) => {
+    if (element == null || typeof element !== 'object') { out += scalar(element); return; }
+    const pad = '  '.repeat(indent);
+    if (Array.isArray(element)) {
+      if (!element.length) { out += '[]'; return; }
+      element.forEach((item, i) => {
+        out += pad + '- ';
+        append(item, indent + 1, true);
+        if (i < element.length - 1) out += '\n';
+      });
+      return;
+    }
+    const keys = Object.keys(element);
+    if (!keys.length) { out += '{}'; return; }
+    keys.forEach((key, i) => {
+      if (i > 0 || !inlineFirst) out += pad;
+      out += key + ':';
+      const value = element[key];
+      if (value != null && typeof value === 'object' && !isEmptyContainer(value)) {
+        out += '\n';
+        append(value, indent + 1);
+      } else {
+        out += ' ';
+        append(value, indent + 1);
+      }
+      if (i < keys.length - 1) out += '\n';
+    });
+  };
+  append(value, 0);
+  return out.replace(/\s+$/, '');
+}
+
+// The transcript's tool messages arrive as markdown (`**tool**` + a ```json fence — see
+// TrailblazeLogger.toTrailblazeLlmMessages); when the fenced (or whole-body) payload parses as
+// JSON, render it exactly like the same call in a trail file — `- toolName:` with the args
+// indented four columns past the dash — mirroring the WASM report's formatLlmActionsYaml
+// composition. A JSON tool RESULT renders as the bare payload (results aren't trail entries);
+// prose output returns null and falls through to the raw text.
+function transcriptToolCallYaml(m: { role?: string; text?: string; toolName?: string | null } | null | undefined): string | null {
+  if (!m) return null;
+  const role = String(m.role || '');
+  const isCall = role === 'tool_use' || role === 'tool_call';
+  if (!isCall && role !== 'tool' && role !== 'function' && role !== 'tool_result') return null;
+  const text = String(m.text == null ? '' : m.text);
+  const fence = text.match(/```json\s*\n([\s\S]*?)\n?\s*```/);
+  const payload = (fence ? fence[1] : text).trim();
+  if (!payload || (payload[0] !== '{' && payload[0] !== '[')) return null;
+  let parsed;
+  try { parsed = JSON.parse(payload); } catch (_) { return null; }
+  if (parsed == null || typeof parsed !== 'object') return null;
+  const argsYaml = jsonToYaml(parsed);
+  if (!isCall || !m.toolName) return argsYaml;
+  if (!argsYaml || argsYaml === '{}') return `- ${m.toolName}:`;
+  const body = argsYaml.split('\n').filter((line) => line.trim() !== '').map((line) => '    ' + line).join('\n');
+  return `- ${m.toolName}:\n${body}`;
+}
+
+// Clean display body for a tool RESULT message. TrailblazeLogger wraps tool messages in a
+// markdown envelope — a `**toolName**` header plus a ```json fence whose content is often NOT
+// JSON but the executor's prose ("**Executed `tap`.** Typed 'TKT-1'") — which rendered verbatim
+// reads as stray asterisks and doubled fence markers. Parse the envelope instead: drop the
+// header (the bubble header already names the tool), unwrap the fence, render structured output
+// as trail-file YAML and prose with the markdown bold/code markers stripped. `raw` carries the
+// verbatim text whenever the cleaned body differs, so the UI can offer it behind an expander and
+// no fidelity is lost. Null for non-result roles or when nothing displayable remains.
+function transcriptToolResultDisplay(m: { role?: string; text?: string; toolName?: string | null } | null | undefined): { text: string; raw: string | null } | null {
+  if (!m) return null;
+  const role = String(m.role || '');
+  if (role !== 'tool' && role !== 'function' && role !== 'tool_result') return null;
+  const rawText = String(m.text == null ? '' : m.text);
+  let body = rawText.replace(/^\s*\*\*[^*\n]+\*\*\s*\n+/, '');
+  const fence = body.match(/```[a-z]*\s*\n([\s\S]*?)\n?\s*```/);
+  if (fence) body = fence[1];
+  body = body.trim();
+  let parsed = null;
+  if (body && (body[0] === '{' || body[0] === '[')) { try { parsed = JSON.parse(body); } catch (_) { parsed = null; } }
+  const text = parsed != null && typeof parsed === 'object'
+    ? jsonToYaml(parsed)
+    : body.replace(/\*\*/g, '').replace(/`([^`\n]*)`/g, '$1').trim();
+  if (!text) return null;
+  return { text, raw: text === rawText ? null : rawText };
+}
+
 // JSON.stringify for a payload embedded inside a <script> element: escape `<` so a literal
 // `</script>` inside any string can't close the script element early (an HTML-parser rule that
 // applies to every script type, including application/json). The escape is JSON-transparent, so
 // JSON.parse returns the original strings.
 function toInertJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+// The `</script>`-safety rule above applies to embedded CODE as well as data, and code can't be
+// `\u003c`-escaped — so neutralize just the closer: inside a JS string, regex, or comment,
+// `<\/script` is read exactly as `</script` was, while the HTML parser no longer sees an end tag.
+// (`String.raw` is the one context where the backslash would survive into the value; no bundle we
+// embed contains a raw-string `</script`.)
+//
+// Applied to every code bundle a generated document inlines. Without it an ordinary future comment
+// containing `</script>` in any embedded source would truncate the page at that byte, and no guard
+// downstream could see it: the markers publish checks look for sit near the top of the document, so
+// a truncated page still matches them.
+function inertScriptBody(code: string): string {
+  return String(code == null ? '' : code).replace(/<\/script/gi, '<\\/script');
 }
 
 // The static #tb-boot loader markup: the first thing a standalone report paints, while the payload
@@ -166,4 +358,4 @@ function rekeySprites(exported: SessionPayload[], all: SessionPayload[], spriteF
   return sprites;
 }
 
-export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, inflateGzJsonArray, inflateEventsGz, toInertJson, tbBootLoaderHtml, rekeySprites };
+export { parseEventJsonish, eventValueText, normalizeEventPayload, eventPrettyText, rawPrettyText, inflateGzText, deflateGzText, inflateGzJsonArray, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, toInertJson, inertScriptBody, tbBootLoaderHtml, rekeySprites };

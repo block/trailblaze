@@ -581,26 +581,22 @@ object TrailblazeNodeSelectorResolver {
    * Maestro-shape pattern: a leading `(?-i)`. [MatchDialect.NATIVE] is strict; opt into
    * case-insensitivity with a leading `(?i)`.
    *
+   * The regex leg (compile + full match, dialect options, `toRegexSafe` degrade) lives behind the
+   * [selectorPatternRegexMatches] expect/actual so the Kotlin/JS compile of this resolver can
+   * translate JVM-regex constructs (`\Q...\E`, leading inline flags, dotAll) that the native
+   * ECMAScript `RegExp` doesn't support — see that declaration for the platform story. The
+   * literal-equality fallback stays here, shared by every platform.
+   *
    * The behavioral contract is locked by the shared cross-language fixture
-   * `sdks/typescript/src/matcher/matcher-parity-fixtures.json`, consumed by both this
-   * implementation's [MatcherParityFixturesTest] and the TS mirror's `matcher-parity.test.ts`.
-   * Semantics changes must update the fixture and both implementations together.
+   * `sdks/typescript/src/matcher/matcher-parity-fixtures.json`, consumed by this
+   * implementation's [MatcherParityFixturesTest], the TS mirror's `matcher-parity.test.ts`, and
+   * the Kotlin/JS selector engine's `engine-parity.test.ts`. Semantics changes must update the
+   * fixture and all implementations together.
    */
   private fun matchesPattern(pattern: String, text: String, dialect: MatchDialect = MatchDialect.NATIVE): Boolean {
-    val options = when (dialect) {
-      MatchDialect.NATIVE -> emptySet()
-      MatchDialect.MAESTRO -> MAESTRO_REGEX_OPTIONS
+    if (selectorPatternRegexMatches(pattern, text, maestroDialect = dialect == MatchDialect.MAESTRO)) {
+      return true
     }
-    val regex = try {
-      Regex(pattern, options)
-    } catch (_: IllegalArgumentException) {
-      when (dialect) {
-        MatchDialect.NATIVE -> null
-        // Maestro's StringUtils.toRegexSafe: invalid regex → escaped literal, same options.
-        MatchDialect.MAESTRO -> Regex(Regex.escape(pattern), options)
-      }
-    }
-    if (regex != null && regex.matches(text)) return true
     return text == pattern
   }
 }

@@ -26,7 +26,10 @@ import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import java.io.File
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -307,15 +310,26 @@ class SessionToolSetTest {
       logsRepo.saveLogToDisk(sessionStartedLog)
 
       // Need at least one recordable step in the session log for
-      // `saveFromLogs` to clear its "no recordable steps" guard. The cheapest
-      // shape that produces a non-empty trail body is an ObjectiveStart paired
-      // with an ObjectiveComplete carrying a non-blank step.
+      // `saveFromLogs` to clear its "no recordable steps" guard: an ObjectiveStart /
+      // ObjectiveComplete pair around one recordable tool, which becomes the step's recording.
       val pauseStep = xyz.block.trailblaze.yaml.DirectionStep(step = "Tap the pause button")
       logsRepo.saveLogToDisk(
         TrailblazeLog.ObjectiveStartLog(
           promptStep = pauseStep,
           session = iosSessionId,
           timestamp = Clock.System.now(),
+        ),
+      )
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = TapOnPointTrailblazeTool(x = 10, y = 20).toLogPayload(),
+          toolName = "tapOnPoint",
+          successful = true,
+          traceId = null,
+          durationMs = 1L,
+          session = iosSessionId,
+          timestamp = Clock.System.now(),
+          isRecordable = true,
         ),
       )
       logsRepo.saveLogToDisk(
@@ -341,7 +355,7 @@ class SessionToolSetTest {
       // Live context points at an ANDROID device — this is the "last-touched
       // device" state that the buggy code path keyed off. The mock bridge
       // returns Android as the available device. If the fix regresses, the
-      // filename will end up `android.trail.yaml`.
+      // recording lands under the `android` classifier slot.
       val androidDeviceId = TrailblazeDeviceId(
         instanceId = "emulator-5554",
         trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
@@ -357,9 +371,6 @@ class SessionToolSetTest {
         logsRepo = logsRepo,
         sessionIdProvider = { iosSessionId },
         trailsDirectory = trailsDir.absolutePath,
-        // Pin the gate off: this guard is about the LEGACY filename's platform, which only
-        // exists on the legacy save path (unified saves route to trail.yaml).
-        unifiedRecordingsEnabled = { false },
       )
 
       val result = toolSet.session(
@@ -376,17 +387,16 @@ class SessionToolSetTest {
       )
       val file = json["file"]?.jsonPrimitive?.content
       assertNotNull(file, "save result should include a file path")
-      assertTrue(
-        file.endsWith("/ios.trail.yaml"),
-        "iOS session must write ios.trail.yaml; got: $file",
+      val saved = createTrailblazeYaml().decodeUnifiedTrail(File(file).readText())
+      assertEquals(
+        setOf("ios"),
+        saved.trail.flatMap { it.recordings.keys }.toSet(),
+        "the recording must be keyed to the SESSION's platform, not the last-touched device; got: ${File(file).readText()}",
       )
-      assertTrue(
-        File(file).readText().contains("platform: ios"),
-        "file content should mark the platform as ios; got: ${File(file).readText()}",
-      )
-      assertTrue(
-        File(file).readText().contains("title: iOS pause test"),
-        "the caller-supplied save title must override into the saved config; got: ${File(file).readText()}",
+      assertEquals(
+        "iOS pause test",
+        saved.config.title,
+        "the caller-supplied save title must override into the saved config",
       )
     } finally {
       logsDir.deleteRecursively()

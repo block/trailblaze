@@ -7,7 +7,6 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.coroutines.async
@@ -488,52 +487,18 @@ class OkHttpFetchExtensionTest {
     assertTrue(result.contains("malformed"), "expected the 'malformed' reason; got: $result")
   }
 
-  @Test
-  fun `isFetchDisabled parses the kill-switch env value`() {
-    assertTrue(OkHttpFetchExtension.isFetchDisabled("1"))
-    assertTrue(OkHttpFetchExtension.isFetchDisabled("true"))
-    assertTrue(OkHttpFetchExtension.isFetchDisabled(" TRUE "))
-    assertFalse(OkHttpFetchExtension.isFetchDisabled(null))
-    assertFalse(OkHttpFetchExtension.isFetchDisabled("0"))
-    assertFalse(OkHttpFetchExtension.isFetchDisabled("yes"))
-  }
-
   private fun textContent(result: JsonObject): String =
     ((result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive).content
 
   companion object {
     /**
-     * A self-contained bundle (same shape `QuickJsToolHostTest` uses) registering one tool that
-     * issues a `fetch` and reports the observable bits of the `Response` back as JSON — or the
-     * thrown error message when `fetch` rejects. Lets a test assert against the handler's view of
-     * `fetch`, which is the contract authors actually depend on.
+     * The shared [FetchProbeBundle] probe plus a `fetchResponseMethod` tool for exercising
+     * individual `Response` methods.
      */
     private val FETCH_PROBE_BUNDLE =
-      """
-      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
-      tools["fetchProbe"] = {
-        name: "fetchProbe",
-        spec: {},
-        handler: async (args) => {
-          try {
-            const res = await fetch(args.url, args.init || undefined);
-            const bodyText = await res.text();
-            let jsonHello = null;
-            try { jsonHello = JSON.parse(bodyText).hello; } catch (e) {}
-            return { content: [{ type: "text", text: JSON.stringify({
-              status: res.status,
-              ok: res.ok,
-              contentType: res.headers.get("content-type"),
-              body: bodyText,
-              jsonHello: jsonHello,
-            }) }] };
-          } catch (e) {
-            return { content: [{ type: "text", text: JSON.stringify({
-              error: String((e && e.message) || e),
-            }) }] };
-          }
-        },
-      };
+      FetchProbeBundle.SOURCE +
+        """
+
       tools["fetchResponseMethod"] = {
         name: "fetchResponseMethod",
         spec: {},

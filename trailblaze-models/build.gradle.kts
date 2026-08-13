@@ -223,6 +223,17 @@ tasks.named<Test>("jvmTest") {
   inputs.file(layout.projectDirectory.file("../sdks/typescript/src/matcher/matcher-parity-fixtures.json"))
     .withPropertyName("matcherParityFixtures")
     .withPathSensitivity(PathSensitivity.NONE)
+  // SelectorEngineParityGoldenTest reads the selector-engine parity fixtures (trees + the
+  // committed golden the Kotlin/JS engine byte-compares against) from the engine module.
+  inputs.dir(layout.projectDirectory.dir("../trailblaze-selector-engine-js/parity"))
+    .withPropertyName("selectorEngineParityFixtures")
+    .withPathSensitivity(PathSensitivity.NONE)
+  // Regen flag for the committed golden: ./gradlew :trailblaze-models:jvmTest
+  //   --tests "*SelectorEngineParityGoldenTest*" -Dtrailblaze.updateSelectorEngineGolden=true
+  systemProperty(
+    "trailblaze.updateSelectorEngineGolden",
+    providers.systemProperty("trailblaze.updateSelectorEngineGolden").getOrElse("false"),
+  )
 }
 
 // Compile bundled framework trailmaps (clock, contacts, wikipedia) into materialized flat

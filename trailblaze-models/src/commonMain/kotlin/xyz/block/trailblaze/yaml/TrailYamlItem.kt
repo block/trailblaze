@@ -27,13 +27,6 @@ sealed interface TrailYamlItem {
     val tools: List<@Contextual TrailblazeToolYamlWrapper>,
   ) : TrailYamlItem
 
-  companion object {
-    val KEYWORD_PROMPTS = "prompts"
-    val KEYWORD_TOOLS = "tools"
-    val KEYWORD_CONFIG = "config"
-    val KEYWORD_TRAILHEAD = "trailhead"
-  }
-
   /**
    *  config
    *

@@ -190,11 +190,6 @@ trailblaze session save                    # uses the title from `session start`
 trailblaze session stop
 ```
 
-> Unified saves are still rolling out as the default. Until the flip lands, turn them
-> on once with `trailblaze config unified-recordings true` (or set
-> `TRAILBLAZE_UNIFIED_RECORDINGS=1`); without it, saves write the legacy per-device
-> `<classifier>.trail.yaml` format instead. Replay accepts both.
-
 The resulting trail holds the natural-language steps, with each step's recorded tool
 sequence nested under a `recording:` block keyed by device classifier — so one file
 carries the recordings for every platform you've run it on. Drop it anywhere in your

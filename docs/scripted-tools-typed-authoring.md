@@ -714,8 +714,8 @@ If you don't recognize yourself in those three cases, you don't need a YAML — 
   workspace layout (source vs. generated), what each generated file is for, what to commit,
   and the fresh-clone bootstrap.
 - **[Scripted Tools — Network Requests](scripted-tools-network-requests.md)** — making
-  HTTP calls from a tool: in-process `fetch` (the default, host-dispatched) vs. a
-  subprocess tool (host-only) for what `fetch` can't reach.
+  HTTP calls from a tool: in-process `fetch` (the default, available on host and
+  on-device) vs. a subprocess tool (host-only) for what `fetch` can't reach.
 - **[`examples/ios-contacts/README`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/README.md)**
   / **[`examples/wikipedia/README`](https://github.com/block/trailblaze/blob/main/examples/wikipedia/README.md)**
   — the worked references this page draws from, with their own quick-starts and CI

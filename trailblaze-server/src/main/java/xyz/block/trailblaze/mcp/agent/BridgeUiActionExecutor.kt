@@ -147,6 +147,11 @@ class BridgeUiActionExecutor(
         screenSummaryAfter = screenSummary,
         durationMs = durationMs,
       )
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+      // Kotlin's CancellationException IS an Exception, so without this the catch below turns a
+      // stopped run into a retryable tool failure and the agent loop keeps going. This is the
+      // catch the inner rethrows unwind through, so it has to let cancellation past too.
+      throw e
     } catch (e: Exception) {
       Console.log("[BridgeUiActionExecutor] Exception executing $toolName: ${e.message}")
       ExecutionResult.Failure(
@@ -270,8 +275,15 @@ class BridgeUiActionExecutor(
       } else {
         null // Valid
       }
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+      // getInstalledAppIds() now suspends on the shared device probe, so this handler is on a
+      // cancellation path: swallowing it here would let a stopped run go on to dispatch the
+      // real launchApp.
+      throw e
     } catch (e: Exception) {
-      // If we can't check, let it through (validation is best-effort)
+      // If we can't check, let it through (validation is best-effort). A failed device probe
+      // throws rather than reporting zero installed apps, so it lands here instead of
+      // rejecting the launch with a confident "not installed".
       Console.log("[BridgeUiActionExecutor] Warning: Could not validate app installation: ${e.message}")
       null
     }

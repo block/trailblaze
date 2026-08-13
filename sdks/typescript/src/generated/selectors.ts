@@ -4,6 +4,7 @@
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeNodeSelector.kt
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/MatchDescriptor.kt
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeNode.kt (nested Bounds)
+//   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeSelectorAnalysis.kt
 //
 // Regenerate with:
 //   ./gradlew :trailblaze-models:generateSelectorsTs
@@ -306,6 +307,74 @@ export interface MatchDescriptor {
    * Compose, `data-testid` on Web. Null otherwise.
    */
   resourceId?: string | null;
+}
+
+/**
+ * One candidate selector for a target node: the selector itself plus everything the inspector
+ * needs to judge it — how many nodes it matches, which ones, where a tap on it would land, and
+ * whether that tap would actually hit the target.
+ */
+export interface TrailblazeSelectorOption {
+  /** The candidate selector, in the same shape the recorder writes into a trail. */
+  selector: TrailblazeNodeSelector;
+  /** Human-readable name of the generator strategy that produced this selector. */
+  strategy: string;
+  /** True on the option the generator would pick for a recording (at most one per analysis). */
+  isBest: boolean;
+  /** Number of nodes in the tree this selector resolves to. 1 means unique. */
+  matchCount: number;
+  /** `nodeId`s of every matching node, in resolution order. */
+  matchingNodeIds: number[];
+  /** X of the coordinate a tap on this selector would use (first match's center). */
+  resolvedCenterX?: number | null;
+  /** Y of the coordinate a tap on this selector would use (first match's center). */
+  resolvedCenterY?: number | null;
+  /**
+   * True when hit-testing the resolved center lands on the target node — i.e. tapping this
+   * selector at playback would really hit the element, not an overlapping child.
+   */
+  hitsTarget: boolean;
+}
+
+/** Ranked selector suggestions for one target node, plus a content-free structural fallback. */
+export interface TrailblazeSelectorAnalysis {
+  /** Ranked candidate selectors; the structural (content-free) option is always last. */
+  options: TrailblazeSelectorOption[];
+  /** Set instead of [options] when the analysis failed (e.g. unknown node id). */
+  error?: string | null;
+}
+
+/**
+ * Result of resolving a tap coordinate to a target node + best selector — the same call the
+ * daemon's recorder makes for every recorded tap (`TrailblazeNodeSelectorGenerator.resolveFromTap`).
+ */
+export interface TrailblazeSelectorTapResolution {
+  /** `nodeId` of the frontmost node at the tap coordinates. */
+  targetNodeId?: number | null;
+  /** The best unique selector for the target — what the recorder would write. */
+  selector?: TrailblazeNodeSelector | null;
+  /** X the selector would resolve to at playback (compare with the tap point for drift). */
+  resolvedCenterX?: number | null;
+  /** Y the selector would resolve to at playback (compare with the tap point for drift). */
+  resolvedCenterY?: number | null;
+  /** True when the selector's resolved center hit-tests back to the same target node. */
+  roundTripValid: boolean;
+  /** Set when resolution failed (e.g. no node at the coordinates). */
+  error?: string | null;
+}
+
+/** Result of resolving an arbitrary selector against a tree — the inspector's "test this selector". */
+export interface TrailblazeSelectorResolution {
+  /** Number of nodes the selector resolves to. 0 means no match. */
+  matchCount: number;
+  /** `nodeId`s of every matching node, in resolution order. */
+  matchingNodeIds: number[];
+  /** X of the coordinate a tap on this selector would use (first match's center). */
+  resolvedCenterX?: number | null;
+  /** Y of the coordinate a tap on this selector would use (first match's center). */
+  resolvedCenterY?: number | null;
+  /** Set when the input selector or tree could not be decoded. */
+  error?: string | null;
 }
 
 /**

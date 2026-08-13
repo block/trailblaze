@@ -181,6 +181,75 @@ class WorkspaceRootTest {
     assertEquals(innerConfig.toPath().toRealPath(), configured.configFile)
   }
 
+  @Test
+  fun `standalone trailblaze-config layout resolves with dir anchored at the workspace root`() {
+    val workspace = newDir("standalone-workspace")
+    val configFile = writeStandaloneConfig(workspace)
+    val deep = File(workspace, "jobs/onboarding/trails").apply { mkdirs() }
+
+    val result = findWorkspaceRoot(deep.toPath())
+
+    val configured = assertIs<WorkspaceRoot.Configured>(result)
+    // For the standalone layout the config-owning dir IS the workspace root, so generated
+    // artifacts (`.trailblaze/`) anchor at `<root>/.trailblaze/`.
+    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(configFile.toPath().toRealPath(), configured.configFile)
+    assertEquals(configFile.parentFile.toPath().toRealPath(), configured.configDir)
+  }
+
+  @Test
+  fun `standalone layout wins over legacy layout at the same ancestor`() {
+    val workspace = newDir("both-layouts")
+    writeConfig(workspace, contents = "# legacy")
+    val standaloneConfig = writeStandaloneConfig(workspace, contents = "# standalone")
+
+    val result = findWorkspaceRoot(workspace.toPath())
+
+    val configured = assertIs<WorkspaceRoot.Configured>(result)
+    assertEquals(standaloneConfig.toPath().toRealPath(), configured.configFile)
+    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+  }
+
+  @Test
+  fun `closest ancestor wins regardless of layout`() {
+    // An outer standalone workspace must NOT outrank an inner legacy workspace: precedence
+    // between the two layouts only breaks ties at the SAME ancestor.
+    val outer = newDir("outer-standalone")
+    writeStandaloneConfig(outer)
+    val inner = File(outer, "inner").apply { mkdirs() }
+    val innerConfig = writeConfig(inner)
+    val deep = File(inner, "a/b").apply { mkdirs() }
+
+    val result = findWorkspaceRoot(deep.toPath())
+
+    val configured = assertIs<WorkspaceRoot.Configured>(result)
+    assertEquals(innerConfig.toPath().toRealPath(), configured.configFile)
+    assertEquals(File(inner, "trails").toPath().toRealPath(), configured.dir)
+  }
+
+  @Test
+  fun `legacy layout configDir is the trails config dir`() {
+    val workspace = newDir("legacy-workspace")
+    val configFile = writeConfig(workspace)
+
+    val result = findWorkspaceRoot(workspace.toPath())
+
+    val configured = assertIs<WorkspaceRoot.Configured>(result)
+    assertEquals(configFile.parentFile.toPath().toRealPath(), configured.configDir)
+  }
+
+  @Test
+  fun `workspaceRootFromConfigDir accepts a standalone config dir`() {
+    val workspace = newDir("env-standalone")
+    val configFile = writeStandaloneConfig(workspace)
+
+    val result = workspaceRootFromConfigDir(configFile.parentFile)
+
+    val configured = assertIs<WorkspaceRoot.Configured>(result)
+    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(configFile.parentFile.toPath().toRealPath(), configured.configDir)
+  }
+
   private fun newDir(relativePath: String): File {
     val dir = File(tempFolder.root, relativePath)
     dir.mkdirs()
@@ -189,6 +258,13 @@ class WorkspaceRootTest {
 
   private fun writeConfig(dir: File, contents: String = ""): File {
     val configDir = File(dir, "trails/config").apply { mkdirs() }
+    val file = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME)
+    file.writeText(contents)
+    return file
+  }
+
+  private fun writeStandaloneConfig(dir: File, contents: String = ""): File {
+    val configDir = File(dir, "trailblaze-config").apply { mkdirs() }
     val file = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME)
     file.writeText(contents)
     return file

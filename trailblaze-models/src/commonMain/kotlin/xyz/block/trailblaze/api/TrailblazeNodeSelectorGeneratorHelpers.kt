@@ -2,6 +2,7 @@ package xyz.block.trailblaze.api
 
 import xyz.block.trailblaze.util.escapeForIdentifier
 import xyz.block.trailblaze.util.escapeForSelector
+import xyz.block.trailblaze.util.quoteAsRegexLiteral
 
 /** Wraps a [DriverNodeMatch] in a [TrailblazeNodeSelector]. */
 internal fun selectorWith(match: DriverNodeMatch): TrailblazeNodeSelector =
@@ -26,22 +27,48 @@ internal fun selectorWith(match: DriverNodeMatch): TrailblazeNodeSelector =
  * widened anchor stops being unique the strategy cascade falls through to a more specific one.
  */
 internal fun stableTextAnchorRegex(text: String): String {
-  countInParensRegex.find(text)?.let { match ->
+  // quoteAsRegexLiteral (not Regex.escape): the quoted head lands in generated selector
+  // text, which must be byte-identical on every platform that generates selectors.
+  countInParensRegex.matchEntire(text)?.let { match ->
     val head = match.groupValues[1].trimEnd()
-    if (head.isNotEmpty()) return Regex.escape(head) + """\s*\(\d[\d.,]*\)"""
+    if (head.isNotEmpty()) return quoteAsRegexLiteral(head) + """\s*\(\d[\d.,]*\)"""
   }
-  trailingBareCountRegex.find(text)?.let { match ->
+  trailingBareCountRegex.matchEntire(text)?.let { match ->
     val head = match.groupValues[1].trimEnd()
-    if (head.isNotEmpty()) return Regex.escape(head) + """\s+\d[\d.,]*"""
+    if (head.isNotEmpty()) return quoteAsRegexLiteral(head) + """\s+\d[\d.,]*"""
   }
   return escapeForSelector(text)
 }
 
+// These two patterns are compiled by each platform's own regex engine but deliberately NOT
+// routed through selectorPatternRegexMatches (they gate generation; they aren't recorded
+// selector patterns), so they must avoid every construct whose semantics differ between
+// java.util.regex and ECMAScript:
+//  - `$`: Java matches before a final line terminator, ECMAScript only at absolute end —
+//    `"Cancel 5\n"` anchored on the JVM but not in the compiled JS engine. Replaced by
+//    unanchored patterns + matchEntire, which is strict whole-input on both. Strictness is
+//    also correct for the JVM alone: the lenient `$` produced an anchor
+//    (`\QCancel\E\s+\d[\d.,]*`) that can't full-match its own trailing-newline text, so the
+//    resolver dropped the option anyway.
+//  - `.`: Java excludes U+0085 (NEL), ECMAScript doesn't — spelled as an explicit
+//    line-terminator-excluding class.
+//  - `\s`: ECMAScript includes Unicode spaces (NBSP etc.), Java's default doesn't — spelled
+//    as Java's exact default set.
+// The `\s*`/`\s+` in the *emitted* anchor suffixes below are a separate concern: those are
+// resolved at match time through selectorPatternRegexMatches, whose parity the matcher
+// fixtures lock.
+
+/** Java-`.` semantics on both platforms: any char except a line terminator. */
+private const val NON_LINE_TERMINATOR = """[^\n\r\u0085\u2028\u2029]"""
+
+/** Java-default-`\s` semantics on both platforms. */
+private const val JAVA_WS = """[ \t\n\u000B\f\r]"""
+
 /** "<head> (<count>)" — head, then a parenthesized run of digits/grouping separators. */
-private val countInParensRegex = Regex("""^(.*?)\s*\(\d[\d.,]*\)$""")
+private val countInParensRegex = Regex("""($NON_LINE_TERMINATOR*?)$JAVA_WS*\(\d[\d.,]*\)""")
 
 /** "<head> <count>" — head, then a trailing whitespace-separated run of digits/grouping. */
-private val trailingBareCountRegex = Regex("""^(.*?)\s+\d[\d.,]*$""")
+private val trailingBareCountRegex = Regex("""($NON_LINE_TERMINATOR*?)$JAVA_WS+\d[\d.,]*""")
 
 /**
  * Builds a map from each child node's id to its parent node, for the entire tree.

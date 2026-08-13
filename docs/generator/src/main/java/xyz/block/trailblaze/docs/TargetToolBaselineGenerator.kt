@@ -173,14 +173,18 @@ class TargetToolBaselineGenerator(
     appendLine("# Target: ${target.displayName}")
     appendLine()
 
-    val platforms = config?.platforms ?: return@buildString
+    if (config == null) return@buildString
+    // A target-shaped shared pack declares `target.tools:` but no `platforms:` — its tools reach
+    // real app targets via `dependencies:`, so it has no drivers of its own to column. Render its
+    // matrix with ZERO driver columns rather than bailing to a header-only page.
+    val platforms = config.platforms.orEmpty()
 
     // Collect all driver types this target uses
     val allDrivers = platforms.flatMap { (platformKey, platformConfig) ->
       platformConfig.resolveDriverTypes(platformKey)
     }.toSortedSet(compareBy { it.name })
 
-    if (allDrivers.isEmpty()) return@buildString
+    if (allDrivers.isEmpty() && config.tools.isNullOrEmpty()) return@buildString
 
     // Build per-driver excluded sets. Route through the central `getExcludedToolSurfaceForDriver`
     // accessor so the baseline matrix honors ALL three exclusion backings (class / YAML / scripted)
@@ -319,11 +323,15 @@ class TargetToolBaselineGenerator(
       buildToolDetail(name, target.id, resolver, yamlDefinedByName, scriptedToolsByName, trailmapDir)
     }
 
-    // Column headers
+    // Column headers. On a platform-less shared pack `allDrivers` is empty and the matrix carries
+    // no driver columns at all (rather than one trailing empty column).
     val driverHeaders = allDrivers.map { "${it.yamlKey} (${it.platform.name})" }
+    val headerSuffix = if (driverHeaders.isEmpty()) "" else " ${driverHeaders.joinToString(" | ")} |"
+    val separatorSuffix =
+      if (driverHeaders.isEmpty()) "" else driverHeaders.joinToString("|") { ":---:" } + "|"
 
-    appendLine("| Tool | Toolset(s) | Kind | Source | ${driverHeaders.joinToString(" | ")} |")
-    appendLine("|------|------------|------|--------|${driverHeaders.joinToString("|") { ":---:" }}|")
+    appendLine("| Tool | Toolset(s) | Kind | Source |$headerSuffix")
+    appendLine("|------|------------|------|--------|$separatorSuffix")
 
     for (toolName in toolEntries.keys.sorted()) {
       val entry = toolEntries[toolName]!!
@@ -336,12 +344,13 @@ class TargetToolBaselineGenerator(
           else -> ""
         }
       }
+      val cellsSuffix = if (allDrivers.isEmpty()) "" else " ${cells.joinToString(" | ")} |"
       val toolCell = if (toolName in sidecarsWritten) {
         "[$toolName](${target.id}/tools/$toolName.md)"
       } else {
         toolName
       }
-      appendLine("| $toolCell | $tsLabel | $kind | $source | ${cells.joinToString(" | ")} |")
+      appendLine("| $toolCell | $tsLabel | $kind | $source |$cellsSuffix")
     }
     appendLine()
 

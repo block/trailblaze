@@ -26,8 +26,8 @@ interface TrailblazeSelectorTsCodegenExtension {
   /**
    * Root directory containing the Kotlin source-of-truth files —
    * `src/commonMain/kotlin/xyz/block/trailblaze/api/` under the consumer module.
-   * The plugin resolves `TrailblazeNodeSelector.kt`, `MatchDescriptor.kt`, and
-   * `TrailblazeNode.kt` underneath it.
+   * The plugin resolves `TrailblazeNodeSelector.kt`, `MatchDescriptor.kt`,
+   * `TrailblazeNode.kt`, and `TrailblazeSelectorAnalysis.kt` underneath it.
    */
   val kotlinSourceDir: DirectoryProperty
 
@@ -104,8 +104,8 @@ abstract class GenerateSelectorsTsTask : DefaultTask() {
   fun generate() {
     requireExtensionConfigured(kotlinSourceDir.isPresent, generatedTsFile.isPresent)
     val outputFile = generatedTsFile.get().asFile
-    val (a, b, c) = resolveInputs(kotlinSourceDir.get().asFile)
-    val rendered = runSelectorTsCodegen(a, b, c)
+    val inputs = resolveInputs(kotlinSourceDir.get().asFile)
+    val rendered = runSelectorTsCodegen(inputs[0], inputs[1], inputs[2], inputs[3])
     outputFile.parentFile.mkdirs()
     outputFile.writeText(rendered, Charsets.UTF_8)
     logger.lifecycle(
@@ -143,8 +143,8 @@ abstract class VerifySelectorsTsTask : DefaultTask() {
           "`./gradlew :trailblaze-models:generateSelectorsTs` and commit the result.",
       )
     }
-    val (a, b, c) = resolveInputs(kotlinSourceDir.get().asFile)
-    val regenerated = runSelectorTsCodegen(a, b, c)
+    val inputs = resolveInputs(kotlinSourceDir.get().asFile)
+    val regenerated = runSelectorTsCodegen(inputs[0], inputs[1], inputs[2], inputs[3])
     val committedText = committed.readText(Charsets.UTF_8)
     if (committedText != regenerated) {
       throw GradleException(
@@ -185,10 +185,11 @@ private fun requireExtensionConfigured(kotlinSourceDirPresent: Boolean, generate
 
 private fun resolveInputs(
   dir: java.io.File,
-): Triple<java.io.File, java.io.File, java.io.File> {
-  return Triple(
+): List<java.io.File> {
+  return listOf(
     java.io.File(dir, "TrailblazeNodeSelector.kt"),
     java.io.File(dir, "MatchDescriptor.kt"),
     java.io.File(dir, "TrailblazeNode.kt"),
+    java.io.File(dir, "TrailblazeSelectorAnalysis.kt"),
   )
 }

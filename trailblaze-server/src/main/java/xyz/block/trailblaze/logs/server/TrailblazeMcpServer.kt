@@ -114,7 +114,6 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValida
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.KoogToolExt
@@ -240,14 +239,6 @@ class TrailblazeMcpServer(
    * wires up its settings repo.
    */
   val saveAnnotatedScreenshotsProvider: () -> Boolean = { true },
-  /**
-   * Resolves the unified-recordings rollout gate for the MCP trail-authoring save path (`trail`/
-   * `session` SAVE). MCP has no CLI flag, so this resolves env > persisted config only; the default
-   * is env-only (`false` when unset) so a host that doesn't wire its settings repo still honors
-   * `TRAILBLAZE_UNIFIED_RECORDINGS`. The desktop apps override it to fold in the persisted
-   * `trailblaze config unified-recordings` value (which lives in a module the server can't read).
-   */
-  val unifiedRecordingsEnabledProvider: () -> Boolean = { UnifiedRecordingWriter.resolveGate(null, null) },
 ) {
   /**
    * Default operating mode for new MCP sessions.
@@ -2354,7 +2345,6 @@ class TrailblazeMcpServer(
           logEmitter = trailLogEmitter,
           logsRepo = logsRepo,
           sessionIdProvider = activeSessionIdProvider,
-          unifiedRecordingsEnabled = unifiedRecordingsEnabledProvider,
         ).asTools(),
       )
 
@@ -2402,7 +2392,6 @@ class TrailblazeMcpServer(
           mcpBridge = mcpBridge,
           logsRepo = logsRepo,
           sessionIdProvider = activeSessionIdProvider,
-          unifiedRecordingsEnabled = unifiedRecordingsEnabledProvider,
         ).asTools(),
       )
 

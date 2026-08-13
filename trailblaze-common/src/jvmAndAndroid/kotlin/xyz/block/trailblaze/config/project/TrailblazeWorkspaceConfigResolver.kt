@@ -7,8 +7,8 @@ import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 
 /**
- * Shared resolver for the Trailblaze workspace anchor (`trails/config/trailblaze.yaml`) and
- * its payload directory (`trails/config/`).
+ * Shared resolver for the Trailblaze workspace anchor (a `trailblaze.yaml` inside
+ * `trailblaze-config/` or the legacy `trails/config/`) and its payload directory.
  *
  * This is the single runtime decision point for "where does project-level config live?".
  * Callers that need LLM config, targets, toolsets, or tools should resolve the workspace
@@ -57,9 +57,10 @@ object TrailblazeWorkspaceConfigResolver {
     val workspaceRoot = findWorkspaceRoot(fromPath)
     val configFile = (workspaceRoot as? WorkspaceRoot.Configured)?.configFile?.toFile()
     val workspaceConfigDir = when (workspaceRoot) {
-      is WorkspaceRoot.Configured ->
-        File(workspaceRoot.dir.toFile(), TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR)
-          .takeIf { it.isDirectory }
+      // The payload dir is wherever the anchor file was found (`trails/config/` or
+      // `trailblaze-config/`) — carried on the root rather than recomposed from a
+      // constant so the two layouts can't diverge here.
+      is WorkspaceRoot.Configured -> workspaceRoot.configDir.toFile().takeIf { it.isDirectory }
       is WorkspaceRoot.Scratch -> null
     }
     return ResolvedTrailblazeWorkspaceConfig(

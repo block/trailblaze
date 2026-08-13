@@ -17,6 +17,7 @@ import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import kotlin.test.assertEquals
@@ -26,10 +27,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Unit tests for the new `--[no-]save-recording` flag, its hidden deprecated alias
- * `--no-record`, and the [TrailCommand.shouldSaveRecording] decision predicate. None of
- * the cases need a running daemon, device, or LLM — they exercise picocli parsing and the
- * pure-function helpers directly.
+ * Unit tests for the `--[no-]save-recording` flag, its hidden deprecated alias `--no-record`, the
+ * [TrailCommand.shouldSaveRecording] decision predicate, and where a save-back lands. None of the
+ * cases need a running daemon, device, or LLM — they exercise picocli parsing and the pure-function
+ * helpers directly.
  *
  * Companion to [CliCommandValidationTest], kept in its own file because the
  * save-recording behaviour is the single largest surface added by this PR and the test
@@ -188,140 +189,77 @@ class TrailCommandSaveRecordingTest {
   }
 
   // ---------------------------------------------------------------------------
-  // recordingSaveFormat — unified vs legacy routing
+  // recordingSaveTarget — shared-trail merge vs per-classifier sibling
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `recordingSaveFormat is UNIFIED for a greenfield directory`() {
-    // A brand-new trail authored from an NL definition (no *.trail.yaml on disk yet) → new
-    // recordings use the unified format once the rollout gate is on.
-    val cmd = unifiedEnabledCommand()
+  fun `recordingSaveTarget is UNIFIED_MERGE for a greenfield directory`() {
+    // A brand-new trail authored from an NL definition (no *.trail.yaml on disk yet) → the
+    // recording merges into the directory's shared trail.yaml.
+    val cmd = command()
     val dir = tempFolder.newFolder()
-    File(dir, "blaze.yaml").writeText("- prompts:\n  - step: do it\n")
+    File(dir, "blaze.yaml").writeText("config:\n  id: x\ntrail:\n  - step: do it\n")
     assertEquals(
-      TrailCommand.RecordingSaveFormat.UNIFIED,
-      cmd.recordingSaveFormat(dir, listOf("android")),
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(dir, listOf("android")),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is UNIFIED when a unified trail file already exists`() {
-    val cmd = unifiedEnabledCommand()
+  fun `recordingSaveTarget is UNIFIED_MERGE when a shared trail file already exists`() {
+    val cmd = command()
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText("trail:\n  - step: s\n")
     assertEquals(
-      TrailCommand.RecordingSaveFormat.UNIFIED,
-      cmd.recordingSaveFormat(dir, listOf("android")),
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(dir, listOf("android")),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is UNIFIED when the executed file IS the unified trail`() {
-    val cmd = unifiedEnabledCommand()
+  fun `recordingSaveTarget is UNIFIED_MERGE when the executed file IS the shared trail`() {
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val unified = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("trail:\n  - step: s\n") }
     assertEquals(
-      TrailCommand.RecordingSaveFormat.UNIFIED,
-      cmd.recordingSaveFormat(unified, listOf("android")),
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(unified, listOf("android")),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is LEGACY when legacy siblings exist without a unified file`() {
-    // A half-migrated / v1 directory: keep updating siblings rather than forking a `trail.yaml`
-    // beside them — even with the rollout gate on. Migration to unified is a separate,
+  fun `recordingSaveTarget is CLASSIFIER_SIBLING when the directory already holds per-device siblings`() {
+    // This directory keeps one file per device. Recording a new device updates that device's own
+    // file rather than forking a second, shared copy beside them — consolidating is a separate,
     // deliberate step.
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
-    File(dir, "ios.trail.yaml").writeText("- prompts:\n  - step: s\n")
+    writeUnifiedWithSlot(File(dir, "ios.trail.yaml"), "ios")
     assertEquals(
-      TrailCommand.RecordingSaveFormat.LEGACY,
-      cmd.recordingSaveFormat(File(dir, "ios.trail.yaml"), listOf("android")),
+      TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
+      cmd.recordingSaveTarget(dir, listOf("android")),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is LEGACY when there are no device classifiers`() {
+  fun `recordingSaveTarget is CLASSIFIER_SIBLING when there are no device classifiers`() {
     // No classifier → no key for a unified slot → fall back to the classifier-agnostic sibling.
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     assertEquals(
-      TrailCommand.RecordingSaveFormat.LEGACY,
-      cmd.recordingSaveFormat(dir, emptyList()),
+      TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
+      cmd.recordingSaveTarget(dir, emptyList()),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is LEGACY when the trail file has no parent`() {
-    // A bare filename → File.parentFile is null → can't inspect a directory → fall back to LEGACY.
-    val cmd = unifiedEnabledCommand()
+  fun `recordingSaveTarget is CLASSIFIER_SIBLING when the trail file has no parent`() {
+    // A bare filename → File.parentFile is null → no directory to inspect → sibling.
+    val cmd = command()
     assertEquals(
-      TrailCommand.RecordingSaveFormat.LEGACY,
-      cmd.recordingSaveFormat(File("orphan.trail.yaml"), listOf("android")),
+      TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
+      cmd.recordingSaveTarget(File("orphan.trail.yaml"), listOf("android")),
     )
-  }
-
-  // ---------------------------------------------------------------------------
-  // Unified-recordings gate (on by default; --no-unified-recordings is the opt-out)
-  // ---------------------------------------------------------------------------
-
-  @Test
-  fun `trail parses --unified-recordings and --no-unified-recordings`() {
-    val on = TrailCommand()
-    CommandLine(on).parseArgs("--unified-recordings", "any.trail.yaml")
-    assertEquals(true, on.unifiedRecordings)
-
-    val off = TrailCommand()
-    CommandLine(off).parseArgs("--no-unified-recordings", "any.trail.yaml")
-    assertEquals(false, off.unifiedRecordings)
-
-    val unset = TrailCommand()
-    CommandLine(unset).parseArgs("any.trail.yaml")
-    assertNull(unset.unifiedRecordings, "tri-state: unset flag defers to env var / persisted config")
-  }
-
-  @Test
-  fun `gate off - a greenfield recording saves as a legacy sibling`() {
-    // Pre-unified behavior must be byte-identical while the gate is off: greenfield recordings
-    // keep landing as <classifier>.trail.yaml, never as a unified trail.yaml.
-    val cmd = TrailCommand().apply { unifiedRecordings = false }
-    val dir = tempFolder.newFolder()
-    File(dir, "blaze.yaml").writeText("- prompts:\n  - step: do it\n")
-    assertEquals(
-      TrailCommand.RecordingSaveFormat.LEGACY,
-      cmd.recordingSaveFormat(dir, listOf("android")),
-    )
-  }
-
-  @Test
-  fun `gate off - nothing is saved next to a unified trail file even with self-heal on`() {
-    // The historical guard: the legacy save-back can't update a unified trail.yaml, so it must
-    // never drop a divergent sibling beside one — self-heal doesn't override that.
-    val cmd = TrailCommand().apply {
-      unifiedRecordings = false
-      selfHeal = true
-    }
-    val dir = tempFolder.newFolder()
-    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText("trail:\n  - step: s\n")
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android")))
-    assertFalse(cmd.shouldSaveRecording(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME), listOf("android")))
-  }
-
-  @Test
-  fun `gate off - nothing is saved for an executed named unified file`() {
-    // Deliberate deviation from byte-identical pre-gate behavior: a NAMED unified file
-    // (login.trail.yaml in a shared multi-test directory) used to get a v1
-    // <classifier>.trail.yaml sibling raw-copied beside it — data damage, not preservation.
-    // Gate off now refuses (no new write path), even with self-heal on.
-    val cmd = TrailCommand().apply {
-      unifiedRecordings = false
-      selfHeal = true
-    }
-    val dir = tempFolder.newFolder()
-    val named = File(dir, "login.trail.yaml")
-    writeUnifiedWithSlot(named, "ios")
-
-    assertFalse(cmd.shouldSaveRecording(named, listOf("android")))
   }
 
   // ---------------------------------------------------------------------------
@@ -330,7 +268,7 @@ class TrailCommandSaveRecordingTest {
 
   @Test
   fun `shouldSaveRecording is true for a greenfield unified recording`() {
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     File(dir, "blaze.yaml").writeText("- prompts:\n  - step: s\n")
     assertTrue(cmd.shouldSaveRecording(dir, listOf("android")))
@@ -338,7 +276,7 @@ class TrailCommandSaveRecordingTest {
 
   @Test
   fun `shouldSaveRecording is false when this classifier slot is already recorded and self-heal off`() {
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
     assertFalse(cmd.shouldSaveRecording(dir, listOf("android")))
@@ -347,7 +285,7 @@ class TrailCommandSaveRecordingTest {
   @Test
   fun `shouldSaveRecording is true when a different classifier is missing from the unified file`() {
     // The android slot is recorded; recording ios for the first time must still save (add its slot).
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
     assertTrue(cmd.shouldSaveRecording(dir, listOf("ios")))
@@ -355,7 +293,7 @@ class TrailCommandSaveRecordingTest {
 
   @Test
   fun `shouldSaveRecording is true for an already-recorded classifier when self-heal is on`() {
-    val cmd = unifiedEnabledCommand(selfHeal = true)
+    val cmd = command(selfHeal = true)
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
     assertTrue(cmd.shouldSaveRecording(dir, listOf("android")))
@@ -365,7 +303,7 @@ class TrailCommandSaveRecordingTest {
   fun `shouldSaveRecording is false when this classifier is recorded only in the trailhead`() {
     // The classifier's sole recording living in the trailhead (no step slot) still counts as
     // "already recorded" — guards the trailheadHit branch of unifiedClassifierAlreadyRecorded.
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val unified = UnifiedTrail(
       config = UnifiedTrailConfig(id = "x", target = "y"),
@@ -379,7 +317,7 @@ class TrailCommandSaveRecordingTest {
   @Test
   fun `a multi-segment classifier round-trips through save then skip`() {
     // The joined key (e.g. "android-phone") must be written AND detected by the re-run guard.
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val recording = File(dir, "recording.trail.yaml").apply {
       writeText(unifiedRecordingYaml(driver = "D", toolName = "tapCart", classifier = "android-phone"))
@@ -434,6 +372,63 @@ class TrailCommandSaveRecordingTest {
     assertTrue(recording.isFile, "the recording is preserved for a retry")
   }
 
+  @Test
+  fun `saveRecordingAsUnified refuses an undecodable recording without touching the trail directory`() {
+    // The intermediate the run produced isn't readable as a trail, so there is nothing to merge.
+    // The guarantee is that the refusal costs the user nothing: no file appears in the trail
+    // directory, and their run's recording is left intact for a retry.
+    val cmd = TrailCommand()
+    val dir = tempFolder.newFolder()
+    val recording = File(dir, "recording.trail.yaml").apply { writeText("not: [a, trail\n") }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+
+    assertFalse(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(), "no shared trail written")
+    assertFalse(File(dir, "android.trail.yaml").exists(), "no per-device sibling written either")
+    assertEquals("not: [a, trail\n", recording.readText(), "the run's recording is preserved intact")
+  }
+
+  @Test
+  fun `saveRecordingAsSibling writes only this device's slot`() {
+    // The intermediate is seeded from the run's source trail, so it can carry other devices' slots.
+    // A per-device file must not republish them — it would fork a stale copy of another device's
+    // recording that nothing updates.
+    val cmd = TrailCommand()
+    val dir = tempFolder.newFolder()
+    val intermediate = File(dir, "recording.trail.yaml")
+    writeUnifiedWithSlot(intermediate, "ios")
+    val withBoth = createTrailblazeYaml().decodeUnifiedTrail(intermediate.readText())
+    intermediate.writeText(
+      createTrailblazeYaml().encodeUnifiedTrailToString(
+        withBoth.copy(
+          trail = withBoth.trail.map {
+            it.copy(recordings = it.recordings + ("android" to listOf(tool("androidTap"))))
+          },
+        ),
+      ),
+    )
+    val target = File(dir, "android.trail.yaml")
+
+    cmd.saveRecordingAsSibling(dir, intermediate, target, listOf("android"))
+
+    val sibling = createTrailblazeYaml().decodeUnifiedTrail(target.readText())
+    assertEquals(listOf("androidTap"), sibling.trail.single().recordings["android"]?.map { it.name })
+    assertNull(sibling.trail.single().recordings["ios"], "the other device's slot must not be republished")
+  }
+
+  @Test
+  fun `saveRecordingAsSibling refuses an undecodable recording without writing`() {
+    val cmd = TrailCommand()
+    val dir = tempFolder.newFolder()
+    val intermediate = File(dir, "recording.trail.yaml").apply { writeText("not: [a, trail\n") }
+    val target = File(dir, "android.trail.yaml")
+
+    cmd.saveRecordingAsSibling(dir, intermediate, target, listOf("android"))
+
+    assertFalse(target.exists(), "no sibling written from an unreadable intermediate")
+    assertEquals("not: [a, trail\n", intermediate.readText(), "the run's recording is preserved intact")
+  }
+
   // ---------------------------------------------------------------------------
   // saveRecordingAsUnified — the merge-write contract
   // ---------------------------------------------------------------------------
@@ -463,7 +458,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = TrailCommand()
     val dir = tempFolder.newFolder()
     val yaml = createTrailblazeYaml()
-    val androidDoc = xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
+    val androidDoc = UnifiedTrailAdapter.mergeRecordedClassifier(
       existing = null,
       recordedItems = listOf(
         TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
@@ -473,7 +468,7 @@ class TrailCommandSaveRecordingTest {
       ),
       classifier = "android",
     )
-    val bothDevices = xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
+    val bothDevices = UnifiedTrailAdapter.mergeRecordedClassifier(
       existing = androidDoc,
       recordedItems = listOf(
         TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "IOS_HOST")),
@@ -516,181 +511,39 @@ class TrailCommandSaveRecordingTest {
     assertEquals("IOS_HOST", unified.config.devices?.get("ios"))
   }
 
-  @Test
-  fun `saveRecordingAsUnified refuses to plant a v1 sibling for a multi-tool trailhead, preserving the recording in logs`() {
-    // A recording with a multi-tool trailhead has no unified representation (the unified trailhead is
-    // one tool per classifier), so it arrives in the legacy list shape. The v1 parser was removed, so
-    // a `<classifier>.trail.yaml` in that shape could no longer be decoded, run, or validated —
-    // writing it would plant a broken trail in the workspace. Refuse instead: write nothing to the
-    // trail dir and leave the session recording in logs/ for hand migration.
-    val cmd = TrailCommand()
-    val dir = tempFolder.newFolder()
-    val recordingBody = v1RecordingYamlWithMultiToolTrailhead(toolNames = listOf("clearBootstrap", "openBootstrap"))
-    val recording = File(dir, "recording.trail.yaml").apply { writeText(recordingBody) }
-
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
-
-    assertFalse(
-      File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
-      "a multi-tool trailhead must not produce an un-encodable unified trail.yaml",
-    )
-    assertFalse(
-      File(dir, "android.trail.yaml").exists(),
-      "no v1-shaped sibling — it could not be decoded, run, or validated after the v1 parser was removed",
-    )
-    // The session recording is preserved verbatim for hand migration, never lost.
-    assertTrue(recording.isFile, "the session recording is preserved for hand migration")
-    assertEquals(recordingBody, recording.readText())
-  }
-
-  @Test
-  fun `saveRecordingAsUnified skips the legacy fallback when a unified trail is already present`() {
-    // A legacy <classifier>.trail.yaml sibling would shadow an existing unified trail at run time,
-    // so when one is present the multi-tool fallback refuses instead: nothing is written, the
-    // unified trail stays canonical, and the session recording stays available for hand migration.
-    // This is where a healed unified run lands — the heal concatenates the failed attempt's
-    // trailhead tool with the recovery tools, so the recorded trailhead arrives multi-tool.
-    val cmd = TrailCommand()
-    val dir = tempFolder.newFolder()
-    writeUnifiedWithAndroidSlot(dir)
-    val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
-    val before = unifiedFile.readText()
-    val recording = File(dir, "recording.trail.yaml").apply {
-      writeText(v1RecordingYamlWithMultiToolTrailhead(toolNames = listOf("clearBootstrap", "openBootstrap")))
-    }
-
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
-
-    assertEquals(before, unifiedFile.readText(), "the unified trail must be left untouched")
-    assertFalse(File(dir, "android.trail.yaml").exists(), "no legacy sibling — it would shadow the unified trail")
-    assertTrue(recording.isFile, "the session recording is preserved for hand migration")
-  }
-
-  // ---------------------------------------------------------------------------
-  // lowerLegacyRecordingItems — the legacy-sibling lowering, incl. the no-classifier guard
-  // ---------------------------------------------------------------------------
-
-  @Test
-  fun `lowerLegacyRecordingItems returns null for a unified intermediate when no classifiers resolved`() {
-    // Regression guard: when a run's resolved classifiers diverge from the session's logged ones
-    // (empty here) the intermediate is still written unified. Decoding a unified-with-recordings doc
-    // with no classifiers throws decodeTrail's no-classifier guard; the LEGACY save path must NOT
-    // hit that — it gets a null (copy-verbatim signal) so the recording is never dropped.
-    val cmd = TrailCommand()
-    val yaml = createTrailblazeYaml()
-    val unifiedIntermediate = yaml.encodeUnifiedTrailToString(
-      xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
-        existing = null,
-        recordedItems = listOf(
-          TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "D")),
-          TrailYamlItem.PromptsTrailItem(
-            listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
-          ),
-        ),
-        classifier = "android",
-      ),
-    )
-
-    assertNull(
-      cmd.lowerLegacyRecordingItems(yaml, unifiedIntermediate, emptyList()),
-      "no classifier to lower a unified intermediate to → copy-verbatim signal, never a throw",
-    )
-  }
-
-  @Test
-  fun `lowerLegacyRecordingItems returns null for a legacy (non-unified) intermediate`() {
-    // A legacy list-shape intermediate can't be decoded as a unified doc, so lowering returns null —
-    // the copy-verbatim signal. The removed v1 parser is never invoked; the caller preserves the
-    // recording as-is rather than throwing.
-    val cmd = TrailCommand()
-    val yaml = createTrailblazeYaml()
-
-    assertNull(
-      cmd.lowerLegacyRecordingItems(yaml, v1RecordingYaml(driver = "D", toolName = "tapCart"), emptyList()),
-      "a legacy (non-unified) intermediate → copy-verbatim signal, never a throw",
-    )
-  }
-
-  @Test
-  fun `lowerLegacyRecordingItems extracts this device's slot from a unified intermediate`() {
-    // With classifiers present, a unified intermediate lowers to only the matching device's items.
-    val cmd = TrailCommand()
-    val yaml = createTrailblazeYaml()
-    val androidDoc = xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
-      existing = null,
-      recordedItems = listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("androidTap"))))),
-        ),
-      ),
-      classifier = "android",
-    )
-    val bothDevices = xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
-      existing = androidDoc,
-      recordedItems = listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "IOS_HOST")),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("iosTap"))))),
-        ),
-      ),
-      classifier = "ios",
-    )
-
-    val items = cmd.lowerLegacyRecordingItems(yaml, yaml.encodeUnifiedTrailToString(bothDevices), listOf("android"))
-
-    assertNotNull(items)
-    val recorded = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
-      .promptSteps.single().recording?.tools?.map { it.name }
-    assertEquals(listOf("androidTap"), recorded, "only the android slot lowers under the android classifier")
-  }
-
   // ---------------------------------------------------------------------------
   // Named unified files — content-aware routing (the shared-directory corpus)
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `recordingSaveFormat is UNIFIED for a named file with unified content`() {
-    // The real unified corpus is NAMED files (login.trail.yaml) sharing a directory with other
-    // tests. Filename-only routing counted every named sibling as "legacy" and raw-copied a v1
-    // <classifier>.trail.yaml into the shared directory.
-    val cmd = unifiedEnabledCommand()
+  fun `recordingSaveTarget is UNIFIED_MERGE for a named file with unified content`() {
+    // The corpus is mostly NAMED files (login.trail.yaml) sharing a directory with other tests.
+    // Keying on the filename alone would misroute them to a per-device sibling that shadows
+    // resolution and doesn't identify which test it recorded — the content decides.
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val named = File(dir, "login.trail.yaml").apply { writeText("trail:\n  - step: s\n") }
     File(dir, "payment.trail.yaml").writeText("trail:\n  - step: p\n")
     assertEquals(
-      TrailCommand.RecordingSaveFormat.UNIFIED,
-      cmd.recordingSaveFormat(named, listOf("android")),
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(named, listOf("android")),
     )
   }
 
   @Test
-  fun `recordingSaveFormat is UNIFIED for a named unified file whose template breaks raw YAML`() {
+  fun `recordingSaveTarget is UNIFIED_MERGE for a named unified file whose template breaks raw YAML`() {
     // The run path resolves {{var}} templates before parsing (TrailYamlTemplateResolver), so a
     // unified file with an unquoted template — invalid as raw YAML — still executes. Detection
     // must resolve the same way, or the file misroutes to a legacy sibling: the exact damage
     // this routing exists to prevent. {{CWD}} is a built-in that always resolves.
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val named = File(dir, "login.trail.yaml").apply {
       writeText("config:\n  target: {{CWD}}\ntrail:\n  - step: s\n")
     }
     assertEquals(
-      TrailCommand.RecordingSaveFormat.UNIFIED,
-      cmd.recordingSaveFormat(named, listOf("android")),
-    )
-  }
-
-  @Test
-  fun `recordingSaveFormat stays LEGACY for a v1-content file named like a trail`() {
-    // Content detection must not flip half-migrated directories: a v1 file is its own legacy
-    // sibling and keeps writing <classifier>.trail.yaml siblings (even with the gate on).
-    val cmd = unifiedEnabledCommand()
-    val dir = tempFolder.newFolder()
-    val v1 = File(dir, "android.trail.yaml").apply { writeText(v1RecordingYaml(driver = "D", toolName = "t")) }
-    assertEquals(
-      TrailCommand.RecordingSaveFormat.LEGACY,
-      cmd.recordingSaveFormat(v1, listOf("ios")),
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(named, listOf("android")),
     )
   }
 
@@ -724,7 +577,7 @@ class TrailCommandSaveRecordingTest {
 
   @Test
   fun `shouldSaveRecording skip guard reads the executed named unified file`() {
-    val cmd = unifiedEnabledCommand()
+    val cmd = command()
     val dir = tempFolder.newFolder()
     val named = File(dir, "login.trail.yaml")
     writeUnifiedWithSlot(named, "android")
@@ -760,13 +613,9 @@ class TrailCommandSaveRecordingTest {
 
   // --- fixtures ---
 
-  /**
-   * A command with the unified-recordings rollout gate explicitly ON (and self-heal pinned), so
-   * unified-path tests exercise the enabled behavior regardless of ambient env/config.
-   */
-  private fun unifiedEnabledCommand(selfHeal: Boolean = false) = TrailCommand().apply {
+  /** A command with self-heal pinned, so routing tests don't read ambient env/config. */
+  private fun command(selfHeal: Boolean = false) = TrailCommand().apply {
     this.selfHeal = selfHeal
-    unifiedRecordings = true
   }
 
   /** Writes a unified `trail.yaml` in [dir] whose single step already carries an `android` slot. */
@@ -775,8 +624,8 @@ class TrailCommandSaveRecordingTest {
 
   /**
    * Writes a unified trail at [target] (any filename — bare or named) whose single step already
-   * carries a [classifier] slot. The step NL matches [v1RecordingYaml] so a follow-up save merges
-   * into the same step.
+   * carries a [classifier] slot. The step NL matches [unifiedRecordingYaml] so a follow-up save
+   * merges into the same step.
    */
   private fun writeUnifiedWithSlot(target: File, classifier: String) {
     val yaml = createTrailblazeYaml()
@@ -786,7 +635,7 @@ class TrailCommandSaveRecordingTest {
         listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("a"))))),
       ),
     )
-    val merged = xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
       existing = null,
       recordedItems = recordingItems,
       classifier = classifier,
@@ -798,11 +647,11 @@ class TrailCommandSaveRecordingTest {
    * A minimal UNIFIED `recording.trail.yaml` body: one config + one recorded step whose tool lives in
    * [classifier]'s slot. This is the shape a recording intermediate now takes — [saveRecordingAsUnified]
    * decodes it as a unified doc, lowers it to the run's classifier, and merges that one slot. The step
-   * NL matches [v1RecordingYaml] / [writeUnifiedWithSlot] so a follow-up save merges into the same step.
+   * NL matches [writeUnifiedWithSlot] so a follow-up save merges into the same step.
    */
   private fun unifiedRecordingYaml(driver: String, toolName: String, classifier: String): String =
     createTrailblazeYaml().encodeUnifiedTrailToString(
-      xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
+      UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = null,
         recordedItems = listOf(
           TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
@@ -820,7 +669,7 @@ class TrailCommandSaveRecordingTest {
    */
   private fun unifiedRecordingYamlWithTrailhead(trailheadToolName: String, classifier: String): String =
     createTrailblazeYaml().encodeUnifiedTrailToString(
-      xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter.mergeRecordedClassifier(
+      UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = null,
         recordedItems = listOf(
           TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
@@ -832,34 +681,6 @@ class TrailCommandSaveRecordingTest {
           ),
         ),
         classifier = classifier,
-      ),
-    )
-
-  /** A minimal v1 `recording.trail.yaml` body with one config + one recorded step. */
-  private fun v1RecordingYaml(driver: String, toolName: String): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
-        ),
-      ),
-    )
-
-  /**
-   * A v1 `recording.trail.yaml` whose trailhead (step 0) carries [toolNames] as its `tools:` list,
-   * plus one ordinary recorded step. A trailhead with more than one tool has no unified representation.
-   */
-  private fun v1RecordingYamlWithMultiToolTrailhead(toolNames: List<String>): String =
-    createTrailblazeYaml().encodeToString(
-      listOf(
-        TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
-        TrailYamlItem.TrailheadTrailItem(
-          TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) }),
-        ),
-        TrailYamlItem.PromptsTrailItem(
-          listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),
-        ),
       ),
     )
 

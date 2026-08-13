@@ -1,0 +1,72 @@
+{
+  "nodeId": 7,
+  "driverDetail": { "class": "web" },
+  "children": [
+    {
+      "nodeId": 6,
+      "bounds": { "left": 0, "top": 0, "right": 1280, "bottom": 800 },
+      "driverDetail": { "class": "web", "ariaRole": "main", "isLandmark": true },
+      "children": [
+        {
+          "nodeId": 1,
+          "bounds": { "left": 440, "top": 120, "right": 840, "bottom": 180 },
+          "driverDetail": {
+            "class": "web",
+            "ariaRole": "heading",
+            "ariaName": "Sign in",
+            "ariaDescriptor": "heading \"Sign in\"",
+            "headingLevel": 1
+          }
+        },
+        {
+          "nodeId": 2,
+          "bounds": { "left": 440, "top": 220, "right": 840, "bottom": 280 },
+          "driverDetail": {
+            "class": "web",
+            "ariaRole": "textbox",
+            "ariaName": "Email",
+            "ariaDescriptor": "textbox \"Email\"",
+            "dataTestId": "email-input",
+            "isInteractive": true
+          }
+        },
+        {
+          "nodeId": 3,
+          "bounds": { "left": 440, "top": 320, "right": 840, "bottom": 380 },
+          "driverDetail": {
+            "class": "web",
+            "ariaRole": "button",
+            "ariaName": "Submit",
+            "ariaDescriptor": "button \"Submit\"",
+            "cssSelector": "#submit",
+            "isInteractive": true
+          }
+        },
+        {
+          "nodeId": 4,
+          "bounds": { "left": 40, "top": 40, "right": 200, "bottom": 90 },
+          "driverDetail": {
+            "class": "web",
+            "ariaRole": "link",
+            "ariaName": "Home",
+            "ariaDescriptor": "link \"Home\"",
+            "nthIndex": 0,
+            "isInteractive": true
+          }
+        },
+        {
+          "nodeId": 5,
+          "bounds": { "left": 440, "top": 700, "right": 600, "bottom": 750 },
+          "driverDetail": {
+            "class": "web",
+            "ariaRole": "link",
+            "ariaName": "Home",
+            "ariaDescriptor": "link \"Home\"",
+            "nthIndex": 1,
+            "isInteractive": true
+          }
+        }
+      ]
+    }
+  ]
+}

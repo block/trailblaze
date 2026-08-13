@@ -11,53 +11,20 @@ import java.io.File
  * Shared save-back routing + unified read-merge-write for every recording surface: the CLI
  * (`trailblaze run`), MCP trail authoring, and the desktop recording tab. Each surface used to
  * write its own `<classifier>.trail.yaml` unconditionally; this is the single place that decides
- * whether a save routes to the unified `trail.yaml` (merging one device's classifier slot) or to a
- * legacy sibling, and the single place that reads-merges-writes the unified file (atomic write +
- * corrupt-file refusal). A future cross-process file lock lands here once, not three times.
+ * whether a save merges into the shared unified `trail.yaml` (under one device's classifier slot)
+ * or lands in a per-classifier sibling, and the single place that reads-merges-writes the unified
+ * file (atomic write + corrupt-file refusal). A future cross-process file lock lands here once,
+ * not three times.
  *
- * The pure merge itself lives in [UnifiedTrailAdapter.mergeRecordedClassifier]
- * ([xyz.block.trailblaze.yaml.unified]); this object adds the JVM file I/O around it. It is
- * deliberately gate-agnostic: callers resolve the rollout gate ([resolveGate]) and pass the result
- * in, so the CLI can layer its `--unified-recordings` flag on top of the env/persisted tiers while
- * MCP/desktop use env/persisted only.
+ * Every destination holds **unified** YAML — [shouldMergeIntoSharedTrail] chooses a file layout, not a
+ * format. The pure merge itself lives in [UnifiedTrailAdapter.mergeRecordedClassifier]
+ * ([xyz.block.trailblaze.yaml.unified]); this object adds the JVM file I/O around it.
  *
- * The legacy `<classifier>.trail.yaml` write stays with each surface (its filename and no-classifier
- * fallback differ), so this object never writes a legacy file — it only tells the caller whether to,
- * and refuses to let one shadow a unified trail.
+ * The per-classifier sibling write stays with each surface (its filename and no-classifier
+ * handling differ), so this object never writes one — it only tells the caller whether to, and
+ * refuses to let one shadow a shared unified trail.
  */
 object UnifiedRecordingWriter {
-
-  /** Env var that opts the gate on (`1`/`true`) or off (`0`/`false`) for every surface. */
-  const val ENV_UNIFIED_RECORDINGS: String = "TRAILBLAZE_UNIFIED_RECORDINGS"
-
-  /**
-   * Resolve the unified-recordings gate. Tier order: an explicit [flagOverride] (the CLI's
-   * `--[no-]unified-recordings`) wins, then the [ENV_UNIFIED_RECORDINGS] env var, then the caller's
-   * [persistedConfig] (`trailblaze config unified-recordings`), then on — unified is the default
-   * save format; any tier set to false is the opt-out back to legacy `<classifier>.trail.yaml`
-   * saving.
-   *
-   * MCP/desktop pass `flagOverride = null` (no CLI flag to honor); the CLI passes its parsed flag.
-   * The env-var name and its parsing live here so the three surfaces can never disagree on them.
-   */
-  fun resolveGate(flagOverride: Boolean?, persistedConfig: Boolean?): Boolean =
-    flagOverride
-      ?: parseBooleanGate(System.getenv(ENV_UNIFIED_RECORDINGS))
-      ?: persistedConfig
-      ?: true
-
-  /**
-   * Parse an on/off gate string, accepting the documented `1`/`true` (and `0`/`false`) forms
-   * case-insensitively (the rest of the framework's env flags accept `1`, and the user-facing
-   * errors/docs tell users to set `=1`). Returns `null` for absent or unrecognized values so the
-   * caller falls through to the next tier. Kept pure + `internal` so it's unit-testable without
-   * touching the process environment.
-   */
-  internal fun parseBooleanGate(raw: String?): Boolean? = when (raw?.trim()?.lowercase()) {
-    "1", "true" -> true
-    "0", "false" -> false
-    else -> null
-  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Shared user-facing messages — kept here so the MCP and desktop surfaces (which map the same
@@ -65,11 +32,11 @@ object UnifiedRecordingWriter {
   // own richer console phrasing.
   // ─────────────────────────────────────────────────────────────────────────────
 
-  /** Refusal message for a legacy `<classifier>.trail.yaml` write that would shadow a unified trail. */
-  fun legacyShadowRefusalMessage(legacyFileName: String, dir: File): String =
-    "Refusing to write $legacyFileName next to a unified trail.yaml in ${dir.absolutePath}. " +
-      "Enable unified recordings ($ENV_UNIFIED_RECORDINGS=1 or `trailblaze config unified-recordings true`) " +
-      "to merge this recording into the unified trail."
+  /** Refusal message for a per-classifier sibling write that would shadow a unified trail. */
+  fun siblingShadowRefusalMessage(siblingFileName: String, dir: File): String =
+    "Refusing to write $siblingFileName next to a unified trail.yaml in ${dir.absolutePath} — it " +
+      "would shadow the unified trail at run time. Record against the unified trail so this " +
+      "device's tools merge into its own classifier slot."
 
   /** Refusal message for merging into an unreadable existing unified trail (left untouched). */
   fun corruptRefusalMessage(target: File, reason: String): String =
@@ -78,6 +45,19 @@ object UnifiedRecordingWriter {
 
   /** Message when a merge produced no steps to write. */
   const val EMPTY_MERGE_MESSAGE: String = "Recording has no steps to merge into the unified trail."
+
+  /**
+   * Refusal message for a save with no device classifier. A unified recording is keyed by
+   * classifier; without one there is no slot to write it to and nothing could ever replay it.
+   */
+  const val BLANK_CLASSIFIER_MESSAGE: String =
+    "Can't save this recording: no device classifier for this session, so there is no unified " +
+      "recording slot to write it to. Re-record with a connected device."
+
+  /** Refusal message for a recorded trailhead the unified one-tool-per-classifier slot can't hold. */
+  fun multiToolTrailheadMessage(toolCount: Int): String =
+    "Can't save this recording: a unified trail's trailhead holds a single tool, and this " +
+      "recording's trailhead has $toolCount. Re-record with a single trailhead tool."
 
   /**
    * True when a unified `trail.yaml` is present for [trailFileOrDir] — the gate-OFF refusal guard.
@@ -122,32 +102,33 @@ object UnifiedRecordingWriter {
   }
 
   /**
-   * Whether a save-back for [trailFileOrDir] under [classifier] should merge into the unified
-   * `trail.yaml` (`true`) or write a legacy `<classifier>.trail.yaml` sibling (`false`), given the
-   * already-resolved [unifiedEnabled] gate:
+   * Whether a save-back for [trailFileOrDir] under [classifier] merges into the shared unified
+   * `trail.yaml` (`true`) or writes a per-classifier `<classifier>.trail.yaml` sibling (`false`).
    *
-   *  - Gate off, or a blank [classifier] (no key for a unified slot) → legacy.
-   *  - The executed file IS a unified trail (bare or named-by-content) → unified (merge into it).
-   *  - The directory already has a bare `trail.yaml` → unified (never drop a sibling beside it).
-   *  - The directory holds legacy `<classifier>.trail.yaml` sibling(s) and no unified file → legacy
-   *    (don't fork a half-migrated directory; migrating those is a separate, deliberate step).
-   *  - Greenfield (neither present) → unified (new recordings default to the unified format).
+   * This is purely a **file-layout** decision — both destinations hold unified YAML. It exists
+   * because a directory can legitimately keep one file per device instead of one shared trail:
+   *
+   *  - A blank [classifier] (no key for a unified slot) → sibling.
+   *  - The executed file IS a unified trail (bare or named-by-content) → merge into it.
+   *  - The directory already has a bare `trail.yaml` → merge into it (never drop a sibling beside it).
+   *  - The directory holds per-classifier sibling(s) and no shared `trail.yaml` → sibling, so a
+   *    re-record updates the device's own file instead of forking a second copy of the trail.
+   *  - Greenfield (neither present) → shared `trail.yaml`.
    *
    * The unified file this decision reads/writes is [unifiedRecordingTarget] — consult the two
    * together so the router and writer never disagree on the target.
    */
-  fun shouldRouteUnified(trailFileOrDir: File, classifier: String, unifiedEnabled: Boolean): Boolean {
-    if (!unifiedEnabled) return false
+  fun shouldMergeIntoSharedTrail(trailFileOrDir: File, classifier: String): Boolean {
     if (classifier.isBlank()) return false
     if (executedFileIsUnified(trailFileOrDir)) return true
     val dir = dirOf(trailFileOrDir) ?: return false
     if (File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return true
-    val hasLegacySibling = dir.listFiles { f ->
+    val hasPerClassifierSibling = dir.listFiles { f ->
       f.isFile &&
         f.name.endsWith(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX) &&
         !TrailRecordings.isUnifiedTrailFile(f.name)
     }?.isNotEmpty() == true
-    return !hasLegacySibling
+    return !hasPerClassifierSibling
   }
 
   /**
@@ -189,7 +170,27 @@ object UnifiedRecordingWriter {
 
     /** No unified target resolved (orphan path with no parent); nothing written. */
     object NoTarget : MergeOutcome
+
+    /**
+     * The recording captured no objective at all (a raw interactive capture), but [target] already
+     * holds [existingStepCount] steps. Nothing written — see [STEPLESS_INTO_EXISTING_MESSAGE].
+     */
+    data class SteplessIntoExistingTrail(val target: File, val existingStepCount: Int) : MergeOutcome
   }
+
+  /**
+   * Refusal message for merging an objective-less raw capture into a trail that already has steps.
+   *
+   * The merge is replace-per-classifier and aligns recorded steps to existing steps positionally. A
+   * capture with no objectives is one placeholder step, so aligning it would bind the whole capture
+   * to step 1's prose and strip this device's recordings from every step after it. A raw capture has
+   * no step structure to align by, so there is no correct alignment — only a lossy one.
+   */
+  const val STEPLESS_INTO_EXISTING_MESSAGE: String =
+    "Can't merge this recording: it captured tools but no objectives, and the trail it would merge " +
+      "into already has steps. Saving it would attach the whole capture to step 1 and drop this " +
+      "device's recordings from the rest. Use \"Generate Trail\" to turn the capture into per-step " +
+      "objectives first, or record against the trail's steps."
 
   /**
    * Read the existing unified target for [trailFileOrDir], merge [recordedItems] (the v1 items a
@@ -239,6 +240,15 @@ object UnifiedRecordingWriter {
         null
       }
 
+      // A capture with no objectives is one placeholder step. Aligning that against an existing
+      // multi-step trail binds the whole capture to step 1 and strips this classifier from every
+      // step after it — silent data loss, so refuse before writing anything.
+      if (existing != null && existing.trail.isNotEmpty() &&
+        UnifiedTrailAdapter.isSteplessRecording(recordedItems)
+      ) {
+        return@synchronized MergeOutcome.SteplessIntoExistingTrail(unifiedFile, existing.trail.size)
+      }
+
       val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recordedItems, classifier)
       // A merge with no steps would emit an empty `trail:`, which the unified parser rejects — skip
       // rather than write an unreadable file (only reachable from a degenerate recording with no
@@ -250,6 +260,36 @@ object UnifiedRecordingWriter {
         MergeOutcome.Merged(unifiedFile)
       }
     }
+  }
+
+  /**
+   * Render [recordedItems] for one device as a standalone unified document — the per-classifier
+   * sibling counterpart of [mergeIntoUnified], seeded empty so the recording lands entirely under
+   * [classifier]'s slot.
+   *
+   * Applies the same invariants as the merge route (a classifier to key the slot by, a single-tool
+   * trailhead, a non-empty trail) so the same recording is refused identically whichever file layout
+   * the directory happens to use. Returns the YAML to write; the caller owns the write.
+   */
+  fun renderStandalone(recordedItems: List<TrailYamlItem>, classifier: String): Result<String> {
+    if (classifier.isBlank()) {
+      return Result.failure(IllegalStateException(BLANK_CLASSIFIER_MESSAGE))
+    }
+    val recordedTrailheadTools = recordedItems
+      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
+      .firstOrNull()?.trailhead?.tools.orEmpty()
+    if (recordedTrailheadTools.size > 1) {
+      return Result.failure(IllegalStateException(multiToolTrailheadMessage(recordedTrailheadTools.size)))
+    }
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing = null,
+      recordedItems = recordedItems,
+      classifier = classifier,
+    )
+    if (merged.trail.isEmpty()) {
+      return Result.failure(IllegalStateException(EMPTY_MERGE_MESSAGE))
+    }
+    return Result.success(createTrailblazeYaml().encodeUnifiedTrailToString(merged))
   }
 
   /**

@@ -15,9 +15,13 @@ import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_T
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_TAB
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_TOGGLE
 import xyz.block.trailblaze.mcp.executor.ConfigurableMockBridge
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.agent.ExecutionResult
 
 /**
  * Unit tests for [BridgeUiActionExecutor.inferElementTypeFromVh] and
@@ -273,5 +277,50 @@ class BridgeUiActionExecutorTest {
     val wrapped = tool as OtherTrailblazeTool
     assertEquals("tap", wrapped.toolName)
     assertEquals(args, wrapped.raw)
+  }
+
+  // ---------------------------------------------------------------------------
+  // launchApp pre-validation
+  // ---------------------------------------------------------------------------
+
+  private fun launchApp(appId: String, configure: ConfigurableMockBridge.() -> Unit): ExecutionResult {
+    val bridge = ConfigurableMockBridge().apply(configure)
+    return runBlocking {
+      BridgeUiActionExecutor(mcpBridge = bridge)
+        .execute(toolName = "launchApp", args = buildJsonObject { put("appId", appId) }, traceId = null)
+    }
+  }
+
+  @Test
+  fun `launchApp is rejected when the device reports the app is not installed`() {
+    val result = launchApp("com.missing.app") { installedAppIds = setOf("com.example.app") }
+
+    // Non-recoverable and lists what IS installed, so the agent retries with a real id instead
+    // of hammering the same wrong one.
+    assertTrue(result is ExecutionResult.Failure, "expected rejection, got $result")
+    assertFalse((result as ExecutionResult.Failure).recoverable)
+    assertTrue(result.error.contains("not installed"), result.error)
+    assertTrue(result.error.contains("com.example.app"), result.error)
+  }
+
+  @Test
+  fun `launchApp proceeds when the installed-app probe fails`() {
+    // The permissive path: a probe that couldn't answer must not be read as "zero apps
+    // installed", which would reject every launch with a confident and wrong "not installed".
+    val result = launchApp("com.example.app") {
+      installedAppIdsException = IllegalStateException("device probe failed")
+    }
+
+    assertTrue(result is ExecutionResult.Success, "expected the launch to proceed, got $result")
+  }
+
+  @Test
+  fun `launchApp propagates cancellation instead of reporting a retryable failure`() {
+    // A stopped run must unwind. Kotlin's CancellationException is an Exception, so every catch
+    // between here and the caller has to let it past — otherwise the agent loop is handed a
+    // retryable error and keeps going after the user hit stop.
+    assertFailsWith<CancellationException> {
+      launchApp("com.example.app") { installedAppIdsException = CancellationException("run stopped") }
+    }
   }
 }

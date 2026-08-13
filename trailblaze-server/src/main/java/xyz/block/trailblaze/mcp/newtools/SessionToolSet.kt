@@ -15,10 +15,9 @@ import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
-import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
-import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.util.Console
@@ -49,11 +48,6 @@ class SessionToolSet(
    * The implementation should store a stop callback on [TrailblazeMcpSessionContext.stopCaptureCallback].
    */
   private val startCaptureProvider: ((SessionId, Boolean, Boolean) -> String)? = null,
-  /**
-   * Resolves the unified-recordings rollout gate for saves (env > persisted config; no CLI flag).
-   * The host wiring the daemon supplies the persisted tier — see [TrailFileManager].
-   */
-  private val unifiedRecordingsEnabled: () -> Boolean = { UnifiedRecordingWriter.resolveGate(null, null) },
 ) : ToolSet {
 
   enum class SessionAction {
@@ -421,7 +415,7 @@ class SessionToolSet(
       ).toJson()
     }
 
-    val trailFileManager = TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
+    val trailFileManager = TrailFileManager(trailsDirectory)
     val saveResult = trailFileManager.saveTrail(
       name = trailName,
       steps = steps,
@@ -466,14 +460,17 @@ class SessionToolSet(
     }
 
     val yamlContent = try {
-      logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
+      logs.generateUnifiedRecordedYaml(sessionTrailConfig = sessionTrailConfig)
     } catch (e: Exception) {
       return SessionResult(error = "Failed to generate recording: ${e.message}").toJson()
     }
 
     if (yamlContent.isBlank()) {
+      // Blank covers more than "nothing recorded" — a session with no device classifier has no
+      // unified slot to key its tools under, and a shape the format can't hold renders nothing too.
       return SessionResult(
-        error = "No recordable steps found in session ${sessionId.value}",
+        error = "No recording could be generated for session ${sessionId.value}: it has no " +
+          "recordable steps, no device classifier to key them under, or a shape a trail can't hold.",
       ).toJson()
     }
 
@@ -491,9 +488,9 @@ class SessionToolSet(
     platform: TrailblazeDevicePlatform?,
   ): String {
     // Route through the shared file manager so this log-backed save (the daemon-default session-save
-    // path) honors the same unified-recordings gate + refusal/merge routing as every other surface.
+    // path) honors the same refusal/merge routing as every other surface.
     // Items go straight in — no YAML encode/decode round-trip, so save-back never touches the v1 parser.
-    val saveResult = TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
+    val saveResult = TrailFileManager(trailsDirectory)
       .saveTrailItems(trailName, recordedItems, platform)
     return if (saveResult.success) {
       Console.log("[session] Trail saved to: ${saveResult.filePath}")

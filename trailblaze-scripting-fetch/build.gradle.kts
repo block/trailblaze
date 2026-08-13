@@ -12,14 +12,14 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
 }
 
-// Isolates the OkHttp dependency for the optional QuickJS `fetch` binding. The lean engine module
-// (`:trailblaze-quickjs-tools`, which the on-device APK depends on) stays OkHttp-free; a runtime
-// opts in by passing `OkHttpFetchExtension` to `QuickJsToolHost.connect(engineExtension = …)`.
+// Isolates the OkHttp dependency for the QuickJS `fetch` binding. The lean engine module
+// (`:trailblaze-quickjs-tools`) stays OkHttp-free; a runtime installs `fetch` by passing
+// `OkHttpFetchExtension` to `QuickJsToolHost.connect(engineExtension = …)`.
 //
-// jvmAndAndroid (mirroring `:trailblaze-quickjs-tools`) so BOTH runtimes can opt in: the host
-// daemon installs `fetch` today; an on-device caller could too (OkHttp runs on ART). Nothing
-// pulls this module transitively unless it actually opts in, so the engine module's dependency
-// surface is unchanged.
+// jvmAndAndroid (mirroring `:trailblaze-quickjs-tools`) so BOTH runtimes get it: the host daemon
+// and the on-device launchers both install `fetch` (OkHttp runs on ART). The isolation buys a lean
+// engine module — not a fetch-free APK — so a runtime that wants no networking simply doesn't
+// depend on this module.
 android {
   namespace = "xyz.block.trailblaze.scripting.fetch"
   compileSdk = 36
@@ -74,6 +74,14 @@ kotlin {
       dependsOn(jvmAndAndroid)
     }
 
+    // The Android half of the `EMULATOR_HOST_ALIASES` expect/actual — the only behavior that
+    // differs by target, and the one a JVM-only suite structurally cannot see.
+    androidUnitTest {
+      dependencies {
+        implementation(libs.kotlin.test.junit4)
+      }
+    }
+
     jvmTest {
       dependencies {
         implementation(libs.kotlin.test.junit4)
@@ -81,6 +89,11 @@ kotlin {
         // The end-to-end test drives a tool's `fetch(…)` against a real loopback server — the
         // JDK's `com.sun.net.httpserver.HttpServer` (a genuine server, no extra dependency and no
         // MockWebServer-API churn across OkHttp's two mockwebserver packages).
+        //
+        // `okhttp-tls` supplies `HeldCertificate` so the TLS test can stand that server up with a
+        // real self-signed certificate — the shape of every Trailblaze HTTPS endpoint a device
+        // reaches — instead of asserting the scoping only as a predicate.
+        implementation(libs.okhttp.tls)
       }
     }
   }

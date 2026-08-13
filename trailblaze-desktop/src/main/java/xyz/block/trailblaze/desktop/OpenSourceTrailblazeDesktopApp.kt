@@ -152,10 +152,6 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       saveAnnotatedScreenshotsProvider = {
         CliConfigHelper.readConfig()?.saveAnnotatedScreenshots ?: true
       },
-      // Fold the persisted `trailblaze config unified-recordings` into the MCP save-back gate. The
-      // server module can't read that setting (it lives in a UI module), so the host wires it here;
-      // env > persisted, no CLI flag for the MCP surface.
-      unifiedRecordingsEnabledProvider = { CliConfigHelper.resolveUnifiedRecordingsGate() },
     )
   }
 

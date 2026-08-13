@@ -14,6 +14,8 @@ import { describe, expect, test } from "bun:test";
 // graph embeds the prebuilt viewer script through a bun macro, and bun 1.3.14's sync CJS loader
 // spins forever on a require()'d graph that combines a macro import with sibling imports.
 import * as RUN_REPORT_CORE_MODULE from "./run-report-core";
+import { traceToolCallCount } from "./run-report-extract";
+import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from "./run-report-inspector";
 import { whenDocumentComplete } from "./run-report-viewer";
 
 const core = RUN_REPORT_CORE_MODULE as unknown as {
@@ -114,10 +116,10 @@ type PlaybackDriveContext = {
   clickShot: () => void;
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[] };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; popstate?: string; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[] };
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void } {
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; group: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, group: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {} };
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void; documentKeyListeners: Array<(e: any) => void>; llmScrolledTo: string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null } {
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; group: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, group: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -156,6 +158,29 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     }
     return stepEls.get(id);
   };
+  // Persistent per-request-table-row stand-ins (the LLM tab): activation highlights the row IN
+  // PLACE (classList.toggle + aria-current) and opens the transcript lightbox — no re-render — so
+  // the same objects must be visible to both the wire pass and the assertions.
+  let llmScrolledTo: string | null = null;
+  const llmRowEls = new Map<string, any>();
+  const llmRowEl = (id: string) => {
+    if (!llmRowEls.has(id)) {
+      const el: any = {
+        dataset: { llm: id },
+        classes: new Set<string>(),
+        attrs: {} as Record<string, string>,
+        classList: { toggle(c: string, on: boolean) { if (on) el.classes.add(c); else el.classes.delete(c); } },
+        setAttribute(name: string, value: string) { el.attrs[name] = value; },
+        removeAttribute(name: string) { delete el.attrs[name]; },
+        focus: () => { restoredFocus = `[data-llm="${id}"]`; },
+        scrollIntoView: () => { llmScrolledTo = `[data-llm="${id}"]`; },
+      };
+      Object.defineProperty(el, "onclick", { set(fn: () => void) { handlers.llmClick[id] = fn; } });
+      Object.defineProperty(el, "onkeydown", { set(fn: (e: any) => void) { handlers.llmKey[id] = fn; } });
+      llmRowEls.set(id, el);
+    }
+    return llmRowEls.get(id);
+  };
   const scrubEl: any = { attrs: {} as Record<string, string>, setAttribute(name: string, value: string) { this.attrs[name] = value; } };
   const shotWrap: any = { querySelectorAll: () => [], insertAdjacentHTML() {} };
   const shotImg: any = { src: "", alt: "" };
@@ -176,6 +201,18 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (sel === "[data-shot]") return [...this._h.matchAll(/data-shot="([^"]+)"(?: data-shot-token="([^"]*)")?(?: data-shot-label="([^"]*)")?(?: data-shot-tool="([^"]*)")?/g)].map((m: any) => ({ dataset: { shot: m[1], shotToken: m[2], shotLabel: m[3], shotTool: m[4] }, set onclick(fn: () => void) { handlers.shot[m[1]] = fn; } }));
       if (sel === "[data-cell-toggle]") return [...this._h.matchAll(/data-cell-toggle="([^"]+)"/g)].map((m: any) => ({ dataset: { cellToggle: m[1] }, set onclick(fn: (e: any) => void) { handlers.cellToggle[m[1]] = fn; }, set onkeydown(_fn: unknown) {} }));
       if (sel === "[data-gal-zoom]") return [...this._h.matchAll(/data-gal-zoom="(-?\d+)"/g)].map((m: any) => ({ dataset: { galZoom: m[1] }, set onclick(fn: () => void) { handlers.galZoom[m[1]] = fn; } }));
+      if (sel === "[data-llm]") return [...this._h.matchAll(/data-llm="(\d+)"/g)].map((m: any) => llmRowEl(m[1]));
+      // Transcript-dialog triggers: clicking passes the element itself as the focus-return target,
+      // so `focus()` records where close puts the reader back.
+      if (sel === "[data-tx]") return [...this._h.matchAll(/data-tx="(\d+)"/g)].map((m: any) => {
+        // Fresh node per wire pass, mirroring the real DOM: every render() replaces this markup, so
+        // a node captured on open is detached by the next one. Focus landing HERE (rather than on
+        // the node querySelector resolves) is the stale-reference bug.
+        const el: any = { dataset: { tx: m[1] }, focus: () => { restoredFocus = `[data-tx="${m[1]}"] (captured)`; } };
+        Object.defineProperty(el, "onclick", { set(fn: (e: any) => void) { handlers.txOpen[m[1]] = () => fn({ stopPropagation() {} }); } });
+        return el;
+      });
+      if (sel === "[data-inspect]") return [...this._h.matchAll(/data-inspect="(\d+)"/g)].map((m: any) => ({ dataset: { inspect: m[1] }, set onclick(fn: () => void) { handlers.inspect[m[1]] = fn; } }));
       if (sel === '[role="button"][tabindex="0"]') return [...this._h.matchAll(/<div[^>]*data-step="(\d+)"[^>]*role="button" tabindex="0"/g)].map((m: any) => ({
         dataset: { step: m[1] },
         click: () => handlers.step[m[1]] && handlers.step[m[1]](),
@@ -193,6 +230,14 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (step && this._h.includes(`data-step="${step[1]}"`)) return stepEl(step[1]);
       const tlStream = sel.match(/^\[data-tlstream="(\d+)"\]$/);
       if (tlStream && this._h.includes(`data-tlstream="${tlStream[1]}"`)) return { focus: () => { restoredFocus = sel; } };
+      const llmRow = sel.match(/^\[data-llm="(\d+)"\]$/);
+      if (llmRow && this._h.includes(`data-llm="${llmRow[1]}"`)) return llmRowEl(llmRow[1]);
+      // The live (currently-rendered) transcript trigger, re-resolved at dialog-close time.
+      const txBtn = sel.match(/^\[data-tx="(\d+)"\]$/);
+      if (txBtn && this._h.includes(`data-tx="${txBtn[1]}"`)) return { focus: () => { restoredFocus = sel; } };
+      // Likewise the live "Inspect UI" trigger, re-resolved when the inspector closes.
+      const inspectBtn = sel.match(/^\[data-inspect="(\d+)"\]$/);
+      if (inspectBtn && this._h.includes(`data-inspect="${inspectBtn[1]}"`)) return { focus: () => { restoredFocus = sel; } };
       // Each render produces fresh <details> markup; refresh the shim's open state from the html
       // without firing ontoggle, mimicking a newly-created element.
       if (sel === "[data-streamselect]" && this._h.includes("data-streamselect")) { timelineMenu._open = this._h.includes("data-streamselect open"); return timelineMenu; }
@@ -200,6 +245,17 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     },
   };
   (globalThis as Record<string, unknown>).window = globalThis;
+  // window-level listeners (the viewer registers exactly one: popstate), captured so a test can
+  // fire browser Back.
+  const popstateListeners: Array<() => void> = [];
+  (globalThis as Record<string, unknown>).addEventListener = (name: string, fn: () => void) => {
+    if (name === "popstate") popstateListeners.push(fn);
+  };
+  (globalThis as Record<string, unknown>).removeEventListener = (name: string, fn: () => void) => {
+    if (name !== "popstate") return;
+    const at = popstateListeners.indexOf(fn);
+    if (at >= 0) popstateListeners.splice(at, 1);
+  };
   // The shipped read path: the payload rides in the inert #tb-run-data JSON script and the viewer
   // JSON.parses its textContent (same `<` escaping as buildMultiReportHtml). payloadViaGlobal
   // exercises the window.__TB_RUN_DATA__ fallback for embedders that inject the payload directly.
@@ -248,14 +304,88 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   let zoomSrc: string | null = null;
   let zoomRoot: any = null;
   let copiedText: string | null = null;
+  // The element inside an overlay that currently holds focus (null once it's been detached by a
+  // markup rewrite) — what document.activeElement reports while an overlay is open.
+  let overlayFocus: any = null;
   const copyBtn: any = { textContent: "", set onclick(fn: () => void) { handlers.copyLink = fn; } };
+  // An element inside an overlay's parsed markup: enough of a real node to observe in-place paints
+  // (class toggles, textContent/innerHTML writes, focus). `detached` models what a real innerHTML
+  // rewrite does to nodes built from the previous markup — the browser drops focus off them, so a
+  // test can tell an in-place update from a rebuild.
+  const overlayChild = (attrs: Record<string, string>, className: string, onFocus: (el: any) => void) => {
+    const el: any = {
+      classes: new Set(className.split(/\s+/).filter(Boolean)),
+      dataset: {} as Record<string, string>,
+      style: {} as Record<string, string>,
+      detached: false,
+      textContent: "",
+      _h: "",
+      // The nearest ancestor <details> branch (wired by the overlay's innerHTML parse for tree
+      // rows) — what reveal-on-select expands.
+      _branch: null,
+      set innerHTML(v: string) { el._h = v; },
+      get innerHTML() { return el._h; },
+      get className() { return [...el.classes].join(" "); },
+      classList: {
+        add: (c: string) => el.classes.add(c),
+        remove: (c: string) => el.classes.delete(c),
+        contains: (c: string) => el.classes.has(c),
+        toggle: (c: string, force?: boolean) => { const on = force == null ? !el.classes.has(c) : force; if (on) el.classes.add(c); else el.classes.delete(c); return on; },
+      },
+      focus: () => onFocus(el),
+      closest: (sel: string) => (sel === "details" ? el._branch : el.matches(sel) ? el : null),
+      matches: (sel: string) => {
+        const attr = sel.match(/^\[([a-z-]+)(?:="([^"]*)")?\]$/);
+        if (attr) return attrs[attr[1]] != null && (attr[2] == null || attrs[attr[1]] === attr[2]);
+        return sel.startsWith(".") ? el.classes.has(sel.slice(1)) : false;
+      },
+      querySelector: (sel: string) => (sel === "img" ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 200, right: 100, bottom: 200 }) } : null),
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 200, right: 100, bottom: 200 }),
+      scrollIntoView: (arg: unknown) => { el.scrolledIntoView = arg; },
+    };
+    Object.keys(attrs).forEach((name) => {
+      const m = name.match(/^data-(.+)$/);
+      if (m) el.dataset[m[1].replace(/-([a-z])/g, (_s, c) => c.toUpperCase())] = attrs[name];
+    });
+    return el;
+  };
   const createElement = (tag: string) => {
     const node: any = {
-      children: [], style: {}, className: "", textContent: "", disabled: false,
+      children: [], style: {}, className: "", textContent: "", disabled: false, removed: false, attrs: {} as Record<string, string>, _els: [] as any[], scrollTop: 0,
       appendChild(child: any) { this.children.push(child); },
-      setAttribute() {}, insertAdjacentHTML() {}, remove() {}, focus() {}, click() {},
+      setAttribute(name: string, value: string) { this.attrs[name] = value; }, insertAdjacentHTML() {}, remove() { this.removed = true; }, focus() {}, click() {},
       set src(value: string) { this._src = value; if (tag === "img") zoomSrc = value; },
       get src() { return this._src; },
+      // Setting innerHTML re-parses the overlay's markup into fresh child stand-ins — the elements
+      // built from the previous markup are detached, exactly as a real rewrite would leave them.
+      set innerHTML(html: string) {
+        node._h = html;
+        node._els.forEach((el: any) => { el.detached = true; });
+        node._els = [];
+        const push = (attrs: Record<string, string>, className: string) => { const el = overlayChild(attrs, className, (el2) => { overlayFocus = el2; }); node._els.push(el); return el; };
+        // The tree's <details> nesting, parsed sequentially so each row knows its nearest branch —
+        // a details stand-in carries `open` plus a parent link, the shape reveal-on-select walks.
+        const branchOf: Record<string, any> = {};
+        {
+          const stack: any[] = [];
+          for (const t of html.matchAll(/<details class="inspbranch"( open)?|<\/details>|data-inspnode="(\d+)"/g)) {
+            if (t[0].startsWith("<details")) {
+              const d: any = { open: !!t[1], _parent: stack[stack.length - 1] || null };
+              d.parentElement = { closest: (sel: string) => (sel === "details" ? d._parent : null) };
+              stack.push(d);
+            } else if (t[0] === "</details>") stack.pop();
+            else branchOf[t[2]] = stack[stack.length - 1] || null;
+          }
+        }
+        [...html.matchAll(/<(?:span|div)\s+class="([^"]*)"\s+data-inspnode="(\d+)"/g)].forEach((m) => { push({ "data-inspnode": m[2] }, m[1])._branch = branchOf[m[2]] || null; });
+        [...html.matchAll(/<div class="([^"]*)" data-insprect="(\d+)"/g)].forEach((m) => push({ "data-insprect": m[2] }, m[1]));
+        [...html.matchAll(/<div class="(inspdetails|insptree)"/g)].forEach((m) => push({}, m[1]));
+        [...html.matchAll(/<div class="(inspshotwrap)" (data-insphit)/g)].forEach((m) => push({ "data-insphit": "" }, m[1]));
+        [...html.matchAll(/<span class="([^"]*)" (data-insphovlabel)/g)].forEach((m) => push({ "data-insphovlabel": "" }, m[1]));
+      },
+      get innerHTML() { return node._h || ""; },
+      querySelectorAll(sel: string) { return node._els.filter((el: any) => el.matches(sel)); },
+      querySelector(sel: string) { return node._els.find((el: any) => el.matches(sel)) || null; },
     };
     return node;
   };
@@ -274,8 +404,11 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
     if (sprites) return opts.chunks.sprites[sprites[1]] != null && !heldSpriteChunks.has(sprites[1]) ? { textContent: opts.chunks.sprites[sprites[1]] } : null;
     return null;
   };
+  // Every keydown listener currently registered on the document, in registration order — a viewer
+  // that boots twice into ONE document must leave exactly one behind (disposeViewerGlobals).
+  const documentKeyListeners: Array<(e: any) => void> = [];
   (globalThis as Record<string, unknown>).document = {
-    activeElement,
+    get activeElement() { return overlayFocus && !overlayFocus.detached ? overlayFocus : activeElement; },
     // While a held chunk is pending the document reads as still loading, so the viewer keeps
     // polling instead of giving up on hydration.
     get readyState() { return heldChunks.size || heldSpriteChunks.size ? "loading" : undefined; },
@@ -294,10 +427,24 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : (id === "copylink" || id === "copylinkrun") && app._h.includes(`id="${id}"`) ? copyBtn
       : id === "exportlogs" && app._h.includes('id="exportlogs"') ? { set onclick(fn: () => void) { handlers.exportLogs = fn; } }
       : null),
-    addEventListener: (name: string, fn: (e: any) => void) => { if (name === "keydown") handlers.documentKey = fn; },
+    // The viewer's boot asks whether this document is a viewer shell (no payload yet, loader chrome
+    // in place) before deciding to auto-boot.
+    documentElement: { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument },
+    addEventListener: (name: string, fn: (e: any) => void) => {
+      if (name !== "keydown") return;
+      handlers.documentKey = fn;
+      documentKeyListeners.push(fn);
+    },
+    removeEventListener: (name: string, fn: (e: any) => void) => {
+      if (name !== "keydown") return;
+      const at = documentKeyListeners.indexOf(fn);
+      if (at >= 0) documentKeyListeners.splice(at, 1);
+    },
     createElement,
     body: { appendChild(el: any) { zoomRoot = el; } },
   };
+  // Every keydown listener currently registered on the document, in registration order. A viewer
+  // that boots twice into one document must leave exactly one behind (see disposeViewerGlobals).
   (globalThis as Record<string, unknown>).navigator = { clipboard: { writeText(text: string) { if (opts.clipboardRejects) return Promise.reject(new Error("denied")); copiedText = text; } } };
   (globalThis as Record<string, unknown>).getComputedStyle = (el: unknown) => ({ overflowY: el === mainScroller || (el === timelineList && !opts.stackedTimeline) ? "auto" : "visible" });
   // Controllable rAF clock for playback drive tests: requestAnimationFrame queues callbacks and
@@ -331,6 +478,9 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   // frame; the boot work runs from the queued rAF callbacks.
   const htmlBeforeBoot = app._h;
   while (rafQueue.length) rafQueue.shift()!();
+  // A second boot into the same document — what the viewer shell does when another archive is
+  // loaded in place.
+  if (opts.rebootViewer) { (opts.viewer || core.RUN_REPORT_VIEWER)(); while (rafQueue.length) rafQueue.shift()!(); }
   if (opts.toggleCell && handlers.cellToggle[opts.toggleCell]) handlers.cellToggle[opts.toggleCell]({ stopPropagation() {} });
   if (opts.session != null && handlers.session[String(opts.session)]) handlers.session[String(opts.session)]();
   if (opts.timelineScrollTop != null) timelineList.scrollTop = opts.timelineScrollTop;
@@ -338,9 +488,20 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.clickGroup != null && handlers.group[String(opts.clickGroup)]) handlers.group[String(opts.clickGroup)]();
   if (opts.tlStreamBeforeTab != null && handlers.tlStream[String(opts.tlStreamBeforeTab)]) handlers.tlStream[String(opts.tlStreamBeforeTab)]();
   if (opts.tab && handlers.tab[opts.tab]) handlers.tab[opts.tab]();
+  if (opts.openTx != null && handlers.txOpen[String(opts.openTx)]) handlers.txOpen[String(opts.openTx)]();
+  if (opts.txEscape && zoomRoot && zoomRoot.onkeydown) zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} });
+  if (opts.llmEnter != null && handlers.llmKey[String(opts.llmEnter)]) handlers.llmKey[String(opts.llmEnter)]({ key: "Enter", preventDefault() {} });
+  if (opts.llmClick != null && handlers.llmClick[String(opts.llmClick)]) handlers.llmClick[String(opts.llmClick)]();
+  // Browser Back/Forward: point the address at another route and fire the viewer's popstate
+  // listener, exactly as the browser would after a history pop.
+  if (opts.popstate != null) {
+    navigate(`/report.html${opts.popstate}`);
+    popstateListeners.forEach((fn) => fn());
+  }
   if (opts.lightboxAll && handlers.gridMode) handlers.gridMode();
   if (opts.galZoom) for (const delta of opts.galZoom) { const fn = handlers.galZoom[String(delta)]; if (fn) fn(); }
   if (opts.zoomShot && handlers.shot[opts.zoomShot]) handlers.shot[opts.zoomShot]();
+  if (opts.inspect != null && handlers.inspect[String(opts.inspect)]) handlers.inspect[String(opts.inspect)]();
   if (opts.zoomKey && handlers.documentKey) handlers.documentKey({ key: opts.zoomKey, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
   if (opts.timelineKey && handlers.documentKey) handlers.documentKey({
     key: opts.timelineKey,
@@ -389,7 +550,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); } };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); }, documentKeyListeners, llmScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -904,6 +1065,36 @@ describe("buildRunReportHtml (single run)", () => {
     const state = renderViewerState(payloadOf(selfHtml), { viewer: () => new Function(script)(), copyLocalPrompt: true });
     expect(state.html).toContain('id="copylocalprompt"');
     expect(state.copiedText).toContain("`trailblaze run trails/checkout.trail.yaml`");
+  });
+
+  test("a shell document is not auto-booted, but hands the viewer a way to boot once it has a payload", () => {
+    // The viewer shell is a report document with no run in it: the loader chrome owns the page until
+    // an archive is loaded. Auto-booting there would paint an empty report over that chrome. The
+    // marker is the whole contract, so drive the real embedded bundle, not the module export.
+    const selfHtml = core.buildRunReportHtml({ meta: { title: "My run", status: "passed" }, trace, llmLogs: llm, shots: {} });
+    const script = viewerScriptOf(selfHtml);
+    const globals = globalThis as Record<string, unknown>;
+    delete globals.__TB_BOOT_REPORT__;
+
+    const shell = renderViewerState(payloadOf(selfHtml), { viewer: () => new Function(script)(), shellDocument: true });
+    expect(shell.html).toBe("");
+    // …and the handoff it leaves behind renders when the shell calls it.
+    const boot = globals.__TB_BOOT_REPORT__ as (() => void) | undefined;
+    expect(typeof boot).toBe("function");
+    boot!();
+    expect(shell.liveHtml()).toContain("My run");
+  });
+
+  test("booting twice into one document leaves a single keydown listener, belonging to the live run", () => {
+    // The viewer shell loads a dropped archive in place, so one document can boot the viewer more
+    // than once. A surviving listener from the first run stays bound to THAT run's sessions and would
+    // render it back into the shared #app — and because it calls preventDefault, the live run would
+    // never see the key at all.
+    const once = renderViewerState(payloadOf(html));
+    expect(once.documentKeyListeners.length).toBe(1);
+
+    const twice = renderViewerState(payloadOf(html), { rebootViewer: true });
+    expect(twice.documentKeyListeners.length).toBe(1);
   });
 });
 
@@ -1936,6 +2127,23 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('class="scrubfill"');
   });
 
+  test("per-call LLM rows don't count toward the Trailhead auto-collapse threshold", () => {
+    // 7 setup tool actions, each preceded by the LLM call that chose it. Only the tool actions are
+    // actions, so this trailhead stays expanded exactly as it did before per-call rows existed.
+    const trace = [
+      { i: 1, label: "Prepare the app", objective: true, trailhead: true, ok: true, ts: 1, ms: 0 },
+      ...Array.from({ length: 7 }, (_, i) => [
+        { i: 100 + i, label: "LLM Request", tool: "llm · m", objective: false, trailhead: false, ok: true, ts: 100 + i, ms: 500, llm: i },
+        { i: 200 + i, label: `setup action ${i + 1}`, tool: "t", objective: false, trailhead: false, ok: true, ts: 200 + i, ms: 100 },
+      ]).flat(),
+      { i: 300, label: "Complete checkout", objective: true, trailhead: false, ok: true, ts: 300, ms: 0 },
+      { i: 301, label: "tapOnElement", tool: "text: Pay", objective: false, trailhead: false, ok: true, ts: 301, ms: 100 },
+    ];
+    const llm = Array.from({ length: 7 }, () => ({ model: "m", inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, totalCost: 0.001, promptCost: null, completionCost: null, cacheSavings: 0, comp: null, durationMs: 500, label: "LLM Request", instructions: null, response: [] }));
+    const out = renderViewer({ generatedAt: "now", sessions: [{ meta: { title: "R", status: "passed" }, trace, llm, shots: {} }] });
+    expect(out).toContain('data-phase="trailhead" aria-expanded="true"');
+  });
+
   test("clicking a step header selects the step's first tool call", () => {
     const trace = [
       { i: 1, label: "Complete checkout", objective: true, trailhead: false, ok: true, ts: 1, ms: 0 },
@@ -2110,6 +2318,115 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain('class="d mono"');
     expect(out).not.toContain('class="n mono"');
     expect(out).not.toContain('<span class="mono" style="color:var(--sub);font-size:11.5px">m</span>');
+  });
+
+  test("the LLM tab names the model in the repo's provider/model form, on the totals card and every row", () => {
+    const call = (model: string, provider: string | null) => ({
+      model, ...(provider ? { provider } : {}), inputTokens: 10, outputTokens: 5, cacheReadTokens: 0,
+      totalCost: 0.001, promptCost: null, completionCost: null, cacheSavings: 0, comp: null,
+      durationMs: 100, label: "LLM Request", instructions: null, response: [],
+    });
+    const render = (llm: unknown[]) => renderViewer({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, shots: {}, recordingYaml: null, llm }],
+    }, { tab: "llm" });
+    // Single-model session: the totals card names it once, every table row carries it.
+    const one = render([call("gpt-5-6-luna", "openai"), call("gpt-5-6-luna", "openai")]);
+    expect(one).toContain(">Model</span>");
+    expect(one).toContain("openai/gpt-5-6-luna");
+    expect([...one.matchAll(/class="llmmodel mono"/g)].length).toBe(2);
+    // Mixed session: both models are listed and counted, rather than one standing in for the run.
+    const mixed = render([call("gpt-5-6-luna", "openai"), call("claude-x", "anthropic")]);
+    expect(mixed).toContain(">Models (2)</span>");
+    expect(mixed).toContain("openai/gpt-5-6-luna");
+    expect(mixed).toContain("anthropic/claude-x");
+    // No provider recorded (older payload / modelName-only log): the bare model id, never a
+    // fabricated prefix.
+    const bare = render([call("some-model", null)]);
+    expect(bare).toContain("some-model");
+    expect(bare).not.toContain("/some-model");
+    // No model at all: the table's em-dash convention, and the totals card omits the line.
+    const none = render([call("?", null)]);
+    expect(none).not.toContain(">Model</span>");
+    expect(none).toContain('class="llmmodel mono" title="—">—<');
+  });
+
+  test("LLM tab renders per-request composition columns, the input-token breakdown, and cache savings", () => {
+    const comp = { system: 511, user: 233, tools: 199, images: 57, systemCount: 1, userCount: 2, toolsCount: 10, imagesCount: 1, est: 1000 };
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "R", status: "passed" }, trace: slim, shots: {}, recordingYaml: null,
+        llm: [
+          { model: "m", inputTokens: 1000, outputTokens: 10, cacheReadTokens: 400, totalCost: 0.01, promptCost: 0.008, completionCost: 0.002, cacheSavings: 0.0012, comp, durationMs: 1000, label: "LLM Request", instructions: null, response: [] },
+          { model: "m", inputTokens: 900, outputTokens: 9, cacheReadTokens: 0, totalCost: 0.009, promptCost: null, completionCost: null, cacheSavings: 0, comp: null, durationMs: 900, label: "LLM Request", instructions: null, response: [] },
+        ],
+      }],
+    }, { tab: "llm" });
+    // Per-request table: a row per call with the reported input total and its estimated split.
+    expect(out).toContain('class="llmtable');
+    expect(out).toContain("Input (LLM)");
+    // No estimate-total column: the split is folded to sum to the reported total, so such a column
+    // would equal Input (LLM) on every row by construction.
+    expect(out).not.toContain("Input (Est)");
+    expect((out.match(/<tr class="llmrow/g) || []).length).toBe(2);
+    // Rows are keyboard-reachable like the call-list rows.
+    expect((out.match(/<tr class="llmrow[^>]*tabindex="0"/g) || []).length).toBe(2);
+    // Call 1 carries its composition numbers…
+    expect(out).toContain(">511<");
+    expect(out).toContain(">233<");
+    expect(out).toContain(">199<");
+    expect(out).toContain(">57<");
+    // …and call 2 (no composition captured) renders em-dashes in all four composition-derived
+    // cells (System/User/Tools/Images), never zeros.
+    expect((out.match(/<td class="num">—<\/td>/g) || []).length).toBe(4);
+    // The aggregated input-token breakdown renders (one legend row per category, images included
+    // because the run sent one).
+    expect(out).toContain('class="llmbreakbar"');
+    expect((out.match(/class="llmbreakcat"/g) || []).length).toBe(4);
+    // Cache-savings figure with the without-cache total (0.01 + 0.009 + 0.0012 savings).
+    expect(out).toContain("−$0.001200");
+    expect(out).toContain("$0.020200");
+    // Input/output cost totals from the per-call costs.
+    expect(out).toContain("$0.008000");
+    expect(out).toContain("$0.002000");
+  });
+
+  test("LLM tab with no composition data renders the table with em-dashes and no breakdown card", () => {
+    const out = renderViewer({
+      generatedAt: "now",
+      sessions: [{
+        meta: { title: "R", status: "passed" }, trace: slim, shots: {}, recordingYaml: null,
+        // Older export shape: rows predating the composition fields entirely.
+        llm: [{ model: "m", inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, totalCost: 0.001, durationMs: 500, label: "LLM Request", instructions: null, response: [] }],
+      }],
+    }, { tab: "llm" });
+    expect(out).toContain('class="llmtable');
+    // All four composition-derived cells (System/User/Tools/Images) fall back — not just one.
+    expect((out.match(/<td class="num">—<\/td>/g) || []).length).toBe(4);
+    expect(out).not.toContain('class="llmbreakbar"');
+  });
+
+  test("activating a per-request table row opens the transcript lightbox and highlights the row in place", () => {
+    const llmCall = (i: number) => ({ model: "m", inputTokens: 100 + i, outputTokens: 10, cacheReadTokens: 0, totalCost: 0.001, promptCost: null, completionCost: null, cacheSavings: 0, comp: null, durationMs: 500, label: "LLM Request", instructions: null, response: [] });
+    const payload = {
+      generatedAt: "now",
+      sessions: [{ meta: { title: "R", status: "passed" }, trace: slim, shots: {}, recordingYaml: null, llm: [llmCall(0), llmCall(1)] }],
+    };
+    // Enter on a table row: the lightbox opens on that call (the tab's only detail view) and the
+    // row highlight moves IN PLACE — no re-render, so the reader's place in the table survives.
+    const state = renderViewerState(payload, { tab: "llm", llmEnter: 1 });
+    expect(state.zoomRoot.className).toBe("txoverlay");
+    expect(state.zoomRoot.attrs["aria-label"]).toBe("LLM transcript, call 2 of 2");
+    expect(state.llmRow(1).classes.has("sel")).toBe(true);
+    expect(state.llmRow(1).attrs["aria-current"]).toBe("true");
+    expect(state.llmRow(0).classes.has("sel")).toBe(false);
+    // While the lightbox is open on the LLM tab, the address deep-links to the call.
+    expect(state.route).toContain("llm=1");
+    // Mouse click takes the identical path.
+    const clicked = renderViewerState(payload, { tab: "llm", llmClick: 1 });
+    expect(clicked.zoomRoot.className).toBe("txoverlay");
+    expect(clicked.llmRow(1).classes.has("sel")).toBe(true);
   });
 
   test("a single run opens straight on its detail with a YAML comparison tab", () => {
@@ -2800,6 +3117,293 @@ describe("extractLlmLogs accounting", () => {
   });
 });
 
+// Port of LlmTokenBreakdownEstimator.estimateBreakdown (trailblaze-models) over the log's
+// flattened message shape — the extraction-time fallback when a log carries no stored breakdown.
+describe("LLM input-token composition estimate (estimateLlmComp)", () => {
+  const estimateLlmComp = (core as any).estimateLlmComp;
+  const sys = { role: "system", message: "s".repeat(400) };
+  const user = { role: "user", message: "u".repeat(400) };
+
+  test("categorizes system/user/tool-descriptor chars and scales the parts to the reported input total", () => {
+    // tool chars = name(3) + description(196) + 200 structure overhead = 399.
+    const comp = estimateLlmComp([sys, user], [{ name: "tap", description: "d".repeat(196) }], 300);
+    expect(comp.system).toBeGreaterThan(0);
+    expect(comp.user).toBeGreaterThan(0);
+    expect(comp.tools).toBeGreaterThan(0);
+    expect(comp.images).toBe(0);
+    // Scaled so the categories sum exactly to the LLM-reported total; `est` is that sum.
+    expect(comp.system + comp.user + comp.tools + comp.images).toBe(300);
+    expect(comp.est).toBe(300);
+    expect(comp.systemCount).toBe(1);
+    expect(comp.userCount).toBe(1);
+    expect(comp.toolsCount).toBe(1);
+  });
+
+  test("user turns after conversation history starts count as messages, not as prompt chars", () => {
+    const base = estimateLlmComp([sys, user], [], 200);
+    const withHistory = estimateLlmComp(
+      [sys, user, { role: "assistant", message: "ok" }, { role: "user", message: "x".repeat(4000) }],
+      [],
+      200,
+    );
+    // The huge post-history turn joins the user message count but not the user char pool, so
+    // the user-vs-system token split is unchanged.
+    expect(withHistory.userCount).toBe(2);
+    expect(withHistory.user).toBe(base.user);
+    expect(withHistory.system).toBe(base.system);
+  });
+
+  test("a tool_result entry ends the initial prompt phase too", () => {
+    const base = estimateLlmComp([sys, user], [], 200);
+    const after = estimateLlmComp(
+      [sys, user, { role: "tool_result", message: "r", toolName: "tap" }, { role: "user", message: "y".repeat(4000) }],
+      [],
+      200,
+    );
+    expect(after.user).toBe(base.user);
+  });
+
+  test("image attachment inventory lines count as images at the flat per-image estimate", () => {
+    const imgUser = { role: "user", message: "look\n\nAttachments:\n- Image (png), Binary, 100 Base64 Encoded Characters\n" };
+    const comp = estimateLlmComp([sys, imgUser], [], 1000);
+    expect(comp.imagesCount).toBe(1);
+    expect(comp.images).toBeGreaterThan(0);
+    expect(comp.system + comp.user + comp.tools + comp.images).toBe(1000);
+  });
+
+  test("returns null when there is nothing to estimate from or distribute", () => {
+    expect(estimateLlmComp([], [{ name: "t", description: "d" }], 100)).toBeNull();
+    expect(estimateLlmComp([sys], [], 0)).toBeNull();
+    expect(estimateLlmComp([sys], [], null)).toBeNull();
+  });
+
+  test("pins the port's constants: exact per-category tokens at scale factor 1", () => {
+    // Fixture chosen so the pre-scale estimate equals the reported total (scale = 1), making the
+    // assertions sensitive to the ported constants themselves — 4 chars/token, the 200-char
+    // per-tool structure overhead, and the 765-token flat image estimate — not just to the
+    // normalized shape, which scaling makes true for ANY nonzero constants:
+    //   system 400 chars → 100 tokens; user 400 chars (incl. the image inventory line) → 100;
+    //   tool 3 + 196 + 200 overhead = 399 chars → 99; one image → 765.
+    //   text tokens trunc(1199/4) = 299; + 765 image = 1064 = the reported input total.
+    const attach = "\n\nAttachments:\n- Image (png)";
+    const userText = "u".repeat(400 - attach.length) + attach;
+    const comp = estimateLlmComp(
+      [{ role: "system", message: "s".repeat(400) }, { role: "user", message: userText }],
+      [{ name: "tap", description: "d".repeat(196) }],
+      1064,
+    );
+    expect(comp).toEqual({
+      system: 100, user: 100, tools: 99, images: 765,
+      systemCount: 1, userCount: 1, toolsCount: 1, imagesCount: 1,
+      est: 1064,
+    });
+  });
+});
+
+describe("extractLlmLogs composition + cache savings", () => {
+  const extractLlmLogs = (core as any).extractLlmLogs;
+  const requestLog = (usage: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    class: `${T}.TrailblazeLlmRequestLog`,
+    llmMessages: [],
+    llmResponse: [],
+    llmRequestUsageAndCost: usage,
+    durationMs: 5,
+    timestamp: "2024-01-01T00:00:00Z",
+    ...extra,
+  });
+
+  test("carries the model's provider id through to the share payload, and omits it when absent", () => {
+    // The log's TrailblazeLlmModel carries { trailblazeLlmProvider: { id, display }, modelId } —
+    // the two halves of the repo's canonical `<provider>/<model>` identity.
+    const withProvider = extractLlmLogs([requestLog({
+      inputTokens: 10, outputTokens: 1, promptCost: 0, completionCost: 0,
+      trailblazeLlmModel: { modelId: "gpt-5-6-luna", trailblazeLlmProvider: { id: "openai", display: "OpenAI" } },
+    })]);
+    expect(withProvider[0].model).toBe("gpt-5-6-luna");
+    expect(withProvider[0].provider).toBe("openai");
+    expect((core as any).slimLlmForShare(withProvider)[0].provider).toBe("openai");
+    // A log with only a model name has no provider, and none is invented; the share payload omits
+    // the key entirely, so an older payload and a provider-less new one render identically.
+    const modelNameOnly = extractLlmLogs([requestLog(
+      { inputTokens: 10, outputTokens: 1, promptCost: 0, completionCost: 0 },
+      { modelName: "some-model" },
+    )]);
+    expect(modelNameOnly[0].model).toBe("some-model");
+    expect(modelNameOnly[0].provider).toBeNull();
+    expect("provider" in (core as any).slimLlmForShare(modelNameOnly)[0]).toBe(false);
+  });
+
+  test("prefers the runtime-computed inputTokenBreakdown stored on the log", () => {
+    const rows = extractLlmLogs([requestLog({
+      inputTokens: 1000, outputTokens: 10, promptCost: 0.01, completionCost: 0.001,
+      trailblazeLlmModel: { modelId: "m" },
+      inputTokenBreakdown: {
+        systemPrompt: { tokens: 600, count: 1 },
+        userPrompt: { tokens: 100, count: 2 },
+        toolDescriptors: { tokens: 200, count: 12 },
+        images: { tokens: 100, count: 1 },
+        assistantMessageCount: 3,
+        toolMessageCount: 4,
+      },
+    })]);
+    expect(rows[0].comp).toEqual({
+      system: 600, user: 100, tools: 200, images: 100,
+      systemCount: 1, userCount: 2, toolsCount: 12, imagesCount: 1,
+      est: 1000,
+    });
+  });
+
+  test("falls back to estimating from the raw messages when the log has no stored breakdown", () => {
+    const rows = extractLlmLogs([requestLog(
+      { inputTokens: 500, outputTokens: 5, promptCost: 0.001, completionCost: 0.0001, trailblazeLlmModel: { modelId: "m" } },
+      {
+        llmMessages: [{ role: "system", message: "s".repeat(400) }, { role: "user", message: "u".repeat(400) }],
+        toolOptions: [{ name: "tap", description: "Tap an element" }],
+      },
+    )]);
+    const comp = rows[0].comp;
+    expect(comp).toBeTruthy();
+    expect(comp.system + comp.user + comp.tools + comp.images).toBe(500);
+    expect(comp.toolsCount).toBe(1);
+  });
+
+  test("comp is null when the log has neither a breakdown nor messages", () => {
+    const rows = extractLlmLogs([requestLog(
+      { inputTokens: 100, outputTokens: 1, promptCost: 0.001, completionCost: 0.0001, trailblazeLlmModel: { modelId: "m" } },
+    )]);
+    expect(rows[0].comp).toBeNull();
+  });
+
+  test("cache savings = cached reads × (full − cached) input rate", () => {
+    const rows = extractLlmLogs([requestLog({
+      inputTokens: 2_000_000, cacheReadInputTokens: 1_000_000, outputTokens: 1, promptCost: 0.01, completionCost: 0.001,
+      trailblazeLlmModel: { modelId: "m", inputCostPerOneMillionTokens: 3.0, cachedInputCostPerOneMillionTokens: 0.3 },
+    })]);
+    expect(rows[0].cacheSavings).toBeCloseTo(2.7, 6);
+  });
+
+  test("a standalone MCP sampling log estimates composition from its prompt fields", () => {
+    const rows = extractLlmLogs([{
+      class: `${T}.McpSamplingLog`,
+      traceId: "llm-solo",
+      usageAndCost: { inputTokens: 1000, outputTokens: 10, promptCost: 0.001, completionCost: 0.0001, trailblazeLlmModel: { modelId: "m" } },
+      systemPrompt: "s".repeat(400),
+      userMessage: "u".repeat(400),
+      includedScreenshot: true,
+      durationMs: 50,
+      timestamp: "2024-01-01T00:00:00Z",
+    }]);
+    const comp = rows[0].comp;
+    expect(comp).toBeTruthy();
+    expect(comp.system).toBeGreaterThan(0);
+    expect(comp.user).toBeGreaterThan(0);
+    expect(comp.imagesCount).toBe(1);
+    expect(comp.images).toBeGreaterThan(0);
+    expect(comp.system + comp.user + comp.tools + comp.images).toBe(1000);
+  });
+
+  test("no estimated category goes negative when the measured text overshoots the reported total", () => {
+    // A short sampling call against a big screenshot: the flat per-image estimate alone exceeds the
+    // reported input total, so the unclamped remainder fold would hand back a negative Tools figure
+    // that the bar cannot draw (legend and bar disagreeing).
+    const rows = extractLlmLogs([{
+      class: `${T}.McpSamplingLog`,
+      traceId: "llm-overshoot",
+      usageAndCost: { inputTokens: 20, outputTokens: 2, promptCost: 0.001, completionCost: 0.0001, trailblazeLlmModel: { modelId: "m" } },
+      systemPrompt: "s".repeat(4000),
+      userMessage: "u".repeat(4000),
+      includedScreenshot: true,
+      durationMs: 10,
+      timestamp: "2024-01-01T00:00:00Z",
+    }]);
+    const comp = rows[0].comp;
+    for (const v of [comp.system, comp.user, comp.tools, comp.images]) expect(v).toBeGreaterThanOrEqual(0);
+  });
+
+  test("a screenshot-only sampling call (empty userMessage) still carries the image signal", () => {
+    const rows = extractLlmLogs([{
+      class: `${T}.McpSamplingLog`,
+      traceId: "llm-shot-only",
+      usageAndCost: { inputTokens: 900, outputTokens: 5, promptCost: 0.001, completionCost: 0.0001, trailblazeLlmModel: { modelId: "m" } },
+      systemPrompt: "s".repeat(100),
+      userMessage: "",
+      includedScreenshot: true,
+      durationMs: 10,
+      timestamp: "2024-01-01T00:00:00Z",
+    }]);
+    expect(rows[0].comp.imagesCount).toBe(1);
+    expect(rows[0].comp.images).toBeGreaterThan(0);
+  });
+
+  test("cache savings is 0 with no cached reads, and with no pricing (cached rate defaults to the full rate)", () => {
+    const noCache = extractLlmLogs([requestLog({
+      inputTokens: 10, outputTokens: 1, promptCost: 0, completionCost: 0,
+      trailblazeLlmModel: { modelId: "m", inputCostPerOneMillionTokens: 3.0 },
+    })]);
+    expect(noCache[0].cacheSavings).toBe(0);
+    const noRates = extractLlmLogs([requestLog({
+      inputTokens: 10, cacheReadInputTokens: 5, outputTokens: 1, promptCost: 0, completionCost: 0,
+      trailblazeLlmModel: { modelId: "m" },
+    })]);
+    expect(noRates[0].cacheSavings).toBe(0);
+    // The branch the name advertises: a model that prices input but omits the cached rate charges
+    // cached reads at the full rate, so the discount is exactly zero (not "free cached reads").
+    const noCachedRate = extractLlmLogs([requestLog({
+      inputTokens: 1_000_000, cacheReadInputTokens: 1_000_000, outputTokens: 1, promptCost: 0, completionCost: 0,
+      trailblazeLlmModel: { modelId: "m", inputCostPerOneMillionTokens: 3.0 },
+    })]);
+    expect(noCachedRate[0].cacheSavings).toBe(0);
+    // …and a model that does price cached reads discounts by the rate difference (proving the
+    // default above is the full rate rather than an unconditional zero).
+    const cachedRate = extractLlmLogs([requestLog({
+      inputTokens: 1_000_000, cacheReadInputTokens: 1_000_000, outputTokens: 1, promptCost: 0, completionCost: 0,
+      trailblazeLlmModel: { modelId: "m", inputCostPerOneMillionTokens: 3.0, cachedInputCostPerOneMillionTokens: 0.3 },
+    })]);
+    expect(cachedRate[0].cacheSavings).toBeCloseTo(2.7, 6);
+  });
+});
+
+describe("embedded LLM payload carries composition numbers, not messages", () => {
+  test("slimmed llm rows keep comp/cacheSavings/per-call costs; the boot index stub stays minimal", () => {
+    const logs = [{
+      class: `${T}.TrailblazeLlmRequestLog`,
+      llmMessages: [{ role: "system", message: "sys prompt" }],
+      llmResponse: [],
+      llmRequestUsageAndCost: {
+        inputTokens: 100, outputTokens: 10, promptCost: 0.002, completionCost: 0.0005, cacheReadInputTokens: 40,
+        trailblazeLlmModel: { modelId: "m", inputCostPerOneMillionTokens: 3, cachedInputCostPerOneMillionTokens: 0.3 },
+        inputTokenBreakdown: {
+          systemPrompt: { tokens: 50, count: 1 },
+          userPrompt: { tokens: 30, count: 1 },
+          toolDescriptors: { tokens: 20, count: 5 },
+          images: { tokens: 0, count: 0 },
+          assistantMessageCount: 0,
+          toolMessageCount: 0,
+        },
+      },
+      durationMs: 5,
+      timestamp: "2024-01-01T00:00:00Z",
+    }];
+    const html = core.buildRunReportHtml({
+      meta: { title: "R", status: "passed" },
+      trace: [],
+      llmLogs: (core as any).extractLlmLogs(logs),
+      shots: {},
+    });
+    const call = payloadOf(html).sessions[0].llm[0];
+    expect(call.comp).toEqual({ system: 50, user: 30, tools: 20, images: 0, systemCount: 1, userCount: 1, toolsCount: 5, imagesCount: 0, est: 100 });
+    expect(call.cacheSavings).toBeCloseTo((40 * (3 - 0.3)) / 1_000_000, 12);
+    expect(call.promptCost).toBe(0.002);
+    expect(call.completionCost).toBe(0.0005);
+    // The composition rides as numbers only — the messages stay out of the share payload.
+    expect(call.messages).toBeUndefined();
+    // The boot index stub keeps exactly the numbers the run list needs — composition stays in
+    // the per-session chunk.
+    const stub = JSON.parse(chunksOf(html).index).sessions[0].llm[0];
+    expect(Object.keys(stub).sort()).toEqual(["inputTokens", "outputTokens", "totalCost"]);
+  });
+});
+
 describe("extractTrace failed assertion", () => {
   test("a failed AssertCondition marks the step ok:false so it renders as failed", () => {
     const trace = core.extractTrace([
@@ -3290,6 +3894,1054 @@ describe("compressed device/network logs (SessionPayload.deviceLogGz / networkGz
       urlAny.createObjectURL = original.create;
       urlAny.revokeObjectURL = original.revoke;
     }
+  });
+});
+
+describe("LLM chat transcripts (SessionPayload.llmMessages / llmMessagesGz)", () => {
+  const gzText = (value: string) => require("zlib").gzipSync(value).toString("base64");
+  // Wait for the async inflate → re-render pass to land (bounded, no fixed sleep).
+  const settled = async (read: () => string, needle: string): Promise<string> => {
+    for (let i = 0; i < 100 && !read().includes(needle); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    return read();
+  };
+  const SYSTEM_PROMPT = "You are an agent that controls a device. SYSTEM-PROMPT-MARKER " + "s".repeat(700);
+  const SCREEN_DUMP = "Here is the view hierarchy: SCREEN-DUMP-MARKER " + "n".repeat(900);
+  const requestLog = (messages: unknown[], n: number) => ({
+    class: `${T}.TrailblazeLlmRequestLog`,
+    llmMessages: messages,
+    llmResponse: [{ parts: [{ class: "Tool.Call", tool: "tapOnElement", args: `{"reasoning":"turn ${n}"}` }] }],
+    llmRequestUsageAndCost: { inputTokens: 10, outputTokens: 5, totalCost: 0.001, trailblazeLlmModel: { modelId: "gpt-test" } },
+    durationMs: 200,
+    timestamp: `2024-01-01T00:00:0${n}Z`,
+  });
+  // Conversation history accumulates: call 2 repeats call 1's turns verbatim. The tool_use body
+  // is the markdown+fence shape TrailblazeLogger.toTrailblazeLlmMessages persists.
+  const turn1 = [
+    { role: "system", message: SYSTEM_PROMPT },
+    { role: "user", message: "Tap login. Screenshot: data:image/png;base64,AAAA////====" },
+    { role: "tool_use", message: '**tapOnElement**\n\n```json\n{"text":"Login"}\n```\n', toolName: "tapOnElement" },
+  ];
+  const turn2 = [...turn1, { role: "tool_result", message: "tapped", toolName: "tapOnElement" }, { role: "user", message: SCREEN_DUMP }];
+  const transcriptLogs = [requestLog(turn1, 1), requestLog(turn2, 2)];
+  const llmRows = () => (core as any).extractLlmLogs(transcriptLogs);
+  const tx = () => (core as any).extractLlmTranscripts(llmRows());
+  const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
+  const sessionBase = () => ({ meta: { title: "Run", status: "passed" }, trace: slim, llm: (core as any).slimLlmForShare(llmRows()), shots: {}, recordingYaml: null });
+  const inlinePayload = () => ({ generatedAt: "now", sessions: [{ ...sessionBase(), llmMessages: tx() }] });
+  const gzPayload = () => ({ generatedAt: "now", sessions: [{ ...sessionBase(), llmMessagesGz: gzText(JSON.stringify(tx())) }] });
+
+  test("extractLlmTranscripts pools repeated history and aligns calls with the slim llm rows", () => {
+    const rows = llmRows();
+    const transcripts = tx();
+    expect(transcripts.calls.length).toBe(rows.length);
+    const call2 = (core as any).transcriptCallMessages(transcripts, 1);
+    expect(call2.map((m: any) => m.role)).toEqual(["system", "user", "tool_use", "tool_result", "user"]);
+    expect(call2[0].text).toContain("SYSTEM-PROMPT-MARKER");
+    expect(call2[2].toolName).toBe("tapOnElement");
+    expect(call2[4].text).toContain("SCREEN-DUMP-MARKER");
+    // The system prompt repeats verbatim in every call's history; the pool stores it once.
+    expect(transcripts.texts.filter((t: string) => t.includes("SYSTEM-PROMPT-MARKER")).length).toBe(1);
+  });
+
+  test("image data URIs inside messages become a placeholder instead of a second embedded screenshot", () => {
+    const call1 = (core as any).transcriptCallMessages(tx(), 0);
+    expect(call1[1].text).toContain("[screenshot]");
+    expect(call1[1].text).toContain("Tap login");
+    expect(JSON.stringify(tx())).not.toContain("data:image/");
+  });
+
+  test("sessions whose calls carry no messages embed no transcript at all", () => {
+    expect((core as any).extractLlmTranscripts((core as any).extractLlmLogs(sampleLogs))).toBeNull();
+    expect((core as any).transcriptCallMessages(null, 0)).toBeNull();
+  });
+
+  test("a malformed transcript degrades instead of throwing", () => {
+    // Non-array where a shape member belongs → no transcript.
+    expect((core as any).transcriptCallMessages({ texts: "nope", calls: [] }, 0)).toBeNull();
+    // A truthy non-array per-call entry → that call reads as empty, no crash.
+    expect((core as any).transcriptCallMessages({ texts: ["hi"], calls: [{ bogus: true }] }, 0)).toEqual([]);
+    expect((core as any).transcriptCallMessages({ texts: ["hi"], calls: [[{ role: "user", t: 0 }]] }, 5)).toEqual([]);
+  });
+
+  test("a malformed llm row (truthy non-array messages) reads as no messages instead of failing extraction", () => {
+    // A string passes a truthy `.length` probe, so the producer must guard with Array.isArray —
+    // extraction runs per session, and one bad record must not fail the whole multi-session report.
+    expect((core as any).extractLlmTranscripts([{ ...llmRows()[0], messages: "not-an-array" }])).toBeNull();
+    const transcripts = (core as any).extractLlmTranscripts([...llmRows(), { ...llmRows()[0], messages: "not-an-array" }]);
+    expect(transcripts.calls.length).toBe(3);
+    expect((core as any).transcriptCallMessages(transcripts, 2)).toEqual([]);
+    expect((core as any).transcriptCallMessages(transcripts, 0)!.length).toBeGreaterThan(0);
+  });
+
+  test("buildMultiReportHtml embeds transcripts in the session chunk but never the boot index", () => {
+    const html = core.buildMultiReportHtml({ generatedAt: "now", sessions: [
+      { meta: { title: "Run A", status: "passed" }, trace: [], llmLogs: llmRows(), shots: {} },
+      { meta: { title: "Run B", status: "failed" }, trace: [], llmLogs: [], shots: {} },
+    ] });
+    const chunks = chunksOf(html);
+    expect(chunks.index).not.toContain("SYSTEM-PROMPT-MARKER");
+    expect(chunks.index).not.toContain("llmMessages");
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.llmMessages.texts.join("\n")).toContain("SYSTEM-PROMPT-MARKER");
+    expect((core as any).transcriptCallMessages(embedded.llmMessages, 0)[0].role).toBe("system");
+    // The slim llm rows stay exactly as slim as before — no messages ride on them.
+    expect(embedded.llm.every((c: Record<string, unknown>) => !("messages" in c))).toBe(true);
+    // A session with no messages carries no transcript payload.
+    expect(payloadOf(html).sessions[1].llmMessages).toBeNull();
+  });
+
+  test("buildMultiReportHtml embeds llmMessagesGz verbatim without inflating or re-deriving", () => {
+    const gz = gzText(JSON.stringify(tx()));
+    const html = core.buildMultiReportHtml({ generatedAt: "now", sessions: [
+      { meta: { title: "Run", status: "passed" }, trace: [], llmLogs: llmRows(), shots: {}, llmMessages: null, llmMessagesGz: gz },
+    ] });
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.llmMessagesGz).toBe(gz);
+    expect(embedded.llmMessages).toBeNull();
+  });
+
+  test("inflateLlmMessagesGz round-trips a driver-compressed payload and rejects malformed input", async () => {
+    expect(await (core as any).inflateLlmMessagesGz(gzText(JSON.stringify(tx())))).toEqual(tx());
+    expect(await (core as any).inflateLlmMessagesGz("not base64 gzip")).toBeNull();
+    expect(await (core as any).inflateLlmMessagesGz(gzText(JSON.stringify(["not", "the", "shape"])))).toBeNull();
+    // The pooled shape's per-call entries must themselves be arrays.
+    expect(await (core as any).inflateLlmMessagesGz(gzText(JSON.stringify({ texts: [], calls: ["nope"] })))).toBeNull();
+  });
+
+  // Every LLM request must surface as its own timeline row inside its step (multiple per step),
+  // carrying the index of its llm-list twin — the timeline is the primary way into a transcript.
+  test("every LLM request becomes a timeline row linked to its llm call, even objective echoes", () => {
+    const timelineLogs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Do the thing" }, timestamp: "2024-01-01T00:00:00Z" },
+      // An agent turn that re-logs the objective as its promptStep — previously folded away.
+      { ...requestLog(turn1, 1), promptStep: { step: "Do the thing" } },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t9", trailblazeTool: { raw: { text: "Login" } }, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01.500Z" },
+      requestLog(turn2, 2),
+    ];
+    const trace = core.extractTrace(timelineLogs);
+    const llmTraceRows = trace.filter((t: any) => t.llm != null);
+    expect(llmTraceRows.map((t: any) => t.llm)).toEqual([0, 1]);
+    expect(llmTraceRows.every((t: any) => !t.objective)).toBe(true);
+    // The linkage survives the share slimming, and LLM rows still don't count as tool calls.
+    const slimmed = (core as any).slimTraceForShare(trace);
+    expect(slimmed.filter((t: any) => t.llm != null).map((t: any) => t.llm)).toEqual([0, 1]);
+    expect(traceToolCallCount(slimmed as any)).toBe(1);
+    // The rows add no embedded screenshots: a request log carries its own set-of-mark image, and
+    // passing it through would inline one more screenshot per LLM call (roughly doubling a real
+    // report's screenshot bytes). Each row previews the next captured frame instead.
+    expect(llmTraceRows.every((t: any) => t.screenshotFile == null)).toBe(true);
+    expect(slimmed.filter((t: any) => t.llm != null).every((t: any) => t.screenshotFile == null)).toBe(true);
+  });
+
+  const timelinePayload = () => {
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Do the thing" }, timestamp: "2024-01-01T00:00:00Z" },
+      { ...requestLog(turn1, 1), promptStep: { step: "Do the thing" } },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t9", trailblazeTool: { raw: { text: "Login" } }, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01.500Z" },
+      requestLog(turn2, 2),
+    ];
+    const rows = (core as any).extractLlmLogs(logs);
+    return { generatedAt: "now", sessions: [{ meta: { title: "Run", status: "passed" }, trace: (core as any).slimTraceForShare(core.extractTrace(logs)), llm: (core as any).slimLlmForShare(rows), shots: {}, recordingYaml: null, llmMessages: (core as any).extractLlmTranscripts(rows) }] };
+  };
+
+  test("the timeline renders a transcript trigger beside each LLM-call row", () => {
+    const out = renderViewer(timelinePayload(), {});
+    // One trigger per call, as a SIBLING of the role=button row (nested interactive is an a11y fault).
+    expect([...out.matchAll(/class="steprow"/g)].length).toBe(2);
+    expect([...out.matchAll(/data-tx="(\d+)"/g)].map((m: any) => m[1])).toEqual(["0", "1"]);
+    expect(out).not.toMatch(/<div class="step[^>]*role="button"[^>]*>[^]*?<button[^>]*data-tx=[^]*?<\/div>\s*<\/div>\s*<button/);
+    // The row shows the call's own accounting, from its llm-list twin.
+    expect(out).toContain("gpt-test · in 10 · out 5");
+  });
+
+  test("a transcript trigger opens the lightbox over the timeline without touching it", () => {
+    const state = renderViewerState(timelinePayload(), { timelineScrollTop: 240, openTx: 1 });
+    expect(state.zoomRoot.className).toBe("txoverlay");
+    const panel = state.zoomRoot.children[0];
+    expect(panel.innerHTML).toContain("Transcript · Call 2");
+    expect(panel.innerHTML).toContain("gpt-test");
+    const body = panel.children[0];
+    expect(body.innerHTML).toContain("SCREEN-DUMP-MARKER");
+    // No re-render underneath: a render would have reset the harness's timeline scroll to 0.
+    expect(state.timelineScrollTop).toBe(240);
+  });
+
+  test("Escape closes the lightbox, returns focus to the trigger, and leaves the view untouched", () => {
+    const state = renderViewerState(timelinePayload(), { timelineScrollTop: 240, openTx: 0, txEscape: true });
+    expect(state.restoredFocus).toBe('[data-tx="0"]');
+    expect(state.timelineScrollTop).toBe(240);
+  });
+
+  test("the lightbox shows role-labeled messages with trail-file tool YAML and expanders", () => {
+    const state = renderViewerState(inlinePayload(), { tab: "llm", openTx: 0 });
+    const body = state.zoomRoot.children[0].children[0];
+    expect(body.innerHTML).toContain("System");
+    expect(body.innerHTML).toContain("SYSTEM-PROMPT-MARKER");
+    expect(body.innerHTML).toContain("[screenshot]");
+    // Call 1 opened; call 2's fresh screen dump belongs to the other call.
+    expect(body.innerHTML).not.toContain("SCREEN-DUMP-MARKER");
+    // The long system prompt collapses behind an expander; the short tool turn does not.
+    expect(body.innerHTML).toContain('<details class="txmsg');
+    expect(body.innerHTML).toContain('<div class="txmsg');
+    // The tool call renders as a trail-file tool entry, not the raw markdown/JSON blob.
+    expect(body.innerHTML).toContain("- tapOnElement:");
+    expect(body.innerHTML).toContain("text: Login");
+    expect(body.innerHTML).not.toContain("```json");
+    // The tool name never runs through the role label's uppercase styling.
+    expect(body.innerHTML).toContain('<span class="txtool mono">tapOnElement</span>');
+  });
+
+  test("the conversation splits into two voices: model-authored vs agent/harness-supplied", () => {
+    const state = renderViewerState(inlinePayload(), { query: "?run=0&tab=llm&llm=1", openTx: 1 });
+    const body = state.zoomRoot.children[0].children[0];
+    // The model's voice: the tool call it chose. The harness's voice: user turns + tool results.
+    // The system prompt is its own quiet preamble.
+    expect(body.innerHTML).toContain('class="txmsg voice-llm"');
+    expect(body.innerHTML).toContain('class="txmsg voice-user"');
+    expect(body.innerHTML).toContain('voice-sys"');
+    expect(body.innerHTML).toContain('class="txavatar llm"');
+    expect(body.innerHTML).toContain('class="txavatar user"');
+    // Tool results side with the harness (the device reporting back), never the model.
+    expect(body.innerHTML).toMatch(/voice-user"[^]*?Tool result/);
+  });
+
+  test("tool-result envelopes render cleaned, with the verbatim text behind a raw expander", () => {
+    const envelope = "**tap**\n\n```json\n**Executed `tap`.** Typed 'TKT-1'\n```\n";
+    const tx = { texts: [envelope, '{"matches":2}'], calls: [[{ role: "tool_result", t: 0, toolName: "tap" }, { role: "tool_result", t: 1, toolName: "findMatches" }]] };
+    const state = renderViewerState({ generatedAt: "now", sessions: [{ ...sessionBase(), llmMessages: tx }] }, { tab: "llm", openTx: 0 });
+    const body = state.zoomRoot.children[0].children[0];
+    // Prose envelope: header + fence + markdown markers gone from the displayed body (the
+    // verbatim text lives only inside the raw expanders), message intact.
+    const cleaned = body.innerHTML.split('<details class="txraw"')[0];
+    expect(cleaned).toContain("Executed tap. Typed 'TKT-1'");
+    expect(cleaned).not.toContain("```");
+    expect(cleaned).not.toContain("**");
+    // JSON payload: rendered as YAML.
+    expect(body.innerHTML).toContain("matches: 2");
+    // Fidelity: the verbatim text stays reachable behind the raw expander.
+    expect(body.innerHTML).toContain('<details class="txraw"');
+    expect(body.innerHTML).toContain("Executed `tap`.");
+  });
+
+  test("transcriptToolResultDisplay parses the logger's markdown envelope (pure)", () => {
+    const envelope = { role: "tool_result", toolName: "tap", text: "**tap**\n\n```json\n**Executed `tap`.** Typed 'TKT-1'\n```\n" };
+    expect((core as any).transcriptToolResultDisplay(envelope)).toEqual({ text: "Executed tap. Typed 'TKT-1'", raw: envelope.text });
+    // Structured output renders as YAML; already-clean text carries no raw fallback.
+    expect((core as any).transcriptToolResultDisplay({ role: "tool_result", text: '{"ok":true}' })).toEqual({ text: "ok: true", raw: '{"ok":true}' });
+    expect((core as any).transcriptToolResultDisplay({ role: "tool_result", text: "tapped" })).toEqual({ text: "tapped", raw: null });
+    // Only result roles apply — tool calls keep their trail-file YAML path.
+    expect((core as any).transcriptToolResultDisplay({ role: "tool_use", text: "x" })).toBeNull();
+  });
+
+  test("the LLM tab's table rows open the same lightbox as the timeline; the table is the only per-call surface", () => {
+    const out = renderViewer(inlinePayload(), { tab: "llm" });
+    // One chat trigger per per-request table row — no master call list and no inline detail pane
+    // (the lightbox is the detail view).
+    expect([...out.matchAll(/td class="txcell"/g)].length).toBe(2);
+    expect(out).not.toContain("llmcalls");
+    expect(out).not.toContain("Assistant response");
+    const state = renderViewerState(inlinePayload(), { tab: "llm", openTx: 1 });
+    expect(state.zoomRoot.className).toBe("txoverlay");
+    expect(state.zoomRoot.children[0].children[0].innerHTML).toContain("SCREEN-DUMP-MARKER");
+  });
+
+  test("a ?llm=N deep link scrolls to the table row, highlights it, and opens its transcript", () => {
+    const state = renderViewerState(inlinePayload(), { query: "?run=0&tab=llm&llm=1" });
+    // No manual interaction: the route alone lands the reader in call 2's transcript…
+    expect(state.zoomRoot.className).toBe("txoverlay");
+    expect(state.zoomRoot.attrs["aria-label"]).toBe("LLM transcript, call 2 of 2");
+    // …with the table row scrolled into view and highlighted underneath.
+    expect(state.llmScrolledTo).toBe('[data-llm="1"]');
+    expect(state.html).toMatch(/data-llm="1"[^>]*aria-current="true"/);
+    expect(state.route).toContain("llm=1");
+  });
+
+  test("closing the deep-linked transcript leaves the highlighted row and drops llm from the URL", () => {
+    const state = renderViewerState(inlinePayload(), { query: "?run=0&tab=llm&llm=1", txEscape: true });
+    // Escape: focus returns to the deep-linked row, its highlight stays…
+    expect(state.restoredFocus).toBe('[data-llm="1"]');
+    expect(state.html).toMatch(/data-llm="1"[^>]*aria-current="true"/);
+    // …and the URL drops back to the tab route (the lightbox is what `llm` encodes).
+    expect(state.route).toBe("/report.html?run=0&tab=llm");
+  });
+
+  test("navigating away with the browser closes the transcript instead of stranding it over the new view", () => {
+    const two = { generatedAt: "now", sessions: [{ ...sessionBase(), llmMessages: tx() }, { ...sessionBase(), meta: { title: "Other", status: "passed" }, llmMessages: tx() }] };
+    const state = renderViewerState(two, { query: "?run=0&tab=llm&llm=1", popstate: "?view=runs" });
+    // Back to the runs index takes the dialog with it…
+    expect(state.zoomRoot.removed).toBe(true);
+    expect(state.html).toContain('class="idxsections"');
+    // …and the dismissal does not write the detail route back over the popped-to URL.
+    expect(state.route).toBe("/report.html?view=runs");
+  });
+
+  test("focus returns to the transcript trigger even after the gz inflation re-render replaces it", async () => {
+    const state = renderViewerState(gzPayload(), { tab: "llm", openTx: 0 });
+    const body = state.zoomRoot.children[0].children[0];
+    // The inflater finishes with a full render(), so the trigger captured on open is now detached.
+    for (let i = 0; i < 100 && !body.innerHTML.includes("SYSTEM-PROMPT-MARKER"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    state.zoomRoot.onkeydown({ key: "Escape", preventDefault() {}, stopPropagation() {} });
+    // Focus lands on the trigger that is actually in the document, not the stale captured node.
+    expect(state.readRestoredFocus()).toBe('[data-tx="0"]');
+  });
+
+  test("the LLM tab groups the per-request table by objective, with subtotals", () => {
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Do the thing" }, timestamp: "2024-01-01T00:00:00Z" },
+      { ...requestLog(turn1, 1), promptStep: { step: "Do the thing" } },
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Do the other thing" }, timestamp: "2024-01-01T00:00:03Z" },
+      requestLog(turn2, 2),
+    ];
+    const rows = (core as any).extractLlmLogs(logs);
+    const payload = { generatedAt: "now", sessions: [{ meta: { title: "Run", status: "passed" }, trace: (core as any).slimTraceForShare(core.extractTrace(logs)), llm: (core as any).slimLlmForShare(rows), shots: {}, recordingYaml: null }] };
+    const out = renderViewer(payload, { tab: "llm" });
+    // Full-width group rows in the per-request table, keyed by objective text.
+    expect([...out.matchAll(/class="llmgrouprow"/g)].length).toBe(2);
+    expect(out).toContain("Do the thing");
+    expect(out).toContain("Do the other thing");
+    // Per-objective subtotals on the group row; global call numbering intact (deep links stable).
+    expect(out).toContain("1 call · in 10 · out 5");
+    expect(out).toContain("1. tapOnElement");
+    expect(out).toContain("2. tapOnElement");
+    // Nesting is structural, not just a divider: one tbody per objective, and each call inside is
+    // marked as grouped (what the stylesheet insets from the group's rail).
+    expect([...out.matchAll(/<tbody class="llmgroup">/g)].length).toBe(2);
+    expect([...out.matchAll(/<tr class="llmrow[^"]*grouped"/g)].length).toBe(2);
+    // Each call sits inside its own objective's tbody — call 1 under the first, call 2 under the
+    // second — so the association is readable from the structure alone.
+    const groups = out.split('<tbody class="llmgroup">').slice(1);
+    expect(groups[0]).toContain("Do the thing");
+    expect(groups[0]).toContain('data-llm="0"');
+    expect(groups[0]).not.toContain('data-llm="1"');
+    expect(groups[1]).toContain("Do the other thing");
+    expect(groups[1]).toContain('data-llm="1"');
+    // The grouped rows are inset and carry the group's rail; the header row is banded.
+    expect(core.RUN_REPORT_CSS).toContain(".llmtable tr.llmrow.grouped td.llmreq {");
+    expect(core.RUN_REPORT_CSS).toContain(".llmtable tr.llmrow.grouped td.llmreq::before {");
+    expect(core.RUN_REPORT_CSS).toContain(".llmtable tr.llmgrouprow td {");
+    // Old payloads without llm-stamped trace rows keep the flat, ungrouped rendering.
+    const flat = renderViewer({ generatedAt: "now", sessions: [{ ...sessionBase(), trace: [] }] }, { tab: "llm" });
+    expect(flat).not.toContain("llmgrouprow");
+    expect(flat).not.toContain('class="llmgroup"');
+    expect(flat).not.toContain("grouped");
+  });
+
+  test("an objective label is clamped at a word boundary, never mid-word", () => {
+    const objective = "Option 1: If a search bar or search icon is visible (it may say 'Search all items') then tap it and search for the item by name";
+    const trace = core.extractTrace([
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: objective }, timestamp: "2024-01-01T00:00:00Z" },
+    ]);
+    const label = String(trace[0].label);
+    expect(label.endsWith("…")).toBe(true);
+    // The visible text is a prefix of the objective that ends at a word boundary: dropping the
+    // ellipsis leaves whole words, and the next character in the original is whitespace.
+    const shown = label.slice(0, -1);
+    expect(objective.startsWith(shown)).toBe(true);
+    expect(objective[shown.length]).toBe(" ");
+  });
+
+  test("legacy bare `tool` turns get a direction-neutral label (older logs use them for calls AND results)", () => {
+    const legacy = { texts: ["sys", "**tapOnElement**\nI will tap the login button."], calls: [[{ role: "system", t: 0 }, { role: "tool", t: 1 }]] };
+    const state = renderViewerState({ generatedAt: "now", sessions: [{ ...sessionBase(), llmMessages: legacy }] }, { tab: "llm", openTx: 0 });
+    const body = state.zoomRoot.children[0].children[0];
+    expect(body.innerHTML).toContain(">Tool</span>");
+    expect(body.innerHTML).not.toContain("Tool result");
+    expect(body.innerHTML).not.toContain("Tool call");
+  });
+
+  test("a payload with no transcript data keeps the LLM tab intact; the lightbox explains", () => {
+    const state = renderViewerState({ generatedAt: "now", sessions: [sessionBase()] }, { tab: "llm", openTx: 0 });
+    expect(state.html).toContain('class="llmtable');
+    expect(state.zoomRoot.children[0].children[0].innerHTML).toContain("No transcript was captured");
+  });
+
+  test("a compressed transcript shows a decompressing note in the lightbox, then the messages once inflation lands", async () => {
+    const state = renderViewerState(gzPayload(), { tab: "llm", openTx: 0 });
+    const body = state.zoomRoot.children[0].children[0];
+    expect(body.innerHTML).toContain("Decompressing transcript");
+    for (let i = 0; i < 100 && !body.innerHTML.includes("SYSTEM-PROMPT-MARKER"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(body.innerHTML).toContain("System");
+    expect(body.innerHTML).toContain("SYSTEM-PROMPT-MARKER");
+  });
+
+  test("Export logs clicked before inflation still downloads the complete transcripts", async () => {
+    const urlAny = URL as any;
+    const original = { create: urlAny.createObjectURL, revoke: urlAny.revokeObjectURL };
+    let downloaded: Blob | null = null;
+    urlAny.createObjectURL = (blob: Blob) => { downloaded = blob; return "blob:test"; };
+    urlAny.revokeObjectURL = () => {};
+    try {
+      renderViewerState(gzPayload(), { exportLogs: true });
+      for (let i = 0; i < 100 && !downloaded; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+      const logs = JSON.parse(await downloaded!.text());
+      // The export carries the POOLED shape (resolving per call would rebuild the quadratic
+      // naive shape); it must be complete and resolvable, never the opaque base64 blob.
+      expect(logs.llmMessages.calls.length).toBe(logs.llm.length);
+      const call2 = (core as any).transcriptCallMessages(logs.llmMessages, 1);
+      expect(call2.map((m: any) => m.role)).toEqual(["system", "user", "tool_use", "tool_result", "user"]);
+      expect(call2[4].text).toContain("SCREEN-DUMP-MARKER");
+    } finally {
+      urlAny.createObjectURL = original.create;
+      urlAny.revokeObjectURL = original.revoke;
+    }
+  });
+});
+
+describe("display YAML for tool calls (jsonToYaml / transcriptToolCallYaml)", () => {
+  test("renders nested objects, arrays and scalars with trail-file indentation", () => {
+    expect((core as any).jsonToYaml({ tapOnElementBySelector: { selector: { textRegex: "Save", index: 2 }, flags: [true, null] } }))
+      .toBe("tapOnElementBySelector:\n  selector:\n    textRegex: Save\n    index: 2\n  flags:\n    - true\n    - null");
+  });
+
+  test("quotes what the recorder quotes — numbers, keywords, ':'/'#'/newline — not leading '-' or '^'", () => {
+    expect((core as any).jsonToYaml({ a: "12345", b: "true", c: "-flag", d: "key: value", e: "plain text", f: "", g: "^Next$" }))
+      .toBe('a: "12345"\nb: "true"\nc: -flag\nd: "key: value"\ne: plain text\nf: ""\ng: ^Next$');
+  });
+
+  test("multiline strings render double-quoted with newline escapes (recorder style), never block scalars", () => {
+    expect((core as any).jsonToYaml({ msg: "line one\nline two" })).toBe('msg: "line one\\nline two"');
+  });
+
+  test("objects inside arrays use the compact dash form", () => {
+    expect((core as any).jsonToYaml({ steps: [{ tool: "tap", x: 1 }, "plain"] }))
+      .toBe("steps:\n  - tool: tap\n    x: 1\n  - plain");
+  });
+
+  test("empty containers, booleans and null render inline", () => {
+    expect((core as any).jsonToYaml({ a: {}, b: [], c: false, d: null })).toBe("a: {}\nb: []\nc: false\nd: null");
+  });
+
+  test("a fenced tool_use payload renders exactly as a trail-file tool entry", () => {
+    const m = { role: "tool_use", toolName: "tapOnElementBySelector", text: '**tapOnElementBySelector**\n\n```json\n{"selector":{"textRegex":"Save"}}\n```\n' };
+    expect((core as any).transcriptToolCallYaml(m)).toBe("- tapOnElementBySelector:\n    selector:\n      textRegex: Save");
+  });
+
+  test("a tool call with empty args renders as the bare dash entry", () => {
+    expect((core as any).transcriptToolCallYaml({ role: "tool_use", toolName: "pressBack", text: "```json\n{}\n```" })).toBe("- pressBack:");
+  });
+
+  // External contract: the transcript's tool-call YAML must read exactly like the same call in a
+  // trail file. The expected text is a recorded entry from a real trail, dedented out of its
+  // `recording:` block — exact-match is deliberate here; if this drifts, the transcript no longer
+  // looks like a trail.
+  test("a tool call renders byte-identical to its recorded twin in a trail file", () => {
+    const trailFileEntry = [
+      "- tapOnElementBySelector:",
+      "    reason: Submit the category selection",
+      "    nodeSelector:",
+      "      androidAccessibility:",
+      "        textRegex: ^Next$",
+    ].join("\n");
+    const m = {
+      role: "tool_use",
+      toolName: "tapOnElementBySelector",
+      text: '**tapOnElementBySelector**\n\n```json\n{"reason":"Submit the category selection","nodeSelector":{"androidAccessibility":{"textRegex":"^Next$"}}}\n```\n',
+    };
+    expect((core as any).transcriptToolCallYaml(m)).toBe(trailFileEntry);
+  });
+
+  test("a JSON tool result renders as bare YAML; prose output and non-tool roles fall back to raw text", () => {
+    expect((core as any).transcriptToolCallYaml({ role: "tool_result", toolName: "tap", text: '{"ok":true}' })).toBe("ok: true");
+    expect((core as any).transcriptToolCallYaml({ role: "tool_result", toolName: "tap", text: "**tap**\n\n```json\n**Executed `tap`.** Typed 'TKT-1'\n```\n" })).toBeNull();
+    expect((core as any).transcriptToolCallYaml({ role: "user", text: '{"looks":"like json"}' })).toBeNull();
+  });
+});
+
+describe("UI Inspector data path (SessionPayload.hierarchies / hierarchiesGz)", () => {
+  const gz = (value: unknown) => require("zlib").gzipSync(JSON.stringify(value)).toString("base64");
+  // A small two-node hierarchy in the legacy ViewHierarchyTreeNode shape.
+  const vh = {
+    nodeId: 1, className: "android.widget.FrameLayout", x1: 0, y1: 0, x2: 1080, y2: 2400,
+    children: [{ nodeId: 2, text: "Login", resourceId: "com.example:id/login", clickable: true, x1: 90, y1: 600, x2: 990, y2: 720 }],
+  };
+  // Two tool rows with screenshots; only the first captured a hierarchy.
+  const hierLogs = [
+    { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap login" }, timestamp: "2024-01-01T00:00:00Z" },
+    { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t1", trailblazeTool: { raw: { text: "Login" } }, screenshotFile: "a.png", viewHierarchyFiltered: vh, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+    { class: `${T}.TrailblazeToolLog`, toolName: "inputText", trailblazeTool: { raw: { text: "user" } }, screenshotFile: "b.png", successful: true, durationMs: 50, timestamp: "2024-01-01T00:00:02Z" },
+  ];
+  const shots = { "a.png": "data:image/png;base64,AAA", "b.png": "data:image/png;base64,BBB" };
+
+  test("extractTrace carries each log's view hierarchy onto its trace row", () => {
+    const trace = core.extractTrace(hierLogs);
+    expect((trace.find((t) => t.label === "tapOnElement") as any).viewHierarchy).toEqual(vh);
+    expect((trace.find((t) => t.label === "inputText") as any).viewHierarchy ?? null).toBeNull();
+  });
+
+  test("traceHierarchies lifts hierarchies keyed by the row's step ordinal", () => {
+    const trace = core.extractTrace(hierLogs);
+    const tapStep = trace.find((t) => t.label === "tapOnElement") as any;
+    const lifted = (core as any).traceHierarchies(trace, false);
+    expect(Object.keys(lifted)).toEqual([String(tapStep.i)]);
+    expect(lifted[String(tapStep.i)]).toEqual(vh);
+    expect((core as any).traceHierarchies([{ label: "no-vh", i: 1 }], false)).toBeNull();
+  });
+
+  test("every status is bounded: passed trims at the tight budget, the rest at the unconditional cap", () => {
+    const big = (text: string) => ({ text, filler: "x".repeat(200) });
+    const trace = [
+      { label: "a", i: 1, viewHierarchy: big("first") },
+      { label: "b", i: 2, viewHierarchy: big("second") },
+    ];
+    // An injected budget that fits one hierarchy but not two applies regardless of status — it
+    // stands in for the pass-gated budget (passed) and the unconditional structural cap (every
+    // other status, which defaults far larger but is never absent).
+    const budget = JSON.stringify(big("first")).length + 10;
+    expect(Object.keys((core as any).traceHierarchies(trace, true, budget))).toEqual(["1"]);
+    expect(Object.keys((core as any).traceHierarchies(trace, false, budget))).toEqual(["1"]);
+    // Without an injected budget a failed session's small hierarchies sit far under the default
+    // structural cap, so everything is kept.
+    expect(Object.keys((core as any).traceHierarchies(trace, false))).toEqual(["1", "2"]);
+  });
+
+  test("packSessionInputsHierarchies gives browser producers the same gz side-channel the CLI emits", async () => {
+    // Big enough to cross the 64 KB inline threshold once lifted; small stays inline; a caller
+    // that already packed is untouched.
+    const bigVh = { className: "Root", x1: 0, y1: 0, x2: 10, y2: 10, blob: "y".repeat(80 * 1024) };
+    const sessions: any[] = [
+      { meta: { status: "failed" }, trace: [{ label: "a", i: 1, viewHierarchy: bigVh }], llmLogs: [], shots: {} },
+      { meta: { status: "failed" }, trace: [{ label: "b", i: 1, viewHierarchy: vh }], llmLogs: [], shots: {} },
+      { meta: { status: "failed" }, trace: [{ label: "c", i: 1, viewHierarchy: vh }], llmLogs: [], shots: {}, hierarchiesGz: "prepacked" },
+    ];
+    await (core as any).packSessionInputsHierarchies(sessions);
+    expect(sessions[0].hierarchiesGz).toBeTruthy();
+    expect(sessions[0].hierarchies ?? null).toBeNull();
+    expect(await (core as any).inflateGzJsonRecord(sessions[0].hierarchiesGz)).toEqual({ "1": bigVh });
+    expect(sessions[1].hierarchies).toEqual({ "1": vh });
+    expect(sessions[1].hierarchiesGz ?? null).toBeNull();
+    expect(sessions[2].hierarchiesGz).toBe("prepacked");
+    expect(sessions[2].hierarchies ?? null).toBeNull();
+  });
+
+  test("buildMultiReportHtml embeds hierarchies in the session chunk and keeps them out of the boot index", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "failed" }, trace: core.extractTrace(hierLogs), llmLogs: [], shots }],
+    });
+    const embedded = payloadOf(html).sessions[0];
+    const tapStep = embedded.trace.find((t: any) => t.label === "tapOnElement");
+    expect(embedded.hierarchies[String(tapStep.i)]).toEqual(vh);
+    // The heavy field never rides on the embedded trace rows themselves…
+    expect(embedded.trace.every((t: any) => t.viewHierarchy === undefined)).toBe(true);
+    // …and never reaches the #tb-index boot chunk the run list parses at startup.
+    expect(chunksOf(html).index).not.toContain("com.example:id/login");
+  });
+
+  test("buildMultiReportHtml embeds hierarchiesGz verbatim without inflating it", () => {
+    const html = core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "passed" }, trace: [], llmLogs: [], shots: {}, hierarchiesGz: gz({ "2": vh }) }],
+    });
+    const embedded = payloadOf(html).sessions[0];
+    expect(embedded.hierarchiesGz).toBe(gz({ "2": vh }));
+    expect(embedded.hierarchies).toBeNull();
+  });
+
+  test("inflateGzJsonRecord round-trips a driver-compressed hierarchies map and rejects non-objects", async () => {
+    expect(await (core as any).inflateGzJsonRecord(gz({ "2": vh }))).toEqual({ "2": vh });
+    expect(await (core as any).inflateGzJsonRecord("not base64 gzip")).toBeNull();
+    expect(await (core as any).inflateGzJsonRecord(gz([1, 2]))).toBeNull();
+  });
+
+  // ── viewer behavior ───────────────────────────────────────────────────────────────────────────
+  const inspectorPayload = () => payloadOf(core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Run", status: "failed" }, trace: core.extractTrace(hierLogs), llmLogs: [], shots }],
+  }));
+  const stepOf = (payload: any, label: string) => payload.sessions[0].trace.find((t: any) => t.label === label).i;
+
+  test("timeline rows with a hierarchy and screenshot get the Inspect UI affordance; hierarchy-less rows don't", () => {
+    const payload = inspectorPayload();
+    const html = renderViewer(payload);
+    expect(html).toContain(`data-inspect="${stepOf(payload, "tapOnElement")}"`);
+    expect(html).not.toContain(`data-inspect="${stepOf(payload, "inputText")}"`);
+  });
+
+  // A timeline row can qualify for BOTH row affordances (the transcript button and Inspect UI).
+  // They are disjoint on real logs — an LLM-call row carries no screenshot — but the row renderer
+  // must emit both rather than let one shadow the other, and both must stay SIBLINGS of the row
+  // (the row is itself role="button", so a nested control would be a second ambiguous tab stop).
+  test("a row that is both an LLM call and inspectable carries both affordances, outside the row", () => {
+    const payload = inspectorPayload();
+    const tapStep = stepOf(payload, "tapOnElement");
+    const session = payload.sessions[0];
+    session.trace.find((t: any) => t.i === tapStep).llm = 0;
+    session.llm = [{ model: "gpt-test", inputTokens: 10, outputTokens: 5, response: [] }];
+    const html = renderViewer(payload);
+    expect(html).toContain('data-tx="0"');
+    expect(html).toContain(`data-inspect="${tapStep}"`);
+    // Both buttons follow the row's closing </div> inside the shared .steprow wrapper.
+    expect(html).toMatch(new RegExp(`<div class="steprow">[\\s\\S]*?</div><button[^>]*data-tx="0"[\\s\\S]*?<button[^>]*data-inspect="${tapStep}"`));
+  });
+
+  // The two side-channels are independent: the LLM transcripts #5788 added and the hierarchies this
+  // inspector reads both survive slimming, and an LLM row keeps screenshotFile null (no screenshot
+  // to inline, so it is never inspectable).
+  test("payload slimming carries transcripts and hierarchies together", () => {
+    const withLlm = [
+      ...hierLogs,
+      {
+        class: `${T}.TrailblazeLlmRequestLog`,
+        llmMessages: [{ role: "user", message: "Tap login" }],
+        llmResponse: [{ parts: [{ class: "Tool.Call", tool: "tapOnElement", args: "{}" }] }],
+        llmRequestUsageAndCost: { inputTokens: 10, outputTokens: 5, totalCost: 0.001, trailblazeLlmModel: { modelId: "gpt-test" } },
+        durationMs: 200,
+        timestamp: "2024-01-01T00:00:03Z",
+      },
+    ];
+    const trace = core.extractTrace(withLlm);
+    const embedded = payloadOf(core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "failed" }, trace, llmLogs: core.extractLlmLogs(withLlm), shots }],
+    })).sessions[0];
+    expect(embedded.llmMessages.texts).toContain("Tap login");
+    expect(Object.keys(embedded.hierarchies)).toEqual([String(trace.find((t) => t.label === "tapOnElement")!.i)]);
+    embedded.trace.filter((t: any) => t.llm != null).forEach((t: any) => expect(t.screenshotFile).toBeNull());
+  });
+
+  test("opening the inspector shows the node tree, the details panel hint, and the bounds overlay", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot; // the inspector overlay is appended to document.body
+    expect(overlay.innerHTML).toContain("UI Inspector");
+    // Tree rows: the root by class name, the leaf by its text (both html-escaped).
+    expect(overlay.innerHTML).toContain("&lt;FrameLayout&gt;");
+    expect(overlay.innerHTML).toContain("&quot;Login&quot;");
+    // Bounds rectangles scaled onto the screenshot in device-percent coordinates: the leaf spans
+    // x 90..990 of a 1080-wide capture.
+    expect(overlay.innerHTML).toContain('class="insprect"');
+    expect(overlay.innerHTML).toContain("left:8.333%");
+    expect(overlay.innerHTML).toContain(shots["a.png"]);
+  });
+
+  // The overlay's live children (parsed from its markup) — how selection and hover are observed
+  // now that both paint in place instead of rebuilding the overlay.
+  const nodeRow = (overlay: any, key: number) => overlay.querySelectorAll("[data-inspnode]").find((el: any) => el.dataset.inspnode === String(key));
+  const rectFor = (overlay: any, key: number) => overlay.querySelectorAll("[data-insprect]").find((el: any) => el.dataset.insprect === String(key));
+  const detailsText = (overlay: any) => String(overlay.querySelector(".inspdetails").innerHTML);
+  const hoverLabel = (overlay: any) => overlay.querySelector("[data-insphovlabel]");
+  const clickNode = (overlay: any, key: number) => overlay.onclick({ preventDefault() {}, target: nodeRow(overlay, key) });
+  const movePointer = (overlay: any, target: any, extra: Record<string, unknown> = {}) => overlay.onpointermove({ pointerType: "mouse", target, ...extra });
+
+  test("selecting a tree node highlights its rectangle and shows its properties", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    clickNode(overlay, 1);
+    expect(rectFor(overlay, 1).classList.contains("sel")).toBe(true);
+    expect(rectFor(overlay, 0).classList.contains("sel")).toBe(false);
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(true);
+    expect(detailsText(overlay)).toContain("com.example:id/login");
+    expect(detailsText(overlay)).toContain("clickable");
+  });
+
+  test("selection paints in place: the tree's scroll position and keyboard focus survive a click", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    const tree = overlay.querySelector(".insptree");
+    tree.scrollTop = 1920;
+    nodeRow(overlay, 1).focus();
+    clickNode(overlay, 1);
+    // A full overlay rebuild would hand back a fresh tree (scrollTop 0) and detach the focused row.
+    expect(overlay.querySelector(".insptree")).toBe(tree);
+    expect(tree.scrollTop).toBe(1920);
+    expect((globalThis as any).document.activeElement).toBe(nodeRow(overlay, 1));
+  });
+
+  // Closing re-resolves the trigger by selector rather than focusing the node captured on open: a gz
+  // report's hierarchy inflation lands with a full render() that replaces the row markup, so the
+  // captured node is detached by then and focusing it would drop the reader on <body>.
+  test("closing the inspector returns focus to the live Inspect UI trigger", () => {
+    const payload = inspectorPayload();
+    const step = stepOf(payload, "tapOnElement");
+    const state = renderViewerState(payload, { inspect: step });
+    expect(state.zoomRoot.removed).toBe(false);
+    state.documentKeyListeners.forEach((fn) => fn({ key: "Escape", defaultPrevented: false, preventDefault() {}, stopPropagation() {} }));
+    expect(state.zoomRoot.removed).toBe(true);
+    expect(state.readRestoredFocus()).toBe(`[data-inspect="${step}"]`);
+  });
+
+  test("hovering the screenshot previews the node a click would select, without committing it", async () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    // Screenshot hit-testing is throttled to one frame, so let the scheduled pass run.
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    // The fake screenshot is 100x200 for a 1080x2400 capture; (50, 55) lands inside the leaf's
+    // 90..990 x 600..720 bounds, so the smallest containing node is the leaf.
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 50, clientY: 55 });
+    await settled();
+    expect(rectFor(overlay, 1).classList.contains("hov")).toBe(true);
+    expect(rectFor(overlay, 1).classList.contains("sel")).toBe(false);
+    expect(nodeRow(overlay, 1).classList.contains("hov")).toBe(true);
+    expect(hoverLabel(overlay).textContent).toContain("Login");
+    // The preview shows the node's properties and says it isn't committed yet.
+    expect(detailsText(overlay)).toContain("com.example:id/login");
+    expect(detailsText(overlay)).toContain("Click to keep");
+    // Moving further down the screenshot previews the enclosing node instead.
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 50, clientY: 150 });
+    await settled();
+    expect(rectFor(overlay, 0).classList.contains("hov")).toBe(true);
+    expect(rectFor(overlay, 1).classList.contains("hov")).toBe(false);
+    // Leaving the overlay clears the preview entirely.
+    overlay.onpointerleave();
+    expect(overlay.querySelectorAll("[data-insprect]").some((el: any) => el.classList.contains("hov"))).toBe(false);
+    expect(hoverLabel(overlay).classList.contains("on")).toBe(false);
+  });
+
+  test("the screenshot is the only hover source — pointing at a tree row previews nothing", async () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    clickNode(overlay, 0);
+    movePointer(overlay, nodeRow(overlay, 1));
+    await settled();
+    // The tree's one interaction is commit-on-activate; a row under the pointer gets no preview
+    // class, no rect on the screenshot, and no preview in the details card.
+    expect(overlay.querySelectorAll("[data-inspnode]").some((el: any) => el.classList.contains("hov"))).toBe(false);
+    expect(overlay.querySelectorAll("[data-insprect]").some((el: any) => el.classList.contains("hov"))).toBe(false);
+    expect(detailsText(overlay)).not.toContain("Click to keep");
+    // The committed selection is untouched, and clicking the row still commits it.
+    expect(nodeRow(overlay, 0).classList.contains("sel")).toBe(true);
+    clickNode(overlay, 1);
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(true);
+    expect(nodeRow(overlay, 0).classList.contains("sel")).toBe(false);
+    expect(detailsText(overlay)).not.toContain("Click to keep");
+  });
+
+  test("a screenshot hover previews over a committed selection without replacing it", async () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    clickNode(overlay, 0);
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 50, clientY: 55 });
+    await settled();
+    // Node 1 previews (including its tree row, so you can see where it lives) while node 0 stays
+    // the committed selection.
+    expect(nodeRow(overlay, 1).classList.contains("hov")).toBe(true);
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(false);
+    expect(nodeRow(overlay, 0).classList.contains("sel")).toBe(true);
+    expect(detailsText(overlay)).toContain("Click to keep");
+  });
+
+  test("focusing a tree row previews nothing either — keyboard matches the mouse on the tree", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    nodeRow(overlay, 1).focus();
+    if (overlay.onfocusin) overlay.onfocusin({ target: nodeRow(overlay, 1) });
+    expect(overlay.querySelectorAll("[data-inspnode]").some((el: any) => el.classList.contains("hov"))).toBe(false);
+    expect(detailsText(overlay)).not.toContain("Click to keep");
+    // Activation is what commits from the keyboard.
+    overlay.onkeydown({ key: "Enter", preventDefault() {}, target: nodeRow(overlay, 1) });
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(true);
+  });
+
+  test("a touch pointer never hovers — a tap would otherwise leave a stuck preview", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    overlay.onpointermove({ pointerType: "touch", target: nodeRow(overlay, 1) });
+    overlay.onpointermove({ pointerType: "touch", target: overlay.querySelector(".inspshotwrap"), clientX: 50, clientY: 55 });
+    expect(overlay.querySelectorAll("[data-inspnode]").some((el: any) => el.classList.contains("hov"))).toBe(false);
+    // …and a tap still commits a selection.
+    clickNode(overlay, 1);
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(true);
+  });
+
+  // ── web-shaped captures ─────────────────────────────────────────────────────────────────────
+  // Mirrors what a real Playwright session logs (see PlaywrightTrailblazeNodeMapper): the tree is
+  // trailblazeNodeTree whose "document" root has NO bounds, node bounds are PAGE-relative (they run
+  // to the full scroll height), off-viewport nodes exist (a hidden carousel slide past the right
+  // edge), and the screenshot is a viewport-only capture whose real coordinate space is the log's
+  // deviceWidth×deviceHeight. Deriving the space from the tree (max x2/y2) skewed every rect and
+  // hit-tested most of the image onto the wrong nodes — the "can't hover some elements" bug.
+  const webVh = {
+    nodeId: 9,
+    driverDetail: { class: "web", ariaRole: "document", ariaDescriptor: "document" },
+    children: [
+      { nodeId: 1, bounds: { left: 0, top: 0, right: 1000, bottom: 60 }, driverDetail: { class: "web", ariaRole: "banner", ariaDescriptor: "banner", isLandmark: true } },
+      { nodeId: 2, bounds: { left: 100, top: 100, right: 300, bottom: 140 }, driverDetail: { class: "web", ariaRole: "link", ariaName: "Home", ariaDescriptor: "link: Home", isInteractive: true } },
+      { nodeId: 3, bounds: { left: 100, top: 3000, right: 300, bottom: 3040 }, driverDetail: { class: "web", ariaRole: "link", ariaName: "Footer", ariaDescriptor: "link: Footer", isInteractive: true } },
+      { nodeId: 4, bounds: { left: 1100, top: 0, right: 2100, bottom: 60 }, driverDetail: { class: "web", ariaRole: "group", ariaName: "Slide 2", ariaDescriptor: "group: Slide 2" } },
+    ],
+  };
+  const webPayload = () => payloadOf(core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "Web run", status: "failed" },
+      trace: core.extractTrace([
+        { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Open dashboard" }, timestamp: "2024-01-01T00:00:00Z" },
+        { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "w1", trailblazeTool: { raw: { text: "Home" } }, screenshotFile: "w.png", trailblazeNodeTree: webVh, deviceWidth: 1000, deviceHeight: 500, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+      ]),
+      llmLogs: [],
+      shots: { "w.png": "data:image/png;base64,WWW" },
+    }],
+  }));
+
+  test("the capture's viewport rides the slim trace row, so the inspector has a real coordinate anchor", () => {
+    const payload = webPayload();
+    const row = payload.sessions[0].trace.find((t: any) => t.label === "tapOnElement");
+    expect(row.viewport).toEqual({ w: 1000, h: 500 });
+    // Rows without a hierarchy don't pay for it.
+    payload.sessions[0].trace.filter((t: any) => t.label !== "tapOnElement").forEach((t: any) => expect(t.viewport ?? undefined).toBeUndefined());
+  });
+  // Swap the wrap's img stub for one that reports a decoded size (the default stub is undecoded,
+  // which keeps the tree-derived fallback in force for the portrait fixtures above).
+  const patchImg = (overlay: any, natural: { w: number; h: number }, rect: { left: number; top: number; width: number; height: number }) => {
+    overlay.querySelector(".inspshotwrap").querySelector = (sel: string) => (sel === "img"
+      ? { complete: true, naturalWidth: natural.w, naturalHeight: natural.h, getBoundingClientRect: () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height }) }
+      : null);
+  };
+
+  test("a page-relative web tree hit-tests against the image's aspect, not the tree's scroll height", async () => {
+    const payload = webPayload();
+    const state = renderViewerState(payload, { inspect: payload.sessions[0].trace.find((t: any) => t.label === "tapOnElement").i });
+    const overlay = state.zoomRoot;
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    // Viewport capture: 1000×500 page-pixels, rendered at 100×50.
+    patchImg(overlay, { w: 1000, h: 500 }, { left: 0, top: 0, width: 100, height: 50 });
+    // (20, 12) on the image is page point (200, 120) — inside the "Home" link. Under the
+    // tree-derived height (max y2 = 3040) the same pointer mapped to page y≈730 and hit nothing.
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 20, clientY: 12 });
+    await settled();
+    expect(nodeRow(overlay, 2).classList.contains("hov")).toBe(true);
+    expect(hoverLabel(overlay).textContent).toContain("Home");
+    // Rect verticals are restyled in place against the image-anchored space: the link sits at
+    // 100/500 = 20% down the capture, and the below-the-fold footer clips past 100%.
+    expect(rectFor(overlay, 2).style.top).toBe("20.000%");
+    expect(parseFloat(rectFor(overlay, 3).style.top)).toBeGreaterThan(100);
+  });
+
+  test("hover hit-testing is image-relative, so it stays correct while a tall capture's pane scrolls", async () => {
+    const payload = webPayload();
+    const state = renderViewerState(payload, { inspect: payload.sessions[0].trace.find((t: any) => t.label === "tapOnElement").i });
+    const overlay = state.zoomRoot;
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    // Full-page capture (1000×5000) rendered 100×500, scrolled 300px up within its pane — the
+    // image's rect has a negative top, exactly what getBoundingClientRect reports mid-scroll.
+    patchImg(overlay, { w: 1000, h: 5000 }, { left: 0, top: -300, width: 100, height: 500 });
+    // Client (20, 3): image y = 3 − (−300) = 303 → page y = 3030 — the below-the-fold footer link.
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 20, clientY: 3 });
+    await settled();
+    expect(nodeRow(overlay, 3).classList.contains("hov")).toBe(true);
+    expect(hoverLabel(overlay).textContent).toContain("Footer");
+    // …and a click at the same point commits the same node.
+    overlay.onclick({ target: overlay.querySelector(".inspshotwrap"), clientX: 20, clientY: 3 });
+    expect(nodeRow(overlay, 3).classList.contains("sel")).toBe(true);
+  });
+
+  // ── reveal on commit ────────────────────────────────────────────────────────────────────────
+  // A committed selection must become visible in the tree (expand collapsed ancestors, center the
+  // row); hover must never move the tree; selecting an already-visible row is a no-op scroll-wise.
+  const deepVh = {
+    nodeId: 1, className: "android.widget.FrameLayout", x1: 0, y1: 0, x2: 1000, y2: 2000,
+    children: [{
+      nodeId: 2, className: "android.widget.ScrollView", x1: 100, y1: 300, x2: 900, y2: 1700,
+      children: [{ nodeId: 3, text: "Buried", clickable: true, x1: 400, y1: 900, x2: 600, y2: 1000 }],
+    }],
+  };
+  const deepPayload = () => payloadOf(core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "Run", status: "failed" },
+      trace: core.extractTrace([
+        { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap buried" }, timestamp: "2024-01-01T00:00:00Z" },
+        { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "d1", trailblazeTool: { raw: { text: "Buried" } }, screenshotFile: "d.png", viewHierarchyFiltered: deepVh, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+      ]),
+      llmLogs: [],
+      shots: { "d.png": "data:image/png;base64,DDD" },
+    }],
+  }));
+  const openDeep = () => {
+    const payload = deepPayload();
+    return renderViewerState(payload, { inspect: payload.sessions[0].trace.find((t: any) => t.label === "tapOnElement").i }).zoomRoot;
+  };
+
+  test("committing from the screenshot expands collapsed ancestor branches and centers the row", () => {
+    const overlay = openDeep();
+    const leaf = nodeRow(overlay, 2);
+    const branch = leaf.closest("details");
+    branch.open = false; // reader collapsed the ScrollView branch; the leaf is buried inside it
+    // Screenshot click at (50, 95) → device (500, 950) → the buried leaf.
+    overlay.onclick({ target: overlay.querySelector(".inspshotwrap"), clientX: 50, clientY: 95 });
+    expect(leaf.classList.contains("sel")).toBe(true);
+    expect(branch.open).toBe(true);
+    expect(leaf.scrolledIntoView).toEqual({ block: "center" });
+  });
+
+  test("hover never scrolls or expands the tree — a preview inside a collapsed branch leaves it collapsed", async () => {
+    const overlay = openDeep();
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+    const branch = nodeRow(overlay, 2).closest("details");
+    branch.open = false;
+    movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 50, clientY: 95 });
+    await settled();
+    expect(nodeRow(overlay, 2).classList.contains("hov")).toBe(true); // the preview itself is fine
+    expect(branch.open).toBe(false);
+    expect(overlay.querySelectorAll("[data-inspnode]").every((el: any) => el.scrolledIntoView === undefined)).toBe(true);
+  });
+
+  test("selecting an already-visible row via the tree does not move the tree; an off-viewport row centers", () => {
+    const overlay = openDeep();
+    // Every row measures inside the tree's viewport by default — committing one must not scroll.
+    clickNode(overlay, 1);
+    expect(nodeRow(overlay, 1).classList.contains("sel")).toBe(true);
+    expect(nodeRow(overlay, 1).scrolledIntoView).toBeUndefined();
+    // A row measuring outside the tree's viewport re-centers on commit.
+    nodeRow(overlay, 2).getBoundingClientRect = () => ({ left: 0, top: 500, right: 100, bottom: 520, width: 100, height: 20 });
+    clickNode(overlay, 2);
+    expect(nodeRow(overlay, 2).scrolledIntoView).toEqual({ block: "center" });
+  });
+
+  test("the raw JSON toggle shows the hierarchy verbatim", () => {
+    const payload = inspectorPayload();
+    const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+    const overlay = state.zoomRoot;
+    overlay.onclick({ target: { closest: (sel: string) => (sel === "[data-inspraw]" ? {} : null) } });
+    expect(overlay.innerHTML).toContain('class="mono inspraw"');
+    expect(overlay.innerHTML).toContain("com.example:id/login");
+  });
+
+  test("a compressed hierarchies payload inflates when the inspector opens", async () => {
+    const payload = inspectorPayload();
+    const tapStep = stepOf(payload, "tapOnElement");
+    const session = payload.sessions[0] as Record<string, any>;
+    session.hierarchiesGz = gz(session.hierarchies);
+    session.hierarchies = null;
+    const state = renderViewerState(payload, { inspect: tapStep });
+    // The affordance shows before inflation (which steps have hierarchies isn't knowable yet)…
+    expect(state.html).toContain(`data-inspect="${tapStep}"`);
+    // …and the inspector holds a decompressing note until the inflate lands, then renders.
+    const overlay = state.zoomRoot;
+    expect(overlay.innerHTML).toContain("Decompressing UI hierarchy");
+    for (let i = 0; i < 100 && !String(overlay.innerHTML).includes("&quot;Login&quot;"); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(overlay.innerHTML).toContain("&quot;Login&quot;");
+    expect(overlay.innerHTML).toContain('class="insprect"');
+  });
+});
+
+describe("UI Inspector model (pure builders)", () => {
+  test("normalizes the legacy ViewHierarchyTreeNode shape (top-level fields, x1..y2 bounds)", () => {
+    const model = inspectorModel({
+      className: "android.widget.FrameLayout", x1: 0, y1: 0, x2: 1000, y2: 2000,
+      children: [{ text: "Pay", accessibilityText: "Pay button", resourceId: "id/pay", clickable: true, x1: 100, y1: 200, x2: 300, y2: 260 }],
+    })!;
+    expect(model.dims).toEqual({ w: 1000, h: 2000 });
+    expect(model.nodes.length).toBe(2);
+    expect(model.nodes[1].label).toBe('"Pay"');
+    expect(model.nodes[1].bounds).toEqual({ x1: 100, y1: 200, x2: 300, y2: 260 });
+    expect(model.nodes[1].fields).toContainEqual({ k: "Content description", v: "Pay button" });
+    expect(model.nodes[1].fields).toContainEqual({ k: "Resource ID", v: "id/pay" });
+    expect(model.nodes[1].flags).toContain("clickable");
+  });
+
+  test("normalizes the TrailblazeNode shape (driverDetail fields, left/top/right/bottom bounds)", () => {
+    const model = inspectorModel({
+      nodeId: 0,
+      bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+      driverDetail: { className: "android.view.View" },
+      children: [{
+        nodeId: 1, ref: "y778",
+        bounds: { left: 40, top: 100, right: 240, bottom: 160 },
+        driverDetail: { className: "android.widget.Button", text: "Charge", isClickable: true },
+      }],
+    })!;
+    expect(model.dims).toEqual({ w: 1080, h: 2400 });
+    expect(model.nodes[1].label).toBe('"Charge"');
+    expect(model.nodes[1].bounds).toEqual({ x1: 40, y1: 100, x2: 240, y2: 160 });
+    expect(model.nodes[1].fields).toContainEqual({ k: "Class", v: "android.widget.Button" });
+    expect(model.nodes[1].fields).toContainEqual({ k: "Ref", v: "y778" });
+    expect(model.nodes[1].flags).toContain("isClickable");
+  });
+
+  test("parses legacy centerPoint/dimensions bounds and falls back to max extent for dims", () => {
+    const model = inspectorModel({
+      text: "Old iOS capture", centerPoint: "200,300", dimensions: "100x50",
+    })!;
+    expect(model.nodes[0].bounds).toEqual({ x1: 150, y1: 275, x2: 250, y2: 325 });
+    expect(model.dims).toEqual({ w: 250, h: 325 });
+  });
+
+  test("hitTestNode picks the smallest node containing the point", () => {
+    const model = inspectorModel({
+      x1: 0, y1: 0, x2: 1000, y2: 1000,
+      children: [
+        { text: "big", x1: 0, y1: 0, x2: 500, y2: 500 },
+        { text: "small", x1: 100, y1: 100, x2: 200, y2: 200 },
+      ],
+    })!;
+    expect(hitTestNode(model, 150, 150)).toBe(2); // the small node wins where they overlap
+    expect(hitTestNode(model, 400, 400)).toBe(1);
+    expect(hitTestNode(model, 900, 900)).toBe(0);
+  });
+
+  test("hit-test ties on identical bounds resolve to the deepest node, like a browser hit-test", () => {
+    // Web DOMs wrap elements in containers with byte-identical bounds (a link filling its list
+    // item, a button around its label) — the wrapper must not shadow the element itself.
+    const model = inspectorModel({
+      x1: 0, y1: 0, x2: 100, y2: 100,
+      children: [{ x1: 10, y1: 10, x2: 90, y2: 90, children: [{ text: "Buy", x1: 10, y1: 10, x2: 90, y2: 90 }] }],
+    })!;
+    expect(hitTestNode(model, 50, 50)).toBe(2);
+    // Overlapping equal-area SIBLINGS resolve to the later one — DOM paint order.
+    const siblings = inspectorModel({
+      x1: 0, y1: 0, x2: 100, y2: 100,
+      children: [{ text: "under", x1: 10, y1: 10, x2: 50, y2: 50 }, { text: "over", x1: 10, y1: 10, x2: 50, y2: 50 }],
+    })!;
+    expect(hitTestNode(siblings, 30, 30)).toBe(2);
+  });
+
+  test("web (Playwright) nodes render their ARIA fields — labels and details, never (node)", () => {
+    // TrailblazeNode shape with DriverNodeDetail.Web fields (ariaRole / ariaName / dataTestId):
+    // the accessible name feeds the text leg of the label, the role feeds the class leg.
+    const model = inspectorModel({
+      bounds: { left: 0, top: 0, right: 1280, bottom: 800 },
+      driverDetail: { ariaRole: "main" },
+      children: [{
+        bounds: { left: 10, top: 10, right: 200, bottom: 40 },
+        driverDetail: { ariaRole: "button", ariaName: "Sign in", dataTestId: "sign-in" },
+      }],
+    })!;
+    expect(model.nodes[1].label).toContain("Sign in");
+    expect(model.nodes[0].label).toContain("main");
+    expect(model.nodes.every((n) => n.label !== "(node)")).toBe(true);
+    const details = inspectorDetailsHtml(model, 1);
+    expect(details).toContain("Name");
+    expect(details).toContain("Sign in");
+    expect(details).toContain("Role");
+    expect(details).toContain("button");
+    expect(details).toContain("Test ID");
+    expect(details).toContain("sign-in");
+  });
+
+  test("tree html renders collapsible branches and selectable rows; details render the selection", () => {
+    const model = inspectorModel({
+      className: "Root", x1: 0, y1: 0, x2: 100, y2: 100,
+      children: [{ text: "Leaf", x1: 0, y1: 0, x2: 10, y2: 10 }],
+    })!;
+    const tree = inspectorTreeHtml(model, 1);
+    expect(tree).toContain("<details");
+    expect(tree).toContain('data-inspnode="0"');
+    expect(tree).toContain('data-inspnode="1"');
+    expect(tree).toContain('inspnoderow sel');
+    // Exactly one tab stop per row: the row span is the focusable control, and the branch
+    // <summary> is out of the tab order (no nested focusables inside it).
+    expect(tree).toContain('<summary data-insptoggle tabindex="-1">');
+    const details = inspectorDetailsHtml(model, 1);
+    expect(details).toContain("Leaf");
+    expect(details).toContain("Bounds");
+    // No selection yet → a hint, not an empty pane.
+    expect(inspectorDetailsHtml(model, null)).toContain("Hover the screenshot");
+    // A hovered node takes precedence over the committed selection and is marked as a preview.
+    expect(inspectorDetailsHtml(model, 0, 1)).toContain("Click to keep");
+    expect(inspectorDetailsHtml(model, 0, 1)).toContain("Leaf");
+    expect(inspectorDetailsHtml(model, 1, 1)).not.toContain("Click to keep");
+    const rects = inspectorRectsHtml(model, 1);
+    expect(rects).toContain('class="insprect sel"');
   });
 });
 

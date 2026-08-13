@@ -26,8 +26,9 @@ import xyz.block.trailblaze.util.Console
  *   meta/summary builders and used to pre-seed the WASM report's session-scoped [LogsRepo].
  * - [rawLogsJson] — the raw per-file records as a [JsonArray], byte-equivalent to what
  *   `RunReportGenerator` used to re-read from disk for the interactive report's `input.json`
- *   (timestamp-sorted like [logs], leniently parsed, heavy view-hierarchy fields stripped at the
- *   seam). Kept as a separate view rather than re-serialized from [logs] so the embedded payload
+ *   (timestamp-sorted like [logs], leniently parsed, redundant view-hierarchy fields deduped to
+ *   the one the renderer reads — see `RunReportGenerator.slimViewHierarchyFields`). Kept as a
+ *   separate view rather than re-serialized from [logs] so the embedded payload
  *   stays identical to the on-disk records — including files that are valid JSON but not
  *   decodable as [TrailblazeLog]. Both views share one order because the interactive report's
  *   extractor folds adjacent records into steps (tool groups by traceId, assertion bursts,
@@ -92,7 +93,7 @@ class SessionLogSnapshot(
           null
         } ?: continue
         runCatching { RAW_PARSER.parseToJsonElement(text) }.getOrNull()
-          ?.let { rawRecords.add(RunReportGenerator.stripHeavyLogFields(it)) }
+          ?.let { rawRecords.add(RunReportGenerator.slimViewHierarchyFields(it)) }
         if (LogsRepo.isTrailblazeLogFile(file)) {
           LogsRepo.parseTrailblazeLog(file, jsonText = text, costEnricher = costEnricher)
             ?.let { typedLogs.add(it) }

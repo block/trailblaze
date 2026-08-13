@@ -38,6 +38,14 @@ sealed interface RunYamlBlockingResult {
 interface TrailblazeMcpBridge {
   suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary
   suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary>
+
+  /**
+   * The app IDs installed on the connected device, probed on demand.
+   *
+   * @throws DeviceAppProbeFailedException if the device could not be probed. Callers must not
+   *   substitute an empty set for a failed probe — an empty set means "no apps installed", which
+   *   membership checks (e.g. `launchApp` validation) act on.
+   */
   suspend fun getInstalledAppIds(): Set<String>
   fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget>
   /**
@@ -413,3 +421,13 @@ interface TrailblazeMcpBridge {
    */
   fun getInnerAgentBuiltInToolClasses(): Set<KClass<out TrailblazeTool>> = emptySet()
 }
+
+/**
+ * The device's installed-app probe (`pm list packages` / `xcrun simctl listapps`) failed or timed
+ * out, so the installed-app set is unknown. Distinct from a successful probe returning an empty
+ * set, which means the device really has none of them installed.
+ */
+class DeviceAppProbeFailedException(trailblazeDeviceId: TrailblazeDeviceId) : Exception(
+  "Could not read installed apps from ${trailblazeDeviceId.toFullyQualifiedDeviceId()} — the " +
+    "device probe failed or timed out.",
+)

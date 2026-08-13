@@ -41,9 +41,10 @@ data class DirectionStep(
   /**
    * Marks this step as the lowered form of a trail's `trailhead:` (its deterministic step 0). Set by
    * [xyz.block.trailblaze.yaml.TrailheadDefinition.toPromptStep] so the marker rides through the
-   * `ObjectiveStartLog` into [xyz.block.trailblaze.yaml.generateRecordedYaml], which re-emits it as a
-   * `- trailhead:` root element rather than a plain prompt step. NOT serialized into trail YAML — the
-   * YAML `PromptStepSerializer` only emits the authored step fields, so this never appears in a `.trail.yaml`.
+   * `ObjectiveStartLog` into [xyz.block.trailblaze.yaml.generateRecordedTrailItems], which re-emits it as a
+   * [TrailYamlItem.TrailheadTrailItem] rather than a plain prompt step. NOT serialized into trail YAML —
+   * a written trail carries [xyz.block.trailblaze.yaml.unified.UnifiedTrailStep]s, not [PromptStep]s, so
+   * this never appears in a `.trail.yaml`.
    */
   val isTrailhead: Boolean = false,
 ) : PromptStep {

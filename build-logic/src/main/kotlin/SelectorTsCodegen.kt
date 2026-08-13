@@ -34,14 +34,19 @@ import java.io.File
 object SelectorTsCodegen {
 
   /**
-   * Emit the full generated TypeScript file given the contents of the three input
-   * Kotlin files. Returns the byte-stable TS source (LF line endings, trailing newline)
-   * that the `generateSelectorsTs` task writes and `verifySelectorsTs` byte-diffs.
+   * Emit the full generated TypeScript file given the contents of the input Kotlin files.
+   * Returns the byte-stable TS source (LF line endings, trailing newline) that the
+   * `generateSelectorsTs` task writes and `verifySelectorsTs` byte-diffs.
+   *
+   * [selectorAnalysisKt] carries the selector-analysis DTOs (`TrailblazeSelectorAnalysis.kt`)
+   * consumed by the Kotlin/JS selector engine's typed boundary. Nullable only so focused
+   * unit tests can exercise the grammar emission alone; production wiring always passes it.
    */
   fun generate(
     trailblazeNodeSelectorKt: String,
     matchDescriptorKt: String,
     trailblazeNodeKt: String,
+    selectorAnalysisKt: String? = null,
   ): String {
     // Parse the input Kotlin files. The narrow parser only understands `data class` /
     // `sealed interface` declarations + their primary-constructor parameter lists; that
@@ -49,6 +54,7 @@ object SelectorTsCodegen {
     val selectorClasses = KotlinSourceParser.parseAllDataClasses(trailblazeNodeSelectorKt)
     val matchDescriptorClasses = KotlinSourceParser.parseAllDataClasses(matchDescriptorKt)
     val nodeClasses = KotlinSourceParser.parseAllDataClasses(trailblazeNodeKt)
+    val analysisClasses = selectorAnalysisKt?.let { KotlinSourceParser.parseAllDataClasses(it) }
 
     val trailblazeNodeSelector = requireOne(selectorClasses, "TrailblazeNodeSelector")
     val driverNodeMatchBranches = listOf(
@@ -99,9 +105,30 @@ object SelectorTsCodegen {
       )
       append('\n')
 
+      // Selector-analysis DTOs — the output surface of the Kotlin/JS selector engine
+      // (`:trailblaze-selector-engine-js`). Emitted after the grammar so their `selector:
+      // TrailblazeNodeSelector` fields reference the interfaces above.
+      if (analysisClasses != null) {
+        for (name in ANALYSIS_CLASS_NAMES) {
+          appendInterface(
+            tsName = name,
+            parsed = requireOne(analysisClasses, name),
+          )
+          append('\n')
+        }
+      }
+
       appendFactoryNamespace(driverNodeMatchBranches.map { it.first })
     }
   }
+
+  /** Emission order for the analysis DTOs — option before the aggregate that references it. */
+  private val ANALYSIS_CLASS_NAMES = listOf(
+    "TrailblazeSelectorOption",
+    "TrailblazeSelectorAnalysis",
+    "TrailblazeSelectorTapResolution",
+    "TrailblazeSelectorResolution",
+  )
 
   private fun requireOne(classes: List<ParsedDataClass>, name: String): ParsedDataClass =
     classes.singleOrNull { it.name == name }
@@ -202,6 +229,10 @@ object SelectorTsCodegen {
       "Int", "Long", "Float", "Double" -> "number"
       "TrailblazeNodeSelector" -> "TrailblazeNodeSelector"
       "TrailblazeNode.Bounds" -> "Bounds"
+      "TrailblazeSelectorOption" -> "TrailblazeSelectorOption"
+      "TrailblazeSelectorAnalysis" -> "TrailblazeSelectorAnalysis"
+      "TrailblazeSelectorTapResolution" -> "TrailblazeSelectorTapResolution"
+      "TrailblazeSelectorResolution" -> "TrailblazeSelectorResolution"
       "DriverNodeMatch.AndroidAccessibility" -> "DriverNodeMatchAndroidAccessibility"
       "DriverNodeMatch.AndroidMaestro" -> "DriverNodeMatchAndroidMaestro"
       "DriverNodeMatch.Web" -> "DriverNodeMatchWeb"
@@ -223,6 +254,7 @@ object SelectorTsCodegen {
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeNodeSelector.kt
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/MatchDescriptor.kt
 //   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeNode.kt (nested Bounds)
+//   opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/api/TrailblazeSelectorAnalysis.kt
 //
 // Regenerate with:
 //   ./gradlew :trailblaze-models:generateSelectorsTs
@@ -682,7 +714,7 @@ internal object KotlinSourceParser {
 }
 
 /**
- * Convenience for the Gradle plugin: read each of the three Kotlin source files from
+ * Convenience for the Gradle plugin: read each of the four Kotlin source files from
  * disk and produce the generated TS. Fails loud if any of the source files don't
  * exist — drift between the plugin wiring and the source layout should surface here,
  * not as a confusing empty-output regen.
@@ -691,13 +723,15 @@ internal fun runSelectorTsCodegen(
   trailblazeNodeSelectorKt: File,
   matchDescriptorKt: File,
   trailblazeNodeKt: File,
+  selectorAnalysisKt: File,
 ): String {
-  for (f in listOf(trailblazeNodeSelectorKt, matchDescriptorKt, trailblazeNodeKt)) {
+  for (f in listOf(trailblazeNodeSelectorKt, matchDescriptorKt, trailblazeNodeKt, selectorAnalysisKt)) {
     require(f.isFile) { "Selector-codegen input file missing: ${f.absolutePath}" }
   }
   return SelectorTsCodegen.generate(
     trailblazeNodeSelectorKt = trailblazeNodeSelectorKt.readText(Charsets.UTF_8),
     matchDescriptorKt = matchDescriptorKt.readText(Charsets.UTF_8),
     trailblazeNodeKt = trailblazeNodeKt.readText(Charsets.UTF_8),
+    selectorAnalysisKt = selectorAnalysisKt.readText(Charsets.UTF_8),
   )
 }

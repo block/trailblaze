@@ -147,6 +147,14 @@ object GitInfoExcludeSeeder {
     "**/trails/config/trailmaps/*/tools/trailblaze-client.d.ts",
     "**/trails/.trailblaze/",
     "**/trails/config/dist/",
+    // Standalone `trailblaze-config/` layout analogs. Its generated `.trailblaze/` lands at
+    // the workspace root (the config dir's parent), which can sit at any depth in the repo
+    // (nested example workspaces), so the dir name is matched at any depth — `.trailblaze/`
+    // is the framework's reserved generated-artifacts dir name everywhere it appears.
+    "**/trailblaze-config/trailmaps/*/tools/tsconfig.json",
+    "**/trailblaze-config/trailmaps/*/tools/trailblaze-client.d.ts",
+    "**/trailblaze-config/dist/",
+    "**/.trailblaze/",
   )
 
   private val MANAGED_BLOCK: String = buildString {

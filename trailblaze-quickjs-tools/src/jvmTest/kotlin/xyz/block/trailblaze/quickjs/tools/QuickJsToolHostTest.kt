@@ -1172,4 +1172,52 @@ class QuickJsToolHostTest {
     val result = host.callTool("readInjected", JsonObject(emptyMap()))
     assertEquals("installed", textContent(result))
   }
+
+  @Test
+  fun `an engine extension that fails to install leaves the bundle usable`() = runBlocking {
+    // An engine extension is ADDITIVE, so a failed install must not fail the launch: `connect`
+    // throwing here propagates into the launcher's fail-fast teardown and kills the whole session,
+    // meaning a session that never touches the extension's globals could die at startup over a
+    // binding it doesn't use. The tool that doesn't need the global keeps working; one that does
+    // fails at first use instead.
+    val host = QuickJsToolHost.connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["independent"] = {
+        name: "independent",
+        spec: {},
+        handler: async () => ({ content: [{ type: "text", text: "ran" }] }),
+      };
+      """.trimIndent(),
+      engineExtension = QuickJsEngineExtension { error("simulated extension install failure") },
+    )
+    hosts.add(host)
+    assertEquals("ran", textContent(host.callTool("independent", JsonObject(emptyMap()))))
+  }
+
+  @Test
+  fun `a cancellation during extension install is not absorbed by the degrade path`() = runBlocking {
+    // The degrade above must not extend to cancellation: `install` is a suspend fun, so a
+    // cancellation can arrive inside it. Swallowing it would continue the launch on a cancelled
+    // coroutine and mislabel the cancellation as an extension-install fault, breaking structured
+    // concurrency. It must propagate out of `connect` instead.
+    val thrown = runCatching {
+      QuickJsToolHost.connect(
+        """
+        const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+        tools["independent"] = {
+          name: "independent",
+          spec: {},
+          handler: async () => ({ content: [{ type: "text", text: "ran" }] }),
+        };
+        """.trimIndent(),
+        engineExtension = QuickJsEngineExtension { throw CancellationException("cancelled mid-install") },
+      ).also { hosts.add(it) }
+    }.exceptionOrNull()
+
+    assertTrue(
+      thrown is CancellationException,
+      "expected the cancellation to propagate out of connect, got: $thrown",
+    )
+  }
 }

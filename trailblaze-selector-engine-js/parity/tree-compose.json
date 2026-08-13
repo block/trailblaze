@@ -1,0 +1,71 @@
+{
+  "nodeId": 8,
+  "driverDetail": { "class": "compose" },
+  "children": [
+    {
+      "nodeId": 7,
+      "bounds": { "left": 0, "top": 0, "right": 1080, "bottom": 2400 },
+      "driverDetail": { "class": "compose" },
+      "children": [
+        {
+          "nodeId": 1,
+          "bounds": { "left": 40, "top": 200, "right": 1040, "bottom": 320 },
+          "driverDetail": {
+            "class": "compose",
+            "testTag": "checkout-button",
+            "role": "Button",
+            "text": "Charge $5.00",
+            "hasClickAction": true
+          }
+        },
+        {
+          "nodeId": 2,
+          "bounds": { "left": 40, "top": 360, "right": 1040, "bottom": 440 },
+          "driverDetail": {
+            "class": "compose",
+            "text": "Rewards (1,000)"
+          }
+        },
+        {
+          "nodeId": 3,
+          "bounds": { "left": 40, "top": 480, "right": 1040, "bottom": 560 },
+          "driverDetail": {
+            "class": "compose",
+            "text": "Cancel 5\n",
+            "role": "Button",
+            "hasClickAction": true
+          }
+        },
+        {
+          "nodeId": 4,
+          "bounds": { "left": 40, "top": 40, "right": 160, "bottom": 160 },
+          "driverDetail": {
+            "class": "compose",
+            "contentDescription": "Back",
+            "role": "Button",
+            "hasClickAction": true
+          }
+        },
+        {
+          "nodeId": 5,
+          "bounds": { "left": 40, "top": 600, "right": 520, "bottom": 700 },
+          "driverDetail": {
+            "class": "compose",
+            "text": "Item",
+            "toggleableState": "Off"
+          }
+        },
+        {
+          "nodeId": 6,
+          "bounds": { "left": 560, "top": 600, "right": 1040, "bottom": 700 },
+          "driverDetail": {
+            "class": "compose",
+            "text": "Item",
+            "toggleableState": "On",
+            "isSelected": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -14,6 +14,8 @@ import {
   formatterContext,
   isRemoteScreenshot,
   packDeviceLog,
+  packHierarchies,
+  packLlmMessages,
   packNetwork,
   remoteShotValue,
   screenshotDataUri,
@@ -152,6 +154,42 @@ describe("device/network log gzip packing", () => {
     const { network, networkGz } = packNetwork(many);
     expect(network).toBeNull();
     expect(JSON.parse(gunzipSync(Buffer.from(networkGz!, "base64")).toString("utf8"))).toEqual(many);
+  });
+});
+
+describe("LLM transcript gzip packing", () => {
+  test("a small transcript stays inline", () => {
+    const tx = { texts: ["You are an agent…", "Tap login"], calls: [[{ role: "system", t: 0 }, { role: "user", t: 1 }]] };
+    expect(packLlmMessages(tx)).toEqual({ llmMessages: tx, llmMessagesGz: null });
+    expect(packLlmMessages(null)).toEqual({ llmMessages: null, llmMessagesGz: null });
+  });
+
+  test("a large transcript is embedded gzipped and round-trips", () => {
+    const texts = Array.from({ length: 40 }, (_, i) => `screen-state dump ${i} ` + "x".repeat(4000));
+    const tx = { texts, calls: texts.map((_, i) => texts.slice(0, i + 1).map((_, t) => ({ role: "user", t }))) };
+    const { llmMessages, llmMessagesGz } = packLlmMessages(tx);
+    expect(llmMessages).toBeNull();
+    expect(JSON.parse(gunzipSync(Buffer.from(llmMessagesGz!, "base64")).toString("utf8"))).toEqual(tx);
+    expect(llmMessagesGz!.length).toBeLessThan(JSON.stringify(tx).length / 2);
+  });
+});
+
+describe("view-hierarchy packing (UI Inspector side-channel)", () => {
+  test("a small hierarchies map stays inline", () => {
+    const map = { "2": { className: "android.widget.Button", text: "Login" } };
+    expect(packHierarchies(map, 1)).toEqual({ hierarchies: map, hierarchiesGz: null });
+  });
+
+  test("a large hierarchies map is embedded gzipped and round-trips", () => {
+    const map = { "2": { text: "node ".repeat(20_000) } };
+    const { hierarchies, hierarchiesGz } = packHierarchies(map, 1);
+    expect(hierarchies).toBeNull();
+    expect(JSON.parse(gunzipSync(Buffer.from(hierarchiesGz!, "base64")).toString("utf8"))).toEqual(map);
+  });
+
+  test("a session with no captured hierarchies packs to nothing", () => {
+    expect(packHierarchies(null, 0)).toEqual({ hierarchies: null, hierarchiesGz: null });
+    expect(packHierarchies({}, 0)).toEqual({ hierarchies: null, hierarchiesGz: null });
   });
 });
 

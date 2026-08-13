@@ -10,6 +10,14 @@ supersedes: 2026-03-06-trail-yaml-v2-syntax.md
 Collapsing the per-platform `*.trail.yaml` files plus `blaze.yaml` into a single
 file per test, with per-step recordings keyed by device classifier.
 
+> **Superseded in part.** The rollout gate this record describes is gone. Unified
+> is now the only format a trail is ever written in, so `--unified-recordings`,
+> `TRAILBLAZE_UNIFIED_RECORDINGS`, and `trailblaze config unified-recordings`
+> no longer exist — the flag fails at argument parsing, and a still-set env var
+> or config key is ignored. Everything below describing the gate, its default,
+> or "while off" behavior is a record of the rollout, not current behavior.
+> The v1 parser was removed in #5043 and the last v1 writers in #5422.
+
 > **Historical note.** This devlog and the corresponding code in the
 > `xyz.block.trailblaze.yaml.unified` package were originally drafted under
 > the working name "Trail YAML v3" — chronologically the third iteration

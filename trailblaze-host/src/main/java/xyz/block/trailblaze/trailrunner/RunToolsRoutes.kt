@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.config.TargetIconConvention
 import xyz.block.trailblaze.config.YamlBackedHostAppTarget
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -194,11 +195,12 @@ internal fun resolveWorkspaceIconFile(deps: TrailRunnerDeps, targetId: String, p
     ?.firstOrNull { it.id.equals(targetId, ignoreCase = true) } as? YamlBackedHostAppTarget
     ?: return null
   val config = target.config
-  // Candidate base dirs, most-specific first: the workspace `trails/config/` dir (where authored
-  // config lives) then the workspace root (its grandparent), so an author can anchor `assets/` at
-  // either spot.
+  // Candidate base dirs, most-specific first: the workspace config dir (where authored config
+  // lives) then the workspace root, so an author can anchor `assets/` at either spot. The root
+  // derivation is layout-aware: `trailblaze-config/` sits directly under the workspace root,
+  // legacy `trails/config/` sits two levels under it.
   val configDir = WorkspaceConfigDirHolder.resolver()
-  val bases = listOfNotNull(configDir, configDir?.parentFile?.parentFile)
+  val bases = listOfNotNull(configDir, configDir?.let(::workspaceRootOfConfigDir))
   val declaredAndroidAppIds = config.platforms?.get("android")?.appIds.orEmpty()
   val declaredIosBundleIds = config.platforms?.get("ios")?.appIds.orEmpty()
   val scoped = platformScopedIconInputs(
@@ -219,6 +221,19 @@ internal fun resolveWorkspaceIconFile(deps: TrailRunnerDeps, targetId: String, p
     baseDirs = bases,
   )
 }
+
+/**
+ * Lexical workspace-root derivation from the config dir's own name: `<root>` for a standalone
+ * `<root>/trailblaze-config`, `<root>` for the legacy `<root>/trails/config` (two levels up).
+ * Requires no `trailblaze.yaml` anchor, so it also serves config dirs that exist but aren't
+ * authored yet. Pure so it's unit-testable with plain files.
+ */
+internal fun workspaceRootOfConfigDir(configDir: File): File? =
+  if (configDir.name == TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR) {
+    configDir.parentFile
+  } else {
+    configDir.parentFile?.parentFile
+  }
 
 /**
  * Gates a caller-supplied [explicitAppId] on actually being one of the platform's

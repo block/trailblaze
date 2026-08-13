@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.recording
 
-import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.wrapTrailblazeTool
@@ -15,10 +14,11 @@ import xyz.block.trailblaze.yaml.wrapTrailblazeTool
  *
  *  - **Single tool, bare**: `name:\n  field: value`. Used by the in-card YAML editor and the
  *    Tool Palette's preview text; minimal and readable.
- *  - **Single tool, trail-wrapped**: `- tools:\n    - name:\n        field: value`. The
- *    runnable form `TrailblazeDeviceManager.runYaml` accepts; what Replay and the Tool
- *    Palette's "Run on Device" button feed to the runner.
- *  - **Multi tool, trail-wrapped**: same shape with multiple tool entries. The replay-from-
+ *  - **Single tool, list-wrapped**: `- name:\n    field: value` — the per-tool dispatch envelope
+ *    (see [TrailblazeYaml.encodeTools]), which is the runnable form
+ *    `TrailblazeDeviceManager.runYaml` accepts; what Replay and the Tool Palette's "Run on
+ *    Device" button feed to the runner.
+ *  - **Multi tool, list-wrapped**: same shape with multiple tool entries. The replay-from-
  *    here button bundles the tail of the recording this way.
  *
  * The decode side ([decodeSingleToolYaml]) parses a bare-single-tool block (as the in-card
@@ -46,41 +46,34 @@ object RecordingYamlCodec {
     trailblazeYaml.encodeToolToYaml(interaction.toolName, interaction.tool)
 
   /**
-   * Serialize one [interaction] as a complete, runnable trail YAML — wrapped in `- tools:`
-   * so it parses through the same path the trail runner uses for full trails.
+   * Serialize one [interaction] as runnable YAML — a single-entry tool envelope, which the runner
+   * decodes via `decodeTrailOrToolEnvelope`.
    */
-  fun singleInteractionToTrailYaml(interaction: RecordedInteraction): String {
-    val wrapper = wrapTrailblazeTool(interaction.tool, interaction.toolName)
-    val item = TrailYamlItem.ToolTrailItem(listOf(wrapper))
-    return trailblazeYaml.encodeToString(listOf(item))
-  }
+  fun singleInteractionToTrailYaml(interaction: RecordedInteraction): String =
+    trailblazeYaml.encodeTools(listOf(wrapTrailblazeTool(interaction.tool, interaction.toolName)))
 
   /**
-   * Serialize a contiguous range of [interactions] as a single trail YAML — one `tools:` block
-   * containing every tool in order. Empty input yields an empty string. Encoding via the same
-   * `ToolTrailItem` shape as [singleInteractionToTrailYaml] keeps the runner-side parser path
-   * identical regardless of how many tools are in the slice.
+   * Serialize a contiguous range of [interactions] as one tool envelope containing every tool in
+   * order. Empty input yields an empty string. Same shape as [singleInteractionToTrailYaml], so
+   * the runner-side parser path is identical regardless of how many tools are in the slice.
    */
   fun interactionsToTrailYaml(interactions: List<RecordedInteraction>): String {
     if (interactions.isEmpty()) return ""
-    val wrappers = interactions.map { wrapTrailblazeTool(it.tool, it.toolName) }
-    val item = TrailYamlItem.ToolTrailItem(wrappers)
-    return trailblazeYaml.encodeToString(listOf(item))
+    return trailblazeYaml.encodeTools(interactions.map { wrapTrailblazeTool(it.tool, it.toolName) })
   }
 
   /**
-   * Serialize a [trailhead] tool reference followed by [interactions] as a single trail YAML.
+   * Serialize a [trailhead] tool reference followed by [interactions] as a single tool envelope.
    * The trailhead is emitted as a bare tool-id reference (`- <trailheadId>`) since trailheads
    * today are class-backed tools with no instance args; the interactions follow with their
    * usual full encoding. Output:
    *
    * ```yaml
-   * - tools:
-   *     - <trailheadId>
-   *     - <interaction-1-name>:
-   *         <fields>
-   *     - <interaction-2-name>:
-   *         <fields>
+   * - <trailheadId>
+   * - <interaction-1-name>:
+   *     <fields>
+   * - <interaction-2-name>:
+   *     <fields>
    * ```
    *
    * Backs the recording tab's "Verify Trail" button, which needs a runnable trail that resets
@@ -89,11 +82,11 @@ object RecordingYamlCodec {
    * the Verify Trail caller is expected to gate on `trailhead != null` before reaching here
    * (no-trailhead Verify is the friction-discovery moment for the trailhead nudge).
    *
-   * Implemented by encoding the interactions block via the typed serializer and splicing the
-   * trailhead id into the resulting `tools:` list. Hand-rolling the whole document would
-   * require instantiating a `TrailblazeTool` for the trailhead (it's class-backed via
-   * reflection — fine on JVM, brittle for future wasmJs use); splicing the text leaves
-   * the encoder responsible for the interaction tools' indentation and quoting rules.
+   * Implemented by encoding the interactions via the typed serializer and prepending the
+   * trailhead id as its own list item. Hand-rolling the whole document would require
+   * instantiating a `TrailblazeTool` for the trailhead (it's class-backed via reflection — fine
+   * on JVM, brittle for future wasmJs use); prepending text leaves the encoder responsible for
+   * the interaction tools' indentation and quoting rules.
    */
   fun interactionsToTrailYamlWithTrailhead(
     trailheadToolId: String,
@@ -103,45 +96,32 @@ object RecordingYamlCodec {
     require(trailheadToolId.isNotBlank()) { "trailheadToolId must not be blank" }
     val trailheadBlock = renderTrailheadBlock(trailheadToolId, trailheadParamValues)
     val baseYaml = interactionsToTrailYaml(interactions)
-    if (baseYaml.isBlank()) {
-      // No interactions — just the trailhead by itself.
-      return "- tools:\n$trailheadBlock"
-    }
-    // Splice the trailhead as the first list item under `tools:`. The encoder produces
-    // `- tools:` on its own line with each tool entry indented under it; we find the line
-    // immediately after `tools:` and insert our own list item before it. The 4-space indent
-    // matches what kaml emits for nested list items in this schema.
-    val lines = baseYaml.lineSequence().toMutableList()
-    val toolsLineIndex = lines.indexOfFirst { it.trimEnd().endsWith("tools:") }
-    require(toolsLineIndex >= 0) {
-      "Expected encoded interactions trail to contain a 'tools:' header; got: $baseYaml"
-    }
-    lines.add(toolsLineIndex + 1, trailheadBlock.trimEnd('\n'))
-    return lines.joinToString("\n")
+    // No interactions — just the trailhead by itself.
+    if (baseYaml.isBlank()) return trailheadBlock
+    return trailheadBlock + baseYaml
   }
 
   /**
-   * Render a trailhead as a list item under a `tools:` header, with the trailing newline.
+   * Render a trailhead as a root-level tool-envelope list item, with the trailing newline.
    *
-   * - No params: `    - toolName\n` (bare-name form, what kaml emits for parameter-less tools)
-   * - With params: `    - toolName:\n        param1: value\n        param2: value\n`
+   * - No params: `- toolName\n` (bare-name form, what kaml emits for parameter-less tools)
+   * - With params: `- toolName:\n    param1: value\n    param2: value\n`
    *
-   * The indentation lines up with what kaml produces for nested tool entries: `    -` opens
-   * the list item, `        ` (8 spaces) indents the param scalars under the tool name. Param
-   * values are wrapped in single quotes so colons, hashes, and other YAML metacharacters in
-   * user-supplied strings don't get interpreted as structure (`account: foo:bar` would
-   * otherwise reparse as a nested map).
+   * The indentation matches what kaml produces for root-level tool entries. Param values are
+   * wrapped in single quotes so colons, hashes, and other YAML metacharacters in user-supplied
+   * strings don't get interpreted as structure (`account: foo:bar` would otherwise reparse as a
+   * nested map).
    */
   private fun renderTrailheadBlock(toolId: String, paramValues: Map<String, String>): String {
     val nonBlankParams = paramValues.filterValues { it.isNotBlank() }
     if (nonBlankParams.isEmpty()) {
-      return "    - $toolId\n"
+      return "- $toolId\n"
     }
     val sb = StringBuilder()
-    sb.append("    - ").append(toolId).append(":\n")
+    sb.append("- ").append(toolId).append(":\n")
     nonBlankParams.forEach { (name, value) ->
       val quoted = value.replace("\\", "\\\\").replace("'", "''")
-      sb.append("        ").append(name).append(": '").append(quoted).append("'\n")
+      sb.append("    ").append(name).append(": '").append(quoted).append("'\n")
     }
     return sb.toString()
   }

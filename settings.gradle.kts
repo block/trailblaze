@@ -84,6 +84,7 @@ include(
   ":trailblaze-scripting-fetch",
   ":trailblaze-scripting-mcp-common",
   ":trailblaze-scripting-subprocess",
+  ":trailblaze-selector-engine-js",
   ":trailblaze-ui",
   ":trailblaze-report",
   ":trailblaze-server",

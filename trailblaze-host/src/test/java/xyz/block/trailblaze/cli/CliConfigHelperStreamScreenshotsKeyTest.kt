@@ -14,9 +14,8 @@ import xyz.block.trailblaze.host.recording.EffectiveStreamScreenshotConfig
 
 /**
  * Behavior of the `stream-screenshots` entry in [CONFIG_KEYS] (one toggle for the shared
- * Android/iOS/web stream engine). Mirrors
- * [CliConfigHelperUnifiedRecordingsKeyTest]: tri-state `Boolean? = null` field, explicit choices
- * persist even when they match the default, and reading the config seeds the JVM-wide
+ * Android/iOS/web stream engine): a tri-state `Boolean? = null` field, so an explicit choice
+ * persists even when it matches the default, and reading the config seeds the JVM-wide
  * [EffectiveStreamScreenshotConfig] holder every platform's runner/agent resolves its mode from.
  */
 class CliConfigHelperStreamScreenshotsKeyTest {

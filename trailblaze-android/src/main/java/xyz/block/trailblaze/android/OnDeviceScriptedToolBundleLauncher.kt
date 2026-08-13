@@ -14,6 +14,7 @@ import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolAdvertisement
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
 import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
+import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
@@ -124,6 +125,9 @@ object OnDeviceScriptedToolBundleLauncher {
         AndroidAssetBundleSource(assetPath = entry.script!!, assetManager = assetManager)
       },
       advertisementOverrides = inlineOverrides + catalogOverrides,
+      // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher installs, so
+      // a scripted tool's HTTP works identically on-device and host-dispatched.
+      engineExtension = OkHttpFetchExtension(),
     )
   }
 

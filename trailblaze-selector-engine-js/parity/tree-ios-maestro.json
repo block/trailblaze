@@ -1,0 +1,63 @@
+{
+  "nodeId": 7,
+  "driverDetail": { "class": "iosMaestro" },
+  "children": [
+    {
+      "nodeId": 6,
+      "bounds": { "left": 0, "top": 0, "right": 390, "bottom": 844 },
+      "driverDetail": { "class": "iosMaestro", "className": "UIWindow" },
+      "children": [
+        {
+          "nodeId": 1,
+          "bounds": { "left": 20, "top": 100, "right": 370, "bottom": 160 },
+          "driverDetail": {
+            "class": "iosMaestro",
+            "text": "Charge $5.00",
+            "className": "UIButton",
+            "clickable": true
+          }
+        },
+        {
+          "nodeId": 2,
+          "bounds": { "left": 20, "top": 200, "right": 370, "bottom": 240 },
+          "driverDetail": {
+            "class": "iosMaestro",
+            "text": "Rewards (1,000)",
+            "className": "UILabel"
+          }
+        },
+        {
+          "nodeId": 3,
+          "bounds": { "left": 20, "top": 280, "right": 370, "bottom": 330 },
+          "driverDetail": {
+            "class": "iosMaestro",
+            "resourceId": "email-field",
+            "hintText": "Email",
+            "className": "UITextField"
+          }
+        },
+        {
+          "nodeId": 4,
+          "bounds": { "left": 20, "top": 380, "right": 190, "bottom": 430 },
+          "driverDetail": {
+            "class": "iosMaestro",
+            "text": "Add",
+            "className": "UIButton",
+            "clickable": true
+          }
+        },
+        {
+          "nodeId": 5,
+          "bounds": { "left": 200, "top": 380, "right": 370, "bottom": 430 },
+          "driverDetail": {
+            "class": "iosMaestro",
+            "text": "Add",
+            "className": "UIButton",
+            "clickable": true,
+            "selected": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -10,26 +10,23 @@ import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toLogPayload
-import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 
 class DynamicToolSerializationTest {
 
   @Test
   fun `raw-argument dynamic tool encodes to yaml with instance name and args`() {
-    val yaml = createTrailblazeYaml().encodeToString(
-      TrailblazeYamlBuilder()
-        .tools(
-          listOf(
-            FakeDynamicTool(
-              instanceToolName = "ios_contacts_create_contact",
-              rawToolArguments = buildJsonObject {
-                put("firstName", "Ada")
-                put("lastName", "Lovelace")
-              },
-            ),
+    val yaml = createTrailblazeYaml().encodeTools(
+      listOf(
+        fromTrailblazeTool(
+          FakeDynamicTool(
+            instanceToolName = "ios_contacts_create_contact",
+            rawToolArguments = buildJsonObject {
+              put("firstName", "Ada")
+              put("lastName", "Lovelace")
+            },
           ),
-        )
-        .build(),
+        ),
+      ),
     )
 
     assertThat(yaml).contains("ios_contacts_create_contact:")

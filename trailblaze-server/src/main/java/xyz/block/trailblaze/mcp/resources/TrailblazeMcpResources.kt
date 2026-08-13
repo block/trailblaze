@@ -219,7 +219,18 @@ fun registerResources(
         instanceId = currentDeviceId.instanceId,
         platform = currentDeviceId.trailblazeDevicePlatform.displayName,
         driver = mcpBridge.getDriverType()?.toString(),
-        installedApps = mcpBridge.getInstalledAppIds().sorted(),
+        // A failed device probe must not fail the whole resource read — the rest of this
+        // payload (platform, driver, appTargets, currentAppTarget) is what clients navigate by,
+        // and two tool descriptions point agents here for valid target IDs.
+        // `catch (Exception)` rather than `runCatching`, which would also swallow the caller's
+        // own cancellation (the probe rethrows it) and fatal Errors.
+        installedApps = try {
+          mcpBridge.getInstalledAppIds().sorted()
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          emptyList()
+        },
         appTargets = mcpBridge.getAvailableAppTargets().map { it.id },
         // Device-scoped: defers to the same resolver tool dispatch uses
         // (`TrailblazeMcpServer.findCurrentTarget`), so the per-device

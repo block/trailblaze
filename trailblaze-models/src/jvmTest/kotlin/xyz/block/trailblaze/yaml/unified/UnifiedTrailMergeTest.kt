@@ -467,6 +467,118 @@ class UnifiedTrailMergeTest {
 
   private fun classifier(value: String) = TrailblazeDeviceClassifier(value)
 
+  // ── tools recorded outside an objective window (TrailYamlItem.ToolTrailItem) ────────────────
+
+  /**
+   * The regression this pins: step alignment is positional, so tools recorded before the first
+   * objective must NOT take an index of their own. If they did, every existing step would be bound
+   * to the previous step's tools and the last step's slot would be stripped and never re-added.
+   */
+  @Test
+  fun `tools recorded before the first objective join step 1 instead of shifting the alignment`() {
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("ios" to listOf(tool("iosTapCart")))),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("ios" to listOf(tool("iosTapPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.ToolTrailItem(listOf(tool("launchApp"))),
+      TrailYamlItem.PromptsTrailItem(
+        listOf(directionStep("Open the cart", tool("tapCart")), directionStep("Pay", tool("tapPay"))),
+      ),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, classifier = "android")
+
+    assertEquals(listOf("Open the cart", "Pay"), merged.trail.map { it.step })
+    assertEquals(listOf("launchApp", "tapCart"), merged.trail[0].recordings["android"]?.map { it.name })
+    assertEquals(listOf("tapPay"), merged.trail[1].recordings["android"]?.map { it.name })
+    // The other platform is untouched, including on the last step.
+    assertEquals(listOf("iosTapCart"), merged.trail[0].recordings["ios"]?.map { it.name })
+    assertEquals(listOf("iosTapPay"), merged.trail[1].recordings["ios"]?.map { it.name })
+  }
+
+  /**
+   * The placeholder is prose the adapter invented, not prose an author wrote. Existing-NL-wins is
+   * the right rule for authored text, but applying it to the placeholder would freeze it into the
+   * file: every later re-record carrying real objectives would lose to it forever.
+   */
+  @Test
+  fun `a re-record with real prose replaces the recorded-actions placeholder`() {
+    val placeholder = "Recorded actions (no objective captured — replace with a description)"
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(
+        UnifiedTrailStep(step = placeholder, recordings = mapOf("android" to listOf(tool("oldTap")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Open the cart", tool("tapCart")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, classifier = "android")
+
+    assertEquals(listOf("Open the cart"), merged.trail.map { it.step })
+    assertEquals(listOf("tapCart"), merged.trail.single().recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `authored prose still wins over a re-record that diverged`() {
+    // The placeholder carve-out must not weaken the general rule: real authored NL is canon.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(UnifiedTrailStep(step = "Open the shopping cart")),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("tap cart icon", tool("tapCart")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, classifier = "android")
+
+    assertEquals(listOf("Open the shopping cart"), merged.trail.map { it.step })
+  }
+
+  @Test
+  fun `a recording of only step-less tools becomes one placeholder step`() {
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.ToolTrailItem(listOf(tool("tapCart"), tool("tapPay"))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing = null, recordedItems = recorded, classifier = "android")
+
+    // The literal is asserted (not referenced) because it is user-visible prose meant to be replaced.
+    assertEquals(
+      listOf("Recorded actions (no objective captured — replace with a description)"),
+      merged.trail.map { it.step },
+    )
+    assertEquals(listOf("tapCart", "tapPay"), merged.trail.single().recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `step-less tools merged into an existing trail keep the existing NL on step 1`() {
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(UnifiedTrailStep(step = "Open the cart", recordings = mapOf("ios" to listOf(tool("iosTapCart"))))),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.ToolTrailItem(listOf(tool("launchApp"))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, classifier = "android")
+
+    // Existing NL is device-agnostic canon — the placeholder must never overwrite it.
+    assertEquals(listOf("Open the cart"), merged.trail.map { it.step })
+    assertEquals(listOf("launchApp"), merged.trail[0].recordings["android"]?.map { it.name })
+    assertEquals(listOf("iosTapCart"), merged.trail[0].recordings["ios"]?.map { it.name })
+  }
+
   private fun v1Config(driver: String?, id: String?, target: String?) =
     TrailYamlItem.ConfigTrailItem(TrailConfig(id = id, target = target, driver = driver))
 

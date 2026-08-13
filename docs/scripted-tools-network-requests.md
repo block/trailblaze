@@ -20,14 +20,14 @@ need.
 
 ## `fetch` — the in-process default
 
-On the host, the runtime gives a scripted tool a WHATWG-shaped `globalThis.fetch`, backed
+The runtime gives a scripted tool a WHATWG-shaped `globalThis.fetch`, backed
 by an [`OkHttp`](https://square.github.io/okhttp/) client. It runs **inside the same
 QuickJS engine that dispatches your tool** — no subprocess fork, no `node_modules`
 resolution, so a call is just a function call into the host. Because it's in-process,
-`fetch` is also the *only* HTTP primitive that could ever run on a device — a subprocess
-(below) structurally cannot — though the default on-device runner doesn't install the
-binding yet (see [Where `fetch` runs](#where-fetch-runs)). For now, treat `fetch` as a
-host-dispatched capability.
+`fetch` is also the *only* HTTP primitive that runs on a device — a subprocess
+(below) structurally cannot — and both the host launchers and the on-device runner
+install the binding, so a tool can assume `fetch` wherever it executes (see
+[Where `fetch` runs](#where-fetch-runs)).
 
 ```ts
 import { trailblaze } from "@trailblaze/scripting";
@@ -79,11 +79,36 @@ The **host daemon installs `fetch` by default** — so it's present in `trailbla
 in `trailblaze tool`/`trailblaze run`, and in the daemon-backed agent loop. That's where
 the vast majority of scripted-tool HTTP happens.
 
-The binding itself is **portable**: it's compiled for Android as well as the JVM (OkHttp
-runs on Android's ART), which is why `fetch` — not a subprocess — is the right primitive
-for a tool you intend to run on-device. Note that the default on-device runner does not
-install the binding yet, so a tool that *must* execute on-device shouldn't assume `fetch`
-is present today; host-dispatched tools always have it.
+The **on-device runner installs it too**: the binding is compiled for Android as well as
+the JVM (OkHttp runs on Android's ART), and the on-device QuickJS launchers bind the same
+extension the host launchers do. A tool that executes on-device gets the identical `fetch`
+surface as one dispatched on the host — which is why `fetch`, not a subprocess, is the
+right primitive for a tool you intend to run on-device.
+
+**Use `https`, including for a local bridge.** Android denies **cleartext** by default from
+targetSdk 28 onward, so an on-device `fetch("http://localhost:8080/…")` fails with
+`UnknownServiceException: CLEARTEXT communication … not permitted` before any socket opens —
+the same call works host-side, which makes it an easy way to write a tool that only runs in
+one place. Rather than opting the runner APK out of that policy, just speak `https`.
+
+### Self-signed certificates
+
+`fetch` **skips certificate validation for device-local hosts** — `localhost`, `127.0.0.1`,
+`::1`, and, when the tool is running on Android, `10.0.2.2` (the emulator's alias for its host
+machine). Every other host is validated normally. The emulator alias is deliberately
+Android-only: to a host-dispatched tool that address is an ordinary routable one, so relaxing
+it there would drop verification for a real remote host.
+
+That's not a convenience; it's what makes the local case work at all. Trailblaze's own HTTPS
+surfaces present **self-signed** certificates — the on-device server, and the host daemon a
+device reaches over `adb reverse` — and no trust store can validate those. Scoping the
+relaxation to those addresses means a tool's call to a real API keeps full validation, while
+a call to a local bridge doesn't need a certificate installed on the device.
+
+This matters most for a run that is **purely on-device** — a device farm, where there is
+no host to proxy through — because the local endpoint is then the only one there is.
+`OnDeviceFetchBindingTest` proves that path end to end on a real device: a self-signed https
+server, nothing installed, a 200 back.
 
 ### Timeouts
 
@@ -133,10 +158,9 @@ process*, not in-process code:
    that genuinely needs Node APIs, the milliseconds don't matter.
 
 The rule of thumb: **`fetch` in-process is the default, and the only HTTP primitive that
-*could* run on-device (a subprocess structurally can't — though the on-device runner
-doesn't install the binding yet). A subprocess (`runtime: subprocess`) is the escape hatch
-for the capabilities plain HTTP can't reach, at the cost of being host-only plus a few
-milliseconds per call.**
+runs on-device (a subprocess structurally can't). A subprocess (`runtime: subprocess`) is
+the escape hatch for the capabilities plain HTTP can't reach, at the cost of being
+host-only plus a few milliseconds per call.**
 
 ## Where to go next
 

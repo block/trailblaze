@@ -120,6 +120,7 @@ declare global {
   function extractTrace(logs: unknown): any[];
   function extractLlmLogs(logs: unknown): any[];
   function buildRunReportHtml(input: any): string;
+  function packSessionInputsHierarchies(sessions: any[]): Promise<void>;
   function slimTraceForShare(trace: any): any;
   function slimLlmForShare(llmLogs: any): any;
   function truncate(text: string, max: number): string;

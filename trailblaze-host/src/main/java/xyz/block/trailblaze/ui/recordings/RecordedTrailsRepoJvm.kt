@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
-import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
@@ -18,7 +17,6 @@ import xyz.block.trailblaze.report.utils.FileChangeEvent
 import xyz.block.trailblaze.report.utils.FileWatchService
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import xyz.block.trailblaze.util.Console
 
@@ -28,15 +26,9 @@ import xyz.block.trailblaze.util.Console
  * All trails are stored directly under the trails directory (e.g., trails/regression/suite_123/...).
  *
  * @param trailsDirectory The root directory for all trails. Defaults to ~/.trailblaze/trails
- * @param unifiedRecordingsEnabledProvider Resolves the unified-recordings rollout gate for the
- *   recording tab (env > persisted `trailblaze config unified-recordings`; no CLI flag on this
- *   surface). When off (default), a save keeps writing a legacy `<classifier>.trail.yaml` BUT
- *   refuses to shadow a unified `trail.yaml`; when on, the classifier's slot merges into the
- *   unified trail. Injected for testability — the default reads the persisted config.
  */
 class RecordedTrailsRepoJvm(
   private val trailsDirectory: File = File(System.getProperty("user.home"), ".trailblaze/trails"),
-  private val unifiedRecordingsEnabledProvider: () -> Boolean = { CliConfigHelper.resolveUnifiedRecordingsGate() },
 ) : RecordedTrailsRepo {
 
   // Cache shared flows per directory path to avoid creating multiple watchers for the same directory
@@ -56,27 +48,25 @@ class RecordedTrailsRepoJvm(
     val trailConfig = sessionInfo.trailConfig ?: TrailConfig()
     val classifiers = sessionInfo.trailblazeDeviceInfo?.classifiers ?: listOf()
 
-    // Classifier key (e.g. "android", "ios-iphone") — the unified slot key AND the legacy filename base.
+    // Classifier key (e.g. "android", "ios-iphone") — the unified slot key AND the sibling filename base.
     val suffix = classifiers.joinToString("-") { it.classifier }
 
+    // Everything below is inside the try so a render failure (e.g. a recording shape the unified
+    // format can't hold) becomes a Result.failure the desktop save surfaces as "Save Failed",
+    // not an exception escaping the save coroutine.
     return try {
-      // Re-encode the lowered items to the v1 list shape for legacy/fallback writes. Byte-identical
-      // to the generator's own encode (both use createTrailblazeYaml()'s classpath-discovered tool
-      // set), and encode-only — the save-back no longer decodes through the v1 parser. Inside the
-      // try so an encode failure (e.g. a custom tool serializer throwing) becomes a Result.failure
-      // the desktop save surfaces as "Save Failed", not an exception escaping the save coroutine.
-      val yaml = createTrailblazeYaml().encodeToString(items)
-
       val trailPath = trailConfig.id
       if (trailPath == null) {
         // Fallback: no trail identity → a session-scoped directory that never holds a unified
-        // trail.yaml. No routing applies; keep this write byte-identical to the pre-unified path.
+        // trail.yaml. No routing applies.
         val recordingFile = File(
           trailsDirectory,
           "${sessionInfo.sessionId}/$suffix${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}",
         )
+        val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix)
+          .getOrElse { return Result.failure(it) }
         recordingFile.parentFile?.mkdirs()
-        recordingFile.writeText(yaml)
+        recordingFile.writeText(rendered)
         Console.log("Recording saved to: ${recordingFile.absolutePath}")
         return Result.success(recordingFile.absolutePath)
       }
@@ -85,31 +75,32 @@ class RecordedTrailsRepoJvm(
       // directory IS the trail identity. Create it before routing so the writer resolves the unified
       // target inside it (a not-yet-existing path would otherwise resolve to its parent).
       val trailDir = File(trailsDirectory, trailPath).apply { mkdirs() }
-      // Legacy filename (byte-identical to pre-unified): "<classifiers>.trail.yaml", or the NL
-      // definition filename when there's no classifier.
-      val legacyFileName = if (suffix.isNotEmpty()) {
+      // Per-classifier sibling filename: "<classifiers>.trail.yaml", or the NL definition filename
+      // when there's no classifier.
+      val siblingFileName = if (suffix.isNotEmpty()) {
         "${suffix.removePrefix("-")}${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}"
       } else {
         TrailRecordings.DEFAULT_NL_DEFINITION_FILENAME
       }
 
       // Route through the shared writer (same routing the CLI uses).
-      if (UnifiedRecordingWriter.shouldRouteUnified(trailDir, suffix, unifiedRecordingsEnabledProvider())) {
-        return saveRecordingAsUnified(trailDir, items, yaml, suffix, legacyFileName)
+      if (UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailDir, suffix)) {
+        return saveRecordingAsUnified(trailDir, items, suffix)
       }
 
-      // Legacy write. Refuse to drop a legacy sibling into a migrated directory whose recordings the
-      // legacy write can't update — it would only shadow the unified trail.yaml. A legacy directory
-      // has no unified file, so this never changes byte-for-byte behavior there.
+      // Per-classifier sibling. Refuse to drop one into a directory that already has a shared
+      // unified trail — the sibling can't update it, so it would only shadow it at run time.
       if (UnifiedRecordingWriter.unifiedTrailPresent(trailDir)) {
         return Result.failure(
-          IllegalStateException(UnifiedRecordingWriter.legacyShadowRefusalMessage(legacyFileName, trailDir)),
+          IllegalStateException(UnifiedRecordingWriter.siblingShadowRefusalMessage(siblingFileName, trailDir)),
         )
       }
 
-      val recordingFile = File(trailDir, legacyFileName)
+      val rendered = UnifiedRecordingWriter.renderStandalone(items, suffix)
+        .getOrElse { return Result.failure(it) }
+      val recordingFile = File(trailDir, siblingFileName)
       recordingFile.parentFile?.mkdirs()
-      recordingFile.writeText(yaml)
+      recordingFile.writeText(rendered)
       Console.log("Recording saved to: ${recordingFile.absolutePath}")
       Result.success(recordingFile.absolutePath)
     } catch (e: Exception) {
@@ -120,16 +111,13 @@ class RecordedTrailsRepoJvm(
 
   /**
    * Merge the recorded [items] into the directory's unified `trail.yaml` under [classifier]'s slot,
-   * preserving every other classifier already on disk. Falls back to a legacy sibling (writing the
-   * v1-encoded [yaml]) only for the shapes the unified format can't hold (a multi-tool trailhead)
-   * and refuses a corrupt existing trail rather than clobbering it.
+   * preserving every other classifier already on disk. Refuses rather than clobbering a corrupt
+   * existing trail, or writing a recording shape the unified format can't hold.
    */
   private fun saveRecordingAsUnified(
     trailDir: File,
     items: List<TrailYamlItem>,
-    yaml: String,
     classifier: String,
-    legacyFileName: String,
   ): Result<String> {
     return when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailDir, items, classifier)) {
       is UnifiedRecordingWriter.MergeOutcome.Merged -> {
@@ -137,21 +125,15 @@ class RecordedTrailsRepoJvm(
         Result.success(outcome.target.absolutePath)
       }
 
-      is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported,
-      is UnifiedRecordingWriter.MergeOutcome.NoTarget -> {
-        // The unified format can't hold this recording (e.g. a multi-tool trailhead). Preserve it as
-        // a legacy sibling ONLY when that won't shadow an existing unified trail; otherwise refuse so
-        // we never drop a legacy file beside a migrated `trail.yaml`.
-        if (UnifiedRecordingWriter.unifiedTrailPresent(trailDir)) {
-          Result.failure(IllegalStateException(UnifiedRecordingWriter.legacyShadowRefusalMessage(legacyFileName, trailDir)))
-        } else {
-          val legacyFile = File(trailDir, legacyFileName)
-          legacyFile.parentFile?.mkdirs()
-          legacyFile.writeText(yaml)
-          Console.log("Recording saved to: ${legacyFile.absolutePath}")
-          Result.success(legacyFile.absolutePath)
-        }
-      }
+      is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported -> Result.failure(
+        IllegalStateException(UnifiedRecordingWriter.multiToolTrailheadMessage(outcome.toolCount)),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.NoTarget -> Result.failure(
+        IllegalStateException(
+          "Can't save this recording: no unified trail.yaml target resolved in ${trailDir.absolutePath}.",
+        ),
+      )
 
       is UnifiedRecordingWriter.MergeOutcome.RefusedCorrupt -> Result.failure(
         IllegalStateException(UnifiedRecordingWriter.corruptRefusalMessage(outcome.target, outcome.reason)),
@@ -159,6 +141,10 @@ class RecordedTrailsRepoJvm(
 
       is UnifiedRecordingWriter.MergeOutcome.SkippedEmpty -> Result.failure(
         IllegalStateException(UnifiedRecordingWriter.EMPTY_MERGE_MESSAGE),
+      )
+
+      is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail -> Result.failure(
+        IllegalStateException(UnifiedRecordingWriter.STEPLESS_INTO_EXISTING_MESSAGE),
       )
     }
   }

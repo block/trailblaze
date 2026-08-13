@@ -22,22 +22,52 @@ val REGEX_METACHARACTERS = setOf(
 val IDENTIFIER_REGEX_METACHARACTERS = REGEX_METACHARACTERS - '.'
 
 /**
+ * Wraps [text] in a `\Q...\E` quote section, mirroring `java.util.regex.Pattern.quote` —
+ * which is what `Regex.escape` delegates to on the JVM. An embedded `\E` (which would
+ * terminate the quote early) is handled the way `Pattern.quote` handles it: close the
+ * section, emit an escaped `\E`, reopen.
+ *
+ * Implemented by hand rather than via `Regex.escape` because `Regex.escape` is
+ * platform-dependent: JVM/Android emit `\Q...\E`, but Kotlin/JS escapes per-character.
+ * Selectors are generated on more than one platform (the daemon's JVM recorder and the
+ * report's Kotlin/JS selector engine), and the generated TEXT must be byte-identical
+ * everywhere — it is shown to users, written into trails, and byte-compared by the
+ * engine's cross-platform parity fixtures. Internal so every selector-producing call site
+ * (the escape helpers below, `stableTextAnchorRegex`, `SelectorTemplating`) quotes through
+ * this one platform-stable implementation.
+ */
+internal fun quoteAsRegexLiteral(text: String): String {
+  val firstEmbedded = text.indexOf("\\E")
+  if (firstEmbedded == -1) return "\\Q$text\\E"
+  val out = StringBuilder(text.length + 16)
+  out.append("\\Q")
+  var current = 0
+  var next = firstEmbedded
+  while (next != -1) {
+    out.append(text, current, next)
+    out.append("\\E\\\\E\\Q")
+    current = next + 2
+    next = text.indexOf("\\E", current)
+  }
+  out.append(text, current, text.length)
+  out.append("\\E")
+  return out.toString()
+}
+
+/**
  * Escapes text for use in content selector fields (textRegex, contentDescriptionRegex,
  * labelRegex, etc.). Returns the text as-is when it contains no regex metacharacters
  * (producing cleaner YAML), or wraps in `\Q...\E` when escaping is needed.
  */
 fun escapeForSelector(text: String): String =
-  if (text.any { it in REGEX_METACHARACTERS }) Regex.escape(text) else text
+  if (text.any { it in REGEX_METACHARACTERS }) quoteAsRegexLiteral(text) else text
 
 /**
- * Inverse of [escapeForSelector] for the whole-string `\\Q...\\E` form that `Regex.escape`
- * emits on the JVM: returns the bare literal it stands for, or null when [value] is not a
- * plain quoted literal (so the caller keeps it untouched). Deliberately conservative -- an
- * intentional regex such as a stable-head anchor (`Item \\d+`) never starts with `\\Q`, and a
- * malformed or multi-section value (`\\Qa\\E\\Qb\\E`) is rejected rather than partially
- * un-escaped. Only the `\\Q...\\E` form is handled; other Kotlin targets escape per-character,
- * but selector generation runs host-side on the JVM, so on any other platform this is a null
- * no-op and the selector keeps its escaped form.
+ * Inverse of [escapeForSelector] for the whole-string `\\Q...\\E` form it emits: returns
+ * the bare literal it stands for, or null when [value] is not a plain quoted literal (so
+ * the caller keeps it untouched). Deliberately conservative -- an intentional regex such
+ * as a stable-head anchor (`Item \\d+`) never starts with `\\Q`, and a malformed or
+ * multi-section value (`\\Qa\\E\\Qb\\E`) is rejected rather than partially un-escaped.
  */
 fun unescapeForSelector(value: String?): String? {
   if (value == null || !value.startsWith("\\Q") || !value.endsWith("\\E")) return null
@@ -51,4 +81,4 @@ fun unescapeForSelector(value: String?): String? {
  * identifiers like `com.example.app:id/foo` are emitted without `\Q...\E` quoting.
  */
 fun escapeForIdentifier(text: String): String =
-  if (text.any { it in IDENTIFIER_REGEX_METACHARACTERS }) Regex.escape(text) else text
+  if (text.any { it in IDENTIFIER_REGEX_METACHARACTERS }) quoteAsRegexLiteral(text) else text

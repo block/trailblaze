@@ -16,10 +16,13 @@
 //      RunReportGenerator.sessionMetaJson() — display-name priority, status badge label,
 //      failure reason, duration/ranAt formatting. Field names match the wire format the
 //      generated trailrunner-dtos.ts types describe.
-//   4. The full assembly (buildReportHtmlFromZipBytes): bytes → the exact report HTML both
-//      report-from-zip homes show. This is the one pipeline the in-app ?zip= screen and the
-//      standalone static edition share, so they can't drift; the run-report-core renderer it
-//      composes with is injected (globals in the browser, the required module in tests).
+//   4. The full assembly, in two stages so every home shares the derivation regardless of how it
+//      renders: buildSessionInputsFromZipBytes (bytes → the per-session renderer inputs) and
+//      buildReportHtmlFromZipBytes (those inputs → the exact report HTML). A home that renders into
+//      its own document (the in-app ?zip= screen, the standalone static edition) takes the second;
+//      one that hydrates itself in place (the viewer shell) takes the first and needs neither HTML
+//      builder. The run-report-core renderer both compose with is injected (globals in the browser,
+//      the required module in tests).
 //
 // All request-free: callers hand in the zip bytes (however they fetched them).
 (function () {
@@ -415,19 +418,22 @@
       originalYamlFromLogs: render.originalYamlFromLogs || g.originalYamlFromLogs,
       buildRunReportHtml: render.buildRunReportHtml || g.buildRunReportHtml,
       buildMultiReportHtml: render.buildMultiReportHtml || g.buildMultiReportHtml,
+      packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
     };
   }
 
-  // The one pipeline both report-from-zip homes share — Trail Runner's in-app ?zip= screen and the
-  // standalone static edition — so the two can't drift as the renderer evolves. Composes the
-  // layers above (sessions → per-session run meta + the screenshots the trace references) with the
-  // run-report-core renderer, then emits the single- or multi-session report HTML. Returns
-  // { html, sessions, zipBytes }, where sessions are the per-session renderer inputs.
+  // Stage one of the shared pipeline: zip bytes → the per-session renderer inputs
+  // ({ meta, trace, llmLogs, shots, recordingYaml, originalYaml }), which is exactly what
+  // buildMultiReportHtml's `sessions` takes and what the viewer's payload carries. Split out of
+  // buildReportHtmlFromZipBytes so a caller that renders IN PLACE (the viewer shell hydrating
+  // itself) shares this derivation without going through an HTML string — it needs neither of the
+  // two HTML builders, so it can embed the viewer bundle alone instead of all of run-report-core.
   //
   // options: { render?, onStage?, inflateRaw?, generatedAt? }. render defaults to the browser
-  // globals; inflateRaw defaults to null (browser DecompressionStream); generatedAt defaults to now
-  // and is shared across every session in a multi-session report.
-  function buildReportHtmlFromZipBytes(zipBytes, options) {
+  // globals (only extractTrace / extractLlmLogs / originalYamlFromLogs are consulted here);
+  // inflateRaw defaults to null (browser DecompressionStream); generatedAt defaults to now and is
+  // shared across every session in a multi-session archive.
+  function buildSessionInputsFromZipBytes(zipBytes, options) {
     options = options || {};
     var render = resolveRenderer(options.render);
     var onStage = options.onStage || function () {};
@@ -470,10 +476,32 @@
         });
       });
       return chain.then(function () {
+        return { sessions: inputs, generatedAt: generatedAt, zipBytes: zipBytes.length };
+      });
+    });
+  }
+
+  // Stage two, for the homes that need a standalone document: the session inputs above rendered to
+  // the exact report HTML. Trail Runner's in-app ?zip= screen and the standalone static edition
+  // both land here, so neither can drift from the other as the renderer evolves. Returns
+  // { html, sessions, zipBytes }; options are buildSessionInputsFromZipBytes's.
+  function buildReportHtmlFromZipBytes(zipBytes, options) {
+    options = options || {};
+    var render = resolveRenderer(options.render);
+    return buildSessionInputsFromZipBytes(zipBytes, options).then(function (built) {
+      var inputs = built.sessions;
+      // Compress the per-step view hierarchies before they're serialized into the document (same
+      // gz side-channel the bun driver emits); an older bundle without the packer just embeds
+      // them inline, exactly as before.
+      var pack = render.packSessionInputsHierarchies
+        ? render.packSessionInputsHierarchies(inputs)
+        : Promise.resolve();
+      return Promise.resolve(pack).then(function () {
+        var s0 = inputs[0];
         var html = inputs.length === 1
-          ? render.buildRunReportHtml({ meta: inputs[0].meta, trace: inputs[0].trace, llmLogs: inputs[0].llmLogs, shots: inputs[0].shots })
-          : render.buildMultiReportHtml({ generatedAt: generatedAt, sessions: inputs });
-        return { html: html, sessions: inputs, zipBytes: zipBytes.length };
+          ? render.buildRunReportHtml({ meta: s0.meta, trace: s0.trace, llmLogs: s0.llmLogs, shots: s0.shots, hierarchies: s0.hierarchies || null, hierarchiesGz: s0.hierarchiesGz || null })
+          : render.buildMultiReportHtml({ generatedAt: built.generatedAt, sessions: inputs });
+        return { html: html, sessions: inputs, zipBytes: built.zipBytes };
       });
     });
   }
@@ -500,6 +528,7 @@
     // assembly
     loadZipSessions: loadZipSessions,
     sessionImageDataUri: sessionImageDataUri,
+    buildSessionInputsFromZipBytes: buildSessionInputsFromZipBytes,
     buildReportHtmlFromZipBytes: buildReportHtmlFromZipBytes,
   };
 

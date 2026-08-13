@@ -55,6 +55,71 @@ class CliPathUtilsTest {
   }
 
   @Test
+  fun `findWorkspaceRoot recognizes the standalone trailblaze-config marker`() {
+    File(workDir, "trailblaze-config/trailmaps").mkdirs()
+    val deep = File(workDir, "jobs/onboarding").apply { mkdirs() }
+
+    val found = CliPathUtils.findWorkspaceRoot(deep.toPath())
+    assertEquals(workDir.canonicalFile.toPath(), found?.toRealPath())
+  }
+
+  @Test
+  fun `workspaceConfigDir resolves the legacy layout`() {
+    File(workDir, "trails/config/trailmaps").mkdirs()
+
+    assertEquals(
+      File(workDir, "trails/config").toPath(),
+      CliPathUtils.workspaceConfigDir(workDir.toPath()),
+    )
+  }
+
+  @Test
+  fun `workspaceConfigDir prefers standalone over legacy when both carry trailmaps`() {
+    File(workDir, "trails/config/trailmaps").mkdirs()
+    File(workDir, "trailblaze-config/trailmaps").mkdirs()
+
+    assertEquals(
+      File(workDir, "trailblaze-config").toPath(),
+      CliPathUtils.workspaceConfigDir(workDir.toPath()),
+    )
+  }
+
+  @Test
+  fun `workspaceConfigDir prefers the layout whose trailmaps dir exists`() {
+    // A standalone dir with no trailmaps/ must not shadow a legacy dir that has one.
+    File(workDir, "trailblaze-config").mkdirs()
+    File(workDir, "trails/config/trailmaps").mkdirs()
+
+    assertEquals(
+      File(workDir, "trails/config").toPath(),
+      CliPathUtils.workspaceConfigDir(workDir.toPath()),
+    )
+  }
+
+  @Test
+  fun `workspaceConfigDir falls back to the legacy path when neither layout exists`() {
+    assertEquals(
+      File(workDir, "trails/config").toPath(),
+      CliPathUtils.workspaceConfigDir(workDir.toPath()),
+    )
+  }
+
+  @Test
+  fun `workspaceGeneratedArtifactsRoot anchors per layout`() {
+    val legacyWs = File(workDir, "legacy").apply { File(this, "trails/config/trailmaps").mkdirs() }
+    val standaloneWs = File(workDir, "standalone").apply { File(this, "trailblaze-config/trailmaps").mkdirs() }
+
+    assertEquals(
+      File(legacyWs, "trails").toPath(),
+      CliPathUtils.workspaceGeneratedArtifactsRoot(legacyWs.toPath()),
+    )
+    assertEquals(
+      standaloneWs.toPath(),
+      CliPathUtils.workspaceGeneratedArtifactsRoot(standaloneWs.toPath()),
+    )
+  }
+
+  @Test
   fun `isCommandOnPath finds a binary that always exists on the test agent`() {
     // `/bin/sh` (POSIX) and `cmd.exe` (Windows) are universally on PATH for any agent
     // running these tests. If this assertion fails, either the agent is severely

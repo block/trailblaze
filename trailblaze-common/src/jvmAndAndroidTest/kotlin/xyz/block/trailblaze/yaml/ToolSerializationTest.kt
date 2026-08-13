@@ -37,7 +37,6 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextBySelectorTrai
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
-import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
 
 /**
  * These tests pin down each tool's YAML (de)serialization. The v1 top-level-list trail shape
@@ -46,7 +45,7 @@ import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
  * enclosing document shape — the per-tool object + typed args being asserted are unchanged.
  */
 class ToolSerializationTest {
-  private val trailblazeYaml = createTrailblazeYaml(setOf(TotallyCustomTool::class))
+  private val trailblazeYaml = createTrailblazeYaml()
 
   private val androidClassifier = listOf(TrailblazeDeviceClassifier("android"))
 

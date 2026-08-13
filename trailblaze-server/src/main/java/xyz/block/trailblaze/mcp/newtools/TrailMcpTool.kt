@@ -12,7 +12,6 @@ import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
-import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
 import xyz.block.trailblaze.yaml.TrailYamlItem
@@ -41,16 +40,11 @@ class TrailMcpTool(
   private val logsRepo: LogsRepo? = null,
   /** Provides the active Trailblaze session ID for reading logs. */
   private val sessionIdProvider: (() -> SessionId?)? = null,
-  /**
-   * Resolves the unified-recordings rollout gate for MCP saves (env > persisted config; no CLI
-   * flag). The host wiring the daemon supplies the persisted tier — see [TrailFileManager].
-   */
-  private val unifiedRecordingsEnabled: () -> Boolean = { UnifiedRecordingWriter.resolveGate(null, null) },
 ) : ToolSet {
 
   /** Lazy-initialized file manager for trail operations */
   private val trailFileManager: TrailFileManager by lazy {
-    TrailFileManager(trailsDirectory, unifiedRecordingsEnabled = unifiedRecordingsEnabled)
+    TrailFileManager(trailsDirectory)
   }
 
   /** Lazy-initialized executor for running trails deterministically */
@@ -243,9 +237,9 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    // Write through the shared file manager so this log-backed save honors the same unified-recordings
-    // gate + refusal/merge routing as every other save surface (it's the daemon-default path). Feed the
-    // items straight in — no YAML encode/decode round-trip, so save-back never touches the v1 parser.
+    // Write through the shared file manager so this log-backed save honors the same refusal/merge
+    // routing as every other save surface (it's the daemon-default path). Feed the items straight
+    // in — no YAML encode/decode round-trip.
     val saveResult = trailFileManager.saveTrailItems(trailName, recordedItems, platform)
     return if (saveResult.success) {
       Console.log("[TrailMcpTool] Saved trail from logs to: ${saveResult.filePath}")
@@ -527,7 +521,7 @@ class TrailMcpTool(
   }
 
   private fun handleEditGet(trailFile: String): String {
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(
         success = false,
         error = "Failed to load trail for editing",
@@ -547,7 +541,7 @@ class TrailMcpTool(
     return TrailEditGetResult(
       success = true,
       file = trailFile,
-      title = config?.title,
+      title = trailFileManager.readTrailTitle(trailFile),
       steps = stepInfos,
       totalSteps = steps.size,
       recordedSteps = recorded,
@@ -568,7 +562,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
 
     val mutableSteps = steps.toMutableList()
@@ -593,7 +587,7 @@ class TrailMcpTool(
 
     mutableSteps.add(insertAt, newStep)
 
-    val result = trailFileManager.saveEditedSteps(trailFile, config, mutableSteps)
+    val result = trailFileManager.saveEditedSteps(trailFile, mutableSteps)
     return if (result.success) {
       TrailEditResult(
         success = true,
@@ -628,7 +622,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
 
     if (index < 0 || index >= steps.size) {
@@ -650,7 +644,7 @@ class TrailMcpTool(
     )
     mutableSteps[index] = newStep
 
-    val result = trailFileManager.saveEditedSteps(trailFile, config, mutableSteps)
+    val result = trailFileManager.saveEditedSteps(trailFile, mutableSteps)
     return if (result.success) {
       val changeDesc = if (promptChanged) {
         "Replaced step $index: '${oldStep.prompt.take(40)}' → '${prompt.take(40)}' (recording cleared)"
@@ -687,7 +681,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
 
     val deleteCount = count ?: 1
@@ -703,7 +697,7 @@ class TrailMcpTool(
     val removed = mutableSteps.subList(index, endIndex).map { it.prompt.take(50) }
     mutableSteps.subList(index, endIndex).clear()
 
-    val result = trailFileManager.saveEditedSteps(trailFile, config, mutableSteps)
+    val result = trailFileManager.saveEditedSteps(trailFile, mutableSteps)
     return if (result.success) {
       TrailEditResult(
         success = true,
@@ -733,7 +727,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
 
     if (index < 0 || index >= steps.size) {
@@ -762,7 +756,7 @@ class TrailMcpTool(
     val step = mutableSteps.removeAt(index)
     mutableSteps.add(position, step)
 
-    val result = trailFileManager.saveEditedSteps(trailFile, config, mutableSteps)
+    val result = trailFileManager.saveEditedSteps(trailFile, mutableSteps)
     return if (result.success) {
       TrailEditResult(
         success = true,
@@ -783,7 +777,7 @@ class TrailMcpTool(
     index: Int?,
     count: Int?,
   ): String {
-    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+    val steps = trailFileManager.getEditableSteps(trailFile)
       ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
 
     val mutableSteps = steps.toMutableList()
@@ -817,7 +811,7 @@ class TrailMcpTool(
       }
     }
 
-    val result = trailFileManager.saveEditedSteps(trailFile, config, mutableSteps)
+    val result = trailFileManager.saveEditedSteps(trailFile, mutableSteps)
     return if (result.success) {
       TrailEditResult(
         success = true,

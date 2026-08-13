@@ -60,6 +60,10 @@ dependencies {
 
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-tracing"))
+  // The OkHttp-backed `globalThis.fetch` binding the on-device QuickJS launchers install, so
+  // scripted tools get the same standard fetch surface on-device as on the host launchers.
+  // `implementation`: callers wire the extension into the launcher, they don't re-expose it.
+  implementation(project(":trailblaze-scripting-fetch"))
   implementation(libs.ktor.client.core.jvm)
   implementation(libs.maestro.orchestra) { isTransitive = false }
   implementation(libs.androidx.test.monitor)

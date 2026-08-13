@@ -23,7 +23,7 @@ import xyz.block.trailblaze.ui.tabs.sessions.SessionImportResult
 import xyz.block.trailblaze.ui.tabs.sessions.SessionImporter
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -469,7 +469,18 @@ internal fun Route.sessionRoutes(deps: TrailRunnerDeps) {
       call.respond(HttpStatusCode.NotFound)
       return@get
     }
-    val yaml = withContext(Dispatchers.IO) { logs.generateRecordedYaml(createTrailblazeYaml()) }
+    val yaml = withContext(Dispatchers.IO) { logs.generateUnifiedRecordedYaml(createTrailblazeYaml()) }
+    if (yaml.isBlank()) {
+      // Blank means the session can't be rendered as a trail (no device classifier to key its tools
+      // under, or a shape the format can't hold). Serving it would download a corrupt-looking
+      // zero-byte .trail.yaml that reads as "exported fine, but empty".
+      call.respond(
+        HttpStatusCode.UnprocessableEntity,
+        "Session $id can't be exported as a trail: it has no device classifier to key its " +
+          "recording under, or a shape a trail can't hold.",
+      )
+      return@get
+    }
     val safeName = id.filter { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' }.ifEmpty { "session" }
     call.response.header("Content-Disposition", "attachment; filename=\"$safeName.trail.yaml\"")
     call.respondText(text = yaml, contentType = ContentType.parse("application/yaml"))

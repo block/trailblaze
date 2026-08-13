@@ -150,6 +150,56 @@ data class SessionResult(
   /** Failure reasons from replaced attempts (populated during dedup when this result superseded earlier failures) */
   val replaced_failure_reasons: List<String> = emptyList(),
 
+  /**
+   * [ci_agent_name] of each attempt this result superseded. Without it the deduplicated report
+   * keeps only the winner's agent, so the one question a retry raises — did it clear a wedged
+   * host, or re-run on the same one — is unanswerable from the report and sends the reader into
+   * per-session artifacts. Compare [ci_agent_name] against this list: absent from it means the
+   * retry moved hosts.
+   *
+   * Sparse, like [replaced_failure_kinds]: an attempt whose agent wasn't stamped contributes
+   * nothing, so this is a set to test membership against and must not be indexed against
+   * [replaced_session_ids].
+   */
+  val replaced_agent_names: List<String> = emptyList(),
+
+  /**
+   * [failure_kind] of each replaced attempt that carried one, in attempt order.
+   *
+   * Dedup keeps one result per test, so without this the earlier attempts' classification is
+   * gone and the only kind left to read is the surviving attempt's. Anything asking "did this
+   * fail the same way twice?" would then have a single classification to reason about and would
+   * be describing the pair by one of its halves. Kept alongside [replaced_failure_reasons] so a
+   * consumer can classify each attempt and then combine, rather than classify the survivor and
+   * call it the verdict.
+   *
+   * Sparse by construction: an attempt whose failure has no structured kind contributes nothing,
+   * so this can be shorter than [replaced_session_ids] and must not be indexed against it.
+   */
+  val replaced_failure_kinds: List<String> = emptyList(),
+
+  /**
+   * [outcome] of every replaced attempt, in attempt order.
+   *
+   * This is what makes "did an earlier attempt fail?" answerable without a failure string.
+   * [replaced_failure_reasons] can only see a failure that recorded prose, and a failure that
+   * recorded none is indistinguishable from a rerun that never failed — so a rescue would be
+   * reported as a plain rerun and lose the warning it earned.
+   *
+   * Dense, unlike [replaced_failure_kinds]: every attempt has an outcome, so this is index-aligned
+   * with [replaced_session_ids] and a consumer may pair them.
+   */
+  val replaced_outcomes: List<Outcome> = emptyList(),
+
+  /**
+   * What this test's attempts, taken together, say about the product — see [CombinedVerdict].
+   *
+   * [outcome] describes only the attempt that survived dedup, so on its own it cannot distinguish
+   * a failure that reproduced from one a retry replaced with a timeout. Null on reports generated
+   * before this existed, which consumers must render as unclassified rather than as any verdict.
+   */
+  val combined_verdict: CombinedVerdict? = null,
+
   /** Priority label for this test (e.g. "P0", "P1", "P2"). Null when not set. */
   val priority: String? = null,
 
@@ -161,6 +211,16 @@ data class SessionResult(
    * pre-provenance log archives.
    */
   val ci_job_id: String? = null,
+
+  /**
+   * CI agent (worker host) that executed this session. Two attempts of the same test carrying
+   * the same value ran on the same machine, so a retry that "cleared" a wedged host can be told
+   * apart from one that merely re-ran on it — without this, a rescue and a genuine reproduction
+   * are indistinguishable in the report. Nullable, and independently so: an agent name the
+   * upload script cannot safely serialize is omitted while [ci_job_id] is still stamped, and
+   * every log archive predating this field lacks it entirely.
+   */
+  val ci_agent_name: String? = null,
 
   /**
    * Filename of the per-session zip artifact that contains this session's logs

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -314,31 +315,50 @@ class TrailblazeDeviceManager(
   /** Guards [getOrCreateSessionResolution] against concurrent session creation for the same device. */
   private val sessionCreationLock = Any()
 
+  // SupervisorJob: children of this scope include long-lived collectors, fire-and-forget
+  // discovery refreshes (which rethrow on discovery failure), and every [DeviceAppInventory]
+  // probe. Without a supervisor, one failed child would cancel the scope's Job and every future
+  // probe would come back as an already-cancelled Deferred.
+  private val loadDevicesScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
   /**
-   * Tracks installed app IDs per device.
-   * Populated when loadDevices() is called.
+   * On-demand per-device app inventory (installed app IDs + version info). Discovery no longer
+   * probes this eagerly — the per-device probe (`pm list packages` / `simctl listapps`) was the
+   * dominant cost of every enumeration whenever an iOS simulator was booted (OSS issue
+   * block/trailblaze#216). Consumers that need inventory pull it via [refreshAppInventory] /
+   * [refreshAppInventoryAsync]; discovery only [DeviceAppInventory.prune]s disconnected devices.
    */
-  private val _installedAppIdsByDeviceFlow = MutableStateFlow<Map<TrailblazeDeviceId, Set<String>>>(emptyMap())
+  private val appInventory = DeviceAppInventory(
+    scope = loadDevicesScope,
+    installedAppIdsProvider = { deviceId ->
+      // runWithTimeout's null (timeout / failure) IS the probe-failure signal the inventory
+      // wants — do not coerce it to an empty set, which downstream reads as "nothing installed".
+      runWithTimeout(10, deviceId.instanceId, "installed apps") {
+        installedAppIdsProviderBlocking(deviceId)
+      }
+    },
+    appVersionInfoProvider = { deviceId, appId ->
+      runWithTimeout(10, deviceId.instanceId, "version info for $appId") {
+        appVersionInfoProviderBlocking(deviceId, appId)
+      }
+    },
+  )
+
+  /** Last-probed installed app IDs per device — see [DeviceAppInventory.installedAppIdsByDeviceFlow]. */
   val installedAppIdsByDeviceFlow: StateFlow<Map<TrailblazeDeviceId, Set<String>>> =
-    _installedAppIdsByDeviceFlow.asStateFlow()
+    appInventory.installedAppIdsByDeviceFlow
 
-  /**
-   * Tracks app version info per device.
-   * Key is a DeviceAppKey (deviceId, appId) to support multiple apps per device.
-   * Populated when loadDevices() is called.
-   */
-  private val _appVersionInfoByDeviceFlow = MutableStateFlow<Map<DeviceAppKey, AppVersionInfo>>(emptyMap())
+  /** Last-probed version info per (device, app) — see [DeviceAppInventory.appVersionInfoByDeviceFlow]. */
   val appVersionInfoByDeviceFlow: StateFlow<Map<DeviceAppKey, AppVersionInfo>> =
-    _appVersionInfoByDeviceFlow.asStateFlow()
-
-  private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
+    appInventory.appVersionInfoByDeviceFlow
 
   // Mutex to coalesce concurrent loadDevices calls — if one is running, others wait for it.
   private val loadDevicesMutex = kotlinx.coroutines.sync.Mutex()
 
   // Short-TTL cache so the several *sequential* discovery passes one CLI command fans out into
   // (LIST, platform-select, connect fallback, session pin) share ONE real enumeration instead of
-  // each re-running `adb devices` + `pm list packages` (and, on macOS, `xcrun simctl` + `plutil`).
+  // each re-running `adb devices` (and, on macOS, `xcrun simctl list`). The per-device installed
+  // -apps probe that used to dominate a pass now runs on demand — see [appInventory].
   // See [DeviceDiscoveryCache] for the freshness/invalidation contract.
   private val discoveryCache = DeviceDiscoveryCache(ttlMs = resolveDiscoveryCacheTtlMs())
 
@@ -1137,36 +1157,12 @@ class TrailblazeDeviceManager(
       val devicesForState = targetDeviceFilter(allDevices)
       val devicesToReturn = if (applyDriverFilter) devicesForState else allDevices
 
-      // Query installed app IDs for each device (with per-device timeout to avoid hanging)
-      val installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>> = devicesForState.associate { device ->
-        val appIds = runWithTimeout(10, device.instanceId, "installed apps") {
-          installedAppIdsProviderBlocking(device.trailblazeDeviceId)
-        } ?: emptySet()
-        device.trailblazeDeviceId to appIds
-      }
-      _installedAppIdsByDeviceFlow.value = installedAppIdsByDevice
-
-      // Query version info only for apps that belong to available app targets (not all installed apps)
-      // This is important for performance - querying version info for all apps would be very slow
-      val relevantAppIds = availableAppTargets.flatMap { target ->
-        target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID).orEmpty() +
-            target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS).orEmpty()
-      }.toSet()
-
-      val appVersionInfoByDevice = mutableMapOf<DeviceAppKey, AppVersionInfo>()
-      devicesForState.forEach { device ->
-        val installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
-        val appsToQuery = installedAppIds.intersect(relevantAppIds)
-        appsToQuery.forEach { appId ->
-          val versionInfo = runWithTimeout(10, device.instanceId, "version info for $appId") {
-            appVersionInfoProviderBlocking(device.trailblazeDeviceId, appId)
-          }
-          if (versionInfo != null) {
-            appVersionInfoByDevice[DeviceAppKey(device.trailblazeDeviceId, appId)] = versionInfo
-          }
-        }
-      }
-      _appVersionInfoByDeviceFlow.value = appVersionInfoByDevice
+      // Discovery does NOT probe installed apps / version info — the per-device probe (a
+      // `pm list packages` per Android device, a multi-second `simctl listapps` per booted iOS
+      // simulator) is exactly what made every enumeration slow (OSS issue block/trailblaze#216). Consumers pull
+      // inventory on demand via [refreshAppInventory]; discovery only drops stale entries for
+      // devices that are no longer connected.
+      appInventory.prune(allDevices.map { it.trailblazeDeviceId }.toSet())
 
       withContext(Dispatchers.Default) {
         publishFilteredDeviceState(devicesForState)
@@ -1504,14 +1500,60 @@ class TrailblazeDeviceManager(
     }
   }
 
-  fun getInstalledAppIdsFlow(trailblazeDeviceId: TrailblazeDeviceId): StateFlow<Set<String>> {
-    return installedAppIdsByDeviceFlow.map { it[trailblazeDeviceId] ?: emptySet() }
-      .stateIn(
-        loadDevicesScope,
-        SharingStarted.Eagerly,
-        installedAppIdsByDeviceFlow.value[trailblazeDeviceId] ?: emptySet()
-      )
+  /**
+   * Probes [trailblazeDeviceId]'s installed apps now, publishes
+   * [installedAppIdsByDeviceFlow] / [appVersionInfoByDeviceFlow], and returns the installed app
+   * IDs — or **null** if the probe failed (nothing is published in that case; see
+   * [DeviceAppInventory]). Null is not an empty set: a caller that gates on installation must
+   * not read a failed probe as "nothing is installed". Always a fresh probe (the caller may
+   * have just installed an app); concurrent calls for the same device share one probe.
+   *
+   * [includeVersionInfo] also probes version info for target-relevant installed apps — on iOS
+   * each version probe is its own `simctl listapps` run, so callers that only consume the
+   * installed-ID set (the MCP bridge's `getInstalledAppIds`) pass `false` and skip that fan-out;
+   * UI that renders version badges keeps the default. Skipping the fan-out never clears version
+   * entries already known for still-installed apps.
+   */
+  suspend fun refreshAppInventory(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    includeVersionInfo: Boolean = true,
+  ): Set<String>? = appInventory.refresh(
+    deviceId = trailblazeDeviceId,
+    relevantAppIds = if (includeVersionInfo) relevantAppIdsForVersionInfo() else emptySet(),
+  )
+
+  /**
+   * Fire-and-forget [refreshAppInventory] for each mobile device in [deviceIds] — the reactive
+   * trigger for UI that renders from the inventory flows (Run Configuration dialog, debug tab).
+   * Virtual devices (web, Compose desktop) have no installable apps and are skipped, and
+   * duplicate ids collapse (two driver rows can share one [TrailblazeDeviceId]).
+   *
+   * Retries a failed probe once. The UI triggers this from an effect keyed on the device list,
+   * so without a retry a single timeout would leave that device rendered as "app not
+   * installed" until the user happened to hit Refresh — where discovery used to re-attempt the
+   * probe on its next pass.
+   */
+  fun refreshAppInventoryAsync(deviceIds: Collection<TrailblazeDeviceId>) {
+    deviceIds
+      .toSet()
+      .filter { !it.trailblazeDevicePlatform.usesVirtualDevice }
+      .forEach { deviceId ->
+        loadDevicesScope.launch {
+          if (refreshAppInventory(deviceId) == null) {
+            refreshAppInventory(deviceId)
+          }
+        }
+      }
   }
+
+  /**
+   * Version info is probed only for apps that belong to available app targets — probing every
+   * installed app would be very slow.
+   */
+  private fun relevantAppIdsForVersionInfo(): Set<String> = availableAppTargets.flatMap { target ->
+    target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID).orEmpty() +
+      target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS).orEmpty()
+  }.toSet()
 
   /** Outcome of the pure [appendNewTarget] decision — one variant per caller-observable branch. */
   internal sealed interface AppendDecision {

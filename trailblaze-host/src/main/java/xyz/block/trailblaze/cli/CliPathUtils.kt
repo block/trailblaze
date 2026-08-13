@@ -1,10 +1,12 @@
 package xyz.block.trailblaze.cli
 
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isWindows
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Cross-cutting filesystem / PATH helpers shared by the CLI subcommands.
@@ -19,8 +21,9 @@ import java.nio.file.Path
 internal object CliPathUtils {
 
   /**
-   * Walks up from [startPath] looking for the workspace marker
-   * (`trails/config/trailmaps/`). Returns the first ancestor that contains it, or
+   * Walks up from [startPath] looking for the workspace marker — a `trailmaps/` directory
+   * inside either workspace config-dir layout (`trailblaze-config/trailmaps/` or the legacy
+   * `trails/config/trailmaps/`). Returns the first ancestor that contains one, or
    * `null` when the walk reaches the filesystem root with no match.
    *
    * Walking continues straight through intermediate `trailmap.yaml`-bearing
@@ -37,13 +40,75 @@ internal object CliPathUtils {
     val startDir = startPath.toAbsolutePath().normalize()
     var current: Path? = if (Files.isRegularFile(startDir)) startDir.parent else startDir
     while (current != null) {
-      val marker = current.resolve(TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
-      if (Files.isDirectory(marker)) {
-        return current
+      val ancestor: Path = current
+      if (candidateTrailmapsDirs(ancestor).any { Files.isDirectory(it) }) {
+        return ancestor
       }
       current = current.parent
     }
     return null
+  }
+
+  /**
+   * The workspace config dir under [workspaceRoot], honoring both layouts: the standalone
+   * `trailblaze-config/` wins over the legacy `trails/config/` when both carry a
+   * `trailmaps/` subdirectory (with a one-time warning); a layout whose `trailmaps/`
+   * exists wins over one that merely has the directory. Falls back to the legacy path
+   * when neither exists, so error messages and scaffolding have a conventional default.
+   */
+  fun workspaceConfigDir(workspaceRoot: Path): Path {
+    val withMarker = TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES
+      .map { workspaceRoot.resolve(it) }
+      .filter { Files.isDirectory(it.resolve(TrailblazeConfigPaths.TRAILMAPS_SUBDIR)) }
+    if (withMarker.size > 1) warnBothConfigDirsOnce(workspaceRoot)
+    withMarker.firstOrNull()?.let { return it }
+    return TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES
+      .map { workspaceRoot.resolve(it) }
+      .firstOrNull { Files.isDirectory(it) }
+      ?: workspaceRoot.resolve(TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR)
+  }
+
+  /** The workspace trailmaps dir under [workspaceRoot] — `<workspaceConfigDir>/trailmaps`. */
+  fun workspaceTrailmapsDir(workspaceRoot: Path): Path =
+    workspaceConfigDir(workspaceRoot).resolve(TrailblazeConfigPaths.TRAILMAPS_SUBDIR)
+
+  /**
+   * True when [workspaceRoot] carries the workspace marker (a `trailmaps/` dir in either
+   * config-dir layout) — the same predicate [findWorkspaceRoot] walks up on.
+   */
+  fun hasWorkspaceMarker(workspaceRoot: Path): Boolean =
+    candidateTrailmapsDirs(workspaceRoot).any { Files.isDirectory(it) }
+
+  /**
+   * The directory generated artifacts (`.trailblaze/`) anchor under for [workspaceRoot]:
+   * the parent of the resolved config dir — `<root>/trails` for the legacy layout, the
+   * workspace root itself for the standalone layout. Matches the daemon-side rule
+   * (`WorkspaceCompileBootstrap` anchors on `configDir.parentFile`), so the CLI and the
+   * daemon generate into the same `.trailblaze/` tree for a given workspace.
+   */
+  fun workspaceGeneratedArtifactsRoot(workspaceRoot: Path): Path =
+    workspaceConfigDir(workspaceRoot).parent ?: workspaceRoot
+
+  /** Human-readable marker description for error messages that name the walk-up target. */
+  val workspaceMarkerLabel: String =
+    TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES
+      .joinToString("` or `") { "$it/${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}/" }
+
+  private fun candidateTrailmapsDirs(root: Path): List<Path> =
+    TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES
+      .map { root.resolve(it).resolve(TrailblazeConfigPaths.TRAILMAPS_SUBDIR) }
+
+  /** Once per JVM per root — the CLI resolves the config dir many times per invocation. */
+  private val bothConfigDirsWarned = ConcurrentHashMap.newKeySet<Path>()
+
+  private fun warnBothConfigDirsOnce(root: Path) {
+    if (!bothConfigDirsWarned.add(root.toAbsolutePath().normalize())) return
+    Console.info(
+      "Warning: both `${TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR}/` and " +
+        "`${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/` exist under $root. Using " +
+        "`${TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR}/`; " +
+        "consolidate into one directory to silence this warning.",
+    )
   }
 
   /**

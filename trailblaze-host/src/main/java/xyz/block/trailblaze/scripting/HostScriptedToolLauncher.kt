@@ -91,8 +91,8 @@ object HostScriptedToolLauncher {
     // Host daemon opts in to a real `fetch` for in-process scripted tools (replaces shelling curl
     // via `ctx.tools.exec`). Unrestricted by default — same reach as the `curl` it replaces; a
     // deployment that wants to constrain it passes a FetchHostAllowlist. One shared instance per
-    // launch (OkHttp pools connections). On-device leaves this null; the engine module never sees
-    // OkHttp.
+    // launch (OkHttp pools connections). The on-device launchers install the same extension; it's
+    // the lean engine module itself that never sees OkHttp.
     val fetchExtension = OkHttpFetchExtension()
 
     // Idempotent launch: skip target-declared tools already registered on this repo by an earlier

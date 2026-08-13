@@ -113,7 +113,10 @@ val bundleRunReportCore by tasks.registering(Exec::class) {
   val out = layout.buildDirectory.file(
     "generated-resources/run-report/xyz/block/trailblaze/trailrunner/web/app/run-report-core.js",
   )
-  inputs.files(fileTree(srcDir) { include("*.ts") }.filter { !it.name.endsWith(".test.ts") })
+  // Includes *.js, not just *.ts: this directory also holds hand-written classic scripts
+  // (zip-report-core.js) that a bun macro reads at transpile time, so a .js-only edit must still
+  // invalidate the task — otherwise a stale copy ships until the next clean build.
+  inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
   outputs.file(out)
   workingDir(srcDir)
   commandLine(
@@ -140,7 +143,7 @@ val bundlePerfReportCore by tasks.registering(Exec::class) {
   val out = layout.buildDirectory.file(
     "generated-resources/perf-report/xyz/block/trailblaze/trailrunner/web/app/perf-core.js",
   )
-  inputs.files(fileTree(srcDir) { include("*.ts") }.filter { !it.name.endsWith(".test.ts") })
+  inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
   outputs.file(out)
   workingDir(srcDir)
   commandLine(

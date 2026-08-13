@@ -18,7 +18,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.modules.SerializersModule
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.yaml.serializers.TrailYamlItemSerializer
 import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
@@ -192,8 +191,6 @@ class TrailblazeYaml internal constructor(
 
   private val trailblazeToolYamlWrapperSerializer: TrailblazeToolYamlWrapperSerializer
 
-  val trailYamlItemSerializer: TrailYamlItemSerializer
-
   /** Custom KAML serializer for [UnifiedTrailStep]; handles the dynamic per-classifier keys. */
   val unifiedTrailStepSerializer: UnifiedTrailStepSerializer
 
@@ -213,16 +210,11 @@ class TrailblazeYaml internal constructor(
       toolSerializersByName = toolSerializersByName,
       yamlInstanceProvider = { lazyYaml ?: error("Yaml instance not yet initialized") },
     )
-    trailYamlItemSerializer = TrailYamlItemSerializer(
-      defaultYamlInstance,
-      trailblazeToolYamlWrapperSerializer,
-    )
     unifiedTrailStepSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer)
     unifiedTrailheadSerializer = UnifiedTrailStepSerializer(trailblazeToolYamlWrapperSerializer, isTrailhead = true)
     yamlInstance = Yaml(
       configuration = yamlConfigurationWithStrictness(strict),
       serializersModule = SerializersModule {
-        contextual(TrailYamlItem::class, trailYamlItemSerializer)
         contextual(TrailblazeToolYamlWrapper::class, trailblazeToolYamlWrapperSerializer)
         contextual(UnifiedTrailStep::class, unifiedTrailStepSerializer)
       },
@@ -242,24 +234,11 @@ class TrailblazeYaml internal constructor(
       ),
     )
 
-  @OptIn(ExperimentalSerializationApi::class)
-  fun encodeToString(items: List<TrailYamlItem>): String {
-    val encoded = yamlInstance.encodeToString(
-      ListSerializer(
-        yamlInstance.serializersModule.getContextual(TrailYamlItem::class)
-          ?: error("Missing contextual serializer for TrailYamlItem"),
-      ),
-      items,
-    )
-    return if (encoded.endsWith("\n")) encoded else "$encoded\n"
-  }
-
   /**
    * Encode a bare tool-wrapper list — `- <toolName>:` at the root, NOT wrapped in a `- tools:`
    * trail item. This is the wire shape of the on-device-RPC per-tool dispatch envelope (the host
    * serializes one authored tool, sends it to the device, and the device runs it). Decoded back
-   * via [decodeTools] / [decodeTrailOrToolEnvelope], never via [decodeTrailDocument] — so the
-   * per-tool round trip carries no dependency on the legacy list-shape trail parser.
+   * via [decodeTools] / [decodeTrailOrToolEnvelope], never via [decodeTrailDocument].
    */
   @OptIn(ExperimentalSerializationApi::class)
   fun encodeTools(tools: List<TrailblazeToolYamlWrapper>): String {

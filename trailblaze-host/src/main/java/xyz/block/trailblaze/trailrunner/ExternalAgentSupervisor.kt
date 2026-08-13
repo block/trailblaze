@@ -27,6 +27,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.cli.CliConfigHelper
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -2231,15 +2232,25 @@ internal fun generationPreamble(demo: DemoRunState, bundleDir: File, trailsRoot:
 
 /**
  * The workspace root a generation run should cwd into: the directory that owns `./trailblaze` and
- * `.claude/skills`, one level above the `trails/` dir. When [trailsRoot] is a configured `trails/`
- * dir (it carries `config/trailblaze.yaml`), the root is its parent; otherwise [trailsRoot] itself.
+ * `.claude/skills`. When [trailsRoot] is a configured legacy `trails/` dir (it carries
+ * `config/trailblaze.yaml`), the root is its parent; a standalone-layout workspace root (it
+ * carries `trailblaze-config/trailblaze.yaml`) is already the root; otherwise [trailsRoot] itself.
  *
  * Mirrors findWorkspaceRoot's anchor rule (WorkspaceRoot.kt) but returns the directory ABOVE
- * `trails/`, which is what the CLI/MCP-proxy launcher and skill walk-up need - the helper returns the
- * `trails/` dir itself, so it is not reusable here directly.
+ * a legacy `trails/` dir, which is what the CLI/MCP-proxy launcher and skill walk-up need - the
+ * helper returns the config-owning dir itself, so it is not reusable here directly.
  */
-internal fun workspaceRootForGeneration(trailsRoot: File): File =
-  if (File(trailsRoot, "config/trailblaze.yaml").isFile) trailsRoot.parentFile ?: trailsRoot else trailsRoot
+internal fun workspaceRootForGeneration(trailsRoot: File): File = when {
+  File(
+    trailsRoot,
+    "${TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR}/${TrailblazeConfigPaths.CONFIG_FILENAME}",
+  ).isFile -> trailsRoot
+  File(
+    trailsRoot,
+    "${TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR}/${TrailblazeConfigPaths.CONFIG_FILENAME}",
+  ).isFile -> trailsRoot.parentFile ?: trailsRoot
+  else -> trailsRoot
+}
 
 /** Suggested destination folder for a generated trail: `<target-or-area>/<kebab-slug-of-objective>/`. */
 internal fun suggestedTrailDir(demo: DemoRunState): String {

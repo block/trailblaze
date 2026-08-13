@@ -36,6 +36,24 @@ object TrailblazeConfigPaths {
   /** Relative path from repo/workspace root to the project-local config directory. */
   const val WORKSPACE_CONFIG_DIR = "$WORKSPACE_TRAILS_DIR/$WORKSPACE_CONFIG_SUBDIR"
 
+  /**
+   * Standalone workspace config directory, directly under the workspace root with no
+   * intermediate `trails/` segment. Supported alongside [WORKSPACE_CONFIG_DIR] so a
+   * workspace that doesn't keep its trails under a top-level `trails/` directory
+   * (e.g. trails co-located with the features they test) still has a conventional
+   * home for config. Workspace-only — the classpath prefix stays [CONFIG_DIR].
+   */
+  const val WORKSPACE_STANDALONE_CONFIG_DIR = "trailblaze-config"
+
+  /**
+   * Workspace config-dir candidates relative to a workspace root, in precedence order:
+   * [WORKSPACE_STANDALONE_CONFIG_DIR] wins over the legacy [WORKSPACE_CONFIG_DIR] when
+   * both exist at the same root. Every filesystem probe for "where is this workspace's
+   * config dir?" iterates this list so the precedence rule can't drift between resolvers.
+   */
+  val WORKSPACE_CONFIG_DIR_CANDIDATES: List<String> =
+    listOf(WORKSPACE_STANDALONE_CONFIG_DIR, WORKSPACE_CONFIG_DIR)
+
   /** Relative path from repo/workspace root to the project-local config file. */
   const val WORKSPACE_CONFIG_FILE = "$WORKSPACE_CONFIG_DIR/$CONFIG_FILENAME"
 

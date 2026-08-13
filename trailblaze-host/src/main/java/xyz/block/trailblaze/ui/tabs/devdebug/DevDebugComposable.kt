@@ -116,6 +116,12 @@ private fun DeviceManagerDebugTab(deviceManager: TrailblazeDeviceManager) {
   val deviceState = deviceManager.deviceStateFlow.collectAsState()
   val installedApps = deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
+  // Inventory is probed on demand (discovery no longer populates it — OSS issue block/trailblaze#216): probe the
+  // known devices so the installed-apps section below has data to show.
+  LaunchedEffect(deviceState.value.devices.keys) {
+    deviceManager.refreshAppInventoryAsync(deviceState.value.devices.keys)
+  }
+
   Column(
     modifier = Modifier
       .fillMaxSize()
@@ -123,7 +129,14 @@ private fun DeviceManagerDebugTab(deviceManager: TrailblazeDeviceManager) {
     verticalArrangement = Arrangement.spacedBy(12.dp)
   ) {
     // Actions Section
-    Button(onClick = { deviceManager.loadDevices() }) {
+    Button(
+      onClick = {
+        deviceManager.loadDevices()
+        // Discovery no longer probes app inventory, and the effect above is keyed on the device
+        // set — a reload that finds the same devices wouldn't refire it.
+        deviceManager.refreshAppInventoryAsync(deviceState.value.devices.keys)
+      }
+    ) {
       Text("Load Devices")
     }
 

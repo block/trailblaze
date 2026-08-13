@@ -36,9 +36,10 @@ import java.util.concurrent.Callable
  * they never re-resolve trailmaps. This keeps trailmap semantics in one place
  * (the compiler) and the runtime hot path simple.
  *
- * The command resolves paths against the workspace root (the nearest
- * ancestor directory of the CWD containing `trails/config/trailmaps/`), not the
- * CWD itself, so running `trailblaze compile` from any subdirectory of a
+ * The command resolves paths against the workspace root (the nearest ancestor
+ * directory of the CWD containing `trailblaze-config/trailmaps/` or the legacy
+ * `trails/config/trailmaps/`), not the CWD itself, so running `trailblaze compile`
+ * from any subdirectory of a
  * workspace — including a trailmap's `tools/` dir several levels deep — works
  * the same as running it from the root. Same UX as `git`.
  */
@@ -62,8 +63,9 @@ class CompileCommand : Callable<Int> {
     description = [
       "Directory whose `trailmaps/` subdirectory holds one <id>/trailmap.yaml per trailmap " +
         "(the compiler reads `<input>/trailmaps/<id>/trailmap.yaml`). " +
-        "Defaults to <workspace-root>/trails/config — the workspace root is found by " +
-        "walking up from the current directory looking for `trails/config/trailmaps/`, " +
+        "Defaults to the workspace config dir (<workspace-root>/trailblaze-config, or the legacy " +
+        "<workspace-root>/trails/config) — the workspace root is found by walking up from the " +
+        "current directory looking for either layout's `trailmaps/` marker, " +
         "the same way `git` walks up to find `.git/`.",
     ],
   )
@@ -73,7 +75,8 @@ class CompileCommand : Callable<Int> {
     names = ["--output", "-o"],
     description = [
       "Directory to emit resolved <id>.yaml files into. " +
-        "Defaults to <workspace-root>/trails/config/dist/targets.",
+        "Defaults to <input-dir>/dist/targets (e.g. <workspace-root>/trailblaze-config/dist/targets, " +
+        "or the legacy <workspace-root>/trails/config/dist/targets).",
     ],
   )
   var outputDir: File? = null
@@ -88,38 +91,41 @@ class CompileCommand : Callable<Int> {
       val startAbs = callerCwd.toAbsolutePath().normalize()
       Console.error(
         "trailblaze $commandLabel: not inside a Trailblaze workspace. Walked up from " +
-          "$startAbs to the filesystem root and found no `trails/config/trailmaps/` " +
+          "$startAbs to the filesystem root and found no `${CliPathUtils.workspaceMarkerLabel}` " +
           "marker. Either `cd` into a workspace tree (so the walk-up can find the " +
           "workspace root) or pass --input pointing at a directory whose `trailmaps/` " +
           "subdirectory holds your trailmap manifests.",
       )
       return EXIT_USAGE
     }
-    val resolvedInputDir = inputDir ?: File(discoveredWorkspaceRoot!!.toFile(), TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR)
-    // When --input is explicit and discovery found nothing, anchor default paths off
-    // <inputDir>/.. (the conventional `<root>/trails/config` shape becomes `<root>`).
+    val resolvedInputDir = inputDir ?: CliPathUtils.workspaceConfigDir(discoveredWorkspaceRoot!!).toFile()
+    // When --input is explicit and discovery found nothing, anchor default paths off the
+    // directory that owns the config dir — `<root>` for `<root>/trailblaze-config`,
+    // `<root>` for the conventional `<root>/trails/config` (two levels up).
     // Log it so the user knows TS setup is about to write into a non-workspace tree.
     val workspaceRoot = discoveredWorkspaceRoot?.toFile() ?: run {
-      val derived = resolvedInputDir.canonicalFile.parentFile?.parentFile
-        ?: resolvedInputDir.canonicalFile
+      val canonical = resolvedInputDir.canonicalFile
+      val derived = if (canonical.name == TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR) {
+        canonical.parentFile ?: canonical
+      } else {
+        canonical.parentFile?.parentFile ?: canonical
+      }
       Console.log(
         "trailblaze $commandLabel: no workspace marker discovered above ${callerCwd.toAbsolutePath().normalize()}; " +
           "using ${derived.absolutePath} as the workspace root (derived from --input).",
       )
       derived
     }
+    // Anchored inside the input dir so the two layouts can't diverge: for the discovered
+    // legacy layout this is byte-identical to the old `<root>/trails/config/dist/targets`.
     val resolvedOutputDir = outputDir
-      ?: File(
-        workspaceRoot,
-        "${TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR}/" +
-          TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH,
-      )
+      ?: File(resolvedInputDir, TrailblazeConfigPaths.WORKSPACE_DIST_TARGETS_SUBPATH)
 
     val trailmapsDir = File(resolvedInputDir, "trailmaps")
     if (!trailmapsDir.isDirectory) {
       Console.error(
         "trailblaze $commandLabel: no trailmaps/ directory found under ${resolvedInputDir.absolutePath}; " +
-          "nothing to compile. Hint: run from a workspace whose `trails/config/trailmaps/` " +
+          "nothing to compile. Hint: run from a workspace whose `${CliPathUtils.workspaceMarkerLabel}` " +
           "exists, or pass --input pointing at a directory that contains `trailmaps/`.",
       )
       return EXIT_USAGE
@@ -202,7 +208,8 @@ class CompileCommand : Callable<Int> {
     // see breakage immediately rather than discovering missing bindings later when their
     // IDE shows `any` everywhere.
     //
-    // `generatorRoot` is the workspace root (`trails/` dir). Derived from
+    // `generatorRoot` is the directory that owns the config dir (`trails/` for the legacy
+    // layout, the workspace root for the standalone layout). Derived from
     // `resolvedInputDir.parentFile` so a `--input` override points codegen at the same
     // workspace tree as the inputs. Canonicalize first: `--input .` or any relative path
     // with no parent segment would give `parentFile == null`. `canonicalFile` resolves to
@@ -395,8 +402,8 @@ class CompileCommand : Callable<Int> {
   }
 
   /**
-   * Walks up from [startPath] looking for the `trails/config/trailmaps/` workspace
-   * marker. Delegates to the shared [CliPathUtils.findWorkspaceRoot] so this
+   * Walks up from [startPath] looking for the workspace marker (a `trailmaps/` dir in
+   * either config-dir layout). Delegates to the shared [CliPathUtils.findWorkspaceRoot] so this
    * command, [CheckCommand], and any future trailmaps-walking subcommand stay
    * in sync on workspace discovery semantics.
    *

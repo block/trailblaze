@@ -23,6 +23,16 @@ win — the hook only creates files that don't already exist.
 Runs automatically on every `mkdocs build`/`serve`; no workflow wiring or staging step
 needed. The gallery slugs come from the showcase manifest (`docs/showcase-trails.yml`),
 so adding/retargeting a platform there is the only edit needed.
+
+Report-viewer placeholder filling
+---------------------------------
+`docs/report-viewer/index.html` is the hosted standalone report viewer — one generated,
+self-contained file that renders any session archive in the browser. Like the gallery
+assets it is NOT committed: the GitHub Pages workflow builds it with
+`scripts/build-viewer-shell.sh` (which needs `bun`) into the docs dir just before
+`mkdocs build`. So that a docs build without `bun` — a contributor's `mkdocs serve`, the
+PR docs-build-check — still resolves the links pointing at it under `--strict`, this hook
+drops a short stand-in page there when the real one is absent. The real file always wins.
 """
 
 from pathlib import Path
@@ -64,9 +74,34 @@ _PENDING_HTML = """<!doctype html>
 """
 
 
+_VIEWER_PENDING_HTML = """<!doctype html>
+<meta charset="utf-8">
+<title>Trailblaze report viewer - built by the docs deploy</title>
+<body style="font-family:Inter,-apple-system,sans-serif;max-width:42rem;margin:4rem auto;padding:0 1.5rem;color:#1b4332;line-height:1.6">
+  <h1>Report viewer built by the docs deploy</h1>
+  <p>The standalone report viewer is generated at deploy time and published with the docs
+     site, so this docs build (which has no <code>bun</code>) is serving a stand-in.</p>
+  <p>Build the real one from a checkout with
+     <code>./scripts/build-viewer-shell.sh out</code>, then open <code>out/index.html</code>
+     and drop a session <code>.zip</code> on it.</p>
+  <p><a href="https://github.com/block/trailblaze">Back to Trailblaze</a></p>
+</body>
+"""
+
+
+def _fill_viewer_placeholder(docs_dir):
+    """Stand in for the generated report viewer when the deploy hasn't built it."""
+    viewer = docs_dir / "report-viewer" / "index.html"
+    if viewer.exists():
+        return
+    viewer.parent.mkdir(parents=True, exist_ok=True)
+    viewer.write_text(_VIEWER_PENDING_HTML, encoding="utf-8")
+
+
 def on_pre_build(config):
     """Fill missing per-trail report assets before MkDocs scans the docs dir."""
     docs_dir = Path(config["docs_dir"])
+    _fill_viewer_placeholder(docs_dir)
     placeholder = docs_dir / "images" / "report-pending.webp"
     if not placeholder.is_file():
         # Without the generic placeholder there's nothing to copy; let the strict build

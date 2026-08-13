@@ -12,6 +12,7 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
 class PromptSerializationTest {
   private val trailblazeYaml = createTrailblazeYaml()
@@ -137,23 +138,32 @@ trail:
       ),
     )
     val expectedYaml = """
-- prompts:
-  - step: Do a thing
-    recordable: false
-  - step: Do another thing
-    recording:
-      tools:
-      - inputText:
-          text: Hello
-  - verify: Check a thing
-    recordable: false
-  - verify: Check another thing
-    recording:
-      tools:
-      - assertVisibleWithText:
-          text: Bingo
-    """.trimIndent()
-    val actualYaml = trailblazeYaml.encodeToString(trailItems)
+      |trail:
+      |  - step: "Do a thing"
+      |    recordable: false
+      |
+      |  - step: "Do another thing"
+      |    recording:
+      |      android:
+      |        - inputText:
+      |            text: Hello
+      |
+      |  - verify: "Check a thing"
+      |    recordable: false
+      |
+      |  - verify: "Check another thing"
+      |    recording:
+      |      android:
+      |        - assertVisibleWithText:
+      |            text: Bingo
+    """.trimMargin()
+    val actualYaml = trailblazeYaml.encodeUnifiedTrailToString(
+      UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing = null,
+        recordedItems = trailItems,
+        classifier = "android",
+      ),
+    )
     assertThat(actualYaml).isEqualTo(expectedYaml + "\n")
   }
 

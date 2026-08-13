@@ -1,0 +1,65 @@
+{
+  "nodeId": 7,
+  "driverDetail": { "class": "androidMaestro" },
+  "children": [
+    {
+      "nodeId": 6,
+      "bounds": { "left": 0, "top": 0, "right": 1080, "bottom": 2400 },
+      "driverDetail": { "class": "androidMaestro", "className": "android.widget.FrameLayout" },
+      "children": [
+        {
+          "nodeId": 1,
+          "bounds": { "left": 40, "top": 200, "right": 1040, "bottom": 320 },
+          "driverDetail": {
+            "class": "androidMaestro",
+            "text": "Charge $5.00",
+            "resourceId": "com.example:id/charge",
+            "className": "android.widget.Button",
+            "clickable": true
+          }
+        },
+        {
+          "nodeId": 2,
+          "bounds": { "left": 40, "top": 360, "right": 1040, "bottom": 440 },
+          "driverDetail": {
+            "class": "androidMaestro",
+            "text": "Rewards (1,000)",
+            "className": "android.widget.TextView"
+          }
+        },
+        {
+          "nodeId": 3,
+          "bounds": { "left": 40, "top": 480, "right": 1040, "bottom": 560 },
+          "driverDetail": {
+            "class": "androidMaestro",
+            "hintText": "Email",
+            "resourceId": "com.example:id/email",
+            "className": "android.widget.EditText",
+            "focused": true
+          }
+        },
+        {
+          "nodeId": 4,
+          "bounds": { "left": 40, "top": 600, "right": 520, "bottom": 700 },
+          "driverDetail": {
+            "class": "androidMaestro",
+            "text": "Add",
+            "className": "android.widget.Button",
+            "clickable": true
+          }
+        },
+        {
+          "nodeId": 5,
+          "bounds": { "left": 560, "top": 600, "right": 1040, "bottom": 700 },
+          "driverDetail": {
+            "class": "androidMaestro",
+            "text": "Add",
+            "className": "android.widget.Button",
+            "clickable": true,
+            "checked": true
+          }
+        }
+      ]
+    }
+  ]
+}

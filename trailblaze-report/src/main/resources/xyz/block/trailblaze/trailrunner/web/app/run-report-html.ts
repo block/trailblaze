@@ -4,8 +4,8 @@
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
 import { RUN_REPORT_CSS } from './run-report-css';
-import { slimLlmForShare, slimTraceForShare, traceStepCount, traceToolCallCount } from './run-report-extract';
-import { tbBootLoaderHtml, toInertJson } from './run-report-payload';
+import { toSessionPayloads, traceStepCount, traceToolCallCount } from './run-report-extract';
+import { inertScriptBody, tbBootLoaderHtml, toInertJson } from './run-report-payload';
 import { embeddedViewerScript } from './run-report-viewer-bundle.macro' with { type: 'macro' };
 
 // The exact classic-script source of the standalone viewer, prebuilt by the bun bundler and
@@ -15,12 +15,13 @@ const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
 
 // Assemble the full self-contained HTML document for ONE run. Thin wrapper over
 // buildMultiReportHtml so the in-app Share button (browser) and the single-run case share one data
-// contract. Optional generic event streams and the authored/recorded YAML ride alongside the trace,
-// LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in the browser and bun.
-function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null }): string {
+// contract. Optional generic event streams, the authored/recorded YAML, and pre-packed hierarchies
+// (packSessionInputsHierarchies — the Share path compresses before serializing) ride alongside the
+// trace, LLM calls, and screenshots. Pure: no fetch, no DOM — usable identically in browser and bun.
+function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, hierarchies = null, hierarchiesGz = null }: { meta: RunMeta; trace: RawTraceRow[]; llmLogs: RawLlmRow[]; shots: Record<string, string>; events?: EventStream[] | null; hierarchies?: Record<string, unknown> | null; hierarchiesGz?: string | null }): string {
   return buildMultiReportHtml({
     generatedAt: (meta || {}).generatedAt || '',
-    sessions: [{ meta, trace, llmLogs, shots, events }],
+    sessions: [{ meta, trace, llmLogs, shots, events, hierarchies, hierarchiesGz }],
   });
 }
 
@@ -30,29 +31,11 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null }: { me
 // several it opens on a pass/fail session index that drills into each run. Pure: callers supply
 // already-derived data; no fetch, no DOM — identical in the browser and in bun.
 function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string {
-  const list: SessionPayload[] = (sessions || []).map((s) => {
-    const trace = s.trace || [];
-    // Recording/original YAML may ride in on meta (buildRunReportHtml callers, the zip importer's
-    // buildRunMeta); lift it into the dedicated session fields and drop it from meta so the
-    // (potentially large) strings aren't embedded twice — and never reach the #tb-index copy of
-    // meta, which must stay small for every session in the report.
-    const { recordingYaml = null, originalYaml = null, ...metaRest } = s.meta || {};
-    return {
-      meta: { generatedAt: generatedAt || '', ...metaRest, steps: trace.length || metaRest.steps || 0 },
-      trace: slimTraceForShare(trace),
-      llm: slimLlmForShare(s.llmLogs),
-      shots: s.shots || {},
-      recordingYaml: s.recordingYaml || recordingYaml,
-      originalYaml: s.originalYaml || originalYaml,
-      deviceLog: s.deviceLog || null,
-      deviceLogGz: s.deviceLogGz || null,
-      network: s.network || null,
-      networkGz: s.networkGz || null,
-      events: s.events || null,
-      eventsGz: s.eventsGz || null,
-      video: s.video || null,
-    };
-  });
+  // Slimming, the llmLogs → llm rename, and lifting recording/original YAML off meta are shared with
+  // the viewer shell's in-place hydration (toSessionPayloads in run-report-extract), so an embedded
+  // payload and a shell-loaded one are the same shape. The sprite hoist below is this path's alone:
+  // it depends on the #tb-sprites-<i> chunks only a document carries.
+  const list: SessionPayload[] = toSessionPayloads({ generatedAt, sessions });
   // Hoist each session's sprite-sheet data URIs out of the main payload: they're the largest
   // blobs in the document and are only needed once a video frame actually renders. Keeping them
   // out of the payload the viewer JSON.parses at boot means first paint never waits on sprite
@@ -110,7 +93,7 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt
 <body>
 <div id="app">${tbBootLoaderHtml(heading)}</div>
 <script type="application/json" id="tb-index">${indexJson}</script>
-<script>${RUN_REPORT_VIEWER_SCRIPT}</script>
+<script>${inertScriptBody(RUN_REPORT_VIEWER_SCRIPT)}</script>
 ${sessionChunks}
 </body>
 </html>`;

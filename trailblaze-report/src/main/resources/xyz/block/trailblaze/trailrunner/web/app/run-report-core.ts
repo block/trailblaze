@@ -18,12 +18,13 @@
 // function serialization, so modules here may freely close over module scope.
 import { RUN_REPORT_CSS } from './run-report-css';
 import {
-  describeAction, describeSelector, extractLlmLogs, extractTrace, localRunAgentPrompt, logClass,
-  originalYamlFromLogs, parseLlmResponse, slimLlmForShare, slimTraceForShare, stepText,
-  summarizeToolArgs, toolChildren, toolDetail, truncate, yamlRootSection,
+  describeAction, describeSelector, estimateLlmComp, extractLlmLogs, extractLlmTranscripts,
+  extractTrace, localRunAgentPrompt, logClass, originalYamlFromLogs, packSessionInputsHierarchies,
+  parseLlmResponse, slimLlmForShare, slimTraceForShare, stepText, summarizeToolArgs, toolChildren,
+  toolDetail, traceHierarchies, transcriptCallMessages, truncate, yamlRootSection,
 } from './run-report-extract';
 import { buildMultiReportHtml, buildRunReportHtml } from './run-report-html';
-import { eventPrettyText, inflateEventsGz, inflateGzText, normalizeEventPayload, rawPrettyText, rekeySprites } from './run-report-payload';
+import { eventPrettyText, inflateEventsGz, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, rawPrettyText, rekeySprites, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
 import {
   buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs,
   videoFrameAt, videoLoopFrame,
@@ -33,17 +34,17 @@ import { RUN_REPORT_VIEWER } from './run-report-viewer';
 // Export to the browser global scope (classic script); bun/node (require) get the same object via
 // the Gradle-appended CommonJS footer reading __TRAILBLAZE_RUN_REPORT_CORE__ (see header).
 const RUN_REPORT_EXPORTS = {
-  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs,
-  stepText, toolDetail, summarizeToolArgs, describeSelector,
-  slimTraceForShare, slimLlmForShare, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
+  extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
+  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
   playbackGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, playbackPositionAt, videoLoopFrame,
 };
 (globalThis as Record<string, unknown>).__TRAILBLAZE_RUN_REPORT_CORE__ = RUN_REPORT_EXPORTS;
 if (typeof window !== 'undefined') Object.assign(window, RUN_REPORT_EXPORTS);
 
 export {
-  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs,
-  stepText, toolDetail, summarizeToolArgs, describeSelector,
-  slimTraceForShare, slimLlmForShare, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
+  extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
+  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
   playbackGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, playbackPositionAt, videoLoopFrame,
 };

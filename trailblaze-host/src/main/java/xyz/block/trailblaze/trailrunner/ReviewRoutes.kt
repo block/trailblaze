@@ -14,7 +14,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import java.io.File
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 
 /**
  * "Review my trail" — the AI authoring-assist pass (Phase 1 of the smarter-trail work).
@@ -88,7 +88,7 @@ internal fun Route.reviewRoutes(deps: TrailRunnerDeps) {
     val target = info?.trailConfig?.target
     val platform = info?.trailblazeDeviceInfo?.platform?.name?.lowercase()
     val recordedYaml = withContext(Dispatchers.IO) {
-      runCatching { logs.generateRecordedYaml(createTrailblazeYaml()) }.getOrNull()
+      runCatching { logs.generateUnifiedRecordedYaml(createTrailblazeYaml()) }.getOrNull()
     }
     if (recordedYaml.isNullOrBlank()) {
       call.respondText(

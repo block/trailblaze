@@ -42,8 +42,9 @@ import java.util.concurrent.TimeUnit
  * `trailblaze compile` + `trailblaze typecheck` two-step.
  *
  * Resolves the workspace in three ways:
- *  1. From inside a workspace tree (CWD or any subdirectory has
- *     `trails/config/trailmaps/` as an ancestor): walk-up finds the workspace root.
+ *  1. From inside a workspace tree (CWD or any subdirectory has an ancestor carrying
+ *     `trailblaze-config/trailmaps/` or the legacy `trails/config/trailmaps/`): walk-up
+ *     finds the workspace root.
  *     If CWD is inside a specific trailmap, that trailmap is the default scope;
  *     otherwise, all trailmaps are checked.
  *  2. From outside any workspace, with `<trailmap-id>`: enumerate known workspace
@@ -95,8 +96,8 @@ class CheckCommand : Callable<Int> {
     arity = "0..1",
     paramLabel = "<trailmap-id>",
     description = [
-      "Name of the trailmap to scope the type-check to (directory name under " +
-        "<workspace>/trails/config/trailmaps/). Omit when running from inside a trailmap " +
+      "Name of the trailmap to scope the type-check to (directory name under the workspace's " +
+        "trailblaze-config/trailmaps/ or legacy trails/config/trailmaps/). Omit when running from inside a trailmap " +
         "tree (auto-detected) or pass --all to type-check every trailmap. Mutually " +
         "exclusive with --all.",
     ],
@@ -116,7 +117,8 @@ class CheckCommand : Callable<Int> {
   @Option(
     names = ["--workspace"],
     description = [
-      "Pin the workspace root explicitly (the directory containing `trails/config/trailmaps/`). " +
+      "Pin the workspace root explicitly (the directory containing `trailblaze-config/trailmaps/` " +
+        "or the legacy `trails/config/trailmaps/`). " +
         "Used by CI scripts that run with a fixed cwd; interactive users should rely on " +
         "the cwd walk-up instead.",
     ],
@@ -176,7 +178,7 @@ class CheckCommand : Callable<Int> {
     // (and gives a stable anchor when --workspace was passed).
     val compileExit = CliCallerContext.withCallerCwd(resolved.workspaceRoot.toPath()) {
       CompileCommand().apply {
-        inputDir = File(resolved.workspaceRoot, TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR)
+        inputDir = CliPathUtils.workspaceConfigDir(resolved.workspaceRoot.toPath()).toFile()
         commandLabel = "check"
       }.call()
     }
@@ -461,11 +463,10 @@ class CheckCommand : Callable<Int> {
     // workspace marker — failing here is friendlier than letting CompileCommand
     // surface a missing-trailmaps error later.
     workspaceDir?.let { explicit ->
-      val trailmapsDir = File(explicit, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
-      if (!trailmapsDir.isDirectory) {
+      if (!CliPathUtils.hasWorkspaceMarker(explicit.toPath())) {
         Console.error(
           "trailblaze check: --workspace ${explicit.absolutePath} does not contain " +
-            "`${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/`. Pass a directory whose " +
+            "`${CliPathUtils.workspaceMarkerLabel}`. Pass a directory whose " +
             "subtree has the workspace marker.",
         )
         return null
@@ -484,7 +485,7 @@ class CheckCommand : Callable<Int> {
       val startAbs = callerCwd.toAbsolutePath().normalize()
       Console.error(
         "trailblaze check: not inside a Trailblaze workspace. Walked up from " +
-          "$startAbs to the filesystem root and found no `${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/` " +
+          "$startAbs to the filesystem root and found no `${CliPathUtils.workspaceMarkerLabel}` " +
           "marker. To resolve, either: (a) `cd` into a workspace tree, " +
           "(b) pass `<trailmap-id>` to enumerate workspaces under `./examples/`, or " +
           "(c) pass `--workspace <dir>` to pin the workspace root explicitly.",
@@ -499,15 +500,19 @@ class CheckCommand : Callable<Int> {
     // this with `./node_modules/*/trails/` without breaking the existing path.
     val candidates = enumerateWorkspaces(callerCwd)
     val matches = candidates.filter {
-      File(it, "${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/$pid/${TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME}").isFile
+      CliPathUtils.workspaceTrailmapsDir(it.toPath())
+        .resolve(pid)
+        .resolve(TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)
+        .toFile()
+        .isFile
     }
     if (matches.isEmpty()) {
       val cwdAbs = callerCwd.toAbsolutePath().normalize()
       if (candidates.isEmpty()) {
         Console.error(
           "trailblaze check: trailmap '$pid' not found — no workspaces enumerable under $cwdAbs. " +
-            "Run from a directory whose `examples/*/trails/config/trailmaps/$pid/` subtree exists, " +
-            "or pass `--workspace <dir>`.",
+            "Run from a directory whose `examples/*/` subtree carries a workspace with trailmap " +
+            "'$pid', or pass `--workspace <dir>`.",
         )
       } else {
         Console.error(
@@ -526,10 +531,7 @@ class CheckCommand : Callable<Int> {
       return null
     }
     val workspaceRoot = matches.single()
-    val scopeTrailmapDir = File(
-      workspaceRoot,
-      "${TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR}/$pid",
-    )
+    val scopeTrailmapDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).resolve(pid).toFile()
     return WorkspaceResolution(
       workspaceRoot = workspaceRoot,
       scopeTrailmapId = pid,
@@ -553,7 +555,7 @@ class CheckCommand : Callable<Int> {
    */
   private fun resolveScopeInWorkspace(workspaceRoot: File, callerCwd: Path): WorkspaceResolution? {
     val explicitTrailmapId = trailmapId
-    val trailmapsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).toFile()
     if (explicitTrailmapId != null) {
       val trailmapDir = File(trailmapsDir, explicitTrailmapId)
       if (!trailmapDir.isDirectory) {
@@ -607,7 +609,7 @@ class CheckCommand : Callable<Int> {
     if (!examplesDir.isDirectory) return emptyList()
     val children = examplesDir.listFiles { f -> f.isDirectory } ?: return emptyList()
     return children
-      .filter { File(it, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR).isDirectory }
+      .filter { CliPathUtils.hasWorkspaceMarker(it.toPath()) }
       .map { it.canonicalFile }
       .sortedBy { it.name }
   }
@@ -632,7 +634,7 @@ class CheckCommand : Callable<Int> {
     // sit under `trailmaps/` at all (e.g. `trails/config/dist/`, `trails/scripts/`).
     // `Path.startsWith` is reflexive so the explicit `cwd == trailmapsDir` case must
     // come before the `!startsWith` fallback — otherwise it'd be silently swallowed.
-    val trailmapsDir = canonicalWs.resolve(TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(canonicalWs)
     return canonicalCwd == canonicalWs ||
       canonicalCwd == trailmapsDir ||
       !canonicalCwd.startsWith(trailmapsDir)
@@ -731,7 +733,10 @@ class CheckCommand : Callable<Int> {
     resolveRuntime: () -> String? = { resolveJsRuntime() },
   ): Int {
     return try {
-      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
+      // `<root>/trails` for the legacy layout, the workspace root itself for the standalone
+      // `trailblaze-config/` layout — the same anchor the daemon-side bootstrap uses, so the
+      // extracted tsc payload and the classpath surfaces land in one `.trailblaze/` tree.
+      val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath())
       val ready = when (val preflight = trailRecordingPreflight(extractTscJs(trailsRoot), resolveRuntime())) {
         TrailRecordingPreflight.MissingTscPayload -> {
           Console.error(
@@ -820,7 +825,7 @@ class CheckCommand : Callable<Int> {
    */
   internal fun runArgTokenValidationPhase(workspaceRoot: File): Int {
     return try {
-      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR).toFile()
+      val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
       if (!trailsRoot.isDirectory) return EXIT_OK
       val yaml = createTrailblazeYaml()
       var findingCount = 0
@@ -890,7 +895,7 @@ class CheckCommand : Callable<Int> {
    */
   internal fun runSelectorDialectLintPhase(workspaceRoot: File): Int {
     try {
-      val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR).toFile()
+      val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath()).toFile()
       if (!trailsRoot.isDirectory) return EXIT_OK
       val yaml = createTrailblazeYaml()
       val findings = mutableListOf<SelectorDialectLint.Finding>()
@@ -1016,7 +1021,7 @@ class CheckCommand : Callable<Int> {
    * regardless of scope, so a trail targeting an out-of-scope-but-real workspace trailmap must be
    * recognized as manifest-BACKED (→ `skippedNoSurface`, non-fatal on a scoped run) rather than
    * misclassified as a permanent `skippedNoManifest`. So the known set is built from every
-   * `trails/config/trailmaps/<id>/trailmap.yaml` plus the classpath manifest ids, independent of scope.
+   * `<configDir>/trailmaps/<id>/trailmap.yaml` plus the classpath manifest ids, independent of scope.
    */
   private fun buildTrailValidationManifestContext(
     scopedTrailmaps: List<Path>,
@@ -1064,7 +1069,7 @@ class CheckCommand : Callable<Int> {
   }
 
   /**
-   * Every workspace trailmap id (the name of each `trails/config/trailmaps/<id>/` directory that
+   * Every workspace trailmap id (the name of each `<configDir>/trailmaps/<id>/` directory that
    * carries a `trailmap.yaml`), independent of the current check scope. Used to build the
    * known-manifest set so an out-of-scope-but-real workspace target isn't mistaken for one that has
    * no manifest at all. A missing trailmaps dir or an I/O error yields an empty set — a degraded but
@@ -1074,7 +1079,7 @@ class CheckCommand : Callable<Int> {
    * pinned without driving a full `check` run.
    */
   internal fun listAllWorkspaceTrailmapIds(workspaceRoot: File): Set<String> {
-    val trailmapsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).toFile()
     val dirs = trailmapsDir.listFiles { f ->
       f.isDirectory && File(f, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME).isFile
     } ?: return emptySet()
@@ -1125,12 +1130,12 @@ class CheckCommand : Callable<Int> {
       return EXIT_OK
     }
 
-    // [WorkspaceTypeScriptSetup.setUp] writes its outputs relative to a `trails/` directory
-    // (same convention `CompileCommand` follows — see CompileCommand.generatorRoot). The
-    // workspace root from the walk-up is the directory containing `trails/config/trailmaps/`,
-    // so descend one level into `trails/` before handing it off — otherwise setUp would
-    // emit `.trailblaze/sdk/` one level above where trailmap tsconfigs reference it.
-    val trailsRoot = workspaceRoot.toPath().resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
+    // [WorkspaceTypeScriptSetup.setUp] writes its outputs relative to the directory that owns
+    // the workspace's config dir (same convention `CompileCommand` follows — see
+    // CompileCommand.generatorRoot): `<root>/trails` for the legacy layout, the workspace root
+    // itself for the standalone `trailblaze-config/` layout. Handing it anything else would
+    // emit `.trailblaze/sdk/` somewhere the trailmap tsconfigs don't reference.
+    val trailsRoot = CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot.toPath())
 
     // Set up the workspace's SDK declaration bundle. Cheap idempotent no-ops if
     // the compile phase already ran. Setup failures are operational (filesystem /
@@ -1263,7 +1268,7 @@ class CheckCommand : Callable<Int> {
     trailmapId: String?,
     typecheckAll: Boolean,
   ): List<Path>? {
-    val trailmapsDir = File(workspaceRoot, TrailblazeConfigPaths.WORKSPACE_TRAILMAPS_DIR)
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot.toPath()).toFile()
     if (!trailmapsDir.isDirectory) {
       Console.error(
         "trailblaze check: no trailmaps/ directory found at ${trailmapsDir.absolutePath}.",

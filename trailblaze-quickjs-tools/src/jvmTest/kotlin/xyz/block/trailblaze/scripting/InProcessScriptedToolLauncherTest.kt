@@ -14,7 +14,7 @@ import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import java.io.File
 import java.nio.file.Files
 
@@ -97,9 +97,7 @@ class InProcessScriptedToolLauncherTest {
       val resolved = toolRepo.toolCallToTrailblazeTool("openUrl", """{"url":"https://example.com"}""")
 
       // Encode exactly like the host-driver dispatch (TrailblazeMcpBridgeImpl) does before re-running.
-      val yaml = createTrailblazeYaml().encodeToString(
-        TrailblazeYamlBuilder().tools(listOf(resolved)).build(),
-      )
+      val yaml = createTrailblazeYaml().encodeTools(listOf(fromTrailblazeTool(resolved)))
       assertTrue(
         yaml.contains("https://example.com"),
         "YAML round-trip must preserve the scripted tool's `url` arg; got:\n$yaml",

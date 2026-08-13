@@ -13,7 +13,6 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
@@ -186,22 +185,6 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    // Gate for the unified-format recorder. Tri-state: an explicit true/false is persisted as
-    // the user's choice (even when it matches the current default, so it survives default
-    // changes); 'unset' clears the preference back to inheriting the framework default (on).
-    name = "unified-recordings",
-    description = "Save new recordings in the unified trail.yaml format (default: on); set false to save legacy <classifier>.trail.yaml siblings",
-    validValues = "true, false, or 'unset' to inherit the default",
-    get = { config -> config.unifiedRecordingsEnabled?.toString() ?: "(not set)" },
-    set = { config, value ->
-      if (value.equals("unset", ignoreCase = true)) {
-        config.copy(unifiedRecordingsEnabled = null)
-      } else {
-        value.toBooleanStrictOrNull()?.let { config.copy(unifiedRecordingsEnabled = it) }
-      }
-    },
-  ),
-  ConfigKey(
     // Per-step natural-language description is what self-heal retries against
     // when a recorded selector goes stale. Permissive default keeps ad-hoc
     // tire-kicking unblocked; flip to true for serious authoring so every
@@ -344,7 +327,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    // Experimental. Tri-state like `unified-recordings`: `null` (default) is off; an explicit
+    // Experimental. Tri-state: `null` (default) is off; an explicit
     // true/false is the user's persisted choice. One toggle covers Android, iOS, and web (they
     // share the stream engine); the per-platform `TRAILBLAZE_<PLATFORM>_STREAM_SCREENSHOT` /
     // `_AB` env vars still win (env = one-off / CI / A/B validation; this = discoverable
@@ -535,16 +518,6 @@ object CliConfigHelper {
     )
   }
   
-  /**
-   * Resolves the unified-recordings rollout gate for a host surface. Layers an optional CLI
-   * [flagOverride] on top of the shared env > persisted tiers (see [UnifiedRecordingWriter.resolveGate]).
-   * The CLI passes its `--[no-]unified-recordings` value; the desktop recording tab and the daemon's
-   * MCP wiring pass null (no flag). Centralizes the persisted-config read so those host sites can't
-   * drift on tier order or config source.
-   */
-  fun resolveUnifiedRecordingsGate(flagOverride: Boolean? = null): Boolean =
-    UnifiedRecordingWriter.resolveGate(flagOverride, readConfig()?.unifiedRecordingsEnabled)
-
   /**
    * Resolves the effective HTTP port using CLI settings.
    */

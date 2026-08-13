@@ -29,9 +29,11 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.AffectedFailure
+import xyz.block.trailblaze.report.models.AttemptSignal
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.combinedVerdictOf
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
@@ -265,6 +267,7 @@ open class GenerateTestResultsCliCommand(
             completed_at = lastLog?.timestamp?.toIso8601String(),
             completed_at_epoch_ms = lastLog?.timestamp?.toEpochMilliseconds(),
             ci_job_id = hostCiContext.ci_job_id,
+            ci_agent_name = hostCiContext.ci_agent_name,
             logs_zip_filename = hostCiContext.logs_zip_filename,
             priority = sessionInfo.trailConfig?.priority,
             accessibility_truncation = AccessibilityTruncationSummary.fromLogs(logs),
@@ -278,7 +281,8 @@ open class GenerateTestResultsCliCommand(
     // Always deduplicate retries: collapse every attempt of a test into a single result, keeping
     // the best outcome (see [deduplicateRetries]). This is the only correct test-case-level view —
     // counting raw attempts double-counts retries. The kept result carries the retry metadata
-    // (attempt, total_attempts, replaced_session_ids, replaced_failure_reasons) so nothing is lost.
+    // (attempt, total_attempts, replaced_session_ids, replaced_failure_reasons,
+    // replaced_failure_kinds, replaced_outcomes) so nothing is lost.
     val finalResults = deduplicateRetries(sessionResults)
 
     // Print summary to console
@@ -512,6 +516,12 @@ open class GenerateTestResultsCliCommand(
   @Serializable
   private data class HostCiContext(
     val ci_job_id: String? = null,
+    /**
+     * Worker host that ran the session. Optional independently of [ci_job_id]: the upload script
+     * omits this key when the agent name can't be safely serialized, and every sidecar written
+     * before this field existed lacks it entirely — both must still yield a usable context.
+     */
+    val ci_agent_name: String? = null,
     val logs_zip_filename: String? = null,
     /**
      * Legacy sidecar field retained only so old archives still decode. Older upload scripts
@@ -553,6 +563,7 @@ open class GenerateTestResultsCliCommand(
     fun getEnv(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
     return HostCiContext(
       ci_job_id = getEnv("BUILDKITE_JOB_ID") ?: getEnv("CI_JOB_ID"),
+      ci_agent_name = getEnv("BUILDKITE_AGENT_NAME") ?: getEnv("CI_AGENT_NAME"),
       logs_zip_filename = getEnv("ARTIFACT_PREFIX")?.let { "logs_${it}__${sessionId.value}.zip" },
     )
   }
@@ -635,7 +646,21 @@ open class GenerateTestResultsCliCommand(
         // Sort by start time so attempt numbering is chronological
         val sorted = attempts.sortedBy { it.started_at_epoch_ms ?: 0L }
 
-        // Prefer the latest PASSED result; if none passed, take the last attempt
+        // A pass anywhere in the sequence is the verdict, whatever order the attempts came in.
+        //
+        // This is the same policy `combinedVerdictOf` states: a test that passed, passed. It ran
+        // what it was meant to run and the product answered correctly, so a later failure of the
+        // same test in the same run is evidence about the run's stability, not about the product.
+        // The two have to agree — the row carries both, and a row reading `outcome = FAILED` beside
+        // `combined_verdict = RESCUED` is not a verdict anyone can act on.
+        //
+        // Only whole-shard retry can produce pass-then-fail at all, since re-running a test that
+        // already passed is the thing that creates the ordering. Targeted retry re-runs only what
+        // failed, which is the direction this pipeline is moving; until then the preference here
+        // keeps the two orderings reading the same.
+        //
+        // The rescue direction is unchanged: a fail-then-pass sequence ends on the pass, and the
+        // superseded failure survives in `replaced_failure_reasons` below.
         val best = sorted.lastOrNull { it.outcome == Outcome.PASSED } ?: sorted.last()
         val bestIndex = sorted.indexOf(best)
         val replaced = sorted.filter { it.session_id != best.session_id }
@@ -645,6 +670,12 @@ open class GenerateTestResultsCliCommand(
           total_attempts = sorted.size,
           replaced_session_ids = replaced.map { it.session_id },
           replaced_failure_reasons = replaced.mapNotNull { it.failure_reason },
+          replaced_failure_kinds = replaced.mapNotNull { it.failure_kind },
+          replaced_outcomes = replaced.map { it.outcome },
+          replaced_agent_names = replaced.mapNotNull { it.ci_agent_name },
+          // Classified from the whole chronological run of attempts, including the one kept.
+          // Computed here because this is the only place every attempt is still in hand.
+          combined_verdict = combinedVerdictOf(sorted.map { AttemptSignal(it.outcome, it.failure_kind) }),
         )
       }
   }
@@ -974,6 +1005,36 @@ open class GenerateTestResultsCliCommand(
     )
   }
 
+  /**
+   * Whether an attempt of this test that ran EARLIER than the kept one is known not to have passed.
+   *
+   * Deliberately a union of two signals rather than a choice between them. The outcome list is
+   * the accurate one — every attempt has an outcome, so a failure that recorded no prose still
+   * shows up — but it only exists on reports generated since it was added. The reason list is
+   * what an older report carries. Reading both means an old report keeps exactly today's answer
+   * and a new one gains the failures that recorded nothing.
+   *
+   * Union rather than replacement also makes the error direction one-way: either signal firing
+   * marks a rescue, so this can only ever ADD one. It can never withhold a warning that the
+   * previous rule would have raised.
+   *
+   * The `attempt > 1` term is what makes "earlier" true rather than merely intended. [replaced]
+   * in [deduplicateRetries] is every attempt except the kept one, before OR after it, so the two
+   * lists alone cannot tell a rescue from its opposite. Whole-shard retry re-runs tests that
+   * already passed, so it can produce pass-then-fail; the kept attempt is then the FIRST one and
+   * the superseded failure came LATER. Without this term that sequence reports as
+   * `passed_on_retry` — a retry that broke something green, announced as a rescue. Since
+   * `attempt` is `bestIndex + 1` over a chronologically sorted list, `attempt > 1` says exactly
+   * "something ran before the one we kept".
+   *
+   * Note this narrows only the retry NARRATIVE. The verdict is untouched: a pass anywhere is
+   * still the verdict, `outcome` still comes from the prefer-PASSED selection, and
+   * `combined_verdict` still comes from [combinedVerdictOf].
+   */
+  private fun SessionResult.supersededAFailedAttempt(): Boolean =
+    attempt > 1 &&
+      (replaced_failure_reasons.isNotEmpty() || replaced_outcomes.any { it != Outcome.PASSED })
+
   private fun buildRetrySummary(
     allAttempts: List<SessionResult>,
     deduped: List<SessionResult>,
@@ -981,15 +1042,12 @@ open class GenerateTestResultsCliCommand(
     // A test only counts as "retried" if an earlier attempt actually FAILED. We can't key this
     // off `total_attempts > 1`: deduplicateRetries() sets total_attempts = group size for every
     // grouped attempt regardless of outcome, so all-passing reruns or a session whose logs were
-    // uploaded twice would inflate the flaky count without any real prior failure. The reliable
-    // signal is `replaced_failure_reasons`, which deduplicateRetries() populates only from the
-    // non-kept attempts that carried a failure reason — so it is non-empty exactly when a genuine
-    // failed attempt was superseded.
+    // uploaded twice would inflate the flaky count without any real prior failure.
     val passedOnRetry = deduped.count {
-      it.outcome == Outcome.PASSED && it.replaced_failure_reasons.isNotEmpty()
+      it.outcome == Outcome.PASSED && it.supersededAFailedAttempt()
     }
     val failedAfterRetries = deduped.count {
-      it.outcome != Outcome.PASSED && it.replaced_failure_reasons.isNotEmpty()
+      it.outcome != Outcome.PASSED && it.supersededAFailedAttempt()
     }
     return RetrySummary(
       total_attempts = allAttempts.size,

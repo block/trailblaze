@@ -6,6 +6,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.time.TimeSource
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -82,10 +83,11 @@ class PerformanceAnalysisGenerator(
                 RunReportGenerator.reportProvenanceJson(environment),
               ),
             )
-            // The raw per-log records for the bun extractor, heavy view-hierarchy fields already
-            // stripped at snapshot capture (the profiler only reads timestamps, durations, and
-            // tool/LLM metadata).
-            put("logs", snapshot.rawLogsJson)
+            // The raw per-log records for the bun extractor, with ALL view-hierarchy fields
+            // dropped: the snapshot keeps one field per record for the run report's UI Inspector,
+            // but the profiler reads only timestamps, durations, and tool/LLM metadata, so that
+            // field would be dead payload here.
+            put("logs", JsonArray(snapshot.rawLogsJson.map { RunReportGenerator.dropViewHierarchyFields(it) }))
           },
         )
       }

@@ -6,8 +6,9 @@
 // as monolithic fallbacks for older files and in-app embedders).
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
-import { isLlmTurnRow, localRunAgentPrompt, traceStepCount, traceToolCallCount, yamlRootSection } from './run-report-extract';
-import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzText, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, toInertJson } from './run-report-payload';
+import { isLlmTurnRow, localRunAgentPrompt, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
+import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
+import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
 import { buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
 
 // Run `fn` once the document has finished streaming (immediately when it already has). A chunked
@@ -17,6 +18,11 @@ import { buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCs
 // One pending slot, latest call wins: re-invoking while armed replaces the deferred work rather
 // than queueing a second snapshot.
 let pendingWhenComplete: (() => void) | null = null;
+
+// Removes the global listeners (and stops the timeline) of the most recent RUN_REPORT_VIEWER run.
+// Module-scoped because the teardown has to outlive the run that installed it: the NEXT run is what
+// invokes it, before installing its own.
+let disposeViewerGlobals: (() => void) | null = null;
 export function whenDocumentComplete(fn: () => void): void {
   if (String(document.readyState || 'complete') === 'complete') { fn(); return; }
   const armed = pendingWhenComplete != null;
@@ -161,10 +167,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       button.setAttribute('title', `Use ${next} mode`);
     });
   };
+  // Registered per boot, so it is torn down per boot too (disposeThemeListener, called from
+  // disposeViewerGlobals) — otherwise a document that boots repeatedly, like the viewer shell loading
+  // one archive after another, accumulates one stale follower per load.
+  let disposeThemeListener = null;
   if (typeof matchMedia === 'function') {
     const media = matchMedia('(prefers-color-scheme: light)');
     const followSystem = (event) => { try { if (!localStorage.getItem(themeKey)) setTheme(event.matches ? 'light' : 'dark', false); } catch (e) {} };
-    if (media.addEventListener) media.addEventListener('change', followSystem);
+    if (media.addEventListener) {
+      media.addEventListener('change', followSystem);
+      if (media.removeEventListener) disposeThemeListener = () => media.removeEventListener('change', followSystem);
+    }
   }
 
   // Rebuild this self-contained document around either the full payload or one selected session.
@@ -277,6 +290,30 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const ensureLogsInflated = logsInflater.ensure;
   const sessionDeviceLog = (session) => session.deviceLog || (logsInflater.cache.get(session) || {}).deviceLog || null;
   const sessionNetwork = (session) => session.network || (logsInflater.cache.get(session) || {}).network || null;
+  const transcriptInflater = makeInflater(
+    (session) => session.llmMessagesGz && !session.llmMessages,
+    (session) => inflateLlmMessagesGz(session.llmMessagesGz),
+  );
+  const ensureTranscriptsInflated = transcriptInflater.ensure;
+  const sessionTranscripts = (session) => session.llmMessages || transcriptInflater.cache.get(session) || null;
+  // Per-step view hierarchies for the UI Inspector (SessionPayload.hierarchies / hierarchiesGz).
+  // Unlike events/logs, inflation is NOT kicked off when the session opens — a large hierarchies
+  // map costs a main-thread JSON.parse most readers never need, so it's paid only when an
+  // inspector is first opened (openInspector calls ensure; its completion re-render then corrects
+  // the row affordances).
+  const hierarchiesInflater = makeInflater(
+    (session) => session.hierarchiesGz && !session.hierarchies,
+    (session) => inflateGzJsonRecord(session.hierarchiesGz),
+  );
+  const ensureHierarchiesInflated = hierarchiesInflater.ensure;
+  const sessionHierarchies = (session) => session.hierarchies || hierarchiesInflater.cache.get(session) || null;
+  const stepHierarchy = (i) => { const h = sessionHierarchies(D); return h ? h[String(i)] : null; };
+  // Rows that get the "Inspect UI" affordance: a non-header row with an inlined screenshot AND a
+  // hierarchy. Known precisely once hierarchies are inline (or inflated); while a compressed
+  // payload hasn't inflated yet the affordance shows optimistically on every screenshot row (a
+  // step the inflate reveals as hierarchy-less loses it on the post-inflate re-render).
+  const stepInspectable = (t) => Boolean(!t.objective && t.screenshotFile && D.shots[t.screenshotFile]
+    && (stepHierarchy(t.i) != null || (D.hierarchiesGz && !hierarchiesInflater.cache.has(D))));
 
   const logPayload = (session) => ({
     run: session.meta || {},
@@ -284,14 +321,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     network: sessionNetwork(session) || [],
     events: sessionEvents(session) || [],
     llm: session.llm || [],
+    // The pooled transcript shape, exported as-is ({texts, calls[]} with calls aligned to `llm`
+    // by index; resolve a message's text as texts[m.t]). Deliberately NOT resolved per call:
+    // the history accumulates, so re-expanding pool refs rebuilds the quadratic naive shape —
+    // ~200MB of export JSON for a 100-call session whose report carries ~4MB.
+    llmMessages: sessionTranscripts(session),
   });
   const hasLogs = (session) =>
     Boolean(sessionDeviceLog(session) || session.deviceLogGz || (session.network && session.network.length) || session.networkGz || hasEvents(session) || (session.llm && session.llm.length));
   const exportLogs = async (session) => {
     if (!hasLogs(session)) return;
     // Compressed payloads export inflated, never as opaque base64 - wait out any in-flight
-    // inflation (logs AND events) so the download can't race it and export empty fields.
-    await Promise.all([ensureLogsInflated(session), ensureEventsInflated(session)]);
+    // inflation (logs, events AND transcripts) so the download can't race it and export empty fields.
+    await Promise.all([ensureLogsInflated(session), ensureEventsInflated(session), ensureTranscriptsInflated(session)]);
     downloadBlob([JSON.stringify(logPayload(session), null, 2)], 'application/json;charset=utf-8', `trailblaze_run_${fileSlug(session.meta.title)}_logs.json`);
   };
 
@@ -304,6 +346,32 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // report doesn't hit a temporal-dead-zone ref.
   let timelinePlaybackStop = null;
   const stopTimeline = () => { st.playing = false; if (!timelinePlaybackStop) return; const stop = timelinePlaybackStop; timelinePlaybackStop = null; stop(); };
+  // Transcript-lightbox state, declared up here (like timelinePlaybackStop) so the init-time
+  // openSession() call can close a stale dialog without a temporal-dead-zone ref. The dialog
+  // itself (openTranscript etc.) lives beside the zoom overlay below.
+  let txEl = null;
+  let txReturnFocus = null;
+  let txReturnSelector = null;
+  let txCallIndex = 0;
+  // Armed by a `?llm=N` route: the next LLM-tab render scrolls to the deep-linked table row and
+  // opens its transcript lightbox (the tab's only detail surface).
+  let pendingLlmOpen = false;
+  // `syncRoute` is for the reader-initiated dismissals (Escape, the close button): the lightbox is
+  // what `?llm=N` encodes, so closing drops the param back to the tab route. Every other caller
+  // (re-open, opening a session, popstate, teardown) is mid-navigation and owns the URL itself —
+  // writing here would replaceState the state being navigated away from back over the new one.
+  const closeTranscript = (syncRoute = false) => {
+    if (!txEl) return;
+    txEl.remove(); txEl = null;
+    const back = txReturnFocus; txReturnFocus = null;
+    const backSelector = txReturnSelector; txReturnSelector = null;
+    // Re-resolve the trigger by selector first: a gz report's transcript inflation completes with a
+    // full render(), which replaces #app and detaches the node this dialog captured on open.
+    const live = backSelector ? root.querySelector<HTMLElement>(backSelector) : null;
+    const target = live || back;
+    if (target && target.focus) target.focus();
+    if (syncRoute) writeRoute(true);
+  };
   // Per-frame aspect ratio of the current session's video sprite (`w / h`). Newer payloads record
   // frameWidth alongside frameHeight, so the aspect is known before anything renders
   // (spriteAspectFromMeta, called when a session opens). Older payloads without frameWidth fall
@@ -344,12 +412,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     spriteAspectFromMeta(D.video);
     ensureEventsInflated(D);
     ensureLogsInflated(D);
+    ensureTranscriptsInflated(D);
     const runFailed = ['failed', 'error'].indexOf(String((D.meta && D.meta.status) || '').toLowerCase()) >= 0;
     const firstFail = runFailed ? failureAnchorIndex() : -1;
     st.step = firstFail >= 0 ? D.trace[firstFail].i : ((D.trace[0] && D.trace[0].i) || 0);
     const trailheadStart = D.trace.findIndex((t) => t.objective && t.trailhead);
     const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
-    const trailheadActions = trailheadStart >= 0 ? (trailStart >= 0 ? trailStart : D.trace.length) - trailheadStart - 1 : 0;
+    // Tool-action count, so the auto-collapse threshold below keeps its pre-LLM-row meaning: per-call
+    // LLM rows are not actions (same filter the step headers and phase stats apply).
+    const trailheadEnd = trailStart >= 0 ? trailStart : D.trace.length;
+    const trailheadActions = trailheadStart >= 0
+      ? D.trace.slice(trailheadStart + 1, trailheadEnd).filter((t) => !isLlmTurnRow(t)).length
+      : 0;
     const failureIsInTrailhead = firstFail >= 0 && trailheadStart >= 0 && (trailStart < 0 || firstFail < trailStart);
     // Setup is supporting context. Keep small setup visible, but collapse high-volume setup so the
     // authored Trail remains the dominant content. A setup failure overrides that default.
@@ -361,7 +435,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const openSession = (i) => {
     // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
     // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.lightboxAll = false;
+    stopTimeline(); closeTranscript(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.lightboxAll = false;
     // Chunked documents hydrate on open: synchronous when the session's chunk has already
     // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
     // chunk lands, then the seed + re-render below run.
@@ -402,7 +476,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return {
       view: 'detail', session: Number(p.get('run') || 0), tab: p.get('tab') || 'timeline',
       step: p.has('step') ? Number(p.get('step')) : null,
-      llm: Number(p.get('llm') || 0),
+      llm: p.has('llm') ? Number(p.get('llm')) : null,
       streams: p.get('streams'),
     };
   };
@@ -415,7 +489,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const allowed = ['timeline', 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'info'];
     if (allowed.indexOf(requestedTab) >= 0) st.tab = requestedTab;
     if (r.step != null && Number.isFinite(r.step) && D.trace.some((t) => t.i === r.step)) { st.step = r.step; revealTimelineStep(st.step); }
-    if (Number.isFinite(r.llm) && r.llm >= 0 && r.llm < D.llm.length) st.llmSel = r.llm;
+    // A deep-linked call (`?llm=N`) highlights its per-request table row AND opens that call's
+    // transcript lightbox — the lightbox IS the detail surface, so the link lands the reader in
+    // the transcript with the row waiting underneath when it closes.
+    if (r.llm != null && Number.isFinite(r.llm) && r.llm >= 0 && r.llm < D.llm.length) { st.llmSel = r.llm; pendingLlmOpen = st.tab === 'llm'; }
     // No upper-bound check here: stream counts may be unknown while a compressed events payload
     // is still inflating, so the consumer owns the clamp (streamEvents ignores unknown tlStreams
     // indices).
@@ -447,7 +524,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       params.set('tab', st.tab);
       if (st.tab === 'timeline' && Number.isFinite(st.step)) params.set('step', String(st.step));
       if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
-      if (st.tab === 'llm' && st.llmSel) params.set('llm', String(st.llmSel));
+      // `llm` means "the transcript lightbox is open on this call" — written while it's open on
+      // the LLM tab, dropped when it closes, so back/forward and copied links land in the same
+      // state the reader sees (the lightbox is the tab's only detail surface).
+      if (st.tab === 'llm' && txEl) params.set('llm', String(txCallIndex));
     }
     return params;
   };
@@ -840,6 +920,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${D.trace.length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${ticks}${eventTicks}<div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div></div>`;
   };
 
+  // Chat glyph for every "open this call's transcript" affordance (timeline rows, LLM tab rows) —
+  // mirrors the WASM report's per-row Chat History icon button.
+  const TX_ICON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H9.4L5.7 19.7A1 1 0 0 1 4 18.9Z" fill="currentColor"/></svg>';
+  const txOpenBtnHtml = (llmIndex, context) =>
+    `<button type="button" class="txopenbtn" data-tx="${llmIndex}" aria-label="Open LLM transcript${context ? ` for ${context}` : ''}" title="LLM transcript">${TX_ICON_SVG}</button>`;
+
   const stepRowHtml = (t, child) => {
     const cat = stepCat(t); const sel = t.i === st.step;
     const icon = stepIcon(t);
@@ -850,17 +936,35 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const rel = (t.ts != null && t0 != null) ? `+${((t.ts - t0) / 1000).toFixed(1)}s` : '';
     const dur = fmtDur(t.ms);
     const time = (rel || dur) ? `<span class="ts">${rel}${dur ? `<span class="dur">${dur}</span>` : ''}</span>` : '';
-    return `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}" data-step="${t.i}" role="button" tabindex="0"${sel ? ' aria-current="step"' : ''}>
+    // An LLM-call row shows the call's own accounting (model + tokens, from the linked llm entry)
+    // as its detail line — the same metadata the WASM report's "LLM Request" child row carries.
+    const llmCall = t.llm != null ? D.llm[t.llm] : null;
+    const detail = llmCall
+      ? `${llmCall.model || ''}${llmCall.inputTokens != null ? ` · in ${fmtN(llmCall.inputTokens)}` : ''}${llmCall.outputTokens != null ? ` · out ${fmtN(llmCall.outputTokens)}` : ''}`
+      : t.tool;
+    const row = `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}${llmCall ? ' llmturn' : ''}" data-step="${t.i}" role="button" tabindex="0"${sel ? ' aria-current="step"' : ''}>
+
       ${child ? '' : `<span class="num">${t.i}</span>`}
       <span class="ic ${icon.cls}"${icon.cls === 'dot' ? ` style="--icon-color:${catColor[cat]}"` : ''} aria-hidden="true">${icon.glyph}</span>
       <div style="flex:1;min-width:0">
         <div class="lbl">${esc(t.label)}${count}</div>
-        ${t.tool ? `<div class="tl-tool mono">${esc(t.tool)}</div>` : ''}
+        ${detail ? `<div class="tl-tool mono">${esc(detail)}</div>` : ''}
         ${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}
         ${kids}
       </div>
       ${time}
     </div>`;
+    // Row affordances are SIBLINGS of the row, never descendants: the row itself is role="button",
+    // and nesting a second interactive control inside it would give keyboard and screen-reader users
+    // two ambiguous tab stops (same rule as the index matrix cell's chevron). The two are disjoint
+    // in practice (an LLM row carries no screenshot, so it is never inspectable), but both are
+    // emitted when both apply rather than one shadowing the other. The inspect wording deliberately
+    // doesn't assert capture: with a gz-packed payload the affordance shows optimistically until
+    // inflation reveals which steps actually have a hierarchy.
+    const affordances = `${llmCall ? txOpenBtnHtml(t.llm, `call ${t.llm + 1}`) : ''}${stepInspectable(t)
+      ? `<button type="button" class="inspectlink" data-inspect="${t.i}" title="Inspect this step's UI hierarchy (if captured)" aria-label="Inspect UI for: ${esc(t.label)}">Inspect UI</button>`
+      : ''}`;
+    return affordances ? `<div class="steprow">${row}${affordances}</div>` : row;
   };
 
   const renderTimeline = () => {
@@ -896,10 +1000,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const selfHealed = !!(g.header && g.header.selfHeal);
         const isTrailhead = g.header && g.header.trailhead;
         const groupSelected = g.header && g.header.i === st.step;
+        // The header's count keeps tool-call semantics (LLM-turn rows render below but are calls,
+        // not device actions — same split the WASM header's "N tools" subtitle makes).
+        const actionCount = g.items.filter((t) => !isLlmTurn(t)).length;
         const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}${groupSelected ? ' sel' : ''}" data-group="${g.header.i}"${groupSelected ? ' aria-current="step"' : ''}>
             <span class="chip">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span>
             <span class="dot" style="background:${failed ? 'var(--fail)' : selfHealed ? 'var(--amber)' : 'var(--pass)'}"></span>
-            ${g.items.length ? `<span style="font-size:11px;color:var(--sub)">${g.items.length} action${g.items.length === 1 ? '' : 's'}</span>` : ''}
+            ${actionCount ? `<span style="font-size:11px;color:var(--sub)">${actionCount} action${actionCount === 1 ? '' : 's'}</span>` : ''}
             <span class="lbl" style="width:100%">${esc(g.header.label)}</span>
           </button>` : '';
         const headerEvents = g.header ? streamGroupHtml(buckets[idxOf(g.header.i)] || []) : '';
@@ -909,7 +1016,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const trailGroups = groups.filter((g) => !g.header || !g.header.trailhead);
       const trailStepCount = trailGroups.filter((g) => g.header).length;
       const phaseStats = (phaseGroups) => {
-        const actions = phaseGroups.reduce((n, g) => n + g.items.length, 0);
+        const actions = phaseGroups.reduce((n, g) => n + g.items.filter((t) => !isLlmTurn(t)).length, 0);
         const duration = phaseGroups.reduce((ms, g) => ms + g.items.reduce((sum, t) => sum + (t.ms || 0), 0), 0);
         return `${actions} action${actions === 1 ? '' : 's'}${duration ? ` · ${fmtDur(duration)}` : ''}`;
       };
@@ -949,6 +1056,96 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const fmtN = (n) => n == null ? '—' : n.toLocaleString();
   const fmtCost = (c) => c == null ? '—' : c === 0 ? '$0.000000' : c < 0.000001 ? '<$0.000001' : '$' + c.toFixed(6);
   const decisionOf = (r) => { const t = (r.response || []).find((p) => p.kind === 'tool'); return t ? t.tool : ((r.response || []).find((p) => p.kind === 'text') ? 'text reply' : r.label); };
+  // The repo's canonical LLM identity: `<provider id>/<model id>` — the form `trailblaze config`
+  // prints, the CLI's "Using LLM:" line uses, and workspace LLM config keys models under. A call
+  // whose log carried no provider renders the bare model id (never a guessed prefix), and a call
+  // with no model at all takes the table's em-dash convention.
+  const llmModelLabel = (call) => {
+    const model = call && call.model ? String(call.model) : '';
+    if (!model || model === '?') return '—';
+    const provider = call && call.provider ? String(call.provider) : '';
+    return provider ? `${provider}/${model}` : model;
+  };
+  // Every distinct model a set of calls used, in first-use order. A session is usually one model,
+  // but a mixed run (an agent step plus an MCP-sampling call, or a mid-run model switch) genuinely
+  // uses several — printing one of them as "the session's model" would be a lie, so the totals card
+  // lists what it finds and the per-request table stays the per-call source of truth.
+  const llmModelsUsed = (calls) => {
+    const seen = [];
+    for (const call of calls || []) {
+      const label = llmModelLabel(call);
+      if (label !== '—' && seen.indexOf(label) < 0) seen.push(label);
+    }
+    return seen;
+  };
+
+  // One transcript message row for the LLM tab. Short messages (the objective, tool results) show
+  // in full; long ones (the system prompt, per-turn screen-state dumps) collapse behind a
+  // <details> expander so the transcript stays skimmable.
+  const TX_COLLAPSE_CHARS = 600;
+  const txRoleClass = (role) => role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+  // Role word only — the tool name renders in its own span beside it (txMsgHtml), so the CSS
+  // small-caps treatment can never mangle a camelCase tool name.
+  const txRoleLabel = (m) => {
+    const role = String(m.role || '');
+    if (role === 'user') return 'User';
+    if (role === 'assistant') return 'Assistant';
+    if (role === 'system') return 'System';
+    if (role === 'tool_call' || role === 'tool_use') return 'Tool call';
+    if (role === 'tool_result') return 'Tool result';
+    // Legacy logs emit both tool calls AND results as bare `tool` turns (today's logger writes
+    // tool_use/tool_result), so label them direction-neutrally rather than inverting a call into
+    // its own consequence.
+    if (role === 'tool' || role === 'function') return 'Tool';
+    return role || 'Message';
+  };
+  // The transcript's two VOICES (the reason the layout is conversational at all): what the model
+  // authored (assistant turns + the tool calls it chose) reads on the left with the --ai accent;
+  // what our agent/harness supplied (user turns — objective, screen dumps, hints — and the tool
+  // results the device reported back) reads on the right with the blue accent, chat-app style.
+  // The system prompt is a quiet full-width preamble.
+  const txVoice = (role) => role === 'assistant' || role === 'tool_call' || role === 'tool_use' ? 'llm'
+    : role === 'system' ? 'sys' : 'user';
+  const txAvatar = (m) => {
+    const role = String(m.role || '');
+    const voice = txVoice(role);
+    const glyph = voice === 'llm' ? 'AI' : role === 'system' ? 'S' : role === 'user' ? 'U' : '⚙';
+    return `<span class="txavatar ${voice}" aria-hidden="true">${glyph}</span>`;
+  };
+  const txMsgHtml = (m) => {
+    const role = String(m.role || '');
+    const voice = txVoice(role);
+    const isResult = role === 'tool' || role === 'function' || role === 'tool_result';
+    // Tool calls render exactly like a trail-file tool entry; tool results get the logger's
+    // markdown envelope parsed away (clean body + a "raw" expander for the verbatim text);
+    // everything else shows the raw message text.
+    let text; let raw = null;
+    if (isResult) {
+      const display = transcriptToolResultDisplay(m);
+      text = display ? display.text : String(m.text == null ? '' : m.text);
+      raw = display ? display.raw : null;
+    } else {
+      const yaml = transcriptToolCallYaml(m);
+      text = yaml != null ? yaml : String(m.text == null ? '' : m.text);
+    }
+    // The tool name rides in its own untransformed span — the role word is small-caps styled, but
+    // a camelCase tool name must read exactly as authored (never uppercased).
+    const roleTag = `${txAvatar(m)}<span class="txrole ${txRoleClass(role)}">${esc(txRoleLabel(m))}</span>${m.toolName ? `<span class="txtool mono">${esc(String(m.toolName))}</span>` : ''}`;
+    const rawHtml = raw != null ? `<details class="txraw"><summary>raw</summary><pre class="txbody">${esc(raw)}</pre></details>` : '';
+    if (text.length <= TX_COLLAPSE_CHARS) return `<div class="txmsg voice-${voice}"><div class="txhead">${roleTag}</div><pre class="txbody">${esc(text)}</pre>${rawHtml}</div>`;
+    return `<details class="txmsg voice-${voice}"><summary>${roleTag}<span class="txpeek">${esc(text.slice(0, 140))}…</span><span class="txlen">${fmtN(text.length)} chars</span></summary><pre class="txbody">${esc(text)}</pre>${rawHtml}</details>`;
+  };
+  // The transcript lightbox's body for one call: role-labeled messages in request order, or the
+  // pending/failed/empty note. Reused on the async refresh after gz inflation lands.
+  const txPanelBodyHtml = (callIndex) => {
+    const tx = sessionTranscripts(D);
+    if (!tx && !D.llmMessagesGz) return `<div class="txnote">No transcript was captured for this run (older report payload).</div>`;
+    const messages = transcriptCallMessages(tx, callIndex);
+    const note = messages ? (messages.length ? null : 'No transcript captured for this call.')
+      : transcriptInflater.inflight.has(D) ? 'Decompressing transcript…'
+      : 'Could not decompress the transcript (requires DecompressionStream support).';
+    return note ? `<div class="txnote">${esc(note)}</div>` : messages.map(txMsgHtml).join('');
+  };
 
   const viewPage = (title, meta, body, className = '') => `<section class="viewpage${className ? ` ${className}` : ''}">
     <div class="viewhead"><h2 class="viewtitle">${esc(title)}</h2>${meta ? `<span class="viewmeta">${esc(meta)}</span>` : ''}</div>
@@ -957,33 +1154,108 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const renderLlm = () => {
     if (!D.llm.length) return viewPage('LLM', '', `<div class="empty">This run has no LLM request logs.</div>`);
-    const totals = D.llm.reduce((a, r) => ({ i: a.i + (r.inputTokens || 0), o: a.o + (r.outputTokens || 0), c: a.c + (r.totalCost || 0), k: a.k + (r.cacheReadTokens || 0), d: a.d + (r.durationMs || 0) }), { i: 0, o: 0, c: 0, k: 0, d: 0 });
-    const list = D.llm.map((r, i) => `<div class="callrow${i === st.llmSel ? ' sel' : ''}" data-llm="${i}" role="button" tabindex="0"${i === st.llmSel ? ' aria-current="true"' : ''}>
-        <div class="d">${i + 1}. ${esc(decisionOf(r))}</div>
-        <div class="m">in ${fmtN(r.inputTokens)} · out ${fmtN(r.outputTokens)}${r.durationMs ? ' · ' + (r.durationMs / 1000).toFixed(1) + 's' : ''}</div>
-      </div>`).join('');
-    const r = D.llm[st.llmSel] || D.llm[0];
-    const respParts = (r.response || []).length ? (r.response || []).map((p) => p.kind === 'tool'
-      ? `${p.reasoning ? `<div class="reason">${esc(p.reasoning)}</div>` : ''}<div class="tool mono">⚙ ${esc(p.tool)}</div>${p.args && p.args !== '{}' ? `<pre>${esc(p.args)}</pre>` : ''}`
-      : `<div class="reason">${esc(p.text)}</div>`).join('') : '<div style="color:var(--sub);font-size:12px">No response captured for this call.</div>';
-    const detail = `<div class="card" style="display:flex;gap:16px;flex-wrap:wrap;align-items:baseline">
-        <span style="font-weight:700">Call ${st.llmSel + 1} <span style="color:var(--sub);font-weight:500">of ${D.llm.length}</span></span>
-        <span style="color:var(--sub);font-size:11.5px">${esc(r.model)}</span>
-        <span style="color:var(--sub);font-size:11.5px">in ${fmtN(r.inputTokens)}${r.cacheReadTokens ? ' (' + fmtN(r.cacheReadTokens) + ' cached)' : ''} · out ${fmtN(r.outputTokens)}</span>
-        ${r.totalCost != null ? `<span style="color:var(--sub);font-size:11.5px">${fmtCost(r.totalCost)}</span>` : ''}
-      </div>
-      ${r.instructions ? `<div style="margin:10px 2px 0;font-size:13px;font-weight:600">${esc(r.instructions)}</div>` : ''}
-      <div class="resp"><div class="h">Assistant response</div>${respParts}</div>`;
-    return viewPage('LLM', `${D.llm.length} call${D.llm.length === 1 ? '' : 's'}`, `<div class="llm">
-      <div><div class="card"><div style="font-size:12px;font-weight:600;color:var(--sub)">Session totals · ${D.llm.length} calls</div>
+    const totals = D.llm.reduce((a, r) => ({ i: a.i + (r.inputTokens || 0), o: a.o + (r.outputTokens || 0), c: a.c + (r.totalCost || 0), k: a.k + (r.cacheReadTokens || 0), d: a.d + (r.durationMs || 0), pc: a.pc + (r.promptCost || 0), oc: a.oc + (r.completionCost || 0), s: a.s + (r.cacheSavings || 0) }), { i: 0, o: 0, c: 0, k: 0, d: 0, pc: 0, oc: 0, s: 0 });
+    const haveCosts = D.llm.some((r) => r.promptCost != null || r.completionCost != null);
+    // Which model(s) produced this session's calls and cost. Listed rather than reduced to one:
+    // a mixed run genuinely uses several, and the per-request table ties each cost to its model.
+    const modelsUsed = llmModelsUsed(D.llm);
+    // Group calls by the objective they ran under (the trace's llm-stamped rows sit inside their
+    // objective's step, so one trace walk recovers the mapping). "Request 12345" alone isn't
+    // actionable; "which objective burned the budget" is — a deliberate improvement over the WASM
+    // report's flat request list. Old payloads without stamped trace rows keep the flat list.
+    const objectiveByCall = new Array(D.llm.length).fill(null);
+    {
+      let currentObjective = null;
+      for (const t of D.trace) {
+        if (t.objective) currentObjective = t;
+        if (t.llm != null && t.llm >= 0 && t.llm < objectiveByCall.length) objectiveByCall[t.llm] = currentObjective;
+      }
+    }
+    const callGroups: Array<{ objective: any; calls: number[] }> = [];
+    D.llm.forEach((_, i) => {
+      const objective = objectiveByCall[i];
+      const last = callGroups[callGroups.length - 1];
+      if (last && last.objective === objective) last.calls.push(i);
+      else callGroups.push({ objective, calls: [i] });
+    });
+    const grouped = callGroups.some((g) => g.objective != null);
+    const groupLabel = (g) => g.objective ? String(g.objective.label || 'Step') : 'Run';
+    // Per-objective subtotals on the header row — the budget question the grouping exists for.
+    const groupMeta = (g) => {
+      const calls = g.calls.map((i) => D.llm[i]);
+      const tin = calls.reduce((n, c) => n + (c.inputTokens || 0), 0);
+      const tout = calls.reduce((n, c) => n + (c.outputTokens || 0), 0);
+      const cost = llmCostTotal(calls);
+      return `${g.calls.length} call${g.calls.length === 1 ? '' : 's'} · in ${fmtN(tin)} · out ${fmtN(tout)}${cost != null ? ` · ${fmtCost(cost)}` : ''}`;
+    };
+    // Input-token composition, ported from the legacy WASM report's LLM Usage tab
+    // (LlmUsageComposable.kt): aggregate the per-call comp numbers into the "what takes up space
+    // in the context window" breakdown, mirroring computeUsageSummary's aggregation over the
+    // requests that carry a breakdown.
+    const comps = D.llm.map((call) => call.comp).filter((c) => c);
+    const agg = comps.reduce((a, c) => a
+      ? { system: a.system + (c.system || 0), user: a.user + (c.user || 0), tools: a.tools + (c.tools || 0), images: a.images + (c.images || 0), systemCount: a.systemCount + (c.systemCount || 0), userCount: a.userCount + (c.userCount || 0), toolsCount: a.toolsCount + (c.toolsCount || 0), imagesCount: a.imagesCount + (c.imagesCount || 0) }
+      : { system: c.system || 0, user: c.user || 0, tools: c.tools || 0, images: c.images || 0, systemCount: c.systemCount || 0, userCount: c.userCount || 0, toolsCount: c.toolsCount || 0, imagesCount: c.imagesCount || 0 }, null);
+    const breakdown = agg ? (() => {
+      const total = agg.system + agg.user + agg.tools + agg.images;
+      const segs = [
+        { label: 'System prompts', v: agg.system, count: `${fmtN(agg.systemCount)} message${agg.systemCount === 1 ? '' : 's'}`, color: 'var(--run)' },
+        { label: 'User prompts', v: agg.user, count: `${fmtN(agg.userCount)} message${agg.userCount === 1 ? '' : 's'}`, color: 'var(--pass)' },
+        { label: 'Tool descriptors', v: agg.tools, count: `${fmtN(agg.toolsCount)} tool${agg.toolsCount === 1 ? '' : 's'}`, color: 'var(--ai)' },
+        ...(agg.imagesCount > 0 ? [{ label: 'Images', v: agg.images, count: `${fmtN(agg.imagesCount)} image${agg.imagesCount === 1 ? '' : 's'}`, color: 'var(--amber)' }] : []),
+      ];
+      const pct = (v) => total > 0 ? `${Math.round((v / total) * 1000) / 10}%` : '0%';
+      return `<div class="card llmbreak"><div style="font-size:12px;font-weight:600;color:var(--sub)">Input token breakdown · estimated split of the reported input tokens</div>
+        <div class="llmbreakbar" aria-hidden="true">${segs.filter((s) => s.v > 0).map((s) => `<span style="width:${total > 0 ? (s.v / total) * 100 : 0}%;background:${s.color}"></span>`).join('')}</div>
+        ${segs.map((s) => `<div class="llmbreakcat"><span class="llmbreakdot" style="background:${s.color}"></span><span class="llmbreaklabel">${esc(s.label)}</span><span class="llmbreaktokens">${fmtN(s.v)}</span><span class="llmbreakpct">${pct(s.v)}</span><span class="llmbreakcount">${esc(s.count)}</span></div>`).join('')}
+        <div class="llmbreaktotal">${fmtN(total)} input tokens · aggregated across ${comps.length === D.llm.length ? `all ${D.llm.length}` : `${comps.length} of ${D.llm.length}`} request${D.llm.length === 1 ? '' : 's'}</div>
+        <div class="llmbreaknote">These four categories are measured; conversation history and the per-turn screen state after the first are not, and their tokens are distributed across the categories so the split sums to the reported total. A category growing across a run can therefore be history growing, not that category.</div></div>`;
+    })() : '';
+    // Per-request table mirroring the WASM report's Per-Request Details columns, grouped by
+    // objective (full-width group rows with per-objective subtotals). This is the tab's ONLY
+    // per-call surface — activating a row (or its chat button) opens the transcript lightbox,
+    // which is the detail view; there is no master list or inline detail pane. Numbering stays
+    // global across groups so `?llm=N` deep links are stable. A call with no composition shows
+    // em-dashes (never zeros); the Images cell is an em-dash when no images were sent.
+    const tableRowHtml = (call, i, inGroup = false) => {
+      const c = call.comp;
+      return `<tr class="llmrow${i === st.llmSel ? ' sel' : ''}${inGroup ? ' grouped' : ''}" data-llm="${i}" tabindex="0"${i === st.llmSel ? ' aria-current="true"' : ''}>
+        <td class="llmreq">${i + 1}. ${esc(decisionOf(call))}</td>
+        <td class="llmmodel mono" title="${esc(llmModelLabel(call))}">${esc(llmModelLabel(call))}</td>
+        <td class="num">${c ? fmtN(c.system) : '—'}</td>
+        <td class="num">${c ? fmtN(c.user) : '—'}</td>
+        <td class="num">${c ? fmtN(c.tools) : '—'}</td>
+        <td class="num">${c && c.imagesCount > 0 ? fmtN(c.images) : '—'}</td>
+        <td class="num"><span style="font-weight:600">${fmtN(call.inputTokens)}</span>${call.cacheReadTokens ? `<span class="llmcached">${fmtN(call.cacheReadTokens)} cached</span>` : ''}</td>
+        <td class="num">${fmtN(call.outputTokens)}</td>
+        <td class="txcell">${txOpenBtnHtml(i, `call ${i + 1}`)}</td>
+        <td class="num">${call.totalCost != null ? fmtCost(call.totalCost) : '—'}</td>
+      </tr>`;
+    };
+    // Grouping is rendered as containment, not just a divider: each objective is its own <tbody>
+    // carrying a hairline rail, the header row bands the objective's prompt (wrapped to two lines,
+    // never mid-word truncated — full text in the title), and its calls are inset so the nesting
+    // reads at a glance. `.grouped` is what indents the Request cell.
+    const tableRows = grouped
+      ? callGroups.map((g) => `<tbody class="llmgroup"><tr class="llmgrouprow"><td colspan="10" title="${esc(groupLabel(g))}"><span class="lbl">${esc(groupLabel(g))}</span><span class="llmgroupmeta">${esc(groupMeta(g))}</span></td></tr>${g.calls.map((i) => tableRowHtml(D.llm[i], i, true)).join('')}</tbody>`).join('')
+      : `<tbody>${D.llm.map((call, i) => tableRowHtml(call, i)).join('')}</tbody>`;
+    // No "Input (Est)" column: the estimated split is folded to sum to the reported total, so an
+    // estimate column always equals Input (LLM) — two columns agreeing by construction read as an
+    // independent check that isn't happening. The per-category estimates stay (that's the split).
+    const table = `<div class="card llmtablewrap"><div style="font-size:12px;font-weight:600;color:var(--sub)">Per-request details</div>
+      <table class="llmtable${grouped ? ' grouped' : ''}"><thead><tr><th>Request</th><th>Model</th><th class="num">System</th><th class="num">User</th><th class="num">Tools</th><th class="num">Images</th><th class="num">Input (LLM)</th><th class="num">Output</th><th><span class="srlabel">Transcript</span></th><th class="num">Cost</th></tr></thead>${tableRows}</table></div>`;
+    // Three stacked blocks: session totals, the context-window breakdown, and the per-request
+    // table. Per-call detail lives in the transcript lightbox alone.
+    return viewPage('LLM', `${D.llm.length} call${D.llm.length === 1 ? '' : 's'}`, `<div class="card"><div style="font-size:12px;font-weight:600;color:var(--sub)">Session totals · ${D.llm.length} calls</div>
         <div class="totals"><div><div class="n">${fmtN(totals.i)}</div><div class="t">input tokens</div></div>
         <div><div class="n">${fmtN(totals.o)}</div><div class="t">output tokens</div></div>
         <div><div class="n">${fmtCost(totals.c)}</div><div class="t">total cost</div></div>
+        ${haveCosts ? `<div><div class="n">${fmtCost(totals.pc)}</div><div class="t">input cost</div></div>
+        <div><div class="n">${fmtCost(totals.oc)}</div><div class="t">output cost</div></div>` : ''}
         ${totals.k ? `<div><div class="n">${fmtN(totals.k)} <span style="font-weight:500;color:var(--sub)">(${Math.round((totals.k / (totals.i || 1)) * 100)}%)</span></div><div class="t">cached input</div></div>` : ''}
-        ${totals.d ? `<div><div class="n">${(totals.d / D.llm.length / 1000).toFixed(1)}s</div><div class="t">avg response</div></div>` : ''}</div></div>
-        <div style="margin-top:12px">${list}</div></div>
-      <div>${detail}</div>
-    </div>`);
+        ${totals.s > 0 ? `<div><div class="n">−${fmtCost(totals.s)}</div><div class="t">cache savings · ${fmtCost(totals.c + totals.s)} without cache</div></div>` : ''}
+        ${totals.d ? `<div><div class="n">${(totals.d / D.llm.length / 1000).toFixed(1)}s</div><div class="t">avg response</div></div>` : ''}</div>
+        ${modelsUsed.length ? `<div class="llmmodels"><span class="k">${modelsUsed.length === 1 ? 'Model' : `Models (${modelsUsed.length})`}</span>${modelsUsed.map((m) => `<span class="v mono">${esc(m)}</span>`).join('')}</div>` : ''}</div>${breakdown}${table}`);
   };
 
   // Thumbnail width steps for the lightbox zoom control. The grid packs as many columns of the
@@ -1600,9 +1872,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const render = (preserveTimelineScroll = false) => {
     const previousTimelineScroll = preserveTimelineScroll ? root.querySelector<HTMLElement>('.timeline-list')?.scrollTop : null;
+    const previousPageScroll = preserveTimelineScroll && typeof window.scrollY === 'number' ? window.scrollY : null;
     const active = preserveTimelineScroll ? document.activeElement as HTMLElement | null : null;
     const focusSelector = active && active.matches('[data-scrub]') ? '[data-scrub]'
       : active && active.matches('[data-step]') ? `[data-step="${active.dataset.step}"]`
+      : active && active.matches('[data-llm]') ? `[data-llm="${active.dataset.llm}"]`
       : active && active.matches('[data-tlstream]') ? `[data-tlstream="${active.dataset.tlstream}"]`
       : active && active.matches('[data-tlstreams]') ? `[data-tlstreams="${active.dataset.tlstreams}"]`
       : active && ['prev', 'next', 'tlplay'].indexOf(active.id) >= 0 ? `#${active.id}`
@@ -1675,7 +1949,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const timelineList = root.querySelector<HTMLElement>('.timeline-list');
       if (timelineList) timelineList.scrollTop = previousTimelineScroll;
     }
+    if (previousPageScroll != null && typeof window.scrollTo === 'function') window.scrollTo(0, previousPageScroll);
     if (focusSelector) root.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
+    // A `?llm=N` deep link: land the reader on the highlighted table row and open its transcript
+    // (the lightbox is the detail surface, so the link opens straight into it; closing leaves the
+    // reader at the row).
+    if (pendingLlmOpen) {
+      pendingLlmOpen = false;
+      if (st.tab === 'llm' && st.llmSel >= 0 && st.llmSel < D.llm.length) {
+        const rowEl = root.querySelector<HTMLElement>(`[data-llm="${st.llmSel}"]`);
+        if (rowEl && typeof rowEl.scrollIntoView === 'function') rowEl.scrollIntoView({ block: 'center' });
+        openTranscript(st.llmSel, rowEl);
+      }
+    }
   };
 
   let zoomEl = null;
@@ -1743,6 +2029,414 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     show();
     zoomEl.focus();
   };
+
+  // ── LLM transcript lightbox (see the state + closeTranscript beside stopTimeline above) ─────
+  // The full conversation for ONE call, as a modal over whatever view opened it — 1:1 with the
+  // WASM report's Chat History dialog (FullScreenModalOverlay + ChatHistoryDialog): a secondary
+  // inspector that never disturbs the primary view. Triggers: the per-call timeline rows, the LLM
+  // tab's call list / per-request table / detail card. Lives on document.body OUTSIDE #app, so
+  // opening and closing it can't touch the timeline's scroll, selection, or render state.
+  // Dismissal is Escape or the close button ONLY (scrim clicks are deliberately inert, matching
+  // the WASM overlay — and protecting a text-selection drag that ends outside the panel).
+  const txHeaderHtml = (i) => {
+    const r: any = D.llm[i] || {};
+    const meta = [
+      // Same `<provider>/<model>` identity the LLM tab shows, so the two surfaces agree.
+      llmModelLabel(r) !== '—' ? `<span class="mono">${esc(llmModelLabel(r))}</span>` : '',
+      r.inputTokens != null ? `<span>in ${fmtN(r.inputTokens)}${r.cacheReadTokens ? ` (${fmtN(r.cacheReadTokens)} cached)` : ''}</span>` : '',
+      r.outputTokens != null ? `<span>out ${fmtN(r.outputTokens)}</span>` : '',
+      r.totalCost != null ? `<span>${fmtCost(r.totalCost)}</span>` : '',
+      r.durationMs ? `<span>${(r.durationMs / 1000).toFixed(1)}s</span>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="txpanelhead">
+      <div class="txpaneltitle"><span class="h" id="txpanel-title">Transcript · Call ${i + 1} <span class="txof">of ${D.llm.length}</span></span><div class="txpanelmeta">${meta}</div></div>
+      <button type="button" class="txclose" data-tx-close aria-label="Close transcript">×</button>
+    </div>`;
+  };
+  // Re-render the open panel's message list in place (used by the post-inflate refresh). The
+  // overlay node itself is stable, so focus inside the dialog survives.
+  let txBodyEl = null;
+  const refreshTranscriptPanel = () => {
+    if (txEl && txBodyEl) txBodyEl.innerHTML = txPanelBodyHtml(txCallIndex);
+  };
+  const openTranscript = (i, opener) => {
+    closeTranscript();
+    txReturnFocus = opener || document.activeElement;
+    // Selector for the trigger, re-resolved at close time so focus still returns after a render()
+    // has replaced the captured node (the gz-transcript inflation path does exactly that).
+    const openerTx = opener && opener.dataset ? opener.dataset.tx : null;
+    const openerLlm = opener && opener.dataset ? opener.dataset.llm : null;
+    txReturnSelector = openerTx != null ? `[data-tx="${openerTx}"]` : openerLlm != null ? `[data-llm="${openerLlm}"]` : null;
+    txCallIndex = i;
+    const session = D;
+    txEl = document.createElement('div');
+    txEl.className = 'txoverlay';
+    txEl.setAttribute('role', 'dialog'); txEl.setAttribute('aria-modal', 'true');
+    txEl.setAttribute('aria-label', `LLM transcript, call ${i + 1} of ${D.llm.length}`);
+    txEl.tabIndex = -1;
+    const panel = document.createElement('div');
+    panel.className = 'txpanel';
+    panel.innerHTML = txHeaderHtml(i);
+    // The message list is its own held element so the post-inflate refresh can swap its content
+    // directly (no querySelector round-trip — also what keeps this drivable in the test shim).
+    txBodyEl = document.createElement('div');
+    txBodyEl.className = 'txscroll';
+    txBodyEl.innerHTML = txPanelBodyHtml(i);
+    panel.appendChild(txBodyEl);
+    // Close clicks by delegation (the header close button lives inside panel.innerHTML).
+    panel.onclick = (e) => {
+      const target = e && (e.target as any);
+      if (target && target.closest && target.closest('[data-tx-close]')) closeTranscript(true);
+      if (e && e.stopPropagation) e.stopPropagation();
+    };
+    txEl.appendChild(panel);
+    // Keyboard contract: Escape closes (and never reaches the document-level handlers under the
+    // modal); Tab is trapped inside the dialog, wrapping at both ends.
+    txEl.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTranscript(true); return; }
+      if (e.key !== 'Tab' || !txEl || typeof txEl.querySelectorAll !== 'function') return;
+      const focusables = Array.from(txEl.querySelectorAll('button, [href], summary, [tabindex]:not([tabindex="-1"])'))
+        .filter((el: any) => !el.disabled && (el.offsetParent !== undefined ? el.offsetParent !== null || el === document.activeElement : true));
+      if (!focusables.length) { e.preventDefault(); return; }
+      const first = focusables[0] as any; const last = focusables[focusables.length - 1] as any;
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === txEl)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.body.appendChild(txEl);
+    txEl.focus();
+    // On the LLM tab the open lightbox IS the route's `llm` param (see routeParams) — record it
+    // so the address stays a shareable deep link into this call.
+    writeRoute(true);
+    // A gz transcript may still be inflating: the panel shows the Decompressing note now and
+    // swaps in the messages when the shared inflater resolves (same session + still open).
+    ensureTranscriptsInflated(D).then(() => { if (txEl && D === session) refreshTranscriptPanel(); });
+  };
+  // ── UI Inspector ──────────────────────────────────────────────────────────────────────────────
+  // Per-step view-hierarchy inspector (tree + node details + bounds overlay on the screenshot +
+  // raw JSON), opened from a timeline row's "Inspect UI" control. An imperative overlay on
+  // document.body like the zoom lightbox: full app re-renders replace #app underneath it without
+  // touching it. The markup builders are pure (run-report-inspector.ts); this block owns only the
+  // overlay lifecycle, state, and event wiring.
+  let inspectorEl = null;
+  let inspectorReturnFocus = null;
+  const inspState = { step: 0, selected: null, hovered: null, raw: false, session: null };
+  // Memoized model of the hierarchy being inspected — the painters and the screenshot hit-testing
+  // all read it, and rebuilding a few-hundred-node model per hover/click is avoidable.
+  let inspModelCache = { hier: null, model: null };
+  const inspectedModel = () => {
+    const hier = stepHierarchy(inspState.step);
+    if (hier == null) return null;
+    if (inspModelCache.hier !== hier) inspModelCache = { hier, model: inspectorModel(hier) };
+    return inspModelCache.model;
+  };
+  const closeInspector = () => {
+    if (!inspectorEl) return;
+    inspectorEl.remove(); inspectorEl = null;
+    // Re-resolve the "Inspect UI" trigger by selector first (same reason closeTranscript does): a gz
+    // report's hierarchy inflation completes with a full render() that replaces #app, detaching the
+    // node captured on open — focusing that node would drop the reader on <body>.
+    const back = inspectorReturnFocus; inspectorReturnFocus = null;
+    const live = root.querySelector(`[data-inspect="${inspState.step}"]`);
+    const target = live || back;
+    if (target && target.focus) target.focus();
+  };
+  // FULL rebuild of the overlay markup. Reserved for changes that alter its structure (open, the
+  // raw-JSON toggle, a decompress landing) — NEVER for hover or selection: see
+  // syncInspectorHighlight for why those must be in-place.
+  // The capture's shape drives the panel geometry (see the .insp-* rules): the screenshot pane is
+  // the priority claimant on space — a landscape capture (web/tablet) widens the whole panel and
+  // gives the image the free column while the data column caps; a very tall scroll capture renders
+  // at pane width and scrolls vertically instead of being scaled to a sliver. Portrait phone
+  // captures keep the classic split. Thresholds: landscape is wider than tall; "tall" is h > 3w
+  // (a 936×3694 web scroll capture, not a 1080×2400 phone). Classified from the tree's extent at
+  // paint time and re-classified from the measured image (applyInspectorImageDims) once it decodes.
+  const inspectorShape = (dims) => (!dims ? 'portrait' : (dims.w > dims.h ? 'landscape' : (dims.h > 3 * dims.w ? 'tall' : 'portrait')));
+  const inspectorImgEl = () => {
+    const wrap = inspectorEl && inspectorEl.querySelector ? inspectorEl.querySelector('[data-insphit]') : null;
+    return wrap && wrap.querySelector ? wrap.querySelector('img') : null;
+  };
+  // Effective overlay coordinate space. The tree's OWN extent cannot be trusted on web: a
+  // trailblazeNodeTree carries PAGE-relative bounds (nodes run to the full scroll height, the
+  // "document" root has no bounds at all) and off-viewport nodes (hidden carousel slides past the
+  // right edge), while the logged screenshot is a viewport capture — an extent derived from the
+  // nodes (max x2/y2, ~1999×10700 on a 1280×800 viewport) skewed every rect and hit-tested most of
+  // the screenshot onto the wrong nodes. Two better anchors, in order:
+  //  - the log's viewport (deviceWidth×deviceHeight, lifted onto the trace row) — the capture's
+  //    real coordinate space;
+  //  - the image's own aspect ratio, refining the height once it decodes (h = w × naturalH/naturalW)
+  //    so a capture taller than the viewport (a full-page export) still lines up.
+  // On captures whose tree already matches the image (Android, iOS) all three agree.
+  const stepViewport = () => {
+    const row = D.trace.find((t) => t.i === inspState.step);
+    const vp = row && row.viewport;
+    return vp && vp.w > 0 && vp.h > 0 ? vp : null;
+  };
+  let inspEffDims = null;
+  // Best dims available right now: measured (image-refined) > viewport > tree-derived.
+  const inspectorAnchorDims = () => {
+    if (inspEffDims) return inspEffDims;
+    const vp = stepViewport();
+    if (vp) return { w: vp.w, h: vp.h };
+    const model = inspectedModel();
+    return model ? model.dims : null;
+  };
+  const applyInspectorImageDims = () => {
+    if (!inspectorEl) return;
+    const model = inspectedModel();
+    const img = inspectorImgEl();
+    if (!model || !model.dims || !img || !(img.naturalWidth > 0) || !(img.naturalHeight > 0)) return;
+    const vp = stepViewport();
+    const anchorW = vp ? vp.w : model.dims.w;
+    const eff = { w: anchorW, h: (anchorW * img.naturalHeight) / img.naturalWidth };
+    if (inspEffDims && Math.abs(inspEffDims.h - eff.h) < 0.5 && Math.abs(inspEffDims.w - eff.w) < 0.5) return;
+    inspEffDims = eff;
+    // Restyle each rect IN PLACE — a repaint here would reset tree scroll and focus (see
+    // syncInspectorHighlight).
+    const pctOf = (v, span) => `${((v / span) * 100).toFixed(3)}%`;
+    inspectorEl.querySelectorAll('[data-insprect]').forEach((el) => {
+      const n = model.nodes[+el.dataset.insprect];
+      if (!n || !n.bounds || !el.style) return;
+      el.style.left = pctOf(n.bounds.x1, eff.w);
+      el.style.width = pctOf(n.bounds.x2 - n.bounds.x1, eff.w);
+      el.style.top = pctOf(n.bounds.y1, eff.h);
+      el.style.height = pctOf(n.bounds.y2 - n.bounds.y1, eff.h);
+    });
+    // Re-classify the panel shape from what the reader actually sees (the image), in place.
+    const panel = inspectorEl.querySelector('.insppanel');
+    if (panel && panel.classList) {
+      ['portrait', 'landscape', 'tall'].forEach((s) => panel.classList.remove(`insp-${s}`));
+      panel.classList.add(`insp-${inspectorShape({ w: img.naturalWidth, h: img.naturalHeight })}`);
+    }
+    syncInspectorHighlight();
+  };
+  const paintInspector = () => {
+    if (!inspectorEl) return;
+    inspState.hovered = null; // a rebuilt overlay has no pointer over it yet
+    inspEffDims = null; // re-measured against the freshly-painted image below
+    const row = D.trace.find((t) => t.i === inspState.step);
+    const hier = stepHierarchy(inspState.step);
+    const model = inspectedModel();
+    const shot = row && row.screenshotFile ? D.shots[row.screenshotFile] : null;
+    const anchorDims = inspectorAnchorDims();
+    const shape = inspectorShape(anchorDims);
+    let body;
+    if (model) {
+      const dataPane = inspState.raw
+        ? `<pre class="mono inspraw">${esc(safeJson(hier))}</pre>`
+        : `<div class="inspdetails">${inspectorDetailsHtml(model, inspState.selected)}</div><div class="insptree">${inspectorTreeHtml(model, inspState.selected)}</div>`;
+      body = `<div class="inspbody">
+        <div class="insppane inspshotpane">${shot
+          ? `<div class="inspshotwrap" data-insphit><img src="${esc(shot)}" alt="Screenshot at ${esc((row && row.label) || 'this step')}" /><div class="insprects" aria-hidden="true">${inspectorRectsHtml(model, inspState.selected, anchorDims)}</div><span class="insphovlabel mono" data-insphovlabel aria-hidden="true"></span></div>`
+          : `<div class="inspnote">No screenshot captured for this step.</div>`}</div>
+        <div class="insppane inspdatapane">${dataPane}</div>
+      </div>`;
+    } else if (D.hierarchiesGz && !hierarchiesInflater.cache.has(D)) {
+      body = `<div class="inspbody"><div class="inspnote">Decompressing UI hierarchy…</div></div>`;
+    } else if (D.hierarchiesGz && hier == null) {
+      body = `<div class="inspbody"><div class="inspnote">Could not decompress the UI hierarchy (requires DecompressionStream support).</div></div>`;
+    } else {
+      body = `<div class="inspbody"><div class="inspnote">No view hierarchy was captured for this step.</div></div>`;
+    }
+    inspectorEl.innerHTML = `<div class="insppanel insp-${shape}">
+      <div class="insphead">
+        <span class="insptitle" id="insp-title">UI Inspector</span>
+        <span class="inspcontext">${esc((row && row.label) || `Step ${inspState.step}`)}</span>
+        <span class="inspactions">${model ? `<button class="btn" type="button" data-inspraw>${inspState.raw ? 'Show tree' : 'Raw JSON'}</button><button class="btn" type="button" data-inspcopy>Copy JSON</button>` : ''}<button class="btn" type="button" data-inspclose>Close</button></span>
+      </div>
+      ${body}
+    </div>`;
+    // Anchor the overlay's coordinate space to the image once it has decoded (data-URI images are
+    // usually ready immediately; a late decode corrects in place).
+    const img = inspectorImgEl();
+    if (img) {
+      if (img.complete && img.naturalWidth > 0) applyInspectorImageDims();
+      else img.onload = applyInspectorImageDims;
+    }
+  };
+  const safeJson = (value) => { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } };
+  // Selection and hover paint IN PLACE: toggle the two classes on the tree rows and the bounds
+  // rects, and re-render only the small details card. Rebuilding the overlay for these would reset
+  // the tree's scrollTop and drop keyboard focus to <body> on every click — and with hover driven
+  // by mousemove it would rebuild the whole DOM on every pointer move.
+  const syncInspectorHighlight = () => {
+    if (!inspectorEl) return;
+    const model = inspectedModel();
+    if (!model) return;
+    const { selected, hovered } = inspState;
+    const mark = (el, key) => {
+      el.classList.toggle('sel', key === selected);
+      el.classList.toggle('hov', key === hovered);
+    };
+    inspectorEl.querySelectorAll('[data-inspnode]').forEach((el) => mark(el, +el.dataset.inspnode));
+    inspectorEl.querySelectorAll('[data-insprect]').forEach((el) => mark(el, +el.dataset.insprect));
+    const details = inspectorEl.querySelector('.inspdetails');
+    if (details) details.innerHTML = inspectorDetailsHtml(model, selected, hovered);
+    // The floating label rides the hovered node's own rect (not the cursor), so a tree-row hover
+    // and a screenshot hover point at the same place.
+    const label = inspectorEl.querySelector('[data-insphovlabel]');
+    const node = hovered != null ? model.nodes[hovered] : null;
+    const labelDims = inspectorAnchorDims();
+    if (label) {
+      label.textContent = node ? node.label : '';
+      label.classList.toggle('on', !!(node && node.bounds && labelDims));
+      if (node && node.bounds && labelDims) {
+        label.style.left = `${Math.max(0, Math.min(100, (node.bounds.x1 / labelDims.w) * 100)).toFixed(3)}%`;
+        label.style.top = `${Math.max(0, Math.min(100, (node.bounds.y1 / labelDims.h) * 100)).toFixed(3)}%`;
+      }
+    }
+  };
+  // Bring the COMMITTED selection into view in the tree: expand any collapsed ancestor branch
+  // (a screenshot-originated selection can land deep inside one), then center the row — unless it
+  // is already fully visible, so selecting a row you're looking at never moves the tree (the same
+  // no-jump guarantee the in-place paint gives). Reveal is a commit affordance only; hover never
+  // calls it — a preview must not scroll or expand anything.
+  const revealSelectedNode = (key) => {
+    if (!inspectorEl || key == null) return;
+    const rows = inspectorEl.querySelectorAll('[data-inspnode]');
+    let row = null;
+    rows.forEach((el) => { if (+el.dataset.inspnode === key) row = el; });
+    if (!row) return;
+    let expanded = false;
+    // The row's own <summary> stays visible when its branch is collapsed; only collapsed ANCESTOR
+    // branches hide it — open every one on the chain.
+    for (let d = row.closest && row.closest('details'); d; d = d.parentElement && d.parentElement.closest ? d.parentElement.closest('details') : null) {
+      if (!d.open) { d.open = true; expanded = true; }
+    }
+    const tree = inspectorEl.querySelector('.insptree');
+    const canMeasure = tree && row.getBoundingClientRect && tree.getBoundingClientRect;
+    if (!expanded && canMeasure) {
+      const a = row.getBoundingClientRect();
+      const b = tree.getBoundingClientRect();
+      if (a.top >= b.top && a.bottom <= b.bottom) return; // already fully visible — don't move the tree
+    }
+    if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+  };
+  const selectInspectorNode = (key) => { inspState.selected = key; syncInspectorHighlight(); revealSelectedNode(key); };
+  const hoverInspectorNode = (key) => {
+    if (inspState.hovered === key) return;
+    inspState.hovered = key;
+    syncInspectorHighlight();
+  };
+  // Hover is a pointer affordance: a coarse pointer (touch) has no hover state, and a tap would
+  // otherwise leave a stuck preview behind.
+  const hoverCapablePointer = (e) => {
+    const kind = e && e.pointerType;
+    if (kind && kind !== 'mouse' && kind !== 'pen') return false;
+    if (typeof matchMedia !== 'function') return true;
+    try { return matchMedia('(hover: hover)').matches; } catch (err) { return true; }
+  };
+  // Map a pointer position inside the screenshot to the smallest node containing it. Coordinates
+  // are IMAGE-relative (the rect is re-read per hit), so the mapping stays correct while the shot
+  // pane scrolls a tall capture; the device space is the image-anchored one (inspEffDims), so a
+  // page-relative web tree doesn't skew the vertical mapping.
+  const inspectorHitAt = (hit, clientX, clientY) => {
+    const model = inspectedModel();
+    const img = hit && hit.querySelector ? hit.querySelector('img') : null;
+    if (!model || !model.dims || !img || !img.getBoundingClientRect) return null;
+    const r = img.getBoundingClientRect();
+    if (!(r.width > 0) || !(r.height > 0)) return null;
+    if (!inspEffDims) applyInspectorImageDims(); // late decode — measure on first use
+    const dims = inspectorAnchorDims();
+    if (!dims) return null;
+    return hitTestNode(model, ((clientX - r.left) / r.width) * dims.w, ((clientY - r.top) / r.height) * dims.h);
+  };
+  // The SCREENSHOT is the only hover source. Pointing at the tree deliberately previews nothing:
+  // the tree's one interaction is commit-on-activate (click / Enter / Space) plus expand/collapse,
+  // so a preview there would be a second, competing meaning for pointing at a row. Hovering the
+  // screenshot does light the matching tree row — that direction locates the node in the hierarchy.
+  // Hit-testing runs against a few hundred rects, so it's throttled to one frame.
+  let inspHoverScheduled = false;
+  let inspHoverPending = null;
+  const onInspectorPointerMove = (e) => {
+    if (!inspectorEl || !hoverCapablePointer(e)) return;
+    const target = e && e.target;
+    const closest = (sel) => (target && target.closest ? target.closest(sel) : null);
+    const hit = closest('[data-insphit]');
+    // Pointer anywhere but the screenshot (the tree included) ends the preview.
+    if (!hit || e.clientX == null) { hoverInspectorNode(null); return; }
+    inspHoverPending = { hit, x: e.clientX, y: e.clientY };
+    if (inspHoverScheduled) return;
+    inspHoverScheduled = true;
+    const run = () => {
+      inspHoverScheduled = false;
+      const p = inspHoverPending;
+      inspHoverPending = null;
+      if (p && inspectorEl) hoverInspectorNode(inspectorHitAt(p.hit, p.x, p.y));
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run); else setTimeout(run, 16);
+  };
+  // One delegated handler for everything inside the overlay — a full paint replaces the markup
+  // wholesale, so per-element wiring would have to be redone each time.
+  const onInspectorClick = (e) => {
+    const target = e && e.target;
+    const closest = (sel) => (target && target.closest ? target.closest(sel) : null);
+    if (closest('[data-inspclose]')) { closeInspector(); return; }
+    if (closest('[data-inspraw]')) { inspState.raw = !inspState.raw; paintInspector(); return; }
+    if (closest('[data-inspcopy]')) {
+      const btn = closest('[data-inspcopy]');
+      try {
+        Promise.resolve(navigator.clipboard.writeText(safeJson(stepHierarchy(inspState.step))))
+          .then(() => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1200); }, () => {});
+      } catch (err) { /* clipboard unavailable */ }
+      return;
+    }
+    const nodeEl = closest('[data-inspnode]');
+    if (nodeEl) {
+      // Selecting a branch row must not also collapse its <details>; collapse stays available on
+      // the summary chevron / whitespace outside the row span.
+      if (e.preventDefault) e.preventDefault();
+      selectInspectorNode(+nodeEl.dataset.inspnode);
+      return;
+    }
+    if (closest('[data-insptoggle]')) return; // native <details> collapse
+    // Click-to-commit on the screenshot: hover previewed which node a click would take; this makes
+    // it the selection. Hit-tested rather than read off the hover state so a tap (no hover) works.
+    const hit = closest('[data-insphit]');
+    if (hit && e.clientX != null) {
+      const key = inspectorHitAt(hit, e.clientX, e.clientY);
+      if (key != null) selectInspectorNode(key);
+    }
+  };
+  const openInspector = (stepId) => {
+    closeInspector();
+    inspState.step = stepId; inspState.selected = null; inspState.hovered = null; inspState.raw = false; inspState.session = D;
+    inspectorReturnFocus = document.activeElement;
+    inspectorEl = document.createElement('div');
+    inspectorEl.className = 'inspector';
+    inspectorEl.setAttribute('role', 'dialog');
+    inspectorEl.setAttribute('aria-modal', 'true');
+    inspectorEl.setAttribute('aria-labelledby', 'insp-title');
+    inspectorEl.tabIndex = -1;
+    inspectorEl.onclick = onInspectorClick;
+    inspectorEl.onpointermove = onInspectorPointerMove;
+    inspectorEl.onpointerleave = () => hoverInspectorNode(null);
+    // No focus-driven preview on tree rows, deliberately: with the screenshot as the only hover
+    // source, a focus preview would be an interaction no pointer user has. Focusing a row gives
+    // its focus ring; activating it commits — identical to what the mouse does on the tree.
+    // Keyboard interaction for the tree rows (role="button" spans rebuilt on every state change).
+    // Each row is the single tab stop for its node (the branch <summary> is tabindex="-1"), so the
+    // row also carries the branch keys: Enter/space selects, ArrowRight/ArrowLeft expand/collapse.
+    inspectorEl.onkeydown = (e) => {
+      const target = e.target;
+      const nodeEl = target && target.closest ? target.closest('[data-inspnode]') : null;
+      if (!nodeEl) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectInspectorNode(+nodeEl.dataset.inspnode); return; }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        const branch = nodeEl.closest('summary') ? nodeEl.closest('details') : null;
+        if (branch) { e.preventDefault(); branch.open = e.key === 'ArrowRight'; }
+      }
+    };
+    document.body.appendChild(inspectorEl);
+    paintInspector();
+    // A compressed hierarchies payload inflates on first open; repaint the overlay (and let the
+    // inflater's own completion hook re-render the app's row affordances) once it lands.
+    if (stepHierarchy(stepId) == null && D.hierarchiesGz) {
+      const session = D;
+      ensureHierarchiesInflated(session).then(() => { if (inspectorEl && inspState.session === session) paintInspector(); });
+    }
+    if (inspectorEl.focus) inspectorEl.focus();
+  };
+
   const centerTimelineSelection = () => {
     const center = () => {
       const list = root.querySelector<HTMLElement>('.timeline-list');
@@ -1974,7 +2668,35 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const backBtn = root.querySelector<HTMLElement>('[data-back]'); if (backBtn) backBtn.onclick = () => { stopTimeline(); st.view = 'index'; st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 }); };
     root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.onclick = () => { st.tab = b.dataset.tab; writeRoute(false); render(); });
     root.querySelectorAll<HTMLElement>('[data-step]').forEach((el) => el.onclick = (e) => { if (e) e.stopPropagation(); stopTimeline(); st.step = +el.dataset.step; revealTimelineStep(st.step); writeRoute(true); render(true); });
-    root.querySelectorAll<HTMLElement>('[data-llm]').forEach((el) => el.onclick = () => { st.llmSel = +el.dataset.llm; writeRoute(true); render(); });
+    // Highlight the activated per-request table row in place (no re-render — the lightbox opens
+    // over an untouched table, and closing it leaves the reader at the highlighted row).
+    const selectLlmRow = (i) => {
+      st.llmSel = i;
+      root.querySelectorAll<HTMLElement>('[data-llm]').forEach((el) => {
+        const on = +el.dataset.llm === i;
+        if (el.classList && el.classList.toggle) el.classList.toggle('sel', on);
+        if (el.setAttribute && el.removeAttribute) { if (on) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current'); }
+      });
+    };
+    root.querySelectorAll<HTMLElement>('[data-llm]').forEach((el) => {
+      // A table row and its chat button share one path: highlight the row, open the transcript
+      // lightbox (the tab's only detail surface).
+      const open = () => { selectLlmRow(+el.dataset.llm); openTranscript(+el.dataset.llm, el); };
+      el.onclick = open;
+      // The rows are focusable via tabindex; <tr>s don't get implicit Enter/Space activation, so
+      // wire it explicitly.
+      el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    });
+    // Transcript triggers (timeline LLM rows + the LLM tab's table rows). stopPropagation so the
+    // sibling row's own select/scrub handler doesn't also fire; the trigger element is passed as
+    // the focus-return target for close. A trigger inside a data-llm table row also moves the
+    // row highlight, same as activating the row itself.
+    root.querySelectorAll<HTMLElement>('[data-tx]').forEach((el) => el.onclick = (e) => {
+      if (e) e.stopPropagation();
+      const row = el.closest ? el.closest('[data-llm]') as HTMLElement | null : null;
+      if (row && row.dataset) selectLlmRow(+row.dataset.llm);
+      openTranscript(+el.dataset.tx, el);
+    });
     const lightboxMode = document.getElementById('lightboxmode');
     if (lightboxMode) lightboxMode.onclick = () => { st.lightboxAll = !st.lightboxAll; render(); };
     root.querySelectorAll<HTMLElement>('[data-gal-zoom]').forEach((el) => el.onclick = () => {
@@ -2025,6 +2747,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       revealTimelineStep(st.step);
       writeRoute(true);
       render(true);
+    });
+    root.querySelectorAll<HTMLElement>('[data-inspect]').forEach((el) => el.onclick = (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      openInspector(+el.dataset.inspect);
     });
     root.querySelectorAll<HTMLElement>('[data-lightbox-step]').forEach((el) => el.onclick = () => {
       stopTimeline();
@@ -2162,7 +2888,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     };
   };
 
-  document.addEventListener('keydown', (e) => {
+  // Global listeners are torn down before this run registers its own, so booting a second time into
+  // the same document (the viewer shell loading another archive, in-app reuse) can't leave the
+  // previous run's handlers live. They would still be bound to that run's own SESSIONS/st and render
+  // it back into the shared #app — an arrow key would be handled by the stale closure first, which
+  // also calls preventDefault, so the current run would never see it.
+  if (disposeViewerGlobals) { disposeViewerGlobals(); disposeViewerGlobals = null; }
+
+  const onKeydown = (e: KeyboardEvent) => {
+    // The transcript dialog owns the keyboard while open (its own handler covers Escape and the
+    // Tab trap); the timeline/zoom shortcuts below must not fire underneath an aria-modal dialog.
+    if (txEl) { if (e.key === 'Escape') { e.preventDefault(); closeTranscript(); } return; }
+    if (inspectorEl) {
+      if (e.key === 'Escape') { e.preventDefault(); closeInspector(); }
+      return; // the overlay is modal — timeline/zoom shortcuts stay inert underneath it
+    }
     if (zoomEl) {
       if (e.key === 'Escape') { e.preventDefault(); closeZoom(); }
       if (e.key === 'ArrowLeft') { e.preventDefault(); if (zoomMove) zoomMove(-1); }
@@ -2178,16 +2918,39 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { stopTimeline(); const p = idxOf(st.step); if (p > 0) { e.preventDefault(); gotoStep(p - 1); } }
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { stopTimeline(); const p = idxOf(st.step); if (p < D.trace.length - 1) { e.preventDefault(); gotoStep(p + 1); } }
     if (e.key === ' ') { e.preventDefault(); const b = document.getElementById('tlplay'); if (b) b.click(); } // space toggles play/pause
-  });
+  };
+  const onPopstate = () => {
+    closeInspector(); // history navigation replaces the view under the modal overlay
+    const previousView = st.view;
+    // Navigating away closes the dialog: applyRoute's index branch never reaches openSession, so
+    // without this a Back to the runs index re-renders the index with the modal stranded over it.
+    closeTranscript();
+    applyRoute();
+    if (st.view !== previousView) st.pageTransition = st.view === 'detail' ? 'forward' : 'back';
+    render();
+  };
 
-  if (typeof window.addEventListener === 'function') {
-    window.addEventListener('popstate', () => {
-      const previousView = st.view;
-      applyRoute();
-      if (st.view !== previousView) st.pageTransition = st.view === 'detail' ? 'forward' : 'back';
-      render();
-    });
-  }
+  document.addEventListener('keydown', onKeydown);
+  const canListenOnWindow = typeof window.addEventListener === 'function';
+  if (canListenOnWindow) window.addEventListener('popstate', onPopstate);
+  // Teardown must never break the boot that invokes it, so every step is guarded: the reduced DOMs
+  // this bundle also runs against (in-app reuse, the fake-DOM harness in the tests) do not
+  // necessarily implement removeEventListener, and a stale playback stopper closes over the previous
+  // run's timers.
+  disposeViewerGlobals = () => {
+    if (typeof document.removeEventListener === 'function') document.removeEventListener('keydown', onKeydown);
+    if (canListenOnWindow && typeof window.removeEventListener === 'function') window.removeEventListener('popstate', onPopstate);
+    if (disposeThemeListener) { try { disposeThemeListener(); } catch (e) { /* media query already gone */ } }
+    // A timeline left playing would keep stepping the previous run's state into a replaced DOM.
+    try { stopTimeline(); } catch (e) { /* previous run's timers are already gone */ }
+    // The zoom overlay lives on document.body, not inside #app, so a caller that swaps the report out
+    // (the shell clearing #app for the next archive) would otherwise leave it stranded over the new
+    // one — and the next boot's Escape handler sees its own zoomEl as null, so it can't dismiss it.
+    try { closeZoom(); } catch (e) { /* overlay's own nodes are already gone */ }
+    // Same for the transcript dialog and the UI Inspector overlay.
+    try { closeTranscript(); } catch (e) { /* overlay's own nodes are already gone */ }
+    try { closeInspector(); } catch (e) { /* overlay's own nodes are already gone */ }
+  };
 
   render();
 }

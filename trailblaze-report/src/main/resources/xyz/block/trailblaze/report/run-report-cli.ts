@@ -48,6 +48,8 @@ const require = createRequire(import.meta.url);
 type ReportCore = {
   extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[];
   extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[];
+  extractLlmTranscripts(llmLogs: RawLlmRow[]): LlmTranscripts | null;
+  traceHierarchies(trace: RawTraceRow[], sessionPassed: boolean): Record<string, unknown> | null;
   buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string;
 };
 
@@ -294,6 +296,36 @@ export function packNetwork(events: NetworkEvent[] | null): { network: NetworkEv
   return { network: inline, networkGz: gz };
 }
 
+/** Splits a session's LLM transcripts into inline `llmMessages` vs compressed `llmMessagesGz` at
+ * the threshold. The transcripts arrive already pooled + image-stripped (extractLlmTranscripts). */
+export function packLlmMessages(transcripts: LlmTranscripts | null): { llmMessages: LlmTranscripts | null; llmMessagesGz: string | null } {
+  const { inline, gz } = packGz(transcripts, (t) => JSON.stringify(t), LOG_INLINE_MAX_CHARS);
+  return { llmMessages: inline, llmMessagesGz: gz };
+}
+
+/**
+ * Splits the per-step view-hierarchies map (lifted off the extracted trace by traceHierarchies in
+ * run-report-extract — shared with the browser producers, so the size budget behaves identically
+ * everywhere; grep REPORT_SIZE_BUDGET) into inline `hierarchies` vs compressed `hierarchiesGz` at
+ * the threshold. Measured on real captured hierarchies: gzip alone is ~9x, ~6.5x end-to-end after
+ * the base64 leg re-inflates it 4/3x — and the viewer inflates it only when an inspector is
+ * opened. The shared inline threshold is well under one real hierarchy (median ~75 KB on Android
+ * captures), so real sessions land on the gz side by design; the inline branch exists for the
+ * deferred-parse split, not greppability. `hierarchyStepCount` is how many trace rows carried a
+ * hierarchy, so a budget-trimmed session logs what was dropped.
+ */
+export function packHierarchies(
+  lifted: Record<string, unknown> | null,
+  hierarchyStepCount: number,
+): { hierarchies: Record<string, unknown> | null; hierarchiesGz: string | null } {
+  const kept = lifted ? Object.keys(lifted).length : 0;
+  if (hierarchyStepCount > kept) {
+    console.error(`hierarchies: report size budget kept ${kept} of ${hierarchyStepCount} step hierarchies on this session (passed sessions trim at 8 MB, every status caps at 64 MB; --full-report-payloads lifts the passed-session trim)`);
+  }
+  const { inline, gz } = packGz(kept ? lifted : null, (h) => JSON.stringify(h), LOG_INLINE_MAX_CHARS);
+  return { hierarchies: inline, hierarchiesGz: gz };
+}
+
 // Event-formatter modules staged beside this driver by RunReportGenerator. A module that fails to
 // load or doesn't export the EventStreamFormatter shape is skipped with a note — formatting is a
 // rendering upgrade, never a reason to lose the report.
@@ -417,6 +449,11 @@ function main(): void {
     const { events, eventsGz } = packEvents(readEvents(s.sessionDir, formatters, ctx));
     const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
     const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
+    const { llmMessages, llmMessagesGz } = packLlmMessages(core.extractLlmTranscripts(llmLogs));
+    const { hierarchies, hierarchiesGz } = packHierarchies(
+      core.traceHierarchies(trace, ctx.sessionPassed),
+      trace.filter((t) => t.viewHierarchy != null).length,
+    );
     return {
       meta: s.meta || {},
       trace,
@@ -430,6 +467,10 @@ function main(): void {
       networkGz,
       events,
       eventsGz,
+      llmMessages,
+      llmMessagesGz,
+      hierarchies,
+      hierarchiesGz,
       video: readVideo(s.sessionDir, logs, files.length),
     };
   });

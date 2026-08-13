@@ -18,6 +18,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.util.Console
 
 /**
  * Evaluates a `@trailblaze/scripting` JS bundle in a QuickJS engine and exposes the registered
@@ -370,9 +371,9 @@ class QuickJsToolHost internal constructor(
      *   throws a clear error if the binding is missing and a handler tries to call out.
      * @param engineExtension optional hook to install extra globals/bindings into the engine
      *   BEFORE the author bundle evaluates — e.g. an OkHttp-backed `fetch` (see
-     *   `:trailblaze-scripting-fetch`). Kept out of this lean engine module so the on-device APK
-     *   doesn't drag in the extension's transitive deps; each runtime opts in by passing one
-     *   (the host daemon installs `fetch`; on-device leaves it `null` unless a caller opts in).
+     *   `:trailblaze-scripting-fetch`). Kept out of this lean engine module so the module itself
+     *   doesn't drag in the extension's transitive deps; each runtime passes one in (both the host
+     *   daemon and the on-device launchers install `fetch`).
      *   The install runs after the `console` shim and before the bundle, so a tool handler can
      *   reference whatever it binds.
      */
@@ -478,9 +479,33 @@ class QuickJsToolHost internal constructor(
             // Optional engine extension (e.g. an OkHttp-backed `fetch`). Installed after the
             // console shim and BEFORE the author bundle so a tool handler can reference whatever
             // globals it binds. Kept as a caller-supplied hook so this module stays free of the
-            // extension's transitive deps (OkHttp etc.) — the on-device APK only pays for it if a
-            // caller actually opts in.
-            engineExtension?.install(quickJs)
+            // extension's transitive deps (OkHttp etc.) — a runtime only pays for it if it passes
+            // one in.
+            //
+            // A failed install degrades to "that global isn't bound" rather than failing the
+            // launch: the extension is ADDITIVE, but a throw here would propagate out of `connect`
+            // into the launcher's fail-fast teardown and kill the whole session — so a session that
+            // never calls `fetch` could die at startup over a binding it doesn't use (e.g. R8
+            // stripping the extension's classes, which has bitten the QuickJS engine before). A
+            // tool that DOES need the global still fails legibly at its first use, and the loud log
+            // line names the cause.
+            if (engineExtension != null) {
+              try {
+                engineExtension.install(quickJs)
+              } catch (e: CancellationException) {
+                // `install` is a suspend fun, so a cancellation can arrive here. Rethrow before the
+                // broad catch below: absorbing it would continue the launch on a cancelled
+                // coroutine and mislabel the cancellation as an extension-install fault. Same
+                // ordering as the HOST_CALL_BINDING dispatch above.
+                throw e
+              } catch (t: Throwable) {
+                Console.error(
+                  "[QuickJsToolHost] engine extension ${engineExtension::class.simpleName} failed to " +
+                    "install for bundle '$bundleFilename' — continuing without the globals it binds. " +
+                    "A tool that needs them will fail at first use. Cause: ${t::class.simpleName}: ${t.message}",
+                )
+              }
+            }
             // Evaluate the author bundle. Population of globalThis.__trailblazeTools happens
             // here as a side effect.
             quickJs.evaluate<Any?>(bundleJs, bundleFilename, false)

@@ -7,13 +7,12 @@
 // declared here natively; on-device gets a smaller, framework-installed subset
 // (`console.*` and `AbortController` are real shims in
 // `trailblaze-bundle-prelude.js`; `URL`, `setTimeout` are NOT — using them from an
-// on-device-eligible tool will fail at runtime). `fetch` is the special case: it's a
-// real binding wherever the framework installs the OkHttp-backed engine extension —
-// the host in-process QuickJS daemon installs it, and on-device is opt-in (off by
-// default), so an on-device-eligible tool must not assume `fetch` unless its runtime
-// opted in (see `:trailblaze-scripting-fetch`). The type system declares the union —
-// the framework's Phase-D host-only marker (and the `.js`-on-device hard error)
-// handles routing.
+// on-device-eligible tool will fail at runtime). `fetch` is available on every
+// runtime: the host subprocess has it natively, and both the host in-process QuickJS
+// daemon and the on-device runner install the OkHttp-backed engine extension (see
+// `:trailblaze-scripting-fetch`), so an on-device-eligible tool may use it. The type
+// system declares the union — the framework's Phase-D host-only marker (and the
+// `.js`-on-device hard error) handles routing.
 //
 // What's deliberately NOT declared: `document`, `window`, `navigator`,
 // `localStorage`, and the rest of the DOM lib. Declaring them would tempt authors
@@ -189,10 +188,11 @@ declare global {
 
   // ---- fetch / Request / Response / Headers ----
   //
-  // Backed by a real OkHttp client on the host: the in-process QuickJS daemon installs
-  // an `OkHttpFetchExtension` (`:trailblaze-scripting-fetch`) that binds `globalThis.fetch`
-  // before a tool bundle evaluates. On-device this is opt-in (off by default); the host
-  // subprocess (bun / Node) has `fetch` natively. The host binding is unrestricted by default
+  // Backed by a real OkHttp client in-process: both the host QuickJS daemon and the
+  // on-device runner install an `OkHttpFetchExtension` (`:trailblaze-scripting-fetch`)
+  // that binds `globalThis.fetch` before a tool bundle evaluates, so a tool gets the same
+  // `fetch` on-device as host-dispatched. The host subprocess (bun / Node) has `fetch`
+  // natively. The binding is unrestricted by default
   // (reaches any host, like the `ctx.tools.exec` + curl it replaces — keeping a recorded run
   // replay-deterministic is the author's responsibility); a deployment can opt into a host
   // allow-list. A tool that needs a proxy uses `ctx.tools.exec` + curl or a `runtime: subprocess`

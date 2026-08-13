@@ -11,9 +11,10 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 /**
  * Pins the on-device-RPC per-tool dispatch envelope: the host serializes one authored tool as a
  * bare tool-wrapper list ([TrailblazeYaml.encodeTools]) and the device decodes it via
- * [TrailblazeYaml.decodeTrailOrToolEnvelope]. That path must NOT route through the legacy
- * list-shape trail parser, so this test also guards that real trail documents (unified mapping and
- * legacy `- config:`/`- prompts:` lists) are still recognized as trails and not mis-read as tools.
+ * [TrailblazeYaml.decodeTrailOrToolEnvelope]. A bare tool envelope is a YAML list, and so was the
+ * legacy v1 trail shape — so this test also guards that a real trail document (a unified `config:` /
+ * `trail:` mapping) is recognized as a trail and not mis-read as a tool envelope. The legacy
+ * `- config:` / `- prompts:` list is no longer a trail at all: its parser was removed in #5043.
  */
 class ToolEnvelopeRoundTripTest {
 
@@ -143,6 +144,30 @@ class ToolEnvelopeRoundTripTest {
         false
       }
     assertTrue(!decodedAsEnvelope, "An empty-map list item must not be decoded as a tool envelope")
+  }
+
+  @Test
+  fun `a legacy v1 trail list is rejected, not silently decoded as a tool envelope`() {
+    // A v1 document and a bare tool envelope are both YAML lists, and this decoder is the one place
+    // that has to tell them apart. Every v1 root key is reserved, so `isBareToolEnvelope` declines
+    // and the document falls through to the trail parser, which no longer accepts a list root. The
+    // edge shapes above pin the discriminator's parts; this pins the whole v1 shape end to end, so
+    // a v1 file can never be quietly re-read as a pile of tools named `config` / `prompts`.
+    val v1 =
+      """
+      - config:
+          id: example-app/suite_1/section_1/case_1
+      - prompts:
+        - step: Open the app
+      """
+        .trimIndent()
+
+    val failure = assertFailsWith<IllegalArgumentException> { yaml.decodeTrailOrToolEnvelope(v1) }
+
+    assertTrue(
+      failure.message.orEmpty().contains("root must be a mapping"),
+      "expected the v1 list to be rejected for its non-mapping root, got: ${failure.message}",
+    )
   }
 
   @Test

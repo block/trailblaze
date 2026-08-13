@@ -8,6 +8,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.time.TimeSource
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -210,8 +211,9 @@ class RunReportGenerator(
       put("sessionDir", sessionDir.absolutePath)
       // The raw per-log records for the bun renderer, straight from the snapshot — byte-identical
       // to what the daemon serves the web app at `/trailrunner/api/session/{id}/logs` (the same
-      // files `TrailblazeJsonInstance` wrote, with discriminator `class`), heavy view-hierarchy
-      // fields already stripped at snapshot capture.
+      // files `TrailblazeJsonInstance` wrote, with discriminator `class`), except that redundant
+      // view-hierarchy fields were deduped to the one the renderer reads at snapshot capture
+      // (see [slimViewHierarchyFields]) — it feeds the report's UI Inspector.
       put("logs", snapshot.rawLogsJson)
     }
   }
@@ -347,23 +349,46 @@ class RunReportGenerator(
     private val HUMAN_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
 
-    // View-hierarchy fields the interactive renderer reads but slims away before embedding. Stripped
-    // at the seam so they never bloat input.json or the bun process-boundary copy. Keep in sync with
-    // the field names run-report-core.ts reads: viewHierarchyFiltered || trailblazeNodeTree || viewHierarchy.
-    private val HEAVY_LOG_FIELDS = setOf("viewHierarchyFiltered", "trailblazeNodeTree", "viewHierarchy")
+    // View-hierarchy fields a log record may carry, in the priority order the interactive report's
+    // extractor reads them (run-report-extract.ts: viewHierarchyFiltered || trailblazeNodeTree ||
+    // viewHierarchy). Only the first present field is ever rendered — it feeds the report's UI
+    // Inspector — so the rest are redundant weight in input.json and are dropped at the seam.
+    private val VIEW_HIERARCHY_LOG_FIELDS = listOf("viewHierarchyFiltered", "trailblazeNodeTree", "viewHierarchy")
 
     /**
-     * Drop the large view-hierarchy fields (hundreds of KB per step) from a raw log record before it
-     * crosses into the bun renderer. The interactive report's extractor reads them onto each trace
-     * row and then slims them away before embedding — carried across the process boundary they only
-     * inflated input.json for no output. Every other field stays byte-identical to the on-disk
-     * record, so the payload keeps parity with what the daemon serves the web app. A non-object
-     * element, or one carrying none of the heavy fields, is returned unchanged (no reallocation).
+     * Keep exactly the ONE view-hierarchy field the interactive renderer reads (the first present
+     * in [VIEW_HIERARCHY_LOG_FIELDS]) and drop the redundant siblings — a record commonly carries
+     * both `trailblazeNodeTree` and the legacy `viewHierarchy`, and shipping both across the bun
+     * process boundary only inflates input.json for no output. The kept field is what the report
+     * embeds for the UI Inspector (per-step tree + bounds overlay). Every other field stays
+     * byte-identical to the on-disk record, so the payload keeps parity with what the daemon
+     * serves the web app. A JSON-null hierarchy field counts as absent, mirroring the extractor's
+     * `||` fallthrough — a record with `viewHierarchyFiltered: null` keeps its populated
+     * `trailblazeNodeTree` (and the dead null key is dropped alongside the redundant siblings).
+     * A non-object element, or one with no other hierarchy field to drop, is returned unchanged
+     * (no reallocation).
      */
-    internal fun stripHeavyLogFields(element: JsonElement): JsonElement =
-      (element as? JsonObject)?.takeIf { obj -> obj.keys.any { it in HEAVY_LOG_FIELDS } }
-        ?.let { obj -> JsonObject(obj.filterKeys { it !in HEAVY_LOG_FIELDS }) }
-        ?: element
+    internal fun slimViewHierarchyFields(element: JsonElement): JsonElement {
+      val obj = element as? JsonObject ?: return element
+      val usable = VIEW_HIERARCHY_LOG_FIELDS.filter { obj[it].let { v -> v != null && v != JsonNull } }
+      if (usable.isEmpty()) return element
+      val redundant = VIEW_HIERARCHY_LOG_FIELDS.filter { it != usable.first() && it in obj.keys }
+      if (redundant.isEmpty()) return element
+      return JsonObject(obj.filterKeys { it !in redundant })
+    }
+
+    /**
+     * Drop ALL view-hierarchy fields from a raw log record — the profiler variant of
+     * [slimViewHierarchyFields]. [PerformanceAnalysisGenerator] reads only timestamps, durations,
+     * and tool/LLM metadata, so even the one field the run report keeps for its UI Inspector is
+     * dead payload crossing that bun boundary. A record with no hierarchy field is returned
+     * unchanged (no reallocation).
+     */
+    internal fun dropViewHierarchyFields(element: JsonElement): JsonElement {
+      val obj = element as? JsonObject ?: return element
+      if (VIEW_HIERARCHY_LOG_FIELDS.none { it in obj.keys }) return element
+      return JsonObject(obj.filterKeys { it !in VIEW_HIERARCHY_LOG_FIELDS })
+    }
 
     /**
      * The run `meta` the viewer renders (title, status badge, device/platform strip, error banner,

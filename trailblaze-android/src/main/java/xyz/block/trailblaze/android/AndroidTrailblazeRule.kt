@@ -60,6 +60,7 @@ import xyz.block.trailblaze.quickjs.tools.AndroidAssetBundleSource
 import xyz.block.trailblaze.quickjs.tools.BundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
+import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -194,6 +195,12 @@ open class AndroidTrailblazeRule(
    * the agent it constructs itself.
    */
   trailblazeToolRepoOverride: TrailblazeToolRepo? = null,
+  /**
+   * Optional platform/system prompt template threaded into the legacy [TrailblazeRunner] and the
+   * Koog runner (null = the built-in default platform prompt in both). The V3 runner does not
+   * consume a platform template — its inner/outer agents own their prompts.
+   */
+  private val systemPromptTemplate: String? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
@@ -257,13 +264,21 @@ open class AndroidTrailblazeRule(
   }
 
   /**
-   * Identity + version of the app under test for the session-start log — [appIdForSession]
+   * App id threaded into the constructed agents (and into the [targetAppInfoForSession]
+   * version probe). Defaults to the device-resolved [appIdForSession]; a subclass that
+   * resolves its app id eagerly at construction overrides this so the agents carry the
+   * same id the rest of the rule uses.
+   */
+  protected open val agentAppId: String? get() = appIdForSession
+
+  /**
+   * Identity + version of the app under test for the session-start log — [agentAppId]
    * paired with the versions PackageManager reports for that package (the instrumentation APK
    * holds `QUERY_ALL_PACKAGES`, so any installed target is visible). Lazy for the same reason
    * as [appIdForSession]; soft-fails to null so a probe failure never blocks the session.
    */
   private val targetAppInfoForSession: TrailblazeTargetAppInfo? by lazy {
-    val appId = appIdForSession ?: return@lazy null
+    val appId = agentAppId ?: return@lazy null
     runCatching {
       val packageInfo = InstrumentationRegistry.getInstrumentation().context.packageManager
         .getPackageInfo(appId, 0)
@@ -317,14 +332,15 @@ open class AndroidTrailblazeRule(
         },
         // Match what the pre-merge AccessibilityAwareAndroidTrailblazeRule passed —
         // without these the on-device classifier signal flows in as `emptyList()` and
-        // device-shaped element matching/filtering loses the dimension.
-        deviceClassifiers = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiers(),
+        // device-shaped element matching/filtering loses the dimension. Read from the
+        // logging rule's provider so a subclass-supplied classifier source flows through.
+        deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
         memory = agentMemory,
         // Surfaces `ctx.target.{id, appIds, appId}` to scripted tools dispatching
         // through `MaestroTrailblazeAgent.buildExecutionContext`. Both fields are null when
         // no [target] was supplied — the documented `ctx.target === undefined` shape.
         resolvedTarget = resolvedTargetForSession,
-        appId = appIdForSession,
+        appId = agentAppId,
         // Same repo the launcher registers scripted tools into (see launchToolsetScriptedToolBundles)
         // so the agent resolves `openUrl` & friends at dispatch instead of failing "Unknown tool".
         trailblazeToolRepo = trailblazeToolRepo,
@@ -344,14 +360,21 @@ open class AndroidTrailblazeRule(
         // scripted tools dispatched through MaestroTrailblazeAgent.buildExecutionContext need
         // `ctx.target` populated regardless of which Android driver the trail picked.
         resolvedTarget = resolvedTargetForSession,
-        appId = appIdForSession,
+        appId = agentAppId,
         // Same repo the launcher registers scripted tools into so the agent resolves them at dispatch.
         trailblazeToolRepo = trailblazeToolRepo,
       )
     }
   }
 
-  private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
+  /**
+   * Stabilization attempts for the UiAutomator screen-state capture (two consecutive identical
+   * hierarchy dumps = stable). Default 1 = capture immediately; subclasses running on slower
+   * or busier devices may raise it.
+   */
+  protected open val uiAutomatorScreenStateMaxAttempts: Int = 1
+
+  protected val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
     // Source of truth is the *agent* the rule will dispatch through, not the driver type
     // label. A caller can pass [agentOverride] with a non-accessibility agent while
     // [driverTypeOverride] stays at the now-default ANDROID_ONDEVICE_ACCESSIBILITY; reading the
@@ -386,6 +409,8 @@ open class AndroidTrailblazeRule(
       }
       ScreenStateKind.UIAUTOMATOR -> AndroidOnDeviceUiAutomatorScreenState(
         includeScreenshot = true,
+        // Clamped: 0 would skip the stabilization loop entirely and fail later with a null tree.
+        maxAttempts = uiAutomatorScreenStateMaxAttempts.coerceAtLeast(1),
         deviceClassifiers = deviceClassifiers,
       )
     }
@@ -408,12 +433,16 @@ open class AndroidTrailblazeRule(
     trailblazeLoggingRule.failureScreenStateProvider = screenStateProvider
   }
 
-  private val elementComparator = TrailblazeElementComparator(
-    screenStateProvider = screenStateProvider,
-    llmClient = llmClient,
-    trailblazeLlmModel = trailblazeLlmModel,
-    toolRepo = trailblazeToolRepo,
-  )
+  // Lazy so rule instances (one per test method) that never compare an element skip the
+  // construction cost, including the comparator's prompt-resource load.
+  protected open val elementComparator: TrailblazeElementComparator by lazy {
+    TrailblazeElementComparator(
+      screenStateProvider = screenStateProvider,
+      llmClient = llmClient,
+      trailblazeLlmModel = trailblazeLlmModel,
+      toolRepo = trailblazeToolRepo,
+    )
+  }
 
   override fun ruleCreation(description: Description) {
     super.ruleCreation(description)
@@ -448,6 +477,13 @@ open class AndroidTrailblazeRule(
    */
   override fun beforeTestExecution(description: Description) {
     super.beforeTestExecution(description)
+    // Subclass seams run BEFORE the service bind below. Ordering constraint: [onBeforeTest]
+    // may perform UiDevice/shell operations that reconnect UiAutomation, which tears down an
+    // already-bound accessibility service — so the bind must come after both hooks return.
+    // [applyPerTrailDriverOverrides] runs first so driver-conditional setup in [onBeforeTest]
+    // sees the final driver.
+    applyPerTrailDriverOverrides(description)
+    onBeforeTest(description)
     // Bind unconditionally — needed for both the accessibility driver (taps/swipes) and the
     // instrumentation driver (Compose semantic-tree exposure under UiAutomator2). See kdoc above.
     OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
@@ -461,7 +497,54 @@ open class AndroidTrailblazeRule(
     xyz.block.trailblaze.android.accessibility.MigrationCaptureSetup.ensureAccessibilityBoundIfMigrationModeOn()
   }
 
-  private val trailblazeYaml = createTrailblazeYaml(
+  /**
+   * Subclass seam: resolve any per-trail driver override (e.g. by peeking at the trail asset
+   * for this test method) before [onBeforeTest] runs, so driver-conditional setup there sees
+   * the final driver. Must not touch [trailblazeAgent], any lazy field derived from it, or
+   * invoke [screenStateProvider] (its lambda's first statement forces the agent) — the driver
+   * is only safely flippable while those are un-initialized. No-op by default.
+   */
+  protected open fun applyPerTrailDriverOverrides(description: Description) = Unit
+
+  /**
+   * Subclass seam for setup (force-stop, permission grants, UiDevice/shell operations) that
+   * must complete before the accessibility service is bound — those operations can reconnect
+   * UiAutomation, which destroys a bound service (see [beforeTestExecution]). Runs after
+   * [applyPerTrailDriverOverrides]. No-op by default.
+   */
+  protected open fun onBeforeTest(description: Description) = Unit
+
+  /**
+   * Subclass seam invoked once per [runSuspend], after the trail's config is decoded and the
+   * `config.skip:` check has passed, but BEFORE the session-start log is emitted and before
+   * [trailblazeAgent] (or any lazy field derived from it) is first touched — the last point
+   * at which a per-trail [TrailConfig.driver] marker can still safely flip
+   * [TrailblazeAndroidLoggingRule.driverTypeOverride]. No-op by default.
+   */
+  protected open fun onTrailConfigResolved(trailConfig: TrailConfig?) = Unit
+
+  /**
+   * Self-heal setting applied to every prompt step in [runSuspend]. Default honors the
+   * run's [config]; subclasses may layer an environment-level override on top.
+   */
+  protected open fun resolveSelfHealEnabled(): Boolean = config.selfHeal
+
+  /**
+   * Optional suffix appended to the empty-trail guard's error message — e.g. a deep link back to
+   * the external test-management entry this trail was generated from, so the failure is navigable
+   * from CI output. Null (the default) appends nothing.
+   */
+  protected open fun emptyTrailGuardHint(trailConfig: TrailConfig?): String? = null
+
+  /** Test class name recorded on the session-start log. */
+  protected open fun sessionTestClassName(trailConfig: TrailConfig?): String =
+    trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule"
+
+  /** Test method name recorded on the session-start log. */
+  protected open fun sessionTestMethodName(trailConfig: TrailConfig?): String =
+    trailblazeLoggingRule.description?.methodName ?: "run"
+
+  protected val trailblazeYaml = createTrailblazeYaml(
     customTrailblazeToolClasses = customToolClasses?.allForSerializationTools() ?: setOf(),
   )
 
@@ -508,6 +591,7 @@ open class AndroidTrailblazeRule(
         trailblazeLogger = trailblazeLoggingRule.logger,
         sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
         maxSteps = maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
+        systemPromptTemplate = systemPromptTemplate,
       )
     }
   }
@@ -639,6 +723,10 @@ open class AndroidTrailblazeRule(
       return null
     }
 
+    // Per-trail overrides (e.g. a `config.driver` flip) must land before the session-start
+    // log below reads the device info, and before any lazy agent field is first touched.
+    onTrailConfigResolved(trailConfig)
+
     if (sendSessionStartLog) {
       val currentSession = trailblazeLoggingRule.session
         ?: error("Session not available when sendSessionStartLog=true. Ensure this rule is used as a @Rule in a JUnit test.")
@@ -649,8 +737,8 @@ open class AndroidTrailblazeRule(
           sessionStatus = SessionStatus.Started(
             trailConfig = trailConfig,
             trailFilePath = trailFilePath,
-            testClassName = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
-            testMethodName = trailblazeLoggingRule.description?.methodName ?: "run",
+            testClassName = sessionTestClassName(trailConfig),
+            testMethodName = sessionTestMethodName(trailConfig),
             trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
             rawYaml = testYaml,
             hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
@@ -679,7 +767,8 @@ open class AndroidTrailblazeRule(
       val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
       throw TrailblazeException(
         "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
-          "Add prompts or tool steps to this trail file.",
+          "Add prompts or tool steps to this trail file." +
+          (emptyTrailGuardHint(trailConfig)?.let { " $it" } ?: ""),
       )
     }
 
@@ -714,6 +803,9 @@ open class AndroidTrailblazeRule(
           sessionId = sessionId,
           toolRepo = trailblazeToolRepo,
           bundleSourceResolver = quickjsBundleSourceResolver,
+          // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher
+          // installs, so a scripted tool's HTTP works identically on-device and host-dispatched.
+          engineExtension = OkHttpFetchExtension(),
         )
       }
 
@@ -731,7 +823,7 @@ open class AndroidTrailblazeRule(
             trailblazeRunnerUtil.runPrompt(
               prompts = item.promptSteps,
               useRecordedSteps = useRecordedSteps,
-              selfHeal = config.selfHeal,
+              selfHeal = resolveSelfHealEnabled(),
             )
           is TrailYamlItem.TrailheadTrailItem ->
             // The trailhead is step 0: run its single lowered step through the same path as any
@@ -739,7 +831,7 @@ open class AndroidTrailblazeRule(
             trailblazeRunnerUtil.runPrompt(
               prompts = listOf(item.trailhead.toPromptStep()),
               useRecordedSteps = true,
-              selfHeal = config.selfHeal,
+              selfHeal = resolveSelfHealEnabled(),
             )
           is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
@@ -832,8 +924,10 @@ open class AndroidTrailblazeRule(
    * tool the Koog graph calls executes through the exact same dispatch (settle, node-selector
    * enrichment, session logging) the legacy on-device runner uses. Only the reasoning loop differs.
    *
-   * The system prompt mirrors the host mobile path: the legacy base + default-platform prompt via
-   * [TrailblazeRunner.composeSystemPrompt].
+   * The system prompt mirrors the legacy runner's composition: the base prompt plus
+   * [systemPromptTemplate] (a target's declared platform prompt) via
+   * [TrailblazeRunner.composeSystemPrompt], falling back to the default platform prompt when the
+   * rule has no template.
    */
   private fun createKoogRunner(): KoogTestAgentRunner = KoogTestAgentRunner(
     agent = trailblazeAgent,
@@ -845,7 +939,7 @@ open class AndroidTrailblazeRule(
     logger = trailblazeLoggingRule.logger,
     sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
     maxLlmCalls = maxLlmCalls,
-    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
+    systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(platformPrompt = systemPromptTemplate),
   )
 
   @Deprecated("Prefer the suspend version.")
@@ -931,6 +1025,13 @@ open class AndroidTrailblazeRule(
     }
   }
 
+  /**
+   * App id [runFromAsset] force-stops when the caller passes no explicit `targetAppId`.
+   * Null (the default) = no force-stop unless a `targetAppId` is supplied; subclasses that
+   * know their app under test override this so `forceStopApp = true` works with no argument.
+   */
+  protected open val defaultForceStopAppId: String? = null
+
   fun runFromAsset(
     yamlAssetPath: String = TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace(
       AndroidAssetsUtil::assetExists,
@@ -945,14 +1046,18 @@ open class AndroidTrailblazeRule(
       doesResourceExist = AndroidAssetsUtil::assetExists,
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
     Console.log("Running from asset: $computedAssetPath")
-    if (forceStopApp && targetAppId != null) {
-      AdbCommandUtil.forceStopApp(targetAppId)
+    val appIdToForceStop = targetAppId ?: defaultForceStopAppId
+    if (forceStopApp && appIdToForceStop != null) {
+      AdbCommandUtil.forceStopApp(appIdToForceStop)
     }
     val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
     run(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
-      trailFilePath = yamlAssetPath,
+      // The resolved (classifier-specific) file, not the caller's raw argument — the raw argument
+      // can be a recording directory, and this value reaches the session-start log, the skip
+      // message, and the trail-name fallback for trails with no title.
+      trailFilePath = computedAssetPath,
     )
   }
 

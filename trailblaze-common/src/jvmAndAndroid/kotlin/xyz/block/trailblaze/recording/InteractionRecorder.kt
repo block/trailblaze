@@ -10,12 +10,12 @@ import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
-import xyz.block.trailblaze.yaml.generateRecordedYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 
 /**
  * Orchestrates interactive recording: collects [RecordedInteraction]s and emits
  * [TrailblazeLog.TrailblazeToolLog] entries into the existing recording pipeline
- * so [generateRecordedYaml] can produce trail YAML.
+ * so [generateUnifiedRecordedYaml] can produce trail YAML.
  *
  * ## Threading contract
  *
@@ -180,11 +180,16 @@ class InteractionRecorder(
     logEmitter.emit(toolLog)
   }
 
-  /** Generate trail YAML from all recorded interactions via the existing pipeline. */
-  fun generateTrailYaml(config: TrailConfig? = null): String =
-    logs.generateRecordedYaml(
+  /**
+   * Generate unified trail YAML from all recorded interactions via the existing pipeline. The
+   * recorder builds its logs by hand (no `SessionStatus.Started` entry), so the recording device's
+   * [classifier] — the slot the recorded tools are keyed under — has to be supplied by the caller.
+   */
+  fun generateTrailYaml(classifier: String, config: TrailConfig? = null): String =
+    logs.generateUnifiedRecordedYaml(
       trailblazeYaml = trailblazeYaml,
       sessionTrailConfig = config,
+      classifierOverride = classifier,
     )
 
   companion object {

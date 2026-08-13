@@ -288,6 +288,10 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   var lastExecutedTool: TrailblazeTool? = null
   var lastTraceId: TraceId? = null
 
+  /** What the installed-app probe reports, or (via [installedAppIdsException]) how it fails. */
+  var installedAppIds: Set<String> = emptySet()
+  var installedAppIdsException: Exception? = null
+
   override suspend fun executeTrailblazeTool(
     tool: TrailblazeTool,
     blocking: Boolean,
@@ -306,8 +310,10 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> =
     throw NotImplementedError("Not needed for executor tests")
 
-  override suspend fun getInstalledAppIds(): Set<String> =
-    throw NotImplementedError("Not needed for executor tests")
+  override suspend fun getInstalledAppIds(): Set<String> {
+    installedAppIdsException?.let { throw it }
+    return installedAppIds
+  }
 
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> =
     throw NotImplementedError("Not needed for executor tests")
@@ -318,17 +324,18 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? =
     throw NotImplementedError("Not needed for executor tests")
 
-  override suspend fun getCurrentScreenState(): ScreenState? =
-    throw NotImplementedError("Not needed for executor tests")
+  // Null rather than NotImplementedError: post-action screen capture is best-effort, and an
+  // Error would escape the executor's `catch (Exception)` and fail tests about other things.
+  override suspend fun getCurrentScreenState(): ScreenState? = null
 
-  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? =
-    throw NotImplementedError("Not needed for executor tests")
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
   override suspend fun endSession(): Boolean =
     throw NotImplementedError("Not needed for executor tests")
 
-  override fun isOnDeviceInstrumentation(): Boolean =
-    throw NotImplementedError("Not needed for executor tests")
+  // Reached by the same best-effort screen capture as the two above, so it must not throw an
+  // Error either.
+  override fun isOnDeviceInstrumentation(): Boolean = false
 
   override fun getDriverType(): TrailblazeDriverType? =
     throw NotImplementedError("Not needed for executor tests")

@@ -364,29 +364,11 @@ open class TrailCommand : Callable<Int> {
         "Default: on. Use --no-save-recording to skip. " +
         "Even when on, the recording is only saved when --self-heal was enabled OR this device " +
         "isn't recorded yet — deterministic re-runs no-op the write so they can't clobber a " +
-        "hand-edited source. See --unified-recordings for the on-disk format."
+        "hand-edited source."
     ],
     negatable = true,
   )
   var saveRecording: Boolean? = null
-
-  // Gate for the unified-format recorder (tri-state like --save-recording): flag >
-  // TRAILBLAZE_UNIFIED_RECORDINGS env var > persisted `trailblaze config unified-recordings` >
-  // on. Resolved via [resolveEffectiveUnifiedRecordings]; when opted out, save-back behavior is
-  // byte-identical to the pre-unified recorder.
-  @Option(
-    names = ["--unified-recordings"],
-    description = [
-      "Save new recordings in the unified format: the device's slot is merged into the unified " +
-        "trail.yaml (a directory that still has legacy <classifier>.trail.yaml files keeps using " +
-        "them). Default: on. Opt out with --no-unified-recordings, " +
-        "TRAILBLAZE_UNIFIED_RECORDINGS=0, or 'trailblaze config unified-recordings false' to " +
-        "save legacy <classifier>.trail.yaml siblings instead — nothing is ever written next to " +
-        "an existing unified trail.yaml."
-    ],
-    negatable = true,
-  )
-  var unifiedRecordings: Boolean? = null
 
   // Deprecated alias. Kept for one cycle so existing scripts that pass --no-record
   // keep working — but with a one-time stderr warning so users notice during the
@@ -1938,9 +1920,8 @@ open class TrailCommand : Callable<Int> {
         else -> emptySet()
       }
 
-      // Write the on-disk intermediate in the unified shape (falls back to the v1 list shape only
-      // when the session has no resolvable device classifier). The save-back step re-reads this file
-      // and merges it, so emitting unified here keeps that re-decode off the legacy v1 parser.
+      // The on-disk intermediate is a unified trail document; the save-back step re-reads it and
+      // merges this device's slot.
       val recordingYaml = logs.generateUnifiedRecordedYaml(
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
@@ -2021,11 +2002,12 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
-   * Saves the session recording back to the trail source directory. The on-disk format is chosen
-   * by [recordingSaveFormat]: a [RecordingSaveFormat.UNIFIED] target merges this device's classifier
-   * slot into the unified trail resolved by [UnifiedRecordingWriter.unifiedRecordingTarget] (the executed unified file
-   * itself, or the directory's shared `trail.yaml`); a [RecordingSaveFormat.LEGACY] target writes a
-   * platform `<classifier>.trail.yaml` sibling (e.g. `android.trail.yaml`, `ios-iphone.trail.yaml`).
+   * Saves the session recording back to the trail source directory. Both destinations hold unified
+   * YAML; [recordingSaveTarget] picks the file layout. [RecordingSaveTarget.UNIFIED_MERGE] merges
+   * this device's classifier slot into the trail resolved by
+   * [UnifiedRecordingWriter.unifiedRecordingTarget] (the executed unified file itself, or the
+   * directory's shared `trail.yaml`); [RecordingSaveTarget.CLASSIFIER_SIBLING] writes a per-device
+   * `<classifier>.trail.yaml` (e.g. `android.trail.yaml`, `ios-iphone.trail.yaml`).
    *
    * @param trailFile The trail file or directory that was executed
    * @param sessionId The session ID from the completed run
@@ -2044,21 +2026,12 @@ open class TrailCommand : Callable<Int> {
         return
       }
 
-      when (recordingSaveFormat(trailFile, deviceClassifiers)) {
-        RecordingSaveFormat.LEGACY -> {
+      when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+        RecordingSaveTarget.CLASSIFIER_SIBLING -> {
           val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
-          val trailblazeYaml = createTrailblazeYaml()
-          val items = lowerLegacyRecordingItems(trailblazeYaml, recordingFile.readText(), deviceClassifiers)
-          if (items != null) {
-            targetFile.writeText(trailblazeYaml.encodeToString(items))
-          } else {
-            // Unified intermediate with no classifier to lower to — copy verbatim rather than drop
-            // the recording (see lowerLegacyRecordingItems).
-            recordingFile.copyTo(targetFile, overwrite = true)
-          }
-          Console.info("Recording saved to: ${targetFile.absolutePath}")
+          saveRecordingAsSibling(trailFile, recordingFile, targetFile, deviceClassifiers)
         }
-        RecordingSaveFormat.UNIFIED -> saveRecordingAsUnified(trailFile, recordingFile, deviceClassifiers)
+        RecordingSaveTarget.UNIFIED_MERGE -> saveRecordingAsUnified(trailFile, recordingFile, deviceClassifiers)
       }
     } catch (e: Exception) {
       Console.error(
@@ -2069,22 +2042,64 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
+   * Write one device's freshly-recorded session as a per-classifier `<classifier>.trail.yaml`
+   * sibling. Re-renders from this device's slot rather than copying the intermediate verbatim: the
+   * intermediate is seeded from the run's source trail and can carry other devices' slots, which a
+   * per-device file must not republish. Same decode-validate-then-write shape as the merge route, so
+   * an unreadable intermediate is refused on both.
+   *
+   * `internal` so a temp-directory unit test can assert the write contract without a device.
+   */
+  internal fun saveRecordingAsSibling(
+    trailFile: File,
+    recordingFile: File,
+    targetFile: File,
+    deviceClassifiers: List<String>,
+  ) {
+    val classifier = deviceClassifiers.joinToString("-")
+    val decoded = runCatching { createTrailblazeYaml().decodeUnifiedTrail(recordingFile.readText()) }
+    val unified = decoded.getOrNull()
+    if (unified == null) {
+      reportCliError(
+        verb = "Recording save",
+        target = trailFile.absolutePath,
+        reason = "the generated recording isn't a readable unified trail" +
+          (decoded.exceptionOrNull()?.let { " (${describeThrowableForUser(it)})" } ?: ""),
+        hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
+      )
+      return
+    }
+    val recordedItems = UnifiedTrailAdapter.lowerToTrailItems(
+      unified,
+      deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
+    )
+    UnifiedRecordingWriter.renderStandalone(recordedItems, classifier)
+      .onSuccess {
+        UnifiedRecordingWriter.writeFileAtomically(targetFile, it)
+        Console.info("Recording saved to: ${targetFile.absolutePath}")
+      }
+      .onFailure {
+        reportCliError(
+          verb = "Recording save",
+          target = targetFile.absolutePath,
+          reason = it.message ?: "the recording can't be written as a trail",
+          hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
+        )
+      }
+  }
+
+  /**
    * Merge one device's freshly-recorded session into the unified trail resolved by
    * [UnifiedRecordingWriter.unifiedRecordingTarget] — the executed file itself when it is a unified document (bare or
    * named), otherwise the directory's shared `trail.yaml`. Writes only this device's
-   * [deviceClassifiers] slot and preserves every other classifier already on disk. The recording
-   * is a v1 file (`recording.trail.yaml`); the merge primitive folds its steps/trailhead/driver
-   * into the (optional) existing unified trail. Creates the file on a first write.
+   * [deviceClassifiers] slot and preserves every other classifier already on disk. The merge
+   * primitive folds the intermediate's steps/trailhead/driver into the (optional) existing unified
+   * trail. Creates the file on a first write.
    *
    * The fan-out run loop is sequential (one device at a time), so merging `ios` after `android` in
    * the same `trailblaze run android,ios` reads the android-merged file and keeps both slots. Two
    * SEPARATE processes recording the same trail concurrently could still race the read-modify-write;
    * a cross-process file lock is deferred (see the unified-syntax devlog's concurrency note).
-   *
-   * The recording generator emits the unified shape for this device's slot in the normal case, and
-   * falls back to the legacy list shape only when a recording has no unified representation (a
-   * multi-tool trailhead). That fallback can't be lowered to a classifier slot, so it's preserved
-   * as a legacy `<classifier>.trail.yaml` sibling instead of merged.
    *
    * `internal` so a temp-directory unit test can assert the write contract (fresh file created; an
    * existing classifier slot preserved) without a device, daemon, or git root.
@@ -2095,17 +2110,15 @@ open class TrailCommand : Callable<Int> {
     deviceClassifiers: List<String>,
   ) {
     val classifier = deviceClassifiers.joinToString("-")
-    // The recording is unified in the normal case; the generator only falls back to the legacy list
-    // shape when a recording has no unified representation (a multi-tool trailhead). Probe for the
-    // unified shape rather than re-parsing the legacy one — a legacy fallback is preserved as a
-    // sibling below, exactly as a MultiToolTrailheadUnsupported merge outcome would be.
-    val unified = runCatching { createTrailblazeYaml().decodeUnifiedTrail(recordingFile.readText()) }.getOrNull()
+    val decoded = runCatching { createTrailblazeYaml().decodeUnifiedTrail(recordingFile.readText()) }
+    val unified = decoded.getOrNull()
     if (unified == null) {
-      saveResidualRecordingAsLegacySibling(
-        trailFile = trailFile,
-        recordingFile = recordingFile,
-        deviceClassifiers = deviceClassifiers,
-        reason = "recording uses the legacy list shape (a multi-tool trailhead has no unified representation)",
+      reportCliError(
+        verb = "Recording save",
+        target = trailFile.absolutePath,
+        reason = "the generated recording isn't a readable unified trail" +
+          (decoded.exceptionOrNull()?.let { " (${describeThrowableForUser(it)})" } ?: ""),
+        hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
       )
       return
     }
@@ -2119,114 +2132,67 @@ open class TrailCommand : Callable<Int> {
         Console.info("Recording merged into ${outcome.target.absolutePath} (classifier `$classifier`)")
 
       is UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported ->
-        saveResidualRecordingAsLegacySibling(
-          trailFile = trailFile,
-          recordingFile = recordingFile,
-          deviceClassifiers = deviceClassifiers,
-          reason = "recorded trailhead has ${outcome.toolCount} tools, which the unified " +
-            "one-tool-per-classifier trailhead can't represent",
+        // Defensive: the intermediate is itself a trail document, and a trail's trailhead holds one
+        // tool per device — so it can't carry the shape this branch describes.
+        reportCliError(
+          verb = "Recording save",
+          target = trailFile.absolutePath,
+          reason = "recorded trailhead has ${outcome.toolCount} tools, and a trailhead holds one " +
+            "tool per device",
+          hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
         )
 
       is UnifiedRecordingWriter.MergeOutcome.RefusedCorrupt ->
-        Console.error(
-          "✗ Recording not saved: existing unified trail is unreadable\n" +
-            "  file: ${outcome.target.absolutePath}\n" +
-            "  reason: ${outcome.reason}\n" +
-            "  hint: fix or delete that file, then re-run — this run's recording is preserved at " +
-            "${recordingFile.absolutePath}",
+        reportCliError(
+          verb = "Recording save",
+          target = outcome.target.absolutePath,
+          reason = "existing unified trail is unreadable: ${outcome.reason}",
+          hint = "fix or delete that file, then re-run — this run's recording is preserved at " +
+            recordingFile.absolutePath,
         )
 
       is UnifiedRecordingWriter.MergeOutcome.SkippedEmpty ->
         Console.log("[unified-record] recording for `$classifier` has no steps to merge; skipping unified write.")
 
       is UnifiedRecordingWriter.MergeOutcome.NoTarget ->
-        // Only reachable for an orphan path with no directory (routing sends those to LEGACY, so this
-        // is defensive) — log rather than dropping the recording silently.
+        // Only reachable for an orphan path with no directory (routing sends those to the sibling
+        // target, so this is defensive) — log rather than dropping the recording silently.
         Console.log("[unified-record] no unified target resolved for ${trailFile.path}; recording left at ${recordingFile.absolutePath}.")
+
+      is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail ->
+        reportCliError(
+          verb = "Recording save",
+          target = outcome.target.absolutePath,
+          reason = "the recording captured no objectives and the trail already has " +
+            "${outcome.existingStepCount} steps, so there is no step structure to align it to",
+          hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
+        )
     }
   }
 
   /**
-   * Preserve a recording that can't be merged into the unified trail as a runnable
-   * `<classifier>.trail.yaml` sibling — but ONLY when that sibling is itself a valid unified trail.
-   * Refuses, leaving the recording in logs/ for hand migration, when:
-   *  - the recording is v1 list-shaped (a multi-tool trailhead has no unified representation): the
-   *    v1 parser was removed, so a `<classifier>.trail.yaml` in that shape can no longer be decoded,
-   *    run, or validated — writing it and reporting success would plant a broken trail in the
-   *    workspace; or
-   *  - a unified trail already exists here (the sibling would shadow it at run time); or
-   *  - no legacy target path is available.
-   * Shared by the legacy-shape fallback probe and the MultiToolTrailheadUnsupported merge outcome.
+   * Which file a recording save-back lands in. Both hold unified YAML — this is a layout choice,
+   * not a format one.
    */
-  private fun saveResidualRecordingAsLegacySibling(
-    trailFile: File,
-    recordingFile: File,
-    deviceClassifiers: List<String>,
-    reason: String,
-  ) {
-    val legacyTarget = computeRecordingTargetFile(trailFile, deviceClassifiers)
-    val recordingIsRunnable =
-      runCatching { createTrailblazeYaml().decodeUnifiedTrail(recordingFile.readText()) }.getOrNull() != null
-    if (legacyTarget == null || !recordingIsRunnable || UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
-      Console.error(
-        "✗ Recording not saved: $reason. It can't be written as a runnable sibling here — it uses " +
-          "the legacy list shape (no longer parseable), a sibling would shadow the unified trail, " +
-          "or no legacy target path is available.\n" +
-          "  hint: migrate the recording by hand — this run's recording is preserved at " +
-          "${recordingFile.absolutePath}",
-      )
-      return
-    }
-    recordingFile.copyTo(legacyTarget, overwrite = true)
-    Console.info(
-      "[unified-record] $reason; saved as ${legacyTarget.absolutePath} instead of merging " +
-        "into the unified trail.",
-    )
-  }
-
-  /** How a recording save-back should be written to the trail source directory. */
-  internal enum class RecordingSaveFormat { UNIFIED, LEGACY }
+  internal enum class RecordingSaveTarget { UNIFIED_MERGE, CLASSIFIER_SIBLING }
 
   /**
-   * Decide whether a recording save-back for [trailFile] writes a unified trail (merging this
-   * device's classifier slot) or a legacy `<classifier>.trail.yaml` sibling:
-   *
-   *  - The executed file IS a unified trail — the bare `trail.yaml` by name, or a NAMED file
-   *    (e.g. `login.trail.yaml`) whose CONTENT is the unified format →
-   *    [RecordingSaveFormat.UNIFIED] (merge into the executed file itself). The content check
-   *    matters because the unified corpus is mostly named files sharing a directory with other
-   *    tests; keying on the filename alone would misroute them to a legacy sibling that shadows
-   *    resolution and doesn't identify which test it recorded.
-   *  - The target dir already has a bare `trail.yaml` → [RecordingSaveFormat.UNIFIED] (merge
-   *    into it — never drop a legacy sibling beside it).
-   *  - The dir already holds legacy `<classifier>.trail.yaml` sibling(s) and no unified file →
-   *    [RecordingSaveFormat.LEGACY] (don't fork a half-migrated directory; migrating those to
-   *    unified is a separate, deliberate step). A v1-content file named like a trail counts as
-   *    its own legacy sibling, so executing one keeps routing LEGACY.
-   *  - Greenfield (neither present) → [RecordingSaveFormat.UNIFIED] (new recordings default to
-   *    the unified format).
-   *  - Empty [deviceClassifiers] → [RecordingSaveFormat.LEGACY] (no classifier to key a unified
-   *    slot; falls back to the classifier-agnostic `recording.trail.yaml`).
-   *
-   * The unified file this decision writes/reads is resolved by [UnifiedRecordingWriter.unifiedRecordingTarget] — the
-   * two must be consulted together so the router and the writer never disagree on the target.
+   * The CLI's view of [UnifiedRecordingWriter.shouldMergeIntoSharedTrail], which owns the routing
+   * rules: `true` → [RecordingSaveTarget.UNIFIED_MERGE] (this device's slot is merged into the
+   * shared unified trail), `false` → [RecordingSaveTarget.CLASSIFIER_SIBLING] (a per-device
+   * `<classifier>.trail.yaml`, or the classifier-agnostic `recording.trail.yaml` when there is no
+   * classifier at all).
    *
    * `internal` so unit tests can exercise each branch directly against a temp directory.
    */
-  internal fun recordingSaveFormat(trailFile: File, deviceClassifiers: List<String>): RecordingSaveFormat =
-    // Routing (incl. the rollout gate and empty-classifier / legacy-sibling / greenfield branches)
-    // lives in the shared writer so the CLI, MCP, and desktop surfaces can't diverge. The CLI keeps
-    // its own enum; shouldSaveRecording separately restores the pre-unified refusal to write a
-    // legacy sibling next to — or in place of — a unified trail.
-    if (UnifiedRecordingWriter.shouldRouteUnified(
-        trailFile,
-        deviceClassifiers.joinToString("-"),
-        resolveEffectiveUnifiedRecordings(),
-      )
-    ) {
-      RecordingSaveFormat.UNIFIED
+  internal fun recordingSaveTarget(trailFile: File, deviceClassifiers: List<String>): RecordingSaveTarget =
+    // Routing (empty-classifier / existing-sibling / greenfield branches) lives in the shared writer
+    // so the CLI, MCP, and desktop surfaces can't diverge. The CLI keeps its own enum;
+    // shouldSaveRecording separately refuses to write a sibling next to a shared unified trail.
+    if (UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailFile, deviceClassifiers.joinToString("-"))) {
+      RecordingSaveTarget.UNIFIED_MERGE
     } else {
-      RecordingSaveFormat.LEGACY
+      RecordingSaveTarget.CLASSIFIER_SIBLING
     }
 
   /**
@@ -2255,42 +2221,6 @@ open class TrailCommand : Callable<Int> {
   }
 
   /**
-   * Lowers a recording intermediate ([intermediateYaml], the `recording.trail.yaml` written by
-   * [generateRecordingForSession]) to the item list a `<classifier>.trail.yaml` legacy sibling is
-   * written from.
-   *
-   * Returns `null` — the caller's signal to copy the intermediate verbatim — in two cases:
-   *  - The intermediate is NOT the unified shape (the recording generator's residual v1 fallback:
-   *    a blank classifier or a multi-tool trailhead with no unified representation). It's copied
-   *    to the legacy sibling as-is, keeping that half-migrated directory on the recorded shape.
-   *  - The intermediate IS unified but no [deviceClassifiers] were resolved: lowering a unified doc
-   *    to one device's slot needs that device's classifier segments (lowering with none would drop
-   *    every recording), so the whole intermediate is copied verbatim instead. This happens when a
-   *    run's resolved classifiers diverge from the session's logged ones.
-   *
-   * With classifiers, the unified doc is lowered to THIS device's slot — the same lowering
-   * [TrailblazeYaml.decodeTrail] performs internally. That drops the informational
-   * `config.platform:` field, which has no replay consumer (device selection keys off `driver`) and
-   * is carried by the classifier slot in the unified form — so the legacy sibling stays replayable.
-   *
-   * `internal` so the shape/classifier branches are unit-testable without a git root, daemon, or
-   * device.
-   */
-  internal fun lowerLegacyRecordingItems(
-    trailblazeYaml: TrailblazeYaml,
-    intermediateYaml: String,
-    deviceClassifiers: List<String>,
-  ): List<TrailYamlItem>? {
-    val unified = runCatching { trailblazeYaml.decodeUnifiedTrail(intermediateYaml) }.getOrNull()
-      ?: return null
-    if (deviceClassifiers.isEmpty()) return null
-    return UnifiedTrailAdapter.lowerToTrailItems(
-      unified,
-      deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
-    )
-  }
-
-  /**
    * Single source of truth for "should this run write a recording back to the trail source
    * directory?" — used by all three call sites (in-process loop, daemon delegate, and the
    * in-process generation inside [runSingleTrailFile]) so the heuristic can't drift between
@@ -2313,30 +2243,20 @@ open class TrailCommand : Callable<Int> {
    */
   internal fun shouldSaveRecording(trailFile: File, deviceClassifiers: List<String>): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
-    // Unified-recordings gate OFF → pre-unified behavior: never write a legacy
-    // `<classifier>.trail.yaml` next to a unified `trail.yaml` (the legacy save-back can't update
-    // it, so it would only drop a divergent sibling), regardless of --self-heal. The executed-file
-    // check is content-aware ([UnifiedRecordingWriter.executedFileIsUnified]) — the one deliberate deviation from
-    // byte-identical-old: a NAMED unified file (e.g. `login.trail.yaml` in a shared multi-test
-    // directory) used to get a v1 sibling raw-copied beside it, which damages the shared directory
-    // rather than preserving anything. Refusing adds no new write path.
-    if (!resolveEffectiveUnifiedRecordings() && UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
-      return false
-    }
     if (resolveEffectiveSelfHeal()) return true
     // Deterministic re-run guard: skip when this device's recording already exists on disk, so a
-    // plain re-run never clobbers a (possibly hand-edited) source. "Already exists" is per-format:
-    //  - LEGACY: the `<classifier>.trail.yaml` sibling exists (also skip when no target resolves —
-    //    an orphan file with no parent — matching prior behavior).
-    //  - UNIFIED: this classifier's slot already carries a recording in the unified target file
+    // plain re-run never clobbers a (possibly hand-edited) source. "Already exists" is per-target:
+    //  - CLASSIFIER_SIBLING: the `<classifier>.trail.yaml` sibling exists (also skip when no target
+    //    resolves — an orphan file with no parent — matching prior behavior).
+    //  - UNIFIED_MERGE: this classifier's slot already carries a recording in the unified target file
     //    ([UnifiedRecordingWriter.unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
     //    recorded yet" → save.
-    return when (recordingSaveFormat(trailFile, deviceClassifiers)) {
-      RecordingSaveFormat.LEGACY -> {
+    return when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+      RecordingSaveTarget.CLASSIFIER_SIBLING -> {
         val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
         !targetFile.exists()
       }
-      RecordingSaveFormat.UNIFIED ->
+      RecordingSaveTarget.UNIFIED_MERGE ->
         !UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers.joinToString("-"))
     }
   }
@@ -2344,19 +2264,6 @@ open class TrailCommand : Callable<Int> {
   /** Resolves the nullable `--[no-]save-recording` flag to its effective on/off value.
    * Defaults to `true` (save by default) when the user didn't specify either form. */
   internal fun resolveEffectiveSaveRecording(): Boolean = saveRecording ?: true
-
-  /**
-   * Resolves the unified-recordings gate, same precedence as self-heal:
-   *   1. `--[no-]unified-recordings` CLI flag (explicit per-run intent)
-   *   2. `TRAILBLAZE_UNIFIED_RECORDINGS` env var (CI / pipeline override)
-   *   3. Persisted `trailblaze config unified-recordings` setting (user's local default)
-   *   4. On — unified is the default save format. Setting any tier to false is the opt-out
-   *      that restores the byte-identical pre-unified legacy save-back.
-   */
-  internal fun resolveEffectiveUnifiedRecordings(): Boolean =
-    // The CLI is the only surface with a flag tier; the shared host helper layers it over
-    // env > persisted config (MCP/desktop pass no flag).
-    CliConfigHelper.resolveUnifiedRecordingsGate(flagOverride = unifiedRecordings)
 
   /**
    * Companion of [shouldSaveRecording]. Emits a single user-visible info line when a save
@@ -2370,27 +2277,14 @@ open class TrailCommand : Callable<Int> {
    */
   private fun logSkippedRecording(trailFile: File, deviceClassifiers: List<String>) {
     if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
-    // Gate-off refusal next to a unified trail: the legacy save-back can't update `trail.yaml`, so
-    // the save is refused rather than dropping a shadowing sibling. Surface it — the MCP/desktop
-    // surfaces return an explicit error here, so the CLI shouldn't silently drop the recording.
-    // Checked before the self-heal short-circuit to match shouldSaveRecording's guard order (the
-    // refusal fires regardless of self-heal).
-    if (!resolveEffectiveUnifiedRecordings() && UnifiedRecordingWriter.unifiedTrailPresent(trailFile)) {
-      Console.info(
-        "Recording not saved: this directory has a unified trail.yaml and the legacy save-back can't " +
-          "update it. Enable unified recordings (--unified-recordings, TRAILBLAZE_UNIFIED_RECORDINGS=1, " +
-          "or `trailblaze config unified-recordings true`) to merge this device's slot instead.",
-      )
-      return
-    }
     if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
-    val skippedTarget: String = when (recordingSaveFormat(trailFile, deviceClassifiers)) {
-      RecordingSaveFormat.LEGACY -> {
+    val skippedTarget: String = when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+      RecordingSaveTarget.CLASSIFIER_SIBLING -> {
         val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
         if (!targetFile.exists()) return // not the "existing target" skip reason
         targetFile.absolutePath
       }
-      RecordingSaveFormat.UNIFIED -> {
+      RecordingSaveTarget.UNIFIED_MERGE -> {
         val classifier = deviceClassifiers.joinToString("-")
         if (!UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, classifier)) return
         val unifiedFile = UnifiedRecordingWriter.unifiedRecordingTarget(trailFile) ?: return

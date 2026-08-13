@@ -11,6 +11,7 @@ import ai.koog.prompt.executor.ollama.client.ContextWindowStrategy
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.host.llm.OpenAICompatibleLlmClientFactory
+import xyz.block.trailblaze.http.OpenAiReasoningEffortCompatibilityPlugin
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
@@ -89,7 +90,10 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
     // here so every provider branch below shares the same wrapped factory (Ollama included —
     // a prior version of this code path constructed OllamaClient without `httpClientFactory`
     // and silently bypassed our customized HTTP config).
-    val httpClientFactory = KtorKoogHttpClient.Factory(baseClient = baseClient)
+    // GPT-5.6-family endpoints reject function tools alongside an active reasoning_effort; the
+    // plugin pins it to none for those requests only. See OpenAiReasoningEffortCompatibilityPlugin.
+    val pinnedBaseClient = baseClient.config { install(OpenAiReasoningEffortCompatibilityPlugin) }
+    val httpClientFactory = KtorKoogHttpClient.Factory(baseClient = pinnedBaseClient)
 
     if (trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA) {
       return if (JvmLLMProvidersUtil.isOllamaInstalled) {
@@ -119,7 +123,7 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
       return OpenAICompatibleLlmClientFactory.createClient(
         providerConfig = providerConfig,
         apiKey = apiKey,
-        baseClient = baseClient,
+        baseClient = pinnedBaseClient,
       )
     }
 

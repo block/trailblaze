@@ -18,105 +18,57 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
 
 /**
  * Contract tests for the shared save-back writer used by the CLI, MCP, and desktop recording
- * surfaces. Exercises routing (gate on/off, greenfield vs half-migrated vs migrated), the gate-off
- * refusal guard, and the unified read-merge-write (fresh create, second-classifier merge, corrupt
- * refusal, multi-tool trailhead fallback) directly against a temp directory — no device, daemon, or
- * CLI needed. The pure merge itself is covered by the `:trailblaze-models` adapter tests.
+ * surfaces. Exercises routing (greenfield vs per-classifier-siblings vs shared unified trail), the
+ * shadowing-sibling refusal guard, and the unified read-merge-write (fresh create,
+ * second-classifier merge, corrupt refusal, multi-tool trailhead) directly against a temp
+ * directory — no device, daemon, or CLI needed. The pure merge itself is covered by the
+ * `:trailblaze-models` adapter tests.
  */
 class UnifiedRecordingWriterTest {
 
   @get:Rule val tempFolder = TemporaryFolder()
 
   // ---------------------------------------------------------------------------
-  // resolveGate — env > persisted, flag on top (CLI-only)
-  // ---------------------------------------------------------------------------
-
-  // The env tier can be set in a developer/CI shell; when it is, it outranks persisted config and
-  // the default. Compute the parsed env value the same way resolveGate does so the assertions below
-  // stay deterministic in any environment (Copilot flagged the naive "assume unset" form as flaky).
-  private val envGate: Boolean? = UnifiedRecordingWriter.parseBooleanGate(
-    System.getenv(UnifiedRecordingWriter.ENV_UNIFIED_RECORDINGS),
-  )
-
-  @Test
-  fun `resolveGate an explicit flag wins over env and persisted config`() {
-    // The flag is the highest tier, so this holds regardless of the ambient env var.
-    assertTrue(UnifiedRecordingWriter.resolveGate(flagOverride = true, persistedConfig = false))
-    assertFalse(UnifiedRecordingWriter.resolveGate(flagOverride = false, persistedConfig = true))
-  }
-
-  @Test
-  fun `resolveGate falls back to persisted config when no flag or env`() {
-    if (envGate != null) return // env tier outranks persisted; skip in an env that sets it
-    assertTrue(UnifiedRecordingWriter.resolveGate(flagOverride = null, persistedConfig = true))
-    assertFalse(UnifiedRecordingWriter.resolveGate(flagOverride = null, persistedConfig = false))
-  }
-
-  @Test
-  fun `resolveGate defaults to on when nothing is set`() {
-    if (envGate != null) return // env tier decides when set; skip in an env that sets it
-    assertTrue(UnifiedRecordingWriter.resolveGate(flagOverride = null, persistedConfig = null))
-  }
-
-  @Test
-  fun `parseBooleanGate accepts the documented 1 and true forms`() {
-    assertEquals(true, UnifiedRecordingWriter.parseBooleanGate("1"))
-    assertEquals(true, UnifiedRecordingWriter.parseBooleanGate("true"))
-    assertEquals(true, UnifiedRecordingWriter.parseBooleanGate("TRUE"))
-    assertEquals(true, UnifiedRecordingWriter.parseBooleanGate(" 1 "))
-    assertEquals(false, UnifiedRecordingWriter.parseBooleanGate("0"))
-    assertEquals(false, UnifiedRecordingWriter.parseBooleanGate("false"))
-    assertNull(UnifiedRecordingWriter.parseBooleanGate(null))
-    assertNull(UnifiedRecordingWriter.parseBooleanGate("yes"))
-    assertNull(UnifiedRecordingWriter.parseBooleanGate(""))
-  }
-
-  // ---------------------------------------------------------------------------
-  // shouldRouteUnified — routing decision
+  // shouldMergeIntoSharedTrail — routing decision
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `shouldRouteUnified is false when the gate is off`() {
+  fun `shouldMergeIntoSharedTrail is false for a blank classifier`() {
     val dir = tempFolder.newFolder()
-    assertFalse(UnifiedRecordingWriter.shouldRouteUnified(dir, "android", unifiedEnabled = false))
+    assertFalse(UnifiedRecordingWriter.shouldMergeIntoSharedTrail(dir, ""))
   }
 
   @Test
-  fun `shouldRouteUnified is false for a blank classifier`() {
-    val dir = tempFolder.newFolder()
-    assertFalse(UnifiedRecordingWriter.shouldRouteUnified(dir, "", unifiedEnabled = true))
-  }
-
-  @Test
-  fun `shouldRouteUnified is true for a greenfield directory`() {
+  fun `shouldMergeIntoSharedTrail is true for a greenfield directory`() {
     val dir = tempFolder.newFolder()
     File(dir, "blaze.yaml").writeText("- prompts:\n  - step: do it\n")
-    assertTrue(UnifiedRecordingWriter.shouldRouteUnified(dir, "android", unifiedEnabled = true))
+    assertTrue(UnifiedRecordingWriter.shouldMergeIntoSharedTrail(dir, "android"))
   }
 
   @Test
-  fun `shouldRouteUnified is true when a unified trail file already exists`() {
+  fun `shouldMergeIntoSharedTrail is true when a unified trail file already exists`() {
     val dir = tempFolder.newFolder()
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText("trail:\n  - step: s\n")
-    assertTrue(UnifiedRecordingWriter.shouldRouteUnified(dir, "android", unifiedEnabled = true))
+    assertTrue(UnifiedRecordingWriter.shouldMergeIntoSharedTrail(dir, "android"))
   }
 
   @Test
-  fun `shouldRouteUnified is false for a half-migrated directory with legacy siblings`() {
+  fun `shouldMergeIntoSharedTrail is false for a directory that already holds per-classifier siblings`() {
     val dir = tempFolder.newFolder()
-    File(dir, "ios.trail.yaml").writeText(v1RecordingYaml(driver = "D", toolName = "t"))
-    assertFalse(UnifiedRecordingWriter.shouldRouteUnified(dir, "android", unifiedEnabled = true))
+    File(dir, "ios.trail.yaml").writeText(siblingRecordingYaml())
+    assertFalse(UnifiedRecordingWriter.shouldMergeIntoSharedTrail(dir, "android"))
   }
 
   @Test
-  fun `shouldRouteUnified is true for a named file whose content is unified`() {
+  fun `shouldMergeIntoSharedTrail is true for a named file whose content is unified`() {
     val dir = tempFolder.newFolder()
     val named = File(dir, "login.trail.yaml").apply { writeText("trail:\n  - step: s\n") }
     File(dir, "payment.trail.yaml").writeText("trail:\n  - step: p\n")
-    assertTrue(UnifiedRecordingWriter.shouldRouteUnified(named, "android", unifiedEnabled = true))
+    assertTrue(UnifiedRecordingWriter.shouldMergeIntoSharedTrail(named, "android"))
   }
 
   // ---------------------------------------------------------------------------
@@ -138,9 +90,9 @@ class UnifiedRecordingWriterTest {
   }
 
   @Test
-  fun `unifiedTrailPresent is false for a legacy-only directory`() {
+  fun `unifiedTrailPresent is false for a siblings-only directory`() {
     val dir = tempFolder.newFolder()
-    File(dir, "android.trail.yaml").writeText(v1RecordingYaml(driver = "D", toolName = "t"))
+    File(dir, "android.trail.yaml").writeText(siblingRecordingYaml())
     File(dir, "blaze.yaml").writeText("- prompts:\n  - step: s\n")
     assertFalse(UnifiedRecordingWriter.unifiedTrailPresent(dir))
   }
@@ -212,7 +164,7 @@ class UnifiedRecordingWriterTest {
     assertEquals(2, (outcome as UnifiedRecordingWriter.MergeOutcome.MultiToolTrailheadUnsupported).toolCount)
     assertFalse(
       File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
-      "an un-representable trailhead must not produce a unified trail.yaml — the caller writes a legacy sibling",
+      "an un-representable trailhead must not produce a unified trail.yaml — the caller writes a per-classifier sibling",
     )
   }
 
@@ -252,6 +204,88 @@ class UnifiedRecordingWriterTest {
     assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.NoTarget)
   }
 
+  @Test
+  fun `mergeIntoUnified refuses an objective-less capture when the trail already has steps`() {
+    // The regression this pins: the merge is replace-per-classifier and aligns positionally, and an
+    // objective-less capture is ONE placeholder step. Merging it would bind the whole capture to
+    // step 1 and strip this classifier from every step after it. Nothing may be written.
+    val dir = tempFolder.newFolder()
+    val target = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    UnifiedRecordingWriter.mergeIntoUnified(dir, twoStepRecordingItems(), "android")
+    val before = target.readText()
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, steplessRecordingItems(), "android")
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail)
+    assertEquals(2, (outcome as UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail).existingStepCount)
+    assertEquals(before, target.readText(), "the existing trail must be left byte-identical")
+    // Both steps keep their android recordings — the loss this refusal prevents.
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(target.readText())
+    assertEquals(listOf("tapCart"), unified.trail[0].recordings["android"]?.map { it.name })
+    assertEquals(listOf("tapPay"), unified.trail[1].recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `mergeIntoUnified accepts an objective-less capture into a greenfield directory`() {
+    // The interactive recorder's raw capture is still savable where there is nothing to align to.
+    val dir = tempFolder.newFolder()
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, steplessRecordingItems(), "android")
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged)
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(listOf("capturedTap"), unified.trail.single().recordings["android"]?.map { it.name })
+  }
+
+  // ---------------------------------------------------------------------------
+  // renderStandalone — the per-classifier sibling route
+  //
+  // Same invariants as mergeIntoUnified, so a recording is refused identically whichever file
+  // layout the directory happens to use.
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `renderStandalone keys the recording under the classifier`() {
+    val yaml = UnifiedRecordingWriter
+      .renderStandalone(recordingItems(driver = "D", toolName = "tapCart"), "ios")
+      .getOrThrow()
+
+    val decoded = createTrailblazeYaml().decodeUnifiedTrail(yaml)
+    assertEquals(listOf("tapCart"), decoded.trail.single().recordings["ios"]?.map { it.name })
+  }
+
+  @Test
+  fun `renderStandalone refuses a blank classifier`() {
+    // Without a classifier there is no slot to key the tools under, so nothing could replay them.
+    val failure = UnifiedRecordingWriter
+      .renderStandalone(recordingItems(driver = "D", toolName = "tapCart"), "")
+      .exceptionOrNull()
+
+    assertEquals(UnifiedRecordingWriter.BLANK_CLASSIFIER_MESSAGE, failure?.message)
+  }
+
+  @Test
+  fun `renderStandalone refuses a multi-tool trailhead`() {
+    // The unified trailhead holds one tool per classifier — the emitter would throw on encode.
+    val failure = UnifiedRecordingWriter
+      .renderStandalone(multiToolTrailheadItems(listOf("launchApp", "signIn")), "android")
+      .exceptionOrNull()
+
+    assertEquals(UnifiedRecordingWriter.multiToolTrailheadMessage(2), failure?.message)
+  }
+
+  @Test
+  fun `renderStandalone refuses a recording with no steps`() {
+    // An empty `trail:` is unparseable, so writing it would leave an unreadable file behind a
+    // success message.
+    val configOnly = listOf(TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app")))
+
+    val failure = UnifiedRecordingWriter.renderStandalone(configOnly, "android").exceptionOrNull()
+
+    assertEquals(UnifiedRecordingWriter.EMPTY_MERGE_MESSAGE, failure?.message)
+  }
+
   // --- fixtures ---
 
   /** The lowered v1 items of a minimal one-config + one-recorded-step recording — the merge input. */
@@ -262,9 +296,32 @@ class UnifiedRecordingWriterTest {
     ),
   )
 
-  /** The same recording rendered as a legacy v1 `recording.trail.yaml` body (the v1 encoder is kept). */
-  private fun v1RecordingYaml(driver: String, toolName: String): String =
-    createTrailblazeYaml().encodeToString(recordingItems(driver, toolName))
+  /** A two-step recording — the "existing trail already has steps" side of the stepless refusal. */
+  private fun twoStepRecordingItems(): List<TrailYamlItem> = listOf(
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.PromptsTrailItem(
+      listOf(
+        DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart")))),
+        DirectionStep(step = "Pay", recording = ToolRecording(tools = listOf(tool("tapPay")))),
+      ),
+    ),
+  )
+
+  /** The interactive recorder's shape: tools captured with no objective window around them. */
+  private fun steplessRecordingItems(): List<TrailYamlItem> = listOf(
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.ToolTrailItem(listOf(tool("capturedTap"))),
+  )
+
+  /** A minimal per-classifier sibling body — routing only keys off the filename, not the content. */
+  private fun siblingRecordingYaml(): String =
+    createTrailblazeYaml().encodeUnifiedTrailToString(
+      UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing = null,
+        recordedItems = recordingItems(driver = "D", toolName = "tapCart"),
+        classifier = "ios",
+      ),
+    )
 
   /**
    * The lowered v1 items whose trailhead (step 0) carries [toolNames] as its `tools:` list, plus one

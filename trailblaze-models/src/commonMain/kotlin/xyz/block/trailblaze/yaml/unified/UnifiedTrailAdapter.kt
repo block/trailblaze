@@ -4,6 +4,7 @@ import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
@@ -36,6 +37,31 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * `step:` with no `recording:` block).
  */
 object UnifiedTrailAdapter {
+
+  /**
+   * NL stand-in for a recording that captured tools but no objective — the interactive recorder's
+   * raw capture, before "Generate Trail" replaces it with real per-step prose. Every unified step
+   * needs a `step:`, and the placeholder names itself as one so an author who saves without
+   * generating sees what to replace. Private: it is placeholder prose, not a contract for callers
+   * to match on, and publishing it would pin the wording into the binary-compatibility baseline.
+   */
+  private const val STEPLESS_TOOLS_STEP =
+    "Recorded actions (no objective captured — replace with a description)"
+
+  private fun isSteplessPlaceholder(step: String): Boolean = step.trim() == STEPLESS_TOOLS_STEP
+
+  /**
+   * True when [recordedItems] carries no objective at all — every tool sits outside a prompt step,
+   * so [mergeRecordedClassifier] would represent the whole recording as one [STEPLESS_TOOLS_STEP]
+   * placeholder.
+   *
+   * Callers merging into an EXISTING trail must check this first and refuse: the merge is
+   * replace-per-classifier and aligns positionally, so a length-1 recording strips this classifier
+   * from every step past the first. A raw capture has no step structure to align by, and pretending
+   * it does silently deletes the other steps' recordings.
+   */
+  fun isSteplessRecording(recordedItems: List<TrailYamlItem>): Boolean =
+    recordedItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().none { it.promptSteps.isNotEmpty() }
 
   /**
    * Lower a [UnifiedTrail] document into legacy v1 [TrailYamlItem]s for the
@@ -482,9 +508,10 @@ object UnifiedTrailAdapter {
    * pin; every other classifier already in [existing] is preserved untouched, so re-recording on
    * Android never disturbs the iOS slot.
    *
-   * The recorded side is passed as the v1 [recordedItems] that [generateRecordedYaml] already
-   * produces (this keeps the recording-generation pipeline unchanged — merge just lowers its output
-   * into the unified file). The driver pin comes from the recorded config's `driver:`.
+   * The recorded side is passed as the [recordedItems] that
+   * [xyz.block.trailblaze.yaml.generateRecordedTrailItems] already produces (this keeps the
+   * recording-generation pipeline unchanged — merge just lowers its output into the unified file).
+   * The driver pin comes from the recorded config's `driver:`.
    *
    * **Replace, not append, per classifier.** This device's prior contribution (its recordings in
    * every step + trailhead, and its `config.devices` driver pin) is stripped first, then the fresh
@@ -499,12 +526,14 @@ object UnifiedTrailAdapter {
    * no tools leaves this classifier ABSENT from that step's map (runs in LLM mode) rather than
    * writing `classifier: []` (which the model reserves for a deliberate no-op).
    *
+   * Tools recorded outside any objective window are placed by [recordedStepsFrom].
+   *
    * The step KIND (`step:` vs `verify:`) is preserved: an appended step takes `verify: true` when
    * the recorded step is a [VerificationStep]; on merge into an existing step the EXISTING kind
    * wins (it is device-agnostic canon, like the NL), with kind disagreement logged as drift.
    *
    * @param existing the current on-disk unified trail, or `null` for the first write of this trail.
-   * @param recordedItems the v1 items from [generateRecordedYaml] for this one device.
+   * @param recordedItems the lowered items from [xyz.block.trailblaze.yaml.generateRecordedTrailItems] for this one device.
    * @param classifier the recorded device's classifier slot (e.g. `android`, `ios-iphone`).
    */
   fun mergeRecordedClassifier(
@@ -515,9 +544,7 @@ object UnifiedTrailAdapter {
     val recordedConfig = recordedItems
       .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
       .firstOrNull()?.config
-    val recordedPrompts = recordedItems
-      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
-      .flatMap { it.promptSteps }
+    val recordedPrompts = recordedStepsFrom(recordedItems, classifier)
     val recordedTrailhead = recordedItems
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
       .firstOrNull()?.trailhead
@@ -554,21 +581,33 @@ object UnifiedTrailAdapter {
       val recordedTools = recorded?.recording?.tools.orEmpty()
       when {
         base != null && recorded != null -> {
-          if (base.step.trim() != recorded.prompt.trim()) {
+          // The placeholder is not canon — it is prose the adapter invented because a raw capture
+          // had none, and it says so in its own text. Existing-prose-wins would otherwise freeze it
+          // into the file forever: every later re-record carrying real prose would lose to it.
+          val canon = if (isSteplessPlaceholder(base.step) && !isSteplessPlaceholder(recorded.prompt)) {
+            Console.info(
+              "[unified-record] step ${i + 1} on classifier `$classifier`: replacing the recorded-" +
+                "actions placeholder with \"${recorded.prompt.take(60)}\".",
+            )
+            base.copy(step = recorded.prompt, verify = recorded is VerificationStep)
+          } else {
+            base
+          }
+          if (canon.step.trim() != recorded.prompt.trim()) {
             // info (not log): a re-record whose NL diverged from the on-disk step keeps the existing
             // prose — the user should see that their recorded tools were bound to different wording,
             // even on a normal (non-verbose) run where Console.log is suppressed.
             Console.info(
               "[unified-record] step ${i + 1} NL drift on classifier `$classifier`: keeping existing " +
-                "\"${base.step.take(60)}\" over recorded \"${recorded.prompt.take(60)}\".",
+                "\"${canon.step.take(60)}\" over recorded \"${recorded.prompt.take(60)}\".",
             )
           }
-          if (base.verify != (recorded is VerificationStep)) {
+          if (canon.verify != (recorded is VerificationStep)) {
             // Same policy as NL drift: the existing kind is device-agnostic canon and wins; the
             // user should see that this device recorded the step under the other keyword.
             Console.info(
               "[unified-record] step ${i + 1} kind drift on classifier `$classifier`: keeping " +
-                "existing `${if (base.verify) "verify" else "step"}:` over recorded " +
+                "existing `${if (canon.verify) "verify" else "step"}:` over recorded " +
                 "`${if (recorded is VerificationStep) "verify" else "step"}:`.",
             )
           }
@@ -576,11 +615,11 @@ object UnifiedTrailAdapter {
           // mutually exclusive and the unified parser rejects the combination. Preserve the
           // author's "never record" intent by dropping the recorded tools rather than corrupting
           // the file.
-          if (recordedTools.isNotEmpty() && base.recordable) {
-            base.withClassifier(classifier, recordedTools)
+          if (recordedTools.isNotEmpty() && canon.recordable) {
+            canon.withClassifier(classifier, recordedTools)
           } else {
             if (recordedTools.isNotEmpty()) logDroppedRecordableFalse(i, classifier)
-            base
+            canon
           }
         }
         base != null -> base // existing step this device didn't reach — classifier already stripped
@@ -605,6 +644,54 @@ object UnifiedTrailAdapter {
       trailhead = mergeRecordedTrailhead(existing?.trailhead?.withoutClassifier(classifier), recordedTrailhead, classifier),
       trail = mergedSteps,
     )
+  }
+
+  /**
+   * The recorded steps [mergeRecordedClassifier] aligns against the existing trail, with tools that
+   * never sat inside an objective window ([TrailYamlItem.ToolTrailItem]) given a home.
+   *
+   * Those tools must never occupy an index of their own: the merge aligns recorded steps to existing
+   * steps positionally, so an extra leading entry would bind every existing step to the previous
+   * step's tools. They are prepended to the first recorded step's recording instead — the generator
+   * only emits them BEFORE the first prompt step, so that is also their execution order.
+   *
+   * Only a recording with no prompt steps at all (the interactive recorder's whole output) has no
+   * step to attach to, and gets the [STEPLESS_TOOLS_STEP] placeholder.
+   */
+  private fun recordedStepsFrom(
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+  ): List<PromptStep> {
+    val promptSteps = recordedItems
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .flatMap { it.promptSteps }
+    val steplessTools = recordedItems
+      .filterIsInstance<TrailYamlItem.ToolTrailItem>()
+      .flatMap { it.tools }
+    if (steplessTools.isEmpty()) return promptSteps
+
+    // info (not log): where a recording's tools ended up is a data-affecting decision, same policy
+    // as the drift/dropped-tool lines below.
+    if (promptSteps.isEmpty()) {
+      Console.info(
+        "[unified-record] ${steplessTools.size} tool(s) recorded with no objective on classifier " +
+          "`$classifier`; saving them as one step titled \"$STEPLESS_TOOLS_STEP\".",
+      )
+      return listOf(
+        DirectionStep(step = STEPLESS_TOOLS_STEP, recording = ToolRecording(tools = steplessTools)),
+      )
+    }
+    Console.info(
+      "[unified-record] ${steplessTools.size} tool(s) recorded before the first objective on " +
+        "classifier `$classifier`; prepending them to step 1's recording.",
+    )
+    val first = promptSteps.first()
+    val merged = ToolRecording(tools = steplessTools + first.recording?.tools.orEmpty())
+    val firstWithTools = when (first) {
+      is DirectionStep -> first.copy(recording = merged)
+      is VerificationStep -> first.copy(recording = merged)
+    }
+    return listOf(firstWithTools) + promptSteps.drop(1)
   }
 
   /**

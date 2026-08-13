@@ -1,19 +1,17 @@
 package xyz.block.trailblaze.yaml
 
 import org.junit.Test
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class RealYamlFileTest {
 
   private val trailblazeYaml = createTrailblazeYaml()
-  private val androidClassifiers = listOf(TrailblazeDeviceClassifier("android"))
 
   @Test
-  fun `can parse realistic YAML with config-based metadata`() {
+  fun `can parse realistic unified trail`() {
     val yaml = """
       config:
         id: "5056470"
@@ -37,19 +35,24 @@ class RealYamlFileTest {
                   text: .*total Points
     """.trimIndent()
 
-    // Test extracting metadata
-    val config = trailblazeYaml.extractTrailConfig(yaml)
-    assertNotNull(config)
-    assertEquals("5056470", config.id)
-    assertEquals("Appointment checkout flow", config.title)
+    val trail = trailblazeYaml.decodeUnifiedTrail(yaml)
 
-    // Test parsing trail items
-    val trailItems = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifiers)
-    assertEquals(2, trailItems.size) // config and prompts sections
+    assertEquals("5056470", trail.config.id)
+    assertEquals("Appointment checkout flow", trail.config.title)
+    assertEquals("Test loyalty points received for purchase workflow", trail.config.description)
+
+    assertEquals(3, trail.trail.size)
+    assertEquals("tap +", trail.trail[0].step)
+    assertEquals(listOf("tapOnElementWithAccessibilityText"), trail.trail[0].recordings.getValue("android").map { it.name })
+
+    // The third step was authored as `verify:`, which the unified model records on the step
+    // itself rather than as a separate item type.
+    assertTrue(trail.trail[2].verify)
+    assertEquals("Verify total points are visible", trail.trail[2].step)
   }
 
   @Test
-  fun `can parse YAML without config item`() {
+  fun `can parse trail with no config block`() {
     val yaml = """
       trail:
         - step: Navigate to login
@@ -60,12 +63,14 @@ class RealYamlFileTest {
                   text: Login
     """.trimIndent()
 
-    val items = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = androidClassifiers)
-    // A unified trail always lowers to a (synthesized) config item plus the prompts section.
-    assertEquals(2, items.size)
+    val trail = trailblazeYaml.decodeUnifiedTrail(yaml)
 
-    // No config metadata was declared, so extraction yields an empty config with no id.
-    val config = trailblazeYaml.extractTrailConfig(yaml)
-    assertNull(config?.id)
+    // `config:` is optional — an absent block decodes to an empty config, not an error.
+    assertNull(trail.config.id)
+    assertNull(trail.config.title)
+
+    assertEquals(2, trail.trail.size)
+    // A step with no `recording:` runs in LLM mode.
+    assertTrue(trail.trail[0].recordings.isEmpty())
   }
 }

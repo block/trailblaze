@@ -122,4 +122,85 @@ class SessionInfoTest {
     val si = info(trailFilePath = "   ", testName = "fallback test")
     assertEquals("fallback test", si.displayName)
   }
+
+  // --- blank author-supplied tiers ---------------------------------------------------------
+  // `trailConfig.title` / `trailConfig.id` come straight from YAML, where `id:` with nothing
+  // after it parses to an empty string rather than to null. They were the only tiers in either
+  // chain without the blank guard every derived tier already had.
+
+  @Test
+  fun `stableTestKey ignores a blank trail id and falls through`() {
+    val si = info(
+      trailConfig = TrailConfig(id = "   "),
+      trailFilePath = "trails/EvaluationLongTest/tenKey.trail.yaml",
+    )
+    assertEquals("EvaluationLongTest/tenKey", si.stableTestKey)
+  }
+
+  @Test
+  fun `displayName ignores a blank trail title and falls through to the id`() {
+    val si = info(trailConfig = TrailConfig(title = "  ", id = "sample-app/taps/simple-tap"))
+    assertEquals("sample-app/taps/simple-tap", si.displayName)
+  }
+
+  @Test
+  fun `stableTestKey is never blank, whatever the session carries`() {
+    // The invariant the whole key rests on, and the only one whose failure is silent.
+    // Retries are grouped on this value by both the report generator (`test_key ?: title`) and
+    // the step summary (jq `.test_key // .title`), and BOTH treat "" as a present value — so a
+    // blank key does not fall back, it groups. Every session that produced one would collapse
+    // into a single result and the losers' verdicts would disappear from the count.
+    //
+    // Enumerated over the blank spellings and over which tiers are present, rather than written
+    // out per case, so a tier that loses its guard later is caught here even if nobody thought
+    // to add a case for it.
+    val blanks = listOf("", " ", "   ", "\t", "\n")
+    for (blank in blanks) {
+      val candidates = listOf(
+        info(trailConfig = TrailConfig(id = blank)),
+        info(trailConfig = TrailConfig(title = blank)),
+        info(trailConfig = TrailConfig(title = blank, id = blank)),
+        info(trailConfig = TrailConfig(title = blank, id = blank), trailFilePath = blank),
+        info(
+          trailConfig = TrailConfig(title = blank, id = blank),
+          trailFilePath = blank,
+          testName = blank,
+          testClass = blank,
+        ),
+      )
+      candidates.forEach { si ->
+        assertEquals(
+          false,
+          si.stableTestKey.isBlank(),
+          "stableTestKey resolved to a blank string for a session whose tiers were [$blank]",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `a session with nothing but blanks keys on its session id`() {
+    val si = info(
+      sessionId = "session_only_identity",
+      trailConfig = TrailConfig(title = "", id = ""),
+      trailFilePath = "",
+      testName = "",
+      testClass = "",
+    )
+    assertEquals("session_only_identity", si.stableTestKey)
+    assertEquals("session_only_identity", si.displayName)
+  }
+
+  @Test
+  fun `two blank-tier sessions do not share a key`() {
+    // The consequence stated as behavior rather than as a property: before the guard both of
+    // these keyed on "" and grouped together, which is one result where two tests ran.
+    val first = info(sessionId = "session_one", trailConfig = TrailConfig(id = ""))
+    val second = info(sessionId = "session_two", trailConfig = TrailConfig(id = ""))
+    assertEquals(
+      false,
+      first.stableTestKey == second.stableTestKey,
+      "two unrelated sessions with blank ids collapsed onto the same key",
+    )
+  }
 }

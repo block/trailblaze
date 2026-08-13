@@ -236,10 +236,21 @@ class DeviceManagerToolSet(
             appendDeviceHeader(currentDeviceId)
             appendDriverStatusIfPresent(driverStatus)
             if (driverStatus == null) {
-              val apps = mcpBridge.getInstalledAppIds()
               appendLine()
-              appendLine("Installed apps (${apps.size}):")
-              apps.sorted().forEach { appendLine("  - $it") }
+              // A failed device probe throws; degrade this section rather than discarding the
+              // header and driver status the caller also asked for. `catch (Exception)` rather
+              // than `runCatching`, which would also swallow the caller's own cancellation (the
+              // probe rethrows it) and fatal Errors, and leave us building a payload for a
+              // request nobody is waiting on.
+              try {
+                val apps = mcpBridge.getInstalledAppIds()
+                appendLine("Installed apps (${apps.size}):")
+                apps.sorted().forEach { appendLine("  - $it") }
+              } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+              } catch (e: Exception) {
+                appendLine("Installed apps: unavailable (${e.message})")
+              }
             }
           }
         }

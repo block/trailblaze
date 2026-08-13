@@ -97,14 +97,13 @@ object MobileDeviceUtils {
    * emulators may have different builds installed. Picking the first DECLARED id without
    * consulting the device is wrong for production launch flows; this helper consults the device.
    *
-   * **No caching.** Reads installed app ids fresh on each call. Two reasons: (1) the install
-   * state can change between test steps (an earlier step may install the app, a later step
-   * may uninstall it), and a stale cache would silently use the wrong value; (2) the existing
-   * UI/MCP path already maintains a `StateFlow`-backed cache via
-   * `TrailblazeDeviceManager.getInstalledAppIdsFlow` for reactive UI; tools should not maintain
-   * a parallel cache that can drift from it. If profiling later shows `listapps`/`pm list` is
-   * a hot-path bottleneck, the right fix is to thread the existing `TrailblazeDeviceManager`
-   * cache through to tool execution rather than re-cache here.
+   * **No caching.** Reads installed app ids fresh on each call, because the install state can
+   * change between test steps (an earlier step may install the app, a later step may uninstall
+   * it) and a stale cache would silently use the wrong value. Nothing maintains a background
+   * cache to defer to: `TrailblazeDeviceManager.refreshAppInventory` probes on demand and
+   * publishes what it read for reactive UI. If profiling shows `listapps`/`pm list` is a
+   * hot-path bottleneck here, route these calls through that shared (coalescing) probe rather
+   * than adding a cache in this file.
    *
    * **Runtime YAML targets are supported.** The signature takes the abstract
    * [TrailblazeHostAppTarget], so both buildtime Kotlin `data object` targets and runtime

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.DeviceAppProbeFailedException
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -525,6 +526,31 @@ class DeviceManagerToolSetTest {
     assertContains(result, "emulator-5554")
     assertContains(result, "ANDROID_ONDEVICE_INSTRUMENTATION")
     assertContains(result, "com.example.app")
+  }
+
+  @Test
+  fun `device INFO FULL still reports the device when the installed-app probe fails`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      installedAppsProbeFails = true,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+      detail = DeviceManagerToolSet.DeviceDetail.FULL,
+    )
+
+    // The probe is one section of this response; losing it must not discard the identity and
+    // driver status the caller also asked for, and it must not read as "0 apps installed".
+    assertContains(result, "emulator-5554")
+    assertContains(result, "ANDROID_ONDEVICE_INSTRUMENTATION")
+    assertContains(result, "unavailable")
   }
 
   // ── WEB action ──────────────────────────────────────────────────────────
@@ -1057,6 +1083,8 @@ class DeviceTestBridge(
   private val devices: Set<TrailblazeConnectedDeviceSummary> = emptySet(),
   private val driverType: TrailblazeDriverType? = null,
   private val installedApps: Set<String> = emptySet(),
+  /** Models a device whose installed-app probe failed — see [TrailblazeMcpBridge.getInstalledAppIds]. */
+  private val installedAppsProbeFails: Boolean = false,
   var driverConnectionStatus: String? = null,
   private val availableAppTargets: Set<TrailblazeHostAppTarget> = emptySet(),
   private val currentAppTargetId: String? = null,
@@ -1144,7 +1172,11 @@ class DeviceTestBridge(
     blocking: Boolean,
     traceId: TraceId?,
   ): String = "[OK]"
-  override suspend fun getInstalledAppIds(): Set<String> = installedApps
+  override suspend fun getInstalledAppIds(): Set<String> = if (installedAppsProbeFails) {
+    throw DeviceAppProbeFailedException(lastSelectedDeviceId ?: TrailblazeDeviceId("unknown", TrailblazeDevicePlatform.ANDROID))
+  } else {
+    installedApps
+  }
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = availableAppTargets
   override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) = ""
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = lastSelectedDeviceId

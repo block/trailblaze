@@ -13,6 +13,7 @@ import ai.koog.prompt.llm.LLMProvider
 import xyz.block.trailblaze.android.openai.OpenAiInstrumentationArgUtil
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.NoOpLlmClient
+import xyz.block.trailblaze.http.OpenAiReasoningEffortCompatibilityPlugin
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -46,7 +47,7 @@ object AndroidLlmClientResolver {
     TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
       timeoutInSeconds = 120,
       reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
-    )
+    ).config { install(OpenAiReasoningEffortCompatibilityPlugin) }
   }
 
   /**

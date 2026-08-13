@@ -141,9 +141,10 @@ class SelectorEscapeTest {
   }
 
   @Test
-  fun `escapeForSelector - backslash-E in input is handled correctly by Regex-escape`() {
-    // Regression: manual "\\Q$s\\E" would break when $s contains "\E".
-    // Regex.escape() handles this by splitting the quote block.
+  fun `escapeForSelector - backslash-E in input is handled correctly by quote splitting`() {
+    // Regression: a naive "\\Q$s\\E" would break when $s contains "\E".
+    // quoteAsRegexLiteral handles this the way Pattern.quote does: close the quote
+    // section, emit an escaped \E, reopen.
     val input = "foo\\Ebar"
     val result = escapeForSelector(input)
     assertTrue(

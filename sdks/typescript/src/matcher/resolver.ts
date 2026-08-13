@@ -773,10 +773,17 @@ function matchesAnyPattern(
  * see `translateQuoteSections`, which rewrites quoted sections to JS-escaped literals
  * before compile.
  *
- * **Regex semantics caveats** that the inline-flag path does NOT cover:
- *   - Possessive quantifiers (`x++`, `x*+`) — Kotlin supports, JS doesn't.
- *   - Unicode property escapes (`\p{...}`) — JS requires the `u` flag, not in
- *     scope for this translator.
+ * **Unicode property escapes** (`\p{L}`) compile with the `u` flag (added only when the
+ * pattern uses one — see `hasUnicodePropertyEscape`), matching Java for standard Unicode
+ * categories/scripts. Java-only property names (`\p{Alpha}`, `\p{javaLowerCase}`) fail the
+ * `u` compile and take the literal-fallback path instead of silently matching different
+ * text. A stray `\E` with no open `\Q` throws during quote translation, mirroring Java's
+ * "Unmatched closing \E" compile error.
+ *
+ * **Regex semantics caveats** that remain untranslated:
+ *   - Possessive quantifiers (`x++`, `x*+`) — Kotlin supports, JS rejects at compile
+ *     (falls back to the literal path; Java matches possessively).
+ *   - Java-only `\p{...}` property names (above).
  *   - Some named-group syntaxes differ.
  *
  * The trail-corpus selectors are simple (alternation + escapes); divergence on
@@ -804,12 +811,20 @@ function matchesPattern(
   let regex: RegExp | null;
   try {
     const translated = translateQuoteSections(stripped);
+    // Unicode property escapes (`\p{L}`) need the `u` flag in JS — without it they're
+    // Annex-B identity escapes that silently match the LITERAL text `p{L}`, diverging from
+    // Java (where `\p{...}` always means the property). Added only when the pattern uses
+    // one: `u` also makes parsing stricter, which would reject Annex-B leniencies other
+    // patterns rely on. Java-only property names (`\p{Alpha}`, `\p{javaLowerCase}`) fail
+    // the `u` compile and fall through to the catch — the safe direction (literal fallback)
+    // rather than a silently different match.
+    const compileFlags = hasUnicodePropertyEscape(translated) ? flags + "u" : flags;
     // Probe-compile the user pattern ALONE before wrapping. An invalid pattern can fuse
     // with the wrapper into a valid-but-garbage regex (e.g. `[unclosed` + the wrapper's
     // trailing `(?![\s\S])` — the wrapper's `]` closes the dangling character class), so
     // validity must be judged on the bare pattern.
-    new RegExp(translated, flags);
-    regex = new RegExp(fullMatchWrap(translated), flags);
+    new RegExp(translated, compileFlags);
+    regex = new RegExp(fullMatchWrap(translated), compileFlags);
   } catch (_e) {
     regex =
       dialect === "maestro"
@@ -868,10 +883,14 @@ function escapeForRegExp(s: string): string {
  * `Regex.escape()`-authored selector diverges from the Kotlin resolver.
  *
  * Mirrors Java semantics: an unterminated `\Q` quotes to the end of the pattern,
- * and a `\Q` preceded by an escaping backslash (e.g. `\\Q`) is NOT a quote start.
+ * a `\Q` preceded by an escaping backslash (e.g. `\\Q`) is NOT a quote start, and a
+ * stray `\E` with no open quote section is a SYNTAX ERROR (Java: "Unmatched closing
+ * \E") — thrown here so the caller's catch takes the same fallback path Java's
+ * failed compile does. Without the throw, JS would accept `foo\E` as the identity
+ * escape `fooE` and silently match different text than the JVM.
  */
 function translateQuoteSections(pattern: string): string {
-  if (!pattern.includes("\\Q")) return pattern;
+  if (!pattern.includes("\\Q") && !pattern.includes("\\E")) return pattern;
   let out = "";
   let i = 0;
   while (i < pattern.length) {
@@ -884,6 +903,9 @@ function translateQuoteSections(pattern: string): string {
         const literal = end === -1 ? pattern.slice(i + 2) : pattern.slice(i + 2, end);
         out += literal.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
         i = end === -1 ? pattern.length : end + 2;
+      } else if (next === "E") {
+        // Java rejects an \E that has no open quote section; mirror it.
+        throw new SyntaxError("Unmatched closing \\E in pattern");
       } else {
         // Any other escape (including `\\`): copy both chars so the escaped
         // char can't be misread as a quote start.
@@ -896,6 +918,23 @@ function translateQuoteSections(pattern: string): string {
     }
   }
   return out;
+}
+
+/**
+ * True when [pattern] (post quote-section translation) contains a regex Unicode property
+ * escape — an odd number of backslashes followed by `p{`/`P{`. Text that came from a
+ * translated `\Q...\E` section can't false-positive: its backslashes are escaped (`\\p`),
+ * making the run even. Used by `matchesPattern` to opt into the `u` flag.
+ */
+function hasUnicodePropertyEscape(pattern: string): boolean {
+  for (let i = 0; i + 2 < pattern.length; i++) {
+    if (pattern[i] === "\\" && (pattern[i + 1] === "p" || pattern[i + 1] === "P") && pattern[i + 2] === "{") {
+      let backslashesBefore = 0;
+      for (let j = i - 1; j >= 0 && pattern[j] === "\\"; j--) backslashesBefore++;
+      if (backslashesBefore % 2 === 0) return true;
+    }
+  }
+  return false;
 }
 
 /**

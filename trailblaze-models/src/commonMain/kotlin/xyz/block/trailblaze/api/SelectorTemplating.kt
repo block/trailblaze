@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.util.quoteAsRegexLiteral
+
 /**
  * Per-session target context for selector template expansion.
  *
@@ -44,10 +46,10 @@ data class TargetTemplateContext(
  * `^{{target.appId}}:id/foo$`. At match time, this expands the placeholder against the
  * current session's [TargetTemplateContext] so the compiled regex sees a concrete value:
  *
- *  1. If [TargetTemplateContext.appId] is non-null, substitute its [Regex.escape]d form —
+ *  1. If [TargetTemplateContext.appId] is non-null, substitute its regex-quoted form —
  *     the runtime resolved a specific install, so the matcher requires a literal hit on it.
  *  2. Else if [TargetTemplateContext.appIds] is non-empty, substitute
- *     `(?:appId1|appId2|…)` with each entry [Regex.escape]d. This is the log-replay safety
+ *     `(?:appId1|appId2|…)` with each entry regex-quoted. This is the log-replay safety
  *     net: a captured tree could have come from any declared variant and the matcher should
  *     still hit.
  *  3. If neither is supplied (no target context at all), leave the literal `{{target.appId}}`
@@ -67,10 +69,12 @@ object SelectorTemplating {
    */
   fun expand(pattern: String, target: TargetTemplateContext?): String {
     if (!pattern.contains(APP_ID_PLACEHOLDER)) return pattern
+    // quoteAsRegexLiteral (not Regex.escape) so the expanded pattern is identical on every
+    // platform — the JS resolver's quote-section translation understands the \Q...\E form.
     val replacement = when {
-      target?.appId != null -> Regex.escape(target.appId)
+      target?.appId != null -> quoteAsRegexLiteral(target.appId)
       !target?.appIds.isNullOrEmpty() ->
-        target.appIds.joinToString(separator = "|", prefix = "(?:", postfix = ")") { Regex.escape(it) }
+        target.appIds.joinToString(separator = "|", prefix = "(?:", postfix = ")") { quoteAsRegexLiteral(it) }
       else -> APP_ID_PLACEHOLDER
     }
     return pattern.replace(APP_ID_PLACEHOLDER, replacement)

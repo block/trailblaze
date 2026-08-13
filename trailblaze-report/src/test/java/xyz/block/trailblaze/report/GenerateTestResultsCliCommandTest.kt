@@ -8,6 +8,7 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.datetime.Instant
@@ -33,6 +34,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.CombinedVerdict
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.models.TriageReport
@@ -744,6 +746,78 @@ class GenerateTestResultsCliCommandTest {
       assertEquals("job-uuid-abc", row.ci_job_id)
       assertEquals("logs_smoke_0__${sessionId.value}.zip", row.logs_zip_filename)
       assertEquals(null, row.logs_zip_url)
+      // Every archive predating the agent-name field looks exactly like this one. Absent must
+      // mean null, not a decode failure that would drop ci_job_id along with it.
+      assertEquals(null, row.ci_agent_name)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `host_ci_context sidecar ci_agent_name reaches the result row`() {
+    // Why this field exists: two attempts of the same test that carry the same agent name ran on
+    // the same worker. Without it, a retry that cleared a wedged host and a genuine reproduction
+    // are the same row in the report. It has to survive the sidecar → report hop to answer that,
+    // since deferred report-gen runs in a different job and cannot read the test job's env.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_05_26_session_agent_name")
+      val deviceInfo = webDeviceInfo()
+
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "001_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/sample-app/smoke.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "smokeTest",
+            testClassName = "WebSmokeTest",
+            trailblazeDeviceInfo = deviceInfo,
+            trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+            rawYaml = null,
+          ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:10:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = sessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-05-26T18:10:04Z"),
+        ),
+      )
+      // Dots are the realistic shape — every mac-mini agent name has them. Pinning a dotted name
+      // here is what keeps the writer's charset from being narrowed back to the ci_job_id one.
+      File(logsDir, sessionId.value).resolve(GenerateTestResultsCliCommand.HOST_CI_CONTEXT_FILENAME)
+        .writeText(
+          """
+          {
+            "ci_job_id": "job-uuid-abc",
+            "ci_agent_name": "build-agent-07.example.internal",
+            "logs_zip_filename": "logs_smoke_0__${sessionId.value}.zip"
+          }
+          """.trimIndent(),
+        )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      val row = report.results.single { it.session_id == sessionId }
+      assertEquals("build-agent-07.example.internal", row.ci_agent_name)
+      assertEquals("job-uuid-abc", row.ci_job_id)
     } finally {
       logsDir.deleteRecursively()
     }
@@ -1201,6 +1275,227 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `a test that passed first and failed on a later attempt is not counted as a rescue`() {
+    val logsDir = Files.createTempDirectory("trailblaze-pass-then-fail").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // Re-running a test that already passed is the only thing that can produce this ordering,
+      // so only whole-shard retry reaches it -- which is exactly what step-level retry is. The
+      // retry rescued nothing here; it broke something that was already green.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_destabilized_attempt1"),
+        trailFilePath = "trails/sample-app/destabilized.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_destabilized_attempt2"),
+        trailFilePath = "trails/sample-app/destabilized.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 2_000, exceptionMessage = "Element not found: More"),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON", "--triage"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(1, report.results.size)
+
+      // Pinned so that narrowing the retry counter can never be mistaken for -- or quietly drift
+      // into -- a change to which attempt wins. A pass anywhere is still the verdict.
+      assertEquals(Outcome.PASSED, report.results.single().outcome)
+
+      val triage =
+        json.decodeFromString<TriageReport>(File(logsDir, "trailblaze_triage_report.json").readText())
+
+      // Nothing was rescued, so nothing may be reported as rescued.
+      assertEquals(0, triage.retries.passed_on_retry)
+      // Nor is it a persistent failure -- the kept outcome is a pass.
+      assertEquals(0, triage.retries.failed_after_retries)
+
+      assertEquals(2, triage.retries.total_attempts)
+      assertEquals(1, triage.retries.unique_test_cases)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a rescue whose failed attempt recorded no message is still counted as a rescue`() {
+    val logsDir = Files.createTempDirectory("trailblaze-reasonless-rescue").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // A failure with no exception message. Keying "was this rescued?" on the presence of a
+      // reason string made this indistinguishable from a shard that a job-level CI retry re-ran
+      // for its own reasons -- so a real red that a retry papered over reported the same as a
+      // healthy leg. Every attempt has an outcome even when it has nothing to say.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_quiet_attempt1"),
+        trailFilePath = "trails/sample-app/quiet.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 3_000, exceptionMessage = null),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_quiet_attempt2"),
+        trailFilePath = "trails/sample-app/quiet.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+
+      // Control: two clean runs of a different trail. The rule must separate these two groups,
+      // which is the whole difficulty -- both have a superseded attempt carrying no reason.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_clean_attempt1"),
+        trailFilePath = "trails/sample-app/clean.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_clean_attempt2"),
+        trailFilePath = "trails/sample-app/clean.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON", "--triage"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      fun resultFor(trail: String) = report.results.single { it.title.contains(trail) }
+
+      val quiet = resultFor("quiet")
+      assertEquals(
+        listOf(Outcome.FAILED),
+        quiet.replaced_outcomes,
+        "the superseded attempt's outcome is the only surviving evidence it failed",
+      )
+      assertTrue(
+        quiet.replaced_failure_reasons.isEmpty(),
+        "this fixture is only meaningful if the failure genuinely recorded no reason",
+      )
+
+      assertEquals(
+        listOf(Outcome.PASSED),
+        resultFor("clean").replaced_outcomes,
+        "an attempt superseded without failing still reports its own outcome",
+      )
+
+      // End-to-end: the classification is computed during report generation, so it must reach
+      // the JSON. Both of these results report outcome PASSED, which is exactly why the outcome
+      // alone cannot tell a rescued test from a clean one.
+      assertEquals(CombinedVerdict.RESCUED, quiet.combined_verdict)
+      assertEquals(CombinedVerdict.PASSED, resultFor("clean").combined_verdict)
+
+      val triage =
+        json.decodeFromString<TriageReport>(File(logsDir, "trailblaze_triage_report.json").readText())
+      assertEquals(1, triage.retries.passed_on_retry)
+      assertEquals(0, triage.retries.failed_after_retries)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `dedup keeps the failure classification of the attempts it replaced`() {
+    val logsDir = Files.createTempDirectory("trailblaze-replaced-kinds").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // Rescued: the only attempt that carried a classification is the one dedup drops. Without
+      // it being carried forward, "what went wrong the first time" is unanswerable from the report.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_rescued_attempt1"),
+        trailFilePath = "trails/sample-app/rescued.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(
+          durationMs = 3_000,
+          exceptionMessage = "TRAILHEAD FAILED: could not reach the starting state",
+          failureKind = "TRAILHEAD",
+        ),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_rescued_attempt2"),
+        trailFilePath = "trails/sample-app/rescued.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+
+      // Failed twice for DIFFERENT reasons. The surviving attempt's own kind is null, so reading
+      // only the survivor would call this an ordinary failure and lose that the run began by
+      // never reaching the trail at all.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_mixed_attempt1"),
+        trailFilePath = "trails/sample-app/mixed.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(
+          durationMs = 2_000,
+          exceptionMessage = "TRAILHEAD FAILED: could not reach the starting state",
+          failureKind = "TRAILHEAD",
+        ),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_mixed_attempt2"),
+        trailFilePath = "trails/sample-app/mixed.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 2_000, exceptionMessage = "Delivery not visible"),
+      )
+
+      // Neither attempt carried a kind: the list stays empty rather than gaining a placeholder,
+      // so "no classification" and "classification lost in dedup" cannot be confused.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_plain_attempt1"),
+        trailFilePath = "trails/sample-app/plain.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 2_000, exceptionMessage = "Delivery not visible"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_plain_attempt2"),
+        trailFilePath = "trails/sample-app/plain.trail.yaml",
+        startedAt = "2026-06-15T10:05:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 4_000),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertEquals(3, report.results.size)
+      fun resultFor(trail: String) = report.results.single { it.title.contains(trail) }
+
+      val rescued = resultFor("rescued")
+      assertEquals(Outcome.PASSED, rescued.outcome)
+      assertEquals(listOf("TRAILHEAD"), rescued.replaced_failure_kinds)
+
+      val mixed = resultFor("mixed")
+      assertEquals(listOf("TRAILHEAD"), mixed.replaced_failure_kinds)
+      // The pair is distinguishable from "failed the same way twice" only because the survivor's
+      // own kind and the replaced one differ.
+      assertEquals(null, mixed.failure_kind)
+
+      val plain = resultFor("plain")
+      assertEquals(emptyList<String>(), plain.replaced_failure_kinds)
+      // Sparse by construction: an attempt was replaced, it just had nothing to classify.
+      assertEquals(1, plain.replaced_session_ids.size)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `each failure signature carries the identity of every failure behind it`() {
     val logsDir = Files.createTempDirectory("trailblaze-triage-identity").toFile()
     val outputFile = File(logsDir, "results.json")
@@ -1523,6 +1818,240 @@ class GenerateTestResultsCliCommandTest {
       assertEquals("boom", replacedSidecar.failure_reason)
       // The roll-up lives on the winner; the superseded attempt keeps its raw record.
       assertEquals(1, replacedSidecar.total_attempts)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `a test that passed then failed reports the pass, not the later failure`() {
+    // Whole-shard retry re-runs cases that already passed, so a case can pass on attempt 1 and
+    // fail on attempt 2. The pass is the verdict: the case ran what it was meant to run and the
+    // product answered correctly, which makes the later failure evidence about the rerun rather
+    // than about the product. This is the same rule `combinedVerdictOf` states when it calls any
+    // sequence containing a pass RESCUED, and the two have to agree — a row reading
+    // `outcome = FAILED` beside `combined_verdict = RESCUED` is not a verdict anyone can act on.
+    //
+    // Asserted in both orders on purpose. The rescue direction is covered by `retry sidecars keep
+    // each attempt's own outcome and put the roll-up on the winner` above; this is its mirror, and
+    // it is the one that only exists because retry re-runs passing tests.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val passedFirstSessionId = SessionId("2026_07_13_attempt_one_passed")
+      val failedLaterSessionId = SessionId("2026_07_13_attempt_two_failed")
+      val deviceInfo = webDeviceInfo()
+
+      fun writeAttempt(sessionId: SessionId, startedAt: String, ended: SessionStatus.Ended, endedAt: String) {
+        writeLog(
+          logsDir = logsDir,
+          sessionId = sessionId,
+          fileName = "001_TrailblazeSessionStatusChangeLog.json",
+          log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Started(
+              trailConfig = null,
+              trailFilePath = "trails/sample-app/checkout.trail.yaml",
+              hasRecordedSteps = false,
+              testMethodName = "checkoutTest",
+              testClassName = "WebCheckoutTest",
+              trailblazeDeviceInfo = deviceInfo,
+              trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+              rawYaml = null,
+            ),
+            session = sessionId,
+            timestamp = Instant.parse(startedAt),
+          ),
+        )
+        writeLog(
+          logsDir = logsDir,
+          sessionId = sessionId,
+          fileName = "002_TrailblazeSessionStatusChangeLog.json",
+          log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = ended,
+            session = sessionId,
+            timestamp = Instant.parse(endedAt),
+          ),
+        )
+      }
+
+      writeAttempt(
+        sessionId = passedFirstSessionId,
+        startedAt = "2026-07-13T10:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+        endedAt = "2026-07-13T10:00:05Z",
+      )
+      writeAttempt(
+        sessionId = failedLaterSessionId,
+        startedAt = "2026-07-13T10:01:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 4_000, exceptionMessage = "regressed on the rerun"),
+        endedAt = "2026-07-13T10:01:04Z",
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      // `single()` is itself the control that the two attempts really did group as one test —
+      // if they hadn't, this would be two rows and the outcome assertion below would be vacuous.
+      val kept = report.results.single()
+      // The case passed once, so the row is a pass — and carries no failure reason, since the
+      // reason belongs to the superseded attempt, not to the verdict.
+      assertEquals(Outcome.PASSED, kept.outcome)
+      assertEquals(passedFirstSessionId, kept.session_id)
+      assertNull(kept.failure_reason)
+      assertEquals(2, kept.total_attempts)
+      // The rerun's failure is not discarded — it is the only record that this case is unstable,
+      // which is what makes the row distinguishable from a clean first-try pass.
+      assertEquals(listOf(failedLaterSessionId), kept.replaced_session_ids)
+      assertEquals(listOf("regressed on the rerun"), kept.replaced_failure_reasons)
+      // And the classifier reaches the same conclusion from the same attempts.
+      assertEquals(CombinedVerdict.RESCUED, kept.combined_verdict)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `the winner carries the superseded attempt's own reason and attempt number`() {
+    // A step-level retry runs attempt 2 in a different job, so the two attempts arrive as two
+    // independent session directories. The merged row is then the ONLY place attempt 1's failure
+    // survives: if `replaced_failure_reasons` came back empty — or held some other run's text — a
+    // rescued flake would render as a clean first-try pass, which is the exact misreport the
+    // retry design must not produce.
+    //
+    // Deliberately NOT re-asserted here, because sibling tests already pin it: the merge itself
+    // (one row, winning session id, total_attempts) is covered by `retry sidecars keep each
+    // attempt's own outcome…`, and "distinct trails stay separate" by `triage report counts
+    // genuine retries…`. What neither pins is the CONTENT of the roll-up — `attempt` is asserted
+    // nowhere in the repo, and `replaced_failure_reasons` only ever reaches an assertion through a
+    // downstream count, which still passes when the list holds the wrong reason.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // The retried test: attempt 1 fails, attempt 2 passes.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_07_13_retried_attempt1"),
+        trailFilePath = "trails/sample-app/checkout.trail.yaml",
+        startedAt = "2026-07-13T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 4_000, exceptionMessage = "attempt one reason"),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_07_13_retried_attempt2"),
+        trailFilePath = "trails/sample-app/checkout.trail.yaml",
+        startedAt = "2026-07-13T10:01:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+
+      // An unrelated test that also failed, same device, same run, interleaved in time. Its reason
+      // must not be attributed to the retried test — a grouping bug that widened the key would
+      // otherwise show up as someone else's failure on the winner's roll-up.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_07_13_unrelated"),
+        trailFilePath = "trails/sample-app/search.trail.yaml",
+        startedAt = "2026-07-13T10:00:30Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 3_000, exceptionMessage = "unrelated reason"),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+
+      val winner = report.results.single { it.test_key == "sample-app/checkout" }
+      assertEquals(Outcome.PASSED, winner.outcome)
+      assertEquals(2, winner.attempt)
+      assertEquals(2, winner.total_attempts)
+      assertEquals(listOf("attempt one reason"), winner.replaced_failure_reasons)
+
+      val unrelated = report.results.single { it.test_key == "sample-app/search" }
+      assertEquals(Outcome.FAILED, unrelated.outcome)
+      assertEquals(1, unrelated.attempt)
+      assertEquals(1, unrelated.total_attempts)
+      assertEquals(emptyList<String>(), unrelated.replaced_failure_reasons)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `the retry roll-up carries the superseded attempt's agent, not just the winner's`() {
+    // Deduplication publishes one row per test, so without this the report shows only the host
+    // the retry landed on — the question the field exists to answer ("did the retry clear a
+    // wedged host, or re-run on it?") needs BOTH hosts on the surviving row.
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val failedSessionId = SessionId("2026_08_11_attempt_one")
+      val passedSessionId = SessionId("2026_08_11_attempt_two")
+      val deviceInfo = webDeviceInfo()
+
+      listOf(
+        Triple(failedSessionId, "10:00", "agent-alpha.example.internal"),
+        Triple(passedSessionId, "10:01", "agent-beta.example.internal"),
+      ).forEach { (sessionId, minute, agent) ->
+        writeLog(
+          logsDir = logsDir,
+          sessionId = sessionId,
+          fileName = "001_TrailblazeSessionStatusChangeLog.json",
+          log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Started(
+              trailConfig = null,
+              trailFilePath = "trails/sample-app/checkout.trail.yaml",
+              hasRecordedSteps = false,
+              testMethodName = "checkoutTest",
+              testClassName = "WebCheckoutTest",
+              trailblazeDeviceInfo = deviceInfo,
+              trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+              rawYaml = null,
+            ),
+            session = sessionId,
+            timestamp = Instant.parse("2026-08-11T$minute:00Z"),
+          ),
+        )
+        File(logsDir, sessionId.value).resolve(GenerateTestResultsCliCommand.HOST_CI_CONTEXT_FILENAME)
+          .writeText("""{ "ci_agent_name": "$agent" }""")
+      }
+      writeLog(
+        logsDir = logsDir,
+        sessionId = failedSessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Failed(durationMs = 4_000, exceptionMessage = "boom"),
+          session = failedSessionId,
+          timestamp = Instant.parse("2026-08-11T10:00:04Z"),
+        ),
+      )
+      writeLog(
+        logsDir = logsDir,
+        sessionId = passedSessionId,
+        fileName = "002_TrailblazeSessionStatusChangeLog.json",
+        log = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+          session = passedSessionId,
+          timestamp = Instant.parse("2026-08-11T10:01:05Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val winner = json.decodeFromString<CiSummaryReport>(outputFile.readText()).results.single()
+      assertEquals(passedSessionId, winner.session_id)
+      assertEquals("agent-beta.example.internal", winner.ci_agent_name)
+      assertEquals(listOf("agent-alpha.example.internal"), winner.replaced_agent_names)
+      // The whole point: the two differ, so this row proves the retry moved hosts.
+      assertEquals(false, winner.replaced_agent_names.contains(winner.ci_agent_name))
     } finally {
       logsDir.deleteRecursively()
     }

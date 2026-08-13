@@ -257,7 +257,7 @@ class TrailFileManagerTest {
     )
     val mgr = manager()
 
-    val (config, steps) = mgr.getEditableSteps(file.absolutePath)
+    val steps = mgr.getEditableSteps(file.absolutePath)
       ?: error("getEditableSteps returned null")
     // The trailhead is NOT an editable step — only the real prompt is.
     assertEquals(1, steps.size)
@@ -265,15 +265,42 @@ class TrailFileManagerTest {
 
     // An unrelated edit (append a step) must not drop the trailhead.
     val edited = steps + TrailFileManager.EditableStep(prompt = "Tap Confirm", type = "step", recording = null)
-    val result = mgr.saveEditedSteps(file.absolutePath, config, edited)
+    val result = mgr.saveEditedSteps(file.absolutePath, edited)
     assertTrue(result.success, "save failed: ${result.error}")
 
-    // The trailhead survives the edit. (The bare-string shorthand canonicalizes to the
-    // `{ tools: [...] }` form on re-emit — semantically identical, re-parses the same.)
-    val rewritten = file.readText()
-    assertTrue(rewritten.contains("trailhead:"), "trailhead lost on save:\n$rewritten")
-    assertTrue(rewritten.contains("myapp_freshInstall"), "trailhead tool lost on save:\n$rewritten")
-    assertTrue(rewritten.contains("Tap Confirm"), "edit not applied:\n$rewritten")
+    // The rewritten file must re-parse as a unified trail with the trailhead and the edit intact —
+    // asserted by decoding, not by substring, so a v1 re-emit (`- trailhead:`) can't pass.
+    val rewritten = createTrailblazeYaml().decodeUnifiedTrail(file.readText())
+    assertEquals("myapp_freshInstall", rewritten.trailhead?.step, "trailhead lost on save")
+    assertEquals(listOf("Tap Pay", "Tap Confirm"), rewritten.trail.map { it.step }, "edit not applied")
+  }
+
+  @Test
+  fun `editing a trail keeps per-step fields the edit API does not expose`() {
+    // `recordable: false` is a deliberate always-LLM marker and `maxRetries:` a hand-tuned budget.
+    // Neither is editable through this API, so an unrelated edit elsewhere in the trail must not
+    // reset them to their defaults.
+    val file = File(trailsDir, "flows/p2p/flags.trail.yaml")
+    file.parentFile?.mkdirs()
+    file.writeText(
+      "config:\n  target: myapp\n" +
+        "trail:\n" +
+        "  - step: Tap Pay\n    recordable: false\n" +
+        "  - step: Tap Send\n    maxRetries: 4\n",
+    )
+    val mgr = manager()
+
+    val steps = mgr.getEditableSteps(file.absolutePath) ?: error("getEditableSteps returned null")
+    // Insert a step at the front — every following step shifts, so index alignment alone would
+    // misattribute the flags.
+    val edited = listOf(TrailFileManager.EditableStep(prompt = "Open the app", type = "step", recording = null)) + steps
+    val result = mgr.saveEditedSteps(file.absolutePath, edited)
+    assertTrue(result.success, "save failed: ${result.error}")
+
+    val rewritten = createTrailblazeYaml().decodeUnifiedTrail(file.readText())
+    assertEquals(listOf("Open the app", "Tap Pay", "Tap Send"), rewritten.trail.map { it.step })
+    assertEquals(listOf(true, false, true), rewritten.trail.map { it.recordable })
+    assertEquals(listOf(null, null, 4), rewritten.trail.map { it.maxRetries })
   }
 
   // ---------------------------------------------------------------------------
@@ -325,7 +352,7 @@ class TrailFileManagerTest {
   }
 
   // ---------------------------------------------------------------------------
-  // saveTrail — unified-recordings rollout gate
+  // saveTrail — where a recording lands
   // ---------------------------------------------------------------------------
 
   // Uses a fabricated tool name (not a real classpath tool) so the OtherTrailblazeTool wrapper
@@ -342,37 +369,26 @@ class TrailFileManagerTest {
   )
 
   @Test
-  fun `saveTrail gate off writes a legacy platform sibling in a plain directory`() {
-    // Byte-identical to the pre-unified behavior: with the gate off and no unified trail present,
-    // a save lands as <platform>.trail.yaml.
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { false })
+  fun `saveTrail updates a per-classifier sibling when the directory already holds one`() {
+    // A directory that already uses per-device siblings keeps that layout — the device's own file
+    // is updated instead of forking a second shared copy. The sibling still holds unified YAML.
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, "ios.trail.yaml").writeText("config:\n  id: app/x\ntrail:\n  - step: Tap login\n")
+
+    val result = TrailFileManager(trailsDir.absolutePath)
       .saveTrail(name = "flow", steps = recordedSteps(), platform = TrailblazeDevicePlatform.ANDROID)
 
     assertTrue(result.success, "save failed: ${result.error}")
-    assertTrue(File(trailsDir, "flow/android.trail.yaml").isFile, "expected a legacy sibling")
-    assertFalse(File(trailsDir, "flow/${TrailRecordings.UNIFIED_TRAIL_FILENAME}").exists(), "no unified file when gate off")
+    val sibling = File(trailDir, "android.trail.yaml")
+    assertTrue(sibling.isFile, "expected the device's own sibling")
+    assertFalse(File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(), "no shared trail.yaml forked")
+    val step = createTrailblazeYaml().decodeUnifiedTrail(sibling.readText()).trail.single()
+    assertEquals(listOf("recordedTapCart"), step.recordings["android"]?.map { it.name })
   }
 
   @Test
-  fun `saveTrail gate off refuses to write a legacy sibling next to a unified trail`() {
-    // The refusal guard: never drop a legacy sibling into a migrated directory (the legacy write
-    // can't update the unified file, so it would only shadow it).
-    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
-    val unified = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
-      .apply { writeText("config:\n  id: app/x\ntrail:\n  - step: Tap login\n") }
-    val bytesBefore = unified.readBytes()
-
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { false })
-      .saveTrail(name = "flow", steps = recordedSteps(), platform = TrailblazeDevicePlatform.ANDROID)
-
-    assertFalse(result.success, "gate-off save must be refused next to a unified trail")
-    assertFalse(File(trailDir, "android.trail.yaml").exists(), "no legacy sibling dropped beside the unified trail")
-    assertEquals(bytesBefore.toList(), unified.readBytes().toList(), "the unified trail must be left untouched")
-  }
-
-  @Test
-  fun `saveTrail gate on merges the platform slot preserving other classifiers`() {
-    val mgr = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { true })
+  fun `saveTrail merges the platform slot preserving other classifiers`() {
+    val mgr = TrailFileManager(trailsDir.absolutePath)
     // First device seeds the unified file; second device merges into the same step.
     assertTrue(mgr.saveTrail("flow", recordedSteps("iosTap"), TrailblazeDevicePlatform.IOS).success)
     val result = mgr.saveTrail("flow", recordedSteps("androidTap"), TrailblazeDevicePlatform.ANDROID)
@@ -380,18 +396,18 @@ class TrailFileManagerTest {
     assertTrue(result.success, "merge save failed: ${result.error}")
     val unifiedFile = File(trailsDir, "flow/${TrailRecordings.UNIFIED_TRAIL_FILENAME}")
     assertTrue(unifiedFile.isFile, "the platform slot must merge into the unified trail.yaml")
-    assertFalse(File(trailsDir, "flow/android.trail.yaml").exists(), "no legacy sibling when routing unified")
+    assertFalse(File(trailsDir, "flow/android.trail.yaml").exists(), "no sibling when routing unified")
     val step = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()).trail.single()
     assertEquals(listOf("iosTap"), step.recordings["ios"]?.map { it.name }, "ios slot preserved")
     assertEquals(listOf("androidTap"), step.recordings["android"]?.map { it.name }, "android slot merged in")
   }
 
   @Test
-  fun `saveTrail gate on refuses a corrupt existing unified trail untouched`() {
+  fun `saveTrail refuses a corrupt existing unified trail untouched`() {
     val trailDir = File(trailsDir, "flow").apply { mkdirs() }
     val corrupt = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
 
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { true })
+    val result = TrailFileManager(trailsDir.absolutePath)
       .saveTrail(name = "flow", steps = recordedSteps(), platform = TrailblazeDevicePlatform.ANDROID)
 
     assertFalse(result.success, "a corrupt unified trail must not be clobbered by a merge")
@@ -418,47 +434,59 @@ class TrailFileManagerTest {
   )
 
   @Test
-  fun `saveTrailItems gate off writes the encoded items verbatim as a legacy sibling`() {
-    val items = recordedTrailItems()
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { false })
-      .saveTrailItems(name = "flow", recordedItems = items, platform = TrailblazeDevicePlatform.ANDROID)
+  fun `saveTrailItems writes a unified per-classifier sibling in a siblings directory`() {
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, "ios.trail.yaml").writeText("config:\n  id: app/x\ntrail:\n  - step: Tap login\n")
+
+    val result = TrailFileManager(trailsDir.absolutePath)
+      .saveTrailItems(name = "flow", recordedItems = recordedTrailItems(), platform = TrailblazeDevicePlatform.ANDROID)
 
     assertTrue(result.success, "save failed: ${result.error}")
-    val legacy = File(trailsDir, "flow/android.trail.yaml")
-    assertTrue(legacy.isFile, "expected the legacy sibling")
-    assertEquals(
-      createTrailblazeYaml().encodeToString(items),
-      legacy.readText(),
-      "the items-direct legacy write must be byte-identical to encoding the items",
-    )
+    val sibling = File(trailDir, "android.trail.yaml")
+    assertTrue(sibling.isFile, "expected the device's own sibling")
+    val step = createTrailblazeYaml().decodeUnifiedTrail(sibling.readText()).trail.single()
+    assertEquals(listOf("recordedTapCart"), step.recordings["android"]?.map { it.name })
   }
 
   @Test
-  fun `saveTrailItems gate on merges the platform slot into the unified trail`() {
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { true })
+  fun `saveTrailItems merges the platform slot into the unified trail`() {
+    val result = TrailFileManager(trailsDir.absolutePath)
       .saveTrailItems(name = "flow", recordedItems = recordedTrailItems("androidTap"), platform = TrailblazeDevicePlatform.ANDROID)
 
     assertTrue(result.success, "merge save failed: ${result.error}")
     val unifiedFile = File(trailsDir, "flow/${TrailRecordings.UNIFIED_TRAIL_FILENAME}")
     assertTrue(unifiedFile.isFile, "the platform slot must merge into the unified trail.yaml")
-    assertFalse(File(trailsDir, "flow/android.trail.yaml").exists(), "no legacy sibling when routing unified")
+    assertFalse(File(trailsDir, "flow/android.trail.yaml").exists(), "no sibling when routing unified")
     val step = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()).trail.single()
     assertEquals(listOf("androidTap"), step.recordings["android"]?.map { it.name })
   }
 
   @Test
-  fun `saveTrail with no platform never writes the reserved trail-yaml name`() {
-    // A null platform (no bound device) has no classifier, so it takes the legacy path. It must land
-    // as the classifier-agnostic `recording.trail.yaml`, NOT the reserved unified `trail.yaml` — a v1
-    // file named `trail.yaml` would masquerade as unified and poison the directory for later saves.
-    val result = TrailFileManager(trailsDir.absolutePath, unifiedRecordingsEnabled = { false })
+  fun `saveTrailItems refuses zero-step items on the sibling route, same as the shared-trail route`() {
+    // The sibling route used to render directly and skip the shared writer's invariants, so items
+    // that lower to no steps planted a config-only, zero-step trail and reported success — while
+    // the identical input was refused on the shared-trail route. Both go through renderStandalone.
+    val trailDir = File(trailsDir, "flow").apply { mkdirs() }
+    File(trailDir, "ios.trail.yaml").writeText("config:\n  id: app/x\ntrail:\n  - step: Tap login\n")
+    val configOnly = listOf(TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app")))
+
+    val result = TrailFileManager(trailsDir.absolutePath)
+      .saveTrailItems(name = "flow", recordedItems = configOnly, platform = TrailblazeDevicePlatform.ANDROID)
+
+    assertFalse(result.success, "a zero-step recording must not be planted as a no-op trail")
+    assertFalse(File(trailDir, "android.trail.yaml").exists(), "nothing written")
+  }
+
+  @Test
+  fun `saveTrail with no platform is refused rather than written to an unkeyed slot`() {
+    // A null platform (no bound device) has no classifier, and a unified trail keys each device's
+    // tools under a classifier slot — so there is nothing to key on. Refuse with an actionable
+    // error instead of writing a file whose recordings can never be resolved at replay time.
+    val result = TrailFileManager(trailsDir.absolutePath)
       .saveTrail(name = "flow", steps = recordedSteps(), platform = null)
 
-    assertTrue(result.success, "save failed: ${result.error}")
-    assertTrue(File(trailsDir, "flow/recording.trail.yaml").isFile, "expected the classifier-agnostic sibling")
-    assertFalse(
-      File(trailsDir, "flow/${TrailRecordings.UNIFIED_TRAIL_FILENAME}").exists(),
-      "a v1 save must never occupy the reserved unified trail.yaml name",
-    )
+    assertFalse(result.success, "a classifier-less save must be refused")
+    assertTrue(result.error!!.contains("device platform"), "unhelpful error: ${result.error}")
+    assertFalse(File(trailsDir, "flow").exists(), "nothing written for a refused save")
   }
 }

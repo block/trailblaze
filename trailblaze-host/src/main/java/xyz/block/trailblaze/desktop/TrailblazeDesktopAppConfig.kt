@@ -175,12 +175,11 @@ abstract class TrailblazeDesktopAppConfig(
    * schema, and scripted-tool lookups follow the trails directory the user picks in settings
    * rather than whatever directory the daemon happened to launch from.
    *
-   * The `config/` subdir itself is NOT required to exist: a brand-new workspace has nothing
-   * authored yet, and Trail Runner's Create Target flow must be able to scaffold
-   * `trails/config/trailmaps/<id>/` inside it (`ToolSourceFiles.newTrailmapBaseDir`). Only the
-   * trails directory itself must be real — a bogus/unset setting still resolves to null. Every
-   * read-side consumer of [WorkspaceConfigDirHolder] applies its own `isDirectory` /
-   * file-exists guard, so a not-yet-created dir degrades to the same empty results null did.
+   * Both workspace layouts are honored — see [resolveWorkspaceConfigDir] for the resolution
+   * rules. Only the trails directory itself must be real — a bogus/unset setting still resolves
+   * to null. Every read-side consumer of [WorkspaceConfigDirHolder] applies its own
+   * `isDirectory` / file-exists guard, so a not-yet-created dir degrades to the same empty
+   * results null did.
    */
   fun workspaceConfigDirOrNull(): File? {
     System.getenv(TrailblazeWorkspaceConfigResolver.CONFIG_DIR_ENV_VAR)
@@ -191,7 +190,8 @@ abstract class TrailblazeDesktopAppConfig(
     val trailsDir = File(
       TrailblazeDesktopUtil.getEffectiveTrailsDirectory(trailblazeSettingsRepo.serverStateFlow.value.appConfig),
     )
-    return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR).takeIf { trailsDir.isDirectory }
+    if (!trailsDir.isDirectory) return null
+    return resolveWorkspaceConfigDir(trailsDir)
   }
 
   /**
@@ -543,3 +543,33 @@ internal fun resolveSavedModelWithinProvider(
   providerDefaultModelId: String?,
 ): TrailblazeLlmModel? = entries.firstOrNull { it.modelId == savedModelId }
   ?: providerDefaultModelId?.let { defaultId -> entries.firstOrNull { it.modelId == defaultId } }
+
+/**
+ * Resolves the workspace config directory for a picked trails directory, honoring both
+ * workspace layouts. Resolution order:
+ *
+ *  1. A standalone `trailblaze-config/` inside [trailsDir] or as its sibling, existence alone
+ *     sufficing — the picked dir is the workspace root or one level under it, and a
+ *     freshly-scaffolded standalone workspace may not have authored `trailblaze.yaml` yet.
+ *  2. A standalone `trailblaze-config/` at any higher ancestor, but only when it carries the
+ *     `trailblaze.yaml` workspace anchor — the picked dir may be a trail library nested deep in
+ *     a standalone workspace (that's the layout's point), and requiring the anchor keeps a
+ *     stray same-named directory further up from hijacking the workspace.
+ *  3. The legacy `<trailsDir>/config` — NOT required to exist: a brand-new workspace has
+ *     nothing authored yet, and Trail Runner's Create Target flow must be able to scaffold
+ *     `trails/config/trailmaps/<id>/` inside it (`ToolSourceFiles.newTrailmapBaseDir`).
+ *
+ * Pure over the filesystem (no settings/env reads) so it's unit-testable with temp dirs.
+ */
+internal fun resolveWorkspaceConfigDir(trailsDir: File): File {
+  var ancestor: File? = trailsDir
+  var depth = 0
+  while (ancestor != null) {
+    val standalone = File(ancestor, TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR)
+    val anchored = File(standalone, TrailblazeConfigPaths.CONFIG_FILENAME).isFile
+    if (standalone.isDirectory && (depth <= 1 || anchored)) return standalone
+    ancestor = ancestor.parentFile
+    depth++
+  }
+  return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR)
+}

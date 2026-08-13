@@ -5,6 +5,7 @@
 :trailblaze-models
 :trailblaze-ondevice-rpc-proto
 :trailblaze-quickjs-tools
+:trailblaze-scripting-fetch
 :trailblaze-tracing
 ai.koog:agents-core-android:1.0.0
 ai.koog:agents-core:1.0.0

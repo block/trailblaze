@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -406,41 +407,107 @@ class RunReportGeneratorTest {
   }
 
   @Test
-  fun stripHeavyLogFields_dropsOnlyTheViewHierarchyFieldsAndKeepsEverythingElse() {
+  fun slimViewHierarchyFields_keepsTheFieldTheRendererReadsAndDropsTheRedundantSiblings() {
     val record = buildJsonObject {
       put("type", "AgentDriverLog")
       put("timestamp", "2026-06-26T12:00:00Z")
-      put("viewHierarchyFiltered", "…hundreds of KB…")
+      put("viewHierarchyFiltered", "…the one the renderer reads…")
       put("trailblazeNodeTree", "…more KB…")
       put("viewHierarchy", "…raw dump…")
       put("screenshotFile", "001.png")
     }
 
-    val stripped = RunReportGenerator.stripHeavyLogFields(record) as JsonObject
+    val slimmed = RunReportGenerator.slimViewHierarchyFields(record) as JsonObject
 
-    // Every heavy field gone; every other field byte-identical and in original order.
-    assertEquals(listOf("type", "timestamp", "screenshotFile"), stripped.keys.toList())
-    assertEquals("AgentDriverLog", stripped["type"]?.jsonPrimitive?.content)
-    assertEquals("001.png", stripped["screenshotFile"]?.jsonPrimitive?.content)
+    // The renderer's first-priority field survives (it feeds the UI Inspector); the redundant
+    // siblings are gone; every other field byte-identical and in original order.
+    assertEquals(listOf("type", "timestamp", "viewHierarchyFiltered", "screenshotFile"), slimmed.keys.toList())
+    assertEquals("…the one the renderer reads…", slimmed["viewHierarchyFiltered"]?.jsonPrimitive?.content)
+    assertEquals("AgentDriverLog", slimmed["type"]?.jsonPrimitive?.content)
+    assertEquals("001.png", slimmed["screenshotFile"]?.jsonPrimitive?.content)
   }
 
   @Test
-  fun stripHeavyLogFields_returnsRecordsWithoutHeavyFieldsUnchanged() {
+  fun slimViewHierarchyFields_followsTheRendererPriorityWhenTheFilteredFieldIsAbsent() {
     val record = buildJsonObject {
+      put("trailblazeNodeTree", "…node tree…")
+      put("viewHierarchy", "…raw dump…")
+    }
+
+    val slimmed = RunReportGenerator.slimViewHierarchyFields(record) as JsonObject
+
+    assertEquals(listOf("trailblazeNodeTree"), slimmed.keys.toList())
+  }
+
+  @Test
+  fun slimViewHierarchyFields_treatsAJsonNullFieldAsAbsentAndKeepsTheFirstPopulatedOne() {
+    // The extractor reads `viewHierarchyFiltered || trailblazeNodeTree || viewHierarchy`, so a
+    // JSON-null higher-priority key would have fallen through — keeping it (and deleting the
+    // populated tree) would silently lose the inspector for the step.
+    val record = buildJsonObject {
+      put("type", "AgentDriverLog")
+      put("viewHierarchyFiltered", JsonNull)
+      put("trailblazeNodeTree", "…the tree the renderer would read…")
+      put("viewHierarchy", "…raw dump…")
+    }
+
+    val slimmed = RunReportGenerator.slimViewHierarchyFields(record) as JsonObject
+
+    assertEquals(listOf("type", "trailblazeNodeTree"), slimmed.keys.toList())
+    assertEquals("…the tree the renderer would read…", slimmed["trailblazeNodeTree"]?.jsonPrimitive?.content)
+
+    // All hierarchy fields null/absent → nothing usable to keep; same instance back.
+    val allNull = buildJsonObject {
+      put("type", "AgentDriverLog")
+      put("viewHierarchyFiltered", JsonNull)
+    }
+    assertTrue(RunReportGenerator.slimViewHierarchyFields(allNull) === allNull)
+  }
+
+  @Test
+  fun slimViewHierarchyFields_returnsRecordsWithAtMostOneHierarchyFieldUnchanged() {
+    val noHierarchy = buildJsonObject {
       put("type", "TrailblazeSessionStatusChangeLog")
       put("timestamp", "2026-06-26T12:00:00Z")
     }
+    // No hierarchy field present → same instance back (no reallocation).
+    assertTrue(RunReportGenerator.slimViewHierarchyFields(noHierarchy) === noHierarchy)
 
-    // No heavy field present → same instance back (no reallocation).
-    assertTrue(RunReportGenerator.stripHeavyLogFields(record) === record)
+    // Exactly one hierarchy field present → also unchanged: it's the one the renderer reads.
+    val single = buildJsonObject {
+      put("type", "AgentDriverLog")
+      put("viewHierarchy", "…raw dump…")
+    }
+    assertTrue(RunReportGenerator.slimViewHierarchyFields(single) === single)
   }
 
   @Test
-  fun stripHeavyLogFields_leavesNonObjectElementsUntouched() {
+  fun dropViewHierarchyFields_removesEveryHierarchyFieldForTheProfilerPath() {
+    // PerformanceAnalysisGenerator reads only timestamps/durations/metadata — even the one field
+    // the run report keeps is dead payload on that bun boundary.
+    val record = buildJsonObject {
+      put("type", "AgentDriverLog")
+      put("timestamp", "2026-06-26T12:00:00Z")
+      put("viewHierarchyFiltered", "…filtered…")
+      put("trailblazeNodeTree", "…tree…")
+      put("viewHierarchy", "…raw…")
+    }
+
+    val dropped = RunReportGenerator.dropViewHierarchyFields(record) as JsonObject
+
+    assertEquals(listOf("type", "timestamp"), dropped.keys.toList())
+
+    // No hierarchy fields → same instance back (no reallocation).
+    val plain = buildJsonObject { put("type", "TrailblazeLlmRequestLog") }
+    assertTrue(RunReportGenerator.dropViewHierarchyFields(plain) === plain)
+  }
+
+  @Test
+  fun slimViewHierarchyFields_leavesNonObjectElementsUntouched() {
     val scalar: JsonPrimitive = JsonPrimitive("not an object")
-    assertTrue(RunReportGenerator.stripHeavyLogFields(scalar) === scalar)
+    assertTrue(RunReportGenerator.slimViewHierarchyFields(scalar) === scalar)
 
     val array = JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(2)))
-    assertTrue(RunReportGenerator.stripHeavyLogFields(array) === array)
+    assertTrue(RunReportGenerator.slimViewHierarchyFields(array) === array)
   }
 }

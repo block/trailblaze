@@ -135,3 +135,7 @@ bun.lockb
 # (Deliberately NOT under docs/generated/, which scripts/generate-docs-and-diff.sh wipes
 # and reproducibility-checks.)
 docs/report-assets/*/
+# Hosted standalone report viewer (docs/report-viewer/index.html): generated at docs-build
+# time by scripts/build-viewer-shell.sh, or stood in for by docs_hooks.py when bun is absent.
+# Never committed — it's a build artifact of the report sources.
+docs/report-viewer/

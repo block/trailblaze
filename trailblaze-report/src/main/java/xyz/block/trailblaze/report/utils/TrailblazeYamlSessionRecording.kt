@@ -6,39 +6,25 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedTrailItems as generateRecordedTrailItemsCommon
-import xyz.block.trailblaze.yaml.generateRecordedYaml as generateRecordedYamlCommon
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml as generateUnifiedRecordedYamlCommon
 
 /**
  * JVM entry point for generating the YAML representation of a Trailblaze session recording.
  *
- * Delegates to the KMP-compatible [generateRecordedYamlCommon] implementation in commonMain,
+ * Delegates to the KMP-compatible [generateUnifiedRecordedYamlCommon] implementation in commonMain,
  * adding JVM-specific support for custom tool classes via reflection.
  */
 object TrailblazeYamlSessionRecording {
 
-  fun List<TrailblazeLog>.generateRecordedYaml(
-    sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null,
-    customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
-  ): String {
-    val trailblazeYaml = createTrailblazeYaml(
-      customTrailblazeToolClasses = customToolClasses,
-    )
-    return generateRecordedYamlCommon(
-      trailblazeYaml = trailblazeYaml,
-      sessionTrailConfig = sessionTrailConfig,
-    )
-  }
-
   /**
-   * Like [generateRecordedYaml] but renders the recording in the unified `trail.yaml` shape
-   * (`config:`/`trailhead:`/`trail:` with per-classifier `recordings:`) — the format the save path
-   * writes to disk. For a session with no resolvable device classifier this falls back to the v1
-   * list shape.
+   * Renders the recording as a unified `trail.yaml` document (`config:`/`trailhead:`/`trail:` with
+   * per-classifier `recordings:`) — the same format the save path writes to disk. Blank when the
+   * session has no resolvable device classifier to key the recording slot on.
    */
   fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null,
     customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
+    classifierOverride: String? = null,
   ): String {
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -46,6 +32,7 @@ object TrailblazeYamlSessionRecording {
     return generateUnifiedRecordedYamlCommon(
       trailblazeYaml = trailblazeYaml,
       sessionTrailConfig = sessionTrailConfig,
+      classifierOverride = classifierOverride,
     )
   }
 

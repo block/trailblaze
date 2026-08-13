@@ -77,11 +77,9 @@ import xyz.block.trailblaze.util.Console
 fun SessionDetailComposable(
   sessionDetail: SessionDetail,
   toMaestroYaml: (JsonObject) -> String = { it.toString() },
-  generateRecordingYaml: () -> String,
   // Renders the recording in the unified `trail.yaml` shape for DISPLAY + Copy, so the preview
-  // matches what the save path writes to disk. `generateRecordingYaml` (v1 list shape) is still
-  // the string shown/copied when this is null. Null falls back to showing the v1 string.
-  generateUnifiedRecordingYaml: (() -> String)? = null,
+  // matches what the save path writes to disk.
+  generateRecordingYaml: () -> String,
   // The lowered trail items the Save button feeds to the repo. Passing items (not a v1 string)
   // keeps the save-back off the v1 parser. Null disables saving even when a repo is present.
   generateRecordingItems: (() -> List<TrailYamlItem>)? = null,
@@ -166,8 +164,6 @@ fun SessionDetailComposable(
     // Pre-compute heavy operations in background threads and cache results
     var llmUsageSummary by remember { mutableStateOf<LlmSessionUsageAndCost?>(null) }
     var recordingYamlCache by remember { mutableStateOf<String?>(null) }
-    // Unified-shape rendering for display + Copy (null until computed / when no unified renderer).
-    var unifiedRecordingYamlCache by remember { mutableStateOf<String?>(null) }
     // Lowered items the Save button feeds to the repo (null until computed / when saving disabled).
     var recordingItemsCache by remember { mutableStateOf<List<TrailYamlItem>?>(null) }
     var isLoadingRecordingYaml by remember { mutableStateOf(true) }
@@ -187,15 +183,10 @@ fun SessionDetailComposable(
       // Compute off-main, then assign Compose state on the effect's (main-dispatched) coroutine —
       // writing snapshot state from Dispatchers.Default risks partial/torn UI updates.
       val computed = withContext(Dispatchers.Default) {
-        Triple(
-          generateRecordingYaml(),
-          generateUnifiedRecordingYaml?.invoke(),
-          generateRecordingItems?.invoke(),
-        )
+        generateRecordingYaml() to generateRecordingItems?.invoke()
       }
       recordingYamlCache = computed.first
-      unifiedRecordingYamlCache = computed.second
-      recordingItemsCache = computed.third
+      recordingItemsCache = computed.second
       isLoadingRecordingYaml = false
     }
 
@@ -419,8 +410,7 @@ fun SessionDetailComposable(
                                 onClick = {
                                   clipboardManager.setText(
                                     AnnotatedString(
-                                      unifiedRecordingYamlCache?.ifBlank { null }
-                                        ?: recordingYamlCache ?: "",
+                                      recordingYamlCache ?: "",
                                     )
                                   )
                                 }
@@ -554,8 +544,7 @@ fun SessionDetailComposable(
                           CodeBlock(
                             // Blank (not just null) means unified rendering failed — fall back to
                             // the v1 string so the tab never shows an empty recording.
-                            text = unifiedRecordingYamlCache?.ifBlank { null }
-                              ?: recordingYamlCache ?: "",
+                            text = recordingYamlCache ?: "",
                             textStyle = MaterialTheme.typography.labelSmall.copy(
                               fontSize = MaterialTheme.typography.labelSmall.fontSize * fontSizeScale
                             )

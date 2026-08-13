@@ -29,10 +29,10 @@ import xyz.block.trailblaze.yaml.TrailheadDefinition
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
- * Contract tests for the desktop recording tab's save path under the unified-recordings rollout
- * gate. Gate off keeps the legacy `<classifier>.trail.yaml` write byte-identical for a plain
- * directory and refuses to shadow a migrated one; gate on merges the classifier slot into the
- * unified `trail.yaml`. The gate is injected, so these need no daemon or persisted config.
+ * Contract tests for the desktop recording tab's save path. Every destination holds unified YAML —
+ * the routing choice is only which FILE: a directory that already uses per-classifier siblings gets
+ * the device's own `<classifier>.trail.yaml`, everything else merges the classifier slot into the
+ * shared `trail.yaml`. Runs against a temp directory; no daemon or persisted config needed.
  */
 class RecordedTrailsRepoJvmTest {
 
@@ -41,38 +41,25 @@ class RecordedTrailsRepoJvmTest {
   private val trailsRoot: File get() = tempFolder.root
 
   @Test
-  fun `gate off writes a legacy classifier sibling in a plain trail directory`() {
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { false })
-
-    val items = recordingItems("tapCart")
-    val result = repo.saveRecording(items, sessionInfo("flows/login", listOf("android")))
-
-    assertTrue(result.isSuccess, "save failed: ${result.exceptionOrNull()?.message}")
-    val legacy = File(trailsRoot, "flows/login/android.trail.yaml")
-    assertTrue(legacy.isFile, "expected the legacy sibling")
-    assertFalse(File(trailsRoot, "flows/login/${TrailRecordings.UNIFIED_TRAIL_FILENAME}").exists())
-    // The legacy write re-encodes the lowered items to the v1 list shape (no parse round-trip).
-    assertEquals(createTrailblazeYaml().encodeToString(items), legacy.readText())
-  }
-
-  @Test
-  fun `gate off refuses to write a legacy sibling next to a unified trail`() {
+  fun `a directory that already holds per-classifier siblings gets this device's own file`() {
     val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
-    val unified = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
-      .apply { writeText("config:\n  id: flows/login\ntrail:\n  - step: Open the cart\n") }
-    val bytesBefore = unified.readBytes()
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { false })
+    File(trailDir, "ios.trail.yaml").writeText("config:\n  id: flows/login\ntrail:\n  - step: Open the cart\n")
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
 
     val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo("flows/login", listOf("android")))
 
-    assertTrue(result.isFailure, "gate-off save must be refused next to a unified trail")
-    assertFalse(File(trailDir, "android.trail.yaml").exists(), "no legacy sibling dropped beside the unified trail")
-    assertEquals(bytesBefore.toList(), unified.readBytes().toList(), "the unified trail must be left untouched")
+    assertTrue(result.isSuccess, "save failed: ${result.exceptionOrNull()?.message}")
+    val sibling = File(trailDir, "android.trail.yaml")
+    assertTrue(sibling.isFile, "expected the device's own sibling")
+    assertFalse(File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(), "no shared trail.yaml forked")
+    // The sibling is itself a unified document holding just this device's slot.
+    val step = createTrailblazeYaml().decodeUnifiedTrail(sibling.readText()).trail.single()
+    assertEquals(listOf("tapCart"), step.recordings["android"]?.map { it.name })
   }
 
   @Test
-  fun `gate on merges the classifier slot preserving other classifiers`() {
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
+  fun `merges the classifier slot preserving other classifiers`() {
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
     // First device seeds the unified file; second device merges into the same step.
     assertTrue(repo.saveRecording(recordingItems("iosCart"), sessionInfo("flows/login", listOf("ios"))).isSuccess)
 
@@ -81,17 +68,17 @@ class RecordedTrailsRepoJvmTest {
     assertTrue(result.isSuccess, "merge save failed: ${result.exceptionOrNull()?.message}")
     val unifiedFile = File(trailsRoot, "flows/login/${TrailRecordings.UNIFIED_TRAIL_FILENAME}")
     assertTrue(unifiedFile.isFile, "the classifier slot must merge into the unified trail.yaml")
-    assertFalse(File(trailsRoot, "flows/login/android.trail.yaml").exists(), "no legacy sibling when routing unified")
+    assertFalse(File(trailsRoot, "flows/login/android.trail.yaml").exists(), "no sibling when routing unified")
     val step = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText()).trail.single()
     assertEquals(listOf("iosCart"), step.recordings["ios"]?.map { it.name }, "ios slot preserved")
     assertEquals(listOf("androidCart"), step.recordings["android"]?.map { it.name }, "android slot merged in")
   }
 
   @Test
-  fun `gate on refuses a corrupt existing unified trail untouched`() {
+  fun `refuses a corrupt existing unified trail untouched`() {
     val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
     val corrupt = File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
 
     val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo("flows/login", listOf("android")))
 
@@ -100,28 +87,28 @@ class RecordedTrailsRepoJvmTest {
   }
 
   @Test
-  fun `gate on refuses a multi-tool-trailhead recording that would shadow a unified trail`() {
-    // A recording whose trailhead has >1 tool can't be represented in the unified format. When a
-    // unified trail already exists here, dropping a legacy sibling would shadow it — refuse instead.
+  fun `refuses a multi-tool-trailhead recording rather than writing a shadowing sibling`() {
+    // A recording whose trailhead has >1 tool can't be represented in the unified format, and a
+    // sibling dropped here would shadow the existing unified trail — refuse instead.
     val trailDir = File(trailsRoot, "flows/login").apply { mkdirs() }
     File(trailDir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
       .writeText("config:\n  id: flows/login\ntrail:\n  - step: Open the cart\n")
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
 
     val result = repo.saveRecording(
       recordingItemsWithMultiToolTrailhead(listOf("clearBootstrap", "openBootstrap")),
       sessionInfo("flows/login", listOf("android")),
     )
 
-    assertTrue(result.isFailure, "a multi-tool trailhead must not drop a legacy sibling next to a unified trail")
-    assertFalse(File(trailDir, "android.trail.yaml").exists(), "no shadowing legacy sibling")
+    assertTrue(result.isFailure, "a multi-tool trailhead must not drop a sibling next to a unified trail")
+    assertFalse(File(trailDir, "android.trail.yaml").exists(), "no shadowing sibling")
   }
 
   @Test
   fun `null trail id writes a session-scoped file without routing`() {
-    // No trail identity → the session-scoped fallback (byte-identical to pre-unified), never routed
-    // and never occupying a per-test unified trail.yaml.
-    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot, unifiedRecordingsEnabledProvider = { true })
+    // No trail identity → the session-scoped fallback: never routed, never occupying a per-test
+    // unified trail.yaml.
+    val repo = RecordedTrailsRepoJvm(trailsDirectory = trailsRoot)
 
     val result = repo.saveRecording(recordingItems("tapCart"), sessionInfo(trailId = null, classifiers = listOf("android")))
 

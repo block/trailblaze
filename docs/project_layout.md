@@ -48,11 +48,20 @@ my-project/
             └── trail.yaml   ← NL-only until a recording is saved into it
 ```
 
-`trails/` is the workspace anchor. Trailblaze walks up from the current directory (or the
-directory containing the trail you invoke) until it finds `trails/config/trailblaze.yaml`;
-the owning `trails/` directory becomes the workspace root. Trails live under that
-directory, and config refs inside `trails/config/trailblaze.yaml` resolve relative to
-`trails/config/`. The authored unit inside that config directory is now usually a
+The workspace anchor is a `trailblaze.yaml` inside the workspace config directory.
+Trailblaze walks up from the current directory (or the directory containing the trail
+you invoke) until it finds one, checking two config-dir layouts at each ancestor:
+
+- **`trailblaze-config/trailblaze.yaml`** — the standalone layout: the config dir sits
+  directly under the workspace root, and trails can live anywhere in the workspace
+  (e.g. next to the features they cover).
+- **`trails/config/trailblaze.yaml`** — the legacy layout: the config dir lives inside a
+  top-level `trails/` directory that also holds the trail library.
+
+The closest ancestor with either layout wins. If both exist at the same ancestor,
+`trailblaze-config/` takes precedence and the CLI prints a warning asking you to
+consolidate. Config refs inside `trailblaze.yaml` resolve relative to the config
+directory it sits in. The authored unit inside that config directory is now usually a
 `trailmaps/<id>/trailmap.yaml`; flat `targets/*.yaml` files still work as a compatibility path.
 
 See [Trailmaps](trailmaps.md) for the trailmap manifest schema, per-file scripted-tool YAMLs, and the
@@ -183,9 +192,11 @@ Both paths run the same files in the same order.
 ## Common questions
 
 **Do I need a `trails/` directory?**
-No for a one-off trail file you run directly by path. Yes if you want the current
-project-level workspace model: `trails/` is the anchor directory, and
-`trails/config/trailblaze.yaml` is how Trailblaze discovers project config automatically.
+No. A one-off trail file runs directly by path with no workspace at all, and a workspace
+that keeps its trails elsewhere (e.g. next to features) can anchor its config in a
+standalone `trailblaze-config/` directory at the workspace root instead. The top-level
+`trails/` directory with `trails/config/trailblaze.yaml` remains fully supported as the
+legacy layout.
 
 **Can I organize by feature?**
 Yes, and it's often clearer. Put a trail next to the code it covers (e.g., `features/checkout/trail.yaml`) and run it with `trailblaze run features/checkout/trail.yaml`, point the CLI at the directory (`trailblaze run features/checkout/`), or glob the whole tree with `trailblaze run features/**/trail.yaml`.
@@ -197,4 +208,4 @@ No — `trailblaze run` takes file paths, shell globs, or directory paths, not n
 It's not an excluded directory (`.cache` isn't in the hardcoded list), so it should be picked up. If it isn't, check that the file actually ends in `.trail.yaml` or is named exactly `trail.yaml` or `blaze.yaml`, and that no ancestor directory is one of the excluded names (`build/`, `.gradle/`, `.git/`, `node_modules/`, `.trailblaze/`, `.claude/`).
 
 **Where do recordings get saved?**
-By default, alongside the trail they replay. For a unified `trail.yaml`, a passing run's recording merges into that same file as the device's classifier slot — while the unified save default rolls out, opt in with `trailblaze config unified-recordings true` (or `TRAILBLAZE_UNIFIED_RECORDINGS=1`). Legacy trails get a per-device `<classifier>.trail.yaml` sibling. Pass `--no-record` to skip.
+By default, alongside the trail they replay: a passing run's recording merges into the trail's `trail.yaml` as that device's classifier slot. A directory that keeps one file per device instead gets the recording in that device's own `<classifier>.trail.yaml`. Pass `--no-record` to skip.

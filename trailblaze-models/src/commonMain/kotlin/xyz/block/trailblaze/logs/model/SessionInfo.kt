@@ -63,9 +63,9 @@ data class SessionInfo(
   @Transient
   val displayName: String = run {
     val displayTestClass = testClass
-      ?.takeIf { it.trim().uppercase() != MCP_TEST_CLASS_NAME }
-    trailConfig?.title
-      ?: trailConfig?.id
+      ?.takeIf { it.isNotBlank() && it.trim().uppercase() != MCP_TEST_CLASS_NAME }
+    trailConfig?.title?.takeIf { it.isNotBlank() }
+      ?: trailConfig?.id?.takeIf { it.isNotBlank() }
       ?: trailFilePath?.takeIf { it.isNotBlank() }?.let { TrailRecordings.shortTrailName(it) }
       ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
         displayTestClass?.let { cls -> "$cls:$name" } ?: name
@@ -88,9 +88,16 @@ data class SessionInfo(
    * `trailFilePath` is preferred over `testClass:testName` because some YAML runners emit fixed
    * class/method pairs (e.g. `HostAccessibilityV3:run`) that would otherwise collapse unrelated
    * trails into a single group.
+   *
+   * Every tier is blank-guarded, so this is never the empty string — only [sessionId] is
+   * unconditional. A blank tier that resolved would be far worse than a missing one: consumers
+   * group on this key, and `?:` / jq's `//` both treat `""` as a present value, so every session
+   * carrying it would collapse into a single group and take the losers' verdicts with it.
+   * `trailConfig.id` is author-supplied YAML (`id:` with nothing after it), which is why it needs
+   * the guard as much as the derived tiers do.
    */
   @Transient
-  val stableTestKey: String = trailConfig?.id
+  val stableTestKey: String = trailConfig?.id?.takeIf { it.isNotBlank() }
     ?: trailFilePath?.takeIf { it.isNotBlank() }?.let { TrailRecordings.shortTrailName(it) }
     ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
       testClass?.let { cls -> "$cls:$name" } ?: name

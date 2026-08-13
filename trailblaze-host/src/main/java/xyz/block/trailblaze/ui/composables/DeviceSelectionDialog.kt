@@ -145,6 +145,47 @@ internal fun initialRunDeviceSelection(
 }
 
 /**
+ * What the device picker's selection is scoped to: the target app being run and the platforms the
+ * trail declares. Deliberately NOT the device list — see the comment at its use site.
+ *
+ * Exists so the seed, the user-edited guard, and the selection itself can't drift apart by keying
+ * on different things; keyed by target *id* so an unrelated edit to the target's contents doesn't
+ * discard the user's device choice.
+ */
+internal data class SelectionScopeKey(
+  val targetAppId: String?,
+  val trailPlatforms: Set<TrailblazeDevicePlatform>?,
+) {
+  constructor(
+    targetApp: TrailblazeHostAppTarget?,
+    trailPlatforms: Set<TrailblazeDevicePlatform>?,
+  ) : this(targetApp?.id, trailPlatforms)
+}
+
+/**
+ * What the selection becomes when eligibility changes — inventory lands per device, seconds after
+ * the dialog opens, so devices flip ineligible→eligible one at a time.
+ *
+ * Before the user has touched a checkbox, re-seed from the last-used list so a device whose probe
+ * was slow still gets pre-checked. After that, only reconcile (drop what became ineligible): a late
+ * probe must never discard a real choice, because the result is persisted.
+ */
+internal fun selectionAfterEligibilityChange(
+  currentSelection: Set<TrailblazeConnectedDeviceSummary>,
+  availableDevices: List<TrailblazeConnectedDeviceSummary>,
+  seedDeviceInstanceIds: List<String>,
+  trailPlatforms: Set<TrailblazeDevicePlatform>?,
+  eligibleDeviceIds: Set<TrailblazeDeviceId>,
+  userEditedSelection: Boolean,
+): Set<TrailblazeConnectedDeviceSummary> = if (userEditedSelection) {
+  currentSelection.filterTo(mutableSetOf()) { it.trailblazeDeviceId in eligibleDeviceIds }
+} else {
+  initialRunDeviceSelection(availableDevices, seedDeviceInstanceIds, trailPlatforms) { device ->
+    device.trailblazeDeviceId in eligibleDeviceIds
+  }
+}
+
+/**
  * Core device configuration content that can be reused in different contexts
  */
 @Composable
@@ -178,20 +219,58 @@ fun DeviceConfigurationContent(
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
   val appVersionInfoByDevice by deviceManager.appVersionInfoByDeviceFlow.collectAsState()
 
+  // Inventory is probed on demand (discovery no longer populates it — OSS issue block/trailblaze#216): kick off a
+  // probe for the listed devices so eligibility gating and version badges fill in reactively.
+  LaunchedEffect(availableDevices) {
+    deviceManager.refreshAppInventoryAsync(availableDevices.map { it.trailblazeDeviceId })
+  }
+
+  val eligibleDeviceIds = availableDevices
+    .filter { it.isEligibleFor(selectedTargetApp, installedAppIdsByDevice) }
+    .map { it.trailblazeDeviceId }
+    .toSet()
+
+  // The seed, the "user touched this" guard, and the selection must share ONE lifetime, and it
+  // must exclude `availableDevices`. Any key the three don't agree on desynchronizes them: with
+  // the guard resetting on a key the seed doesn't, the re-seed branch below fires again holding a
+  // seed captured before the user's edit and pushes it through [onSelectionChanged], which
+  // PERSISTS — silently undoing the edit. And because that persisted value is what the seed reads,
+  // including device-list churn here would also let each re-seed narrow the saved list to whatever
+  // happened to be eligible at that instant, permanently dropping a device whose probe was slow.
+  //
+  // Device-list churn needs no key: [LaunchedEffect(eligibleDeviceIds)] below already re-seeds
+  // (before an edit) or drops what became ineligible (after one).
+  val selectionScopeKey = SelectionScopeKey(selectedTargetApp, trailPlatforms)
+
+  val seedDeviceInstanceIds = remember(selectionScopeKey) { lastSelectedDeviceInstanceIds }
+
+  // Tracks whether the user has touched a checkbox, so the pre-check below can keep updating
+  // while eligibility is still unknown without ever overwriting a real choice.
+  var userEditedSelection by remember(selectionScopeKey) { mutableStateOf(false) }
+
   // Initial pre-check: last-used devices that are still available/eligible, except that a
   // web/compose trail pre-checks its virtual device — see [initialRunDeviceSelection].
-  var selectedDevices by remember(
-    availableDevices,
-    lastSelectedDeviceInstanceIds,
-    selectedTargetApp,
-    installedAppIdsByDevice,
-    trailPlatforms,
-  ) {
+  var selectedDevices by remember(selectionScopeKey) {
     mutableStateOf(
-      initialRunDeviceSelection(availableDevices, lastSelectedDeviceInstanceIds, trailPlatforms) { device ->
-        device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
+      initialRunDeviceSelection(availableDevices, seedDeviceInstanceIds, trailPlatforms) { device ->
+        device.trailblazeDeviceId in eligibleDeviceIds
       }
     )
+  }
+
+  LaunchedEffect(eligibleDeviceIds) {
+    val updated = selectionAfterEligibilityChange(
+      currentSelection = selectedDevices,
+      availableDevices = availableDevices,
+      seedDeviceInstanceIds = seedDeviceInstanceIds,
+      trailPlatforms = trailPlatforms,
+      eligibleDeviceIds = eligibleDeviceIds,
+      userEditedSelection = userEditedSelection,
+    )
+    if (updated != selectedDevices) {
+      selectedDevices = updated
+      onSelectionChanged(selectedDevices.map { it.instanceId })
+    }
   }
 
   LaunchedEffect(activeDeviceSessions, allowSelectionOfActiveDevices) {
@@ -247,7 +326,14 @@ fun DeviceConfigurationContent(
 
       if (showRefreshButton) {
         IconButton(
-          onClick = { deviceManager.loadDevices() },
+          onClick = {
+            deviceManager.loadDevices()
+            // Discovery no longer probes app inventory, and the mount-time LaunchedEffect is
+            // keyed on the device list — a refresh that rediscovers the same devices wouldn't
+            // refire it. An explicit refresh should re-check install state too (the user may
+            // have just installed/removed an app).
+            deviceManager.refreshAppInventoryAsync(availableDevices.map { it.trailblazeDeviceId })
+          },
           enabled = !isLoadingDevices
         ) {
           if (isLoadingDevices) {
@@ -297,6 +383,7 @@ fun DeviceConfigurationContent(
             onSessionClick = onSessionClick,
             onToggle = {
               if (isDeviceEnabled && (allowSelectionOfActiveDevices || !hasActiveSession)) {
+                userEditedSelection = true
                 selectedDevices = if (allowMultipleSelection) {
                   if (selectedDevices.contains(device)) {
                     selectedDevices - device
@@ -362,18 +449,30 @@ fun DeviceSelectionDialog(
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
-  // Mirrors DeviceConfigurationContent's initial pre-check (same inputs → same result); the
-  // content's onSelectionChanged keeps the two in sync from then on.
+  // Inventory is probed on demand (discovery no longer populates it — OSS issue block/trailblaze#216): kick off a
+  // probe for the listed devices so eligibility gating fills in reactively.
+  LaunchedEffect(availableDevices) {
+    deviceManager.refreshAppInventoryAsync(availableDevices.map { it.trailblazeDeviceId })
+  }
+
+  val eligibleDeviceIds = availableDevices
+    .filter { it.isEligibleFor(selectedTargetApp, installedAppIdsByDevice) }
+    .map { it.trailblazeDeviceId }
+    .toSet()
+
+  // Mirrors DeviceConfigurationContent's initial pre-check (same inputs → same result). Not
+  // keyed on eligibility: the content owns re-seeding as probes land and pushes every change
+  // here through onSelectionChanged, so re-seeding here too would race it. Same snapshot
+  // rationale as the content's seed — onSelectionChanged persists into this list.
+  val seedDeviceInstanceIds = remember { lastSelectedDeviceInstanceIds }
   var selectedDevices by remember(
     availableDevices,
-    lastSelectedDeviceInstanceIds,
     selectedTargetApp,
-    installedAppIdsByDevice,
     trailPlatforms,
   ) {
     mutableStateOf(
-      initialRunDeviceSelection(availableDevices, lastSelectedDeviceInstanceIds, trailPlatforms) { device ->
-        device.isEligibleFor(selectedTargetApp, installedAppIdsByDevice)
+      initialRunDeviceSelection(availableDevices, seedDeviceInstanceIds, trailPlatforms) { device ->
+        device.trailblazeDeviceId in eligibleDeviceIds
       }
     )
   }
