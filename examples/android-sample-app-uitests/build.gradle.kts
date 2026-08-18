@@ -55,6 +55,7 @@ val installSampleAppMcpTools =
 val stagedSampleAppTrailsRoot = layout.buildDirectory.dir("intermediates/staged-sample-app-trails")
 val stagedSampleAppTrailsForPlugin =
   layout.buildDirectory.dir("intermediates/staged-sample-app-trails/trails")
+val evalTrailsDir = file("../../../trails/eval/android/sample-app")
 
 // Sync, not Copy: the destination must mirror the current source tree exactly. A plain Copy
 // leaves stale files behind when a source trail is deleted or renamed — a removed scenario's
@@ -155,9 +156,13 @@ val stageSampleAppTrails =
     // `trails/eval/README.md`; the eval set deliberately lives outside the sample-app dir so
     // the `pr_eval_android.sh` Square-POS-targeted runner's `find -maxdepth 1` doesn't scoop
     // them up.
-    from("../../../trails/eval/android/sample-app") {
-      eachFile { stageTrailFile(this) }
-      includeEmptyDirs = false
+    // That path resolves outside this tree and is not published with it, so the directory is
+    // absent in the public repo. Stage the eval trails only where they actually exist.
+    if (evalTrailsDir.isDirectory) {
+      from(evalTrailsDir) {
+        eachFile { stageTrailFile(this) }
+        includeEmptyDirs = false
+      }
     }
     // Copy the trailmap `config/` subtree VERBATIM (no path rewriting). This ships the sample-app
     // trailmap definition and its scripted-tool sources — most importantly

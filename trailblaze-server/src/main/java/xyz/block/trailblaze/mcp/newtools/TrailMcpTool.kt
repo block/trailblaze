@@ -40,6 +40,12 @@ class TrailMcpTool(
   private val logsRepo: LogsRepo? = null,
   /** Provides the active Trailblaze session ID for reading logs. */
   private val sessionIdProvider: (() -> SessionId?)? = null,
+  /**
+   * How the bound device's classifiers are resolved for recording lowering. Defaults to the
+   * platform-only fallback; the daemon wires a host-probed provider. See
+   * [DeviceClassifiersProvider].
+   */
+  private val deviceClassifiersProvider: DeviceClassifiersProvider = platformOnlyDeviceClassifiers,
 ) : ToolSet {
 
   /** Lazy-initialized file manager for trail operations */
@@ -49,7 +55,7 @@ class TrailMcpTool(
 
   /** Lazy-initialized executor for running trails deterministically */
   private val trailExecutor: TrailExecutor by lazy {
-    TrailExecutorImpl(mcpBridge, sessionContext, trailsDirectory, logEmitter)
+    TrailExecutorImpl(mcpBridge, sessionContext, trailsDirectory, logEmitter, deviceClassifiersProvider)
   }
 
   enum class TrailAction {
@@ -324,7 +330,7 @@ class TrailMcpTool(
 
     // Connect to device if needed — BEFORE loading the trail, because a unified trail's
     // per-classifier recordings can only be lowered once the session has a bound device
-    // (see [deviceClassifiersFor]). Loading first with no classifiers would trip decodeTrail's
+    // (see [DeviceClassifiersProvider]). Loading first with no classifiers would trip decodeTrail's
     // unified-with-recordings guard.
     if (platform != null || device != null) {
       val connectResult = connectToDevice(platform, device)
@@ -349,7 +355,7 @@ class TrailMcpTool(
     // Load with the bound device's classifiers so a unified trail lowers to its recordings.
     val loadResult = trailFileManager.loadTrail(
       trailFile,
-      deviceClassifiers = deviceClassifiersFor(sessionContext?.associatedDeviceId),
+      deviceClassifiers = deviceClassifiersProvider(sessionContext?.associatedDeviceId),
     )
     if (!loadResult.success) {
       return TrailRunResult(

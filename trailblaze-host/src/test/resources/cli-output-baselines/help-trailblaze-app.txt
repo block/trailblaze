@@ -6,6 +6,7 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze app [-hV] [--foreground] [--headless] [--status] [--stop]
+                      [COMMAND]
 Launch the Trailblaze desktop app for viewing sessions and managing trails (use
 --headless for a daemon-only background service)
       --foreground   Run in foreground (blocks terminal). Use for debugging
@@ -15,3 +16,5 @@ Launch the Trailblaze desktop app for viewing sessions and managing trails (use
       --status       Check if the daemon is running
       --stop         Stop the running daemon
   -V, --version      Print version information and exit.
+Commands:
+  start  Start the Trailblaze app in the background (same as `trailblaze app`)

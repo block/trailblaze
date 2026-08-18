@@ -3,9 +3,12 @@ package xyz.block.trailblaze.model
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.config.AppTargetYamlLoader
+import xyz.block.trailblaze.config.ToolNameResolver
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
@@ -63,6 +66,84 @@ class CustomTrailblazeToolsTest {
       defaultNames.all { it in names },
       "Without driverType, initialToolRepoToolClasses should contain DefaultLlmTrailblazeTools",
     )
+  }
+
+  // -- toCustomTrailblazeToolsForDriver: what an on-device session actually offers the LLM --
+
+  /**
+   * Catalog fixture with the three cases a target's `tool_sets:` has to separate: an
+   * always-enabled framework entry, the entry the target declares, and another app's entry.
+   */
+  private fun onDeviceCatalog() = listOf(
+    ToolSetCatalogEntry(
+      id = "framework",
+      description = "always-enabled framework surface",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("framework_yaml")),
+      alwaysEnabled = true,
+    ),
+    ToolSetCatalogEntry(
+      id = "myapp",
+      description = "the toolset this target declares",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("myapp_yaml")),
+      scriptedToolNames = setOf(ToolName("myapp_scripted")),
+    ),
+    ToolSetCatalogEntry(
+      id = "otherapp",
+      description = "another app's toolset",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("otherapp_yaml")),
+      scriptedToolNames = setOf(ToolName("otherapp_scripted")),
+    ),
+  )
+
+  private fun onDeviceTarget() = AppTargetYamlLoader.loadFromYaml(
+    """
+    id: myapp
+    display_name: My App
+    platforms:
+      android:
+        app_ids:
+          - com.example.myapp
+        tool_sets:
+          - myapp
+    """.trimIndent(),
+    toolNameResolver = ToolNameResolver.fromBuiltInAndCustomTools(),
+  )
+
+  @Test
+  fun `on-device tools come from the trailmap's declared toolsets, not the whole catalog`() {
+    val repo = onDeviceTarget()
+      .toCustomTrailblazeToolsForDriver(
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        catalog = onDeviceCatalog(),
+      )
+      .toTrailblazeToolRepo()
+
+    val yamlNames = repo.getRegisteredYamlToolNames()
+    assertTrue(ToolName("myapp_yaml") in yamlNames, "the declared toolset's tools must be present")
+    assertTrue(ToolName("framework_yaml") in yamlNames, "always-enabled toolsets ride along undeclared")
+    assertFalse(
+      ToolName("otherapp_yaml") in yamlNames,
+      "a toolset the trailmap never declared must not reach the session's LLM tool list",
+    )
+  }
+
+  @Test
+  fun `on-device scripted bundling is scoped to the declared toolsets too`() {
+    // `allCatalogScriptedToolNames` is what the on-device launcher loads bundles for and what
+    // gates their advertisement. Scoping only the class/YAML halves would leave every other app's
+    // scripted tools bundled and advertised.
+    val repo = onDeviceTarget()
+      .toCustomTrailblazeToolsForDriver(
+        driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        catalog = onDeviceCatalog(),
+      )
+      .toTrailblazeToolRepo()
+
+    assertTrue(ToolName("myapp_scripted") in repo.allCatalogScriptedToolNames)
+    assertFalse(ToolName("otherapp_scripted") in repo.allCatalogScriptedToolNames)
   }
 
   // -- toTrailblazeToolRepo extension: pins the forward used by AndroidTrailblazeRule and downstream subclasses --

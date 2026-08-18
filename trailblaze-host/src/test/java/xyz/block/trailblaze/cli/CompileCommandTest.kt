@@ -9,9 +9,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
 import picocli.CommandLine
+import xyz.block.trailblaze.config.KnownTargetWorkspace
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.AnalyzerScriptedToolEnrichment
 import xyz.block.trailblaze.scripting.MetaOnlyDescriptorTestFixture
+import xyz.block.trailblaze.util.GitUtils
 
 /**
  * Tests for [CompileCommand] — the user-facing `trailblaze compile` picocli
@@ -305,6 +307,214 @@ class CompileCommandTest {
       typedSurface.readText().contains("web_requestDetails"),
       "The tool carried by the workspace-authored toolset should be declared in alpha's typed " +
         "surface; got:\n${typedSurface.readText()}",
+    )
+  }
+
+  @Test
+  fun `compile warns when a workspace trailmap id is registered to a different repo`() {
+    // The known-target-shadow lint end-to-end: a workspace trailmap named after an id the
+    // registry homes elsewhere gets a stderr warning naming the owning repo, and the compile
+    // still exits OK — overriding is a legitimate workflow, so this can never be an error.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+      """.trimIndent(),
+    )
+    val command = CompileCommand().apply {
+      knownTargetWorkspacesProvider = {
+        listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/alpha-trails.git",
+            targets = listOf("alpha"),
+          ),
+        )
+      }
+      workspaceRepoShortNamesProvider = { setOf("example-org/consumer-repo") }
+    }
+
+    val (exit, stderr) = captureStderr {
+      CommandLine(command).execute(
+        "--input", workDir.absolutePath,
+        "--output", File(workDir, "out").absolutePath,
+      )
+    }
+
+    assertEquals(0, exit, "The shadow lint is a warning — a clean compile must still exit OK")
+    assertTrue(
+      stderr.contains("workspace trailmap 'alpha'") && stderr.contains("example-org/alpha-trails"),
+      "Expected a warning naming the trailmap id and the registered home repo; got: $stderr",
+    )
+  }
+
+  @Test
+  fun `compile stays quiet when the colliding id's home matches this workspace's remote`() {
+    // Identical staging to the warning test, with ONE variable flipped: the workspace's own git
+    // remote resolves to the registered home repo. That's a target's home repo overriding its
+    // own bundled trailmap — the documented workflow, so no warning.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        platforms:
+          android:
+            app_ids: [com.example.alpha]
+      """.trimIndent(),
+    )
+    val command = CompileCommand().apply {
+      knownTargetWorkspacesProvider = {
+        listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/alpha-trails.git",
+            targets = listOf("alpha"),
+          ),
+        )
+      }
+      workspaceRepoShortNamesProvider = { setOf("example-org/alpha-trails") }
+    }
+
+    val (exit, stderr) = captureStderr {
+      CommandLine(command).execute(
+        "--input", workDir.absolutePath,
+        "--output", File(workDir, "out").absolutePath,
+      )
+    }
+
+    assertEquals(0, exit)
+    assertTrue(
+      !stderr.contains("Warning: workspace trailmap"),
+      "No shadow warning should fire in the id's own home repo; got: $stderr",
+    )
+  }
+
+  @Test
+  fun `a git-ignored trailmap is treated as a staged copy and does not warn`() {
+    // Drives the REAL `GitUtils.isPathIgnored` probe against a real git repo rather than stubbing
+    // the predicate, so the wiring (`stagedTrailmapProbe` default → `git check-ignore`) is pinned
+    // end-to-end. Covers the pinned-clone case: a build stages a copy of the home repo's trailmap
+    // into the workspace, which warned on every CI run before this.
+    val repo = File(workDir, "repo").apply { mkdirs() }
+    val trailmapsDir = File(repo, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha\n")
+    File(repo, ".gitignore").writeText("trailmaps/alpha/\n")
+    listOf(
+      listOf("git", "init"),
+      listOf("git", "add", "-A"),
+    ).forEach { cmd ->
+      ProcessBuilder(cmd).directory(repo).redirectErrorStream(true).start().waitFor()
+    }
+    // Guard the fixture itself — if git isn't available or the ignore rule didn't take, the
+    // assertion below would pass for the wrong reason.
+    assumeTrue(
+      "Fixture requires a working `git` that ignores the staged trailmap",
+      GitUtils.isPathIgnored(File(trailmapsDir, "alpha")),
+    )
+
+    val command = CompileCommand().apply {
+      knownTargetWorkspacesProvider = {
+        listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/alpha-trails.git",
+            targets = listOf("alpha"),
+          ),
+        )
+      }
+      workspaceRepoShortNamesProvider = { setOf("example-org/consumer-repo") }
+    }
+
+    val (exit, stderr) = captureStderr {
+      CommandLine(command).execute(
+        "--input", repo.absolutePath,
+        "--output", File(workDir, "out").absolutePath,
+      )
+    }
+
+    assertEquals(0, exit)
+    assertTrue(
+      !stderr.contains("Warning: workspace trailmap"),
+      "A git-ignored trailmap is a staged copy, not authored source, so it must not warn; got: $stderr",
+    )
+  }
+
+  @Test
+  fun `the git probe is anchored at the input dir, not a derived ancestor`() {
+    // Regression: the probe used to run against the derived `workspaceRoot`, which for an explicit
+    // `--input` that discovery can't match is a two-ancestors-up guess — here that lands outside the
+    // staged tree entirely (on /tmp), so git would report no remotes and the lint would warn even in
+    // the registered target's own checkout. Anchoring at the input dir keeps the probe inside the
+    // tree the user named; git walks up from there to the enclosing repo.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha\n")
+    var probedDir: File? = null
+    val command = CompileCommand().apply {
+      knownTargetWorkspacesProvider = {
+        listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/alpha-trails.git",
+            targets = listOf("alpha"),
+          ),
+        )
+      }
+      workspaceRepoShortNamesProvider = { dir ->
+        probedDir = dir
+        emptySet()
+      }
+    }
+
+    CommandLine(command).execute(
+      "--input", workDir.absolutePath,
+      "--output", File(workDir, "out").absolutePath,
+    )
+
+    assertEquals(
+      workDir.canonicalFile,
+      probedDir?.canonicalFile,
+      "The git probe must run from the --input dir so it stays inside the user's checkout",
+    )
+  }
+
+  @Test
+  fun `an orphan library trailmap still triggers the shadow warning`() {
+    // A library trailmap (no `target:`) nothing depends on is absent from the resolved-trailmap
+    // pool, but it still shadows a same-id classpath trailmap — the lint must enumerate manifests
+    // from disk, not from the pool, or exactly this accident goes unreported.
+    val trailmapsDir = File(workDir, "trailmaps").apply { mkdirs() }
+    File(trailmapsDir, "alpha").mkdirs()
+    File(trailmapsDir, "alpha/trailmap.yaml").writeText("id: alpha\n")
+    val command = CompileCommand().apply {
+      knownTargetWorkspacesProvider = {
+        listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/alpha-trails.git",
+            targets = listOf("alpha"),
+          ),
+        )
+      }
+      workspaceRepoShortNamesProvider = { setOf("example-org/consumer-repo") }
+    }
+
+    val (exit, stderr) = captureStderr {
+      CommandLine(command).execute(
+        "--input", workDir.absolutePath,
+        "--output", File(workDir, "out").absolutePath,
+      )
+    }
+
+    assertEquals(0, exit)
+    assertTrue(
+      stderr.contains("workspace trailmap 'alpha'"),
+      "An orphan library trailmap shadows the id too, so it must warn; got: $stderr",
     )
   }
 

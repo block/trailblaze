@@ -407,6 +407,37 @@ class UnifiedTrailAdapterTest {
   }
 
   @Test
+  fun `an all skip covers every device, and an explicit classifier still outranks it`() {
+    // The shape every "skipped everywhere" trail uses. Enumerating device keys instead is what
+    // lets a leg slip through: which devices actually run a trail is decided by the CI system
+    // dispatching it — which may fan out per recorded leg — not by the trail's own `devices:` map,
+    // so a key list derived from either one silently misses the rest.
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      skip = linkedMapOf("all" to "never passed — see #123", "ios-ipad" to "different reason"),
+    )
+    for (device in listOf(
+      listOf("android", "phone"),
+      listOf("android", "tablet"),
+      listOf("ios", "iphone"),
+      listOf("web"),
+    )) {
+      assertEquals(
+        "never passed — see #123",
+        UnifiedTrailAdapter.resolveSkip(config, device.map { classifier(it) }),
+        "`all` must resolve for $device — the universal root ends every chain",
+      )
+    }
+    // An explicitly-declared classifier outranks the universal root, so a device that needs its
+    // own reason keeps it.
+    assertEquals(
+      "different reason",
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("ios"), classifier("ipad"))),
+    )
+  }
+
+  @Test
   fun `resolveSkip device-agnostic — any declared skip counts as skipped`() {
     val config = UnifiedTrailConfig(id = "x", target = "y", skip = mapOf("ios" to "ios only"))
     // No classifiers (pre-flight with no device yet): skipped if ANY classifier declares a reason,

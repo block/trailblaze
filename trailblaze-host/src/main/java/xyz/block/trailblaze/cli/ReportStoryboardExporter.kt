@@ -70,6 +70,9 @@ object ReportStoryboardExporter {
    *   built into a tmp file and discarded after the WebP is encoded.
    * @param maxBytes When non-null, iteratively re-encode at smaller widths until the
    *   WebP fits the cap. Same loop as the timeline exporters use.
+   * @param maxBytesStrict Whether floor exhaustion is fatal. `true` (the default) is the
+   *   behavior an explicitly-requested cap gets; the CLI passes `false` when the cap is
+   *   only [MaxArtifactSize.DEFAULT_MAX_BYTES], which warns and keeps the oversized WebP.
    * @param includeYaml when true, each cell's YAML strip replaces the synthesized
    *   verb/sublabel line. Library default is `false` (callers must opt in explicitly);
    *   the CLI's `--storyboard-yaml` flag defaults to `true` for end-user ergonomics —
@@ -87,6 +90,7 @@ object ReportStoryboardExporter {
     includeYaml: Boolean = false,
     headless: Boolean = true,
     maxBytes: Long? = null,
+    maxBytesStrict: Boolean = true,
   ): File {
     val logs = logsRepo.getLogsForSession(sessionId)
     // Resolve sections, pick the column count, auto-fit cell width, run the memory +
@@ -160,11 +164,13 @@ object ReportStoryboardExporter {
           }
           val rescaleElapsedMs = System.currentTimeMillis() - rescaleStartMs
           if (!result.fits) {
-            error(
-              "Storyboard WebP still exceeds ${maxBytes}B at the " +
-                "${MaxArtifactSize.READABILITY_FLOOR_PX}px readability floor " +
-                "(current size: ${outputWebp.length()}B). The storyboard's size scales with " +
-                "step count — try `--storyboard-columns 8` to trailmap more cells per row (smaller " +
+            MaxArtifactSize.failOrWarn(
+              strict = maxBytesStrict,
+              artifact = outputWebp,
+              formatLabel = "Storyboard WebP",
+              maxBytes = maxBytes,
+              remedies = "The storyboard's size scales with step count — try " +
+                "`--storyboard-columns 8` to trailmap more cells per row (smaller " +
                 "individual thumbs), or split the session into multiple shorter recordings.",
             )
           }

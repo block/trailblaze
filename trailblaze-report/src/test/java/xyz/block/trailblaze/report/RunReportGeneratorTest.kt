@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionId
@@ -185,6 +186,20 @@ class RunReportGeneratorTest {
   }
 
   @Test
+  fun sessionMetaJson_liftsTheStructuredFailureCodeBesideTheErrorBanner() {
+    val payload = buildJsonObject {
+      put("schema", "example-repo/trailhead-error/v1")
+      put("code", "account-state")
+    }
+    val coded = SessionStatus.Ended.Failed(900, "staging account locked out", failurePayload = payload)
+    val meta = RunReportGenerator.sessionMetaJson(info(coded), coded, noSelfHeal)
+    assertEquals("account-state", meta["failureCode"]!!.jsonPrimitive.content)
+    // Payload-less failures (every legacy run) emit no key at all — the viewer renders no chip.
+    val uncoded = SessionStatus.Ended.Failed(900, "boom")
+    assertNull(RunReportGenerator.sessionMetaJson(info(uncoded), uncoded, noSelfHeal)["failureCode"])
+  }
+
+  @Test
   fun sessionMetaJson_forwardsTrailConfigMetadataForConsumerInjection() {
     val passed = SessionStatus.Ended.Succeeded(1)
     val meta = RunReportGenerator.sessionMetaJson(
@@ -348,6 +363,111 @@ class RunReportGeneratorTest {
     }
   }
 
+  /**
+   * The linked-image contract, end to end: the same session rendered twice, once embedding its
+   * screenshot and once referencing it off a base URL. What callers depend on is that the second
+   * report carries the `<base><sessionId>/<file>` reference and NO base64 image payload — that's
+   * what makes a many-session report small enough to serve.
+   */
+  @Test
+  fun generate_referencesScreenshotsOffTheBaseUrl_insteadOfEmbeddingThem() {
+    val bun = BunBinaryResolver.resolveBunBinary() ?: return
+    val tmp = Files.createTempDirectory("rrg-imgurl-").toFile()
+    try {
+      val logsRepo = LogsRepo(logsDir = tmp, watchFileSystem = false)
+      val sessionId = SessionId("linkedimagesession")
+      val deviceId = TrailblazeDeviceId("web", TrailblazeDevicePlatform.WEB)
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = null,
+            trailFilePath = "trails/example.trail.yaml",
+            hasRecordedSteps = false,
+            testMethodName = "report",
+            testClassName = "RunReportGeneratorTest",
+            trailblazeDeviceInfo = TrailblazeDeviceInfo(
+              trailblazeDeviceId = deviceId,
+              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+              widthPixels = 1280,
+              heightPixels = 720,
+              classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+            ),
+            trailblazeDeviceId = deviceId,
+            rawYaml = "trail:\n  - step: Open the app",
+          ),
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(1_700_000_000_000L),
+        ),
+      )
+      val screenshotFile = "linkedimagesession_1700000001000.png"
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.TrailblazeSnapshotLog(
+          displayName = "final_screenshot",
+          screenshotFile = screenshotFile,
+          viewHierarchy = ViewHierarchyTreeNode(),
+          deviceWidth = 1280,
+          deviceHeight = 720,
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(1_700_000_001_000L),
+        ),
+      )
+      logsRepo.saveLogToDisk(
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 5_000L),
+          session = sessionId,
+          timestamp = Instant.fromEpochMilliseconds(1_700_000_005_000L),
+        ),
+      )
+      // Small enough to skip the ffmpeg recompression path, so the embedded leg is deterministic.
+      File(logsRepo.getSessionDir(sessionId), screenshotFile).writeBytes(ByteArray(4_096) { 7 })
+
+      val embedded = RunReportGenerator(bunBinary = bun).generate(logsRepo, listOf(sessionId))
+      assertNotNull(embedded, "generate() should produce a report file")
+      // Read before the second generate(): the output filename carries a wall-clock SECOND, so two
+      // calls this close together land on the same path and the second overwrites the first.
+      val embeddedHtml = embedded.readText()
+      assertTrue(embeddedHtml.contains("data:image/png;base64,"), "default embeds the screenshot")
+
+      val linked = RunReportGenerator(bunBinary = bun)
+        .generate(logsRepo, listOf(sessionId), imageBaseUrl = "/static/")
+      assertNotNull(linked, "generate(imageBaseUrl) should produce a report file")
+      val linkedHtml = linked.readText()
+      assertTrue(
+        linkedHtml.contains("/static/${sessionId.value}/$screenshotFile"),
+        "linked report should reference the screenshot off the base URL",
+      )
+      assertTrue(!linkedHtml.contains("data:image/"), "linked report should embed no image payload")
+      assertTrue(linkedHtml.length < embeddedHtml.length, "linking should shrink the report")
+
+      // CI's leg: an EMPTY base is a real base (document-relative), not "unset". This is the case a
+      // regression to `isNullOrEmpty()` on either side of the Kotlin/driver boundary would silently
+      // turn back into embedding, with every CI report quietly re-inflating and no test failing.
+      val relative = RunReportGenerator(bunBinary = bun)
+        .generate(logsRepo, listOf(sessionId), imageBaseUrl = "")
+      assertNotNull(relative, "generate(imageBaseUrl = \"\") should produce a report file")
+      val relativeHtml = relative.readText()
+      assertTrue(
+        relativeHtml.contains("\"${sessionId.value}/$screenshotFile\""),
+        "an empty base should leave a document-relative reference",
+      )
+      assertTrue(!relativeHtml.contains("data:image/"), "an empty base must not fall back to embedding")
+
+      // A linked report references only files it can still see. This is the invariant
+      // the CI report step's ordering gate protects: delete the images before
+      // generation and the report silently comes out with no screenshots at all.
+      File(logsRepo.getSessionDir(sessionId), screenshotFile).delete()
+      val afterDelete = RunReportGenerator(bunBinary = bun)
+        .generate(logsRepo, listOf(sessionId), imageBaseUrl = "/static/")
+      assertNotNull(afterDelete, "generate() should still produce a report file")
+      assertTrue(
+        !afterDelete.readText().contains("/static/${sessionId.value}/$screenshotFile"),
+        "a screenshot missing from disk should be dropped, not referenced",
+      )
+    } finally {
+      tmp.deleteRecursively()
+    }
+  }
+
   @Test
   fun discoverEventFormatterResources_findsFormattersAndSupportFilesInDirsAndJars() {
     val tmp = Files.createTempDirectory("rrg-fmt-").toFile()
@@ -437,6 +557,56 @@ class RunReportGeneratorTest {
     val slimmed = RunReportGenerator.slimViewHierarchyFields(record) as JsonObject
 
     assertEquals(listOf("trailblazeNodeTree"), slimmed.keys.toList())
+  }
+
+  @Test
+  fun slimViewHierarchyFields_keepsTheLegacySiblingBesideAWebNodeTree() {
+    // A web record's trailblazeNodeTree carries sparse fuzzy-matched bounds; its legacy
+    // viewHierarchy sibling carries the dense ref-resolved bounds the UI Inspector's hit-test
+    // needs. The extractor merges the two (mergeWebHierarchyBounds in run-report-extract.ts), so
+    // both must survive the slim for web records — and only for web records.
+    val webRecord = buildJsonObject {
+      put("type", "AgentDriverLog")
+      put(
+        "trailblazeNodeTree",
+        buildJsonObject {
+          put("nodeId", 1)
+          put("driverDetail", buildJsonObject { put("class", "web"); put("ariaRole", "document") })
+        },
+      )
+      put("viewHierarchy", "…dense legacy bounds…")
+      put("screenshotFile", "001.png")
+    }
+
+    val slimmed = RunReportGenerator.slimViewHierarchyFields(webRecord)
+
+    // Both hierarchy fields survive; nothing was redundant, so the record is the same instance.
+    assertTrue(slimmed === webRecord)
+
+    // An Android accessibility record (non-web driver detail) keeps only the node tree.
+    val androidRecord = buildJsonObject {
+      put(
+        "trailblazeNodeTree",
+        buildJsonObject {
+          put("nodeId", 1)
+          put("driverDetail", buildJsonObject { put("class", "androidAccessibility") })
+        },
+      )
+      put("viewHierarchy", "…raw dump…")
+    }
+    assertEquals(listOf("trailblazeNodeTree"), (RunReportGenerator.slimViewHierarchyFields(androidRecord) as JsonObject).keys.toList())
+
+    // A web record where the higher-priority viewHierarchyFiltered wins keeps exactly that one —
+    // the merge exception applies only when the node tree is the field the renderer reads.
+    val filteredRecord = buildJsonObject {
+      put("viewHierarchyFiltered", "…filtered…")
+      put(
+        "trailblazeNodeTree",
+        buildJsonObject { put("driverDetail", buildJsonObject { put("class", "web") }) },
+      )
+      put("viewHierarchy", "…raw dump…")
+    }
+    assertEquals(listOf("viewHierarchyFiltered"), (RunReportGenerator.slimViewHierarchyFields(filteredRecord) as JsonObject).keys.toList())
   }
 
   @Test

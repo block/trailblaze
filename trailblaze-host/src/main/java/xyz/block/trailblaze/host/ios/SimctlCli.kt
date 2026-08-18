@@ -29,8 +29,12 @@ object SimctlCli {
     val success: Boolean get() = exitCode == 0
   }
 
-  fun launch(udid: String, bundleId: String, timeoutSeconds: Long = 15): Result =
-    run(listOf("xcrun", "simctl", "launch", udid, bundleId), timeoutSeconds)
+  /** Pure argv build for [launch], extracted so tests can pin that [launchArguments] reach the command. */
+  internal fun launchCommand(udid: String, bundleId: String, launchArguments: List<String>): List<String> =
+    listOf("xcrun", "simctl", "launch", udid, bundleId) + launchArguments
+
+  fun launch(udid: String, bundleId: String, launchArguments: List<String> = emptyList(), timeoutSeconds: Long = 15): Result =
+    run(launchCommand(udid, bundleId, launchArguments), timeoutSeconds)
 
   fun terminate(udid: String, bundleId: String, timeoutSeconds: Long = 10): Result =
     run(listOf("xcrun", "simctl", "terminate", udid, bundleId), timeoutSeconds)

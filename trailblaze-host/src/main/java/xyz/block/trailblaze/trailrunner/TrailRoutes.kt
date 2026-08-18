@@ -12,6 +12,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
@@ -159,7 +160,14 @@ internal fun validateTrailYaml(deps: TrailRunnerDeps, yaml: String?): ValidateTr
     if (target != null && dm != null) {
       val known = runCatching { dm.availableAppTargets.map { it.id } }.getOrDefault(emptyList())
       if (known.isNotEmpty() && target !in known) {
-        errors += ValidationErrorDto(message = "unknown target '$target' — known targets: ${known.sorted().joinToString(", ")}")
+        // Same case the daemon's run path warns about, reached through validation instead: if the
+        // target is declared as living in another repo, say so here too, or the editor reports a
+        // trail authored for another workspace as simply misspelled. The single-line variant, because
+        // every other error on this response is normalized to one line just above.
+        val elsewhere = KnownTargetMessages.unavailableTargetSummary(target)?.let { " — $it" }.orEmpty()
+        errors += ValidationErrorDto(
+          message = "unknown target '$target' — known targets: ${known.sorted().joinToString(", ")}$elsewhere",
+        )
       }
     }
   }

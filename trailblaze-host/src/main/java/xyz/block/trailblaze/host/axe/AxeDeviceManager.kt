@@ -332,7 +332,7 @@ class AxeDeviceManager(
         // readiness poll must additionally see the tree CHANGE — otherwise it returns
         // immediately and the first selector resolves against the stale screen.
         val baseline = captureTree()
-        val launched = SimctlCli.launch(udid, action.bundleId)
+        val launched = SimctlCli.launch(udid, action.bundleId, action.launchArguments)
         if (!launched.success) {
           val container = SimctlCli.getAppContainer(udid, action.bundleId)
           if (!container.success) {

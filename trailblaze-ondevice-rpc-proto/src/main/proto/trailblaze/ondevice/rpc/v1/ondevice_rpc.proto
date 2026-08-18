@@ -418,6 +418,7 @@ message AndroidAccessibilityDetail {
   bool is_important_for_accessibility = 34;
   int32 drawing_order = 35;
   int32 max_text_length = 36;
+  bool is_text_link = 40;
   repeated string actions = 37;
   CollectionInfo collection_info = 38;
   RangeInfo range_info = 39;

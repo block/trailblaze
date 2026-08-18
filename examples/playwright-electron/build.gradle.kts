@@ -42,7 +42,31 @@ val downloadElectronBinary by tasks.registering(Exec::class) {
 tasks.test {
   useJUnitPlatform()
   dependsOn(downloadElectronBinary)
-  workingDir = rootProject.projectDir.resolve("opensource")
+  // The tests resolve their trails from `user.dir`, so this must be the `opensource` root. Derive
+  // it from this module's own path: `rootProject` differs when this build is included from another composite root.
+  workingDir = projectDir.parentFile.parentFile
+
+  // Gradle treats `workingDir` as @Internal, so the trails read through it are invisible to the
+  // build cache. Without this, editing a trail restores the old result instead of replaying it.
+  inputs.dir(workingDir.resolve("trails/playwright-electron"))
+    .withPropertyName("evalTrails")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+
+  // The Electron app Trailblaze launches. Named files rather than the directory: `npmInstallElectron`
+  // writes `node_modules` into it, and a task's inputs must not contain another task's outputs.
+  inputs.files(
+    sampleAppDir.resolve("main.js"),
+    sampleAppDir.resolve("package.json"),
+    // Selects the Electron runtime this eval launches, so a change to it must re-run the tests.
+    sampleAppDir.resolve("provision-electron.sh"),
+  )
+    .withPropertyName("electronApp")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+
+  // `main.js` renders playwright-native's fixture page, so this eval depends on that module's tree.
+  inputs.dir(workingDir.resolve("examples/playwright-native/sample-app"))
+    .withPropertyName("sharedSampleApp")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 
   // Pass paths to the Electron binary and app directory
   systemProperty(

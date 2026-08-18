@@ -92,8 +92,8 @@ internal object PlaywrightReportCapture {
    * Throws (via `error`) on capture failure — timeout or zero frames — so the caller
    * doesn't silently produce a truncated artifact and exit 0.
    *
-   * @param reportHtml Single-session report HTML (multi-session reports land on the list
-   *   view and never trigger autoplay).
+   * @param reportHtml Single-session report HTML — either generated artifact (the
+   *   interactive report or the legacy WASM one).
    * @param framesDir Directory to write `frame_NNNNN.png` files into. Created by caller.
    * @param tag Log-line prefix, e.g. `ReportGifExporter` / `ReportWebpExporter`. Used so
    *   each exporter's logs stay grep-distinguishable.
@@ -161,7 +161,11 @@ internal object PlaywrightReportCapture {
       // Fail soft: emit the best-effort truncated artifact rather than aborting with no
       // output (https://github.com/block/trailblaze/issues/173). With idle-gap compression a timeout here is unusual, so call
       // it out loudly and point at the override.
-      Console.log(
+      //
+      // On Console.error, not Console.log: log is suppressed in CLI quiet mode, which is
+      // the one thing that would make a truncated artifact genuinely silent. Exit stays 0
+      // — a partial animation is still a usable artifact and the report itself succeeded.
+      Console.error(
         "[$tag] WARNING: timeline playback did not signal completion within " +
           "${waitMs / 1000}s — writing a truncated $capturedFrames-frame artifact. " +
           "Set $MAX_PLAYBACK_WAIT_ENV (ms) higher to capture the full timeline.",
@@ -190,7 +194,8 @@ internal object PlaywrightReportCapture {
 
   /**
    * Turns an absolute filesystem path into a `file://` URL with the autoplay query
-   * parameter the WASM app reads at startup. We let `File.toURI().toASCIIString()` do
+   * parameter both report artifacts read at startup — the legacy WASM app and the
+   * interactive viewer implement the same contract. We let `File.toURI().toASCIIString()` do
    * the percent-encoding (generated report paths in `logs/reports/` don't realistically
    * contain `?`, but the `contains("?")` guard keeps the URL well-formed for the edge
    * case where they do).

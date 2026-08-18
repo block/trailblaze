@@ -24,10 +24,11 @@ import {
   toolDetail, traceHierarchies, transcriptCallMessages, truncate, yamlRootSection,
 } from './run-report-extract';
 import { buildMultiReportHtml, buildRunReportHtml } from './run-report-html';
+import { isSelectorAnalyzableTree } from './run-report-selectors';
 import { eventPrettyText, inflateEventsGz, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, rawPrettyText, rekeySprites, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
 import {
-  buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs,
-  videoFrameAt, videoLoopFrame,
+  buildExportSchedule, buildPlaybackSchedule, exportGapMs, playbackGapMs, playbackPositionAt,
+  spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame,
 } from './run-report-playback';
 import { RUN_REPORT_VIEWER } from './run-report-viewer';
 
@@ -36,8 +37,8 @@ import { RUN_REPORT_VIEWER } from './run-report-viewer';
 const RUN_REPORT_EXPORTS = {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
-  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  playbackGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, playbackPositionAt, videoLoopFrame,
+  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  playbackGapMs, exportGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt, videoLoopFrame,
 };
 (globalThis as Record<string, unknown>).__TRAILBLAZE_RUN_REPORT_CORE__ = RUN_REPORT_EXPORTS;
 if (typeof window !== 'undefined') Object.assign(window, RUN_REPORT_EXPORTS);
@@ -45,6 +46,6 @@ if (typeof window !== 'undefined') Object.assign(window, RUN_REPORT_EXPORTS);
 export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
-  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
-  playbackGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, playbackPositionAt, videoLoopFrame,
+  slimTraceForShare, slimLlmForShare, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  playbackGapMs, exportGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt, videoLoopFrame,
 };

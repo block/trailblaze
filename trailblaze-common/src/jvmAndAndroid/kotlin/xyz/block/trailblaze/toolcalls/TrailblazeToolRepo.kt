@@ -46,6 +46,16 @@ class TrailblazeToolRepo(
    * back to the non-driver-aware catalog filter.
    */
   val driverType: TrailblazeDriverType? = null,
+  /**
+   * Catalog toolset ids this repo's surface is scoped to — a target's trailmap `tool_sets:`
+   * declarations. `null` means "every catalog entry", the historical whole-catalog surface.
+   *
+   * Governs [allCatalogScriptedToolNames], so the scripted-tool launcher bundles only what the
+   * scope can deliver. Must be set to the same ids [withDynamicToolSets] resolved the initial
+   * class/YAML surface from, or the repo would advertise scripted tools from toolsets whose
+   * class-backed siblings it dropped.
+   */
+  private val toolSetIds: List<String>? = null,
 ) {
   val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
     .asTools()
@@ -94,20 +104,24 @@ class TrailblazeToolRepo(
   }
 
   /**
-   * Every scripted tool name the catalog could deliver for this repo's driver — i.e. the union of
-   * `scriptedToolNames` across all (driver-compatible) toolsets, not just the active ones.
+   * Every scripted tool name the catalog could deliver for this repo's driver, narrowed to the
+   * [toolSetIds] scope when one is set — the union of `scriptedToolNames` across the in-scope,
+   * driver-compatible toolsets (`always_enabled` entries included). A null scope keeps the whole
+   * driver-compatible catalog.
    *
-   * The bundling layer registers a dynamic tool for EACH of these at session start, so recorded
-   * replays can dispatch a scripted tool even when it's hidden from the LLM. Advertisement is gated
-   * by [advertisedDynamic] to the non-excluded set, so registering-but-not-advertising a scripted
-   * tool that a target's `excluded_tools:` dropped is harmless.
+   * Wider than what the LLM ends up seeing: the bundling layer registers a dynamic tool for EACH of
+   * these at session start, so recorded replays can dispatch a scripted tool even when it's hidden
+   * from the LLM. Advertisement is gated by [advertisedDynamic] to the non-excluded set, so
+   * registering-but-not-advertising a scripted tool that a target's `excluded_tools:` dropped is
+   * harmless.
    */
   val allCatalogScriptedToolNames: Set<ToolName> by lazy {
     val catalog = toolSetCatalog ?: return@lazy emptySet()
-    if (driverType != null) {
-      TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(driverType, catalog)
-    } else {
-      catalog.flatMap { it.scriptedToolNames }.toSet()
+    val scope = toolSetIds
+    when {
+      scope != null -> TrailblazeToolSetCatalog.resolveForSession(driverType, scope, catalog).scriptedToolNames
+      driverType != null -> TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(driverType, catalog)
+      else -> catalog.flatMap { it.scriptedToolNames }.toSet()
     }
   }
 
@@ -422,13 +436,16 @@ class TrailblazeToolRepo(
    *
    * Returns `null` only when no schema can be located:
    *  - The tool name is unknown to every resolution tier, OR
-   *  - A dynamic tool registration declares no parameters (subprocess MCP servers can legitimately
-   *    advertise no schema; defaulting to "skip" avoids false rejections on tools whose schema
-   *    simply isn't modelled in the descriptor).
+   *  - A dynamic tool registration declares no parameters AND doesn't claim its parameter
+   *    split is exhaustive ([DynamicTrailblazeToolRegistration.declaresExhaustiveParameters]
+   *    is false — subprocess MCP servers can legitimately advertise no schema; defaulting to
+   *    "skip" avoids false rejections on tools whose schema simply isn't modelled).
    *
    * Returns an **empty set** when the tool's schema is author-controlled and exhaustively
    * declares zero parameters (class-backed `@TrailblazeToolClass` with no constructor args;
-   * YAML tools with `parameters: []`). In that case every incoming key is unknown and the
+   * YAML tools with `parameters: []`; dynamic registrations with
+   * `declaresExhaustiveParameters = true`, e.g. a scripted `.ts` tool whose analyzer-generated
+   * schema is `properties: {}`). In that case every incoming key is unknown and the
    * validator MUST reject — leniency here would re-introduce the exact silent-drop behavior
    * this change closes (e.g. for `pressBack` and other no-arg YAML tools).
    */
@@ -438,9 +455,12 @@ class TrailblazeToolRepo(
     val typedName = ToolName(toolName)
 
     snapshot.dynamic[typedName]?.let { registration ->
-      // Dynamic tools (subprocess MCP) can legitimately advertise no schema — fall through
-      // to "skip" rather than rejecting every call to an unannotated subprocess tool.
-      return registration.trailblazeDescriptor.parameterNames().ifEmpty { null }
+      val names = registration.trailblazeDescriptor.parameterNames()
+      // An exhaustive parameter split (analyzer-generated / author-declared schema) rejects
+      // strictly even when empty — same policy as YAML `parameters: []`. A non-exhaustive
+      // one (subprocess MCP server without an explicit schema) falls through to "skip"
+      // rather than rejecting every call to an unannotated subprocess tool.
+      return if (registration.declaresExhaustiveParameters) names else names.ifEmpty { null }
     }
 
     val sessionClass = snapshot.toolClasses.firstOrNull { it.toolName() == typedName }
@@ -497,8 +517,9 @@ class TrailblazeToolRepo(
    * callers reject empty payloads only when something actually must be present.
    *
    * Returns `null` only when the resolver doesn't recognize the tool at all — same skip
-   * branch [expectedArgumentKeysFor] uses for "dynamic tool advertises no schema." Falling
-   * through to null keeps the validator a no-op for tools whose schema can't be read.
+   * branch [expectedArgumentKeysFor] uses for "dynamic tool advertises no schema without
+   * claiming exhaustiveness." Falling through to null keeps the validator a no-op for tools
+   * whose schema can't be read.
    *
    * Class-backed tools introspect via `SerialDescriptor.isElementOptional` so a Kotlin
    * property with a default value (`val foo: String = "x"`) is treated as optional even
@@ -513,10 +534,13 @@ class TrailblazeToolRepo(
     val typedName = ToolName(toolName)
 
     snapshot.dynamic[typedName]?.let { registration ->
-      // Mirror [expectedArgumentKeysFor]'s "schema can be empty" skip: a dynamic tool that
-      // advertises no parameters at all (subprocess MCP server without an explicit schema)
-      // falls through rather than synthesizing a missing-required error on every empty call.
-      if (registration.trailblazeDescriptor.parameterNames().isEmpty()) return null
+      // Mirror [expectedArgumentKeysFor]'s skip: a dynamic tool that advertises no parameters
+      // at all AND doesn't claim exhaustiveness (subprocess MCP server without an explicit
+      // schema) falls through rather than synthesizing a missing-required error on every
+      // empty call. An exhaustive empty split instead returns the empty required set —
+      // "I checked, nothing is required" — keeping the two gates in agreement.
+      val names = registration.trailblazeDescriptor.parameterNames()
+      if (names.isEmpty() && !registration.declaresExhaustiveParameters) return null
       return registration.trailblazeDescriptor.requiredParameterNames()
     }
 
@@ -606,9 +630,18 @@ class TrailblazeToolRepo(
       id == GENERIC_VERIFICATION_TOOLSET_ID || id.endsWith("_verification")
 
     /**
-     * Creates a [TrailblazeToolRepo] carrying every catalog tool the driver can run, plus any
+     * Creates a [TrailblazeToolRepo] carrying the catalog tools in scope for the driver, plus any
      * [customToolClasses] / [customYamlToolNames] / [customScriptedToolNames]. The full surface is
      * advertised from the start — there is no runtime opt-in.
+     *
+     * [toolSetIds] is the catalog scope: pass a target's trailmap `tool_sets:` declarations to get
+     * exactly those toolsets plus the catalog's `always_enabled` ones — the surface
+     * [TrailblazeHostAppTarget.getAgentToolboxForDriver] reports. Prefer
+     * [xyz.block.trailblaze.model.toSessionToolRepo], which every runtime uses and which resolves
+     * this scope for you. Leave it null for the whole catalog; that's the right default only for
+     * callers with no target in hand (test fixtures, driver-agnostic construction), because the
+     * whole-catalog surface advertises every other app's tools to this session's LLM and the
+     * LLM tool array is capped at 128 entries.
      *
      * When [driverType] is non-null, resolution runs through
      * [TrailblazeToolSetCatalog.resolveForDriver] so catalog entries that declare incompatible
@@ -635,26 +668,25 @@ class TrailblazeToolRepo(
       excludedScriptedToolNames: Set<ToolName> = emptySet(),
       catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
       driverType: TrailblazeDriverType? = null,
+      toolSetIds: List<String>? = null,
     ): TrailblazeToolRepo {
-      // Every tool the driver can run is advertised up front — there is no progressive
-      // disclosure / opt-in narrowing anymore (the LLM sees the full surface and it works;
-      // browsing a catalog only added complexity). Resolving with every catalog id selects
-      // all entries, still filtered to the driver's compatible set when [driverType] is known.
-      val allIds = catalog.map { it.id }
-      val allTools = if (driverType != null) {
-        TrailblazeToolSetCatalog.resolveForDriver(driverType, allIds, catalog)
-      } else {
-        TrailblazeToolSetCatalog.resolve(allIds, catalog)
-      }
+      // The whole in-scope surface is advertised up front — there is no progressive disclosure /
+      // opt-in narrowing (the LLM sees the full surface and it works; browsing a catalog only
+      // added complexity). The scope is [toolSetIds] when the caller knows the target's trailmap
+      // declarations, and every catalog id otherwise; either way `resolveForSession` adds the
+      // `always_enabled` entries and drops entries the driver can't run.
+      val scopedIds = toolSetIds ?: catalog.map { it.id }
+      val scopedTools = TrailblazeToolSetCatalog.resolveForSession(driverType, scopedIds, catalog)
       return TrailblazeToolRepo(
         trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
           name = "All Tools",
-          toolClasses = allTools.toolClasses + customToolClasses - excludedToolClasses,
-          yamlToolNames = allTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
-          scriptedToolNames = allTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
+          toolClasses = scopedTools.toolClasses + customToolClasses - excludedToolClasses,
+          yamlToolNames = scopedTools.yamlToolNames + customYamlToolNames - excludedYamlToolNames,
+          scriptedToolNames = scopedTools.scriptedToolNames + customScriptedToolNames - excludedScriptedToolNames,
         ),
         toolSetCatalog = catalog,
         driverType = driverType,
+        toolSetIds = toolSetIds,
       )
     }
   }

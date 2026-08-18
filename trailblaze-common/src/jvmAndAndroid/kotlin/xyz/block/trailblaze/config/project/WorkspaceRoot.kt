@@ -38,6 +38,29 @@ sealed class WorkspaceRoot {
   data class Configured(override val dir: Path, val configFile: Path) : WorkspaceRoot() {
     /** The config payload dir the anchor file sits in (`trails/config/` or `trailblaze-config/`). */
     val configDir: Path get() = configFile.parent ?: dir
+
+    /**
+     * The repo/workspace root — the directory a human would call "the project", holding
+     * `trailblaze-config/` or `trails/`. Differs from [dir] only in the legacy layout, where
+     * [dir] is the `trails/` directory itself rather than its parent.
+     *
+     * Use this to resolve workspace-relative paths a user authors in `trailblaze.yaml`
+     * (`trails:`), so one written value means the same directory under either layout. Paths
+     * the *framework* generates still anchor at [dir] — that's where `.trailblaze/` artifacts
+     * have always lived, and moving them would orphan existing caches.
+     *
+     * Detects the **legacy shape** (`<root>/trails/config/`) rather than the standalone name.
+     * `TRAILBLAZE_CONFIG_DIR` accepts a config dir of any name, and [workspaceRootFromConfigDir]
+     * already sets [dir] to that dir's parent — so keying off "not named `trailblaze-config`"
+     * would treat every custom-named config dir as legacy and hand back a root one level too
+     * high (`TRAILBLAZE_CONFIG_DIR=/work/repo/cfg` → `/work` instead of `/work/repo`).
+     */
+    val workspaceRootDir: Path
+      get() {
+        val isLegacyShape = configDir.fileName?.toString() == TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR &&
+          dir.fileName?.toString() == TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR
+        return if (isLegacyShape) dir.parent ?: dir else dir
+      }
   }
 
   /**

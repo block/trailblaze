@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 
 /**
  * Direct coverage for [QuickJsToolMeta]. The launcher tests indirectly exercise the
@@ -33,6 +34,49 @@ class QuickJsToolMetaTest {
     val meta = QuickJsToolMeta.fromSpec(spec)
     assertEquals(QuickJsToolMeta(), meta)
   }
+
+  @Test
+  fun `fromSpec reads sensitiveArgNames and it is not a registration filter`() {
+    val meta = QuickJsToolMeta.fromSpec(
+      metaSpec {
+        put(
+          "trailblaze/sensitiveArgNames",
+          buildJsonArray {
+            add(kotlinx.serialization.json.JsonPrimitive("password"))
+            add(kotlinx.serialization.json.JsonPrimitive("sessionToken"))
+          },
+        )
+      },
+    )
+    assertEquals(
+      DeclaredSensitiveArgs.Named(setOf("password", "sessionToken")),
+      meta.sensitiveArgs,
+    )
+    assertTrue(meta.shouldRegister(TrailblazeDriverType.DEFAULT_ANDROID, preferHostAgent = false))
+  }
+
+  @Test
+  fun `an absent sensitiveArgNames key masks nothing`() {
+    assertEquals(
+      DeclaredSensitiveArgs.None,
+      QuickJsToolMeta.fromSpec(buildJsonObject { put("_meta", buildJsonObject { }) }).sensitiveArgs,
+    )
+  }
+
+  @Test
+  fun `a malformed sensitiveArgNames masks every arg rather than none`() {
+    // Fail closed: this parser reads `_meta` straight off a bundle, bypassing the descriptor
+    // loader's shape validation. Degrading to "mask nothing" (what every other key does on a
+    // malformed value) would write the credential the author was trying to protect.
+    val malformed = QuickJsToolMeta.fromSpec(
+      metaSpec { put("trailblaze/sensitiveArgNames", "password") },
+    )
+    assertEquals(DeclaredSensitiveArgs.AllArgsDeclarationUnreadable, malformed.sensitiveArgs)
+    assertEquals(setOf("email", "password"), malformed.sensitiveArgs.resolve(setOf("email", "password")))
+  }
+
+  private fun metaSpec(build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) =
+    buildJsonObject { put("_meta", buildJsonObject(build)) }
 
   @Test
   fun `supportedDrivers filters out current driver when not in list`() {

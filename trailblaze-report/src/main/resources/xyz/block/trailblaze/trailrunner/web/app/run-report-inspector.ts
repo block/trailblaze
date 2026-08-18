@@ -25,6 +25,10 @@ interface InspectorTreeNode {
   flags: string[];
   bounds: { x1: number; y1: number; x2: number; y2: number } | null;
   children: number[];
+  /** One past the last pre-order key in this node's subtree (subtree = keys [key, end)). */
+  end: number;
+  /** True for dialog/alertdialog roles — a top-layer hit-test scope (see hitTestNode). */
+  topLayer: boolean;
 }
 
 interface InspectorModel {
@@ -119,6 +123,20 @@ function nodeFlags(props: Record<string, unknown>): string[] {
   return Object.keys(props).filter((key) => props[key] === true);
 }
 
+// Dialogs live in the browser's top layer: everything their bounds cover is painted over, so a
+// hit inside them must never resolve to an occluded element of the page underneath (which keeps
+// its bounds in the capture — an ARIA snapshot has no z-order). The exact lowercase match is what
+// keeps this web-only: no other driver's vocabulary produces a bare "dialog" in these keys —
+// Android classNames are dotted ("android.app.Dialog"), iosMaestro classNames are bare but
+// UpperCamelCase ("UIButton"), iOS AXe `role` values are AX-prefixed ("AXButton"), and Compose
+// `role` values are capitalized ("Button"). Deliberately reads `role`, NOT the AXe
+// `roleDescription`, whose values are documented lowercase ("button", "application") and would
+// collide.
+function nodeIsTopLayer(props: Record<string, unknown>): boolean {
+  const role = props.ariaRole ?? props.role ?? props.className;
+  return role === 'dialog' || role === 'alertdialog';
+}
+
 // The tree row's display text — same precedence the legacy WASM inspector used: literal text
 // first, then the accessibility text, then resource id, then a short class name. The web
 // (Playwright) detail keeps that shape via its ARIA fields: ariaName is the accessible name
@@ -153,24 +171,44 @@ function inspectorModel(hierarchy: unknown): InspectorModel | null {
       flags: nodeFlags(props),
       bounds: nodeBounds(raw),
       children: [],
+      end: 0,
+      topLayer: nodeIsTopLayer(props),
     };
     nodes.push(node);
     for (const child of Array.isArray(raw.children) ? raw.children : []) {
       const key = walk(child, depth + 1);
       if (key != null) node.children.push(key);
     }
+    node.end = nodes.length;
     return node.key;
   };
   walk(hierarchy, 0);
   if (!nodes.length) return null;
-  // Device coordinate space: the root's own extent when it has one, else the widest extent any
-  // node reports — bounds are device pixels, so this is what the overlay scales against.
+  // The tree's own coordinate space — what the overlay scales against, in whatever units the tree
+  // reports (Android device pixels, iOS points; the screenshot's pixel size never enters, since
+  // every rect is a PERCENTAGE of this extent and the image is drawn at 100% width).
+  //  1. the root's own extent when it declares one (Android, AXe iOS);
+  //  2. else the widest extent among nodes ANCHORED AT THE ORIGIN — the screen-sized windows and
+  //     content views every capture has. Deliberately not the widest extent overall: iOS
+  //     (XCUITest) trees carry off-screen containers that overhang the screen on every side — a
+  //     real iPhone capture has one at (-402,-874 → 804,1748), exactly 3x the 402x874 screen — so
+  //     an overall max anchors at 2x and paints the entire UI into the top-left quadrant, at half
+  //     scale, with hit-testing skewed to match. Origin-anchored reproduces the logged device size
+  //     on all 101 committed iOS captures, where the overall max matches on 5.
+  //  3. else the widest extent overall (nothing starts at the origin — nothing better to go on).
+  // A too-tall extent self-corrects: the viewer re-derives height from the decoded image's aspect
+  // ratio, so width is the load-bearing dimension here.
   let w = 0;
   let h = 0;
   const root = nodes[0].bounds;
   if (root && root.x2 > 0 && root.y2 > 0) { w = root.x2; h = root.y2; }
   else {
-    for (const n of nodes) { if (n.bounds) { w = Math.max(w, n.bounds.x2); h = Math.max(h, n.bounds.y2); } }
+    for (const n of nodes) { if (n.bounds && n.bounds.x1 === 0 && n.bounds.y1 === 0) { w = Math.max(w, n.bounds.x2); h = Math.max(h, n.bounds.y2); } }
+    if (!(w > 0 && h > 0)) {
+      w = 0;
+      h = 0;
+      for (const n of nodes) { if (n.bounds) { w = Math.max(w, n.bounds.x2); h = Math.max(h, n.bounds.y2); } }
+    }
   }
   return { nodes, dims: w > 0 && h > 0 ? { w, h } : null, truncated };
 }
@@ -182,13 +220,34 @@ function inspectorModel(hierarchy: unknown): InspectorModel | null {
  * first-wins tie the outermost wrapper shadowed the element itself on every hover — the deepest
  * node is the one a browser hit-test would report. The same rule resolves overlapping equal-area
  * SIBLINGS to the later one, matching DOM paint order (later siblings draw on top).
+ *
+ * Candidates are first scoped to the last dialog/alertdialog whose bounds contain the point: a
+ * dialog paints over everything under it, but the occluded page keeps its bounds in the capture,
+ * and those background elements (often smaller than the dialog's own controls) stole the hit on
+ * every hover over a modal. Later dialogs sit above earlier ones, so the last containing one —
+ * the innermost of nested dialogs, the newest of stacked ones — is the visible surface.
+ *
+ * Known limit: an overlay PORTALED out of an open dialog (a select listbox / popover mounted at
+ * document.body, an ARIA sibling of the dialog) is excluded by the scope and can't be hit while
+ * it overlaps the dialog. "Outside the subtree but later in document order" is NOT a usable
+ * eligibility signal for those: real captures put occluded background elements after the dialog
+ * subtree too (the Create-item capture has five, one overlapping a form row), so a document-order
+ * carve-out reintroduces exactly the background steal this scope exists to stop. Distinguishing
+ * the two needs a z-order-ish signal the capture doesn't carry today.
  */
 function hitTestNode(model: InspectorModel, x: number, y: number): number | null {
+  const contains = (b: InspectorTreeNode['bounds']) => !!b && x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2;
+  let start = 0;
+  let end = model.nodes.length;
+  for (const n of model.nodes) {
+    if (n.topLayer && contains(n.bounds)) { start = n.key; end = n.end; }
+  }
   let best: number | null = null;
   let bestArea = Infinity;
-  for (const n of model.nodes) {
-    const b = n.bounds;
-    if (!b || x < b.x1 || x > b.x2 || y < b.y1 || y > b.y2) continue;
+  for (let key = start; key < end; key++) {
+    const n = model.nodes[key];
+    if (!contains(n.bounds)) continue;
+    const b = n.bounds!;
     const area = Math.max(1, (b.x2 - b.x1) * (b.y2 - b.y1));
     if (area <= bestArea) { bestArea = area; best = n.key; }
   }

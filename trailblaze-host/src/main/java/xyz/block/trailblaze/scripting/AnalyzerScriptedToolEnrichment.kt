@@ -308,6 +308,7 @@ class AnalyzerScriptedToolEnrichment(
             entrySupportedPlatforms = entry.supportedPlatforms,
             entrySurfaceToLlm = entry.surfaceToLlm,
             entryIsRecordable = entry.isRecordable,
+            entrySensitiveArgNames = entry.sensitiveArgNames,
             def = defsByName.getValue(entry.name),
           )
         }
@@ -343,6 +344,7 @@ class AnalyzerScriptedToolEnrichment(
             entrySupportedPlatforms = null,
             entrySurfaceToLlm = null,
             entryIsRecordable = null,
+            entrySensitiveArgNames = null,
             def = def,
           ),
         )
@@ -413,6 +415,10 @@ class AnalyzerScriptedToolEnrichment(
             // downstream subprocess synthesizer + in-process descriptor see a self-contained
             // schema — see [ScriptedToolSchemaRefFlattener].
             inputSchema = ScriptedToolSchemaRefFlattener.flatten(def.inputSchemaObject),
+            // The analyzer read the tool's `<I>` generic, so this schema IS the complete
+            // argument contract — including `properties: {}` for a genuinely no-arg tool,
+            // which the arg-shape gates may therefore enforce strictly.
+            inputSchemaExhaustive = true,
             trailhead = trailheadOf(def.name, def.spec),
           ),
         )
@@ -456,6 +462,7 @@ class AnalyzerScriptedToolEnrichment(
     entrySupportedPlatforms: List<String>?,
     entrySurfaceToLlm: Boolean?,
     entryIsRecordable: Boolean?,
+    entrySensitiveArgNames: List<String>?,
     def: ScriptedToolDefinition,
   ): InlineScriptToolConfig {
     val description = entryDescription ?: specDescriptionOf(def.spec) ?: def.description
@@ -506,6 +513,11 @@ class AnalyzerScriptedToolEnrichment(
     // the on-device `_meta` (read by QuickJsToolMeta) agree with the typed `InlineScriptToolConfig`
     // slot the host reads — otherwise an explicit descriptor `_meta:{trailblaze/surfaceToLlm:true}`
     // could win in `_meta` while the typed slot is `false`, diverging the two runtimes.
+    // An empty per-entry list means "inherit", not "mask nothing" — same reading
+    // `TrailmapScriptedToolFile` takes, and for the same reason: guessing wrong in the other
+    // direction writes a credential to a shipped artifact.
+    val effectiveSensitiveArgNames =
+      entrySensitiveArgNames?.takeIf { it.isNotEmpty() } ?: descriptor.sensitiveArgNames
     val mergedMetaBase = mergeMeta(
       descriptorMeta = descriptor.meta,
       requiresHost = effectiveRequiresHost,
@@ -513,6 +525,7 @@ class AnalyzerScriptedToolEnrichment(
       analyzerSpec = def.spec,
       surfaceToLlm = effectiveSurfaceToLlm,
       isRecordable = effectiveIsRecordable,
+      sensitiveArgNames = effectiveSensitiveArgNames,
     )
     val mergedWithEntry = if (entryMeta == null || entryMeta.isEmpty()) mergedMetaBase else {
       // Per-entry `_meta:` keys win over file-wide ones.
@@ -537,6 +550,10 @@ class AnalyzerScriptedToolEnrichment(
       runtime = descriptor.runtime,
       meta = merged,
       inputSchema = inputSchema,
+      // Exhaustive on both branches of the `inputSchema` selection above: either the author
+      // declared a full `inputSchema:` (which wins over the analyzer), or the analyzer read the
+      // tool's `<I>` generic. Both are the tool's complete argument contract.
+      inputSchemaExhaustive = true,
       trailhead = trailheadOf(entryName, def.spec),
     )
   }
@@ -609,6 +626,15 @@ class AnalyzerScriptedToolEnrichment(
           "`supportedPlatforms: [...]` shortcut instead of authoring this key directly."
       }
     }
+    meta["trailblaze/sensitiveArgNames"]?.let { v ->
+      if (v !is JsonArray || v.any { it !is JsonPrimitive || !(it as JsonPrimitive).isString }) {
+        return "`_meta.trailblaze/sensitiveArgNames` expected a YAML list of argument names " +
+          "(e.g. `[password]`), got ${v::class.simpleName} '${v}'. A malformed value masks " +
+          "NOTHING, so the named credential would be written to the session log in plaintext. " +
+          "Prefer the top-level `sensitiveArgNames: [...]` shortcut instead of authoring this " +
+          "key directly."
+      }
+    }
     return null
   }
 
@@ -651,6 +677,7 @@ class AnalyzerScriptedToolEnrichment(
     analyzerSpec: JsonObject?,
     surfaceToLlm: Boolean = true,
     isRecordable: Boolean = true,
+    sensitiveArgNames: List<String>? = null,
   ): JsonObject? {
     val explicit = descriptorMeta ?: JsonObject(emptyMap())
     val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
@@ -660,12 +687,28 @@ class AnalyzerScriptedToolEnrichment(
     val needsIsRecordable = !isRecordable
     val analyzerProjected = projectAnalyzerSpec(analyzerSpec)
     val analyzerHasContent = analyzerProjected.isNotEmpty()
+    // UNION across all three sources (`.ts` spec, explicit `_meta:`, descriptor shortcut) rather
+    // than the last-write-wins precedence the other keys use. Every other key answers "which gate
+    // applies"; this one answers "which args are secret", and a source that overrode another could
+    // only ever un-mask an arg some author had already declared sensitive. Mirrors the additive
+    // union `requiresHost` takes, for the same fail-safe reason.
+    val unionSensitiveArgNames = buildSet {
+      (analyzerProjected["trailblaze/sensitiveArgNames"] as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
+        ?.let(::addAll)
+      (explicit["trailblaze/sensitiveArgNames"] as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }
+        ?.let(::addAll)
+      sensitiveArgNames?.let(::addAll)
+    }
+    val needsSensitiveArgNames = unionSensitiveArgNames.isNotEmpty()
     if (
       explicit.isEmpty() &&
       !needsSupportedPlatforms &&
       !needsRequiresHost &&
       !needsSurfaceToLlm &&
       !needsIsRecordable &&
+      !needsSensitiveArgNames &&
       !analyzerHasContent
     ) {
       return null
@@ -693,6 +736,14 @@ class AnalyzerScriptedToolEnrichment(
       }
       if (needsIsRecordable) {
         put("trailblaze/isRecordable", JsonPrimitive(false))
+      }
+      if (needsSensitiveArgNames) {
+        // Sorted so the emitted `_meta` is deterministic across runs regardless of which source
+        // contributed which name.
+        put(
+          "trailblaze/sensitiveArgNames",
+          buildJsonArray { unionSensitiveArgNames.sorted().forEach { add(JsonPrimitive(it)) } },
+        )
       }
     }
   }
@@ -773,7 +824,7 @@ class AnalyzerScriptedToolEnrichment(
     val projected = mutableMapOf<String, JsonElement>()
     // SISTER-IMPL-TAG: typed-tool-spec-fields. The bare-field-name set
     // (`supportedPlatforms`, `requiresContext`, `requiresHost`, `supportedDrivers`,
-    // `surfaceToLlm`, `isRecordable`) is defined in THREE places that must stay in
+    // `surfaceToLlm`, `isRecordable`, `sensitiveArgNames`) is defined in THREE places that must stay in
     // lockstep when a new field is added to `TrailblazeTypedToolSpec`:
     //  1. `sdks/typescript/src/tool-core.ts`             (the SDK's TS surface)
     //  2. `sdks/typescript/tools/extract-tool-defs.mjs`  (`RECOGNIZED_SPEC_FIELDS`)
@@ -796,6 +847,7 @@ class AnalyzerScriptedToolEnrichment(
     analyzerSpec["supportedDrivers"]?.let { projected["trailblaze/supportedDrivers"] = it }
     analyzerSpec["surfaceToLlm"]?.let { projected["trailblaze/surfaceToLlm"] = it }
     analyzerSpec["isRecordable"]?.let { projected["trailblaze/isRecordable"] = it }
+    analyzerSpec["sensitiveArgNames"]?.let { projected["trailblaze/sensitiveArgNames"] = it }
     return projected
   }
 

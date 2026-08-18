@@ -61,7 +61,10 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
+import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
+import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -387,16 +390,22 @@ abstract class BaseHostTrailblazeTest(
       ),
     )
   } else {
-    TrailblazeToolRepo.withDynamicToolSets(
-      customToolClasses = customToolClasses,
-      customYamlToolNames = customYamlToolNames,
-      // Union the explicit class opt-outs with the target's full surface, and forward the YAML +
-      // scripted partitions too (via getExcludedToolSurfaceForDriver) so an `excluded_tools:
-      // [openUrl]` target doesn't advertise openUrl in a host run.
-      excludedToolClasses = excludedToolClasses + targetExcludedSurface.toolClasses,
-      excludedYamlToolNames = targetExcludedSurface.yamlToolNames,
-      excludedScriptedToolNames = targetExcludedSurface.scriptedToolNames,
+    // The shared session entry point, same as the on-device rules, the host YAML runner and the
+    // daemon. This used to compose against the whole driver catalog while ignoring the target's
+    // `tool_sets:`, so a Block target got its trailmap scope on device and every app's tools in a
+    // host JUnit run — the cross-runtime drift this class of bug keeps coming back as.
+    // `excludedToolClasses` is this harness's own opt-out list, unioned with the target's.
+    appTarget.toSessionToolRepo(
       driverType = trailblazeDriverType,
+      additional = ResolvedAgentToolbox(
+        toolClasses = customToolClasses,
+        yamlToolNames = customYamlToolNames,
+      ),
+      additionalExclusions = ResolvedToolExclusions(
+        toolClasses = excludedToolClasses,
+        yamlToolNames = emptySet(),
+        scriptedToolNames = emptySet(),
+      ),
     )
   }
 

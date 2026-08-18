@@ -15,7 +15,7 @@
 import { createRequire } from "module";
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { gzipSync } from "zlib";
 import { buildEventStream, resolveFormatterModule } from "./run-report-events";
 import { parseSpriteMetadata, resolvedFrameMap, spriteRejectionReason, spriteSheetRows } from "./run-report-sprites";
@@ -32,6 +32,21 @@ interface DriverInput {
    * for passed sessions — the report size budgets are bypassed entirely.
    */
   fullEventPayloads?: boolean;
+  /**
+   * File name (beside this driver) of the Kotlin/JS selector-engine bundle RunReportGenerator
+   * staged from its JAR resources, when present. Embedded once per report — gz+base64 past the
+   * shared inline threshold — so the UI Inspector can compute selector suggestions offline.
+   */
+  selectorEngine?: string;
+  /**
+   * When set, local screenshots and video sprite sheets are REFERENCED at
+   * `<imageBaseUrl><sessionId>/<file>` instead of base64-embedded (see [localShotUrl]). Absent —
+   * the default — embeds every image, which is what makes a report a portable single file.
+   *
+   * Screenshots that are ALREADY absolute URLs (a device-farm leg — see [isRemoteScreenshot]) pass
+   * through unchanged either way; this switch governs only the images that live on disk.
+   */
+  imageBaseUrl?: string | null;
   sessions?: Array<{
     meta?: RunMeta;
     recordingYaml?: string | null;
@@ -50,7 +65,8 @@ type ReportCore = {
   extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[];
   extractLlmTranscripts(llmLogs: RawLlmRow[]): LlmTranscripts | null;
   traceHierarchies(trace: RawTraceRow[], sessionPassed: boolean): Record<string, unknown> | null;
-  buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string;
+  isSelectorAnalyzableTree(hierarchy: unknown): boolean;
+  buildMultiReportHtml(args: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string;
 };
 
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
@@ -147,6 +163,44 @@ export function remoteShotValue(url: string): string {
     // Not parseable as a URL, so it can't be normalized — it still must not close the attribute.
     return url.replace(/"/g, "%22");
   }
+}
+
+/**
+ * What the viewer renders for a LOCAL screenshot or sprite sheet when the report links images
+ * instead of embedding them (`imageBaseUrl` in the driver input — see [DriverInput.imageBaseUrl]).
+ *
+ * The emitted key is `<sessionId>/<file>`, the same key the legacy WASM report hands its
+ * `window.transformImageUrl` hook and the same one the in-app Share path already fetches
+ * (`share-export.tsx` builds this exact `/static/<enc sessionId>/<enc file>` shape), so every
+ * hosting environment that already serves that layout keeps working unchanged:
+ *
+ * - the daemon passes `/static/`, which its `staticFiles("/static", logsRepo.logsDir)` route serves;
+ * - CI passes `""`, leaving a document-relative reference that the browser resolves against the
+ *   report's own artifact URL — arithmetic identical to what a hosted-report `transformImageUrl`
+ *   hook computes for the WASM report, against the same `<sessionId>/<file>` artifact paths the
+ *   report step uploads.
+ *
+ * ESCAPING IS LOAD-BEARING, in two different contexts. The viewer interpolates a screenshot into
+ * `src="…"` and a sprite sheet into `background-image:url('…')` — both WITHOUT escaping, because
+ * both were only ever fed base64 data URIs before. So the value must be unable to close EITHER
+ * delimiter: percent-encoding each path segment handles `"`, and `'` is encoded explicitly because
+ * `encodeURIComponent` leaves it intact. Segments are encoded individually rather than encoding the
+ * whole key, so a name that itself contains `/` still yields a real path instead of `%2F` (which no
+ * static file route would resolve).
+ */
+export function localShotUrl(baseUrl: string, sessionId: string, file: string): string {
+  // A base is a URL prefix, so it must end in `/` — tolerate a caller that omits it rather than
+  // silently emitting `/staticmy_session/shot.webp`.
+  const base = baseUrl === "" || baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return `${base}${encodePathSegments(sessionId)}/${encodePathSegments(file)}`;
+}
+
+/** Percent-encodes each `/`-separated segment, preserving the separators. See [localShotUrl]. */
+function encodePathSegments(value: string): string {
+  return value
+    .split("/")
+    .map((segment) => encodeURIComponent(segment).replace(/'/g, "%27"))
+    .join("/");
 }
 
 export function screenshotDataUri(sessionDir: string, file: string, ffmpeg: string = "ffmpeg"): string | null {
@@ -304,6 +358,48 @@ export function packLlmMessages(transcripts: LlmTranscripts | null): { llmMessag
 }
 
 /**
+ * Whether any session carries a hierarchy the selector engine can actually analyze — the gate for
+ * embedding the engine at all. Presence of *some* hierarchy isn't enough: a session that only
+ * logged the legacy `ViewHierarchyTreeNode` shape (agent/MCP-sampling captures) opens an inspector
+ * that can never show a suggestion, so paying ~110 KB for it is pure weight. `isAnalyzable` is the
+ * viewer's own `isSelectorAnalyzableTree` (passed in — this driver reaches shared logic through the
+ * bundled core, never a re-implementation), so the gate and the UI agree by construction.
+ */
+export function anyAnalyzableHierarchy(
+  liftedPerSession: Array<Record<string, unknown> | null>,
+  isAnalyzable: (hierarchy: unknown) => boolean,
+): boolean {
+  return liftedPerSession.some((lifted) => lifted != null && Object.values(lifted).some(isAnalyzable));
+}
+
+/**
+ * Splits the Kotlin/JS selector-engine bundle into the shared inline/gz transport (see packGz) for
+ * buildMultiReportHtml's `selectorEngine` argument. The real bundle (~320 KB) always lands on the
+ * gz side (~110 KB as base64); the inline branch exists only for threshold symmetry with every
+ * other side-channel. Null in, null out — an absent bundle embeds nothing.
+ */
+export function packSelectorEngine(code: string | null): SelectorEnginePayload | null {
+  if (!code) return null;
+  const { inline, gz } = packGz(code, (t) => t, LOG_INLINE_MAX_CHARS);
+  return { js: inline, gz };
+}
+
+// The staged engine file name comes from input.json; require the same plain path-safe shape as
+// event formatters so a crafted input can't point report generation at an arbitrary file and
+// embed its contents (the exfiltration concern remoteShotValue documents).
+const SAFE_ENGINE_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Read the staged selector-engine bundle, or null when unnamed/unsafe/unreadable. */
+function readSelectorEngineSource(name: string | undefined): string | null {
+  if (!name || !SAFE_ENGINE_FILE_NAME.test(name)) return null;
+  try {
+    return readFileSync(name, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Splits the per-step view-hierarchies map (lifted off the extracted trace by traceHierarchies in
  * run-report-extract — shared with the browser producers, so the size budget behaves identically
  * everywhere; grep REPORT_SIZE_BUDGET) into inline `hierarchies` vs compressed `hierarchiesGz` at
@@ -353,7 +449,19 @@ function loadFormatters(names: string[]): EventStreamFormatter[] {
 // multi-sheet) live in run-report-sprites.ts — the shared contract this driver and the legacy
 // WasmReport both apply, locked cross-language by sprite-metadata-parity-fixtures.json. A rejected
 // sprite hides the Video tab so the timeline falls back to per-step screenshots.
-function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreenshotCount: number): VideoInfo | null {
+/**
+ * @param spriteValue what to put in each sheet's `uri` — the base64 data URI by default, or the
+ *   linked-image URL when the report references images instead of embedding them. Sheets are
+ *   ordinary files in the session dir (`video_sprites*.webp`), served by the same two hosts as the
+ *   step screenshots, so they follow the same switch — and they are the largest single blob a
+ *   session contributes.
+ */
+export function readVideo(
+  sessionDir: string,
+  logs: TrailblazeLogRecord[],
+  stepScreenshotCount: number,
+  spriteValue: (path: string) => string | null = dataUri,
+): VideoInfo | null {
   try {
     const metaPath = join(sessionDir, "capture_metadata.json");
     if (!existsSync(metaPath)) return null;
@@ -410,7 +518,7 @@ function readVideo(sessionDir: string, logs: TrailblazeLogRecord[], stepScreensh
 
     const sprites: Array<{ uri: string; rows: number }> = [];
     for (let k = 0; k < spritePaths.length; k++) {
-      const uri = dataUri(spritePaths[k]);
+      const uri = spriteValue(spritePaths[k]);
       if (!uri) return null;
       sprites.push({ uri, rows: spriteSheetRows(meta, k) });
     }
@@ -429,6 +537,9 @@ function main(): void {
   const core = require("./run-report-core.js") as ReportCore;
   const input: DriverInput = JSON.parse(readFileSync(inputPath, "utf8"));
   const formatters = loadFormatters(input.formatters || []);
+  // Each session's lifted per-step hierarchies, kept for the selector-engine embed gate below.
+  const liftedHierarchies: Array<Record<string, unknown> | null> = [];
+  const imageBaseUrl = input.imageBaseUrl ?? null;
   const sessions: SessionInput[] = (input.sessions || []).map((s) => {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
@@ -436,13 +547,23 @@ function main(): void {
     // Inline only the screenshots the timeline actually references (deduped), mirroring the
     // in-app Share path (share-export.jsx#collectScreenshots).
     const files = [...new Set(trace.map((t) => t.screenshotFile).filter(Boolean))] as string[];
+    // Session id == the session dir's own name, the segment both hosts address images under.
+    const sessionId = basename(s.sessionDir);
+    // In linked-image mode a file that isn't on disk is dropped rather than referenced, matching
+    // what embedding does with the same file: a shot the report can't produce is one the viewer
+    // renders without, not a broken <img>. NOTE: this is why any caller that deletes the image
+    // files must do so AFTER generation — see the CI report step's ordering gate.
+    const linkedShot = (file: string) =>
+      imageBaseUrl != null && existsSync(join(s.sessionDir, file))
+        ? localShotUrl(imageBaseUrl, sessionId, file)
+        : null;
     const shots: Record<string, string> = {};
     for (const f of files) {
       if (isRemoteScreenshot(f)) {
         shots[f] = remoteShotValue(f);
         continue;
       }
-      const uri = screenshotDataUri(s.sessionDir, f);
+      const uri = linkedShot(f) ?? screenshotDataUri(s.sessionDir, f);
       if (uri) shots[f] = uri;
     }
     const ctx = formatterContext(s.meta?.status, input.fullEventPayloads === true);
@@ -450,8 +571,10 @@ function main(): void {
     const { deviceLog, deviceLogGz } = packDeviceLog(readDeviceLog(s.sessionDir));
     const { network, networkGz } = packNetwork(readNetworkLog(s.sessionDir));
     const { llmMessages, llmMessagesGz } = packLlmMessages(core.extractLlmTranscripts(llmLogs));
+    const lifted = core.traceHierarchies(trace, ctx.sessionPassed);
+    liftedHierarchies.push(lifted);
     const { hierarchies, hierarchiesGz } = packHierarchies(
-      core.traceHierarchies(trace, ctx.sessionPassed),
+      lifted,
       trace.filter((t) => t.viewHierarchy != null).length,
     );
     return {
@@ -471,11 +594,16 @@ function main(): void {
       llmMessagesGz,
       hierarchies,
       hierarchiesGz,
-      video: readVideo(s.sessionDir, logs, files.length),
+      video: readVideo(s.sessionDir, logs, files.length, (path) => linkedShot(basename(path)) ?? dataUri(path)),
     };
   });
 
-  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", ...(input.shareUrl ? { shareUrl: input.shareUrl } : {}), sessions });
+  // Embed the selector engine only when some session carries a hierarchy it can analyze — an
+  // inspector-less (or legacy-tree-only) report gets no engine bytes at all.
+  const selectorEngine = anyAnalyzableHierarchy(liftedHierarchies, core.isSelectorAnalyzableTree)
+    ? packSelectorEngine(readSelectorEngineSource(input.selectorEngine))
+    : null;
+  const html = core.buildMultiReportHtml({ generatedAt: input.generatedAt || "", ...(input.shareUrl ? { shareUrl: input.shareUrl } : {}), ...(selectorEngine ? { selectorEngine } : {}), sessions });
   writeFileSync(outputPath, html);
 }
 

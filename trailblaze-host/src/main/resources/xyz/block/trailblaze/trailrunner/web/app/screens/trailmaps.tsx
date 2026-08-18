@@ -57,6 +57,36 @@ function tmSynthComp(relPath) {
   return { name, relPath, flavor: null, trailmap, label: tmInnerLabel(relPath, name) };
 }
 
+// The "lives in another repo" footer of the component rail: targets the daemon knows OF (declared
+// by a known-target-workspace record) but doesn't carry, grouped one row per home repo. These stay
+// OUT of the trailmap groups above and out of every trailmaps-derived picker — there is nothing to
+// browse or create here; the pointer (repo link + clone command) is the whole payload.
+function NotInstalledTargetsSection({ entries }) {
+  const groups = React.useMemo(() => window.NotInstalledTargetsModel.groupByRepo(entries || []), [entries]);
+  const copy = (t) => { try { navigator.clipboard.writeText(t); } catch (_) {} };
+  if (groups.length === 0) return null;
+  return (
+    // Bounded + self-scrolling: this sits below the rail's main scroll area, so with many repos
+    // (or a short window) an unbounded block would squeeze the component list and clip the footer.
+    <div style={{ borderTop: '1px solid var(--tb-hairline)', padding: '8px 12px 10px', flex: '0 1 auto', maxHeight: '30%', overflowY: 'auto' }}>
+      <div className="tb-eyebrow" style={{ marginBottom: 6 }} title="Targets declared in the known-target-workspaces registry that this installation doesn't carry. Clone the repo and run the daemon from it to use them.">Lives in another repo</div>
+      {groups.map((g) => (
+        <div key={g.repo} style={{ padding: '4px 0 6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <Ico n="git-branch" s={12} c="var(--text-subtle)" style={{ flex: '0 0 auto' }} />
+            {g.url
+              ? <a href={g.url} target="_blank" rel="noreferrer" className="tb-mono" title={g.description || g.repo} style={{ fontSize: 11.5, color: 'var(--text-standard)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.shortName}</a>
+              : <span className="tb-mono" title={g.description || g.repo} style={{ fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.shortName}</span>}
+            <div style={{ flex: 1 }} />
+            <button className="tb-btn ghost sm" style={{ padding: 3 }} title={'Copy: ' + g.cloneCommand} onClick={() => copy(g.cloneCommand)}><Ico n="copy" s={11} /></button>
+          </div>
+          <div className="tb-sub tb-mono" style={{ fontSize: 10.5, paddingLeft: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.targets.join(', ')}>{g.targets.join(', ')}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ComponentTypeScreen({ kind, initSel }) {
   useLucide();
   const meta = TM_COMP_TYPES[kind] || TM_COMP_TYPES.tools;
@@ -175,6 +205,7 @@ function ComponentTypeScreen({ kind, initSel }) {
           })}
           {!tmResult.loading && filtered.length === 0 && <div className="tb-sub" style={{ padding: '20px 10px', fontSize: 12.5 }}>No {meta.label.toLowerCase()} {q ? 'match.' : 'in this workspace yet.'}</div>}
         </div>
+        <NotInstalledTargetsSection entries={(tmResult.extra && tmResult.extra.notInstalledTargets) || []} />
         <TargetScopeBanner label={scoped ? (gt.label || gt.target) : null} platform={scoped ? gtPlatform : null} onShowAll={() => setScopeOff(true)} />
         <div style={{ padding: '9px 12px', borderTop: '1px solid var(--tb-hairline)' }}>
           <div className="tb-sub" style={{ fontSize: 11.5, color: 'var(--text-standard)' }}>{filtered.length === fullCount ? `${fullCount} ${meta.label.toLowerCase()}` : `${filtered.length} of ${fullCount} ${meta.label.toLowerCase()}`}</div>
@@ -188,7 +219,7 @@ function ComponentTypeScreen({ kind, initSel }) {
             <EmptyState ico={meta.ico} title={`Select a ${meta.singular}`} sub={meta.def} />
           </div>
         )}
-        {cur && <ComponentDetail comp={cur} kind={kind} />}
+        {cur && <ComponentDetail comp={cur} kind={kind} home={(tms.find((t) => t.id === cur.trailmap)) || null} />}
       </div>
       {showNew && <NewComponentModal kind={kind} trailmaps={tms.map((t) => t.id)} onClose={() => setShowNew(false)} onCreated={(rel) => { setSelPath(rel); tmResult.reload(); }} />}
       {menu && <TrailmapComponentContextMenu menu={menu} onClose={() => setMenu(null)} />}
@@ -233,7 +264,9 @@ function NewComponentModal({ kind, trailmaps, onClose, onCreated }) {
 
 function tmParseYaml(text) { try { return window.jsyaml ? window.jsyaml.load(text) : null; } catch (_) { return null; } }
 
-function ComponentDetail({ comp, kind }) {
+// `home` is the component's TrailmapEntry (for its homeRepo/homeUrl annotation), or null when the
+// catalog hasn't loaded it / no record homes the trailmap — the chip simply doesn't render then.
+function ComponentDetail({ comp, kind, home }) {
   useLucide();
   const [tab, setTab] = React.useState('overview');
   const [text, setText] = React.useState(null);
@@ -253,7 +286,19 @@ function ComponentDetail({ comp, kind }) {
     <div style={{ padding: '24px 28px', maxWidth: 980, margin: '0 auto', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', ...(tab === 'edit' ? { height: '100%', minHeight: 0 } : { minHeight: '100%' }) }}>
       <DetailHeader
         title={tmDisplayLabel(kind, comp.trailmap, comp.label)}
-        badges={<React.Fragment><Chip>{comp.trailmap}</Chip>{kind === 'tools' && comp.flavor ? <Chip>{comp.flavor}</Chip> : null}</React.Fragment>}
+        badges={<React.Fragment>
+          <Chip>{comp.trailmap}</Chip>
+          {kind === 'tools' && comp.flavor ? <Chip>{comp.flavor}</Chip> : null}
+          {home && home.homeShortName ? (
+            // This trailmap is loadable here but at home in another repo (e.g. bundled from a pinned
+            // copy while its trails live only there) — the same annotation `trailblaze config target`
+            // prints, so an empty Trails tab has an explanation. The href passes the same http(s)
+            // gate as the footer links: homeUrl comes from workspace-contributable registry YAML.
+            window.NotInstalledTargetsModel.safeHttpUrl(home.homeUrl)
+              ? <a href={window.NotInstalledTargetsModel.safeHttpUrl(home.homeUrl)} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }} title={'This target is at home in ' + home.homeShortName}><Chip>trails in {home.homeShortName}</Chip></a>
+              : <Chip>trails in {home.homeShortName}</Chip>
+          ) : null}
+        </React.Fragment>}
         meta={<ToolMeta ico="folder" label="Source"><span className="tb-mono" data-selectable title={comp.relPath}>{comp.relPath}</span></ToolMeta>}
         right={<Btn sm ico="folder-open" onClick={() => TB.revealToolSource({ path: comp.relPath })}>Open in Finder</Btn>}
       />

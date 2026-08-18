@@ -3,7 +3,11 @@ package xyz.block.trailblaze.toolcalls
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
@@ -120,22 +124,59 @@ fun scrubSensitiveValues(text: String, memory: AgentMemory): String {
 }
 
 /**
+ * Structured-payload analog of [scrubSensitiveValues]: scrubs a tool's error payload
+ * (`ExceptionThrown.structuredPayload`) the same way the free-form message is scrubbed — a tool
+ * could splice a resolved `rememberSensitive` value into its payload just as easily as into its
+ * message. The scrub traverses the tree and matches DECODED string contents, never the serialized
+ * form — a secret containing a JSON-escaped character (quote, backslash, newline) appears as
+ * `\"`/`\\`/`\n` in encoded text, where a literal value match would silently miss it. Object member
+ * NAMES are scrubbed too: payload schemas are repo-owned and can legally key a map by a resolved
+ * value (two keys collapsing to one token drops an entry — over-masking is the safe failure). A
+ * non-string primitive whose text matches a secret (e.g. a numeric PIN) is masked as a string
+ * token: the type change is visible, the secret is not.
+ */
+fun scrubSensitivePayload(payload: JsonElement, memory: AgentMemory): JsonElement {
+  if (memory.sensitiveKeys.isEmpty()) return payload
+  return when (payload) {
+    is JsonObject -> JsonObject(
+      payload.entries.associate { (key, value) ->
+        scrubSensitiveValues(key, memory) to scrubSensitivePayload(value, memory)
+      },
+    )
+    is JsonArray -> JsonArray(payload.map { scrubSensitivePayload(it, memory) })
+    is JsonPrimitive -> {
+      if (payload is JsonNull) return payload
+      val scrubbed = scrubSensitiveValues(payload.content, memory)
+      when {
+        scrubbed == payload.content -> payload
+        else -> JsonPrimitive(scrubbed)
+      }
+    }
+  }
+}
+
+/**
  * Full failure-result hardening for LLM-facing / persisted content: restores the authored
  * (token-bearing) command identity ([withAuthoredCommandIdentity]) AND scrubs any resolved
  * `rememberSensitive` value a failing tool spliced into its free-form [errorMessage]
- * ([scrubSensitiveValues]). The command swap alone keeps STRUCTURED args safe; the message scrub
- * closes the gap for a tool that interpolates a token into a diagnostic string — e.g. a remember
- * tool's "Failed to find element for prompt: …" on a lookup miss, where the prompt arrives
+ * ([scrubSensitiveValues]) or its structured [TrailblazeToolResult.Error.ExceptionThrown.structuredPayload]
+ * ([scrubSensitivePayload]). The command swap alone keeps STRUCTURED args safe; the message and
+ * payload scrubs close the gap for a tool that interpolates a token into its diagnostics — e.g. a
+ * remember tool's "Failed to find element for prompt: …" on a lookup miss, where the prompt arrives
  * boundary-resolved. Use this (not the bare identity swap) wherever a failure result leaves the
- * dispatch loop toward the LLM / logs.
+ * dispatch loop toward the LLM / logs — downstream carriers (`TrailheadException.payload`,
+ * `SessionStatus.Ended.Failed.failurePayload`, the report row) inherit the redaction from here.
  */
 fun <R : TrailblazeToolResult> R.withAuthoredFailureContent(authored: TrailblazeTool, memory: AgentMemory): R {
   val identityRestored = withAuthoredCommandIdentity(authored)
   if (identityRestored !is TrailblazeToolResult.Error.ExceptionThrown) return identityRestored
-  val scrubbed = scrubSensitiveValues(identityRestored.errorMessage, memory)
-  if (scrubbed == identityRestored.errorMessage) return identityRestored
+  val scrubbedMessage = scrubSensitiveValues(identityRestored.errorMessage, memory)
+  val scrubbedPayload = identityRestored.structuredPayload?.let { scrubSensitivePayload(it, memory) }
+  if (scrubbedMessage == identityRestored.errorMessage && scrubbedPayload == identityRestored.structuredPayload) {
+    return identityRestored
+  }
   @Suppress("UNCHECKED_CAST")
-  return identityRestored.copy(errorMessage = scrubbed) as R
+  return identityRestored.copy(errorMessage = scrubbedMessage, structuredPayload = scrubbedPayload) as R
 }
 
 /**

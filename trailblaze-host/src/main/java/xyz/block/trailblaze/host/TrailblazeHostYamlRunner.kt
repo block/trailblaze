@@ -2,11 +2,7 @@ package xyz.block.trailblaze.host
 
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ForkJoinPool
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -59,13 +55,14 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
-import xyz.block.trailblaze.cli.DeviceClassifierResolver
+import xyz.block.trailblaze.host.devices.HostProbedDeviceClassifiers
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
@@ -74,13 +71,11 @@ import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
-import xyz.block.trailblaze.toolcalls.EmptyTrailblazeToolSurface
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
-import xyz.block.trailblaze.toolcalls.getExcludedToolSurfaceForDriver
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -1585,11 +1580,6 @@ object TrailblazeHostYamlRunner {
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
-    // Full `excluded_tools:` surface (class / YAML / scripted) via the central accessor, so this
-    // host-runner path drops scripted opt-outs (e.g. `openUrl`) too — not just class-backed ones.
-    val excludedSurface = targetTestApp
-      ?.getExcludedToolSurfaceForDriver(driverType)
-      ?: EmptyTrailblazeToolSurface
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -1600,7 +1590,7 @@ object TrailblazeHostYamlRunner {
     // (they have a single recording per step), so this re-ordering is a no-op
     // for the existing format.
     val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      hostProbedAndroidClassifiers(trailblazeDeviceId)
+      HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
     // Decode trail YAML to extract prompt steps for V3. Envelope-tolerant so single-tool MCP
@@ -1662,13 +1652,9 @@ object TrailblazeHostYamlRunner {
       model = trailblazeLlmModel,
     )
 
-    val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
-      customToolClasses = customToolClasses,
-      excludedToolClasses = excludedSurface.toolClasses,
-      excludedYamlToolNames = excludedSurface.yamlToolNames,
-      excludedScriptedToolNames = excludedSurface.scriptedToolNames,
-      driverType = driverType,
-    )
+    // Same composer the on-device rules and the daemon use, so this target advertises the same
+    // tools here as it does on device. Reads the target's `excluded_tools:` itself.
+    val toolRepo = targetTestApp.toSessionToolRepo(driverType = driverType)
 
     // Single AgentMemory shared between host-local tool execution contexts and the RPC
     // client's per-tool arg interpolation, so values written by host-local tools are visible
@@ -1965,7 +1951,6 @@ object TrailblazeHostYamlRunner {
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
-    val excludedSurface = targetTestApp?.getExcludedToolSurfaceForDriver(driverType) ?: EmptyTrailblazeToolSurface
 
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -1974,7 +1959,7 @@ object TrailblazeHostYamlRunner {
     // Query device classifiers up-front so a v3 trail can be lowered with the
     // right closest-wins recording for THIS device. v1 trails ignore the list.
     val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
-      hostProbedAndroidClassifiers(trailblazeDeviceId)
+      HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
     // Envelope-tolerant decode: single-tool MCP dispatch decodes via decodeTools, not the legacy
@@ -2017,13 +2002,9 @@ object TrailblazeHostYamlRunner {
     val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
     val llmClient = dynamicLlmClient.createLlmClient()
 
-    val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
-      customToolClasses = customToolClasses,
-      excludedToolClasses = excludedSurface.toolClasses,
-      excludedYamlToolNames = excludedSurface.yamlToolNames,
-      excludedScriptedToolNames = excludedSurface.scriptedToolNames,
-      driverType = driverType,
-    )
+    // Same composer the on-device rules and the daemon use, so this target advertises the same
+    // tools here as it does on device. Reads the target's `excluded_tools:` itself.
+    val toolRepo = targetTestApp.toSessionToolRepo(driverType = driverType)
 
     // Pre-resolve the session's target once — mirrors the V3 wiring in
     // `runHostV3WithAccessibilityYaml`. Surfaces `ctx.target.{id, appIds,
@@ -2422,84 +2403,6 @@ object TrailblazeHostYamlRunner {
             "RPC failure: ${result.message}",
         )
         emptyList()
-      }
-    }
-  }
-
-  /**
-   * Bound on the host-side classifier probe in [hostProbedAndroidClassifiers]. Sized as hang
-   * containment, not a latency budget: the resolver's own `wm size`/`wm density` calls are bounded
-   * at 3s each with one retry (~12s worst case), so a probe still running at 15s is wedged rather
-   * than slow. See [hostProbedAndroidClassifiers] for why an unbounded wait here is unsafe.
-   */
-  private const val HOST_CLASSIFIER_PROBE_TIMEOUT_MS = 15_000L
-
-  /**
-   * Fallback for when [queryDeviceClassifiers] returns nothing (transient RPC failure or an
-   * older on-device agent): classify from the host via the canonical [DeviceClassifierResolver]
-   * (adb `wm size`/`wm density`), so the session — and the test-result telemetry built from it —
-   * still records a specific classifier (e.g. `android-phone`) instead of the bare platform.
-   * Degrades to platform-only when the host probe fails, times out, or yields nothing — i.e. the
-   * worst case is exactly the bare `[android]` this fallback replaced, never a stalled run.
-   *
-   * [probe] and [probeTimeoutMs] are injectable so the timeout and degrade branches are
-   * unit-testable without a device (and without a real 15s wait); production callers use the
-   * defaults.
-   */
-  internal suspend fun hostProbedAndroidClassifiers(
-    trailblazeDeviceId: TrailblazeDeviceId,
-    probeTimeoutMs: Long = HOST_CLASSIFIER_PROBE_TIMEOUT_MS,
-    probe: (TrailblazeDeviceId) -> List<TrailblazeDeviceClassifier> = { deviceId ->
-      DeviceClassifierResolver.classifiersFor(
-        platform = TrailblazeDevicePlatform.ANDROID,
-        instanceId = deviceId.instanceId,
-      )
-    },
-  ): List<TrailblazeDeviceClassifier> {
-    val platformOnly = listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
-    Console.log(
-      "[DeviceClassifierResolver] On-device classifier probe returned nothing; " +
-        "classifying ${trailblazeDeviceId.instanceId} via host-side probe",
-    )
-    // The probe must be bounded, and the bound has to be on the WAIT rather than the work: the
-    // resolver consults any installed distribution override first, and an override may shell out
-    // via the UNBOUNDED `execAdbShellCommand` (a `getprop` pair is the typical shape). A wedged
-    // dadb transport hangs on read instead of throwing, so neither `withDadb`'s IOException retry
-    // nor coroutine cancellation can unwind it — `withTimeout` around a blocking body would just
-    // wait for that body anyway. This fallback runs precisely when the device RPC already failed,
-    // i.e. exactly when a wedged transport is most likely, so an unbounded wait here would trade a
-    // wrong-but-instant classifier for a stalled run. Bounding the wait via a detached future
-    // (the same idiom `DeviceClassifierResolver.warmCache` uses) guarantees we proceed; an
-    // abandoned probe thread is the acceptable cost of that guarantee, and is once per run.
-    val classifiers = withContext(Dispatchers.IO) {
-      val pending = CompletableFuture.supplyAsync({ probe(trailblazeDeviceId) }, ForkJoinPool.commonPool())
-      try {
-        pending.get(probeTimeoutMs, TimeUnit.MILLISECONDS)
-      } catch (e: Exception) {
-        Console.log(
-          "[DeviceClassifierResolver] Host-side probe failed for ${trailblazeDeviceId.instanceId} " +
-            "(${e::class.simpleName}: ${e.message}); using platform-only classifier",
-        )
-        null
-      }
-    }
-    // An override is free to return an empty list, which downstream reads as device-AGNOSTIC (a
-    // `resolveSkip` on any classifier would then apply). The expression this replaced was
-    // unconditionally non-empty, so keep that contract.
-    return (classifiers ?: platformOnly).ifEmpty { platformOnly }.also { resolved ->
-      // Log the OUTCOME, not just the attempt: a probe that degrades to platform-only reproduces
-      // the very bare-`android` row this fallback exists to eliminate, and that has to be visible
-      // when triaging a mis-classified telemetry row.
-      if (resolved == platformOnly) {
-        Console.log(
-          "[DeviceClassifierResolver] Host-side probe did not resolve a specific classifier for " +
-            "${trailblazeDeviceId.instanceId}; telemetry will record the bare platform",
-        )
-      } else {
-        Console.log(
-          "[DeviceClassifierResolver] Host-side probe resolved ${trailblazeDeviceId.instanceId} " +
-            "as ${resolved.joinToString("-") { it.classifier }}",
-        )
       }
     }
   }

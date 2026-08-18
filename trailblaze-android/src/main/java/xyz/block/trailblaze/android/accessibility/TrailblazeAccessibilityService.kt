@@ -14,7 +14,10 @@ import android.hardware.HardwareBuffer
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
+import android.text.Spanned
+import android.text.style.ClickableSpan
 import android.view.Display
+import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -1220,6 +1223,143 @@ class TrailblazeAccessibilityService : AccessibilityService() {
           )
         }
       }
+    }
+
+    /**
+     * Fully qualified names of the framework's parceled ClickableSpan replacements. When a
+     * node's text crosses the accessibility IPC boundary, the platform substitutes each
+     * ClickableSpan/URLSpan with `AccessibilityClickableSpan`/`AccessibilityURLSpan`, whose
+     * `onClick` performs the click on the owning app's real span through the node's
+     * connection. Both classes are `@hide` (absent from the public SDK), so the span-click
+     * dispatch gates on the runtime class name and calls through the public base-class
+     * `ClickableSpan.onClick` virtually.
+     */
+    private val REMOTE_CLICKABLE_SPAN_CLASSES = setOf(
+      "android.text.style.AccessibilityClickableSpan",
+      "android.text.style.AccessibilityURLSpan",
+    )
+
+    /**
+     * Activates the in-text link whose span substring equals [linkText] and whose owning
+     * text node contains ([targetX], [targetY]) — the resolved synthetic child's center —
+     * by invoking the parceled span's own click transport, the same activation path
+     * TalkBack uses (see [REMOTE_CLICKABLE_SPAN_CLASSES]). No coordinate gesture is
+     * involved, so this survives the layout reflow and scroll drift that can move a link
+     * between capture and dispatch. The point constraint
+     * preserves the resolved node's identity when the same link text appears in several
+     * text nodes; same-text spans within one node are told apart by their per-char bounds
+     * (see [pickTextLinkSpanIndex]). Searches the same merged window roots the capture
+     * walked (see [getCaptureWindowRoots]), so a link child resolved from a non-active
+     * secondary application window can still dispatch. Returns `false` when no live node
+     * carries a matching span, or when the frontmost window covering the tap point carries
+     * none (caller should fall back to coordinate gesture dispatch, which obeys z-order).
+     */
+    fun clickTextLinkSpan(linkText: String, targetX: Int, targetY: Int): Boolean {
+      awaitTreeStable()
+      val roots = getCaptureWindowRoots()
+      if (roots.isEmpty()) {
+        Console.log("[clickTextLinkSpan] no live window roots, caller will gesture-fall-back")
+        return false
+      }
+      // Search front-to-back: capture order is ascending layer (base window first), but a
+      // physical tap lands in the frontmost window, so when an overlay and the base window
+      // both carry the same link text at the tap point, z-order must pick the overlay's span.
+      // A frontmost root that covers the tap point but carries no matching span STOPS the
+      // search rather than letting it continue into lower roots: `ClickableSpan.onClick`
+      // bypasses pointer hit-testing, so dispatching below that root would activate a link a
+      // physical tap could not reach — miss instead and let the caller's gesture fallback
+      // obey real z-order. The short-circuit still recycles every root (getCaptureWindowRoots'
+      // caller-owns contract).
+      var clicked = false
+      var coveredByFrontWindow = false
+      for (root in roots.asReversed()) {
+        root.useRecycling { rootNode ->
+          if (!clicked && !coveredByFrontWindow) {
+            refreshTreeInPlace(rootNode)
+            clicked = clickTextLinkSpanInSubtree(rootNode, linkText, targetX, targetY)
+            if (!clicked && rootNode.boundsContain(targetX, targetY)) {
+              coveredByFrontWindow = true
+              Console.log(
+                "[clickTextLinkSpan] frontmost root covering ($targetX, $targetY) has no " +
+                  "matching span, caller will gesture-fall-back",
+              )
+            }
+          }
+        }
+      }
+      return clicked
+    }
+
+    /**
+     * DFS for a node containing ([targetX], [targetY]) whose text carries a ClickableSpan
+     * whose substring equals [linkText]; clicks that span and returns true. Children are
+     * walked last-to-first because later siblings paint on top (the same same-window z-order
+     * convention `TapOcclusionGuard` relies on), so when a covering later child and a covered
+     * earlier one both carry a matching span at the point, the visible one wins. A covering
+     * child WITHOUT a matching span cannot stop the walk the way a covering window root does:
+     * transparent full-bleed containers (scroll views, constraint layouts) "cover" every
+     * point in their subtree, so stop-on-cover here would break span lookup everywhere; the
+     * window-level stop plus the plan-time `isVisibleToUser` gate handle opaque overlays.
+     */
+    private fun clickTextLinkSpanInSubtree(
+      node: AccessibilityNodeInfo,
+      linkText: String,
+      targetX: Int,
+      targetY: Int,
+    ): Boolean {
+      val spanned = node.text as? Spanned
+      if (spanned != null && node.boundsContain(targetX, targetY)) {
+        // Only the parceled accessibility variants carry the remote-click transport. A plain
+        // ClickableSpan here would mean same-process text, whose onClick contract we can't
+        // rely on — such spans are not candidates, and the caller's gesture fallback handles
+        // a candidate-less tree.
+        val candidates = spanned.getSpans(0, spanned.length, ClickableSpan::class.java).filter { span ->
+          val start = spanned.getSpanStart(span)
+          val end = spanned.getSpanEnd(span)
+          start >= 0 && end > start && spanned.subSequence(start, end).toString() == linkText &&
+            span.javaClass.name in REMOTE_CLICKABLE_SPAN_CLASSES
+        }
+        if (candidates.isNotEmpty()) {
+          val match = if (candidates.size == 1) {
+            candidates.single()
+          } else {
+            // Same link text more than once in one paragraph: re-derive each span's on-screen
+            // bounds (IPC per candidate, duplicate case only) and take the one the resolved
+            // child's center falls in. When no candidate contains the point, the duplicates
+            // are positionally indistinguishable — clicking an arbitrary one could activate
+            // the wrong link, so miss instead and let the caller's gesture fallback aim at
+            // the resolved child's own coordinates.
+            val candidateBounds = candidates.map { span ->
+              val start = spanned.getSpanStart(span)
+              node.charRangeBounds(start, spanned.getSpanEnd(span) - start)
+            }
+            val index = pickTextLinkSpanIndex(candidateBounds, targetX, targetY)
+            if (index == null) {
+              Console.log(
+                "[clickTextLinkSpan] ${candidates.size} same-text spans but none contain " +
+                  "($targetX, $targetY), caller will gesture-fall-back",
+              )
+              return false
+            }
+            candidates[index]
+          }
+          // The throwaway View satisfies onClick's non-null parameter; the parceled variants
+          // ignore it entirely.
+          match.onClick(View(requireService()))
+          return true
+        }
+      }
+      return (node.childCount - 1 downTo 0).any { i ->
+        node.getChild(i)?.useRecycling { child ->
+          clickTextLinkSpanInSubtree(child, linkText, targetX, targetY)
+        } == true
+      }
+    }
+
+    private fun AccessibilityNodeInfo.boundsContain(x: Int, y: Int): Boolean {
+      val rect = Rect()
+      getBoundsInScreen(rect)
+      return rect.contains(x, y)
     }
 
     /**

@@ -1411,6 +1411,36 @@ class ScriptedToolDefinitionAnalyzerTest {
   }
 
   @Test
+  fun `with-spec overload — sensitiveArgNames is extracted when authored`() = runBlocking {
+    // A credential-handling scripted tool declares which args must never reach the session log
+    // (which ships as a CI artifact). If the extractor drops the field, the declaration never
+    // reaches `_meta` and the runtime writes the password out in plaintext.
+    assumeAnalyzerRunnable()
+    val toolsDir = tempFolder.newFolder("with-spec-sensitive-args-trailmap-tools")
+    writeTsFixture(
+      toolsDir,
+      "signInTool.ts",
+      """
+        |${declareTypedToolStub()}
+        |interface I { email: string; password: string; }
+        |interface O { ok: boolean; }
+        |
+        |export const signInTool = trailblaze.tool<I, O>(
+        |  { sensitiveArgNames: ["password"] },
+        |  async () => ({ ok: true }),
+        |);
+      """.trimMargin(),
+    )
+
+    val def = analyzer.analyze(toolsDir).single()
+    val spec = def.spec ?: fail("expected non-null spec; got bare-handler shape")
+    assertEquals(
+      listOf("password"),
+      (spec["sensitiveArgNames"] as JsonArray).map { it.jsonPrimitive.content },
+    )
+  }
+
+  @Test
   fun `with-spec overload — description is extracted when authored`() = runBlocking {
     // `description` is a recognized `TrailblazeTypedToolSpec` field (RECOGNIZED_SPEC_FIELDS). The
     // analyzer captures the spec's `description` into `ScriptedToolDefinition.spec["description"]`

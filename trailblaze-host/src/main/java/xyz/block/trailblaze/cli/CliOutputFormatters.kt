@@ -431,8 +431,18 @@ internal fun extractJsonError(content: String): String? {
  * - `"not valid for the current device/target"` matches both `Tool not valid …`
  *   (singular) and `Tools not valid …` (plural) — `StepToolSet` pluralizes
  *   the noun based on count.
+ * - The two `"… argument keys"` phrases match `JsScriptingCallbackArgumentValidator`'s
+ *   rejections (`was called with unknown argument keys: […]` / `was called without
+ *   required argument keys: […]`), emitted by `StepToolSet`'s direct-tools arg-shape
+ *   gate — a wrong-shaped `trailblaze tool <scripted-tool> …` invocation is user
+ *   input, not infrastructure.
  */
-internal val MISUSE_MARKERS = listOf("Unknown tool", "not valid for the current device/target")
+internal val MISUSE_MARKERS = listOf(
+  "Unknown tool",
+  "not valid for the current device/target",
+  "was called with unknown argument keys",
+  "was called without required argument keys",
+)
 
 /**
  * True when a daemon result is a *user-input misuse* — an **error** whose message carries a

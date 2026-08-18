@@ -37,6 +37,9 @@ import {
 // (the full-only `run` + imperative `tool` are intentionally NOT here — `run`/`tool` below are the
 // slim overrides). Keep this list in sync with `index.ts`.
 export { z } from "zod";
+// Dependency-free (its own module precisely so this entry can carry it) — the structured-error
+// authoring surface works identically for in-process and subprocess tools.
+export { ToolError } from "./tool-error.js";
 export {
   fromMeta,
   type TrailblazeContext,

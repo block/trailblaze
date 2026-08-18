@@ -15,6 +15,7 @@
 import {
   hasIdentifiableProperties,
   isInteractive,
+  resolveText,
   type DriverNodeDetail,
 } from "./driver-node-detail.js";
 
@@ -197,61 +198,137 @@ function findAllInto(
 }
 
 /**
- * Hit-tests the tree at (x, y) and returns the frontmost node whose bounds contain
- * the point, or null if no node contains it. Mirrors `TrailblazeNode.hitTest(x, y)`.
+ * Hit-tests the tree at (x, y) and returns the node a touch there would act on, or null
+ * if no node contains the point. Mirrors `TrailblazeNode.hitTest(x, y)`.
  *
- * Priority order (see Kotlin source for the rationale):
- *   1. Interactive nodes first (the OS routes touches to them).
- *   2. Identifiable nodes (have a stable property) over propertyless containers.
- *   3. Smallest area wins among ties.
+ * Models real touch dispatch (see the Kotlin source for the full rationale):
+ *   1. Pick the frontmost element containing the point — real area over degenerate
+ *      (zero-area) nodes, then identifiable over propertyless, then smallest area, ties
+ *      going to a *labeled* descendant when the tied nodes sit on one ancestor chain
+ *      (unless the tied ancestor is itself interactive — a control captured with bounds
+ *      identical to its child keeps its own touch; a label-less descendant never
+ *      displaces its ancestor), sibling ties to the first node in document order.
+ *   2. If it isn't interactive, climb *its own ancestors* to the first interactive one that
+ *      also contains the point, stopping at any ancestor that encloses more than one piece
+ *      of text (a control owns its icon and label; a list does not own its rows).
  *
- * Implementation: linear single-pass min finder that mirrors Kotlin's
- * `minWithOrNull(compareByDescending { ... }.thenByDescending { ... }.thenBy { ... })`
- * exactly — O(N) rather than O(N log N) sort, and ties resolve in
- * first-encountered order independently of engine sort stability (V8/Bun
- * happen to be stable, but anchoring the contract here removes the
- * cross-engine concern entirely).
+ * Implementation: single DFS carrying the current ancestor path, so step 2 never leaves
+ * the picked element's chain and the whole thing stays O(N).
  */
 export function hitTest(
   root: TrailblazeNode,
   x: number,
   y: number,
 ): TrailblazeNode | null {
-  let winner: TrailblazeNode | null = null;
-  let winnerKey: HitTestKey | null = null;
-  for (const node of aggregate(root)) {
-    if (node.bounds == null || !boundsContainsPoint(node.bounds, x, y)) continue;
-    const key = hitTestKey(node);
-    if (winnerKey == null || compareHitTestKeys(key, winnerKey) < 0) {
-      winner = node;
-      winnerKey = key;
+  const ancestors: TrailblazeNode[] = [];
+  // A record rather than plain `let`s: TS narrows a `let` captured by a closure to its
+  // initializer type, which would make the post-walk read of `best` a `never`.
+  const best = {
+    node: null as TrailblazeNode | null,
+    degenerate: true,
+    identifiable: false,
+    area: Number.POSITIVE_INFINITY,
+    ancestors: [] as TrailblazeNode[],
+  };
+
+  const visit = (node: TrailblazeNode): void => {
+    if (node.bounds != null && boundsContainsPoint(node.bounds, x, y)) {
+      const area = boundsWidth(node.bounds) * boundsHeight(node.bounds);
+      const degenerate = area <= 0;
+      const identifiable = hasIdentifiableProperties(node.driverDetail);
+      // Capture for narrowing: `best.node` stays `TrailblazeNode | null` inside the
+      // nested ternary, but a const local narrows past the null check.
+      const bestNode = best.node;
+      const labeled = ownLabel(node.driverDetail) != null;
+      const wins =
+        bestNode == null
+          ? true
+          : degenerate !== best.degenerate
+            ? !degenerate
+            : identifiable !== best.identifiable
+              ? identifiable
+              : area !== best.area
+                ? area < best.area
+                : // Exact-area tie on one ancestor chain goes to a *labeled* descendant
+                  // (real hit-testing returns the deepest element; a label-less
+                  // structural descendant would only weaken the selector) — unless the
+                  // tied ancestor is itself interactive: the control keeps its own touch.
+                  // Sibling ties keep the first node in document order.
+                  labeled &&
+                  !isInteractive(bestNode.driverDetail) &&
+                  ancestors.some((ancestor) => ancestor === bestNode);
+      if (wins) {
+        best.node = node;
+        best.degenerate = degenerate;
+        best.identifiable = identifiable;
+        best.area = area;
+        best.ancestors = [...ancestors];
+      }
     }
+    ancestors.push(node);
+    for (const child of node.children ?? []) visit(child);
+    ancestors.pop();
+  };
+  visit(root);
+
+  const target = best.node;
+  if (target == null) return null;
+  if (isInteractive(target.driverDetail)) return target;
+  // `best.ancestors` is root-first, so iterate backwards to walk outward from the node.
+  for (let i = best.ancestors.length - 1; i >= 0; i--) {
+    const ancestor = best.ancestors[i]!;
+    if (countLabels(ancestor, 2) >= 2) break;
+    const bounds = ancestor.bounds;
+    if (bounds == null) continue;
+    if (boundsContainsPoint(bounds, x, y) && isInteractive(ancestor.driverDetail)) return ancestor;
   }
-  return winner;
+  return target;
+}
+
+/** Counts label-bearing nodes in this subtree, stopping as soon as `limit` is reached. */
+function countLabels(node: TrailblazeNode, limit: number): number {
+  let count = ownLabel(node.driverDetail) != null ? 1 : 0;
+  for (const child of node.children ?? []) {
+    if (count >= limit) return count;
+    count += countLabels(child, limit - count);
+  }
+  return count;
 }
 
 /**
- * Sort key for [hitTest]. `interactive` and `identifiable` are descending
- * (true beats false), `area` is ascending. We store interactive/identifiable
- * as integers so the comparator is plain arithmetic — `0 - 1 = -1` means
- * "left wins" under ascending ordering.
+ * The node's own visible or spoken text, or null when it carries none. Mirrors the Kotlin
+ * `ownLabel()`: blank-aware at every step of each variant's fallback chain — NOT delegated
+ * to `resolveText()`, whose `??` chain stops at a blank `text` (captures serialize `text`
+ * as "" on nodes labeled only via accessibilityText) and would report such a node as
+ * unlabeled instead of falling back.
+ *
+ * Deliberately excludes `hintText`: a hint is a prompt for *absent* content, not content
+ * the node carries. An empty Search EditText (`text = ""`, `hintText = "Search"`) wrapping
+ * its static TextView("Search") must not read as labeled here, or the climb-stop counts
+ * two labels, treats the control as a container, and strands the tap on the static child
+ * instead of the editable field.
  */
-interface HitTestKey {
-  readonly interactiveRank: number; // 0 for true, 1 for false (descending = lower wins)
-  readonly identifiableRank: number; // 0 for true, 1 for false (descending = lower wins)
-  readonly area: number;
+function ownLabel(detail: DriverNodeDetail): string | null {
+  switch (detail.class) {
+    case "androidAccessibility":
+      return firstNonBlank(detail.text, detail.contentDescription);
+    case "androidMaestro":
+      return firstNonBlank(detail.text, detail.accessibilityText);
+    case "iosMaestro":
+      return firstNonBlank(detail.text, detail.accessibilityText);
+    case "iosAxe":
+      // resolveText is already blank-aware per step for this variant.
+      return resolveText(detail);
+    case "compose":
+      return firstNonBlank(detail.editableText, detail.text, detail.contentDescription);
+    case "web":
+      return firstNonBlank(detail.ariaName);
+  }
 }
 
-function hitTestKey(node: TrailblazeNode): HitTestKey {
-  return {
-    interactiveRank: isInteractive(node.driverDetail) ? 0 : 1,
-    identifiableRank: hasIdentifiableProperties(node.driverDetail) ? 0 : 1,
-    area: boundsWidth(node.bounds!) * boundsHeight(node.bounds!),
-  };
-}
-
-function compareHitTestKeys(a: HitTestKey, b: HitTestKey): number {
-  if (a.interactiveRank !== b.interactiveRank) return a.interactiveRank - b.interactiveRank;
-  if (a.identifiableRank !== b.identifiableRank) return a.identifiableRank - b.identifiableRank;
-  return a.area - b.area;
+function firstNonBlank(...candidates: Array<string | null | undefined>): string | null {
+  for (const candidate of candidates) {
+    if (candidate != null && candidate.trim().length > 0) return candidate;
+  }
+  return null;
 }

@@ -18,24 +18,43 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
 import xyz.block.trailblaze.ondevice.rpc.proto.RpcResponseEnvelope
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.SelectToolSet
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 class OnDeviceRpcWebSocketClientTest {
 
-  @Test
-  fun `unmapped legacy requests fall back before connecting`() {
-    val client = OnDeviceRpcWebSocketClient("http://localhost:1")
-    try {
-      val result = runBlocking {
-        client.call(SelectToolSet(toolSetNames = listOf("legacy")), timeoutMs = 5_000)
-      }
+  /** Private to this test, so production can never give it a protobuf mapping. */
+  private object UnmappedProbeRequest : RpcRequest<Unit>
 
-      assertIs<OnDeviceRpcWebSocketClient.Attempt.FallbackToHttp>(result)
+  @Test
+  fun `unmapped requests fall back before connecting`() {
+    val port = ServerSocket(0).use { it.localPort }
+    val connectionCount = AtomicInteger()
+    // Reachable server: a connect failure can no longer masquerade as the unmapped fallback.
+    val server = embeddedServer(CIO, port = port) {
+      install(WebSockets)
+      routing {
+        webSocket("/rpc-ws") {
+          connectionCount.incrementAndGet()
+        }
+      }
+    }.start(wait = false)
+
+    try {
+      val client = OnDeviceRpcWebSocketClient("http://localhost:$port")
+      try {
+        val result = runBlocking {
+          client.call(UnmappedProbeRequest, timeoutMs = 5_000)
+        }
+
+        assertIs<OnDeviceRpcWebSocketClient.Attempt.FallbackToHttp>(result)
+        assertEquals(0, connectionCount.get())
+      } finally {
+        client.close()
+      }
     } finally {
-      client.close()
+      server.stop(gracePeriodMillis = 0, timeoutMillis = 500)
     }
   }
 

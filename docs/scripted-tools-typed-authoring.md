@@ -293,6 +293,67 @@ in the legacy YAML descriptor. Every field is optional:
 | `requiresContext?: boolean` | UX hint surfaced in tool catalogs — "this tool needs a live device session to be useful" (e.g. it dispatches UI tools that won't work without a connected emulator / browser). Not a registration filter; informational only. |
 | `requiresHost?: boolean` | On-device *visibility* gate — skip registering this (in-process) tool on-device. NOT a runtime selector: it does not give the tool Node APIs. A tool that needs `node:fs` / `node:child_process` / native modules selects the subprocess runtime with `runtime: subprocess` in its descriptor (host-only by nature); see the [Runtime](#runtime-quickjs-in-process-by-default) section. |
 | `supportedDrivers?: string[]` | Registration gate, finer-grained than `supportedPlatforms`. Use when a tool depends on driver-specific capabilities (e.g. `"playwright-native"` only). |
+| `sensitiveArgNames?: (keyof TInput)[]` | Argument names whose values are masked in the tool-execution log — see [Keeping a credential out of the session log](#keeping-a-credential-out-of-the-session-log) for exactly what that covers. Not a registration gate. |
+
+### Keeping a credential out of the session log
+
+Every tool call is written to the session log, and that log ships as a CI artifact. So a
+tool that takes a password, a session token, or a fetched auth payload leaks it by
+default. Name those arguments in `sensitiveArgNames` and the framework replaces each
+value with `<redacted>` at the log-encode boundary:
+
+```ts
+interface SignInInput {
+  email: string;
+  password: string;
+}
+
+export const signIn = trailblaze.tool<SignInInput, { ok: boolean }>(
+  { sensitiveArgNames: ["password"] },
+  async ({ email, password }, ctx) => {
+    // `password` is the real value here — masking is log-only.
+    return { ok: await authenticate(email, password) };
+  },
+);
+```
+
+The names are typed against your input interface, so it stays the single source of truth.
+Renaming `password` without updating the list, or misspelling it, is a compile error
+rather than a silently-unmasked credential:
+
+```
+error TS2820: Type '"passwrod"' is not assignable to type 'keyof SignInInput'.
+  Did you mean '"password"'?
+```
+
+Four more things worth knowing:
+
+- **Masking is log-only.** Your handler, and the wire encoding that reaches it, still get
+  the real value. Only the persisted payload is masked.
+- **Names are top-level input keys.** A secret nested inside an object argument isn't
+  reached; lift it to a top-level field if it needs masking.
+- **A recording made from a masked log carries the placeholder, not the secret.** That's
+  intended: re-supply secret material at authoring time (a `{{memory}}` token, say) rather
+  than round-tripping it through logs.
+- **What's covered is the tool-execution log.** A tool invoked directly over MCP —
+  including `trailblaze tool <name> --args …` — has its arguments recorded by the MCP
+  request log and the daemon log *before* this masking applies, so those two surfaces
+  still carry the real value. Anything your handler writes to stderr is copied into the
+  daemon log verbatim too. Replaying a trail doesn't traverse either path. This gap
+  predates the declaration and applies equally to Kotlin tools; closing it is tracked
+  separately.
+
+The same declaration is available on a YAML descriptor as a top-level
+`sensitiveArgNames: [password]` shortcut, and to a Kotlin class-backed tool by
+implementing `SensitiveArgsTrailblazeTool` — all three lower to the same
+`_meta.trailblaze/sensitiveArgNames` key the runtimes read, and when more than one applies
+to a tool their names are **unioned**, never overridden.
+
+Because the cost of getting this wrong is a credential in a shipped artifact, every
+ambiguity resolves toward masking. A malformed declaration fails the descriptor at load
+time; if one somehow reaches a runtime anyway (a hand-written bundle, an external MCP
+server's advertisement — neither passes through descriptor validation), that tool's log
+masks **every** argument rather than none.
 
 ### Where the description comes from
 
@@ -481,6 +542,28 @@ export const contacts_ios_verifyContactStructure = trailblaze.tool<VerifyContact
   },
 );
 ```
+
+### Failing with a typed payload: `ToolError`
+
+`throw new Error(message)` is the default failure surface and stays fine for most
+tools: the message becomes the step's error text. When downstream consumers need to
+*parse* the failure — route it, count it, key triage off it — throw the SDK's
+`ToolError` instead and attach a JSON payload via `data`:
+
+```ts
+import { ToolError } from "@trailblaze/scripting";
+
+throw new ToolError(`example_tool: staging account ${email} is locked out.`, {
+  data: { schema: "example-repo/tool-error/v1", code: "account-state" },
+});
+```
+
+The message renders everywhere the plain-`Error` message does; the `data` payload
+additionally rides the error envelope (`structuredContent`) into the session log and
+the report row (`failure_code` is lifted from a top-level string `code`). Trailblaze
+never interprets the payload — your repo owns its schema, so include a `schema`
+discriminator. A plain `Error`, or a `ToolError` without `data`, produces the same
+text-only failure as before.
 
 ### Shared helpers
 

@@ -24,7 +24,10 @@ internal fun iosMaestroStrategies(
     }
   },
   "Accessibility text" to {
-    if (detail.text == null && detail.accessibilityText != null) {
+    // Blank-aware like the hint strategy below: captures serialize `text` as "" on nodes
+    // labeled only via accessibilityText, and `== null` would skip the stable text
+    // strategy for exactly those nodes, dropping them to structural/index fallbacks.
+    if (detail.text.isNullOrBlank() && detail.accessibilityText != null) {
       detail.accessibilityText.takeIf { it.isNotBlank() }?.let { a11y ->
         selectorWith(DriverNodeMatch.IosMaestro(accessibilityTextRegex = escapeForSelector(a11y)))
       }

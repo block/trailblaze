@@ -95,6 +95,7 @@ object MaestroCommandToIosDriverActionConverter {
         clearState = command.clearState == true,
         clearKeychain = command.clearKeychain == true,
         permissions = command.permissions,
+        launchArguments = toIosLaunchArgumentsList(command.launchArguments.orEmpty()),
       ),
     )
     is StopAppCommand -> listOf(IosDriverAction.StopApp(command.appId))
@@ -108,6 +109,17 @@ object MaestroCommandToIosDriverActionConverter {
       null
     }
   }
+
+  /**
+   * Flattens launch arguments into `xcrun simctl launch` argv, mirroring Maestro's
+   * `IOSLaunchArguments`: non-boolean keys gain a `-` prefix (unless already dashed) so
+   * `UserDefaults` surfaces the pair; boolean keys pass through untouched.
+   */
+  private fun toIosLaunchArgumentsList(launchArguments: Map<String, Any>): List<String> =
+    launchArguments.flatMap { (key, value) ->
+      val argKey = if (value is Boolean || key.startsWith("-")) key else "-$key"
+      listOf(argKey, value.toString())
+    }
 
   private fun convertTapOnPoint(command: TapOnPointCommand): IosDriverAction =
     if (command.longPress == true) IosDriverAction.LongPress(command.x, command.y)

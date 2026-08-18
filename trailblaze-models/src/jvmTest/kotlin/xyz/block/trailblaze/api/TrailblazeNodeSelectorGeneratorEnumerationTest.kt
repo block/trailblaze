@@ -146,6 +146,79 @@ class TrailblazeNodeSelectorGeneratorEnumerationTest : TrailblazeNodeSelectorGen
   }
 
   @Test
+  fun `enumerate - blank text does not suppress the accessibilityText strategy`() {
+    // Captures serialize `text` as "" on nodes labeled only via accessibilityText; the
+    // strategy gate must treat blank as absent, or the recorder skips the stable text
+    // selector and falls back to class/index for exactly the in-text-link shape.
+    nextId = 1L
+    val link = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "", accessibilityText = "currency spread"),
+    )
+    val root = nodeOf(detail = DriverNodeDetail.IosMaestro(), children = listOf(link))
+
+    val candidates = TrailblazeNodeSelectorGenerator.enumerateSelectorCandidates(root, link)
+    assertTrue(
+      candidates.any { it.selector.iosMaestro?.accessibilityTextRegex == "currency spread" },
+      "accessibilityTextRegex must be offered when text is blank",
+    )
+  }
+
+  @Test
+  fun `buildTargetMatch - blank text falls back to accessibilityText for iosMaestro`() {
+    // resolveText()'s elvis stops at the serialized blank, so without an explicit fallback
+    // the node anchors no text and every composite strategy fed by this match degrades to
+    // class/index shapes.
+    val match = buildTargetMatch(
+      DriverNodeDetail.IosMaestro(text = "", accessibilityText = "Learn more"),
+    )
+    assertEquals(
+      "Learn more",
+      (match as DriverNodeMatch.IosMaestro).accessibilityTextRegex,
+    )
+  }
+
+  @Test
+  fun `enumerate - duplicated blank-text links anchor composite fallbacks by accessibilityText`() {
+    // Two links share the same accessibilityText, so the direct strategy is ambiguous and
+    // the cascade falls through to composite strategies. Those must still carry the
+    // accessibility text on the target match — a bare class/index fallback replays against
+    // the wrong same-index node when hierarchy order changes.
+    nextId = 1L
+    val link1 = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "", accessibilityText = "Learn more"),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 20),
+    )
+    val para1 = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(accessibilityText = "Bitcoin fees apply. Learn more"),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 20),
+      children = listOf(link1),
+    )
+    val link2 = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "", accessibilityText = "Learn more"),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 120),
+    )
+    val para2 = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(accessibilityText = "A currency spread applies. Learn more"),
+      bounds = TrailblazeNode.Bounds(0, 100, 100, 120),
+      children = listOf(link2),
+    )
+    val root = nodeOf(detail = DriverNodeDetail.IosMaestro(), children = listOf(para1, para2))
+
+    val candidates = TrailblazeNodeSelectorGenerator.enumerateSelectorCandidates(root, link2)
+    val anchored = candidates.filter {
+      it.selector.iosMaestro?.accessibilityTextRegex == "Learn more" &&
+        it.selector.iosMaestro?.textRegex == null
+    }
+    assertTrue(
+      anchored.any {
+        TrailblazeNodeSelectorResolver.resolve(root, it.selector)
+          .let { r -> r is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch && r.node.nodeId == link2.nodeId }
+      },
+      "some composite candidate must pair the accessibility text with a disambiguator and uniquely resolve the link",
+    )
+  }
+
+  @Test
   fun `enumerate - containsChild appears when it's the only way to disambiguate a wrapper`() {
     // Two structurally-identical wrapper containers (same className, nothing else identifying),
     // each with exactly one uniquely-labeled child. Only `containsChild` on the labeled

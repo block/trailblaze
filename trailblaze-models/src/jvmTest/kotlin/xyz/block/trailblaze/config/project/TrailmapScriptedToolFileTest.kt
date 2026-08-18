@@ -11,6 +11,7 @@ import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
@@ -63,6 +64,44 @@ class TrailmapScriptedToolFileTest {
       JsonArray(listOf(JsonPrimitive("bar"), JsonPrimitive("count"))),
       schema["required"],
     )
+  }
+
+  @Test
+  fun `descriptor without an inputSchema block is not exhaustive`() {
+    // A descriptor that deliberately omits `inputSchema:` because the analyzer derives the real
+    // schema from the `.ts` `<I>` generic (a common shape for app launch/sign-in steps) still
+    // synthesizes `properties: {}`. That must NOT read as "takes no arguments" — on the
+    // no-analyzer catalog path it made the arg-shape gate reject every argument such a tool
+    // is called with.
+    val source = """
+      script: ./tools/derived.ts
+      name: derived_tool
+      description: Schema comes from the .ts type.
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+
+    // The synthesized schema is indistinguishable from an analyzer no-arg schema by shape…
+    assertEquals(JsonObject(emptyMap()), inline.inputSchema["properties"])
+    // …so the provenance flag is the only thing that separates them.
+    assertEquals(false, inline.inputSchemaExhaustive)
+  }
+
+  @Test
+  fun `descriptor with an author-declared inputSchema is exhaustive`() {
+    val source = """
+      script: ./tools/declared.ts
+      name: declared_tool
+      inputSchema:
+        bar:
+          type: string
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+
+    assertEquals(true, inline.inputSchemaExhaustive)
   }
 
   @Test
@@ -1078,5 +1117,87 @@ class TrailmapScriptedToolFileTest {
     val msg = assertNotNull(ex.message)
     assertTrue(msg.contains("trailblaze/isRecordable"), "expected key name in: $msg")
     assertTrue(msg.contains("boolean"), "expected expected-type guidance in: $msg")
+  }
+
+  @Test
+  fun `sensitiveArgNames folds into the _meta namespaced key`() {
+    val source = """
+      script: ./tools/sign_in.ts
+      name: sign_in
+      sensitiveArgNames: [password, sessionToken]
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    val meta = assertNotNull(inline.meta, "sensitiveArgNames must produce a non-null _meta")
+    assertEquals(
+      buildJsonArray { add(JsonPrimitive("password")); add(JsonPrimitive("sessionToken")) },
+      meta["trailblaze/sensitiveArgNames"],
+      "Top-level `sensitiveArgNames:` must fold into `_meta.trailblaze/sensitiveArgNames`",
+    )
+  }
+
+  @Test
+  fun `omitting sensitiveArgNames leaves the _meta key absent`() {
+    val source = """
+      script: ./tools/tap.ts
+      name: tap_thing
+    """.trimIndent()
+
+    val inline = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfig()
+    assertNull(inline.meta, "a descriptor with no gates must not gain an empty _meta")
+  }
+
+  @Test
+  fun `multi-tool entry inherits file-wide sensitiveArgNames unless it declares its own`() {
+    // An empty per-entry list is treated as "inherit", not "mask nothing" — guessing wrong in the
+    // other direction leaks a credential.
+    val source = """
+      script: ./tools/steps.ts
+      sensitiveArgNames: [password]
+      tools:
+        - name: inherits
+        - name: declares_own
+          sensitiveArgNames: [apiKey]
+        - name: empty_inherits
+          sensitiveArgNames: []
+    """.trimIndent()
+
+    val configs = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+      .toInlineScriptToolConfigs()
+      .associateBy { it.name }
+
+    val passwordOnly = buildJsonArray { add(JsonPrimitive("password")) }
+    assertEquals(passwordOnly, assertNotNull(configs["inherits"]?.meta)["trailblaze/sensitiveArgNames"])
+    assertEquals(
+      buildJsonArray { add(JsonPrimitive("apiKey")) },
+      assertNotNull(configs["declares_own"]?.meta)["trailblaze/sensitiveArgNames"],
+      "a per-entry list must override the file-wide one",
+    )
+    assertEquals(
+      passwordOnly,
+      assertNotNull(configs["empty_inherits"]?.meta)["trailblaze/sensitiveArgNames"],
+      "an empty per-entry list inherits rather than clearing the file-wide masking",
+    )
+  }
+
+  @Test
+  fun `_meta with a non-list trailblaze sensitiveArgNames is rejected with descriptor-aware error`() {
+    // A malformed value reads downstream as "mask nothing", so the author's credential would land
+    // in the session log in plaintext. Fail at descriptor-load time instead.
+    val source = """
+      script: ./tools/foo.ts
+      name: foo_tool
+      _meta:
+        trailblaze/sensitiveArgNames: password
+    """.trimIndent()
+
+    val descriptor = yaml.decodeFromString(TrailmapScriptedToolFile.serializer(), source)
+    val ex = assertFailsWith<IllegalArgumentException> { descriptor.toInlineScriptToolConfig() }
+    val msg = assertNotNull(ex.message)
+    assertTrue(msg.contains("foo_tool"), "expected tool name in: $msg")
+    assertTrue(msg.contains("trailblaze/sensitiveArgNames"), "expected key name in: $msg")
+    assertTrue(msg.contains("list"), "expected expected-type guidance in: $msg")
   }
 }

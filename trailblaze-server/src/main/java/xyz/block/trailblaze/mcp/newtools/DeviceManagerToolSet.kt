@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -526,7 +527,8 @@ class DeviceManagerToolSet(
       "Switched target app to: $displayName ($appTargetId)"
     } else {
       val availableIds = mcpBridge.getAvailableAppTargets().map { it.id }
-      "Failed to switch target app. '$appTargetId' not found. Available targets: $availableIds"
+      "Failed to switch target app. '$appTargetId' not found. Available targets: $availableIds" +
+        KnownTargetMessages.unavailableTargetHint(appTargetId)?.let { "\n$it" }.orEmpty()
     }
   }
 
@@ -573,7 +575,8 @@ class DeviceManagerToolSet(
     ) ?: run {
       val availableIds = mcpBridge.getAvailableAppTargets().map { it.id }
       throw IllegalArgumentException(
-        "'$appTargetId' is not a known target id. Available: $availableIds"
+        "'$appTargetId' is not a known target id. Available: $availableIds" +
+          KnownTargetMessages.unavailableTargetHint(appTargetId)?.let { "\n$it" }.orEmpty()
       )
     }
     // Daemon-side target is now set; re-register tools so the SDK fires

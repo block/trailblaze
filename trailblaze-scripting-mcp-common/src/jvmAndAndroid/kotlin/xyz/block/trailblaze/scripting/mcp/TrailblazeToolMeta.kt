@@ -8,6 +8,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 
 /**
  * Trailblaze-specific metadata read off an advertised MCP [Tool]'s `_meta` object.
@@ -45,6 +46,14 @@ data class TrailblazeToolMeta(
   /** Null = global registry (pull-based). Non-null = pushed into that toolset at registration. */
   val toolset: String? = null,
   val requiresContext: Boolean = false,
+  /**
+   * Which args are masked in persisted session logs (which ship as CI artifacts). Not a
+   * [shouldRegister] filter — the runtime threads it onto the decoded
+   * [xyz.block.trailblaze.toolcalls.TrailblazeTool] so the log-encode boundary redacts those
+   * values while execution still receives the real ones. A malformed declaration resolves to
+   * "mask everything" rather than "mask nothing"; see [DeclaredSensitiveArgs].
+   */
+  val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
 ) {
 
   /**
@@ -111,6 +120,9 @@ data class TrailblazeToolMeta(
       supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
       toolset = meta.readString(KEY_TOOLSET),
       requiresContext = meta.readBoolean(KEY_REQUIRES_CONTEXT, default = false),
+      // NOT `readStringList` — that treats a malformed shape as absent, which for this key means
+      // "mask nothing" and silently leaks the credential. See [DeclaredSensitiveArgs].
+      sensitiveArgs = DeclaredSensitiveArgs.fromMeta(meta),
     )
 
     private fun JsonObject.readBoolean(key: String, default: Boolean): Boolean =

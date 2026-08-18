@@ -3,10 +3,13 @@ package xyz.block.trailblaze.cli
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.compile.TrailblazeCompiler
+import xyz.block.trailblaze.config.KnownTargetWorkspace
+import xyz.block.trailblaze.config.KnownTargetWorkspaceLoader
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
+import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifestLoader
 import xyz.block.trailblaze.host.AppTargetDiscovery
 import xyz.block.trailblaze.host.PerTrailmapClientDtsEmitter
 import xyz.block.trailblaze.host.PerTrailmapTsconfigEmitter
@@ -18,6 +21,7 @@ import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.workspaceLayeredConfigResourceSource
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.GitUtils
 import java.io.File
 import java.nio.file.Path
 import java.util.concurrent.Callable
@@ -57,6 +61,22 @@ class CompileCommand : Callable<Int> {
    * is currently raising. Internal only — not a picocli option.
    */
   internal var commandLabel: String = "compile"
+
+  /**
+   * Inputs to the [KnownTargetShadowLint] warning, injectable so tests can stage registry records
+   * and a workspace repo identity without a classpath resource or a real git checkout (the
+   * registry loader takes a `ConfigResourceSource`, but this command always uses the classpath
+   * default in production). Internal only — not picocli options.
+   */
+  internal var knownTargetWorkspacesProvider: () -> List<KnownTargetWorkspace> =
+    { KnownTargetWorkspaceLoader.discover() }
+  internal var workspaceRepoShortNamesProvider: (File) -> Set<String> = { gitProbeDir ->
+    GitUtils.getRemoteUrls(gitProbeDir)
+      .map { KnownTargetWorkspace.shortNameForRepo(it) }
+      .filter { it.isNotBlank() }
+      .toSet()
+  }
+  internal var stagedTrailmapProbe: (File) -> Boolean = { GitUtils.isPathIgnored(it) }
 
   @Option(
     names = ["--input", "-i"],
@@ -199,6 +219,14 @@ class CompileCommand : Callable<Int> {
       )
       result.deletedOrphans.forEach { Console.log("  - ${it.name}") }
     }
+
+    // Probe git from `resolvedInputDir`, NOT the derived `workspaceRoot`: with an explicit
+    // `--input` that discovery couldn't match, `workspaceRoot` is a two-ancestors-up guess that can
+    // land outside the checkout entirely — the probe would then find no remotes and warn even
+    // inside the registered target's own repo. The input dir is verified on disk (its `trailmaps/`
+    // child was just checked) and git walks upward from it to the enclosing repo regardless of
+    // which config-dir layout is in play.
+    emitKnownTargetShadowWarnings(trailmapsDir = trailmapsDir, gitProbeDir = resolvedInputDir)
 
     // Emit per-trailmap typed bindings (`<trailmapDir>/tools/trailblaze-client.d.ts`) so the IDE
     // picks up typed `client.callTool` overloads scoped to each trailmap's own platform
@@ -400,6 +428,50 @@ class CompileCommand : Callable<Int> {
     }
     return EXIT_OK
   }
+
+  /**
+   * Warn when a workspace trailmap's id captures a target the known-target-workspaces registry
+   * homes in a different repo — see [KnownTargetShadowLint] for the rule and rationale. Emitted
+   * via [Console.error] like the CLI's other warnings, and strictly advisory: any failure in the
+   * lint's own plumbing (manifest enumeration, registry discovery, the git probe) is swallowed so
+   * an id-capture heads-up can never break a compile that succeeded.
+   */
+  private fun emitKnownTargetShadowWarnings(trailmapsDir: File, gitProbeDir: File) {
+    try {
+      KnownTargetShadowLint.warningsFor(
+        workspaceTrailmaps = workspaceTrailmapManifests(trailmapsDir),
+        records = knownTargetWorkspacesProvider(),
+        workspaceRepoShortNames = { workspaceRepoShortNamesProvider(gitProbeDir) },
+        isStagedCopy = stagedTrailmapProbe,
+        commandLabel = commandLabel,
+      ).forEach { Console.error(it) }
+    } catch (e: Exception) {
+      Console.log(
+        "trailblaze $commandLabel: known-target shadow lint failed (ignored — the lint is " +
+          "advisory): ${e.message ?: e::class.simpleName}",
+      )
+    }
+  }
+
+  /**
+   * Every trailmap in this workspace — the manifest id and directory of each
+   * `<trailmapsDir>/<dir>/trailmap.yaml` that loads. The directory travels with the id so the lint
+   * can tell a staged copy (git-ignored) from authored source. Enumerated from disk rather than
+   * from the resolved-trailmap pool because the pool
+   * omits orphan library trailmaps (nothing depends on them), yet an orphan still shadows a
+   * same-id classpath trailmap — the exact accident the lint exists to surface. Load failures are
+   * skipped: the compile pass has already reported any unparseable manifest.
+   */
+  private fun workspaceTrailmapManifests(trailmapsDir: File): List<KnownTargetShadowLint.WorkspaceTrailmap> =
+    trailmapsDir.listFiles { f -> f.isDirectory }
+      ?.mapNotNull { dir ->
+        val manifestFile = File(dir, TrailblazeConfigPaths.TRAILMAP_MANIFEST_FILENAME)
+        if (!manifestFile.isFile) return@mapNotNull null
+        runCatching { TrailblazeTrailmapManifestLoader.load(manifestFile).manifest.id }
+          .getOrNull()
+          ?.let { KnownTargetShadowLint.WorkspaceTrailmap(id = it, directory = dir) }
+      }
+      .orEmpty()
 
   /**
    * Walks up from [startPath] looking for the workspace marker (a `trailmaps/` dir in

@@ -1,0 +1,14 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze app start [-hV] [--foreground] [--headless]
+Start the Trailblaze app in the background (same as `trailblaze app`)
+      --foreground   Run in foreground (blocks terminal). Use for debugging
+                       with an attached IDE.
+  -h, --help         Show this help message and exit.
+      --headless     Start in headless mode (daemon only, no GUI)
+  -V, --version      Print version information and exit.

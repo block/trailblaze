@@ -326,6 +326,45 @@ class CheckCommandTest {
   }
 
   @Test
+  fun `check surfaces the known-target shadow warning under the 'trailblaze check' prefix`() {
+    // The shadow lint lives in the inner CompileCommand (see [KnownTargetShadowLint]); this pins
+    // that `trailblaze check` — the command authors actually run — surfaces it, routed under the
+    // `check` label, without failing the run. Registry records and the workspace repo identity
+    // are injected through [CheckCommand.compileCommandFactory] because the production paths
+    // (classpath discovery, a git remote probe) aren't stageable from a unit test.
+    val workspaceRoot = newWorkspaceWithTrailmap(trailmapId = "alpha", withTarget = true)
+    val command = CheckCommand().apply {
+      compileCommandFactory = {
+        CompileCommand().apply {
+          knownTargetWorkspacesProvider = {
+            listOf(
+              xyz.block.trailblaze.config.KnownTargetWorkspace(
+                repo = "git@github.com:example-org/alpha-trails.git",
+                targets = listOf("alpha"),
+              ),
+            )
+          }
+          workspaceRepoShortNamesProvider = { setOf("example-org/consumer-repo") }
+        }
+      }
+    }
+
+    val (exit, stderr) = captureStderr {
+      CliCallerContext.withCallerCwd(workspaceRoot.toPath()) {
+        CommandLine(command).execute("--no-typecheck")
+      }
+    }
+
+    assertEquals(0, exit, "The shadow lint is a warning — `check` must still exit OK. Got: $stderr")
+    assertTrue(
+      stderr.contains("trailblaze check: Warning: workspace trailmap 'alpha'") &&
+        stderr.contains("example-org/alpha-trails"),
+      "Expected the shadow warning, routed under `trailblaze check:` and naming the registered " +
+        "home repo; got: $stderr",
+    )
+  }
+
+  @Test
   fun `pre-flight unknown-trailmap error carries the 'trailblaze check' prefix`() {
     // Pins the prefix on the pre-flight `resolveTrailmapsToCheck` error path. CheckCommand
     // fails fast there for `nonexistent-trailmap` — before the typecheck phase ever runs —

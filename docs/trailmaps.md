@@ -382,6 +382,41 @@ If two classpath jars both ship a trailmap with the same id, the loader keeps th
 discovered and logs a warning identifying both locations — resolve by ensuring only one
 bundled jar declares each trailmap id.
 
+### Targets that live in another repository
+
+A trailmap can be at home in a repo other than the one your binary was built from, and its trails
+almost always are. Declare that in any YAML file under the `trails/config/known-target-workspaces`
+resource directory. A file may inline several repos:
+
+```yaml
+workspaces:
+  - repo: git@github.com:your-org/your-app-trails.git
+    url: https://github.com/your-org/your-app-trails
+    description: Trails and trailmap for Your App
+    targets:
+      - yourapp
+  - repo: git@github.com:your-org/other-trails.git
+    targets:
+      - otherapp
+```
+
+A file holding a single bare record (the fields above with no `workspaces:` wrapper) is also accepted.
+Every file in the directory is merged, so put yours under its own filename — discovery keys on
+resource path and layered sources fold last-wins, so a file whose path matches one already on the
+classpath replaces those records instead of adding to them.
+
+These records are pointers, not a third discovery source — nothing is fetched, cloned, or resolved
+from them. They exist so every surface that names a target can answer "where do I get this?" instead
+of listing whatever happens to be installed:
+
+- a `--target yourapp` that resolves nowhere names the repo and prints a clone command, rather than
+  an available-list that reads as "pick a different target"
+- `trailblaze config target` lists declared-but-absent targets under **Not installed**
+- an installed target whose trails live elsewhere is annotated with that repo, so an empty Trails
+  tab has an explanation
+- a trail whose `config.target` names an absent target still runs against the workspace default
+  (that fallback is deliberate), but now says so on every run instead of retargeting silently
+
 ## Compile output: `trails/config/dist/`
 
 `trailblaze check` is the trailmap→target compile step (think `javac` for trailmaps). It reads

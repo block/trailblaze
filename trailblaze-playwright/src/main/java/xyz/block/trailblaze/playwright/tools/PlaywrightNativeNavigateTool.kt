@@ -41,7 +41,7 @@ data class PlaywrightNativeNavigateTool(
     FORWARD,
     ;
 
-    object Serializer : CaseInsensitiveEnumSerializer<NavigationAction>(NavigationAction::class)
+    object Serializer : CaseInsensitiveEnumSerializer<NavigationAction>(NavigationAction::class, NavigationAction.entries)
   }
 
   override suspend fun executeWithPlaywright(

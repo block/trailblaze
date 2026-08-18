@@ -120,6 +120,50 @@ permits the viewer's page. Plenty of artifact stores don't, and that's not somet
 viewer can work around — the browser blocks the read before the page sees any bytes. When it
 happens, the viewer says so and you can still drop the file.
 
+## How screenshots travel with a report
+
+A report has to answer one question about every screenshot it shows: does the picture ride
+*inside* the HTML file, or does the browser fetch it from somewhere? Trailblaze does both,
+and which one you get depends on how the report was made.
+
+**Embedded (the default).** `trailblaze report` writes every screenshot into the HTML as
+base64. The result is one file with no dependencies — mail it, attach it to a PR, open it
+on a plane. The cost is size: a screenshot-dense run contributes a couple of MB on its own,
+so a report covering hundreds of runs is not something you want to hand a browser.
+
+**Already hosted (automatic).** A run on a device farm doesn't ship its step screenshots
+back with the logs — the farm keeps them and the session log records the URL it put them
+at. Reports built from those logs reference the images and never embed them. Nothing to
+configure; it is simply what those sessions carry. Measured on 37 device-farm sessions: the
+report referenced 296 hosted screenshots and embedded 37 (the one screenshot per session
+the farm does download locally), for 4.1 MB total.
+
+**Linked (opt-in).** `generate-report --link-images` writes references instead of image data,
+pointing at `<session-id>/<file>` next to the report. It's for reports that are *served* rather
+than passed around: you host the screenshot files alongside the HTML and the browser pulls each
+one only when it's actually shown. On three real local runs this took the report from 5.3 MB to
+0.9 MB, and it skips the ffmpeg re-encode that embedding runs on every screenshot over 100 KB.
+
+Three things to know before turning it on:
+
+- **The report stops being portable.** Move it away from its images and they stop loading. That's
+  why embedding remains the default, and why `trailblaze report` never links.
+- **You must host the images at that exact layout**, `<report-url-dir>/<session-id>/<file>`.
+  Nothing checks this for you; get it wrong and every screenshot is a 404.
+- **The images have to still be on disk when the report is generated.** A screenshot the
+  generator can't find is left out of the report rather than referenced — so if your pipeline
+  deletes or moves the image files, do it *after* generation, not before.
+
+A linked report also can't offer its **Export screenshots** button (it has no image bytes to put
+in the export), and **Export report** produces a copy that still points at the original host
+rather than a self-contained file.
+
+The Trailblaze daemon's own `/report` page always uses the linked form, serving the images
+off its `/static/` route. That page is generated fresh on every request from logs the
+daemon can still see, so there is nothing to keep portable — and it's what lets one page
+cover many runs without inlining all of them. When you want the portable artifact for a run
+you're looking at there, `trailblaze report` writes it.
+
 *Want the exports above for your own app? Every `trailblaze run` produces a session you can
 export the same way — see the [CLI reference](CLI.md#trailblaze-report) for `trailblaze report`
 and its `--storyboard` / `--webp` / `--gif` / `--video` flags.*

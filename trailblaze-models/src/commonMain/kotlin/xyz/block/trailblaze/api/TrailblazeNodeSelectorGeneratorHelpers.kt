@@ -184,10 +184,16 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
   }
   is DriverNodeDetail.IosMaestro -> {
     val text = detail.resolveText()?.takeIf { it.isNotBlank() }
+    // Captures serialize `text` as "" on nodes labeled only via accessibilityText, and
+    // resolveText()'s elvis stops at the blank — without this fallback such a node anchors
+    // no text at all, so the composite strategies (childOf, spatial, index) that this match
+    // feeds degrade to broad class/index shapes that can replay against the wrong node.
+    val a11y = if (text == null) detail.accessibilityText?.takeIf { it.isNotBlank() } else null
     val rid = detail.resourceId
-    if (text != null || rid != null) {
+    if (text != null || a11y != null || rid != null) {
       DriverNodeMatch.IosMaestro(
         textRegex = text?.let { escapeForSelector(it) },
+        accessibilityTextRegex = a11y?.let { escapeForSelector(it) },
         resourceIdRegex = rid?.let { escapeForIdentifier(it) },
       )
     } else {

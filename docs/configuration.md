@@ -88,7 +88,7 @@ my-project/                          my-project/
  e.g. next to features)                       └── trail.yaml
 ```
 
-Trailblaze walks up from the current directory (or from the directory containing the trail you invoked) until it finds a `trailblaze.yaml` in either `trailblaze-config/` (the standalone layout) or the legacy `trails/config/`. The closest ancestor wins; when both layouts exist at the same ancestor, `trailblaze-config/` takes precedence and the CLI prints a consolidation warning. Every relative path inside the file resolves against the config directory it sits in. See [Project Layout](project_layout.md) for the discovery rules.
+Trailblaze walks up from the current directory (or from the directory containing the trail you invoked) until it finds a `trailblaze.yaml` in either `trailblaze-config/` (the standalone layout) or the legacy `trails/config/`. The closest ancestor wins; when both layouts exist at the same ancestor, `trailblaze-config/` takes precedence and the CLI prints a consolidation warning. Relative paths inside the file resolve against the config directory it sits in — except [`trails:`](#declaring-a-trails-directory), which resolves against the workspace root so one value means the same directory under either layout. See [Project Layout](project_layout.md) for the discovery rules.
 
 `trailblaze.yaml` is configuration, never a trail. Every section is optional, and an empty file is valid.
 
@@ -100,6 +100,8 @@ defaults:
 
 targets:
   - my-app
+
+trails: legacy-trails    # only when your trails aren't under <workspace-root>/trails
 
 llm:
   providers:
@@ -116,6 +118,7 @@ llm:
 |---|---|---|
 | `defaults` | map | Workspace-wide defaults — see below. |
 | `targets` | list of ids | Target-trailmap ids this workspace opts into. **Omit to auto-discover** every target trailmap under the workspace config dir's `trailmaps/`. Listing ids loads only that subset. Each id must name a target trailmap (one with a `target:` block); library trailmaps enter scope through a target's `dependencies:`. |
+| `trails` | path | Directory holding this workspace's trail files, so the desktop app and Trail Runner browse the right tree the moment you launch inside the repo. See [Declaring a trails directory](#declaring-a-trails-directory). |
 | `toolsets` | list | Extra toolsets, either inline or pulled in with `ref: path/to/toolset.yaml`. |
 | `tools` | list | Extra tools, with the same inline-or-`ref:` shape. |
 | `providers` | list | Reserved for standalone LLM provider files. Provider and model definitions are read from the `llm:` block today. |
@@ -128,6 +131,57 @@ llm:
 | `target` | Target-trailmap id used when nothing more specific is selected. It must match a loaded target (case-sensitive); an unknown id is logged and skipped rather than failing the run. |
 | `llm` | Reserved provider/model shorthand. Use `llm.defaults.model` today. |
 | `max-llm-calls` | Team-wide positive-integer cap on LLM calls per objective. Per-run CLI and environment overrides still win. |
+
+### Declaring a trails directory
+
+A workspace's **trails** directory (the `.trail.yaml` files) is a different thing from its
+**config** directory (the one holding `trailblaze.yaml`). They coincide only in the legacy
+layout, where the config dir is nested at `trails/config/`.
+
+Trailblaze's default guess for the trails directory is `<workspace-root>/trails`. When a repo
+keeps its trails somewhere else, say so:
+
+```yaml
+# trailblaze-config/trailblaze.yaml
+trails: legacy-trails
+```
+
+Relative paths resolve against the workspace root — the directory holding `trailblaze-config/`
+(or holding `trails/`, in the legacy layout) — so one committed value means the same directory
+under either layout. A relative value may not escape that root: the file is shared by everyone
+who clones the repo, so `../..` would point the whole team's app, and its recording writes,
+outside their checkout. Use an absolute path when you really do mean somewhere else; it can't be
+portable across machines, so it reads as deliberate rather than as a typo.
+
+Launch the desktop app or the CLI anywhere inside that workspace and the Trails tab, the
+Waypoints tab, Trail Runner, MCP, and saved recordings all use the declared directory. A clean
+install does the right thing the first time it opens the workspace, with no per-machine setup.
+
+The trails directory resolves in this order:
+
+1. **A directory you picked** in Settings (or via `PATCH /api/settings`).
+2. **The workspace's `trails:`** declaration.
+3. `<app data dir>/../trails`.
+
+So the declaration answers the question only when you haven't. Pick a location in Settings and it
+wins in every workspace; Settings names the file the current value came from, and offers **Use
+Workspace Location** to clear your choice and hand the decision back.
+
+Two things worth knowing:
+
+- **Only an explicit declaration takes effect.** Omit the key and nothing changes.
+  Workspaces already using `<workspace-root>/trails` need no entry.
+- **An already-running daemon does not re-anchor.** `trailblaze app` hands off to the existing
+  window, so the workspace is the one the daemon *started* in. Run `trailblaze app --stop` and
+  relaunch from the workspace you want.
+
+A declared directory that isn't on disk is logged and ignored rather than failing the launch,
+the same way an unknown `defaults.target` is.
+
+Trailblaze does not write a trails directory into your settings unless you pick one, so "nobody
+has chosen yet" stays distinguishable from a real choice. A settings file written by an older
+version carries the default as though it were a choice; a stored value equal to the default is
+treated as unchosen so the workspace can still answer.
 
 ### `ref:` entries
 
@@ -185,7 +239,7 @@ Development-checkout launcher knobs (the `./trailblaze` wrapper script; installe
 | `TRAILBLAZE_OLLAMA_NUM_CTX` | `65536` | session | Positive host-side Ollama `num_ctx` request override. Malformed or non-positive values fall back to 64K. See [Ollama (Local Models)](llm_configuration.md#ollama-local-models). |
 | `TRAILBLAZE_DEFERRED_VARIABLES` | empty | command | Comma-separated `{{var}}` names excluded from environment expansion in trail templates (left for runtime memory instead). |
 | `TRAILBLAZE_AUTO_TERMINATE_VERIFY_STEPS` | `false` | session | Auto-terminate verify steps once their assertion passes. |
-| `TRAILBLAZE_TRAILS_DIR` | configured trails root | launch | Overrides the Trail Runner web UI's primary trails root. Unset, the UI uses the trails directory configured in the app (the app-data `trails/` dir unless you picked a workspace), falling back to `<cwd>/trails` only when the configured path doesn't exist. |
+| `TRAILBLAZE_TRAILS_DIR` | configured trails root | launch | Overrides the Trail Runner web UI's primary trails root. Unset, the UI uses the effective trails directory — the launch workspace's [`trails:`](#declaring-a-trails-directory) declaration if it has one, else the directory configured in the app (the app-data `trails/` dir unless you picked a workspace) — falling back to `<cwd>/trails` only when that path doesn't exist. |
 
 ### Android devices
 

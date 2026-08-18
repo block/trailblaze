@@ -167,6 +167,20 @@ object QuickJsToolBundleLauncher {
      */
     advertisementOverrides: Map<ToolName, QuickJsToolAdvertisement> = emptyMap(),
     /**
+     * The names the caller declared as tools, when it has an authoritative list (a target's
+     * `tools:` plus its trailmap's toolsets). A bundle registers EVERY exported function on
+     * `globalThis.__trailblazeTools`, so a module's exported helpers (`sha256Hex`,
+     * `pollForConsecutiveStable`, …) arrive alongside its real tools; anything registered but
+     * absent from this set is a helper, and is registered for dispatch without being advertised
+     * to the LLM.
+     *
+     * Null (the default) means "no declaration list" and every registered name may advertise, which
+     * is the only correct behavior for a caller that hands over bundles with no external source of
+     * truth: a generated wrapper never populates `spec`, so a missing `spec` cannot be read as
+     * "not a tool" there.
+     */
+    declaredToolNames: Set<ToolName>? = null,
+    /**
      * Optional engine extension installed into each launched bundle's QuickJS engine BEFORE the
      * bundle evaluates (e.g. an OkHttp-backed `fetch`; see [QuickJsEngineExtension]). Every
      * production launcher — host and on-device alike — passes the fetch extension so scripted
@@ -199,6 +213,17 @@ object QuickJsToolBundleLauncher {
     val started = mutableListOf<QuickJsToolHost>()
     val startedFilenames = mutableListOf<String>()
     val pendingRegistrations = mutableListOf<QuickJsToolRegistration>()
+    val suppressedAsUndeclared = mutableListOf<String>()
+    // An empty declaration list would suppress the caller's ENTIRE surface. No caller means that by
+    // passing zero names — it means it resolved nothing and should fall back to bundle-sourced
+    // advertisement — so treat it as "no list" rather than "declare nothing".
+    val declaredNames = declaredToolNames?.takeIf { it.isNotEmpty() }
+    if (declaredToolNames != null && declaredNames == null) {
+      Console.log(
+        "[QuickJsToolBundleLauncher] session=${sessionId.value} declaredToolNames was empty; " +
+          "advertising what the bundles register instead of suppressing everything.",
+      )
+    }
 
     try {
       bundleable.forEachIndexed { index, entry ->
@@ -237,6 +262,13 @@ object QuickJsToolBundleLauncher {
           // no override (e.g. a hand-written `pure.js` that populates `spec`).
           val override = advertisementOverrides[ToolName(spec.name)]
           val meta = override?.meta ?: QuickJsToolMeta.fromSpec(spec.spec)
+          // Exported helpers reach this loop alongside real tools (see [declaredToolNames]). Only a
+          // caller with a declaration list can tell them apart: `listTools()` normalizes both a
+          // missing `spec` and an explicit `spec: {}` to `{}`, so an absent spec does NOT mean
+          // "not a tool". A helper still registers — a recorded step or a sibling tool can dispatch
+          // it by name — it just stays out of the tool array.
+          val isDeclaredTool = declaredNames?.contains(ToolName(spec.name)) ?: true
+          if (!isDeclaredTool) suppressedAsUndeclared += spec.name
           if (!meta.shouldRegister(driver = deviceInfo.trailblazeDriverType, preferHostAgent = preferHostAgent)) {
             // requiresHost / driver / platform mismatch — drop at registration so the LLM
             // never sees a tool it can't actually run in this session. The legacy
@@ -251,8 +283,9 @@ object QuickJsToolBundleLauncher {
             spec = spec,
             binding = binding,
             descriptorOverride = override?.descriptor,
-            surfaceToLlm = meta.surfaceToLlm,
+            surfaceToLlm = meta.surfaceToLlm && isDeclaredTool,
             isRecordable = meta.isRecordable,
+            sensitiveArgs = meta.sensitiveArgs,
           )
         }
       }
@@ -264,11 +297,25 @@ object QuickJsToolBundleLauncher {
       // log by session can see exactly which QuickJS-runtime tools landed in the repo. The
       // legacy `BundleTrailblazeTool.execute` emits a similar `REGISTERED ...` line per tool
       // call — this gives the new path equivalent observability at session start.
-      val registeredNames = pendingRegistrations.map { it.name.toolName }
+      // Advertised and registered-only are listed separately: a tool the LLM can't see but a
+      // recorded step can still call is the single most confusing state to debug from a device-farm
+      // log, and one undifferentiated `tools=[...]` line reads as "all of these are available to
+      // the agent".
+      val advertisedNames = pendingRegistrations.filter { it.surfaceToLlm }.map { it.name.toolName }
+      val registerOnlyNames =
+        pendingRegistrations.filterNot { it.surfaceToLlm }.map { it.name.toolName }
       Console.log(
         "[QuickJsToolBundleLauncher] REGISTERED session=${sessionId.value} " +
-          "tools=$registeredNames hosts=${started.size}",
+          "advertised=$advertisedNames registeredNotAdvertised=$registerOnlyNames " +
+          "hosts=${started.size}",
       )
+      if (suppressedAsUndeclared.isNotEmpty()) {
+        Console.log(
+          "[QuickJsToolBundleLauncher] session=${sessionId.value} kept " +
+            "${suppressedAsUndeclared.size} undeclared bundle export(s) out of the LLM tool array " +
+            "(still dispatchable by name): ${suppressedAsUndeclared.sorted()}",
+        )
+      }
       return LaunchedQuickJsToolRuntime(
         hosts = started.toList(),
         repo = toolRepo,

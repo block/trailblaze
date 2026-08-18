@@ -2,20 +2,15 @@ package xyz.block.trailblaze.android
 
 import android.content.res.AssetManager
 import androidx.test.platform.app.InstrumentationRegistry
-import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
-import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
-import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.quickjs.tools.AndroidAssetBundleSource
 import xyz.block.trailblaze.quickjs.tools.LaunchedQuickJsToolRuntime
-import xyz.block.trailblaze.quickjs.tools.QuickJsToolAdvertisement
 import xyz.block.trailblaze.quickjs.tools.QuickJsToolBundleLauncher
-import xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher
+import xyz.block.trailblaze.scripting.OnDeviceScriptedToolBundlePlan
 import xyz.block.trailblaze.scripting.fetch.OkHttpFetchExtension
-import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
 
@@ -35,9 +30,10 @@ import xyz.block.trailblaze.util.Console
  *    resource directories (which is why the descriptor-discovery route below comes up empty for a
  *    bundled Kotlin target).
  *  - **catalog/toolset-delivered** scripted tools, resolved through the shared
- *    [InProcessScriptedToolLauncher.resolveInProcessScriptedTools] (descriptor-discovery gated).
+ *    [xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher] (descriptor-discovery gated).
  *
- * Both routes are filtered to bundles that are actually packaged in this APK's assets, so a target
+ * Both routes are planned by [OnDeviceScriptedToolBundlePlan], which this launcher supplies an
+ * asset-existence probe to. Bundles that aren't packaged in this APK's assets are dropped, so a target
  * whose bundles aren't staged degrades to "tool unavailable" (the same as before this launcher
  * existed) rather than crashing session start on a missing asset. A multi-export bundle (one `.ts`
  * module exporting several tools) is loaded once — `QuickJsToolHost.listTools()` then registers
@@ -78,53 +74,30 @@ object OnDeviceScriptedToolBundleLauncher {
         }
       }
 
-    // 1. Target-declared (`target.tools:`) in-process scripted tools.
-    val inlineConfigs: List<InlineScriptToolConfig> =
-      target?.getInlineScriptTools().orEmpty()
-        .filter { ScriptedToolRuntime.resolve(it.runtime) == ScriptedToolRuntime.IN_PROCESS }
-        .filter { ToolName(it.name) !in alreadyRegistered }
-
-    // Group by bundle asset path (a multi-export module is one bundle backing many tool names) and
-    // drop any whose `.bundle.js` isn't packaged in this APK — better an unavailable tool than a
-    // crashed session.
-    val inlineByAsset: Map<String, List<InlineScriptToolConfig>> =
-      inlineConfigs
-        .groupBy { ScriptedToolNameDiscoverer.bundleResourcePathForScript(it.script) }
-        .filterKeys { assetPath -> bundleAssetPackaged(assetPath) }
-
-    val inlineNames: Set<ToolName> = inlineByAsset.values.flatten().map { ToolName(it.name) }.toSet()
-    val inlineOverrides: Map<ToolName, QuickJsToolAdvertisement> =
-      inlineByAsset.values.flatten().associate {
-        ToolName(it.name) to QuickJsToolAdvertisement.fromInlineScriptToolConfig(it)
-      }
-
-    // 2. Catalog/toolset-delivered scripted tools (descriptor-discovery gated, asset-filtered).
-    val catalogResolved =
-      InProcessScriptedToolLauncher.resolveInProcessScriptedTools(
-        toolNames = toolRepo.allCatalogScriptedToolNames,
-        skipNames = alreadyRegistered + inlineNames,
-        logPrefix = "[ondevice-scripted]",
-      ).filter { bundleAssetPackaged(it.bundleResourcePath) }
-
-    val catalogOverrides: Map<ToolName, QuickJsToolAdvertisement> =
-      catalogResolved.associate {
-        it.name to QuickJsToolAdvertisement.fromInlineScriptToolConfig(it.config)
-      }
+    // Both delivery routes, resolved by the shared planner so this path and the JVM-side
+    // on-device surface guard agree on which bundles load and what each declared tool advertises.
+    val plan = OnDeviceScriptedToolBundlePlan.resolve(
+      toolRepo = toolRepo,
+      target = target,
+      alreadyRegistered = alreadyRegistered,
+      isPackaged = ::bundleAssetPackaged,
+      logPrefix = "[ondevice-scripted]",
+    )
 
     // One config per UNIQUE bundle path: the launcher loads each bundle once and registers every
     // tool that bundle's `listTools()` advertises.
-    val bundlePaths = (inlineByAsset.keys + catalogResolved.map { it.bundleResourcePath }).distinct()
-    if (bundlePaths.isEmpty()) return null
+    if (plan.bundlePaths.isEmpty()) return null
 
     return QuickJsToolBundleLauncher.launchAll(
-      bundles = bundlePaths.map { McpServerConfig(script = it) },
+      bundles = plan.bundlePaths.map { McpServerConfig(script = it) },
       deviceInfo = deviceInfo,
       sessionId = sessionId,
       toolRepo = toolRepo,
       bundleSourceResolver = { entry ->
         AndroidAssetBundleSource(assetPath = entry.script!!, assetManager = assetManager)
       },
-      advertisementOverrides = inlineOverrides + catalogOverrides,
+      advertisementOverrides = plan.advertisementOverrides,
+      declaredToolNames = plan.declaredToolNames,
       // Standard WHATWG `fetch`, OkHttp-backed — the same binding every host launcher installs, so
       // a scripted tool's HTTP works identically on-device and host-dispatched.
       engineExtension = OkHttpFetchExtension(),

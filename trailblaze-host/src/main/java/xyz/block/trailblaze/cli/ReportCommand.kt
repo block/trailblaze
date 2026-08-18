@@ -19,13 +19,18 @@ import kotlin.system.exitProcess
  * With `--id` or `--current`, the report narrows to a single session and the timeline
  * exports (`--video`, `--gif`, `--webp`) become available.
  *
- * Every run produces BOTH HTML report artifacts, generated concurrently: the legacy
- * Compose/WebAssembly report and the lightweight, self-contained interactive report (the same
- * artifact the Trail Runner app's "Share as HTML" button produces). Either can individually be
- * unavailable (missing WASM template / missing `bun`) — the command only fails when neither could
- * be generated. `--no-wasm-report` skips the legacy report entirely. The animated exports
- * (`--video`/`--gif`/`--webp`) always capture the legacy timeline, since only it implements the
- * autoplay-capture contract, so they can't be combined with `--no-wasm-report`.
+ * Every run produces BOTH HTML report artifacts, generated concurrently: the lightweight,
+ * self-contained interactive report — the Trailblaze report, the same artifact the Trail Runner
+ * app's "Share as HTML" button produces — and the deprecated legacy Compose/WebAssembly report.
+ * Either can individually be unavailable; the command only fails when neither could be generated.
+ * A missing legacy report is routine (no WASM template); a missing interactive one means a broken
+ * `bun`, which Trailblaze requires. `--no-wasm-report` skips the legacy report entirely.
+ *
+ * The animated exports (`--video`/`--gif`/`--webp`) capture the **interactive** report's timeline
+ * by default — both artifacts now implement the autoplay-capture contract (`?autoplay=1` plays the
+ * timeline through and raises `globalThis.__tbPlaybackEnded`), so `--no-wasm-report` and the
+ * exports combine freely. `--export-from wasm` pins the capture back to the legacy timeline for as
+ * long as that report still exists.
  *
  * Examples:
  *   trailblaze report                              - HTML (legacy + interactive) + JSON for all sessions
@@ -232,23 +237,42 @@ class ReportCommand : Callable<Int> {
     description = [
       "Skip the legacy WASM report; emit only the interactive report (plus the JSON " +
         "summary). Saves the CPU-bound WASM build when only the interactive artifact is " +
-        "consumed. Mutually exclusive with --video/--gif/--webp, which capture the legacy " +
-        "timeline. Same flag as the CI report generator's --no-wasm-report.",
+        "consumed. Combines with --video/--gif/--webp, which capture the interactive " +
+        "timeline by default. Same flag as the CI report generator's --no-wasm-report.",
     ],
   )
   var noWasmReport: Boolean = false
 
   @Option(
+    names = ["--export-from"],
+    paramLabel = "<artifact>",
+    description = [
+      "Which HTML report the animated exports (--video/--gif/--webp) record: " +
+        "`interactive` (default) or `wasm`. Both implement the autoplay-capture " +
+        "contract; the interactive report is the one that survives the legacy WASM " +
+        "report's removal, so pin `wasm` only to reproduce an older artifact's exact " +
+        "look. Requires one of --video/--gif/--webp — passing it on its own is a usage " +
+        "error (--storyboard builds its own HTML and is never affected).",
+    ],
+  )
+  var exportFrom: String? = null
+
+  @Option(
     names = ["--max-size"],
     description = [
-      "Cap each exported timeline artifact (--gif / --video / --webp) at the given byte " +
-        "size. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G). " +
-        "After the initial encode, the exporter iteratively re-encodes at smaller " +
-        "viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. " +
-        "If even the readability floor (480px) is still over the cap, the export fails " +
-        "with an actionable error — drop GIF for --webp or --video (both compress " +
+      "Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given " +
+        "byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export " +
+        "you paste into a PR fits without having to think about it. Accepts plain bytes " +
+        "(1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for " +
+        "a genuinely uncapped export. After the initial encode, the exporter iteratively " +
+        "re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact " +
+        "fits, then stops. If even the readability floor (480px) is still over the cap: " +
+        "an explicitly-passed --max-size fails the export with an actionable error, while " +
+        "the 10MB default keeps the oversized artifact and warns instead — a default you " +
+        "didn't ask for never turns a working export into a failure. Either way the " +
+        "remedies are the same: drop GIF for --webp or --video (both compress " +
         "dramatically better), or shorten the recorded session (fewer trail steps, or " +
-        "split into multiple sessions). The flag is applied per artifact, so " +
+        "split into multiple sessions). The cap is applied per artifact, so " +
         "`--gif --webp --max-size=10MB` caps each one independently.",
     ],
   )
@@ -311,12 +335,23 @@ class ReportCommand : Callable<Int> {
       )
       return TrailblazeExitCode.MISUSE.code
     }
-    // The animated timeline exports drive the legacy WASM report's autoplay contract, so
-    // deliberately skipping that report while requesting one is contradictory.
-    if (noWasmReport && (videoOutput != null || gifOutput != null || webpOutput != null)) {
+    val exportSource = when (exportFrom?.trim()?.lowercase()) {
+      null -> ReportExportSource.INTERACTIVE
+      "interactive" -> ReportExportSource.INTERACTIVE
+      "wasm" -> ReportExportSource.WASM
+      else -> {
+        Console.error("--export-from must be `interactive` or `wasm`, got '$exportFrom'.")
+        return TrailblazeExitCode.MISUSE.code
+      }
+    }
+    if (exportSource == ReportExportSource.WASM && noWasmReport) {
+      Console.error("--export-from wasm contradicts --no-wasm-report — there'd be no legacy report to capture. Drop one.")
+      return TrailblazeExitCode.MISUSE.code
+    }
+    if (exportFrom != null && videoOutput == null && gifOutput == null && webpOutput == null) {
       Console.error(
-        "--no-wasm-report contradicts --video/--gif/--webp — they capture the legacy " +
-          "timeline report. Drop one.",
+        "--export-from only selects which report the animated exports record. Add --video, " +
+          "--gif, or --webp.",
       )
       return TrailblazeExitCode.MISUSE.code
     }
@@ -367,13 +402,15 @@ class ReportCommand : Callable<Int> {
     // gating execution on it would block every non-storyboard run. Silent no-op is the
     // right behavior — the CLI help already documents the "has no effect without
     // --storyboard" semantic.)
-    val maxBytes: Long? = maxSize?.let {
-      try {
-        MaxArtifactSize.parseSize(it)
-      } catch (e: IllegalArgumentException) {
-        Console.error("--max-size: ${e.message}")
-        return TrailblazeExitCode.MISUSE.code
-      }
+    // `maxSize == null` is the signal that the user never typed --max-size, which is what
+    // separates the default cap (warn on floor exhaustion) from an explicit one (fail).
+    // Deliberately NOT a picocli `defaultValue` — that would populate the field either
+    // way and erase the distinction.
+    val cap = try {
+      MaxArtifactSize.resolveCap(maxSize)
+    } catch (e: IllegalArgumentException) {
+      Console.error("--max-size: ${e.message}")
+      return TrailblazeExitCode.MISUSE.code
     }
     val trimmedShareUrl = shareUrl?.trim()?.takeIf { it.isNotEmpty() }
     // Reject values the viewer would refuse to render (its safeHref requires a parseable
@@ -383,7 +420,7 @@ class ReportCommand : Callable<Int> {
       Console.error("--share-url must be a valid http(s) URL with a host, got '$trimmedShareUrl'.")
       return TrailblazeExitCode.MISUSE.code
     }
-    return generateSessionReport(
+    val exitCode = generateSessionReport(
       parent.appProvider(),
       resolvedId,
       open,
@@ -396,11 +433,25 @@ class ReportCommand : Callable<Int> {
       storyboardIncludeYaml = storyboardYaml,
       suppressGif = noGif,
       suppressWebp = noWebp,
-      maxBytes = maxBytes,
+      maxBytes = cap.maxBytes,
+      maxBytesStrict = cap.strict,
       generateWasm = !noWasmReport,
+      exportSource = exportSource,
       shareUrl = trimmedShareUrl,
       fullEventPayloads = fullReportPayloads,
     )
+    // Exit for every outcome, not just the successful one. `TrailblazeCli.run` force-exits on
+    // non-zero codes but returns normally on 0, so a non-daemon thread left running anywhere in
+    // this path wedges the JVM on exactly the runs that went fine — which is the bug this replaced,
+    // when the logs-repo file watcher was that thread.
+    //
+    // That watcher is fixed at the source (FileWatchService now runs its loop on a daemon thread),
+    // so this is precaution rather than a known leak: `report` already force-exited on success
+    // before this, and covering the other paths costs nothing while the report path keeps driving
+    // subprocess-heavy work (headless Playwright, the bun/WASM report builds) whose threads we
+    // don't own. Report generation owns the whole JVM — there's nothing left to do once the
+    // artifacts are on disk.
+    exitProcess(exitCode)
   }
 
   /**
@@ -466,15 +517,22 @@ class ReportCommand : Callable<Int> {
  * @param suppressGif / [suppressWebp] When true, suppress the auto-emitted companion file
  *   under the shared-capture model. Setting either when the corresponding spec is
  *   non-null is a usage error rejected upstream by [ReportCommand.call].
+ * @param maxBytes Byte ceiling for each exported artifact, or null for uncapped.
+ * @param maxBytesStrict Whether exhausting the 480px readability floor without fitting
+ *   [maxBytes] fails the export (an explicitly-requested cap) or only warns and keeps the
+ *   oversized artifact (the 10MB default nobody asked for). See [MaxArtifactSize.Cap].
  * @param generateWasm When false (`--no-wasm-report`), the legacy WASM report is skipped
- *   and only the interactive report is produced. Pairing with the animated exports is a
- *   usage error rejected upstream by [ReportCommand.call].
+ *   and only the interactive report is produced.
+ * @param exportSource Which HTML artifact the animated exports record (`--export-from`).
+ *   Defaults to the interactive report.
  * @param shareUrl When non-null (`--share-url`), the canonical hosted URL baked into the
  *   interactive report for its Copy link. Validated as http(s) upstream by
  *   [ReportCommand.call].
  * @param fullEventPayloads When true (`--full-report-payloads`), event formatters embed full
  *   payloads in the interactive report even for passed sessions instead of applying their
  *   report size budgets.
+ * @return the exit code for the run. Every path returns rather than exiting the process — the
+ *   caller ([ReportCommand.call]) owns process termination, so one force-exit covers all of them.
  */
 internal fun generateSessionReport(
   app: TrailblazeDesktopApp,
@@ -490,7 +548,9 @@ internal fun generateSessionReport(
   suppressGif: Boolean = false,
   suppressWebp: Boolean = false,
   maxBytes: Long? = null,
+  maxBytesStrict: Boolean = true,
   generateWasm: Boolean = true,
+  exportSource: ReportExportSource = ReportExportSource.INTERACTIVE,
   shareUrl: String? = null,
   fullEventPayloads: Boolean = false,
 ): Int {
@@ -578,17 +638,35 @@ internal fun generateSessionReport(
   if (jsonFile != null) Console.info("JSON: file://${jsonFile.absolutePath}")
 
   // The animated timeline exports (--video/--gif/--webp) drive headless Playwright over the
-  // report's autoplay timeline — a contract only the legacy WASM report implements (it honors
-  // `?autoplay=1` and signals `__tbPlaybackEnded`), so they require the legacy artifact.
+  // report's autoplay timeline (`?autoplay=1` plays it through and raises `__tbPlaybackEnded`).
+  // Both HTML artifacts implement that contract; --export-from picks which one is recorded.
   // (--storyboard builds its own grid HTML from logs and only needs a path anchor.)
-  if (htmlFile == null && (videoSpec != null || gifSpec != null || webpSpec != null)) {
-    Console.error("--video/--gif/--webp capture the legacy timeline report, which could not be generated.")
+  val captureHtml = when (exportSource) {
+    ReportExportSource.INTERACTIVE -> interactiveFile
+    ReportExportSource.WASM -> htmlFile
+  }
+  if (captureHtml == null && (videoSpec != null || gifSpec != null || webpSpec != null)) {
+    val missing = if (exportSource == ReportExportSource.WASM) "legacy WASM" else "interactive"
+    Console.error(
+      "--video/--gif/--webp record the $missing report, which could not be generated. " +
+        "Re-run with --export-from ${if (exportSource == ReportExportSource.WASM) "interactive" else "wasm"} " +
+        "to record the other one.",
+    )
     return TrailblazeExitCode.INFRA_FAILED.code
   }
-  // Non-null anchor for export path resolution. Equal to the legacy report whenever it exists —
-  // in particular for the capture exports, which the guard above restricts to that case. At
-  // least one artifact exists here (the both-failed case already returned).
-  val exportHtml = htmlFile ?: interactiveFile!!
+  // Non-null anchor for export path resolution (every artifact lands in the same directory, so
+  // this only decides where a defaulted output path is rooted). At least one artifact exists
+  // here — the both-failed case already returned.
+  val exportHtml = captureHtml ?: htmlFile ?: interactiveFile!!
+  // --open's target is deliberately NOT the capture source: which report gets recorded is an
+  // export decision, and letting it move what a plain `trailblaze report --open` opens would be
+  // an unrelated behavior change riding along with the export migration.
+  val openHtml = htmlFile ?: interactiveFile!!
+
+  if (captureHtml != null && (videoSpec != null || gifSpec != null || webpSpec != null)) {
+    val label = if (exportSource == ReportExportSource.WASM) "legacy WASM" else "interactive"
+    Console.log("Recording the $label report's timeline: file://${captureHtml.absolutePath}")
+  }
 
   val (effectiveGifSpec, effectiveWebpSpec) =
     resolveSharedCaptureSpecs(gifSpec, webpSpec, suppressGif, suppressWebp)
@@ -636,7 +714,12 @@ internal fun generateSessionReport(
     try {
       Console.log("Exporting timeline autoplay to ${videoFile.absolutePath} ...")
       outputsToCleanupOnFailure.add(videoFile)
-      ReportVideoExporter.export(reportHtml = exportHtml, outputMp4 = videoFile, maxBytes = maxBytes)
+      ReportVideoExporter.export(
+        reportHtml = captureHtml!!,
+        outputMp4 = videoFile,
+        maxBytes = maxBytes,
+        maxBytesStrict = maxBytesStrict,
+      )
       Console.info("Video: ${videoFile.absolutePath} (${videoFile.length() / 1024}KB)")
     } catch (e: Exception) {
       Console.error("Failed to export report video: ${e.message}")
@@ -673,7 +756,7 @@ internal fun generateSessionReport(
     try {
       val capture = try {
         PlaywrightReportCapture.captureFrames(
-          reportHtml = exportHtml,
+          reportHtml = captureHtml!!,
           framesDir = ws.framesDir,
           headless = true,
           deviceId = ws.deviceId,
@@ -690,7 +773,7 @@ internal fun generateSessionReport(
         try {
           Console.log("Exporting timeline autoplay to ${gifFile.absolutePath} ...")
           outputsToCleanupOnFailure.add(gifFile)
-          ReportGifExporter.encode(ws.framesDir, capture, gifFile, maxBytes)
+          ReportGifExporter.encode(ws.framesDir, capture, gifFile, maxBytes, maxBytesStrict)
           Console.info("GIF: ${gifFile.absolutePath} (${gifFile.length() / 1024}KB)")
         } catch (e: Exception) {
           Console.error("Failed to export report GIF: ${e.message}")
@@ -702,7 +785,7 @@ internal fun generateSessionReport(
         try {
           Console.log("Exporting timeline autoplay to ${webpFile.absolutePath} ...")
           outputsToCleanupOnFailure.add(webpFile)
-          ReportWebpExporter.encode(ws.framesDir, capture, webpFile, maxBytes)
+          ReportWebpExporter.encode(ws.framesDir, capture, webpFile, maxBytes, maxBytesStrict)
           Console.info("WebP: ${webpFile.absolutePath} (${webpFile.length() / 1024}KB)")
         } catch (e: Exception) {
           Console.error("Failed to export report WebP: ${e.message}")
@@ -745,6 +828,7 @@ internal fun generateSessionReport(
         includeYaml = storyboardIncludeYaml,
         headless = true,
         maxBytes = maxBytes,
+        maxBytesStrict = maxBytesStrict,
       )
       Console.info("Storyboard: ${storyboardWebpFile.absolutePath} (${storyboardWebpFile.length() / 1024}KB)")
     } catch (e: Exception) {
@@ -755,13 +839,18 @@ internal fun generateSessionReport(
   }
 
   if (open) {
-    TrailblazeDesktopUtil.openInDefaultBrowser("file://${exportHtml.absolutePath}")
+    TrailblazeDesktopUtil.openInDefaultBrowser("file://${openHtml.absolutePath}")
   }
 
-  // Background threads spawned by the report generator keep the JVM alive after
-  // a successful run; force exit to match the prior `trailblaze report` behavior.
-  exitProcess(TrailblazeExitCode.SUCCESS.code)
+  return TrailblazeExitCode.SUCCESS.code
 }
+
+/**
+ * Which generated HTML report the animated timeline exports record (`--export-from`). Both
+ * artifacts implement the autoplay-capture contract; [INTERACTIVE] is the default and the one
+ * that outlives the legacy WASM report.
+ */
+enum class ReportExportSource { INTERACTIVE, WASM }
 
 private data class ExportDefaults(
   val mp4: String,

@@ -4,15 +4,21 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
+import xyz.block.trailblaze.toolcalls.REDACTED_TOOL_ARG_PLACEHOLDER
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import java.io.File
@@ -206,6 +212,76 @@ class InProcessScriptedToolLauncherTest {
   }
 
   /**
+   * Regression pin for a device-farm launch break: a scripted tool resolved through the catalog
+   * path — no analyzer, so its config comes from
+   * `TrailmapScriptedToolFile.toInlineScriptToolConfigs()` — must keep accepting the arguments its
+   * caller passes when the descriptor deliberately omits `inputSchema:` (the real schema lives in
+   * the `.ts` `<I>` generic, a common shape for app launch/sign-in steps).
+   *
+   * That YAML translation still synthesizes `{type: object, properties: {}}`, byte-identical to a
+   * genuine analyzer no-arg schema — so the argument-shape gate must decide on the config's
+   * `inputSchemaExhaustive` provenance flag, NOT the schema's shape. Reading the shape rejected
+   * every argument (`"was called with unknown argument keys: [...]. This tool accepts no
+   * arguments."`) and broke the nested launch compose.
+   *
+   * Drives the real registration + repo + validator rather than asserting the flag directly, so the
+   * pin survives a refactor that moves where the decision is made.
+   */
+  @Test
+  fun `catalog-resolved tool without a declared inputSchema still accepts its arguments`(): Unit = runBlocking {
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl)).single()
+    val bundleJs = assertNotNull(
+      this@InProcessScriptedToolLauncherTest::class.java.classLoader
+        .getResourceAsStream(resolved.bundleResourcePath),
+    ).use { it.readBytes().decodeToString() }
+    val sessionDir = Files.createTempDirectory("inproc-arg-gate-test").toFile()
+    val bundleFile = File(sessionDir, "openUrl.bundle.js").apply { writeText(bundleJs) }
+
+    // Rebuild the config the way a descriptor with NO `inputSchema:` block resolves on the catalog
+    // path: empty properties, provenance flag false. (openUrl's own descriptor declares `url`, so
+    // it can't reproduce the shape as-shipped — hence both fields set explicitly. `copy` carrying
+    // the flag is itself load-bearing: it's why the flag lives in the primary constructor.)
+    val emptySchema = buildJsonObject {
+      put("type", JsonPrimitive("object"))
+      put("properties", buildJsonObject { })
+    }
+    val derivedSchemaRepo = TrailblazeToolRepo.withDynamicToolSets()
+    val derivedSchemaReg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = resolved.config.copy(inputSchema = emptySchema, inputSchemaExhaustive = false),
+      bundlePath = bundleFile,
+      toolRepo = derivedSchemaRepo,
+      sessionId = SessionId.sanitized("inproc-arg-gate-derived"),
+    )
+    // The mirror: same empty schema, but analyzer-sourced (exhaustive) — a stray key IS a typo there.
+    val exhaustiveRepo = TrailblazeToolRepo.withDynamicToolSets()
+    val exhaustiveReg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = resolved.config.copy(inputSchema = emptySchema, inputSchemaExhaustive = true),
+      bundlePath = bundleFile,
+      toolRepo = exhaustiveRepo,
+      sessionId = SessionId.sanitized("inproc-arg-gate-exhaustive"),
+    )
+
+    try {
+      derivedSchemaRepo.addDynamicTools(listOf(derivedSchemaReg))
+      exhaustiveRepo.addDynamicTools(listOf(exhaustiveReg))
+      val args = """{"url":"https://example.com"}"""
+
+      assertNull(
+        JsScriptingCallbackArgumentValidator.validate(derivedSchemaRepo, openUrl.toolName, args),
+        "a catalog-resolved tool whose descriptor omits inputSchema must not have its arguments rejected",
+      )
+      assertNotNull(
+        JsScriptingCallbackArgumentValidator.validate(exhaustiveRepo, openUrl.toolName, args),
+        "an analyzer-sourced no-arg schema IS exhaustive, so a stray key must still be rejected",
+      )
+    } finally {
+      runCatching { derivedSchemaReg.dispose() }
+      runCatching { exhaustiveReg.dispose() }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  /**
    * Host-path `_meta` consistency: a descriptor can opt out via the raw namespaced `_meta` key
    * (`trailblaze/surfaceToLlm` / `trailblaze/isRecordable`) WITHOUT the typed shortcut field. The
    * on-device QuickJS launcher reads `_meta`, so the host in-process registration must honor it too
@@ -241,6 +317,52 @@ class InProcessScriptedToolLauncherTest {
       assertFalse(
         reg.decodeToolCall("""{"url":"https://example.com"}""").getIsRecordableFromAnnotation(),
         "host registration must honor `_meta.trailblaze/isRecordable: false`",
+      )
+    } finally {
+      runCatching { reg.dispose() }
+      sessionDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `host registration masks declared sensitive args in the log payload`() = runBlocking {
+    // `decodeToolCall` returns a WRAPPER (ContextSettingScriptedTool), and the log-encode boundary
+    // resolves the sensitive-args marker off the object it is handed. A wrapper that dropped the
+    // marker would mask on-device and leak the credential on the host path, where the wrapper
+    // surfaces `rawToolArguments` verbatim.
+    val resolved = InProcessScriptedToolLauncher.resolveInProcessScriptedTools(setOf(openUrl)).single()
+    val bundleJs = assertNotNull(
+      this@InProcessScriptedToolLauncherTest::class.java.classLoader
+        .getResourceAsStream(resolved.bundleResourcePath),
+    ).use { it.readBytes().decodeToString() }
+    val sessionDir = Files.createTempDirectory("inproc-sensitive-args-test").toFile()
+    val bundleFile = File(sessionDir, "openUrl.bundle.js").apply { writeText(bundleJs) }
+
+    val withSensitiveArg = resolved.config.copy(
+      meta = buildJsonObject {
+        put(
+          "trailblaze/sensitiveArgNames",
+          buildJsonArray { add(JsonPrimitive("url")) },
+        )
+      },
+    )
+    val reg = LazyYamlScriptedToolRegistration.create(
+      toolConfig = withSensitiveArg,
+      bundlePath = bundleFile,
+      toolRepo = TrailblazeToolRepo.withDynamicToolSets(),
+      sessionId = SessionId.sanitized("inproc-sensitive-args"),
+    )
+    try {
+      val decoded = reg.decodeToolCall("""{"url":"https://example.com/secret-token"}""")
+      assertEquals(
+        JsonPrimitive(REDACTED_TOOL_ARG_PLACEHOLDER),
+        decoded.toLogPayload().raw["url"],
+        "host registration must honor `_meta.trailblaze/sensitiveArgNames`",
+      )
+      assertEquals(
+        JsonPrimitive("https://example.com/secret-token"),
+        (decoded as RawArgumentTrailblazeTool).rawToolArguments["url"],
+        "the wrapper must still dispatch the real value to the bundle",
       )
     } finally {
       runCatching { reg.dispose() }

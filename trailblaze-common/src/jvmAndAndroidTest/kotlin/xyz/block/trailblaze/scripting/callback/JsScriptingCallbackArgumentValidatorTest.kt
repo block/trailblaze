@@ -3,6 +3,7 @@ package xyz.block.trailblaze.scripting.callback
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
+import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import kotlinx.serialization.SerialName
@@ -190,6 +191,69 @@ class JsScriptingCallbackArgumentValidatorTest {
     assertThat(rejected!!).contains("\"element\"")
     assertThat(rejected).contains("url")
     assertThat(rejected).contains("reasoning")
+  }
+
+  @Test
+  fun `validate enforces empty-arg contract for dynamic tools that declare exhaustive parameters`() {
+    // A dynamic registration whose parameter split is author-controlled and exhaustive
+    // (declaresExhaustiveParameters = true — e.g. a scripted `.ts` tool whose analyzer
+    // schema is `properties: {}`) must reject stray keys even when the declared parameter
+    // list is EMPTY. Only non-exhaustive registrations (a subprocess MCP server advertising
+    // no schema, the default) keep the lenient skip — pinned by the sibling test below.
+    val repo = repoWith()
+    repo.addDynamicTools(listOf(dynamicNoArgRegistration("exhaustive_no_arg", exhaustive = true)))
+
+    assertThat(repo.expectedArgumentKeysFor("exhaustive_no_arg")).isEqualTo(emptySet<String>())
+    assertThat(repo.requiredArgumentKeysFor("exhaustive_no_arg")).isEqualTo(emptySet<String>())
+
+    val emptyOk = JsScriptingCallbackArgumentValidator.validate(repo, "exhaustive_no_arg", "{}")
+    assertThat(emptyOk).isNull()
+
+    val rejected = JsScriptingCallbackArgumentValidator.validate(
+      repo,
+      "exhaustive_no_arg",
+      """{"bogus":"1"}""",
+    )
+    assertThat(rejected).isNotNull()
+    assertThat(rejected!!).contains("\"bogus\"")
+    assertThat(rejected).contains("accepts no arguments")
+  }
+
+  @Test
+  fun `validate skips dynamic tools with no parameters that do not claim exhaustiveness`() {
+    // The default (declaresExhaustiveParameters = false): an empty parameter list means
+    // "schema not modelled", not "takes no arguments" — introspection returns null and the
+    // gate stays a no-op, preserving the subprocess-MCP leniency the kdoc promises.
+    val repo = repoWith()
+    repo.addDynamicTools(listOf(dynamicNoArgRegistration("unmodelled_no_arg", exhaustive = false)))
+
+    assertThat(repo.expectedArgumentKeysFor("unmodelled_no_arg")).isNull()
+    assertThat(repo.requiredArgumentKeysFor("unmodelled_no_arg")).isNull()
+
+    val passedThrough = JsScriptingCallbackArgumentValidator.validate(
+      repo,
+      "unmodelled_no_arg",
+      """{"anything":"goes"}""",
+    )
+    assertThat(passedThrough).isNull()
+  }
+
+  private fun dynamicNoArgRegistration(
+    registeredName: String,
+    exhaustive: Boolean,
+  ): DynamicTrailblazeToolRegistration = object : DynamicTrailblazeToolRegistration {
+    override val name: ToolName = ToolName(registeredName)
+    override val declaresExhaustiveParameters: Boolean = exhaustive
+    override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+      name = registeredName,
+      description = "no-arg dynamic tool",
+    )
+    override fun buildKoogTool(
+      trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+    ): TrailblazeKoogTool<out TrailblazeTool> =
+      error("buildKoogTool not exercised by the validator test path")
+    override fun decodeToolCall(argumentsJson: String): TrailblazeTool =
+      error("decodeToolCall not exercised by the validator test path")
   }
 
   @Test

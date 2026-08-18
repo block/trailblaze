@@ -234,6 +234,14 @@ sealed interface TrailblazeLog {
     val successful: Boolean,
     override val traceId: TraceId?,
     val exceptionMessage: String? = null,
+    /**
+     * Structured error payload the tool attached to its failure — see
+     * [xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.ExceptionThrown.structuredPayload].
+     * Carried opaquely beside [exceptionMessage] so structured consumers (report extract,
+     * CI classifiers) can dispatch on payload fields instead of regexing the message text.
+     * Null = text-only failure and every log written before the field existed.
+     */
+    val errorPayload: JsonElement? = null,
     override val durationMs: Long,
     override val session: SessionId,
     override val timestamp: Instant,

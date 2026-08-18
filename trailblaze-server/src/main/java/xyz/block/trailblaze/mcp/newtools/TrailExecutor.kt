@@ -115,18 +115,30 @@ interface TrailExecutor {
 }
 
 /**
- * Platform-level device classifiers for the MCP session's associated device, used to lower a
- * unified trail's per-classifier recordings. Only the device's platform is known here (not its
- * phone/tablet sub-category), so this yields e.g. `[android]` — enough for platform-keyed
- * recordings (`android:`/`ios:`/`web:`). A step recorded ONLY under a more specific sub-category
- * key (e.g. `android-phone:`) won't resolve from a platform-only chain: it lowers with no
- * recording, and the deterministic MCP executor — which has no LLM fallback — fails that step.
- * Empty when no device is associated, which makes `decodeTrail` refuse a
- * unified-with-recordings trail (surfaced as a "bind a device" error rather than a silent
- * lowering whose recorded steps would all fail).
+ * Resolves the device classifiers used to lower a unified trail's per-classifier recordings for the
+ * MCP session's bound device. Empty for a null device id, which makes `decodeTrail` refuse a
+ * unified-with-recordings trail (surfaced as a "bind a device" error rather than a silent lowering
+ * whose recorded steps would all fail).
+ *
+ * Injected because the specific classifier (`android-phone`, `ios-ipad`) can only be probed from
+ * the host, and the canonical host resolver lives in a module that depends on this one. A host wires
+ * the real probe in via the `deviceClassifiersProvider` parameter on `TrailblazeMcpServer`; an
+ * embedder that wires nothing falls back to [platformOnlyDeviceClassifiers].
+ */
+typealias DeviceClassifiersProvider = suspend (TrailblazeDeviceId?) -> List<TrailblazeDeviceClassifier>
+
+/**
+ * Default [DeviceClassifiersProvider]: knows only the device's platform, so it yields e.g.
+ * `[android]` — enough for platform-keyed recordings (`android:`/`ios:`/`web:`). A step recorded
+ * ONLY under a more specific sub-category key (e.g. `android-phone:`) won't resolve from a
+ * platform-only chain: it lowers with no recording, and the deterministic MCP executor — which has
+ * no LLM fallback — fails that step. That's why the daemon wires a host-probed provider instead.
  */
 internal fun deviceClassifiersFor(deviceId: TrailblazeDeviceId?): List<TrailblazeDeviceClassifier> =
   deviceId?.trailblazeDevicePlatform?.asTrailblazeDeviceClassifier()?.let { listOf(it) } ?: emptyList()
+
+/** [deviceClassifiersFor] as a [DeviceClassifiersProvider], for use as a parameter default. */
+internal val platformOnlyDeviceClassifiers: DeviceClassifiersProvider = { deviceId -> deviceClassifiersFor(deviceId) }
 
 /**
  * Default implementation of TrailExecutor.
@@ -142,6 +154,12 @@ class TrailExecutorImpl(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val trailsDirectory: String = "./trails",
   private val logEmitter: LogEmitter? = null,
+  /**
+   * How the bound device's classifiers are resolved for recording lowering. Defaults to the
+   * platform-only fallback; the daemon wires a host-probed provider. See
+   * [DeviceClassifiersProvider].
+   */
+  private val deviceClassifiersProvider: DeviceClassifiersProvider = platformOnlyDeviceClassifiers,
 ) : TrailExecutor {
 
   private val trailblazeYaml = TrailblazeYaml.Default
@@ -167,9 +185,9 @@ class TrailExecutorImpl(
 
     // Resolve the trail with the MCP session's associated-device classifiers so a unified trail
     // lowers to the right per-classifier recording (v1 trails ignore the list). See
-    // [deviceClassifiersFor] for the platform-only limitation and the empty-list guard semantics —
-    // the guard is surfaced below as a clear "bind a device first" error.
-    val deviceClassifiers = deviceClassifiersFor(sessionContext?.associatedDeviceId)
+    // [DeviceClassifiersProvider] for the empty-list (no bound device) semantics — that guard is
+    // surfaced below as a clear "bind a device first" error.
+    val deviceClassifiers = deviceClassifiersProvider(sessionContext?.associatedDeviceId)
     val trailItems = try {
       val yamlContent = file.readText()
       trailblazeYaml.decodeTrail(yamlContent, deviceClassifiers = deviceClassifiers)

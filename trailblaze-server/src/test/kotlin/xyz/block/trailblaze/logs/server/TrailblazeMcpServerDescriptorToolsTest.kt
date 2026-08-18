@@ -27,6 +27,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.mcp.utils.McpToolArgumentValidationException
 import xyz.block.trailblaze.mcp.utils.McpToolExecutionException
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -34,6 +35,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -109,6 +111,105 @@ class TrailblazeMcpServerDescriptorToolsTest {
   ).also {
     it.mcpClientName = "Claude Code"
     it.setAssociatedDevice(androidDevice)
+  }
+
+  // ── multi-target exclusion contracts ──────────────────────────────────────
+
+  @Test
+  fun `a sibling target's own excluded_tools removes its tool from the session`() {
+    // A daemon session can have several targets bound at once, and every bound target's tools are
+    // collected into the session repo. Only the ACTIVE target's `excluded_tools:` are subtracted
+    // downstream, so a sibling's opt-out did nothing and the tool stayed dispatchable.
+    //
+    // Asserted at dispatch rather than on the collector that computes it: the collector's result
+    // has to actually reach the session repo to matter, and a test on the collector alone stays
+    // green if it stops doing so.
+    val active = ClassToolTarget(id = "activeapp")
+    val sibling = ClassToolTarget(
+      id = "siblingapp",
+      customTools = setOf(SiblingExcludedTool::class),
+      excludedTools = setOf(SiblingExcludedTool::class),
+    )
+    val bridge = RecordingBridge(targets = setOf(active, sibling), currentTargetId = active.id)
+    val server = newServer(bridge)
+    val sessionId = "sibling-excluded"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+
+    // No pre-installed runtime: this must build the session repo through the real path, which is
+    // the only thing that exercises the per-target exclusion.
+    assertFailsWith<McpToolArgumentValidationException>(
+      "a tool its own target excluded must not be dispatchable, even from a non-active target",
+    ) {
+      runBlocking {
+        server.executeDescriptorBackedTool(sessionId, "siblingExcludedTool", buildJsonObject { })
+      }
+    }
+    assertTrue(
+      bridge.executedTools.isEmpty(),
+      "an excluded tool must never reach the bridge executor",
+    )
+  }
+
+  @Test
+  fun `a sibling's exclusion cannot strip a tool the active target's own toolsets deliver`() {
+    // `eraseText` reaches this session two ways: the sibling declares it, and the active target's
+    // always-enabled `core_interaction` toolset carries it on this driver. A sibling opting out
+    // speaks only for its own declaration — it must not delete a tool the active trailmap supplies,
+    // or one app's config silently removes another app's tool from a shared daemon session.
+    val active = ScopedYamlTarget(id = "activeapp", toolSetIds = listOf("verification"))
+    val sibling = YamlToolTarget(
+      id = "siblingapp",
+      displayName = "Sibling",
+      yamlNames = setOf(ToolName("eraseText")),
+      excludedYamlNames = setOf(ToolName("eraseText")),
+    )
+    val bridge = RecordingBridge(targets = setOf(active, sibling), currentTargetId = active.id)
+    val server = newServer(bridge)
+    val sessionId = "sibling-excluded-yaml"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+
+    val result = runBlocking {
+      server.executeDescriptorBackedTool(
+        sessionId,
+        "eraseText",
+        buildJsonObject { put("charactersToErase", 3) },
+      )
+    }
+
+    assertEquals("[OK] executed", result, "the active target's own toolset tool must still dispatch")
+    assertEquals(
+      1,
+      bridge.executedTools.size,
+      "a sibling's excluded_tools must not remove a tool the active target's trailmap delivers",
+    )
+  }
+
+  @Test
+  fun `one target's exclusion does not remove another target's tool`() {
+    // The subtraction is per target, not global. If `excludingapp` opts out of a tool that
+    // `owningapp` legitimately declares, the union must still carry `owningapp`'s — otherwise one
+    // target's config silently deletes another's tool from a shared session.
+    val active = ClassToolTarget(id = "activeapp")
+    val owning = ClassToolTarget(id = "owningapp", customTools = setOf(SharedDeclaredTool::class))
+    val excluding = ClassToolTarget(id = "excludingapp", excludedTools = setOf(SharedDeclaredTool::class))
+    val bridge = RecordingBridge(
+      targets = setOf(active, owning, excluding),
+      currentTargetId = active.id,
+    )
+    val server = newServer(bridge)
+    val sessionId = "sibling-shared"
+    server.installSessionContextForTest(sessionId, ctx(sessionId))
+
+    val result = runBlocking {
+      server.executeDescriptorBackedTool(sessionId, "sharedDeclaredTool", buildJsonObject { })
+    }
+
+    assertEquals("[OK] executed", result, "the declaring target's tool must still dispatch")
+    assertEquals(
+      1,
+      bridge.executedTools.size,
+      "a sibling's exclusion must not remove a tool another bound target declares",
+    )
   }
 
   // ── executeDescriptorBackedTool dispatch contracts ────────────────────────
@@ -686,6 +787,56 @@ class TrailblazeMcpServerDescriptorToolsTest {
   // ── Fixture ───────────────────────────────────────────────────────────────
 
   /** App-target stub declaring one inline scripted tool (the `target.tools:` shape). */
+  /**
+   * A target contributing class-backed tools, so a multi-target session's exclusion rules can be
+   * asserted where they actually matter — at dispatch.
+   */
+  /** Declared and excluded by the same non-active target. */
+  @Serializable
+  @TrailblazeToolClass("siblingExcludedTool")
+  private class SiblingExcludedTool : TrailblazeTool
+
+  /** Declared by one bound target and excluded by a different one. */
+  @Serializable
+  @TrailblazeToolClass("sharedDeclaredTool")
+  private class SharedDeclaredTool : TrailblazeTool
+
+  /** A target that scopes itself to specific catalog toolsets, declaring no tools of its own. */
+  private class ScopedYamlTarget(
+    id: String,
+    private val toolSetIds: List<String>,
+  ) : TrailblazeHostAppTarget(id, id) {
+    override fun getPossibleAppIdsForPlatform(
+      platform: TrailblazeDevicePlatform,
+    ): List<String>? = null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getDeclaredToolSetIdsForDriver(
+      driverType: TrailblazeDriverType,
+    ): List<String> = toolSetIds
+  }
+
+  private class ClassToolTarget(
+    id: String,
+    private val customTools: Set<KClass<out TrailblazeTool>> = emptySet(),
+    private val excludedTools: Set<KClass<out TrailblazeTool>> = emptySet(),
+  ) : TrailblazeHostAppTarget(id, id) {
+    override fun getPossibleAppIdsForPlatform(
+      platform: TrailblazeDevicePlatform,
+    ): List<String>? = null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = customTools
+
+    override fun getExcludedToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = excludedTools
+  }
+
   private class InlineToolTarget(
     id: String,
     displayName: String,

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.trailrunner
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.File
 
@@ -82,13 +83,32 @@ internal fun resolvePrimaryRoot(configuredProvider: () -> File): File {
   // Trail Runner even when it has no `.trail.yaml` files yet (a fresh workspace). Previously this
   // required `containsTrails(configured)`, so picking any empty/new folder silently snapped back to
   // the daemon launch-dir trails below and looked like the switch did nothing.
+  //
+  // The daemon's provider is `TrailblazeDesktopUtil.getEffectiveTrailsDirectory`, which already
+  // applies a launch-workspace `trails:` declaration — so a workspace that declares one wins here
+  // without a rung of its own.
   if (configured.isDirectory) return configured
-  // Nothing usable is configured (e.g. the configured path doesn't exist): fall back to
-  // `<cwd>/trails` when it actually holds trails, then to the configured path as a last resort.
+  // Nothing usable is configured (e.g. the configured path doesn't exist): fall back to the
+  // launch workspace's trails root, then to the configured path as a last resort. The workspace
+  // is asked first because the `trails/` convention below is only ever a guess about layout,
+  // and a repo that keeps its trails elsewhere (`trails: legacy-trails`) has stated the answer.
+  cwdWorkspaceTrailsDir()?.let { return it }
   val cwdTrails = File(System.getProperty("user.dir"), "trails")
   if (cwdTrails.isDirectory && containsTrails(cwdTrails)) return cwdTrails
   return configured
 }
+
+/**
+ * The `trails:` root declared by the workspace this process launched in, or null when it
+ * declares none.
+ *
+ * Shares [TrailblazeDesktopUtil]'s memo rather than resolving independently. Two reasons: this
+ * is NOT a cold path — `resolveRoots` runs on every Trail Runner route and the web UI polls a
+ * few times a minute, so an unmemoized walk-up plus YAML parse would run per request for as long
+ * as the configured directory stays missing — and a second independent resolver could disagree
+ * with the one the desktop UI reports, which is exactly the split this PR set out to remove.
+ */
+private fun cwdWorkspaceTrailsDir(): File? = TrailblazeDesktopUtil.launchWorkspaceDeclaration()?.trailsDir
 
 internal fun containsTrails(dir: File): Boolean {
   if (!dir.isDirectory) return false

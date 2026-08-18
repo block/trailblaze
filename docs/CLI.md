@@ -606,8 +606,9 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--storyboard-yaml` | Annotate each --storyboard cell with the YAML form of the recordable tool that produced it (looked up by traceId against the session's TrailblazeToolLog entries). The YAML strip replaces the synthesized verb/sublabel line — strictly more informative for "what was invoked here" triage. Cells without a sibling tool log fall back to the verb line. CSS Grid aligns rows to their tallest YAML so a short YAML doesn't pay the cost of a long one elsewhere. Capped at 20 lines per cell as a sanity bound. Default: on. Pass --no-storyboard-yaml to suppress (reduces total rendered height by ~20% on a typical session, at the cost of less actionable per-cell labels). Has no effect without --storyboard. | - |
 | `--no-gif` | Suppress the auto-emitted .gif companion when --webp is requested with a bare flag. Use this on scripts and CI flows that only embed the .webp and want to skip the wasted GIF encode. Mutually exclusive with --gif. | - |
 | `--no-webp` | Suppress the auto-emitted .webp companion when --gif is requested with a bare flag. Mutually exclusive with --webp. | - |
-| `--no-wasm-report` | Skip the legacy WASM report; emit only the interactive report (plus the JSON summary). Saves the CPU-bound WASM build when only the interactive artifact is consumed. Mutually exclusive with --video/--gif/--webp, which capture the legacy timeline. Same flag as the CI report generator's --no-wasm-report. | - |
-| `--max-size` | Cap each exported timeline artifact (--gif / --video / --webp) at the given byte size. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G). After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap, the export fails with an actionable error — drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The flag is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
+| `--no-wasm-report` | Skip the legacy WASM report; emit only the interactive report (plus the JSON summary). Saves the CPU-bound WASM build when only the interactive artifact is consumed. Combines with --video/--gif/--webp, which capture the interactive timeline by default. Same flag as the CI report generator's --no-wasm-report. | - |
+| `--export-from` | Which HTML report the animated exports (--video/--gif/--webp) record: `interactive` (default) or `wasm`. Both implement the autoplay-capture contract; the interactive report is the one that survives the legacy WASM report's removal, so pin `wasm` only to reproduce an older artifact's exact look. Requires one of --video/--gif/--webp — passing it on its own is a usage error (--storyboard builds its own HTML and is never affected). | - |
+| `--max-size` | Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export you paste into a PR fits without having to think about it. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for a genuinely uncapped export. After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap: an explicitly-passed --max-size fails the export with an actionable error, while the 10MB default keeps the oversized artifact and warns instead — a default you didn't ask for never turns a working export into a failure. Either way the remedies are the same: drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The cap is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
@@ -1429,6 +1430,7 @@ Launch the Trailblaze desktop app for viewing sessions and managing trails (use 
 
 ```
 trailblaze app [OPTIONS]
+trailblaze app start
 ```
 
 **Options:**
@@ -1438,6 +1440,27 @@ trailblaze app [OPTIONS]
 | `--headless` | Start in headless mode (daemon only, no GUI) | - |
 | `--stop` | Stop the running daemon | - |
 | `--status` | Check if the daemon is running | - |
+| `--foreground` | Run in foreground (blocks terminal). Use for debugging with an attached IDE. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze app start`
+
+Start the Trailblaze app in the background (same as `trailblaze app`)
+
+**Synopsis:**
+
+```
+trailblaze app start [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--headless` | Start in headless mode (daemon only, no GUI) | - |
 | `--foreground` | Run in foreground (blocks terminal). Use for debugging with an attached IDE. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |

@@ -32,6 +32,8 @@ interface RunMeta {
   cmd?: string;
   /** Failure reason shown as the header error banner. */
   error?: string;
+  /** Machine-readable failure code lifted from the session's structured failure payload (`failureCodeOf`); rendered as a chip on the failure banner. */
+  failureCode?: string;
   /** True for *WithSelfHeal statuses — renders the separate self-heal marker badge. */
   selfHeal?: boolean;
   generatedAt?: string;
@@ -74,6 +76,16 @@ interface ActionMark {
 interface TraceChild {
   label: string;
   tool: string;
+  /** Summed execution time of the folded dispatches; null for a declared-but-never-logged dispatch. */
+  ms?: number | null;
+  /** `false` when the dispatch logged a failure. */
+  ok?: boolean;
+  /** The failed dispatch's error message (errorMessage or the JVM log's exceptionMessage); null when it passed or logged none. */
+  err?: string | null;
+  /** Machine-readable code from the failed dispatch's structured error payload (top-level string `code`); null when it passed or the payload carried none. */
+  code?: string | null;
+  /** Consecutive identical dispatches folded into this child (×N); 1 when it ran once. */
+  count?: number | null;
 }
 
 /** One timeline row after slimTraceForShare — the embedded shape the viewer renders. */
@@ -119,7 +131,11 @@ interface TraceStep {
    * polluted by off-viewport nodes. Present only on rows that carried a hierarchy.
    */
   viewport?: { w: number; h: number } | null;
-  children: TraceChild[];
+  /** Composite-tool dispatch list (see toolChildren). Only present on rows that carry one. */
+  children?: TraceChild[];
+  /** A composite call's full argument list as preformatted `key=value` lines — unabridged, unlike
+   * the `tool` summary's three-key crop. Only present on rows that carry children. */
+  params?: string[] | null;
 }
 
 /** Rows as extractTrace produces them, before slimTraceForShare strips extraction bookkeeping. */
@@ -363,6 +379,18 @@ interface VideoInfo {
    * timestamps) the timeline preview falls back to per-step screenshots.
    */
   startMs?: number | null;
+}
+
+/**
+ * The Kotlin/JS selector-engine bundle (:trailblaze-selector-engine-js) as the report transports
+ * it: `js` inline below the driver's threshold, `gz` (gzip+base64) above it — the same split as
+ * every other side-channel (see packGz in run-report-cli.ts). buildMultiReportHtml embeds it ONCE
+ * per document as the inert `#tb-selector-engine` JSON chunk, and only when a session carries
+ * hierarchies; the viewer inflates + evaluates it on first inspector use, never on page load.
+ */
+interface SelectorEnginePayload {
+  js?: string | null;
+  gz?: string | null;
 }
 
 /** One run inside the embedded payload. */

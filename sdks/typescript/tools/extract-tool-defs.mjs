@@ -131,13 +131,14 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
   "supportedDrivers",
   "surfaceToLlm",
   "isRecordable",
+  "sensitiveArgNames",
   "trailhead",
 ]);
 
 /**
  * Maximum recursion depth for [literalValueOf]. Most recognized
  * `TrailblazeTypedToolSpec` fields are 1-level shapes (boolean, string,
- * string array) — `trailhead` is the one 2-level shape (`{ to: string,
+ * string array — `sensitiveArgNames` among them) — `trailhead` is the one 2-level shape (`{ to: string,
  * dynamic: boolean }`) — so depth 2 covers `supportedPlatforms: ["web"]`,
  * `trailhead: { to: "..." }`, and friends with headroom. A pathological
  * author literal like `[[[[[[[["web"]]]]]]]]`

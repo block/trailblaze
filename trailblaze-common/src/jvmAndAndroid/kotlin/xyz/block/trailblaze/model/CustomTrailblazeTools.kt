@@ -8,8 +8,14 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSurface
+import xyz.block.trailblaze.toolcalls.allToolNames
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ResolvedTargetToolScope
+import xyz.block.trailblaze.toolcalls.ResolvedToolExclusions
+import xyz.block.trailblaze.toolcalls.logDeclaredToolSetProblemsOnce
+import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.toolcalls.toolName
 import kotlin.reflect.KClass
 
@@ -109,6 +115,18 @@ data class CustomTrailblazeTools(
    * `target.getExcludedToolSurfaceForDriver(driverType)`. Defaults to no exclusions.
    */
   val initialToolRepoExclusions: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+  /**
+   * Catalog toolset ids the tool repo's surface is scoped to — a target's trailmap `tool_sets:`
+   * declarations for [driverType]. Null (the default) keeps the whole-catalog surface for callers
+   * that have no target in hand. Forwarded by [toTrailblazeToolRepo] to
+   * [TrailblazeToolRepo.withDynamicToolSets]; populate it from
+   * `target.getDeclaredToolSetIdsForDriver(driverType)` so an on-device session advertises the same
+   * tools `getAgentToolboxForDriver` reports for that target and driver.
+   *
+   * Declared last so adding it doesn't shift the generated `componentN()` / `copy()` positions of
+   * the existing parameters — those positions are public API.
+   */
+  val toolSetIds: List<String>? = null,
 ) {
   fun allForSerializationTools(): Set<KClass<out TrailblazeTool>> = buildSet {
     addAll(registeredAppSpecificLlmTools)
@@ -134,6 +152,7 @@ data class CustomTrailblazeTools(
  * - [CustomTrailblazeTools.initialToolRepoExclusions] — `excluded_tools:` opt-outs (all backings)
  * - [CustomTrailblazeTools.toolSetCatalog] — dynamic-toolset catalog (falls back to classpath)
  * - [CustomTrailblazeTools.driverType] — driver filter for `always_enabled` entries
+ * - [CustomTrailblazeTools.toolSetIds] — trailmap `tool_sets:` scope for the catalog surface
  *
  * Used by `AndroidTrailblazeRule` and downstream rule types so every rule type shares a
  * single wiring path. Having one callable to forward the fields makes it impossible for a
@@ -154,4 +173,164 @@ fun CustomTrailblazeTools.toTrailblazeToolRepo(): TrailblazeToolRepo =
     excludedScriptedToolNames = initialToolRepoExclusions.scriptedToolNames,
     catalog = toolSetCatalog ?: TrailblazeToolSetCatalog.defaultEntries(),
     driverType = driverType,
+    toolSetIds = toolSetIds,
   )
+
+/**
+ * The [CustomTrailblazeTools] any runtime should run this target with on [driverType] — the
+ * trailmap-declared toolsets plus the target's own tools, minus its `excluded_tools:`.
+ *
+ * **The one composer.** On-device rules, the host runner, and the daemon all build their session
+ * tool repo here, off the same [resolveToolScopeForDriver] scope that
+ * [xyz.block.trailblaze.toolcalls.getAgentToolboxForDriver] reports from. Composing per runtime is
+ * what let them disagree: the host and daemon resolved against the whole catalog while on-device
+ * resolved against the trailmap, so the same (target, driver) got a different tool array depending
+ * on where it ran — and the device's exceeded the providers' 128-tool cap.
+ *
+ * Deliberately WIDER than the advertised surface: no `surfaceToLlm` or YAML-config-presence filter
+ * runs here, because the repo must still *dispatch* a tool the LLM was never shown (a recorded step
+ * replaying an internal step, or a scripted tool composed by a sibling). Advertisement is gated
+ * later, inside the repo. Narrowing this to the advertised set would break recorded replays.
+ *
+ * The declared ids ride through on [CustomTrailblazeTools.toolSetIds] rather than only being
+ * pre-resolved into the initial sets, because the scripted partition is re-derived from the catalog
+ * inside the repo ([TrailblazeToolRepo.allCatalogScriptedToolNames]) and would otherwise still be
+ * catalog-wide.
+ */
+fun TrailblazeHostAppTarget.toCustomTrailblazeToolsForDriver(
+  driverType: TrailblazeDriverType,
+  config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
+  catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
+  /**
+   * Tools a runtime contributes that this target's YAML can't name — the host's driver-specific
+   * web classes, or the daemon's OTHER bound targets. All three backings, because a runtime that
+   * contributes class-backed tools generally contributes YAML and scripted ones too; taking only
+   * classes here silently dropped the daemon's sibling-target YAML/scripted tools to
+   * "Unknown tool". The target's `excluded_tools:` still wins over anything added here.
+   */
+  additional: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+  /**
+   * Opt-outs the runtime imposes on top of the target's own `excluded_tools:` — a caller that
+   * suppresses specific tool classes for its harness. Unioned with the target's exclusions, so
+   * either source removing a tool removes it.
+   */
+  additionalExclusions: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+): CustomTrailblazeTools =
+  resolveToolScopeForDriver(driverType, catalog)
+    .toCustomTrailblazeTools(config, catalog, additional, additionalExclusions)
+
+/**
+ * The same composer for a caller that already resolved the scope. Threading the scope rather than
+ * re-deriving it is what makes "resolved once" structural instead of a convention.
+ */
+fun ResolvedTargetToolScope.toCustomTrailblazeTools(
+  config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
+  catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
+  additional: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+  additionalExclusions: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+): CustomTrailblazeTools {
+  val scope = this
+  // The target's `excluded_tools:` unioned with whatever the runtime suppresses. One combined
+  // surface so every subtraction below reads from the same place — splitting them is how the
+  // scripted partition kept getting dropped from one site and not another.
+  val excluded = ResolvedToolExclusions(
+    toolClasses = scope.excluded.toolClasses + additionalExclusions.toolClasses,
+    yamlToolNames = scope.excluded.yamlToolNames + additionalExclusions.yamlToolNames,
+    scriptedToolNames = scope.excluded.scriptedToolNames + additionalExclusions.scriptedToolNames,
+  )
+  // Logged in the composer so on-device, host, and daemon all get it — this is the line that
+  // answers "why can't the agent call tool X here?" after a session comes up narrower than
+  // expected. On-device used to log it at the rule; the other two logged nothing.
+  // NOT exclusion-subtracted: `registeredAppSpecific*` also feeds `allForSerializationTools()`,
+  // which is the YAML *decoder* registry. Dropping an excluded tool from it turns "declared but not
+  // advertised" into "recorded trail fails to parse". Exclusions apply to the repo surface below.
+  val customTools = scope.customToolClasses + additional.toolClasses
+  val customYaml = scope.customYamlToolNames + additional.yamlToolNames
+  val customScripted = scope.customScriptedToolNames + additional.scriptedToolNames
+  val repoToolClasses = scope.toolClasses + customTools - excluded.toolClasses
+  val repoYamlToolNames = scope.yamlToolNames + customYaml - excluded.yamlToolNames
+  val repoScriptedToolNames = scope.scriptedToolNames + customScripted - excluded.scriptedToolNames
+  // Every number here is a number the repo actually ends up with. Logging the SCOPE's counts
+  // instead under-reported any runtime contribution and, worse, any runtime exclusion: on the
+  // daemon that is precisely the sibling-target surface, so the one line meant to explain "why
+  // can't the agent call tool X here?" omitted the reason.
+  Console.log(
+    "Resolved tools for target='${scope.targetId}' driver=${driverType.yamlKey}: " +
+      "trailmapToolSets=${scope.declaredToolSetIds.ifEmpty { "<unconfigured — whole catalog>" }} " +
+      "class=${repoToolClasses.size} yaml=${repoYamlToolNames.size} " +
+      "scripted=${repoScriptedToolNames.size} excluded=${excluded.allToolNames.size}",
+  )
+  // Deduped inside, so this stays one report per misconfiguration no matter how often a session
+  // recomposes — the daemon skips caching a runtime for exactly the targets whose `tool_sets:`
+  // resolved to nothing, so "compose once" was never a real guarantee for them.
+  scope.logDeclaredToolSetProblemsOnce()
+  return CustomTrailblazeTools(
+    registeredAppSpecificLlmTools = customTools,
+    config = config,
+    driverType = driverType,
+    registeredAppSpecificYamlToolNames = customYaml,
+    registeredAppSpecificScriptedToolNames = customScripted,
+    // Straight off the scope — the unconfigured-target fallback to the whole driver catalog is
+    // already baked into `scope.fromTrailmap`, so this composer no longer re-decides it. Re-deciding
+    // here is what let the daemon and this repo disagree about an unconfigured target.
+    initialToolRepoToolClasses = repoToolClasses,
+    initialToolRepoYamlToolNames = repoYamlToolNames,
+    initialToolRepoScriptedToolNames = repoScriptedToolNames,
+    toolSetCatalog = catalog,
+    // The whole exclusion surface rides through so the SCRIPTED opt-outs drop too — those are
+    // re-added from the catalog inside `withDynamicToolSets`, so pre-subtracting can't reach them.
+    initialToolRepoExclusions = excluded,
+    // Null when the target declared nothing for this driver — see [ResolvedTargetToolScope.isScoped].
+    // An unconfigured target keeps the whole driver-compatible catalog rather than collapsing to
+    // `always_enabled`, which would leave the agent unable to verify or navigate.
+    toolSetIds = scope.declaredToolSetIds.takeIf { scope.isScoped },
+  )
+}
+
+/**
+ * **The session tool repo, for every runtime.** On-device rules, the host runner, and the daemon
+ * all build theirs here, so a given (target, driver) gets the same tools wherever it runs.
+ *
+ * Nullable receiver because a session can legitimately have no target (a bare `trailblaze run`
+ * against a device with no trailmap bound). With no target there is nothing to scope to, so that
+ * case — and only that case — keeps the driver-compatible whole-catalog surface.
+ *
+ * @param additional tools the runtime contributes that the target's YAML can't name — the host's
+ *   driver-specific web classes, or the daemon's other bound targets. All three backings; the
+ *   target's `excluded_tools:` still wins over them.
+ */
+fun TrailblazeHostAppTarget?.toSessionToolRepo(
+  driverType: TrailblazeDriverType,
+  config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
+  catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
+  additional: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+  additionalExclusions: TrailblazeToolSurface = EmptyTrailblazeToolSurface,
+): TrailblazeToolRepo = this
+  ?.toCustomTrailblazeToolsForDriver(
+    driverType = driverType,
+    config = config,
+    catalog = catalog,
+    additional = additional,
+    additionalExclusions = additionalExclusions,
+  )
+  ?.toTrailblazeToolRepo()
+  ?: TrailblazeToolRepo.withDynamicToolSets(
+    customToolClasses = additional.toolClasses,
+    customYamlToolNames = additional.yamlToolNames,
+    customScriptedToolNames = additional.scriptedToolNames,
+    // No target means no `excluded_tools:`, but a runtime's own opt-outs still apply.
+    excludedToolClasses = additionalExclusions.toolClasses,
+    excludedYamlToolNames = additionalExclusions.yamlToolNames,
+    excludedScriptedToolNames = additionalExclusions.scriptedToolNames,
+    catalog = catalog,
+    driverType = driverType,
+  )
+
+private fun catalogToolClasses(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
+  TrailblazeToolSetCatalog.defaultToolClassesForDriver(d, c)
+
+private fun catalogYamlNames(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
+  TrailblazeToolSetCatalog.defaultYamlToolNamesForDriver(d, c)
+
+private fun catalogScriptedNames(d: TrailblazeDriverType, c: List<ToolSetCatalogEntry>) =
+  TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(d, c)

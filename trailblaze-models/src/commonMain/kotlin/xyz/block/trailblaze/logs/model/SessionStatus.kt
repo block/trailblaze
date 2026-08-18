@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
@@ -76,6 +77,13 @@ sealed interface SessionStatus {
        * Null for ordinary failures and on logs written before the field existed.
        */
       val failureKind: String? = null,
+      /**
+       * Structured error payload carried by the session-ending exception — detail WITHIN
+       * [failureKind], opaque to the framework (see
+       * [xyz.block.trailblaze.exception.TrailheadException.payload]). Null for text-only
+       * failures and on logs written before the field existed.
+       */
+      val failurePayload: JsonElement? = null,
     ) : Ended
 
     @Serializable
@@ -105,6 +113,8 @@ sealed interface SessionStatus {
       val exceptionStackTrace: String? = null,
       /** See [Failed.failureKind]. */
       val failureKind: String? = null,
+      /** See [Failed.failurePayload]. */
+      val failurePayload: JsonElement? = null,
     ) : Ended
 
     @Serializable

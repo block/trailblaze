@@ -18,8 +18,31 @@ class ReportCommandMaxSizeWiringTest {
 
   @Test
   fun `--max-size is optional and defaults to null`() {
+    // Load-bearing: a null field is how the command tells "user didn't pass it" (→ the
+    // 10MB default cap, non-strict) from "user asked for a cap" (→ strict). A picocli
+    // `defaultValue = "10MB"` would populate the field either way and erase that signal.
     val cmd = parseReport()
     assertNull(cmd.maxSize)
+    val cap = MaxArtifactSize.resolveCap(cmd.maxSize)
+    assertEquals(MaxArtifactSize.DEFAULT_MAX_BYTES, cap.maxBytes)
+    assertTrue(!cap.strict)
+  }
+
+  @Test
+  fun `--max-size=none is accepted and produces an uncapped export`() {
+    val cmd = parseReport("--id", "abc", "--webp", "--max-size", "none")
+    assertEquals("none", cmd.maxSize)
+    assertNull(MaxArtifactSize.resolveCap(cmd.maxSize).maxBytes)
+  }
+
+  @Test
+  fun `--max-size=none without an artifact still exits USAGE`() {
+    // The "no effect without an artifact" guard keys on whether the user typed the flag,
+    // not on the resolved cap — under `none` the resolved cap is null, so a guard keyed
+    // on the resolved value would silently accept this instead of flagging the misuse.
+    val cmd = ReportCommand()
+    CommandLine(cmd).parseArgs("--id", "abc", "--max-size", "none")
+    assertEquals(TrailblazeExitCode.MISUSE.code, cmd.call())
   }
 
   @Test

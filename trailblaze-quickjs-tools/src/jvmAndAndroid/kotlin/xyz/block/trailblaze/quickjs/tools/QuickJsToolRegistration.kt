@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.quickjs.tools
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
@@ -61,6 +62,13 @@ class QuickJsToolRegistration(
    * [QuickJsToolBundleLauncher]. Default `true`.
    */
   internal val isRecordable: Boolean = true,
+  /**
+   * 1:1 with the scripted tool's declared `sensitiveArgNames`. Threaded onto the decoded tool so
+   * the log-encode boundary masks those args' values in the persisted session log (which ships as
+   * a CI artifact). Sourced from the tool's `_meta` ([QuickJsToolMeta.sensitiveArgs]) by
+   * [QuickJsToolBundleLauncher].
+   */
+  internal val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
 ) : DynamicTrailblazeToolRegistration {
 
   override val name: ToolName = ToolName(spec.name)
@@ -75,7 +83,7 @@ class QuickJsToolRegistration(
     // doesn't model today (`array`, `object`, etc.) — those fall back to String rather than
     // crashing session startup. Same posture the legacy MCP-bundle registration takes.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable)
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs)
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -94,7 +102,7 @@ class QuickJsToolRegistration(
     // still fires — a wrapper would let a non-recordable same-bundle compose bypass the guard and
     // deadlock the host's non-reentrant evalMutex. The tool's `toolMetadata` carries the opt-out so
     // the recording gate (`getIsRecordableFromAnnotation`) skips it.
-    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable)
+    val serializer = QuickJsToolSerializer(name, host, binding, isRecordable, sensitiveArgs)
     return Json.decodeFromString(serializer, argumentsJson)
   }
 }

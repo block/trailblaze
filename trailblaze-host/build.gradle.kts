@@ -500,9 +500,9 @@ val copyTypescriptCompilerResources by tasks.registering(Copy::class) {
 // `bundleTrailblazeSdkDts` tracks `src/` + `package.json` + `bun.lock` as inputs and `dist/` as
 // outputs — `node_modules/` is neither, and its install-skip probe looks for `.bin/esbuild` and
 // `.bin/dts-bundle-generator`, never `node_modules/typescript`. So with `dist/` present and
-// `node_modules/` deleted (exactly what the documented `rm -rf node_modules` recovery in AGENTS.md
-// leaves behind, and what any cache that keeps `dist/` but not `node_modules/` reproduces), that task
-// reports UP-TO-DATE, `bun install` never runs, and the Copy above goes NO-SOURCE.
+// `node_modules/` deleted (the same state after an `rm -rf node_modules` recovery, and what any
+// cache that keeps `dist/` but not `node_modules/` reproduces), that task reports UP-TO-DATE,
+// `bun install` never runs, and the Copy above goes NO-SOURCE.
 //
 // A `doLast` on the Copy cannot catch that: Gradle skips a NO-SOURCE task's actions entirely. So the
 // assertion lives in its own always-executing task, wired ahead of resource processing. It fails the

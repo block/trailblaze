@@ -59,6 +59,9 @@
 <!-- Pure target/device grouping model. Browser devices join declared web targets here rather than
      being flattened into an anonymous Web bucket by the React screen. -->
 <script src="./app/screens/target-picker-model.js"></script>
+<!-- Groups the declared-but-absent targets (TrailmapsResponse.notInstalledTargets) by home repo for
+     the Trailmaps screens' "lives in another repo" section. Plain JS with a sibling bun test. -->
+<script src="./app/screens/not-installed-targets-model.js"></script>
 <!-- Live device mirror transport (H.264/CDP live stream with layered JPEG/poll fallback), shared by
      the recorder + companion mirror. Plain JS with a sibling live-device-stream.test.ts; loaded
      before the babel screens so they see window.TbLiveDeviceStream. -->

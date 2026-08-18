@@ -40,7 +40,21 @@ dependencies {
 
 tasks.test {
   useJUnitPlatform()
-  workingDir = rootProject.projectDir.resolve("opensource")
+  // The tests resolve their trails from `user.dir`, so this must be the `opensource` root. Derive
+  // it from this module's own path: `rootProject` differs when this build is included from another composite root.
+  workingDir = projectDir.parentFile.parentFile
+
+  // Gradle treats `workingDir` as @Internal, so the trails read through it are invisible to the
+  // build cache. Without this, editing a trail restores the old result instead of replaying it.
+  inputs.dir(workingDir.resolve("trails/playwright-native"))
+    .withPropertyName("evalTrails")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+
+  // The trails navigate to these fixture pages through file:// URLs, so a page edit has to
+  // invalidate the cached result the same way a trail edit does.
+  inputs.dir(projectDir.resolve("sample-app"))
+    .withPropertyName("sampleApp")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 
   // Run tests in parallel — each test gets its own browser instance
   systemProperty("junit.jupiter.execution.parallel.enabled", "true")

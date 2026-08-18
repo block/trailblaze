@@ -12,9 +12,9 @@ import kotlin.test.assertTrue
 
 /**
  * Unit tests for [SimctlCli]'s pure helpers: the permission-preserving bundle copy backing
- * `clearAppState`'s reinstall, the symlink-safe temp-bundle delete, and the `launchctl list`
- * parse backing `ensureStopped`. The simctl-subprocess paths need a real simulator and aren't
- * covered here.
+ * `clearAppState`'s reinstall, the symlink-safe temp-bundle delete, the `launchctl list`
+ * parse backing `ensureStopped`, and the `launch` argv build. The simctl-subprocess paths
+ * need a real simulator and aren't covered here.
  */
 class SimctlCliTest {
 
@@ -149,5 +149,34 @@ class SimctlCliTest {
       512	0	UIKitApplication:com.example.app2[a1b2][rb-legacy]
     """.trimIndent()
     assertFalse(SimctlCli.isAppRunning(output, "com.example.app"))
+  }
+
+  // --- launchCommand ---
+
+  @Test
+  fun `launchCommand appends launch arguments after the bundle id`() {
+    assertEquals(
+      listOf(
+        "xcrun", "simctl", "launch", "UDID-123", "com.example.app",
+        "-E2ETestLaunchSessionToken", "session-token-value",
+      ),
+      SimctlCli.launchCommand(
+        udid = "UDID-123",
+        bundleId = "com.example.app",
+        launchArguments = listOf("-E2ETestLaunchSessionToken", "session-token-value"),
+      ),
+    )
+  }
+
+  @Test
+  fun `launchCommand without launch arguments is the bare simctl launch command`() {
+    assertEquals(
+      listOf("xcrun", "simctl", "launch", "UDID-123", "com.example.app"),
+      SimctlCli.launchCommand(
+        udid = "UDID-123",
+        bundleId = "com.example.app",
+        launchArguments = emptyList(),
+      ),
+    )
   }
 }

@@ -9,9 +9,9 @@ Usage: trailblaze report [-hV] [--current] [--full-report-payloads] [--no-gif]
                          [--no-wasm-report] [--no-webp] [--open] [--[no-]
                          storyboard-yaml] [--gif[=<gifOutput>]] [--storyboard
                          [=<storyboardOutput>]] [--video[=<videoOutput>]]
-                         [--webp[=<webpOutput>]] [--id=<id>]
-                         [--max-size=<maxSize>] [--output-dir=<outputDir>]
-                         [--share-url=<url>]
+                         [--webp[=<webpOutput>]] [--export-from=<artifact>]
+                         [--id=<id>] [--max-size=<maxSize>]
+                         [--output-dir=<outputDir>] [--share-url=<url>]
                          [--storyboard-columns=<storyboardColumns>]
                          [<session-id>]
 Generate an HTML report for session recordings, plus a best-effort JSON
@@ -29,6 +29,17 @@ written with a warning.
       --current              Narrow to the currently active session (resolved
                                via the running daemon). Mutually exclusive with
                                --id.
+      --export-from=<artifact>
+                             Which HTML report the animated exports
+                               (--video/--gif/--webp) record: `interactive`
+                               (default) or `wasm`. Both implement the
+                               autoplay-capture contract; the interactive
+                               report is the one that survives the legacy WASM
+                               report's removal, so pin `wasm` only to
+                               reproduce an older artifact's exact look.
+                               Requires one of --video/--gif/--webp — passing
+                               it on its own is a usage error (--storyboard
+                               builds its own HTML and is never affected).
       --full-report-payloads Embed full event payloads in the interactive
                                report even for sessions that passed, instead of
                                applying the report size budgets (which truncate
@@ -58,21 +69,29 @@ written with a warning.
                                sessions). Use `trailblaze session list` to find
                                IDs. Prefix matching is supported. Equivalent to
                                passing the session ID positionally.
-      --max-size=<maxSize>   Cap each exported timeline artifact (--gif /
-                               --video / --webp) at the given byte size.
-                               Accepts plain bytes (1024000) or human-readable
-                               suffixes (10MB, 5M, 1.5G). After the initial
+      --max-size=<maxSize>   Cap each exported artifact (--gif / --video /
+                               --webp / --storyboard) at the given byte size.
+                               Defaults to 10MB — GitHub's inline-attachment
+                               limit — so an export you paste into a PR fits
+                               without having to think about it. Accepts plain
+                               bytes (1024000) or human-readable suffixes
+                               (10MB, 5M, 1.5G); pass `none` (or `0`) for a
+                               genuinely uncapped export. After the initial
                                encode, the exporter iteratively re-encodes at
                                smaller viewport widths (1280→1024→720→640→480)
                                until the artifact fits, then stops. If even the
-                               readability floor (480px) is still over the cap,
-                               the export fails with an actionable error — drop
-                               GIF for --webp or --video (both compress
-                               dramatically better), or shorten the recorded
-                               session (fewer trail steps, or split into
-                               multiple sessions). The flag is applied per
-                               artifact, so `--gif --webp --max-size=10MB` caps
-                               each one independently.
+                               readability floor (480px) is still over the cap:
+                               an explicitly-passed --max-size fails the export
+                               with an actionable error, while the 10MB default
+                               keeps the oversized artifact and warns instead —
+                               a default you didn't ask for never turns a
+                               working export into a failure. Either way the
+                               remedies are the same: drop GIF for --webp or
+                               --video (both compress dramatically better), or
+                               shorten the recorded session (fewer trail steps,
+                               or split into multiple sessions). The cap is
+                               applied per artifact, so `--gif --webp
+                               --max-size=10MB` caps each one independently.
       --no-gif               Suppress the auto-emitted .gif companion when
                                --webp is requested with a bare flag. Use this
                                on scripts and CI flows that only embed the .
@@ -81,10 +100,10 @@ written with a warning.
       --no-wasm-report       Skip the legacy WASM report; emit only the
                                interactive report (plus the JSON summary).
                                Saves the CPU-bound WASM build when only the
-                               interactive artifact is consumed. Mutually
-                               exclusive with --video/--gif/--webp, which
-                               capture the legacy timeline. Same flag as the CI
-                               report generator's --no-wasm-report.
+                               interactive artifact is consumed. Combines with
+                               --video/--gif/--webp, which capture the
+                               interactive timeline by default. Same flag as
+                               the CI report generator's --no-wasm-report.
       --no-webp              Suppress the auto-emitted .webp companion when
                                --gif is requested with a bare flag. Mutually
                                exclusive with --webp.

@@ -336,6 +336,12 @@ abstract class TrailblazeDesktopApp(
 
     val logsRepo = deviceManager.logsRepo
 
+    // Warnings raised while assembling this run fire before any session exists, so they can't be
+    // logged to the session directly here. Collected and handed to the runner, which lands them in
+    // the session log once the session is created — see
+    // [DesktopAppRunYamlParams.sessionStartAdvisories].
+    val sessionStartAdvisories = mutableListOf<String>()
+
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
       runYamlRequest = runYamlRequest,
@@ -350,7 +356,14 @@ abstract class TrailblazeDesktopApp(
         callerWorkspaceDir = request.callerWorkspaceDir,
         findTargetById = { desktopAppConfig.availableAppTargets.findById(it) },
         resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
+        onDeclaredTargetUnresolved = { declared, fallback ->
+          val message = unresolvedDeclaredTargetWarning(declared, fallback)
+          Console.error(message)
+          onProgress(message)
+          sessionStartAdvisories += message
+        },
       ),
+      sessionStartAdvisories = sessionStartAdvisories,
       noLogging = request.noLogging,
       captureVideo = request.captureVideo,
       captureLogcat = request.captureLogcat,

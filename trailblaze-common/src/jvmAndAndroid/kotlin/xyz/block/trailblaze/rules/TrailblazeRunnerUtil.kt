@@ -164,6 +164,8 @@ class TrailblazeRunnerUtil(
             headline =
               "tool '${recordingResult.failedTool.name}' could not reach the trail's starting state",
             detail = buildTrailheadFailureDetail(prompt, recordingResult, failureMessage),
+            payload = (recordingResult.failureResult as? TrailblazeToolResult.Error.ExceptionThrown)
+              ?.structuredPayload,
           )
         }
         // A FatalError throws even when selfHeal is requested — see the runPromptSuspend kdoc.

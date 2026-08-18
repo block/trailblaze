@@ -32,6 +32,24 @@ interface DynamicTrailblazeToolRegistration {
   val surfaceToLlm: Boolean get() = true
 
   /**
+   * Whether [trailblazeDescriptor]'s parameter split is **author-controlled and exhaustive** —
+   * i.e. an empty parameter list means "this tool takes no arguments," not "the schema isn't
+   * modelled." The argument-shape gates ([TrailblazeToolRepo.expectedArgumentKeysFor] /
+   * [requiredArgumentKeysFor]) use this to decide what an empty parameter set means:
+   *
+   *  - `true` → strict: an empty set is returned and the validator rejects every incoming key,
+   *    the same policy as YAML tools with `parameters: []` and no-arg class-backed tools.
+   *  - `false` (default) → skip: an empty set makes introspection return `null`, so validation
+   *    falls through — a subprocess MCP server can legitimately advertise no schema, and
+   *    rejecting args on its tools would be a false positive.
+   *
+   * Implementations whose descriptor comes from an exhaustive source (e.g. the analyzer-generated
+   * JSON schema behind a scripted `.ts` tool) should override this to `true` so a no-arg tool
+   * still rejects misspelled/unknown argument keys instead of silently swallowing them.
+   */
+  val declaresExhaustiveParameters: Boolean get() = false
+
+  /**
    * Build the Koog-level [TrailblazeKoogTool] for this tool. Called each time the repo
    * produces a [ai.koog.agents.core.tools.ToolRegistry] via
    * [TrailblazeToolRepo.asToolRegistry].

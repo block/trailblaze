@@ -102,7 +102,7 @@ Available App Launch Modes:
 
     ;
 
-    object Serializer : CaseInsensitiveEnumSerializer<LaunchMode>(LaunchMode::class)
+    object Serializer : CaseInsensitiveEnumSerializer<LaunchMode>(LaunchMode::class, LaunchMode.entries)
 
     companion object {
       fun fromString(value: String?): LaunchMode = LaunchMode.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: REINSTALL

@@ -34,6 +34,7 @@ export type {
   TrailblazeToolMap,
 } from "./client.js";
 export type { EmptyInput, ToolContext, TypedToolDefinition } from "./tool.js";
+export { ToolError } from "./tool-error.js";
 export {
   captureViewHierarchy,
   ConditionalActionFailedError,

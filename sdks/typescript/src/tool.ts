@@ -16,6 +16,7 @@ import { createClient, type TrailblazeClient } from "./client.js";
 import { fromMeta, type TrailblazeContext } from "./context.js";
 import { createLogger } from "./logger.js";
 import { attachMemoryDeltaToResult } from "./memory.js";
+import { toolErrorData } from "./tool-error.js";
 import {
   defineTypedTool,
   formatAjvErrors,
@@ -343,7 +344,7 @@ export function tool<TInput = Record<string, never>, TResult = string>(
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool<TInput = Record<string, never>, TResult = string>(
-  spec: TrailblazeTypedToolSpec,
+  spec: TrailblazeTypedToolSpec<TInput>,
   handler: (input: TInput, ctx: ToolContext) => Promise<TResult>,
 ): TypedToolDefinition<TInput, TResult>;
 export function tool(name: string, spec: TrailblazeToolSpec, handler: TrailblazeToolHandler): void;
@@ -650,9 +651,14 @@ export function registerPendingTools(server: McpServer): void {
               // Throwing `stack` getter — fall through with the prefix-only text.
             }
           }
+          // A [ToolError]'s structured payload rides beside the text envelope. Set only
+          // when present so payload-less errors keep the exact wire shape they had before
+          // the field existed.
+          const structured = toolErrorData(e);
           return {
             isError: true,
             content: [{ type: "text", text: envelopeText }],
+            ...(structured !== undefined ? { structuredContent: structured } : {}),
           };
         }
         // Positional cast (`Parameters<...>[2]`) rather than the SDK's named `ToolCallback`

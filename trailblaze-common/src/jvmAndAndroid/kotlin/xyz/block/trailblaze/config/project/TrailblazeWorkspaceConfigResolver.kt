@@ -119,6 +119,87 @@ object TrailblazeWorkspaceConfigResolver {
     selectedTargetAppId?.takeIf { it.isNotBlank() && it != neutralDefaultId }
 
   /**
+   * The `trails:` declaration of the workspace anchored at [fromPath], or null when it declares
+   * nothing, no workspace resolves, or the declared directory is unusable.
+   *
+   * Null means "no opinion" — callers keep whatever root they would have used anyway. Only an
+   * explicit declaration returns non-null: this deliberately does NOT fall back to the
+   * `<workspace-root>/trails` convention, because that would let merely launching inside any
+   * workspace re-anchor a user who has deliberately pointed their app somewhere else. Opting
+   * in costs one committed line, and workspaces that already follow the convention need
+   * nothing.
+   *
+   * The result carries the declaring anchor alongside the directory, because a declaration
+   * **decouples the trails dir from the config dir**. Callers that previously recovered the
+   * config dir by walking up from the trails dir (`resolveWorkspaceConfigDir`) or seeded the
+   * workspace walk-up from it must read [WorkspaceTrailsDeclaration.configDir] /
+   * [WorkspaceTrailsDeclaration.configFile] instead — the declared directory may sit outside
+   * the config dir's ancestry entirely, in which case a walk-up finds nothing.
+   *
+   * Path rules:
+   *  - A **relative** value resolves against [WorkspaceRoot.Configured.workspaceRootDir], so the
+   *    same committed string means the same directory under either config-dir layout, and must
+   *    stay inside that root. A committed file is shared by everyone who clones the repo; letting
+   *    `../..` walk out of it would silently point the whole team's app — and its recording
+   *    writes — somewhere unrelated to the checkout.
+   *  - An **absolute** value is taken at face value. It can't be portable across machines, so it
+   *    is unambiguously a deliberate local choice rather than a typo.
+   *  - The filesystem root is rejected outright: recursive trail scanning from `/` is never what
+   *    anyone meant.
+   *
+   * Anything unusable is logged and treated as absent rather than propagated: a typo, or a path
+   * valid only on a teammate's machine, should not strand the app pointing somewhere it can't
+   * read.
+   */
+  fun workspaceTrailsDeclaration(
+    fromPath: Path,
+    consumer: String,
+    envReader: () -> String? = { System.getenv(CONFIG_DIR_ENV_VAR) },
+  ): WorkspaceTrailsDeclaration? = readWorkspace(fromPath, consumer, envReader) { resolved, config ->
+    val root = resolved.workspaceRoot as? WorkspaceRoot.Configured ?: return@readWorkspace null
+    val configFile = resolved.configFile ?: return@readWorkspace null
+    val declared = config.trails?.trim()?.takeIf { it.isNotEmpty() } ?: return@readWorkspace null
+    val workspaceRootDir = root.workspaceRootDir.toFile()
+    val declaredFile = File(declared)
+    val candidate = (if (declaredFile.isAbsolute) declaredFile else File(workspaceRootDir, declared)).canonicalFile
+
+    fun reject(why: String): WorkspaceTrailsDeclaration? {
+      Console.log(
+        "Ignoring `trails: $declared` from ${configFile.absolutePath} for $consumer: " +
+          "${candidate.absolutePath} $why.",
+      )
+      return null
+    }
+
+    if (candidate.parentFile == null) return@readWorkspace reject("is the filesystem root")
+    if (!declaredFile.isAbsolute && !candidate.isInside(workspaceRootDir.canonicalFile)) {
+      return@readWorkspace reject("escapes the workspace root ${workspaceRootDir.absolutePath} — use an absolute path if that is intentional")
+    }
+    if (!candidate.isDirectory) return@readWorkspace reject("is not a directory")
+
+    WorkspaceTrailsDeclaration(
+      trailsDir = candidate,
+      configDir = root.configDir.toFile(),
+      configFile = configFile,
+    )
+  }
+
+  /**
+   * Convenience over [workspaceTrailsDeclaration] for callers that only need the directory.
+   * Callers that also resolve a config dir or a workspace anchor must use the full declaration
+   * — see its kdoc for why deriving those from the trails dir stops working once one is declared.
+   */
+  fun workspaceTrailsDir(
+    fromPath: Path,
+    consumer: String,
+    envReader: () -> String? = { System.getenv(CONFIG_DIR_ENV_VAR) },
+  ): File? = workspaceTrailsDeclaration(fromPath, consumer, envReader)?.trailsDir
+
+  /** True when this file is [ancestor] itself or sits beneath it. Both must be canonical. */
+  private fun File.isInside(ancestor: File): Boolean =
+    this == ancestor || path.startsWith(ancestor.path + File.separator)
+
+  /**
    * Resolves the workspace anchor from [fromPath] and loads its raw `defaults:` block,
    * paired with the anchor file for caller diagnostics. Returns null when no anchor
    * resolves or the file declares no `defaults:`. Load failures (malformed YAML, I/O)
@@ -128,24 +209,43 @@ object TrailblazeWorkspaceConfigResolver {
    *
    * This is the single shared read path for `defaults.*` consumers (`defaults.target`,
    * `defaults.maxLlmCalls`, …) — add new consumers here rather than re-implementing the
-   * resolve → load → swallow-and-log shape.
+   * resolve → load → swallow-and-log shape. [readWorkspace] owns that shape; add a new
+   * top-level key's reader beside this one over the same primitive.
    */
   fun loadWorkspaceDefaults(
     fromPath: Path,
     consumer: String,
     envReader: () -> String? = { System.getenv(CONFIG_DIR_ENV_VAR) },
-  ): LoadedWorkspaceDefaults? {
-    // Broad catch by design: callers sit on hot paths (Compose recomposition, per-dispatch
-    // MCP), so ANY throw from the walk-up or the YAML layer must degrade to "no workspace
-    // defaults", not crash the calling feature. TrailblazeProjectConfigException and
-    // IOException are the expected shapes; the rest is the safety net. Cancellation and
-    // interrupts are NOT failures to degrade from: a coroutine cancellation must propagate
-    // (swallowing it leaves the caller running through its own cancellation), and a thread
-    // interrupt must stay visible to the caller's next interruptible operation.
+  ): LoadedWorkspaceDefaults? = readWorkspace(fromPath, consumer, envReader) { resolved, config ->
+    val configFile = resolved.configFile ?: return@readWorkspace null
+    val defaults = config.defaults ?: return@readWorkspace null
+    LoadedWorkspaceDefaults(configFile = configFile, defaults = defaults)
+  }
+
+  /**
+   * Resolve → load → hand the caller the parsed config, swallowing and logging any failure.
+   *
+   * Broad catch by design: callers sit on hot paths (Compose recomposition, per-dispatch MCP,
+   * desktop launch), so ANY throw from the walk-up or the YAML layer must degrade to "no
+   * workspace opinion", not crash the calling feature. TrailblazeProjectConfigException and
+   * IOException are the expected shapes; the rest is the safety net. Cancellation and interrupts
+   * are NOT failures to degrade from: a coroutine cancellation must propagate (swallowing it
+   * leaves the caller running through its own cancellation), and a thread interrupt must stay
+   * visible to the caller's next interruptible operation.
+   *
+   * [read] runs inside the catch, so a caller's own filesystem probes degrade the same way.
+   */
+  private fun <T> readWorkspace(
+    fromPath: Path,
+    consumer: String,
+    envReader: () -> String?,
+    read: (ResolvedTrailblazeWorkspaceConfig, TrailblazeProjectConfig) -> T?,
+  ): T? {
     return try {
-      val configFile = resolve(fromPath, envReader).configFile ?: return null
-      val defaults = TrailblazeProjectConfigLoader.load(configFile)?.raw?.defaults ?: return null
-      LoadedWorkspaceDefaults(configFile = configFile, defaults = defaults)
+      val resolved = resolve(fromPath, envReader)
+      val configFile = resolved.configFile ?: return null
+      val config = TrailblazeProjectConfigLoader.load(configFile)?.raw ?: return null
+      read(resolved, config)
     } catch (e: CancellationException) {
       throw e
     } catch (e: InterruptedException) {
@@ -163,6 +263,22 @@ object TrailblazeWorkspaceConfigResolver {
 data class LoadedWorkspaceDefaults(
   val configFile: File,
   val defaults: ProjectDefaults,
+)
+
+/**
+ * A workspace's resolved `trails:` declaration: the directory it names, plus the config dir and
+ * anchor file that named it.
+ *
+ * The anchor travels with the directory because a declaration is precisely the case where the
+ * trails dir and the config dir are no longer derivable from one another. `legacy-trails/` and
+ * `trailblaze-config/` can be siblings, and an absolute declaration can leave the repo entirely
+ * — so a caller holding only [trailsDir] cannot recover [configDir] by walking up, and would
+ * silently resolve an empty workspace instead.
+ */
+data class WorkspaceTrailsDeclaration(
+  val trailsDir: File,
+  val configDir: File,
+  val configFile: File,
 )
 
 data class ResolvedTrailblazeWorkspaceConfig(

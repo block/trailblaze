@@ -13,6 +13,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.buildLogSafeResolvedPayload
+import xyz.block.trailblaze.toolcalls.scrubSensitivePayload
 import xyz.block.trailblaze.toolcalls.scrubSensitiveValues
 import xyz.block.trailblaze.toolcalls.withSensitiveArgsRedacted
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -102,6 +103,8 @@ fun TrailblazeAgentContext.logToolExecution(
       // rememberSensitive value a tool spliced into its error message would otherwise land in the
       // persisted session log. The args payload is already scrubbed via `buildLogSafeResolvedPayload`.
       exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage?.let { scrubSensitiveValues(it, memory) },
+      errorPayload = (result as? TrailblazeToolResult.Error.ExceptionThrown)?.structuredPayload
+        ?.let { scrubSensitivePayload(it, memory) },
       successful = result.isSuccess(),
       durationMs =
         Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),
@@ -204,6 +207,8 @@ fun TrailblazeAgentContext.logToolExecution(
     // Same rationale as the context-carrying overload: scrub the logged message so a resolved
     // rememberSensitive value spliced into an error can't reach the persisted log.
     exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage?.let { scrubSensitiveValues(it, memory) },
+    errorPayload = (result as? TrailblazeToolResult.Error.ExceptionThrown)?.structuredPayload
+      ?.let { scrubSensitivePayload(it, memory) },
     successful = result.isSuccess(),
     durationMs =
       Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),

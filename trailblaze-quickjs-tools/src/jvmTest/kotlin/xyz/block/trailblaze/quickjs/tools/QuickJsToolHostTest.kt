@@ -179,6 +179,61 @@ class QuickJsToolHostTest {
   }
 
   @Test
+  fun `on-device engine exposes the Date clock but no event-loop timers`() = runBlocking {
+    // Pins the runtime split that wall-clock-bounded scripted tools depend on: `Date` IS available
+    // on this engine, `setTimeout` is NOT. Scripted tools that need a real elapsed-time ceiling read
+    // `Date.now()` directly, and the absent timers are why a fixed pause still has to be burned
+    // against a never-matching selector instead of awaited.
+    //
+    // Worth a test rather than a comment because the comment is what went wrong before: a scripted
+    // tool had degraded a wall-clock deadline into a poll count on the stated belief that this engine
+    // has no clock at all, and prose asserting the opposite is what a future reader would have to
+    // trust. [QuickJsToolHost] builds a plain `QuickJs.create` engine and only ADDS globals
+    // (`console`, the host-call binding, `__trailblazeLog`), so nothing here removes `Date` — this
+    // test is what makes that a checked property of the on-device path.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["probeRuntime"] = {
+        name: "probeRuntime",
+        spec: {},
+        handler: async () => {
+          const first = Date.now();
+          // Busy-spin rather than await a timer — the point is that no timer exists to await.
+          while (Date.now() === first) { /* advance at least one millisecond */ }
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                dateNow: typeof Date.now,
+                setTimeout: typeof setTimeout,
+                setInterval: typeof setInterval,
+                advanced: Date.now() > first,
+                year: new Date(first).getUTCFullYear(),
+              }),
+            }],
+          };
+        },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("probeRuntime", JsonObject(emptyMap()))
+    val text = ((result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive).content
+    val probe = Json.parseToJsonElement(text).jsonObject
+    fun field(name: String) = (probe[name] as JsonPrimitive).content
+
+    assertEquals("function", field("dateNow"), "Date.now must exist — wall-clock deadlines read it")
+    assertEquals("undefined", field("setTimeout"), "no event-loop timers on this engine")
+    assertEquals("undefined", field("setInterval"), "no event-loop timers on this engine")
+    // A real advancing epoch clock, not a frozen stub: it moves, and it reads as a plausible date.
+    assertEquals("true", field("advanced"), "Date.now must advance across a busy loop")
+    assertTrue(
+      field("year").toInt() >= 2025,
+      "Date.now must be a real epoch clock, got year ${field("year")}",
+    )
+  }
+
+  @Test
   fun `callTool throws when the named tool is not registered`() = runBlocking {
     val host = connect(
       // Empty registry — no tools registered.
@@ -995,6 +1050,71 @@ class QuickJsToolHostTest {
     // even when no string representation is available.
     assertTrue("expected static fallback in envelope text: $text") {
       text.contains("unstringifiable thrown value")
+    }
+  }
+
+  @Test
+  fun `callTool lifts a ToolError-marked throw's data onto structuredContent`() = runBlocking {
+    // The on-device mirror of the subprocess SDK's ToolError catch path: a throw carrying
+    // the `Symbol.for('trailblaze.ToolError')` marker (what the bundled SDK's ToolError
+    // constructor stamps) gets its `data` onto the isError envelope's `structuredContent`,
+    // which `toTrailblazeToolResult` threads to `ExceptionThrown.structuredPayload`.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["coded_thrower"] = {
+        name: "coded_thrower",
+        spec: {},
+        handler: async () => {
+          const e = new Error("session did not survive the relaunch");
+          e.data = { code: "session", ticket: "TICKET-123" };
+          Object.defineProperty(e, Symbol.for('trailblaze.ToolError'), { value: true });
+          throw e;
+        },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("coded_thrower", JsonObject(emptyMap()))
+    assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+    val structured = result["structuredContent"]!!.jsonObject
+    assertEquals("session", structured["code"]?.jsonPrimitive?.content)
+    assertEquals("TICKET-123", structured["ticket"]?.jsonPrimitive?.content)
+    // The text envelope keeps the message — the payload is additive.
+    val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+      .first().jsonObject["text"]!!.jsonPrimitive.content
+    assertTrue("expected message in envelope text: $text") {
+      text.contains("session did not survive the relaunch")
+    }
+  }
+
+  @Test
+  fun `callTool with a ToolError whose data cannot be JSON-serialized still ships the envelope`() = runBlocking {
+    // Non-serializable `data` (a cycle here) must not cost the whole envelope — the
+    // dispatcher retries the stringify without structuredContent.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["cyclic_thrower"] = {
+        name: "cyclic_thrower",
+        spec: {},
+        handler: async () => {
+          const e = new Error("boom with cyclic payload");
+          const cyclic = {};
+          cyclic.self = cyclic;
+          e.data = cyclic;
+          Object.defineProperty(e, Symbol.for('trailblaze.ToolError'), { value: true });
+          throw e;
+        },
+      };
+      """.trimIndent(),
+    )
+    val result = host.callTool("cyclic_thrower", JsonObject(emptyMap()))
+    assertEquals(true, result["isError"]?.jsonPrimitive?.boolean)
+    assertEquals(null, result["structuredContent"], "cyclic data must be dropped, not crash: $result")
+    val text = (result["content"] as kotlinx.serialization.json.JsonArray)
+      .first().jsonObject["text"]!!.jsonPrimitive.content
+    assertTrue("expected message in envelope text: $text") {
+      text.contains("boom with cyclic payload")
     }
   }
 

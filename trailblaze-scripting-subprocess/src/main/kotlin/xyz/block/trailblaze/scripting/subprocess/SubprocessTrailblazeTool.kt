@@ -21,8 +21,10 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackDispatchDepth
 import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -63,11 +65,30 @@ class SubprocessTrailblazeTool(
    * wiring construct through the public ctor with a known value.
    */
   private val callbackContext: SubprocessToolRegistration.JsScriptingCallbackContext? = null,
-) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
+  /**
+   * 1:1 with the scripted tool's declared `sensitiveArgNames`, sourced from the advertised tool's
+   * `_meta` ([xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta.sensitiveArgs]). Resolved
+   * against this call's args by [sensitiveArgNames] below.
+   */
+  private val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
+) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool, SensitiveArgsTrailblazeTool {
 
   override val advertisedToolName: String get() = advertisedName.toolName
   override val instanceToolName: String get() = advertisedName.toolName
   override val rawToolArguments: JsonObject get() = args
+
+  /**
+   * Satisfies [SensitiveArgsTrailblazeTool] so the log-encode boundary masks these args' values in
+   * the persisted session log (which ships as a CI artifact). [rawToolArguments] above surfaces the
+   * args verbatim, so without this a credential passed to a subprocess scripted tool would be
+   * written to disk in plaintext.
+   *
+   * Resolved against [args] rather than stored, so an unreadable declaration can mask every arg
+   * this call actually carries (see [DeclaredSensitiveArgs.AllArgsDeclarationUnreadable]).
+   *
+   * Log-only: [execute] still dispatches the real values to the subprocess.
+   */
+  override val sensitiveArgNames: Set<String> get() = sensitiveArgs.resolve(args.keys)
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val legacyEnvelope = TrailblazeContextEnvelope.buildLegacyArgEnvelope(toolExecutionContext)
@@ -282,6 +303,11 @@ class SubprocessToolSerializer(
   private val advertisedName: ToolName,
   private val sessionProvider: () -> McpSubprocessSession,
   private val callbackContext: SubprocessToolRegistration.JsScriptingCallbackContext? = null,
+  /**
+   * Forwarded onto the decoded [SubprocessTrailblazeTool] so its `SensitiveArgsTrailblazeTool`
+   * declaration masks those args in the persisted session log.
+   */
+  private val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
 ) : KSerializer<SubprocessTrailblazeTool> {
 
   override val descriptor: SerialDescriptor = buildClassSerialDescriptor("subprocess:${advertisedName.toolName}")
@@ -296,6 +322,7 @@ class SubprocessToolSerializer(
       advertisedName = advertisedName,
       args = args,
       callbackContext = callbackContext,
+      sensitiveArgs = sensitiveArgs,
     )
   }
 

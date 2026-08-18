@@ -105,7 +105,7 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
 // into exported report HTML is itself prebuilt during this bundle via the bun macro in
 // run-report-viewer-bundle.macro.ts. workingDir is pinned to the source dir so the bundler's
 // module-path comments stay relative and the artifact is byte-identical across machines. bun is a
-// hard build prerequisite repo-wide (see AGENTS.md), same as the SDK bundlers.
+// hard build prerequisite repo-wide, same as the SDK bundlers.
 val bundleRunReportCore by tasks.registering(Exec::class) {
   group = "trailblaze"
   description = "Bundles the run-report-*.ts modules into the run-report-core.js JAR resource (bun build --format=iife)."
@@ -117,6 +117,17 @@ val bundleRunReportCore by tasks.registering(Exec::class) {
   // (zip-report-core.js) that a bun macro reads at transpile time, so a .js-only edit must still
   // invalidate the task — otherwise a stale copy ships until the next clean build.
   inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
+  // Out-of-directory modules the bundle inlines (run-report-selectors.ts imports the selector
+  // engine's typed wrapper, which types itself off the generated selectors bindings) — declared so
+  // an edit there re-bundles instead of shipping a stale viewer until the next clean build.
+  // fileTrees, not named files: `inputs.files` contributes nothing for a path that doesn't exist,
+  // so naming the two .ts files directly would silently stop covering anything the day either is
+  // renamed — reintroducing the stale-viewer bug with no signal. A tree over each source dir keeps
+  // covering it (and any sibling module the wrapper starts importing).
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("../trailblaze-selector-engine-js/src/typescript")) { include("**/*.ts") },
+    fileTree(layout.projectDirectory.dir("../sdks/typescript/src/generated")) { include("**/*.ts") },
+  ).withPropertyName("selectorEngineWrapperSources")
   outputs.file(out)
   workingDir(srcDir)
   commandLine(
@@ -157,6 +168,25 @@ val bundlePerfReportCore by tasks.registering(Exec::class) {
   )
 }
 
+// Stage the Kotlin/JS selector engine bundle (the daemon's selector generator/resolver compiled to
+// JS by :trailblaze-selector-engine-js — see that module's build file) into this module's JAR
+// resources, where RunReportGenerator stages it beside the bun driver so the report can embed it
+// for the UI Inspector's selector suggestions. Same consume-a-generator-task pattern as
+// :trailblaze-models's copyTypescriptSdkResources → bundleTrailblazeSdkDts: the bundle is a build
+// artifact (never committed), regenerated whenever its Kotlin sources change and UP-TO-DATE-skipped
+// otherwise. `bundleSelectorEngine` skips cleanly when `bun` isn't on PATH; the Copy then stages
+// nothing and RunReportGenerator degrades to reports without suggestions.
+//
+// `from(<task provider>)` carries the bundle's declared OUTPUT plus its implicit task dependency, so
+// there's no `dependsOn` and no hardcoded `dist/…` path to drift when that module relocates its
+// output (the :trailblaze-ui precedent above).
+val copySelectorEngineResource by tasks.registering(Copy::class) {
+  group = "trailblaze"
+  description = "Stages the Kotlin/JS selector engine bundle into build/ for inclusion in this module's JAR resources."
+  from(project(":trailblaze-selector-engine-js").tasks.named("bundleSelectorEngine"))
+  into(layout.buildDirectory.dir("generated-resources/selector-engine/xyz/block/trailblaze/report"))
+}
+
 sourceSets {
   main {
     resources.srcDir(
@@ -165,18 +195,23 @@ sourceSets {
     resources.srcDir(
       bundlePerfReportCore.map { layout.buildDirectory.dir("generated-resources/perf-report").get() },
     )
+    resources.srcDir(
+      copySelectorEngineResource.map { layout.buildDirectory.dir("generated-resources/selector-engine").get() },
+    )
   }
 }
 
 tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") {
   dependsOn(bundleRunReportCore)
   dependsOn(bundlePerfReportCore)
+  dependsOn(copySelectorEngineResource)
   // The bun test co-located with the run-report modules (run-report-core.test.ts) lives under
   // resources so it can import them directly; keep it out of the packaged JAR.
   // Same for the cross-language parity fixture the tests share with the Kotlin suite.
   exclude("**/*.test.ts")
   exclude("**/session-events-parity-fixtures.json")
   exclude("**/sprite-metadata-parity-fixtures.json")
+  exclude("**/web-hierarchy-merge-fixtures.json")
   // TypeScript module sources + ambient types + tsconfig for the run-report renderer: the packaged
   // artifact is the bundled run-report-core.js from `bundleRunReportCore` above (the bun
   // driver run-report-cli.ts IS packaged — bun executes TS natively).

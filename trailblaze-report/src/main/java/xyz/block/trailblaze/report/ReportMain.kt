@@ -42,6 +42,27 @@ open class GenerateReportCliCommand(
     default = false,
   )
 
+  /**
+   * Makes the interactive report reference images at `<sessionId>/<file>` — relative to the report's
+   * own URL — instead of embedding them. It's what keeps a many-session CI report a small document.
+   *
+   * Deliberately NOT folded into [useRelativeImageUrlsFlag], even though the two sound alike. That
+   * flag only tells the legacy WASM report to stop embedding; its viewer then resolves images
+   * through a `transformImageUrl` hook, so a caller may pass it without hosting anything. THIS flag
+   * is a promise about the world: the caller guarantees the session image tree is served at
+   * `<report-url-dir>/<sessionId>/<file>`. Only one CI script actually does that
+   * (the per-step/per-plan report, which uploads the logs dir's images at the artifact root
+   * alongside the report). The aggregate summary reports pass `--use-relative-image-urls` but upload
+   * only their HTML, into a `reports/summary-<key>/` subdirectory — so linking there would silently
+   * turn every screenshot into a 404. They keep embedding.
+   */
+  private val linkImagesFlag = FlagOption(
+    longName = "link-images",
+    help = "Interactive report only: reference images at <sessionId>/<file> relative to the report " +
+      "instead of embedding them. The caller MUST host the session image tree beside the report.",
+    default = false,
+  )
+
   private val noWasmReportFlag = FlagOption(
     longName = "no-wasm-report",
     help = "Skip the legacy WASM report (trailblaze_report.html); emit only the interactive report.",
@@ -50,6 +71,7 @@ open class GenerateReportCliCommand(
 
   private val logsDir: File get() = logsDirArg.value
   private val useRelativeImageUrls: Boolean get() = useRelativeImageUrlsFlag.value
+  private val linkImages: Boolean get() = linkImagesFlag.value
   private val skipWasmReport: Boolean get() = noWasmReportFlag.value
 
   override fun parseArgs(args: Array<String>) {
@@ -60,6 +82,7 @@ open class GenerateReportCliCommand(
       val arg = args[i]
       when {
         useRelativeImageUrlsFlag.matches(arg) -> useRelativeImageUrlsFlag.set()
+        linkImagesFlag.matches(arg) -> linkImagesFlag.set()
         noWasmReportFlag.matches(arg) -> noWasmReportFlag.set()
         arg.startsWith("--") -> parseError("Unknown option: $arg")
         else -> positionalArgs.add(arg)
@@ -83,7 +106,7 @@ open class GenerateReportCliCommand(
   }
 
   override fun printUsage() {
-    Console.error("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()} ${noWasmReportFlag.getUsage()}")
+    Console.error("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()} ${linkImagesFlag.getUsage()} ${noWasmReportFlag.getUsage()}")
     Console.error("")
     Console.error("Generate Trailblaze HTML report from logs directory")
     Console.error("")
@@ -92,12 +115,14 @@ open class GenerateReportCliCommand(
     Console.error("")
     Console.error("Options:")
     Console.error("  ${useRelativeImageUrlsFlag.getUsage()}  ${useRelativeImageUrlsFlag.getHelp()}")
+    Console.error("  ${linkImagesFlag.getUsage()}  ${linkImagesFlag.getHelp()}")
     Console.error("  ${noWasmReportFlag.getUsage()}  ${noWasmReportFlag.getHelp()}")
   }
 
   override fun run(): Unit = ReportTiming.stage("ReportMain.run") {
     Console.log("logsDir: ${logsDir.canonicalPath}")
     Console.log("useRelativeImageUrls: $useRelativeImageUrls")
+    Console.log("linkImages: $linkImages")
 
     // Reorganize adb-pulled files into per-session directories BEFORE constructing LogsRepo.
     // LogsRepo's single-read cache is built at construction, so doing the moves first means that
@@ -127,8 +152,9 @@ open class GenerateReportCliCommand(
       val rootWorkingDir = System.getProperty("trailblaze.rootDir")?.let { File(it) }
         ?: logsRepo.logsDir.parentFile
 
-      // Every run produces the lightweight, self-contained interactive report — the same artifact
-      // `trailblaze report` (the CLI/daemon path) emits. The legacy WASM report is emitted ALONGSIDE
+      // Every run produces the lightweight interactive report — the same artifact `trailblaze
+      // report` (the CLI/daemon path) emits, and self-contained unless --link-images was passed
+      // (see [linkImagesFlag]). The legacy WASM report is emitted ALONGSIDE
       // it unless --no-wasm-report was passed. overlapReports runs the two concurrently
       // (overlapping the interactive report's bun wait with the CPU-bound WASM build) and joins
       // the interactive leg even when the WASM build throws.
@@ -169,8 +195,13 @@ open class GenerateReportCliCommand(
           interactive = {
             // Built from the shared snapshots — no re-read of the log files the repo already
             // decoded (the WASM leg is unscoped, so it reuses the repo's seeded cache directly).
-            RunReportGenerator().generateFromSnapshots(logsRepo, logsSource.snapshots(logsDir))
-              .also { generatedInteractiveHtml = it }
+            RunReportGenerator().generateFromSnapshots(
+              logsRepo,
+              logsSource.snapshots(logsDir),
+              // "" = document-relative `<sessionId>/<file>`, which the browser resolves against the
+              // report's own URL. See [linkImagesFlag] for why this is its own flag.
+              imageBaseUrl = if (linkImages) "" else null,
+            ).also { generatedInteractiveHtml = it }
           },
           wasm = { wasmRequest?.let { generateWasmReport(logsRepo, request = it) } },
         )
@@ -191,7 +222,13 @@ open class GenerateReportCliCommand(
           if (primary != null) primary.addSuppressed(copyFailure) else throw copyFailure
         }
       } else {
-        Console.error("Warning: could not generate the interactive report (bun unavailable or subprocess failure).")
+        // The Trailblaze report IS the interactive report; the legacy WASM artifact is deprecated
+        // and does not stand in for it. bun is a required dependency, so this is a broken
+        // toolchain (or a genuine renderer bug), not a supported degraded mode.
+        Console.error(
+          "ERROR: could not generate the Trailblaze report. Check the [RunReportGenerator] output " +
+            "above — a missing `bun` (a required dependency) or a report subprocess failure.",
+        )
       }
       wasmFailure?.let { throw it }
 
@@ -331,6 +368,36 @@ class SingleReadLogsRepoProvider {
   }
 }
 
+/**
+ * One report invocation drives two commands over the same argv — [GenerateReportCliCommand] and
+ * [GenerateTestResultsCliCommand] — and each rejects a flag it doesn't declare. This is the single
+ * place that says which flags belong to which, so an entry point that composes the same two
+ * commands (including a subclassing one downstream) can't carry a stale copy of the split.
+ */
+object ReportCliArgs {
+  /**
+   * HTML-report-only. The test-results command is a clikt command, so one of these reaching it
+   * aborts the whole run with `Error: no such option <flag>`.
+   */
+  private val HTML_REPORT_ONLY_FLAGS = setOf(
+    "--use-relative-image-urls",
+    "--link-images",
+    "--no-wasm-report",
+  )
+
+  /** Test-results-only: the cross-cutting failure analysis the HTML report doesn't emit. */
+  private val TEST_RESULTS_ONLY_FLAGS = setOf("--triage")
+
+  /** Retired, but still passed by callers: dedup is unconditional now. Neither command takes it. */
+  private val RETIRED_FLAGS = setOf("--dedup")
+
+  fun forHtmlReport(args: Array<String>): Array<String> =
+    args.filterNot { it in TEST_RESULTS_ONLY_FLAGS || it in RETIRED_FLAGS }.toTypedArray()
+
+  fun forTestResults(args: Array<String>): Array<String> =
+    args.filterNot { it in HTML_REPORT_ONLY_FLAGS || it in RETIRED_FLAGS }.toTypedArray()
+}
+
 fun main(args: Array<String>) {
   // One shared parse of every session across both commands — see [SingleReadLogsRepoProvider].
   // The capture is lazy (first `get`), and ordering makes it correct: the report command runs
@@ -338,17 +405,8 @@ fun main(args: Array<String>) {
   // repo seeded from it) sees the final on-disk layout for the test-results command too.
   val sharedLogsRepos = SingleReadLogsRepoProvider()
   try {
-    // The HTML report command understands neither --dedup (removed; dedup is now unconditional)
-    // nor the test-results-only --triage flag — strip both before handing args to it.
-    val reportArgs = args.filterNot { it == "--dedup" || it == "--triage" }.toTypedArray()
-    GenerateReportCliCommand(sharedLogsRepos).main(reportArgs)
-    // The test-results command dropped --dedup and doesn't know the HTML-only
-    // --use-relative-image-urls / --no-wasm-report; --triage is still a valid flag here and must
-    // pass through.
-    val filteredArgs = args
-      .filterNot { it == "--use-relative-image-urls" || it == "--no-wasm-report" || it == "--dedup" }
-      .toTypedArray()
-    GenerateTestResultsCliCommand(sharedLogsRepos::get).main(argv = filteredArgs)
+    GenerateReportCliCommand(sharedLogsRepos).main(ReportCliArgs.forHtmlReport(args))
+    GenerateTestResultsCliCommand(sharedLogsRepos::get).main(argv = ReportCliArgs.forTestResults(args))
   } finally {
     sharedLogsRepos.close()
   }

@@ -30,7 +30,11 @@ function buildRunReportHtml({ meta, trace, llmLogs, shots, events = null, hierar
 // straight on that run's detail (mirroring the old WASM report's single-session auto-advance); with
 // several it opens on a pass/fail session index that drills into each run. Pure: callers supply
 // already-derived data; no fetch, no DOM — identical in the browser and in bun.
-function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[] }): string {
+// `selectorEngine` (optional) is the Kotlin/JS selector-engine bundle for the UI Inspector's
+// suggestions, embedded ONCE per document — index-level, not per-session — as an inert JSON chunk
+// the viewer inflates + evaluates on first inspector use. Callers gate it on hierarchies being
+// present (see run-report-cli.ts): no hierarchies means no inspector, means dead weight.
+function buildMultiReportHtml({ generatedAt, shareUrl, sessions, selectorEngine }: { generatedAt?: string; shareUrl?: string; sessions: SessionInput[]; selectorEngine?: SelectorEnginePayload | null }): string {
   // Slimming, the llmLogs → llm rename, and lifting recording/original YAML off meta are shared with
   // the viewer shell's in-place hydration (toSessionPayloads in run-report-extract), so an embedded
   // payload and a shell-loaded one are the same shape. The sprite hoist below is this path's alone:
@@ -75,6 +79,11 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt
   const indexJson = toInertJson({ generatedAt: generatedAt || '', ...(shareUrl ? { shareUrl } : {}), sessions: indexEntries });
   const sessionChunks = list.map((s, i) => `<script type="application/json" id="tb-session-${i}">${toInertJson(s)}</script>`
     + (sprites[String(i)] ? `\n<script type="application/json" id="tb-sprites-${i}">${toInertJson(sprites[String(i)])}</script>` : '')).join('\n');
+  // The selector engine rides LAST: it is never on the boot path (evaluated only when an inspector
+  // selection commits), so on a streaming document it must not delay the session chunks ahead of it.
+  const selectorEngineChunk = selectorEngine && (selectorEngine.js || selectorEngine.gz)
+    ? `\n<script type="application/json" id="tb-selector-engine">${toInertJson({ ...(selectorEngine.js ? { js: selectorEngine.js } : {}), ...(selectorEngine.gz ? { gz: selectorEngine.gz } : {}) })}</script>`
+    : '';
   const escText = (s: string) => s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
   const heading = list.length === 1 ? (list[0].meta.title || 'Trailblaze run') : 'Trailblaze Report';
   const title = escText(list.length === 1 ? heading + ' · Trailblaze run' : heading);
@@ -94,7 +103,7 @@ function buildMultiReportHtml({ generatedAt, shareUrl, sessions }: { generatedAt
 <div id="app">${tbBootLoaderHtml(heading)}</div>
 <script type="application/json" id="tb-index">${indexJson}</script>
 <script>${inertScriptBody(RUN_REPORT_VIEWER_SCRIPT)}</script>
-${sessionChunks}
+${sessionChunks}${selectorEngineChunk}
 </body>
 </html>`;
 }

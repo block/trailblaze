@@ -513,7 +513,12 @@ object CliConfigHelper {
       selectedTrailblazeDriverTypes = existingDriverTypes +
         defaultDriverTypes.filterKeys { it !in existingDriverTypes },
       logsDirectory = logsDirectory ?: derivedLogsDirectory(derivedAppDataDir),
-      trailsDirectory = trailsDirectory ?: derivedTrailsDirectory(derivedAppDataDir),
+      // `trailsDirectory` is deliberately NOT hydrated: null has to keep meaning "the user has
+      // not chosen one" so a workspace `trails:` declaration can answer instead. Materializing
+      // the derived default here made the field permanently non-null, which is indistinguishable
+      // from a real choice — and since `writeConfig` persists whatever it is handed, it also
+      // wrote a directory into the settings file that nobody had asked for. Readers resolve the
+      // default themselves via `TrailblazeDesktopUtil.getEffectiveTrailsDirectory`.
       appDataDirectory = appDataDirectory ?: derivedAppDataDir.canonicalPath,
     )
   }
@@ -559,7 +564,8 @@ object CliConfigHelper {
     return SavedTrailblazeAppConfig(
       selectedTrailblazeDriverTypes = defaultDriverTypes(),
       logsDirectory = derivedLogsDirectory(appDataDir),
-      trailsDirectory = derivedTrailsDirectory(appDataDir),
+      // No `trailsDirectory`: this config is written to disk on first run, and writing a default
+      // there would record a choice the user never made — see [hydrateDefaults].
       appDataDirectory = appDataDir.canonicalPath,
     )
   }
@@ -598,10 +604,9 @@ object CliConfigHelper {
     return File(root, "logs").canonicalPath
   }
 
-  private fun derivedTrailsDirectory(appDataDir: File): String {
-    val root = appDataDir.canonicalFile.parentFile ?: appDataDir.canonicalFile
-    return File(root, "trails").canonicalPath
-  }
+  // The default trails directory now lives on `TrailblazeDesktopUtil.defaultTrailsDirectory`,
+  // resolved by readers rather than written into the config. It is a single definition there
+  // because this one and the desktop's inline fallback had silently diverged.
   
   /**
    * Parse a per-platform driver override. Matches (case-insensitively) on either the enum

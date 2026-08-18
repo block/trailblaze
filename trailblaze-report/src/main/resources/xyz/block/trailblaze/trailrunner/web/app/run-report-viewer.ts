@@ -9,7 +9,8 @@
 import { isLlmTurnRow, localRunAgentPrompt, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
 import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
-import { buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
+import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
+import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
 
 // Run `fn` once the document has finished streaming (immediately when it already has). A chunked
 // report's UI is interactive while the document tail — later sessions' #tb-session-<i> /
@@ -92,6 +93,39 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // INTO the existing stub (object identity preserved — the inflater caches and `D` hold object
   // references) and removes the entry. Empty for monolithic payloads (everything starts hydrated).
   const unhydrated = new Set<number>(INDEX_PAYLOAD && RAW.sessions && RAW.sessions.length ? SESSIONS.map((_, i) => i) : []);
+  // A chunk element the HTML parser has NOT closed yet holds a partial payload: its text keeps
+  // growing until the `</script>` end tag lands, and `nextSibling` is the parser's own signal that
+  // it has. A completed document has nothing left to stream, so the final chunk qualifies there.
+  const chunkComplete = (el: HTMLElement | null) => !!el && (el.nextSibling != null || String(document.readyState || 'complete') === 'complete');
+  // readJsonScript for a chunk that arrives with the streaming document tail. Parsing a
+  // still-growing chunk can only fail, and on a large report (CI aggregates run to hundreds of
+  // megabytes) re-scanning a multi-megabyte string on every poll turn burns the same main thread
+  // the download runs on, so the wait feeds itself and the run never opens.
+  const readStreamedJsonScript = (id: string) => {
+    const el = document.getElementById(id);
+    if (!chunkComplete(el)) return null;
+    try { return JSON.parse(el.textContent || ''); } catch (_) { return null; }
+  };
+  // How many session chunks have finished streaming. They arrive in document order, so the first
+  // one still missing is the count, which is the honest progress the loading view reports.
+  const arrivedSessionChunks = (): number => {
+    let n = 0;
+    while (n < SESSIONS.length && chunkComplete(document.getElementById(`tb-session-${n}`))) n++;
+    return n;
+  };
+  const loadingProgressText = () => (MULTI
+    ? `Downloaded ${arrivedSessionChunks()} of ${SESSIONS.length} runs. This one opens as soon as its data arrives.`
+    : 'This run opens as soon as its data arrives.');
+  // Patched in place rather than re-rendered: the loading view is otherwise static, and a full
+  // render every 50ms would throw away the spinner's animation frame each turn. Only a changed
+  // count is written back, because the note sits in a role=status live region and rewriting the
+  // same sentence 20 times a second would have a screen reader read it out on every turn.
+  const refreshLoadingProgress = () => {
+    const note = root.querySelector<HTMLElement>('[data-run-loading-progress]');
+    if (!note) return;
+    const text = loadingProgressText();
+    if (note.textContent !== text) note.textContent = text;
+  };
   // Parse a session's chunk into its stub. Returns true once the session is usable: synchronously
   // when the chunk is already in the DOM (the common case), or — document fully loaded but the
   // chunk genuinely absent/malformed — by giving up on hydration so the run opens with what the
@@ -99,7 +133,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const hydrateSession = (i: number): boolean => {
     if (!unhydrated.has(i)) return true;
     const docComplete = String(document.readyState || 'complete') === 'complete';
-    const full = readJsonScript(`tb-session-${i}`);
+    const full = readStreamedJsonScript(`tb-session-${i}`);
     if (full) {
       // Blanked sprite URIs mean this session's frames ride in the #tb-sprites-<i> chunk directly
       // after this one (see buildMultiReportHtml) — usually the bulk of the session's bytes, so on
@@ -117,9 +151,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
   // Await a chunk that hasn't streamed in yet (the run was opened while the document tail is
   // still downloading). Cheap 50ms poll — it only ever runs during that streaming window, which
-  // hydrateSession's readyState check bounds.
+  // hydrateSession's readyState check bounds. Each turn refreshes the loading view's progress line
+  // so a long wait on a big report reads as a download in flight, not a hung page.
   const awaitSessionChunk = (i: number): Promise<void> => new Promise((resolve) => {
-    const poll = () => { if (hydrateSession(i)) resolve(); else setTimeout(poll, 50); };
+    const poll = () => {
+      if (hydrateSession(i)) { resolve(); return; }
+      refreshLoadingProgress();
+      setTimeout(poll, 50);
+    };
     poll();
   });
   // Sprite sheets are hoisted out of the boot payload into inert JSON chunks (see
@@ -137,7 +176,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const primeSpriteChunk = (i: number): boolean => {
     const key = String(i);
     if (spriteChunkCache[key]) return true;
-    const chunk = readJsonScript(`tb-sprites-${key}`);
+    const chunk = readStreamedJsonScript(`tb-sprites-${key}`);
     if (chunk) spriteChunkCache[key] = chunk;
     return Boolean(chunk);
   };
@@ -145,7 +184,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (v && v.sprites.some((sp) => sp.uri)) return v.sprites.map((sp) => sp.uri);
     const key = String(sessionIndex == null ? st.session : sessionIndex);
     if (spriteChunkCache[key]) return spriteChunkCache[key];
-    const chunk = readJsonScript(`tb-sprites-${key}`);
+    const chunk = readStreamedJsonScript(`tb-sprites-${key}`);
     if (chunk) { spriteChunkCache[key] = chunk; return chunk; }
     return spriteStore()[key] || [];
   };
@@ -340,7 +379,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `D` is the session currently in view; every renderer reads D.trace / D.llm / D.shots / D.meta /
   // D.recordingYaml, so the single-run renderers below are unchanged across a session switch.
   let D: SessionPayload = SESSIONS[0];
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, llmSel: 0, tlStreams: [], tlMenuOpen: false, trailheadOpen: true, trailOpen: true, lightboxAll: false, lightboxZoom: 1, runSort: 'grouped', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, llmSel: 0, tlStreams: [], tlMenuOpen: false, trailheadOpen: true, trailOpen: true, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runSort: 'grouped', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
   // Timeline playback stop handle (the active rAF engine run's stop function). Declared up here
   // (before openSession, which stops it) so the init-time openSession() call for a single-session
   // report doesn't hit a temporal-dead-zone ref.
@@ -435,7 +474,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const openSession = (i) => {
     // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
     // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); closeTranscript(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.lightboxAll = false;
+    stopTimeline(); closeTranscript(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.llmSel = 0; st.tlStreams = []; st.tlMenuOpen = false; st.trailOpen = true; st.kidsOpen = {}; st.lightboxAll = false;
     // Chunked documents hydrate on open: synchronous when the session's chunk has already
     // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
     // chunk lands, then the seed + re-render below run.
@@ -458,6 +497,35 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (trailStart >= 0 && index >= trailStart) st.trailOpen = true;
     else if (D.trace.some((t) => t.objective && t.trailhead)) st.trailheadOpen = true;
   };
+
+  // ── Autoplay-capture contract (`?autoplay=1`) ───────────────────────────────────────────────
+  // The two-signal handshake the CLI's `trailblaze report --video/--gif/--webp` exporters drive:
+  // they load this report in headless Chromium with `?autoplay=1`, screen-record the tab, and stop
+  // when `globalThis.__tbPlaybackEnded` turns true. So the report must play its timeline start to
+  // finish with no user interaction and then say so, exactly once, after the last frame is on
+  // screen. Deliberately NOT in routeKeys below: writeRoute only rewrites the keys it owns, so the
+  // flag survives the route writes playback itself performs.
+  const AUTOPLAY = (() => {
+    if (typeof location === 'undefined') return false;
+    const search = String(location.search || '').replace(/^\?/, '');
+    // Lenient about the value like the legacy report was — `?autoplay` and `?autoplay=1` both fire.
+    return !!search && search.split('&').some((pair) => pair === 'autoplay' || pair.indexOf('autoplay=') === 0);
+  })();
+  let playbackEndSignaled = false;
+  const signalPlaybackEnded = () => {
+    if (playbackEndSignaled) return; // the recorder stops on the first true; a second is a no-op anyway
+    playbackEndSignaled = true;
+    const raise = () => { (globalThis as Record<string, unknown>).__tbPlaybackEnded = true; };
+    // Raise it a full paint AFTER the caller's final render: the recorder polls the flag right
+    // after a screenshot, so flipping it synchronously can hand it a frame the compositor drew
+    // before the last step landed. Two rAF turns guarantee that frame is on screen first.
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(raise));
+    else raise();
+  };
+  // Marks the document for capture framing (see the html[data-tb-autoplay] rules in the CSS):
+  // pure-affordance chrome is hidden and transitions are stilled so no frame catches a half-played
+  // one. Set at boot, before the first render, so the very first captured frame is already framed.
+  if (AUTOPLAY && document.documentElement && document.documentElement.dataset) document.documentElement.dataset.tbAutoplay = '1';
 
   // Report state lives in query parameters so copied URLs communicate their selected run, view,
   // and step. Only these owned keys are changed: signed-artifact parameters such as `jwt` survive
@@ -663,7 +731,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const typeName = parsed.type.split('.').pop() || parsed.type;
     const yamlLink = failedStep && (D.recordingYaml || D.originalYaml) ? `<button type="button" class="yamllink" data-yaml-step="${failedStep.i}">View YAML</button>` : '';
     return `<section class="failurepanel" aria-labelledby="failure-title">
-      <div class="failurehead"><span class="failureicon" aria-hidden="true">!</span><span class="failuretitle" id="failure-title">${esc(title)}</span><span class="failurecontext">${esc(context)}</span></div>
+      <div class="failurehead"><span class="failureicon" aria-hidden="true">!</span><span class="failuretitle" id="failure-title">${esc(title)}</span><span class="failurecontext">${esc(context)}</span>${D.meta && D.meta.failureCode ? `<span class="failurecode">${esc(D.meta.failureCode)}</span>` : ''}</div>
       ${failedTool ? `<div class="failuretool"><div class="k">Failed tool call</div><div class="failuretoolvalue"><span class="failuretoolname">${esc(failedTool.label)}</span>${failedTool.tool ? `<code class="failuretoolargs mono">${esc(failedTool.tool)}</code>` : ''}${yamlLink}</div></div>` : yamlLink}
       <div class="failurebody"><div class="failurefield"><div class="k">Type</div><code class="failuretype mono" title="${esc(parsed.type)}">${esc(typeName)}</code></div><div class="failurefield"><div class="k">Message</div><div class="failuremessage">${esc(parsed.message).replace(/\n/g, '<br>')}</div></div></div>
       ${parsed.stack ? `<details class="failurestack" open><summary>Stack trace<span class="frames">${frames} frame${frames === 1 ? '' : 's'}</span></summary><pre class="mono">${esc(parsed.stack)}</pre></details>` : ''}
@@ -929,8 +997,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const stepRowHtml = (t, child) => {
     const cat = stepCat(t); const sel = t.i === st.step;
     const icon = stepIcon(t);
-    const kids = (t.children || []).length
-      ? `<div class="kids">${t.children.map((c) => `<div><span class="mono">${esc(c.label)}</span> <span class="kt mono">${esc(c.tool)}</span></div>`).join('')}</div>` : '';
+    // A handful of children (an agent `tap` resolving to its executor) reads best inline; a
+    // composite tool's long dispatch list (a scripted trailhead's sign-in) collapses to one
+    // summary line that keeps what matters — the dispatch count, the biggest time sink, and every
+    // failed dispatch with its error, shown even while collapsed — so the failure the reader came
+    // for is reachable without expanding the plumbing.
+    const kidList = t.children || [];
+    const kidRow = (c) => `<div class="kid${c.ok === false ? ' bad' : ''}"><span class="mono">${esc(c.label)}</span>${(c.count || 1) > 1 ? `<span class="kcount">×${c.count}</span>` : ''}<span class="kt mono">${esc(c.tool)}</span>${c.ms != null ? `<span class="kms">${fmtDur(c.ms) || '0ms'}</span>` : ''}</div>${c.ok === false && (c.err || c.code) ? `<div class="kiderr">${c.code ? `<span class="kidcode">${esc(c.code)}</span>` : ''}${esc(c.err || '')}</div>` : ''}`;
+    const kidRows = kidList.map(kidRow).join('');
+    const dispatchCount = kidList.reduce((n, c) => n + (c.count || 1), 0);
+    const failedCount = kidList.reduce((n, c) => n + (c.ok === false ? (c.count || 1) : 0), 0);
+    const kidsOpen = !!st.kidsOpen[t.i];
+    const slowest = kidList.reduce((a, c) => ((c.ms || 0) > ((a && a.ms) || 0) ? c : a), null);
+    const failedRows = kidList.filter((c) => c.ok === false).map(kidRow).join('');
+    const kidSummary = `<div class="kidsummary${kidsOpen ? ' open' : ''}" data-kids="${t.i}" data-open="${kidsOpen ? 1 : 0}" role="button" tabindex="0" aria-expanded="${kidsOpen}">${dispatchCount} tool dispatches${failedCount ? ` · <span class="bad">${failedCount} failed</span>${[...new Set(kidList.filter((c) => c.ok === false && c.code).map((c) => c.code))].map((code) => `<span class="kidcode">${esc(code)}</span>`).join('')}` : ''}${slowest && slowest.ms ? ` · slowest <span class="mono">${esc(slowest.label)}</span> ${fmtDur(slowest.ms)}` : ''}</div>`;
+    const kids = !kidList.length ? ''
+      : kidList.length <= 4
+      ? `<div class="kids">${kidRows}</div>`
+      : `<div class="kids">${kidSummary}${kidsOpen ? kidRows : failedRows}</div>`;
     const count = t.count ? ` <span style="color:var(--sub);font-variant-numeric:tabular-nums">×${t.count}</span>` : '';
     const t0 = traceT0();
     const rel = (t.ts != null && t0 != null) ? `+${((t.ts - t0) / 1000).toFixed(1)}s` : '';
@@ -948,11 +1032,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <span class="ic ${icon.cls}"${icon.cls === 'dot' ? ` style="--icon-color:${catColor[cat]}"` : ''} aria-hidden="true">${icon.glyph}</span>
       <div style="flex:1;min-width:0">
         <div class="lbl">${esc(t.label)}${count}</div>
-        ${detail ? `<div class="tl-tool mono">${esc(detail)}</div>` : ''}
+        ${t.params && t.params.length ? t.params.map((p) => `<div class="tl-tool mono">${esc(p)}</div>`).join('') : detail ? `<div class="tl-tool mono">${esc(detail)}</div>` : ''}
         ${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}
-        ${kids}
       </div>
       ${time}
+      ${kids}
     </div>`;
     // Row affordances are SIBLINGS of the row, never descendants: the row itself is role="button",
     // and nesting a second interactive control inside it would give keyboard and screen-reader users
@@ -1757,7 +1841,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchText = (s, outcome) => {
       const status = String((s.meta && s.meta.status) || 'unknown').toLowerCase();
       const outcomeLabel = indexOutcomeLabel(outcome);
-      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, ...Object.values(s.meta.metadata || {})]
+      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, ...Object.values(s.meta.metadata || {})]
         .filter((v) => v != null && v !== '').join(' ').toLowerCase();
     };
     const facts = (pairs) => `<div class="idxfacts">${pairs.map(([label, value]) => `<div class="idxfact"><div class="k">${label}</div><div class="v">${esc(value != null && value !== '' ? value : '—')}</div></div>`).join('')}</div>`;
@@ -1896,12 +1980,22 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (unhydrated.has(st.session)) {
       // The session's #tb-session chunk hasn't streamed in yet (openSession is awaiting it): hold
       // the detail view with its header + a loading note instead of rendering empty-trace panes.
+      // `notabs` restores the bottom padding the tab nav normally contributes, so the header isn't
+      // a title flush against its own border. A deep link into a late run of a big CI report can
+      // wait a while (the chunk is behind every earlier run's bytes), so the note carries live
+      // download progress, and the run index (already fully rendered from #tb-index) stays one
+      // click away instead of the view being a dead end.
       const outcome = indexOutcome(D);
       root.innerHTML = `
-        <header class="detailheader">
+        <header class="detailheader notabs">
           <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? '<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs"><span class="backarrow" aria-hidden="true">←</span></button></div>' : ''}<div class="runidentity"><span class="badge ${esc(outcome)}">${esc(indexOutcomeLabel(outcome))}</span><h1>${esc((D.meta || {}).title)}</h1></div><div class="detailactions">${renderThemeToggle()}</div></div>
         </header>
-        <main><div class="empty">Loading run…</div></main>`;
+        <main><div class="runloading" role="status">
+          <div class="tb-boot-spinner" aria-hidden="true"></div>
+          <div class="tb-boot-title">Loading run…</div>
+          <div class="tb-boot-note" data-run-loading-progress>${esc(loadingProgressText())}</div>
+          ${MULTI ? '<button class="btn" type="button" data-back>All runs</button>' : ''}
+        </div></main>`;
       wire();
       return;
     }
@@ -2223,10 +2317,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (model) {
       const dataPane = inspState.raw
         ? `<pre class="mono inspraw">${esc(safeJson(hier))}</pre>`
-        : `<div class="inspdetails">${inspectorDetailsHtml(model, inspState.selected)}</div><div class="insptree">${inspectorTreeHtml(model, inspState.selected)}</div>`;
+        : `<div class="inspdetails">${inspectorDetailsHtml(model, inspState.selected)}</div><div class="inspselectors" data-inspselectors></div><div class="insptree">${inspectorTreeHtml(model, inspState.selected)}</div>`;
       body = `<div class="inspbody">
         <div class="insppane inspshotpane">${shot
-          ? `<div class="inspshotwrap" data-insphit><img src="${esc(shot)}" alt="Screenshot at ${esc((row && row.label) || 'this step')}" /><div class="insprects" aria-hidden="true">${inspectorRectsHtml(model, inspState.selected, anchorDims)}</div><span class="insphovlabel mono" data-insphovlabel aria-hidden="true"></span></div>`
+          ? `<div class="inspshotwrap" data-insphit><img src="${esc(shot)}" alt="Screenshot at ${esc((row && row.label) || 'this step')}" /><div class="insprects" aria-hidden="true">${inspectorRectsHtml(model, inspState.selected, anchorDims)}</div><div class="inspselvizlayer" data-inspselvizlayer aria-hidden="true"></div><span class="insphovlabel mono" data-insphovlabel aria-hidden="true"></span></div>`
           : `<div class="inspnote">No screenshot captured for this step.</div>`}</div>
         <div class="insppane inspdatapane">${dataPane}</div>
       </div>`;
@@ -2252,8 +2346,152 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (img.complete && img.naturalWidth > 0) applyInspectorImageDims();
       else img.onload = applyInspectorImageDims;
     }
+    // A full rebuild replaced the suggestions container; re-render it for the retained selection
+    // (no-op — the container stays empty and hidden — when nothing is committed).
+    updateInspectorSuggestions();
   };
   const safeJson = (value) => { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } };
+  // ── Selector suggestions (hover-follow, committed fallback) ──────────────────────────────────
+  // Ranked nodeSelector suggestions computed by the embedded Kotlin/JS selector engine — the
+  // daemon's own generator/resolver, so a suggestion is exactly what the recorder would write.
+  // The SUBJECT follows the same rule as the properties card: the hovered node when a hover
+  // preview is active, the committed selection otherwise (hover-out restores the committed
+  // cards). Hover-driven computes are debounced and stale-discarded so a rapid sweep never
+  // queues; analyses are cached per (step, node) so re-visits render instantly; and the engine
+  // is preloaded when the inspector opens (async — the modal paints first) so hover suggestions
+  // aren't dead during the one-time bundle eval. Graceful absence is the contract: no engine
+  // chunk (older report / bundle unavailable at generation time), a malformed chunk, or a legacy
+  // ViewHierarchyTreeNode capture all leave the container empty — the inspector reads exactly as
+  // it did before suggestions.
+  let selectorEngineLoad = null;
+  // True once the engine load settled (found or definitively absent): before that, a compute
+  // shows the "Computing…" note; after it, warm computes (~tens of ms) render without a flash.
+  let selectorEngineReady = false;
+  const ensureSelectorEngine = () => {
+    if (selectorEngineLoad) return selectorEngineLoad;
+    const chunk = readJsonScript('tb-selector-engine');
+    const load = loadSelectorEngineFromChunk(chunk).then((engine) => { selectorEngineReady = true; return engine; });
+    // Don't memoize a miss while the document tail (where the engine chunk rides) may still be
+    // streaming in — the next use retries; a hit or a settled document caches for good.
+    if (chunk || loadSelectorEngine() != null || String(document.readyState || 'complete') === 'complete') selectorEngineLoad = load;
+    return load;
+  };
+  // The engine is worth a "Computing…" placeholder only when a source exists at all: an inert
+  // chunk in the document, or an engine global already installed (the Trail Runner web app).
+  const selectorEngineAvailable = () => loadSelectorEngine() != null || Boolean(document.getElementById('tb-selector-engine'));
+  // Render-state behind the suggestions section: YAML payloads for the copy buttons and mismatch
+  // payloads for the visualization (both indexed by data-inspselcopy / data-inspselviz), the
+  // subject key the rendered cards describe, and the analysis cache (per step:node — analyses
+  // are position-independent, so hover re-visits and commit-after-hover render from cache).
+  let inspSelYamls = [];
+  let inspSelViz = [];
+  let inspSelSubjectKey = null;
+  let inspSelTimer = null;
+  let inspSelToken = 0;
+  let inspSelVizPinned = null;
+  const inspSelCache = new Map();
+  const SUGGESTION_HOVER_DEBOUNCE_MS = 120;
+  const mismatchVizLayer = () => (inspectorEl && inspectorEl.querySelector ? inspectorEl.querySelector('[data-inspselvizlayer]') : null);
+  const clearMismatchViz = () => {
+    inspSelVizPinned = null;
+    const layer = mismatchVizLayer();
+    if (layer) layer.innerHTML = '';
+  };
+  // Paint one engaged mismatch onto the screenshot: the intended element's bounds, the actual
+  // receiver's bounds, and the tap point — its own layer, so it never fights the hover/selection
+  // rects painted by syncInspectorHighlight.
+  const paintMismatchViz = (idx) => {
+    const layer = mismatchVizLayer();
+    const model = inspectedModel();
+    const viz = inspSelViz[idx];
+    if (!layer || !model || !viz) return;
+    const hier = stepHierarchy(inspState.step);
+    const subject = inspSelSubjectKey != null ? model.nodes[inspSelSubjectKey] : null;
+    const hitKey = viz.hitNodeId != null ? inspectorKeyForNodeId(hier, viz.hitNodeId) : null;
+    const hitNode = hitKey != null ? model.nodes[hitKey] : null;
+    layer.innerHTML = mismatchVizHtml({
+      target: subject ? subject.bounds : null,
+      hit: hitNode ? hitNode.bounds : null,
+      tap: { x: viz.tapX, y: viz.tapY },
+      dims: inspectorAnchorDims(),
+    });
+  };
+  const clearInspectorSuggestions = (box) => {
+    inspSelYamls = []; inspSelViz = []; inspSelSubjectKey = null;
+    if (inspSelTimer != null) { clearTimeout(inspSelTimer); inspSelTimer = null; }
+    if (box) box.innerHTML = '';
+    clearMismatchViz();
+  };
+  // Render one node's cached/computed analysis into the section. The preview flag (and the
+  // header's subject label) make it unambiguous WHICH element the cards describe now that the
+  // subject follows hover.
+  const renderInspectorSuggestions = (box, key, analysis) => {
+    const model = inspectedModel();
+    const hier = stepHierarchy(inspState.step);
+    const built = selectorSuggestionsHtml(analysis, {
+      subjectLabel: model && model.nodes[key] ? model.nodes[key].label : null,
+      preview: inspState.hovered != null && key === inspState.hovered && key !== inspState.selected,
+      hitLabelFor: (nodeId) => {
+        const hitKey = inspectorKeyForNodeId(hier, nodeId);
+        return hitKey != null && model && model.nodes[hitKey] ? model.nodes[hitKey].label : null;
+      },
+    });
+    inspSelYamls = built.yamls;
+    inspSelViz = built.viz;
+    inspSelSubjectKey = key;
+    box.innerHTML = built.html;
+    clearMismatchViz(); // fresh cards — any engaged paint belongs to the old ones
+  };
+  const updateInspectorSuggestions = () => {
+    const token = ++inspSelToken; // any newer call supersedes an in-flight compute
+    if (inspSelTimer != null) { clearTimeout(inspSelTimer); inspSelTimer = null; }
+    if (!inspectorEl) return;
+    const box = inspectorEl.querySelector('[data-inspselectors]');
+    if (!box) { clearInspectorSuggestions(null); return; } // raw JSON view / no model
+    const hier = stepHierarchy(inspState.step);
+    const subject = inspState.hovered != null ? inspState.hovered : inspState.selected;
+    if (subject == null || hier == null || !isSelectorAnalyzableTree(hier)) { clearInspectorSuggestions(box); return; }
+    if (!selectorEngineAvailable()) {
+      // The engine chunk rides LAST, after the session chunks that carry the hierarchies — so an
+      // inspector opened while the document tail is still streaming is usable before the chunk
+      // exists. Without this retry that window renders a permanently empty section (and nothing
+      // re-arms: re-selecting the same node short-circuits on the cache stamp), indistinguishable
+      // from the genuine no-engine path. whenDocumentComplete keeps ONE pending slot, latest wins,
+      // and only defers while the document is still loading — so a sweep can't queue retries and a
+      // settled document with no chunk stays the plain absence path.
+      clearInspectorSuggestions(box);
+      if (String(document.readyState || 'complete') !== 'complete') whenDocumentComplete(() => { if (inspectorEl) updateInspectorSuggestions(); });
+      return;
+    }
+    const nodeId = nodeIdForInspectorKey(hier, subject);
+    if (nodeId == null) { clearInspectorSuggestions(box); return; }
+    const step = inspState.step;
+    const stamp = `${step}:${subject}`;
+    if (inspSelCache.has(stamp)) { renderInspectorSuggestions(box, subject, inspSelCache.get(stamp)); return; }
+    const session = D;
+    const run = () => {
+      inspSelTimer = null;
+      // The note only covers the one-time engine load; once warm, computes render in ~a frame.
+      if (!selectorEngineReady) box.innerHTML = '<div class="inspselnote">Computing selector suggestions…</div>';
+      ensureSelectorEngine().then((engine) => {
+        // Only the newest subject paints — a rapid hover sweep discards every superseded result.
+        if (token !== inspSelToken) return;
+        if (!inspectorEl || inspState.session !== session || inspState.step !== step) return;
+        const live = inspectorEl.querySelector('[data-inspselectors]');
+        if (!live) return;
+        if (!engine) { clearInspectorSuggestions(live); return; }
+        let analysis = null;
+        try { analysis = engine.computeSelectorAnalysis(hier, nodeId); } catch (e) { analysis = null; }
+        inspSelCache.set(stamp, analysis);
+        renderInspectorSuggestions(live, subject, analysis);
+      });
+    };
+    // Hover-driven subjects debounce so a sweep across the screenshot computes only where the
+    // pointer dwells; commit (and hover-out restore) runs immediately.
+    const hoverDriven = inspState.hovered != null && subject === inspState.hovered && subject !== inspState.selected;
+    if (hoverDriven) inspSelTimer = setTimeout(run, SUGGESTION_HOVER_DEBOUNCE_MS);
+    else run();
+  };
   // Selection and hover paint IN PLACE: toggle the two classes on the tree rows and the bounds
   // rects, and re-render only the small details card. Rebuilding the overlay for these would reset
   // the tree's scrollTop and drop keyboard focus to <body> on every click — and with hover driven
@@ -2311,11 +2549,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     if (row.scrollIntoView) row.scrollIntoView({ block: 'center' });
   };
-  const selectInspectorNode = (key) => { inspState.selected = key; syncInspectorHighlight(); revealSelectedNode(key); };
+  // Committing a selection is what computes suggestions (hover only previews the properties card).
+  const selectInspectorNode = (key) => { inspState.selected = key; syncInspectorHighlight(); revealSelectedNode(key); updateInspectorSuggestions(); };
   const hoverInspectorNode = (key) => {
     if (inspState.hovered === key) return;
     inspState.hovered = key;
     syncInspectorHighlight();
+    // Suggestions follow the hover subject (debounced; hover-out restores the committed node's).
+    updateInspectorSuggestions();
   };
   // Hover is a pointer affordance: a coarse pointer (touch) has no hover state, and a tap would
   // otherwise leave a stuck preview behind.
@@ -2380,6 +2621,28 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       } catch (err) { /* clipboard unavailable */ }
       return;
     }
+    // Copy one suggestion's trail-file nodeSelector YAML (held in inspSelYamls by the render).
+    const selCopyBtn = closest('[data-inspselcopy]');
+    if (selCopyBtn) {
+      const yaml = inspSelYamls[+selCopyBtn.dataset.inspselcopy];
+      if (yaml != null) {
+        try {
+          Promise.resolve(navigator.clipboard.writeText(yaml))
+            .then(() => { selCopyBtn.textContent = 'Copied'; setTimeout(() => { selCopyBtn.textContent = 'Copy'; }, 1200); }, () => {});
+        } catch (err) { /* clipboard unavailable */ }
+      }
+      return;
+    }
+    // Clicking a mismatch card pins its visualization (tap/touch counterpart of the hover
+    // engagement); clicking it again unpins.
+    const vizCard = closest('[data-inspselviz]');
+    if (vizCard) {
+      const idx = +vizCard.dataset.inspselviz;
+      if (inspSelVizPinned === idx) { clearMismatchViz(); return; }
+      paintMismatchViz(idx);
+      inspSelVizPinned = idx;
+      return;
+    }
     const nodeEl = closest('[data-inspnode]');
     if (nodeEl) {
       // Selecting a branch row must not also collapse its <details>; collapse stays available on
@@ -2400,6 +2663,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const openInspector = (stepId) => {
     closeInspector();
     inspState.step = stepId; inspState.selected = null; inspState.hovered = null; inspState.raw = false; inspState.session = D;
+    // Fresh overlay, fresh suggestion state; preload the engine now (async — the modal paints
+    // first) so the first hover/commit isn't dead for the one-time bundle eval.
+    inspSelCache.clear();
+    clearInspectorSuggestions(null);
+    if (selectorEngineAvailable()) ensureSelectorEngine();
     inspectorReturnFocus = document.activeElement;
     inspectorEl = document.createElement('div');
     inspectorEl.className = 'inspector';
@@ -2410,6 +2678,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     inspectorEl.onclick = onInspectorClick;
     inspectorEl.onpointermove = onInspectorPointerMove;
     inspectorEl.onpointerleave = () => hoverInspectorNode(null);
+    // Mismatch-visualization engagement: pointing at a mismatch card paints where its tap would
+    // land vs the element it describes; leaving the card reverts (unless click-pinned above).
+    inspectorEl.onpointerover = (e) => {
+      const target = e && e.target;
+      const card = target && target.closest ? target.closest('[data-inspselviz]') : null;
+      if (card) paintMismatchViz(+card.dataset.inspselviz);
+    };
+    inspectorEl.onpointerout = (e) => {
+      const target = e && e.target;
+      const card = target && target.closest ? target.closest('[data-inspselviz]') : null;
+      if (!card) return;
+      const to = e && e.relatedTarget;
+      if (to && to.closest && to.closest('[data-inspselviz]') === card) return; // still inside the card
+      if (inspSelVizPinned != null) { paintMismatchViz(inspSelVizPinned); return; } // pinned paint stays
+      const layer = mismatchVizLayer();
+      if (layer) layer.innerHTML = '';
+    };
     // No focus-driven preview on tree rows, deliberately: with the screenshot as the only hover
     // source, a focus preview would be an interaction no pointer user has. Focusing a row gives
     // its focus ring; activating it commits — identical to what the mouse does on the tree.
@@ -2536,7 +2821,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (!D.trace.length) return;
     const v = tlVideo();
     const stepsSchedule = buildPlaybackSchedule(D.trace, null);
-    const schedule = v ? buildPlaybackSchedule(D.trace, v) : stepsSchedule;
+    // Under capture the export schedule replaces both modes: it compresses idle gaps even when a
+    // video is driving, so the artifact's length tracks the step count instead of the session's
+    // wall clock (a session recorded over an hour must not export an hour of a static screen).
+    const schedule = AUTOPLAY ? buildExportSchedule(D.trace, v) : v ? buildPlaybackSchedule(D.trace, v) : stepsSchedule;
     const axis = timelineAxis(stepsSchedule);
     const startMs = schedule.offsets[idxOf(st.step)] ?? 0;
     const span = Math.max(1, schedule.offsets.length ? schedule.offsets[schedule.offsets.length - 1] : 0);
@@ -2590,9 +2878,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const f = pos.clockMs != null ? axis.tsFrac(pos.clockMs) : Math.min(1, playMs / span);
         if (f != null) els.head.style.left = `${f * 100}%`;
       }
-      if (pos.done) { endTimelinePlayback(); return false; }
+      if (pos.done) { endTimelinePlayback(); if (AUTOPLAY) signalPlaybackEnded(); return false; }
       return true;
     });
+  };
+  // The `?autoplay=1` entry point: land on the timeline of the first run, at its first step, and
+  // play through to the end without a click. Runs once the document is COMPLETE — a chunked report
+  // streams its per-session payload after this script, so starting earlier would play a run whose
+  // steps are still arriving. A run with nothing to play signals immediately rather than leaving
+  // the recorder waiting out its whole timeout for playback that can never start.
+  const startExportAutoplay = () => {
+    if (st.view !== 'detail') openSession(0); // multi-run documents land on the index; capture is per-run
+    st.tab = 'timeline';
+    if (!D.trace.length) { render(true); signalPlaybackEnded(); return; }
+    st.step = D.trace[0].i;
+    revealTimelineStep(st.step);
+    st.playing = true;
+    render(true); // paint the playing state first; the engine caches its paint targets from it
+    playTimeline();
   };
   const wire = () => {
     stopVideo(); // a re-render replaces the video element; drop any running playback timer.
@@ -2665,7 +2968,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const empty = document.getElementById('runempty');
       if (empty) empty.hidden = shown !== 0;
     };
-    const backBtn = root.querySelector<HTMLElement>('[data-back]'); if (backBtn) backBtn.onclick = () => { stopTimeline(); st.view = 'index'; st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 }); };
+    // querySelectorAll, not querySelector: the loading view offers the same escape as a labelled
+    // button in the body as well as the header's back arrow.
+    root.querySelectorAll<HTMLElement>('[data-back]').forEach((backBtn) => { backBtn.onclick = () => { stopTimeline(); st.view = 'index'; st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 }); }; });
     root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.onclick = () => { st.tab = b.dataset.tab; writeRoute(false); render(); });
     root.querySelectorAll<HTMLElement>('[data-step]').forEach((el) => el.onclick = (e) => { if (e) e.stopPropagation(); stopTimeline(); st.step = +el.dataset.step; revealTimelineStep(st.step); writeRoute(true); render(true); });
     // Highlight the activated per-request table row in place (no re-render — the lightbox opens
@@ -2766,6 +3071,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     galleryShots.forEach((el, index) => el.onclick = (e) => { if (e) e.stopPropagation(); const s = D.shots[el.dataset.shot]; if (s) openZoom(s, '', galleryEntries, index); });
     root.querySelectorAll<HTMLElement>('[role="button"][tabindex="0"]').forEach((el) => el.onkeydown = (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    });
+    // The dispatch-list summary sits inside a selectable step row: without stopPropagation the
+    // toggle would also select the step and re-render — so the open state lives in st.kidsOpen
+    // and the render owns what the summary shows. `data-open` carries the effective state so the
+    // first toggle flips from what the reader actually sees. Bound after the generic
+    // role=button keydown pass above, which would otherwise overwrite this onkeydown (handler
+    // assignment, not addEventListener) and let Enter/Space bubble into selecting the step.
+    root.querySelectorAll<HTMLElement>('[data-kids]').forEach((el) => {
+      const toggle = (e) => {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        st.kidsOpen[+el.dataset.kids] = el.dataset.open !== '1';
+        render(true);
+      };
+      el.onclick = toggle;
+      el.onkeydown = (e) => { if (e && (e.key === 'Enter' || e.key === ' ')) toggle(e); };
     });
     const previewShot = root.querySelector<HTMLImageElement>('.preview .shot');
     if (previewShot && !previewShot.complete) previewShot.addEventListener('load', centerTimelineSelection, { once: true });
@@ -2953,4 +3273,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
 
   render();
+
+  // Autoplay is the LAST thing boot does: everything above (route, listeners, first render) is the
+  // state it plays from.
+  if (AUTOPLAY) whenDocumentComplete(startExportAutoplay);
 }

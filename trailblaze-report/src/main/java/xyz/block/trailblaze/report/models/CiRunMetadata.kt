@@ -132,6 +132,71 @@ data class CiRunMetadata(
   /** CI build label */
   val ci_build_label: String? = null,
 
+  /**
+   * Pre-rendered Markdown summary of this run's results, for a consumer to publish as-is wherever
+   * it publishes CI narrative — a Buildkite annotation, a GitHub check-run summary, a Slack post.
+   *
+   * Exists so a repo that TRIGGERS a Trailblaze run can report what the run found without
+   * reimplementing the rendering. The alternative is every caller deriving its own summary from
+   * [CiSummaryReport.results], which means as many answers to "how many passed" as there are callers.
+   *
+   * Reflects whatever the producer's own summary says, and is therefore NOT a normalised verdict.
+   * One producer may count every `PASSED` row — including one whose `execution_mode` is `UNKNOWN`,
+   * meaning it replayed no recording and made no LLM call — while a stricter producer excludes
+   * exactly those from its own pass count AND reports the whole run `FAIL` when any is present, so
+   * for such a run two renderings disagree about the verdict and not merely the rate — this field
+   * follows the producer that built it. A consumer that needs the stricter reading must apply it
+   * to [CiSummaryReport.results] itself.
+   *
+   * Deliberately provider-NEUTRAL, in name and content. "Annotation" was avoided because it means
+   * a Markdown block on the build in Buildkite but a file/line diagnostic in GitHub Actions. The
+   * content is the data-derived summary only — counts, per-test rows, failure reasons — and carries
+   * none of the publishing system's own chrome: emoji, build labels and assembled link markup exist
+   * only where they are published, and each consumer already has its own. The report LINK is the
+   * exception a reader cannot reconstruct, and it travels as [ci_report_url] rather than embedded
+   * here, so nobody has to parse a URL back out of rendered Markdown.
+   *
+   * Null when the producer rendered no summary. Populated by the CI layer that renders it rather
+   * than by the report generator itself, so a non-CI `trailblaze report` invocation leaves it null.
+   */
+  val ci_build_summary_markdown: String? = null,
+
+  /**
+   * Permanent URL of the HTML report for ONE execution plan — where a consumer sends a reader who
+   * wants the detail behind [ci_build_summary_markdown]. The two are a pair: the summary is what
+   * happened, this is where to look at it.
+   *
+   * **Scope is one plan, which is one device — not the whole request.** A config naming several
+   * devices generates a separate execution plan per device, each with its own report and its own
+   * value here; a six-device config produces six, and no single one of them describes the request.
+   * [devices] listing several entries alongside a single URL is therefore not a contradiction: that
+   * field is what was ASKED FOR, this one belongs to the leg that wrote the document you are reading.
+   *
+   * The consequence for a producer: only stamp this where the surrounding results are one leg's. A
+   * document that merges legs — an aggregate across a config's devices — must leave it null rather
+   * than pick one, because the per-(case, device) cells written from such a document all inherit one
+   * metadata block, and every cell but one would then link another device's report.
+   *
+   * Exists because this is the one part of a run's context that CANNOT be derived downstream. A
+   * Buildkite artifact URL is keyed by a UUID assigned at upload time and readable only through the
+   * REST API, so a repo that merely TRIGGERS a run can reach it only by authenticating against the
+   * producing build — while the step that uploaded the file already holds it for free.
+   *
+   * Points at the interactive report whenever the leg produced one and the legacy report only when
+   * it did not — the same precedence the leg's own annotation links under, so the two never disagree
+   * about which artifact is "the report". When the chosen artifact's URL cannot be resolved, this is
+   * null rather than the other artifact's URL, which would silently break that agreement.
+   *
+   * Provider-NEUTRAL in name, like [ci_build_url]: the value is whatever permanent URL the CI
+   * provider serves that artifact from. Producers must stamp an absolute `https` URL or leave it
+   * null — never a provider-internal scheme such as Buildkite's `artifact://`, which resolves for
+   * nothing outside the build that wrote it and would read as a working link to everyone else.
+   *
+   * Null when the leg published no HTML report, when the URL could not be resolved, or on a non-CI
+   * `trailblaze report` invocation, which uploads nothing.
+   */
+  val ci_report_url: String? = null,
+
   /** Git commit SHA */
   val git_commit: String? = null,
 

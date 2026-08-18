@@ -69,12 +69,16 @@ object ReportWebpExporter {
    * @param maxBytes When non-null, iteratively re-assemble at smaller widths until the
    *   output fits under the cap. See [MaxArtifactSize]. If even the readability floor
    *   can't satisfy the cap, this throws — callers should surface the message verbatim.
+   * @param maxBytesStrict Whether floor exhaustion is fatal. `true` (the default) is the
+   *   behavior an explicitly-requested cap gets; the CLI passes `false` when the cap is
+   *   only [MaxArtifactSize.DEFAULT_MAX_BYTES], which warns and keeps the oversized WebP.
    */
   internal fun encode(
     framesDir: File,
     capture: PlaywrightReportCapture.CaptureResult,
     outputWebp: File,
     maxBytes: Long? = null,
+    maxBytesStrict: Boolean = true,
   ) {
     outputWebp.parentFile?.mkdirs()
     if (outputWebp.exists()) outputWebp.delete()
@@ -101,13 +105,15 @@ object ReportWebpExporter {
       }
       val rescaleElapsedMs = System.currentTimeMillis() - rescaleStartMs
       if (!result.fits) {
-        error(
-          "WebP still exceeds ${maxBytes}B at the ${MaxArtifactSize.READABILITY_FLOOR_PX}px " +
-            "readability floor (current size: ${outputWebp.length()}B). WebP is typically " +
-            "the most space-efficient of the three formats, so this usually means the " +
-            "session is unusually long. Switch to --video (libx264 absorbs duration " +
-            "better, especially at a higher CRF), or shorten the session — split the " +
-            "trail into smaller recordings.",
+        MaxArtifactSize.failOrWarn(
+          strict = maxBytesStrict,
+          artifact = outputWebp,
+          formatLabel = "WebP",
+          maxBytes = maxBytes,
+          remedies = "WebP is typically the most space-efficient of the three formats, " +
+            "so this usually means the session is unusually long. Switch to --video " +
+            "(libx264 absorbs duration better, especially at a higher CRF), or shorten " +
+            "the session — split the trail into smaller recordings.",
         )
       }
       if (result.widthPx != null) {

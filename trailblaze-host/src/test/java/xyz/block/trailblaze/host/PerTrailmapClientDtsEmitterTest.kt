@@ -22,11 +22,13 @@ import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlinx.serialization.json.buildJsonArray
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -1287,6 +1289,232 @@ class PerTrailmapClientDtsEmitterTest {
       tools = emptyList(),
       waypoints = emptyList(),
     )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Toolset-delivered scripted tools (framework-trailmap catalog tools like `openUrl`)
+  //
+  // A toolset can deliver SCRIPTED tools (`ToolSetCatalogEntry.scriptedToolNames`), backed by
+  // JAR-bundled descriptors under `trails/config/trailmaps/<id>/tools/`. Every replay launch
+  // path registers `TrailblazeToolRepo.allCatalogScriptedToolNames` — every DRIVER-COMPATIBLE
+  // catalog scripted name, independent of requested toolsets — so the typed surface must
+  // advertise the same driver-derived set, or every recorded call to one reads as a TS2339
+  // validator finding (the gap that kept upstream's `openUrl`-recording trails alive only via
+  // `default`'s transitional exemption). These tests resolve `openUrl` against the REAL
+  // classpath descriptor (trailblaze-common resources), pinning the discoverer bridge
+  // end-to-end.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private fun openUrlToolsetCatalog() = listOf(
+    ToolSetCatalogEntry(
+      id = "scripted_delivery_set",
+      description = "Synthetic toolset delivering the framework scripted tool openUrl.",
+      toolClasses = emptySet(),
+      scriptedToolNames = setOf(ToolName("openUrl")),
+    ),
+  )
+
+  @Test
+  fun `toolset-delivered scripted tool lands in the typed surface and sidecar`() {
+    val trailmapDir = newTrailmapDir("scripted_delivery")
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.scripted_delivery"),
+        toolSets = listOf("scripted_delivery_set"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "scripted_delivery",
+        target = TrailmapTargetConfig(displayName = "Scripted Delivery", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(id = "scripted_delivery", displayName = "Scripted Delivery", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("expected toolset-delivered openUrl in the typed surface: $rendered") {
+      rendered.contains("openUrl:")
+    }
+    assertTrue("expected openUrl's url arg from the classpath descriptor's inputSchema: $rendered") {
+      toolEntryBlock(rendered, "openUrl").contains("url: string;")
+    }
+    // The arg-coercion sidecar is written from the same resolved set, so it must carry the
+    // tool too — otherwise the validator would see the .d.ts entry but skip arg coercion.
+    val sidecar = TrailValidationDescriptorSidecar.read(trailmapDir.toPath())
+    assertTrue("expected openUrl in the validation sidecar: ${sidecar.keys}") {
+      "openUrl" in sidecar
+    }
+  }
+
+  @Test
+  fun `driver-compatible scripted tools deliver even with no tool_sets declared anywhere`() {
+    // Replay registers every driver-compatible catalog scripted name regardless of requested
+    // toolsets (`TrailblazeToolRepo.allCatalogScriptedToolNames`), so a mobile trailmap that
+    // declares NO `tool_sets:` — authored or resolved — must still get always-delivered tools
+    // like `core_interaction`'s `openUrl` in its typed surface.
+    val trailmapDir = newTrailmapDir("no_toolsets_delivery")
+    val resolvedPlatforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.no_toolsets_delivery"),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "no_toolsets_delivery",
+        target = TrailmapTargetConfig(displayName = "No Toolsets Delivery"),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(
+        id = "no_toolsets_delivery",
+        displayName = "No Toolsets Delivery",
+        platforms = resolvedPlatforms,
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("expected driver-delivered openUrl in the typed surface despite no tool_sets: $rendered") {
+      rendered.contains("openUrl:")
+    }
+  }
+
+  @Test
+  fun `driver-incompatible scripted tools stay out of the typed surface`() {
+    // The inverse bound: a web-only trailmap's Playwright session never registers mobile-only
+    // catalog scripted tools, so the surface must not admit them — even when the trailmap
+    // requests toolsets. Otherwise the validator accepts recordings replay would reject.
+    val trailmapDir = newTrailmapDir("web_only_delivery")
+    val platforms = mapOf(
+      "web" to PlatformConfig(
+        drivers = listOf("playwright-native"),
+        toolSets = listOf("scripted_delivery_set"),
+      ),
+    )
+    val mobileOnlyCatalog = listOf(
+      ToolSetCatalogEntry(
+        id = "scripted_delivery_set",
+        description = "Synthetic mobile-only toolset delivering openUrl.",
+        toolClasses = emptySet(),
+        scriptedToolNames = setOf(ToolName("openUrl")),
+        compatibleDriverTypes = setOf(
+          TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+          TrailblazeDriverType.IOS_HOST,
+          TrailblazeDriverType.IOS_AXE,
+        ),
+      ),
+    )
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "web_only_delivery",
+        target = TrailmapTargetConfig(displayName = "Web Only Delivery", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(id = "web_only_delivery", displayName = "Web Only Delivery", platforms = platforms),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = mobileOnlyCatalog)
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("expected mobile-only openUrl to be absent from the web-only surface: $rendered") {
+      !rendered.contains("openUrl:")
+    }
+  }
+
+  @Test
+  fun `trailmap-local scripted declaration wins over a toolset-delivered tool of the same name`() {
+    val trailmapDir = newTrailmapDir("local_override_delivery")
+    val platforms = mapOf(
+      "android" to PlatformConfig(
+        appIds = listOf("com.example.local_override"),
+        toolSets = listOf("scripted_delivery_set"),
+      ),
+    )
+    val localDescription = "Local override of openUrl for this trailmap."
+    val trailmap = ResolvedTrailmap(
+      manifest = TrailblazeTrailmapManifest(
+        id = "local_override_delivery",
+        target = TrailmapTargetConfig(displayName = "Local Override", platforms = platforms),
+      ),
+      source = TrailmapSource.Filesystem(trailmapDir),
+      target = AppTargetYamlConfig(
+        id = "local_override_delivery",
+        displayName = "Local Override",
+        platforms = platforms,
+        tools = listOf(
+          InlineScriptToolConfig(
+            script = "./tools/openUrl.ts",
+            name = "openUrl",
+            description = localDescription,
+            inputSchema = buildJsonObject {
+              put("type", JsonPrimitive("object"))
+              put("properties", buildJsonObject { /* no params */ })
+            },
+          ),
+        ),
+      ),
+      toolsets = emptyList(),
+      tools = emptyList(),
+      waypoints = emptyList(),
+    )
+
+    PerTrailmapClientDtsEmitter.emit(listOf(trailmap), catalog = openUrlToolsetCatalog())
+
+    val rendered = Files.readString(File(trailmapDir, "tools/trailblaze-client.d.ts").toPath())
+    assertTrue("expected the trailmap-local openUrl declaration to win: $rendered") {
+      rendered.contains(localDescription)
+    }
+    assertEquals(
+      1,
+      Regex("""^    openUrl: \{""", RegexOption.MULTILINE).findAll(rendered).count(),
+      "expected exactly one openUrl entry (no duplicate from the toolset): $rendered",
+    )
+  }
+
+  @Test
+  fun `emitClasspathValidationSurfaces includes toolset-delivered scripted tools`() {
+    // JAR-bundled targets get their validation surface from the baked AppTargetYamlConfig, whose
+    // flattened `platforms.<p>.tool_sets:` may deliver scripted tools — those must land in the
+    // validation surface exactly like the workspace path.
+    val outputBase = createTempDirectory("classpath-scripted-surface-out").toFile().also { tempDirs += it }
+    val bakedConfig = AppTargetYamlConfig(
+      id = "bundled_scripted_app",
+      displayName = "Bundled Scripted App",
+      platforms = mapOf(
+        "android" to PlatformConfig(
+          appIds = listOf("com.example.bundled_scripted"),
+          toolSets = listOf("scripted_delivery_set"),
+        ),
+      ),
+    )
+
+    val emitted = PerTrailmapClientDtsEmitter.emitClasspathValidationSurfaces(
+      targetConfigs = listOf(bakedConfig),
+      excludeIds = emptySet(),
+      outputBaseDir = outputBase.toPath(),
+      catalog = openUrlToolsetCatalog(),
+    )
+
+    assertEquals(1, emitted.size, "expected one surface, got: $emitted")
+    val rendered = Files.readString(
+      File(outputBase, "bundled_scripted_app/tools/trailblaze-client.d.ts").toPath(),
+    )
+    assertTrue("expected toolset-delivered openUrl in the classpath validation surface: $rendered") {
+      rendered.contains("openUrl:")
+    }
   }
 
   /**

@@ -22,7 +22,6 @@ dependencies {
   api(libs.koog.prompt.model)
 
   implementation(project(":trailblaze-tracing"))
-  implementation(libs.exp4j)
   implementation(libs.coroutines)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)

@@ -15,6 +15,13 @@ class CombinedVerdictTest {
   private fun skipped() = AttemptSignal(Outcome.SKIPPED)
 
   /**
+   * Held alongside [skipped] because the two classify the same but only this one is reachable from
+   * the report generator: `mapStatusToOutcome` can emit CANCELLED and never emits SKIPPED. Testing
+   * only the unreachable member would leave the one a nightly can actually produce uncovered.
+   */
+  private fun cancelled() = AttemptSignal(Outcome.CANCELLED)
+
+  /**
    * The whole taxonomy in one table, so a change to any rule shows up as a diff against every
    * other rule rather than against one case someone happened to write a test for.
    */
@@ -41,6 +48,11 @@ class CombinedVerdictTest {
     Triple("ran out of budget then passed", listOf(maxCalls(), pass()), CombinedVerdict.RESCUED),
     Triple("never ran", listOf(skipped()), CombinedVerdict.UNCLASSIFIED),
     Triple("skipped after a failure", listOf(fail(), skipped()), CombinedVerdict.UNCLASSIFIED),
+    // A run that was cancelled reached no conclusion and never finished attempting one, so it
+    // lands in the residue rather than in a failure state. Named here so the residue is a stated
+    // outcome of the taxonomy rather than somewhere a reachable outcome quietly falls.
+    Triple("cancelled once, never retried", listOf(cancelled()), CombinedVerdict.UNCLASSIFIED),
+    Triple("cancelled after a failure", listOf(fail(), cancelled()), CombinedVerdict.UNCLASSIFIED),
     Triple("no attempts at all", emptyList(), CombinedVerdict.UNCLASSIFIED),
   )
 
@@ -56,7 +68,7 @@ class CombinedVerdictTest {
     // The rule that keeps a nightly red honest in the other direction: whatever else happened,
     // a test that passed is not evidence the product regressed. Asserted across every non-pass
     // signal so a new outcome cannot quietly acquire the power to outrank a pass.
-    listOf(fail(), trailhead(), timeout(), error(), maxCalls(), skipped()).forEach { signal ->
+    listOf(fail(), trailhead(), timeout(), error(), maxCalls(), skipped(), cancelled()).forEach { signal ->
       assertEquals(
         CombinedVerdict.RESCUED,
         combinedVerdictOf(listOf(signal, pass())),
@@ -98,7 +110,7 @@ class CombinedVerdictTest {
     // Enumerated over the signals rather than written out as cases, so a combination nobody
     // thought to list is still covered, and a rule edit that never touches the table above is
     // still caught here.
-    val nonPassing = listOf(fail(), trailhead(), timeout(), error(), maxCalls(), skipped())
+    val nonPassing = listOf(fail(), trailhead(), timeout(), error(), maxCalls(), skipped(), cancelled())
     val sequences = nonPassing.map { listOf(it) } +
       nonPassing.flatMap { first -> nonPassing.map { second -> listOf(first, second) } }
 

@@ -34,7 +34,9 @@ import xyz.block.trailblaze.util.CoreSimulatorTempFiles
  *     classifier still has the final say once the trail actually starts.
  *   - `emptyList()` when the platform can't be parsed from the spec.
  *
- * All probes are best-effort and time-bounded; failures fall back to platform-only.
+ * All probes are best-effort and time-bounded; failures fall back to platform-only. When a caller
+ * needs to know whether an answer is a real classification or a best-effort guess, ask
+ * [classificationFor] instead of [classifiersFor] — see [Classification].
  */
 object DeviceClassifierResolver {
 
@@ -55,6 +57,51 @@ object DeviceClassifierResolver {
   fun interface DimensionsProbe {
     fun probe(platform: TrailblazeDevicePlatform, instanceId: String): DeviceProbe?
   }
+
+  /**
+   * A classifier lookup's outcome: the classifiers, plus whether they are a *definitive*
+   * classification of this device.
+   *
+   * `definitive = false` means the probe itself came back incomplete, so the classifiers are a
+   * heuristic guess rather than a measurement — the dim probe failed (platform-only), or an Android
+   * classification was computed without density (the raw-pixel heuristic misreads a 1920x1080
+   * @160dpi tablet as a phone).
+   *
+   * A caller that only needs a *label* — `device list`, plan-time filename lookup — can use
+   * [classifiers] as-is. A caller whose answer *selects behavior* should degrade to platform-only
+   * when this is false: closest-wins recording-leg lowering will happily pick the `android-phone:`
+   * leg from a guessed `phone`, and running the wrong recorded steps is worse than falling back to
+   * the generic `android:` leg.
+   *
+   * Deliberately NOT the same question as "may the resolver memoize this" — see [ProbeOutcome].
+   */
+  data class Classification(
+    val classifiers: List<TrailblazeDeviceClassifier>,
+    val definitive: Boolean,
+  )
+
+  /**
+   * Internal result of one classification pass: a [Classification] plus whether it may be cached.
+   *
+   * These are two different questions and only one branch separates them, but that branch matters.
+   * "Don't cache this, an installed override may claim the device once its shell probe is ready" is
+   * about the answer possibly being *superseded*; "don't trust this, the probe was incomplete" is
+   * about the answer being a *guess*. A declined override with a fully successful `wm size` +
+   * `wm density` probe is the first without being the second — the dim classification measured
+   * everything it needed.
+   *
+   * Collapsing the two would silently strip the sub-category from nearly every device on any
+   * distribution that installs an override, because an override recognizes only its own hardware and
+   * declines everything else — every stock emulator and phone, and typically every non-Android
+   * platform. A measured `[android, phone]` would come back as bare `[android]`: worse than the
+   * value it replaced, and fatal for a recording keyed only by sub-category. Both flags are still
+   * decided in one place ([computeClassification]), one `ProbeOutcome` per branch, so they can't
+   * drift.
+   */
+  private data class ProbeOutcome(
+    val classification: Classification,
+    val cacheable: Boolean,
+  )
 
   /**
    * Function shape `(platform) -> list of (instanceId, description)`. Used to resolve a
@@ -159,11 +206,11 @@ object DeviceClassifierResolver {
    * classification is in the cache, and subsequent [classifiersFor] / [resolveFromSpec] calls
    * for those (platform, instanceId) pairs return without IO.
    *
-   * Non-definitive results are deliberately NOT cached, so a warmed device can still re-probe
-   * on the next lookup — [classifyByProbing] leaves the cache untouched for a transient probe
+   * Non-cacheable results are deliberately NOT cached, so a warmed device can still re-probe
+   * on the next lookup — [computeClassification] leaves the cache untouched for a transient probe
    * failure (platform-only fallback, missing Android density) AND for a device an installed
-   * distribution override declined (indistinguishable from a raced/blank probe; see the
-   * caching guards in [classifyByProbing]). This is the same self-healing property the
+   * distribution override declined (indistinguishable from a raced/blank probe; the latter answer
+   * is still definitive, just not permanent — see [ProbeOutcome]). This is the same self-healing property the
    * single-device API has: the cost is a re-probe on the next call, the payoff is that one
    * transient miss can't lock a device into a degraded classifier for the daemon's lifetime.
    *
@@ -236,7 +283,7 @@ object DeviceClassifierResolver {
       specInstanceId != null -> findPlatformForInstanceId(specInstanceId, deviceListLookup) ?: return emptyList()
       else -> return emptyList()
     }
-    return classifyByProbing(platform, instanceId, dimensionsProbe)
+    return classifyByProbing(platform, instanceId, dimensionsProbe).classifiers
   }
 
   /**
@@ -264,15 +311,40 @@ object DeviceClassifierResolver {
     platform: TrailblazeDevicePlatform,
     instanceId: String,
     dimensionsProbe: DimensionsProbe = defaultProbe,
-  ): List<TrailblazeDeviceClassifier> = classifyByProbing(platform, instanceId, dimensionsProbe)
+  ): List<TrailblazeDeviceClassifier> = classifyByProbing(platform, instanceId, dimensionsProbe).classifiers
+
+  /**
+   * Same lookup as [classifiersFor], but also reports whether the answer is definitive (see
+   * [Classification]). Use this when a non-definitive classifier would select the wrong *behavior*
+   * rather than just print a vague label.
+   */
+  fun classificationFor(
+    platform: TrailblazeDevicePlatform,
+    instanceId: String,
+    dimensionsProbe: DimensionsProbe = defaultProbe,
+  ): Classification = classifyByProbing(platform, instanceId, dimensionsProbe)
 
   private fun classifyByProbing(
     platform: TrailblazeDevicePlatform,
     instanceId: String,
     dimensionsProbe: DimensionsProbe,
-  ): List<TrailblazeDeviceClassifier> {
+  ): Classification {
     val cacheKey = platform to instanceId
-    classifierCache[cacheKey]?.let { return it }
+    // Only a cacheable outcome is ever written (below), and every cacheable branch is also
+    // definitive, so a hit is definitive by construction.
+    classifierCache[cacheKey]?.let { return Classification(it, definitive = true) }
+    val outcome = computeClassification(platform, instanceId, dimensionsProbe)
+    if (outcome.cacheable) {
+      classifierCache[cacheKey] = outcome.classification.classifiers
+    }
+    return outcome.classification
+  }
+
+  private fun computeClassification(
+    platform: TrailblazeDevicePlatform,
+    instanceId: String,
+    dimensionsProbe: DimensionsProbe,
+  ): ProbeOutcome {
     val platformClassifier = platform.asTrailblazeDeviceClassifier()
     // Distribution-specific override wins when it recognizes the device. A throwing
     // override would otherwise propagate out of `warmCache` (skipping the per-future
@@ -287,27 +359,26 @@ object DeviceClassifierResolver {
       null
     }
     if (overrideResult != null) {
-      // Definitive answer from a distribution that recognizes the device → cache it.
-      classifierCache[cacheKey] = overrideResult
-      return overrideResult
+      // Definitive answer from a distribution that recognizes the device.
+      return ProbeOutcome(Classification(overrideResult, definitive = true), cacheable = true)
     }
     val driverType = canonicalDriverTypeFor(platform)
     val maestroPlatform = maestroPlatformFor(platform)
     if (driverType == null || maestroPlatform == null) {
-      // Platforms without a host classifier path (WEB, DESKTOP). Deterministic — cache
-      // the platform-only fallback so subsequent lookups skip the override-and-probe work.
-      val deterministicFallback = listOf(platformClassifier)
-      classifierCache[cacheKey] = deterministicFallback
-      return deterministicFallback
+      // Platforms without a host classifier path (WEB, DESKTOP). Deterministic — cache it so
+      // subsequent lookups skip the override-and-probe work.
+      return ProbeOutcome(Classification(listOf(platformClassifier), definitive = true), cacheable = true)
     }
     // Dim probe is the only path where a *transient* failure (xcrun/adb hiccup,
     // simulator booting, device disconnected mid-probe) can leave us without a real
-    // answer. Returning platform-only here is the right user-facing fallback, but we
-    // intentionally do NOT cache it — otherwise one transient failure would lock the
-    // device into a degraded classifier for the daemon's lifetime, silently breaking
-    // `<platform>-<category>.trail.yaml` recording-pick (exactly the bug this resolver
-    // is fixing). The next call retries the probe.
-    val dims = dimensionsProbe.probe(platform, instanceId) ?: return listOf(platformClassifier)
+    // answer. Returning platform-only here is the right user-facing fallback, but it is NOT
+    // definitive — so it isn't cached (otherwise one transient failure would lock the device into
+    // a degraded classifier for the daemon's lifetime, silently breaking
+    // `<platform>-<category>.trail.yaml` recording-pick, exactly the bug this resolver is fixing)
+    // and callers that select behavior on the answer can see it's a guess. The next call retries
+    // the probe.
+    val dims = dimensionsProbe.probe(platform, instanceId)
+      ?: return ProbeOutcome(Classification(listOf(platformClassifier), definitive = false), cacheable = false)
     val classifiers = TrailblazeHostDeviceClassifier(
       trailblazeDriverType = driverType,
       maestroDeviceInfoProvider = {
@@ -324,10 +395,12 @@ object DeviceClassifierResolver {
     // An Android classification computed WITHOUT density fell back to the raw-pixel heuristic, which
     // misreads a low-density tablet (1920x1080 @160dpi) as a phone. A missing density here is a
     // *transient* `wm density` failure (timeout / malformed output), so treat it like the dim-probe
-    // failure above: return the best-effort classifier but do NOT cache it, or one hiccup would lock
-    // the device into the wrong `android-phone` slot for the daemon's lifetime. The next call retries.
+    // failure above: return the best-effort classifier as NON-definitive. It isn't cached (one
+    // hiccup would otherwise lock the device into the wrong `android-phone` slot for the daemon's
+    // lifetime; the next call retries), and a caller that lowers recording legs off this answer can
+    // fall back to platform-only rather than confidently running a phone recording on a tablet.
     if (platform == TrailblazeDevicePlatform.ANDROID && dims.densityDpi == null) {
-      return classifiers
+      return ProbeOutcome(Classification(classifiers, definitive = false), cacheable = false)
     }
     // A distribution override is installed but declined this probe. That is indistinguishable from a
     // *transient* miss: an override that recognizes hardware via a `getprop`/shell probe declines
@@ -337,14 +410,20 @@ object DeviceClassifierResolver {
     // both cases. Caching the dim-based fallback here would lock a device the override *would* have
     // claimed into the wrong `<platform>-<category>` slot for the daemon's entire lifetime, poisoning
     // every later run's classifier lookup — exactly the failure the transient guards above avoid. So
-    // when an override is present but declined, return the best-effort dim classifier WITHOUT caching,
-    // letting the next call re-consult the override once the probe is reliable. Devices with no
-    // override installed keep caching: their dim answer is the definitive classification.
+    // when an override is present but declined, skip the cache write and let the next call
+    // re-consult the override once the probe is reliable.
+    //
+    // The dim classification itself is still DEFINITIVE here: `wm size` and `wm density` both
+    // succeeded, so nothing was guessed. Only its permanence is in question, which is exactly the
+    // distinction [ProbeOutcome] draws — marking it non-definitive would strip the sub-category
+    // from every device an installed override doesn't claim, which for an override that recognizes
+    // only its own hardware is nearly all of them, handing back a bare platform in place of a real
+    // measurement.
     if (installedOverride != null) {
-      return classifiers
+      return ProbeOutcome(Classification(classifiers, definitive = true), cacheable = false)
     }
-    classifierCache[cacheKey] = classifiers
-    return classifiers
+    // No override installed: the dim answer is the final word.
+    return ProbeOutcome(Classification(classifiers, definitive = true), cacheable = true)
   }
 
   /**

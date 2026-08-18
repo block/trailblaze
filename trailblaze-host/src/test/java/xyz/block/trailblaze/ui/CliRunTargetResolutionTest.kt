@@ -87,6 +87,59 @@ class CliRunTargetResolutionTest {
   }
 
   @Test
+  fun `an unresolved config target announces itself and names what ran instead`() {
+    val beta = target("beta")
+    val announced = mutableListOf<Pair<String, String?>>()
+
+    resolveDaemonRunTargetApp(
+      configTarget = "otherapp",
+      callerWorkspaceDir = "/caller/workspace",
+      findTargetById = { null },
+      resolveForCallerCwd = { beta },
+      onDeclaredTargetUnresolved = { declared, fallback -> announced += declared to fallback?.id },
+    )
+
+    // Silence here is the bug this guards: the run still happens, so without an announcement it
+    // looks identical to a correct one until some target-scoped tool fails much later.
+    assertEquals(1, announced.size, "exactly one announcement per unresolved declared target")
+    assertEquals("otherapp", announced.single().first, "the announcement names the declared target")
+    assertEquals("beta", announced.single().second, "…and what actually ran instead")
+  }
+
+  @Test
+  fun `a config target that resolves announces nothing`() {
+    val alpha = target("alpha")
+    var announcements = 0
+
+    resolveDaemonRunTargetApp(
+      configTarget = "alpha",
+      callerWorkspaceDir = null,
+      findTargetById = { alpha },
+      resolveForCallerCwd = { null },
+      onDeclaredTargetUnresolved = { _, _ -> announcements++ },
+    )
+
+    assertEquals(0, announcements)
+  }
+
+  @Test
+  fun `a blank config target is treated as declaring nothing, not as an unknown id`() {
+    val beta = target("beta")
+    var announcements = 0
+
+    val resolved = resolveDaemonRunTargetApp(
+      configTarget = "   ",
+      callerWorkspaceDir = "/caller/workspace",
+      findTargetById = { error("a blank config.target must not be looked up") },
+      resolveForCallerCwd = { beta },
+      onDeclaredTargetUnresolved = { _, _ -> announcements++ },
+    )
+
+    assertEquals(beta, resolved)
+    assertEquals(0, announcements, "an empty `target:` key is not a mistyped target")
+  }
+
+  @Test
   fun `null caller cwd is forwarded to the resolver unchanged`() {
     // The resolver (not this function) is what maps null -> daemon anchor; this pins that the
     // handler forwards null verbatim rather than substituting its own value.

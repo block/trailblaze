@@ -44,6 +44,28 @@ const val OTHER_TRAILBLAZE_TOOL_RAW_FIELD = "raw"
  * missing `@TrailblazeToolClass`, or a serializer that throws all produce a structurally
  * valid payload (best-available `toolName`, empty `raw`) plus a diagnostic [Console] warning
  * so the failure is observable in logs.
+ *
+ * ## SISTER-IMPL-TAG: tool-payload-encoders — this one is UNREDACTED
+ *
+ * Two encoders produce an [OtherTrailblazeTool], and the difference is a security boundary:
+ *
+ *  - **This one** is the canonical/wire encode. It deliberately does NOT apply
+ *    [SensitiveArgsTrailblazeTool] masking — execution and wire transport need real values.
+ *  - **`TrailblazeTool.toLogPayload()`** (in `trailblaze-common`) wraps this one and applies
+ *    [withSensitiveArgsRedacted]. It is the encoder every persisted-log path must use.
+ *
+ * **The invariant: this function must never be the last hop to a persisted surface.** Redaction
+ * happens at formatting, not at capture — the tool instance holds the plaintext throughout — so
+ * "is this credential safe?" is answered entirely by which of the two encoders a given sink ends
+ * up calling.
+ *
+ * That is easy to get wrong indirectly. [TrailblazeToolJsonSerializer] delegates here, so EVERY
+ * `@Contextual TrailblazeTool` field serializes unredacted — including
+ * [TrailblazeToolResult.Error.ExceptionThrown.command], which is itself a serialized field of
+ * `MaestroCommandLog` and `AccessibilityActionLog`. Scripted tools can't reach those today
+ * (host-local dispatch persists only `errorMessage` from the result), but that is a property of
+ * the dispatch branch they happen to take, not something the types enforce. If you route scripted
+ * tools through a different branch, re-check this.
  */
 fun TrailblazeTool.toOtherTrailblazeToolPayload(): OtherTrailblazeTool {
   if (this is OtherTrailblazeTool) return this

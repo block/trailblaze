@@ -117,4 +117,43 @@ class TrailblazeToolResultJsonTest {
     assertThat(decoded.command).isEqualTo(null)
     assertThat(decoded.errorMessage).isEqualTo("no command attached")
   }
+
+  @Test
+  fun `ExceptionThrown round-trips its structuredPayload verbatim`() {
+    // The opaque structured-error channel (a downstream tool's machine-readable failure
+    // payload) travels through logs and RPC like `command` does — silent loss would strip
+    // the code CI classifiers dispatch on.
+    val payload = buildJsonObject {
+      put("schema", "example-repo/trailhead-error/v1")
+      put("code", "session")
+      put("ticket", "TICKET-123")
+    }
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "session did not survive the relaunch",
+      structuredPayload = payload,
+    )
+
+    val json = TrailblazeJsonInstance.encodeToString(
+      TrailblazeToolResult.Error.ExceptionThrown.serializer(),
+      error,
+    )
+    val decoded = TrailblazeJsonInstance.decodeFromString(
+      TrailblazeToolResult.Error.ExceptionThrown.serializer(),
+      json,
+    )
+    assertThat(decoded.structuredPayload).isEqualTo(payload)
+  }
+
+  @Test
+  fun `ExceptionThrown JSON written before structuredPayload existed still decodes`() {
+    // Backward compatibility with persisted logs and RPC peers on older versions: the
+    // field is additive with default null, so its absence must decode cleanly.
+    val legacyJson = """{"errorMessage":"tap missed","stackTrace":"at line 42"}"""
+    val decoded = TrailblazeJsonInstance.decodeFromString(
+      TrailblazeToolResult.Error.ExceptionThrown.serializer(),
+      legacyJson,
+    )
+    assertThat(decoded.errorMessage).isEqualTo("tap missed")
+    assertThat(decoded.structuredPayload).isEqualTo(null)
+  }
 }

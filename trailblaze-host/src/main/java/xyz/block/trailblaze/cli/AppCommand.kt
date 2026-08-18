@@ -14,14 +14,17 @@ import kotlin.time.Duration.Companion.seconds
  * Launch, stop, or check the status of the Trailblaze application.
  *
  * Examples:
- *   trailblaze app                 - Launch desktop GUI
- *   trailblaze app --headless      - Start headless daemon (no GUI)
- *   trailblaze app --stop          - Stop the daemon
- *   trailblaze app --status        - Check if daemon is running
+ *   trailblaze app                   - Launch desktop GUI
+ *   trailblaze app start             - Same as `trailblaze app` (explicit verb)
+ *   trailblaze app --headless        - Start headless daemon (no GUI)
+ *   trailblaze app start --headless  - Same, spelled with the explicit verb
+ *   trailblaze app --stop            - Stop the daemon
+ *   trailblaze app --status          - Check if daemon is running
  */
 @Command(
   name = "app",
   mixinStandardHelpOptions = true,
+  subcommands = [AppStartCommand::class],
   description = ["Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service)"]
 )
 open class AppCommand : Callable<Int> {
@@ -57,9 +60,19 @@ open class AppCommand : Callable<Int> {
     return when {
       stop -> doStop()
       status -> doStatus()
-      foreground -> parent.launchDesktop(headless)
-      else -> launchInBackground()
+      else -> startApp()
     }
+  }
+
+  /**
+   * The "start the app" behavior shared by bare `trailblaze app` and the explicit
+   * `trailblaze app start`. Kept separate from [call] so the subcommand can reach it
+   * without re-entering the `--stop` / `--status` dispatch.
+   */
+  internal fun startApp(): Int = if (foreground) {
+    parent.launchDesktop(headless)
+  } else {
+    launchInBackground()
   }
 
   /**
@@ -170,5 +183,45 @@ open class AppCommand : Callable<Int> {
 
       TrailblazeExitCode.SUCCESS.code
     }
+  }
+}
+
+/**
+ * `trailblaze app start` — an explicit verb for what bare `trailblaze app` already does.
+ *
+ * The rest of the codebase (docs, KDoc, and the `is the daemon running?` recovery hints in
+ * [reportDaemonUnreachable]) has always spelled daemon startup `app start`, so this makes the
+ * documented invocation real rather than rewording every reference. `--headless` and
+ * `--foreground` are re-declared here so they work on either side of the verb —
+ * `app --headless start` and `app start --headless` are equivalent.
+ */
+@Command(
+  name = "start",
+  mixinStandardHelpOptions = true,
+  description = ["Start the Trailblaze app in the background (same as `trailblaze app`)"]
+)
+class AppStartCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var app: AppCommand
+
+  @Option(
+    names = ["--headless"],
+    description = ["Start in headless mode (daemon only, no GUI)"]
+  )
+  var headless: Boolean = false
+
+  @Option(
+    names = ["--foreground"],
+    description = ["Run in foreground (blocks terminal). Use for debugging with an attached IDE."]
+  )
+  var foreground: Boolean = false
+
+  override fun call(): Int {
+    // OR rather than assign: the same flag may have been given before the verb, which picocli
+    // binds to the parent instead.
+    if (headless) app.headless = true
+    if (foreground) app.foreground = true
+    return app.startApp()
   }
 }

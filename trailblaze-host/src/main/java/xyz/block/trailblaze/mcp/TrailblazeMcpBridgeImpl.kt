@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -11,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.api.EffectiveScreenshotScalingConfig
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -20,6 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.ios.IosDriverTrailblazeAgent
 import xyz.block.trailblaze.host.ios.IosDeviceManager
+import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.devices.IosNativeConnectedDevice
 import xyz.block.trailblaze.host.devices.HostIosDriverFactory
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
@@ -32,6 +35,7 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.NoOpLogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -41,6 +45,7 @@ import xyz.block.trailblaze.logs.model.MCP_TEST_CLASS_NAME
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
@@ -55,6 +60,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -141,6 +147,38 @@ class TrailblazeMcpBridgeImpl(
   private class WebInitState {
     val startTimeMs: Long = System.currentTimeMillis()
     @Volatile var progressMessage: String = "Checking Playwright drivers..."
+  }
+
+  /**
+   * Where a one-shot tool dispatch has to run. Mirrors the fork the trail-run agents apply
+   * (`HostOnDeviceRpcTrailblazeAgent.executeTool`, `BaseTrailblazeAgent.runTrailblazeTools`) so
+   * `trailblaze tool <name>` and a trail step that invokes the same tool agree on where it lands.
+   */
+  internal enum class ToolDispatchRoute {
+    /** Expand host-side into executable primitives, then route each child on its own. */
+    HOST_EXPAND,
+
+    /** Execute on the daemon JVM. */
+    HOST_LOCAL,
+
+    /** Serialize and ship to the device / browser / cloud driver. */
+    DEVICE,
+  }
+
+  /**
+   * Where a host-local tool's live screen reads come from. Verification tools
+   * (`assertWaypoint` and friends) refuse to run without one, so which source is picked — and
+   * that *a* source is picked at all on the on-device drivers — is the whole contract.
+   */
+  internal enum class HostLocalScreenStateSource {
+    /** A connected host driver (Maestro / iOS-native / Playwright) serves the capture. */
+    DIRECT_DRIVER,
+
+    /** No host driver exists; read the tree over the on-device `GetScreenState` RPC. */
+    ON_DEVICE_RPC,
+
+    /** Nothing can capture — the context's provider stays null. */
+    NONE,
   }
 
   /** Keeps a terminal runner failure armed until that device has actually been restarted. */
@@ -612,6 +650,181 @@ class TrailblazeMcpBridgeImpl(
       if (deviceId in connectedDevices) return null
       return "Android device '${deviceId.instanceId}' is no longer connected to adb. Reconnect it and retry."
     }
+
+    /**
+     * Routing decision for one resolved tool. Pure — no bridge, device, or daemon required, so
+     * the contract is unit-testable with plain inputs.
+     *
+     * A host-local tool's runtime exists only on the daemon JVM: the in-process QuickJS engine
+     * behind a scripted (`.ts`) tool, the stdio client behind a subprocess MCP tool, the
+     * host-side registry behind a `requiresHost = true` class-backed tool. Shipping one to the
+     * device over RPC fails with "Unknown tool" because the device's repo carries no
+     * registration for it — so the [HostLocalExecutableTrailblazeTool] marker AND the
+     * `requiresHost` bit both have to be consulted before the device fallback. That ordering is
+     * lifted from [xyz.block.trailblaze.host.HostOnDeviceRpcTrailblazeAgent.executeTool], which
+     * is what makes a host-local tool behave the same under `trailblaze tool <name>` as it does
+     * inside a trail.
+     *
+     * ### Where this deliberately differs from the agent
+     *
+     * The agent checks `ExecutableTrailblazeTool` first and expands **every**
+     * [DelegatingTrailblazeTool] host-side, with no `requiresHost` gate. This inverts the two
+     * arms and gates the delegating one, because a composed tool without `requires_host` is
+     * decodable on the device and shipping it whole is one round trip instead of one per child —
+     * the behavior that was already here, which the tests pin.
+     *
+     * The residual gap is a composed tool without `requires_host` whose children include a
+     * host-local one: the agent routes that child to the host, this ships the parent to the
+     * device and the child comes back "Unknown tool". Nothing in the shipped set has that shape
+     * (`eraseText` / `pressBack` expand to Maestro primitives), and workspace YAML configs
+     * default to `requires_host = true`, so closing it would cost every composed tool an extra
+     * round trip to fix a case that doesn't exist yet. Add the child-inspection here if one shows
+     * up.
+     */
+    internal fun resolveToolDispatchRoute(tool: TrailblazeTool): ToolDispatchRoute = when {
+      tool is DelegatingTrailblazeTool && tool.requiresHostInstance() -> ToolDispatchRoute.HOST_EXPAND
+      tool !is ExecutableTrailblazeTool -> ToolDispatchRoute.DEVICE
+      tool is HostLocalExecutableTrailblazeTool || tool.requiresHostInstance() -> ToolDispatchRoute.HOST_LOCAL
+      else -> ToolDispatchRoute.DEVICE
+    }
+
+    /**
+     * Which live-screen source a host-local dispatch should use. Pure — the two inputs are the
+     * only things the choice depends on, so the contract is testable without a device.
+     *
+     * A connected host driver wins when there is one. Otherwise the on-device Android drivers get
+     * the RPC path: device setup deliberately skips `createPersistentDevice` for them, so without
+     * this branch `getDirectScreenStateProvider` returns null and every verification tool fails
+     * with "requires a live screen-state provider". [HostLocalScreenStateSource.NONE] keeps the
+     * context field's "no state available" meaning intact for tools that check it.
+     */
+    internal fun resolveHostLocalScreenStateSource(
+      hasDirectProvider: Boolean,
+      isOnDeviceInstrumentation: Boolean,
+    ): HostLocalScreenStateSource = when {
+      hasDirectProvider -> HostLocalScreenStateSource.DIRECT_DRIVER
+      isOnDeviceInstrumentation -> HostLocalScreenStateSource.ON_DEVICE_RPC
+      else -> HostLocalScreenStateSource.NONE
+    }
+
+    /**
+     * Device info for a host-local dispatch: the connected driver's real size when it could report
+     * one, the standard fallback sizing otherwise. Pure — takes the already-probed dimensions
+     * rather than the driver, so the fallback is testable without a device.
+     *
+     * One nullable pair, not two nullable ints: `maestro.DeviceInfo` declares `widthPixels` /
+     * `heightPixels` as non-null primitives, so the only caller derives both from the same
+     * nullable probe result. They are present together or absent together, and a per-dimension
+     * fallback would be a branch no caller can reach.
+     */
+    internal fun hostLocalDeviceInfo(
+      deviceId: TrailblazeDeviceId,
+      driverType: TrailblazeDriverType,
+      driverDimensions: Pair<Int, Int>?,
+    ): TrailblazeDeviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = deviceId,
+      trailblazeDriverType = driverType,
+      widthPixels = driverDimensions?.first ?: DEFAULT_DEVICE_WIDTH,
+      heightPixels = driverDimensions?.second ?: DEFAULT_DEVICE_HEIGHT,
+    )
+
+    /**
+     * The device-resolved app id for a host-local dispatch — which declared candidate is actually
+     * installed. Pure over its two lambdas, so both behaviors are testable without a device.
+     *
+     * Two contracts, both load-bearing:
+     *  - A target that declares no app ids on this platform (web targets, pure API packs) must
+     *    NOT trigger [probeInstalledAppIds] at all — that probe is a `pm list packages` /
+     *    `simctl listapps` round trip per dispatch, and for those targets it can only ever
+     *    return null.
+     *  - A failing probe or pick yields null rather than throwing, so a scripted tool can fall
+     *    back to `ctx.target.appIds[0]` and let the launch fail downstream with a clearer
+     *    message. Matches the trail-run resolution in `TrailblazeHostYamlRunner`.
+     *
+     * [CancellationException] is rethrown rather than swallowed into a null: this runs while the
+     * dispatch context is being built, and converting an aborted run into "no app id" would let
+     * the dispatch continue against a torn-down session.
+     */
+    internal fun resolveHostLocalAppId(
+      declaredAppIds: List<String>?,
+      probeInstalledAppIds: () -> Set<String>,
+      pickInstalledAppId: (Set<String>) -> String?,
+    ): String? {
+      if (declaredAppIds.isNullOrEmpty()) return null
+      return try {
+        pickInstalledAppId(probeInstalledAppIds())
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        Console.log("[executeTrailblazeTool] Installed-app probe failed (${e::class.simpleName}: ${e.message}); ctx.appId will be null")
+        null
+      }
+    }
+
+    /**
+     * The nested-dispatch bridge a host-local tool's `ctx.tools.<name>(...)` calls ride.
+     *
+     * Forwards [traceId] — the PARENT dispatch's effective id — to every nested call so the whole
+     * call tree correlates under one trace. Passing the caller's original nullable id instead
+     * would let each nested dispatch mint its own and scatter one logical tool call across the
+     * report.
+     *
+     * Failures become a typed [TrailblazeToolResult.Error] so a nested failure surfaces to the
+     * calling tool instead of unwinding the host dispatch; [CancellationException] still
+     * propagates so session teardown isn't swallowed.
+     */
+    internal fun hostLocalNestedToolExecutor(
+      traceId: TraceId,
+      dispatch: suspend (TrailblazeTool, TraceId?) -> String,
+    ): suspend (TrailblazeTool) -> TrailblazeToolResult = { nested ->
+      try {
+        TrailblazeToolResult.Success(message = dispatch(nested, traceId))
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(e, nested)
+      }
+    }
+
+    /**
+     * Assembles the [TrailblazeToolExecutionContext] a host-local dispatch runs against, from
+     * inputs its caller has already resolved. Pure, so the WIRING is testable and not just the
+     * individual decisions — a helper that returns the right answer into the wrong field is
+     * exactly as broken as a helper that returns the wrong answer, and an earlier bug lived in the
+     * wiring rather than in any single decision.
+     *
+     * [dispatchNested] is threaded through [hostLocalNestedToolExecutor] here rather than by the
+     * caller so the parent [traceId] can't be forgotten at the call site.
+     *
+     * Memory is a fresh [AgentMemory] by construction: a one-shot dispatch has no run to inherit
+     * from, which is what the `runYamlInternal` path it replaced gave it too (a new run, a new
+     * memory).
+     */
+    internal fun buildHostLocalToolContext(
+      deviceInfo: TrailblazeDeviceInfo,
+      session: TrailblazeSession,
+      traceId: TraceId,
+      screenStateProvider: (() -> ScreenState)?,
+      trailblazeLogger: TrailblazeLogger,
+      resolvedTarget: ResolvedTarget?,
+      appId: String?,
+      toolRepo: TrailblazeToolRepo,
+      sessionDirProvider: ((SessionId) -> java.io.File)?,
+      dispatchNested: suspend (TrailblazeTool, TraceId?) -> String,
+    ): TrailblazeToolExecutionContext = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = traceId,
+      trailblazeDeviceInfo = deviceInfo,
+      sessionProvider = { session },
+      screenStateProvider = screenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = AgentMemory(),
+      resolvedTarget = resolvedTarget,
+      appId = appId,
+      toolRepo = toolRepo,
+      nestedToolExecutor = hostLocalNestedToolExecutor(traceId, dispatchNested),
+      sessionDirProvider = sessionDirProvider,
+    )
 
     /**
      * Pure expansion helper: synthesizes the [TrailblazeToolExecutionContext] needed by
@@ -1433,8 +1646,26 @@ class TrailblazeMcpBridgeImpl(
     // delegating tool's `toolMetadata.requiresHost` is the gate: workspace YAML configs
     // default to `requires_host = true` via `AppTargetDiscovery.registerWorkspaceYamlTools`;
     // classpath-bundled `*.tool.yaml` files set the field explicitly (or leave it null).
-    if (tool is DelegatingTrailblazeTool && tool.requiresHostInstance()) {
-      return expandDelegatingToolAndDispatch(tool, trailblazeDeviceId, blocking, traceId)
+    //
+    // HOST_LOCAL is the same guard the trail-run agents apply before their own RPC fallback —
+    // see [resolveToolDispatchRoute]. Without it a scripted / subprocess / `requiresHost` tool
+    // reaching this method was shipped to the device, which has no registration for it and
+    // answers "Unknown tool", even though the identical tool dispatches fine inside a trail.
+    when (resolveToolDispatchRoute(tool)) {
+      ToolDispatchRoute.HOST_EXPAND ->
+        return expandDelegatingToolAndDispatch(
+          tool = tool as DelegatingTrailblazeTool,
+          trailblazeDeviceId = trailblazeDeviceId,
+          blocking = blocking,
+          traceId = traceId,
+        )
+      ToolDispatchRoute.HOST_LOCAL ->
+        return executeHostLocalToolOnDaemon(
+          tool = tool as ExecutableTrailblazeTool,
+          trailblazeDeviceId = trailblazeDeviceId,
+          traceId = traceId,
+        )
+      ToolDispatchRoute.DEVICE -> Unit
     }
 
     // Use custom executor if provided, otherwise convert to YAML and run
@@ -1530,6 +1761,196 @@ class TrailblazeMcpBridgeImpl(
       )
       else -> null
     }
+  }
+
+  /**
+   * Runs a [ToolDispatchRoute.HOST_LOCAL] tool on the daemon JVM.
+   *
+   * Playwright keeps its existing dispatch: [executeHostLocalTool] hands the tool to the
+   * browser-bound agent, which carries the live page and screen state. Every other driver runs
+   * the tool directly against a context built here.
+   *
+   * Nested framework calls a scripted tool makes (`ctx.tools.<name>(...)`) go back through
+   * [executeTrailblazeTool], so they re-enter this router and land on the device or the host
+   * according to their own routing — which is what lets e.g. a staging-seeding tool compose a
+   * host-side session resolver while a tap in the same handler still reaches the device.
+   *
+   * ### What the context carries, and why each piece is load-bearing
+   *
+   * On a HOST/Maestro driver a `requiresHost = true` tool used to reach `MaestroTrailblazeAgent`
+   * through [runYamlInternal] and run against that agent's fully-wired `buildExecutionContext`.
+   * This method now intercepts that, so it has to carry the same signals or the reroute would be
+   * a regression rather than a fix:
+   *
+   *  - **[TrailblazeToolExecutionContext.appId]** — `assertWaypoint` feeds it to
+   *    `TargetTemplateContext`, and the matcher fail-closes templated selectors when it's
+   *    missing, so a waypoint using `{{target.appId}}` would start failing without it.
+   *  - **[TrailblazeToolExecutionContext.toolRepo]** — `invokeFrameworkTool` errors out when it's
+   *    null, so a Kotlin tool composing other framework tools would throw here while working
+   *    inside a trail. Same host-vs-device parity this method exists to close, on the
+   *    composition axis.
+   *  - **[TrailblazeToolExecutionContext.trailblazeLogger]** — a real emitter keeps the tool's own
+   *    log output (screen states, verification diagnostics) in the session directory and therefore
+   *    in the report.
+   *  - **[TrailblazeToolExecutionContext.screenStateProvider]** — host-local verification tools
+   *    poll the live screen through it; see [hostLocalScreenStateProvider] for why the on-device
+   *    drivers need their own source.
+   *
+   * Memory is deliberately a fresh [AgentMemory]: a one-shot dispatch has no run to inherit from,
+   * which is what the [runYamlInternal] path gave it too (a new run, a new memory).
+   */
+  private suspend fun executeHostLocalToolOnDaemon(
+    tool: ExecutableTrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    traceId: TraceId?,
+  ): String {
+    val driverType = getDriverType()
+      ?: getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+      ?: TrailblazeDriverType.DEFAULT_ANDROID
+    // One repo for both the Playwright agent below and the context's `toolRepo`.
+    val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = TrailblazeToolSet.NonLlmTrailblazeTools,
+      driverType = driverType,
+    )
+
+    // Driver-specific host-local dispatch (Playwright today) wins when it claims the tool;
+    // it returns null for every driver that has no such path.
+    if (tool is HostLocalExecutableTrailblazeTool) {
+      executeHostLocalTool(tool = tool, toolRepo = toolRepo, traceId = traceId)?.let { return it }
+    }
+
+    val toolLabel = (tool as? HostLocalExecutableTrailblazeTool)?.advertisedToolName
+      ?: tool::class.simpleName
+      ?: "tool"
+    Console.log("[executeTrailblazeTool] Executing '$toolLabel' on the host JVM (driver=$driverType)")
+
+    val session = TrailblazeSession(
+      sessionId = getActiveSessionId() ?: SessionId.sanitized("mcp_${trailblazeDeviceId.instanceId}"),
+      startTime = Clock.System.now(),
+    )
+    // Scripted tools read `ctx.target.{id, appIds}` off this; a null hands a target-scoped tool
+    // `ctx.target === undefined`, diverging from the trail-run path. Resolved through the
+    // per-device session override so `trailblaze tool --target <id>` is honored.
+    val resolvedTarget = getSessionTargetAppIdForDevice(trailblazeDeviceId)
+      ?.let { trailblazeDeviceManager.availableAppTargets.findById(it) }
+      ?.let { ResolvedTarget(target = it, deviceId = trailblazeDeviceId) }
+    // One trace id for this dispatch AND everything nested under it: passing the original
+    // nullable `traceId` down would let each nested dispatch mint its own, scattering one
+    // logical tool call across the report.
+    val effectiveTraceId = traceId ?: TraceId.generate(origin = TraceId.Companion.TraceOrigin.MCP)
+    val context = buildHostLocalToolContext(
+      deviceInfo = hostLocalDeviceInfoForDevice(trailblazeDeviceId, driverType),
+      session = session,
+      traceId = effectiveTraceId,
+      screenStateProvider = hostLocalScreenStateProvider(trailblazeDeviceId),
+      trailblazeLogger = hostLocalTrailblazeLogger(),
+      resolvedTarget = resolvedTarget,
+      appId = resolvedTarget?.let { installedAppIdOrNull(it) },
+      toolRepo = toolRepo,
+      sessionDirProvider = logsRepo?.let { repo -> repo::getSessionDir },
+    ) { nested, nestedTraceId ->
+      executeTrailblazeTool(nested, blocking = true, traceId = nestedTraceId)
+    }
+
+    // A host-local tool can still move the UI through its nested calls, so the cached state is
+    // no more trustworthy than after a device dispatch — and no more trustworthy when the tool
+    // throws partway through than when it succeeds.
+    cachedScreenStates.remove(trailblazeDeviceId.instanceId)
+    val result = tool.execute(context)
+    return when (result) {
+      is TrailblazeToolResult.Success -> renderToolResultOutput(
+        message = result.message,
+        structuredContent = result.structuredContent,
+        fallback = "Executed $toolLabel on the host for device ${trailblazeDeviceId.instanceId}",
+      )
+      is TrailblazeToolResult.Error -> error("Host-local tool execution failed: ${result.errorMessage}")
+    }
+  }
+
+  /**
+   * The device-resolved app id for [resolved]. Gathers the inputs (declared candidates, the
+   * device probe) and defers the decision to [resolveHostLocalAppId], where both contracts —
+   * skip the probe for a target that declares nothing, never throw — are pinned.
+   */
+  private fun installedAppIdOrNull(resolved: ResolvedTarget): String? = resolveHostLocalAppId(
+    declaredAppIds = resolved.target.getPossibleAppIdsForPlatform(resolved.platform),
+    probeInstalledAppIds = { MobileDeviceUtils.getInstalledAppIds(resolved.deviceId) },
+    pickInstalledAppId = { installed ->
+      resolved.target.getAppIdIfInstalled(platform = resolved.platform, installedAppIds = installed)
+    },
+  )
+
+  /** Probes the connected host driver for real dimensions, then defers to [hostLocalDeviceInfo]. */
+  private fun hostLocalDeviceInfoForDevice(
+    deviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
+  ): TrailblazeDeviceInfo {
+    val maestroDeviceInfo = (persistentDevices[deviceId.instanceId] as? MaestroConnectedDevice)
+      ?.let { runCatching { it.getMaestroDriver().deviceInfo() }.getOrNull() }
+    return hostLocalDeviceInfo(
+      deviceId = deviceId,
+      driverType = driverType,
+      driverDimensions = maestroDeviceInfo?.let { it.widthPixels to it.heightPixels },
+    )
+  }
+
+  /**
+   * Live screen source for host-local tools that poll the screen (`assertWaypoint` and the other
+   * verification tools). [resolveHostLocalScreenStateSource] owns the choice; this binds the
+   * chosen source to an actual capture.
+   *
+   * `runBlocking` around the RPC mirrors `HostOnDeviceRpcTrailblazeAgent.screenStateProvider`.
+   */
+  private fun hostLocalScreenStateProvider(deviceId: TrailblazeDeviceId): (() -> ScreenState)? {
+    val directProvider = getDirectScreenStateProvider(skipScreenshot = false)
+    return when (
+      resolveHostLocalScreenStateSource(
+        hasDirectProvider = directProvider != null,
+        isOnDeviceInstrumentation = isOnDeviceInstrumentation(),
+      )
+    ) {
+      HostLocalScreenStateSource.DIRECT_DRIVER -> {
+        val provider = directProvider ?: return null
+        { provider.invoke(EffectiveScreenshotScalingConfig.effective) }
+      }
+      HostLocalScreenStateSource.ON_DEVICE_RPC -> {
+        {
+          val response = runBlocking {
+            getScreenStateViaRpc(
+              includeScreenshot = true,
+              screenshotScalingConfig = EffectiveScreenshotScalingConfig.effective,
+              includeAnnotatedScreenshot = false,
+              includeAllElements = false,
+            )
+          }
+          RpcScreenStateAdapter.from(
+            response
+              ?: error("Failed to capture screen state from ${deviceId.instanceId} over the on-device RPC"),
+          )
+        }
+      }
+      HostLocalScreenStateSource.NONE -> null
+    }
+  }
+
+  /**
+   * Session-backed logger so a host-local tool's own log output lands in the session directory
+   * (and therefore the report) rather than being dropped. Falls back to the no-op logger when the
+   * daemon has no logs repo — the same degradation every other artifact-writing path takes.
+   *
+   * This does NOT emit the tool's own `TrailblazeToolLog`: dispatchers own that emit, and the
+   * `trailblaze tool` path already writes one from `StepToolSet.executeDirectTools`. Emitting a
+   * second here is the #3818 double-log shape.
+   */
+  private fun hostLocalTrailblazeLogger(): TrailblazeLogger {
+    val repo = logsRepo ?: return noOpTrailblazeLogger()
+    return TrailblazeLogger(
+      logEmitter = LogEmitter { repo.saveLogToDisk(it) },
+      screenStateLogger = ScreenStateLogger { screenStateLog ->
+        repo.saveScreenshotToDisk(screenStateLog)
+        screenStateLog.fileName
+      },
+    )
   }
 
   /**

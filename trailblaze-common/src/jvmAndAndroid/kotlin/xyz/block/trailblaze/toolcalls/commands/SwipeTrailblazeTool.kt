@@ -75,7 +75,10 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
  * ----- DO NOT GIVE THIS TOOL TO THE LLM -----
  * This is a tool that should be delegated to, not registered to the LLM.
  */
-@Deprecated("This is only being used by a few handwritten tests and may go away in the future.")
+@Deprecated(
+  "Not for new code, but not going away: the recording pipeline constructs this directly " +
+    "(MaestroInteractionToolFactory, OnDeviceRpcDeviceScreenStream), so those sites suppress this.",
+)
 @Serializable
 @TrailblazeToolClass(
   name = "swipeWithRelativeCoordinates",

@@ -19,6 +19,12 @@ import kotlinx.serialization.json.Json
  */
 class MatcherParityFixturesTest {
 
+  /** `class` discriminator so the fixture's `driverDetail` blocks decode as [DriverNodeDetail]. */
+  private val fixtureJson = Json {
+    classDiscriminator = "class"
+    ignoreUnknownKeys = true
+  }
+
   @Serializable
   private data class ParityCase(
     val name: String,
@@ -40,15 +46,25 @@ class MatcherParityFixturesTest {
   )
 
   @Serializable
+  private data class HitTestCase(
+    val name: String,
+    val tree: TrailblazeNode,
+    val x: Int,
+    val y: Int,
+    val expectedNodeId: Long? = null,
+  )
+
+  @Serializable
   private data class ParityFixtures(
     val cases: List<ParityCase>,
     val iosMaestroHintBridgeCases: List<HintBridgeCase> = emptyList(),
+    val hitTestCases: List<HitTestCase> = emptyList(),
   )
 
   @Test
   fun `matching behavior agrees with the shared parity fixtures`() {
     val fixtureFile = locate("sdks/typescript/src/matcher/matcher-parity-fixtures.json")
-    val fixtures = Json { ignoreUnknownKeys = true }.decodeFromString<ParityFixtures>(fixtureFile.readText())
+    val fixtures = fixtureJson.decodeFromString<ParityFixtures>(fixtureFile.readText())
     check(fixtures.cases.isNotEmpty()) { "parity fixture file is empty: $fixtureFile" }
 
     // Every case runs through BOTH dialects (native shape asserting `nativeMatches`, Maestro
@@ -146,7 +162,7 @@ class MatcherParityFixturesTest {
   @Test
   fun `hint bridge behavior agrees with the shared parity fixtures`() {
     val fixtureFile = locate("sdks/typescript/src/matcher/matcher-parity-fixtures.json")
-    val fixtures = Json { ignoreUnknownKeys = true }.decodeFromString<ParityFixtures>(fixtureFile.readText())
+    val fixtures = fixtureJson.decodeFromString<ParityFixtures>(fixtureFile.readText())
     check(fixtures.iosMaestroHintBridgeCases.isNotEmpty()) { "hint-bridge parity section is empty: $fixtureFile" }
 
     val failures = fixtures.iosMaestroHintBridgeCases.mapNotNull { case ->
@@ -186,6 +202,41 @@ class MatcherParityFixturesTest {
             "Either the bridge's hintTextRegex leg drifted, or the fixture was changed without " +
               "updating this implementation. Fix the resolver (or the fixture) and keep the TS mirror " +
               "(sdks/typescript/src/matcher/resolver.ts) in lockstep.",
+          )
+        },
+      )
+    }
+  }
+
+  // Which node a touch at (x, y) acts on. Same source of truth and drift guarantee as `cases`
+  // — the TS mirror is matcher-parity.test.ts driving `trailblaze-node.ts`'s `hitTest`. The
+  // expected-analysis.txt golden only locks this Kotlin against its own Kotlin/JS compile, so
+  // without these cases the hand-written TS port can drift silently.
+  @Test
+  fun `hit-test behavior agrees with the shared parity fixtures`() {
+    val fixtureFile = locate("sdks/typescript/src/matcher/matcher-parity-fixtures.json")
+    val fixtures = fixtureJson.decodeFromString<ParityFixtures>(fixtureFile.readText())
+    check(fixtures.hitTestCases.isNotEmpty()) { "hit-test parity section is empty: $fixtureFile" }
+
+    val failures = fixtures.hitTestCases.mapNotNull { case ->
+      val hit = case.tree.hitTest(case.x, case.y)
+      if (hit?.nodeId != case.expectedNodeId) {
+        "  ${case.name}: hitTest(${case.x}, ${case.y}) expected nodeId=${case.expectedNodeId}, " +
+          "got ${hit?.nodeId} (${hit?.describe()})"
+      } else {
+        null
+      }
+    }
+
+    if (failures.isNotEmpty()) {
+      fail(
+        buildString {
+          appendLine("${failures.size} hit-test parity fixture case(s) disagree with the Kotlin implementation:")
+          failures.forEach { appendLine(it) }
+          append(
+            "Either TrailblazeNode.hitTest drifted, or the fixture was changed without updating " +
+              "this implementation. Fix hitTest (or the fixture) and keep the TS mirror " +
+              "(sdks/typescript/src/matcher/trailblaze-node.ts) in lockstep.",
           )
         },
       )

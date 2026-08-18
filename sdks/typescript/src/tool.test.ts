@@ -18,6 +18,7 @@ import {
   _clearPendingTools,
   type TrailblazeTypedToolSpec,
 } from "./tool.js";
+import { ToolError } from "./tool-error.js";
 import { createMemory, DRAIN_DELTA, type DrainableMemory, type TrailblazeMemory } from "./memory.js";
 
 // Minimal McpServer test double. We only assert on the handler the SDK was registered with,
@@ -319,6 +320,94 @@ describe("registerPendingTools handler error envelope", () => {
     }));
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toBe("ok");
+  });
+});
+
+describe("ToolError structured payload on the error envelope", () => {
+  // `ToolError` is the opt-in structured-failure surface: `data` rides onto the
+  // envelope's `structuredContent`, which the Kotlin host threads opaquely to
+  // `ExceptionThrown.structuredPayload` and onward to the report row. Everything
+  // that is NOT a ToolError must keep the exact pre-payload wire shape (no
+  // `structuredContent` key at all, not even `undefined`).
+
+  test("thrown ToolError lifts data onto structuredContent beside the text envelope", async () => {
+    const payload = { schema: "example-repo/trailhead-error/v1", code: "session" };
+    const result = (await invokeTool("toolerror_thrower", () => {
+      throw new ToolError("session did not survive the relaunch", { data: payload });
+    })) as EnvelopeResult & { structuredContent?: unknown };
+    expect(result.isError).toBe(true);
+    // The text envelope keeps the full name/message/stack shape — the payload is
+    // additive, never a replacement for the human-readable message.
+    expect(result.content[0].text.startsWith("ToolError: session did not survive the relaunch")).toBe(true);
+    expect(result.content[0].text).toContain("tool.test.ts");
+    expect(result.structuredContent).toEqual(payload);
+  });
+
+  test("plain Error produces NO structuredContent key (exact legacy wire shape)", async () => {
+    const result = await invokeTool("plain_error_thrower", () => {
+      throw new Error("no payload here");
+    });
+    expect(result.isError).toBe(true);
+    // Key-absence, not just value-undefined: `"structuredContent" in result` must be
+    // false so payload-less errors serialize byte-identically to the pre-field era.
+    expect("structuredContent" in result).toBe(false);
+  });
+
+  test("ToolError without data also omits the structuredContent key", async () => {
+    const result = await invokeTool("dataless_toolerror_thrower", () => {
+      throw new ToolError("failed, nothing structured to add");
+    });
+    expect(result.isError).toBe(true);
+    expect("structuredContent" in result).toBe(false);
+  });
+
+  test("marker-based detection lifts data from a foreign-realm ToolError shape", async () => {
+    // Cross-realm case: an esbuild-bundled on-device tool carries its OWN copy of the
+    // ToolError class, so `instanceof` fails — detection goes through the
+    // `Symbol.for("trailblaze.ToolError")` global-registry marker. Simulate the foreign
+    // copy with a hand-built object carrying the marker.
+    const foreign = Object.assign(new Error("foreign realm"), {
+      data: { code: "device-state" },
+      [Symbol.for("trailblaze.ToolError")]: true,
+    });
+    const result = (await invokeTool("foreign_toolerror_thrower", () => {
+      throw foreign;
+    })) as EnvelopeResult & { structuredContent?: unknown };
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({ code: "device-state" });
+  });
+
+  test("hostile throwing data getter degrades to a payload-less envelope, never a lost envelope", async () => {
+    // The catch path is the last line of defense — a sabotaging accessor must not
+    // re-introduce the escaped-throw bug this whole file guards against.
+    const hostile = new Error("hostile accessor");
+    Object.defineProperty(hostile, Symbol.for("trailblaze.ToolError"), { value: true });
+    Object.defineProperty(hostile, "data", {
+      get() {
+        throw new Error("data-getter sabotage");
+      },
+    });
+    const result = await invokeTool("hostile_data_thrower", () => {
+      throw hostile;
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("hostile accessor");
+    expect("structuredContent" in result).toBe(false);
+  });
+
+  test("hostile throwing marker getter degrades the same way", async () => {
+    const hostile = new Error("marker sabotage host");
+    Object.defineProperty(hostile, Symbol.for("trailblaze.ToolError"), {
+      get() {
+        throw new Error("marker-getter sabotage");
+      },
+    });
+    const result = await invokeTool("hostile_marker_thrower", () => {
+      throw hostile;
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("marker sabotage host");
+    expect("structuredContent" in result).toBe(false);
   });
 });
 

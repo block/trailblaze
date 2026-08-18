@@ -8,10 +8,11 @@ package xyz.block.trailblaze.api
  *
  * [maestroDialect] selects Maestro's Orchestra semantics: `IGNORE_CASE | DOT_MATCHES_ALL |
  * MULTILINE` (the canonical statement of `Orchestra.REGEX_OPTIONS`, locked by
- * `matcher-parity-fixtures.json`; two sibling copies must stay in sync — the vendored
- * `Orchestra.kt` in trailblaze-android and the inlined options in `PropertyUniqueness` in
- * trailblaze-common), plus the `toRegexSafe` degrade: an invalid pattern is retried as an
- * escaped literal with the same options.
+ * `matcher-parity-fixtures.json`; one sibling copy must stay in sync — the vendored
+ * `Orchestra.kt` in trailblaze-android), plus the `toRegexSafe` degrade: an invalid pattern
+ * is retried as an escaped literal with the same options. Public because downstream KMP
+ * modules share the chokepoint too — `PropertyUniqueness` in trailblaze-common routes its
+ * Maestro-semantics matching here instead of keeping an inlined copy of the options.
  *
  * expect/actual for two reasons:
  * - `RegexOption.DOT_MATCHES_ALL` exists on JVM, Android, and Wasm but not in the common
@@ -24,7 +25,7 @@ package xyz.block.trailblaze.api
  *   translation the TypeScript matcher (`sdks/typescript/src/matcher/resolver.ts`) ships,
  *   locked by the same `matcher-parity-fixtures.json` contract.
  */
-internal expect fun selectorPatternRegexMatches(
+expect fun selectorPatternRegexMatches(
   pattern: String,
   text: String,
   maestroDialect: Boolean,

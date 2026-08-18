@@ -86,7 +86,7 @@ export interface EmptyInput { /* intentionally empty — see kdoc */ }
  * the injected [defineTypedTool] validator); [description] routes into the tool's primary
  * descriptor (NOT `_meta`); the remaining gate fields flow into `_meta` via the analyzer.
  */
-export interface TrailblazeTypedToolSpec {
+export interface TrailblazeTypedToolSpec<TInput = Record<string, unknown>> {
   /**
    * LLM-facing description for this tool. When set, it overrides the JSDoc/TSDoc above the
    * binding (but a YAML sidecar `description:` still wins — see the precedence note on this
@@ -114,6 +114,37 @@ export interface TrailblazeTypedToolSpec {
    * Omitted = `true`.
    */
   isRecordable?: boolean;
+  /**
+   * Argument names whose values carry secret material — a password, a session token, an auth
+   * payload — and must never reach a persisted session log. Session logs ship as CI artifacts,
+   * so an unmasked credential leaves the machine.
+   *
+   * Names are top-level keys of this tool's input object. At the log-encode boundary each named
+   * value is replaced with `<redacted>`; **execution is untouched** — the handler still receives
+   * the real value. The scripted-tool equivalent of a Kotlin tool implementing
+   * `SensitiveArgsTrailblazeTool`.
+   *
+   * Scope: this covers the tool-execution log, which is what a replayed trail and its CI artifact
+   * carry. A tool invoked directly over MCP (including `trailblaze tool …`) is separately recorded
+   * by the MCP request log and the daemon log before this masking runs, and stderr your handler
+   * writes is copied to the daemon log verbatim. See the docs section linked below.
+   *
+   * ```ts
+   * export const signIn = trailblaze.tool<{ email: string; password: string }>(
+   *   { sensitiveArgNames: ["password"] },
+   *   async ({ email, password }, ctx) => { ... },
+   * );
+   * ```
+   *
+   * Trade-off: a recording generated from such a session log carries the placeholder, not the
+   * real value. That's intended — secret material is re-supplied at authoring time (e.g. via a
+   * `{{memory}}` token), never round-tripped through logs.
+   *
+   * Typed against `TInput`, so the input interface stays the single source of truth for the field
+   * names: a typo, or renaming `password` without updating this list, is a compile error rather
+   * than a silently-unmasked credential.
+   */
+  sensitiveArgNames?: readonly Extract<keyof TInput, string>[];
   /**
    * Optional JSON Schema for the typed tool's input. When present AND the caller injected a
    * validator compiler (full path), the runtime adapter validates `args` BEFORE the handler;

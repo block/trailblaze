@@ -63,6 +63,23 @@ Please always provide a tool call that will help complete the task.
       override val errorMessage: String,
       @Contextual val command: TrailblazeTool? = null,
       val stackTrace: String? = null,
+      /**
+       * Structured error payload the tool attached to its failure (MCP 0.7+
+       * `structuredContent` on an `isError` response — e.g. a TS tool throwing the SDK's
+       * `ToolError` with `data`). Trailblaze threads it through opaquely, exactly like
+       * [Success.structuredContent] on the success side: the framework never interprets
+       * the payload, downstream consumers own its schema. Null = text-only failure (every
+       * failure before this field existed, and every tool that doesn't opt in).
+       *
+       * Scope: the payload survives host-side dispatch (MCP subprocess and QuickJS envelopes)
+       * into the session log and report. Two boundaries stay deliberately text-only for now:
+       * host-driven on-device RPC ([xyz.block.trailblaze.llm.RunYamlResponse] carries only
+       * `errorMessage`, so the host agent rebuilds a payload-less [ExceptionThrown]) and the
+       * scripted-tool callback direction
+       * (`JsScriptingCallbackResult.CallToolResult.error_message`). Extend the wire types
+       * first if a consumer needs the payload across either.
+       */
+      val structuredPayload: JsonElement? = null,
     ) : Error {
       companion object {
         fun fromThrowable(

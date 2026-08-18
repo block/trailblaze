@@ -523,6 +523,106 @@ class ToolMemoryInterpolationTest {
       .isSameInstanceAs(success)
   }
 
+  @Test
+  fun `scrubs a resolved secret from the structured error payload`() {
+    // The payload rides past this boundary into TrailheadException.payload →
+    // SessionStatus.failurePayload → the report row, none of which re-scrub — so this is the
+    // redaction guarantee for the whole downstream chain, not just LLM-facing content.
+    val memory = AgentMemory().apply { rememberSensitive("pin", "9999") }
+    val authored = InputTextTrailblazeTool(text = "{{pin}}")
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "boom",
+      command = InputTextTrailblazeTool(text = "9999"),
+      structuredPayload = buildJsonObject {
+        put("code", "session")
+        put("detail", "sign-in rejected pin 9999")
+      },
+    )
+
+    val safe = error.withAuthoredFailureContent(authored, memory)
+
+    assertThat(safe.structuredPayload).isEqualTo(
+      buildJsonObject {
+        put("code", "session")
+        put("detail", "sign-in rejected pin {{pin}}")
+      },
+    )
+  }
+
+  @Test
+  fun `scrubs a secret containing JSON-escaped characters from the payload`() {
+    // The scrub must match DECODED string contents, not serialized JSON text: a secret with a
+    // quote/backslash/newline appears as `\"`/`\\`/`\n` in encoded form, where a literal value
+    // match silently misses it and the secret rides into the persisted payload.
+    val memory = AgentMemory().apply { rememberSensitive("password", "pa\"ss\\wo\nrd") }
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "boom",
+      structuredPayload = buildJsonObject {
+        put("detail", "auth rejected pa\"ss\\wo\nrd")
+        put("nested", buildJsonObject { put("repeated", "pa\"ss\\wo\nrd") })
+      },
+    )
+
+    val safe = error.withAuthoredFailureContent(InputTextTrailblazeTool(text = "{{password}}"), memory)
+
+    assertThat(safe.structuredPayload).isEqualTo(
+      buildJsonObject {
+        put("detail", "auth rejected {{password}}")
+        put("nested", buildJsonObject { put("repeated", "{{password}}") })
+      },
+    )
+  }
+
+  @Test
+  fun `scrubs a secret used as an object member NAME`() {
+    // Payload schemas are repo-owned and can legally key a map by a resolved value
+    // (e.g. per-account detail keyed by the account token) — member names need the
+    // same redaction as member values.
+    val memory = AgentMemory().apply { rememberSensitive("token", "tok-9999") }
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "boom",
+      structuredPayload = buildJsonObject {
+        put("tok-9999", "lease expired")
+      },
+    )
+
+    val safe = error.withAuthoredFailureContent(InputTextTrailblazeTool(text = "{{token}}"), memory)
+
+    assertThat(safe.structuredPayload).isEqualTo(
+      buildJsonObject { put("{{token}}", "lease expired") },
+    )
+  }
+
+  @Test
+  fun `masks a non-string primitive matching a secret as a string token`() {
+    // A numeric PIN (`{"pin": 9999}`) holds the secret outside any string. The scrub masks it
+    // as the string token — the type change is visible, the secret is not.
+    val memory = AgentMemory().apply { rememberSensitive("pin", "9999") }
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "boom",
+      structuredPayload = buildJsonObject { put("pin", 9999) },
+    )
+
+    val safe = error.withAuthoredFailureContent(InputTextTrailblazeTool(text = "{{pin}}"), memory)
+
+    assertThat(safe.structuredPayload).isEqualTo(buildJsonObject { put("pin", "{{pin}}") })
+  }
+
+  @Test
+  fun `leaves a secret-free structured payload identical`() {
+    val memory = AgentMemory().apply { rememberSensitive("pin", "9999") }
+    val payload = buildJsonObject { put("code", "session") }
+    val error = TrailblazeToolResult.Error.ExceptionThrown(
+      errorMessage = "boom",
+      command = InputTextTrailblazeTool(text = "9999"),
+      structuredPayload = payload,
+    )
+
+    val safe = error.withAuthoredFailureContent(InputTextTrailblazeTool(text = "{{pin}}"), memory)
+
+    assertThat(safe.structuredPayload).isEqualTo(payload)
+  }
+
   // -- fixtures --
 
   private fun payload(toolName: String, build: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) =

@@ -4,6 +4,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.config.KnownTargetWorkspace
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
 import xyz.block.trailblaze.util.BunBinaryResolver
@@ -391,6 +392,94 @@ class TrailmapCatalogBuilderTest {
       val gated = TrailmapCatalogBuilder.build()
       assertTrue(gated.single { it.id == "alpha" }.workspaceListed)
       assertFalse(gated.single { it.id == "beta" }.workspaceListed)
+    }
+  }
+
+  @Test
+  fun `targets declared to live elsewhere are reported apart from the browsable catalog`() {
+    val records = listOf(
+      KnownTargetWorkspace(
+        repo = "git@github.com:example-org/app-trails.git",
+        url = "https://github.com/example-org/app-trails",
+        description = "App and App Lite",
+        targets = listOf("installedhere", "absentapp", "absentapplite"),
+      ),
+    )
+
+    val notInstalled = TrailmapCatalogBuilder.notInstalledTargets(
+      // Spelled differently than the record to pin the case-insensitive match — a target present
+      // under another casing must not be advertised as missing.
+      installedIds = listOf("InstalledHere", "unrelated"),
+      knownWorkspaces = records,
+    )
+
+    assertEquals(listOf("absentapp", "absentapplite"), notInstalled.map { it.id })
+    assertEquals("git@github.com:example-org/app-trails.git", notInstalled.first().repo)
+    assertEquals("https://github.com/example-org/app-trails", notInstalled.first().url)
+    // Server-computed display fields, so a UI never re-derives (and drifts from) the CLI's wording.
+    assertEquals("example-org/app-trails", notInstalled.first().shortName)
+    assertEquals(
+      "git clone git@github.com:example-org/app-trails.git && cd app-trails",
+      notInstalled.first().cloneCommand,
+    )
+  }
+
+  @Test
+  fun `a target named by two records is reported once`() {
+    // An id-keyed consumer (a React key, a `single { it.id == }`) collides on duplicates, and a
+    // workspace record repeating a bundled one is the expected way this happens.
+    val notInstalled = TrailmapCatalogBuilder.notInstalledTargets(
+      installedIds = emptyList(),
+      knownWorkspaces = listOf(
+        KnownTargetWorkspace(repo = "git@github.com:example-org/a.git", targets = listOf("shared", "shared")),
+        KnownTargetWorkspace(repo = "git@github.com:example-org/b.git", targets = listOf("SHARED")),
+      ),
+    )
+
+    assertEquals(listOf("shared"), notInstalled.map { it.id })
+  }
+
+  @Test
+  fun `an installed trailmap carries the repo that homes it`() {
+    assumeAnalyzerRunnable()
+    val configDir = tempFolder.newFolder("config-home-repo")
+    File(configDir, "trailmaps/alpha").apply { mkdirs() }
+      .also { File(it, "trailmap.yaml").writeText("id: alpha\ntarget:\n  display_name: Alpha\n") }
+
+    withWorkspace(configDir) {
+      val catalog = TrailmapCatalogBuilder.build(
+        knownWorkspaces = listOf(
+          KnownTargetWorkspace(
+            repo = "git@github.com:example-org/app-trails.git",
+            url = "https://github.com/example-org/app-trails",
+            targets = listOf("alpha"),
+          ),
+        ),
+      )
+
+      // Installed AND homed elsewhere: the entry stays browsable, and the annotation is what lets
+      // the screen explain why its Trails tab is empty.
+      val alpha = catalog.single { it.id == "alpha" }
+      assertEquals("git@github.com:example-org/app-trails.git", alpha.homeRepo)
+      assertEquals("https://github.com/example-org/app-trails", alpha.homeUrl)
+      // The detail-header chip is gated entirely on this field, so losing it hides the chip
+      // with the suite still green unless it's pinned here.
+      assertEquals("example-org/app-trails", alpha.homeShortName)
+    }
+  }
+
+  @Test
+  fun `a trailmap no record names carries no home repo`() {
+    assumeAnalyzerRunnable()
+    val configDir = tempFolder.newFolder("config-no-home")
+    File(configDir, "trailmaps/solo").apply { mkdirs() }
+      .also { File(it, "trailmap.yaml").writeText("id: solo\ntarget:\n  display_name: Solo\n") }
+
+    withWorkspace(configDir) {
+      val catalog = TrailmapCatalogBuilder.build(knownWorkspaces = emptyList())
+      val solo = catalog.single { it.id == "solo" }
+      assertEquals(null, solo.homeRepo)
+      assertEquals(null, solo.homeUrl)
     }
   }
 

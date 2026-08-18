@@ -14,6 +14,7 @@ import { expect, test } from "bun:test";
 import { selectors } from "../generated/selectors.js";
 import fixtures from "./matcher-parity-fixtures.json";
 import { resolve } from "./resolver.js";
+import { hitTest } from "./trailblaze-node.js";
 import type { TrailblazeNode } from "./trailblaze-node.js";
 
 // Every case runs through BOTH dialects (native shape asserting `nativeMatches`, Maestro
@@ -116,5 +117,20 @@ for (const c of fixtures.iosMaestroHintBridgeCases) {
       matched,
       `hintTextRegex=[${c.hintTextRegex}] type=[${c.type}] label=[${c.label}] value=[${c.value}] help=[${c.help}] expected matches=${c.matches}, got ${matched}`,
     ).toBe(c.matches);
+  });
+}
+
+// Which node a touch at (x, y) acts on. Same source of truth and drift guarantee as `cases`
+// above — the Kotlin mirror is MatcherParityFixturesTest. The selector-engine golden
+// (expected-analysis.txt) only locks the Kotlin implementation against its own Kotlin/JS
+// compile, so without these cases this hand-written port can drift silently.
+for (const c of fixtures.hitTestCases) {
+  test(`parity (hitTest): ${c.name}`, () => {
+    const hit = hitTest(c.tree as unknown as TrailblazeNode, c.x, c.y);
+    const got = hit == null ? null : hit.nodeId;
+    expect(
+      got,
+      `hitTest(${c.x}, ${c.y}) expected nodeId=${c.expectedNodeId}, got ${got}`,
+    ).toBe(c.expectedNodeId);
   });
 }

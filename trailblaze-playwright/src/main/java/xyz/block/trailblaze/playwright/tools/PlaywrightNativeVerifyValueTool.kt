@@ -53,7 +53,7 @@ data class PlaywrightNativeVerifyValueTool(
     ATTRIBUTE,
     ;
 
-    object Serializer : CaseInsensitiveEnumSerializer<VerifyValueType>(VerifyValueType::class)
+    object Serializer : CaseInsensitiveEnumSerializer<VerifyValueType>(VerifyValueType::class, VerifyValueType.entries)
   }
 
   override suspend fun executeWithPlaywright(

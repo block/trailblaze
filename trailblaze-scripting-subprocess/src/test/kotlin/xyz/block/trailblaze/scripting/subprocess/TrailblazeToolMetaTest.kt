@@ -10,6 +10,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.scripting.mcp.TrailblazeToolMeta
 import kotlin.test.Test
@@ -135,5 +136,34 @@ class TrailblazeToolMetaTest {
     assertThat(parsed.shouldRegister(TrailblazeDriverType.PLAYWRIGHT_NATIVE, preferHostAgent = true)).isTrue()
     assertThat(parsed.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = true)).isTrue()
     assertThat(parsed.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isTrue()
+  }
+
+  @Test fun `fromJsonObject reads sensitiveArgNames`() {
+    val parsed = TrailblazeToolMeta.fromJsonObject(
+      buildJsonObject {
+        put("trailblaze/sensitiveArgNames", buildJsonArray { add("password"); add("sessionToken") })
+      },
+    )
+    assertThat(parsed.sensitiveArgs)
+      .isEqualTo(DeclaredSensitiveArgs.Named(setOf("password", "sessionToken")))
+    // Not a registration filter — a tool that masks args still registers everywhere.
+    assertThat(parsed.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isTrue()
+  }
+
+  @Test fun `an absent sensitiveArgNames key masks nothing`() {
+    assertThat(TrailblazeToolMeta.fromJsonObject(buildJsonObject { }).sensitiveArgs)
+      .isEqualTo(DeclaredSensitiveArgs.None)
+  }
+
+  @Test fun `a malformed sensitiveArgNames masks every arg rather than none`() {
+    // Fail closed: this parser reads `_meta` advertised by a subprocess/MCP server the runtime
+    // doesn't control, so it never passes through the descriptor loader's shape validation.
+    // Degrading to "mask nothing" would write the credential the author was trying to protect.
+    val malformed = TrailblazeToolMeta.fromJsonObject(
+      buildJsonObject { put("trailblaze/sensitiveArgNames", "password") },
+    )
+    assertThat(malformed.sensitiveArgs).isEqualTo(DeclaredSensitiveArgs.AllArgsDeclarationUnreadable)
+    assertThat(malformed.sensitiveArgs.resolve(setOf("email", "password")))
+      .isEqualTo(setOf("email", "password"))
   }
 }

@@ -29,7 +29,8 @@ import xyz.block.trailblaze.util.Console
  *  - screenshots are referenced as `/static/<session>/<file>` URLs (served by
  *    [xyz.block.trailblaze.logs.server.ServerEndpoints]' `staticFiles("/static", ...)`)
  *    instead of base64-inlined, so the response stays small and images load lazily —
- *    the same call `GenerateReportEndpoint` makes with `useRelativeImageUrls`.
+ *    the same shape `GenerateReportEndpoint` asks for via
+ *    [GenerateReportEndpoint.STATIC_IMAGE_BASE_URL].
  *  - the libwebp 16383px dimension cap is not enforced, so a large session that would
  *    bust the WebP encoder still renders fine as a scrollable page.
  *

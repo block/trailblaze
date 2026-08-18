@@ -302,6 +302,69 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(names).contains(TapTrailblazeTool::class.toolName().toolName)
   }
 
+  // --- toolSetIds scope ---
+
+  /**
+   * Catalog with one always-enabled entry, one entry a caller would declare, and one it wouldn't —
+   * the three cases `toolSetIds` has to separate.
+   */
+  private fun scopeCatalog() = listOf(
+    ToolSetCatalogEntry(
+      id = "framework",
+      description = "always-enabled framework surface",
+      toolClasses = setOf(TapTrailblazeTool::class),
+      alwaysEnabled = true,
+    ),
+    ToolSetCatalogEntry(
+      id = "declared",
+      description = "a toolset the target's trailmap declares",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("declared_yaml")),
+      scriptedToolNames = setOf(ToolName("declared_scripted")),
+    ),
+    ToolSetCatalogEntry(
+      id = "someone_elses",
+      description = "another app's toolset",
+      toolClasses = emptySet(),
+      yamlToolNames = setOf(ToolName("other_yaml")),
+      scriptedToolNames = setOf(ToolName("other_scripted")),
+    ),
+  )
+
+  @Test fun `toolSetIds limits the surface to the declared toolsets plus always-enabled ones`() {
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = scopeCatalog(),
+      toolSetIds = listOf("declared"),
+    )
+    assertThat(repo.getRegisteredYamlToolNames()).contains(ToolName("declared_yaml"))
+    assertThat(repo.getRegisteredScriptedToolNames()).contains(ToolName("declared_scripted"))
+    // Always-enabled entries ride along without being declared — that's their contract.
+    assertThat(repo.getRegisteredTrailblazeTools()).contains(TapTrailblazeTool::class)
+    // Another app's toolset does not.
+    assertThat(repo.getRegisteredYamlToolNames()).doesNotContain(ToolName("other_yaml"))
+    assertThat(repo.getRegisteredScriptedToolNames()).doesNotContain(ToolName("other_scripted"))
+  }
+
+  @Test fun `toolSetIds also scopes which scripted tools the bundling layer is asked to load`() {
+    // allCatalogScriptedToolNames is what the on-device / daemon launchers bundle and register.
+    // Leaving it catalog-wide while the advertised surface narrowed would keep paying to load
+    // undeclared toolsets' bundles, and `advertisedDynamic` would then advertise every tool they
+    // register.
+    val scoped = TrailblazeToolRepo.withDynamicToolSets(
+      catalog = scopeCatalog(),
+      toolSetIds = listOf("declared"),
+    )
+    assertThat(scoped.allCatalogScriptedToolNames.toList()).containsExactly(ToolName("declared_scripted"))
+  }
+
+  @Test fun `omitting toolSetIds keeps the whole-catalog surface`() {
+    // Callers with no target in hand (test fixtures, driver-agnostic construction) still get
+    // everything — the scope is opt-in, so this change can't silently narrow them.
+    val repo = TrailblazeToolRepo.withDynamicToolSets(catalog = scopeCatalog())
+    assertThat(repo.getRegisteredYamlToolNames()).contains(ToolName("other_yaml"))
+    assertThat(repo.allCatalogScriptedToolNames).contains(ToolName("other_scripted"))
+  }
+
   // --- helpers ---
 
   @Serializable

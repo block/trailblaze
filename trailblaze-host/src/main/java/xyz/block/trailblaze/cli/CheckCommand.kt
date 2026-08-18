@@ -150,6 +150,14 @@ class CheckCommand : Callable<Int> {
   )
   var showTypedTools: Boolean = false
 
+  /**
+   * Builds the inner [CompileCommand] for the materialize step. Injectable so a test can hand the
+   * inner command staged known-target-registry records and a workspace repo identity (see
+   * [CompileCommand.knownTargetWorkspacesProvider]) and assert the shadow warning surfaces through
+   * `trailblaze check`. Internal only — not a picocli option.
+   */
+  internal var compileCommandFactory: () -> CompileCommand = { CompileCommand() }
+
   override fun call(): Int {
     if (checkAll && trailmapId != null) {
       Console.error("trailblaze check: --all and <trailmap-id> are mutually exclusive.")
@@ -177,7 +185,7 @@ class CheckCommand : Callable<Int> {
     // shape we just used, so setting `inputDir` explicitly keeps it from re-walking
     // (and gives a stable anchor when --workspace was passed).
     val compileExit = CliCallerContext.withCallerCwd(resolved.workspaceRoot.toPath()) {
-      CompileCommand().apply {
+      compileCommandFactory().apply {
         inputDir = CliPathUtils.workspaceConfigDir(resolved.workspaceRoot.toPath()).toFile()
         commandLabel = "check"
       }.call()

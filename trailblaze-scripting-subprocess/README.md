@@ -10,16 +10,16 @@ Authors write a standard MCP server in TypeScript with
 in-process JS — the author's `.ts` file runs under its own runtime and
 communicates back over stdio.
 
-This is the sibling runtime to `:trailblaze-scripting`. Pick between them based
+This is the sibling runtime to `:trailblaze-quickjs-tools`. Pick between them based
 on execution model:
 
-| | `:trailblaze-scripting-subprocess` | `:trailblaze-scripting` |
+| | `:trailblaze-scripting-subprocess` | `:trailblaze-quickjs-tools` |
 |---|---|---|
 | Execution | Out-of-process bun subprocess | In-process QuickJS |
 | Transport | MCP JSON-RPC over stdio | Direct Kotlin ↔ JS binding |
 | JS runtime | Real `@modelcontextprotocol/sdk` | `dokar3/quickjs-kt` |
 | Host requirement | `bun` on `PATH` (a `tsx` fallback is still wired in `NodeRuntime.kt` during the bun-only transition; do not rely on it) | Just the JVM classpath |
-| Can run on-device | No (can't spawn subprocesses) | Yes (planned — PR A5 bundle path) |
+| Can run on-device | No (can't spawn subprocesses) | Yes |
 
 ## How it's wired
 

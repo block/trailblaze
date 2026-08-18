@@ -133,6 +133,24 @@ kotlin {
     }
   }
 
+  // Kotlin/Native (iOS simulator, arm64). Declared for its COMPILE SIGNAL, not to ship: an
+  // on-device iOS agent needs this module's commonMain to build for Native, and the only way
+  // to know it still does is to compile it every build. wasmJs already forces commonMain to
+  // be platform-neutral, but it is single-threaded and reflection-free in ways Native is not,
+  // so it cannot stand in for this target — the `concurrentMutableMap` seam is the concrete
+  // example (see PlatformConcurrency.ios.kt).
+  //
+  // Pinned OFF in `gradle.properties`, exactly like `trailblaze.wasm`, so an ordinary
+  // build pays nothing for this: the target isn't declared,
+  // no klib compiles, and the multi-GB Kotlin/Native toolchain is never needed. The KMP
+  // cleanliness gate passes `-Ptrailblaze.ios=true`, which is where the signal comes from.
+  // Deleting the properties line turns it on by default — the predicate is opt-*out* in shape.
+  // Apple targets only build on a macOS host; KGP disables their compile tasks elsewhere, so a
+  // Linux build reports SKIPPED rather than failing.
+  if (findProperty("trailblaze.ios")?.toString()?.toBoolean() != false) {
+    iosSimulatorArm64()
+  }
+
   androidTarget {
     compilerOptions {
       jvmTarget = JvmTarget.JVM_17
@@ -165,13 +183,17 @@ kotlin {
       // here so the type is on the compile classpath.
       implementation(libs.ktor.client.core)
       implementation(libs.kotlinx.datetime)
-      implementation(libs.kotlin.reflect)
       implementation(libs.kotlinx.serialization.core)
     }
 
     // Shared source set for JVM and Android (reflection-based code not available on wasmJs)
     val jvmAndAndroid by creating {
       dependsOn(commonMain.get())
+      dependencies {
+        // kotlin-reflect is JVM-only; commonMain uses only the stdlib KClass surface, and the
+        // `kotlin.reflect.full` callers (Koog tool descriptors, annotation lookups) live here.
+        implementation(libs.kotlin.reflect)
+      }
     }
 
     // Mirror the main source set on the test side so reflection-based tests (e.g.
@@ -200,6 +222,11 @@ kotlin {
       }
     }
 
+    // Only present when the (opt-out) iOS target above is declared.
+    findByName("iosTest")?.dependencies {
+      implementation(kotlin("test"))
+    }
+
     jvmTest {
       dependsOn(jvmAndAndroidTest)
       dependencies {
@@ -213,6 +240,38 @@ kotlin {
 
 dependencyGuard {
   configuration("jvmMainRuntimeClasspath")
+}
+
+// The iosSimulatorArm64 target exists ONLY as a compile-time gate (see the `kotlin {}` block), so
+// its publication is suppressed — nothing consumes a Native variant of this module yet, and the
+// release pipeline would otherwise start shipping a klib as a silent side effect of a lint gate.
+// The wasmJs variant IS published, because the report UI consumes it; that's the distinction.
+// Same known residual as `:trailblaze-common`'s wasmJs suppression: the root Gradle Module
+// Metadata still advertises `iosSimulatorArm64*-published` variants whose `available-at`
+// coordinate never receives an upload. Harmless while no Native consumer exists (JVM and Android
+// consumers never resolve those variants); revisit when the on-device iOS agent needs the artifact.
+tasks.matching {
+  it.name.startsWith("publish") && it.name.contains("IosSimulatorArm64")
+}.configureEach {
+  enabled = false
+}
+
+// Kotlin/Native unit tests execute in an iOS SIMULATOR, and `check` is the deterministic merge
+// gate — a simulator boot is exactly the kind of dependency that belongs in a separate CI lane, so
+// it stays out of here. The test binary is still COMPILED on every build
+// (`compileTestKotlinIosSimulatorArm64`, wired into the KMP cleanliness gate, so the test source
+// cannot rot) while the run is opt-in:
+//
+//   ./gradlew :trailblaze-models:iosSimulatorArm64Test \
+//     -Ptrailblaze.ios=true -Ptrailblaze.ios.simulator.tests=true
+//
+// Both flags: the first declares the target at all (it's pinned off), the second enables the run.
+// Flip the run on in a macOS-guaranteed lane when there's more Native code under test than
+// PlatformConcurrencyIosTest.
+if (findProperty("trailblaze.ios.simulator.tests")?.toString()?.toBoolean() != true) {
+  tasks.matching { it.name == "iosSimulatorArm64Test" }.configureEach {
+    enabled = false
+  }
 }
 
 // MatcherParityFixturesTest reads the shared cross-language matcher fixture that lives in the

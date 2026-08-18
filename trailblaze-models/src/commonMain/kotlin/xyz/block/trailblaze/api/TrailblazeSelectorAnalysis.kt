@@ -40,6 +40,13 @@ internal data class TrailblazeSelectorOption(
    * selector at playback would really hit the element, not an overlapping child.
    */
   val hitsTarget: Boolean = false,
+  /**
+   * `nodeId` of the node that would actually receive a tap at the resolved center — the
+   * frontmost node by the recorder's hit test ([TrailblazeNode.hitTest]). Equals the target's
+   * id when [hitsTarget]; when it differs, this is the element intercepting the tap (what the
+   * inspector's mismatch visualization highlights). Null when no center resolved.
+   */
+  val hitNodeId: Long? = null,
 )
 
 /** Ranked selector suggestions for one target node, plus a content-free structural fallback. */

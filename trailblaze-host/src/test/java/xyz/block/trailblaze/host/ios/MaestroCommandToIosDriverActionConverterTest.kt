@@ -361,6 +361,47 @@ class MaestroCommandToIosDriverActionConverterTest {
   }
 
   @Test
+  fun `LaunchAppCommand launchArguments flatten to dash-prefixed simctl argv`() {
+    val cmd = LaunchAppCommand(
+      appId = "com.example.app",
+      launchArguments = mapOf(
+        "E2ETestLaunchSessionToken" to "session-token-value",
+        "isDemo" to true,
+        "-alreadyDashed" to "value",
+      ),
+    )
+    val action = assertIs<IosDriverAction.LaunchApp>(convert(cmd).single())
+    assertEquals(
+      listOf(
+        "-E2ETestLaunchSessionToken",
+        "session-token-value",
+        "isDemo",
+        "true",
+        "-alreadyDashed",
+        "value",
+      ),
+      action.launchArguments,
+    )
+  }
+
+  @Test
+  fun `LaunchAppCommand without launchArguments maps to an empty argv`() {
+    val action = assertIs<IosDriverAction.LaunchApp>(convert(LaunchAppCommand(appId = "com.example.app")).single())
+    assertTrue(action.launchArguments.isEmpty())
+  }
+
+  @Test
+  fun `LaunchApp description and toString exclude launch arguments`() {
+    val action = IosDriverAction.LaunchApp(
+      bundleId = "com.example.app",
+      launchArguments = listOf("-E2ETestLaunchSessionToken", "session-token-value"),
+    )
+    assertTrue(!action.description.contains("session-token-value"))
+    assertTrue(!action.toString().contains("session-token-value"))
+    assertTrue(action.toString().contains("com.example.app"))
+  }
+
+  @Test
   fun `standalone ClearStateCommand maps to ClearState without a launch`() {
     // The dashboard iOS launch tool emits a bare `clearState:` (no launchApp) — it must wipe
     // state and leave the app stopped, not piggyback on LaunchApp machinery.

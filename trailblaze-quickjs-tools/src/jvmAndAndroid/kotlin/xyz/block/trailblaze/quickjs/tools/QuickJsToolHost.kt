@@ -294,10 +294,36 @@ class QuickJsToolHost internal constructor(
                 // rather than crashing; the message is still informative on its own.
               }
             }
-            globalThis.__trailblazeLastResult = JSON.stringify({
-              isError: true,
-              content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
-            });
+            // ToolError payload lift — the on-device mirror of the subprocess SDK's catch path
+            // (`tool.ts`): a throw carrying the `Symbol.for('trailblaze.ToolError')` marker gets
+            // its `data` onto the envelope's `structuredContent`, which
+            // `QuickJsTrailblazeTool.toTrailblazeToolResult` threads to
+            // `ExceptionThrown.structuredPayload`. Same registry key works across the bundled
+            // copy of the SDK because `Symbol.for` is engine-global. Access-hardened like every
+            // other read off the thrown value.
+            let __structured;
+            try {
+              if (__e !== null && __e !== undefined && typeof __e === 'object' &&
+                  __e[Symbol.for('trailblaze.ToolError')] === true) {
+                __structured = __e.data;
+              }
+            } catch (__dataError) {
+              __structured = undefined;
+            }
+            const __envelope = { isError: true, content: [{ type: 'text', text: __name + ': ' + __msg + __stack }] };
+            if (__structured !== undefined) {
+              __envelope.structuredContent = __structured;
+            }
+            try {
+              globalThis.__trailblazeLastResult = JSON.stringify(__envelope);
+            } catch (__payloadStringifyError) {
+              // Non-JSON-serializable `data` (cycles, BigInt) must not cost the envelope —
+              // ship it payload-less rather than crash the dispatch.
+              globalThis.__trailblazeLastResult = JSON.stringify({
+                isError: true,
+                content: [{ type: 'text', text: __name + ': ' + __msg + __stack }]
+              });
+            }
           } else {
             try {
               globalThis.__trailblazeLastResult = JSON.stringify(__dispatchResult == null ? {} : __dispatchResult);

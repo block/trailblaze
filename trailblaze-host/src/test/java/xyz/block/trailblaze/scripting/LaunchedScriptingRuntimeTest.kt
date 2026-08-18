@@ -2,6 +2,8 @@ package xyz.block.trailblaze.scripting
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.Test
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.logs.model.SessionId
@@ -127,6 +129,39 @@ class LaunchedScriptingRuntimeTest {
       emptyToolSet.isEmpty(),
       "expected repo to remain empty after empty-runtime shutdown; got $emptyToolSet",
     )
+  }
+
+  @Test
+  fun `declaresExhaustiveParameters comes from config provenance not schema shape`() = runBlocking {
+    // The two configs below carry a BYTE-IDENTICAL `{type: object, properties: {}}` schema and
+    // must still classify differently, which is why the flag can't be inferred from the schema:
+    //  - analyzer-sourced (inputSchemaExhaustive = true): the `<I>` generic IS the contract, so
+    //    a no-arg tool rejects stray keys.
+    //  - synthesized from a descriptor whose `inputSchema:` is absent (false): the real schema
+    //    arrives from the analyzer wherever enrichment runs, so the gate must stay lenient here.
+    // Reading `properties` instead of the flag is what broke a real app launch tool on the
+    // no-analyzer catalog path — every argument it was called with got rejected.
+    val repo = newRepo()
+    val noArgSchema = buildJsonObject {
+      put("type", JsonPrimitive("object"))
+      put("properties", JsonObject(emptyMap()))
+    }
+    val analyzerSourced = LazyYamlScriptedToolRegistration.create(
+      toolConfig = toolConfig("no_arg_analyzer")
+        .copy(inputSchema = noArgSchema)
+        .copy(inputSchemaExhaustive = true),
+      bundlePath = writeBundleFile("analyzer"),
+      toolRepo = repo,
+      sessionId = sessionId,
+    )
+    val yamlSynthesized = LazyYamlScriptedToolRegistration.create(
+      toolConfig = toolConfig("no_arg_yaml").copy(inputSchema = noArgSchema),
+      bundlePath = writeBundleFile("yaml"),
+      toolRepo = repo,
+      sessionId = sessionId,
+    )
+    assertTrue(analyzerSourced.declaresExhaustiveParameters)
+    assertFalse(yamlSynthesized.declaresExhaustiveParameters)
   }
 
   // --- helpers ---

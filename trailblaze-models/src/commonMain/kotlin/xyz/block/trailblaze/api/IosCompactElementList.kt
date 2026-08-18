@@ -86,6 +86,7 @@ object IosCompactElementList {
     screenHeight: Int = 0,
     screenWidth: Int = 0,
     offscreenCounter: () -> Unit = {},
+    promotedInTextLink: Boolean = false,
   ) {
     val detail = node.driverDetail as? DriverNodeDetail.IosMaestro ?: return
 
@@ -113,7 +114,11 @@ object IosCompactElementList {
     // carries a stable identifier. Two genuinely distinct controls can share a VoiceOver label
     // (e.g. a bottom-nav "More" tab and a top-right "More" overflow button); dropping the second
     // as a "duplicate" loses a separately-tappable control. A distinct id makes it non-duplicate.
-    val isDuplicate = label != null &&
+    // A promoted in-text link is likewise known distinct: its RAW label is a proper substring of
+    // the parent's, but both can truncate to the same display string (long labels sharing their
+    // first MAX_LABEL_LENGTH-1 chars), which would otherwise trip both duplicate checks here.
+    val isDuplicate = !promotedInTextLink &&
+      label != null &&
       effectiveResourceId == null &&
       (label == parentLabel || label in emittedLabels)
 
@@ -193,25 +198,59 @@ object IosCompactElementList {
         val childDetail = child.driverDetail as? DriverNodeDetail.IosMaestro ?: continue
         if (!childDetail.visible && !includeOffscreen) continue
         if (isSystemUi(childDetail, child)) continue
-        val childLabel = resolveLabel(childDetail)?.truncate(MAX_LABEL_LENGTH)
+        val rawChildLabel = resolveLabel(childDetail)
+        val childLabel = rawChildLabel?.truncate(MAX_LABEL_LENGTH)
         // Dedupe against the parent label whether the parent's label is raw
         // ("Sign In") or a composite ("mobile: (408) 555-5270"). Without the
         // suffix check, an XCUIElement row wrapping a single text node would
         // redundantly echo the value as a child quoted string.
+        // Both comparisons use RAW labels: truncation can cut a long composite's
+        // ": value" suffix (so a truncated-suffix check stops recognizing the value
+        // mirror and the in-text-link gate below would promote it as a noisy ref), and
+        // two long labels can truncate to the same display string while the child is a
+        // proper-substring link that must reach that gate.
+        // Display-level dedupe of such truncation collisions still holds — the
+        // quoted-string branch checks `emittedLabels`, which already carries the
+        // parent's identical truncated label.
         if (childLabel != null &&
-          (childLabel == label || label?.endsWith(": $childLabel") == true)
+          (rawChildLabel == rawLabel || rawLabel?.endsWith(": $rawChildLabel") == true)
         ) {
           continue
         }
         val childInteractive = childDetail.clickable || childDetail.checked || childDetail.selected
-        if (childLabel != null && !childInteractive) {
+        // In-text link: iOS surfaces a tappable link range inside a larger text element as its
+        // own child accessibility element with its own bounds (per-link UIAccessibilityElements
+        // on UIKit, link custom actions on SwiftUI), but the Maestro attribute mapping carries
+        // no clickable/link flag for it — so the interactivity gate above would demote the only
+        // directly-tappable handle for the link to a ref-less quoted string. Signature: a leaf
+        // child with bounds whose label is a proper substring of the parent's label ("Terms of
+        // Service" inside "…Privacy Notice, Terms of Service and Open Source Software"). Promote
+        // it to a normal element line so it gets an addressable ref. Untruncated labels: an
+        // 80-char-truncated parent label could lose the tail that contains the child's text.
+        // Mirrored labels (a wrapper whose child repeats its whole label) never reach this
+        // gate — the dedupe `continue` above skips them — so `contains` is always a
+        // proper-substring match here. Composite rows ("category: value") also mirror their
+        // CATEGORY into a static child (a "Search: Kate" row carries a non-clickable "Search"
+        // icon child); that prefix shape is excluded here rather than deduped above so the
+        // child keeps its quoted-string line exactly as before, unlike the value mirror,
+        // which was always skipped outright.
+        val isInTextLink = !childInteractive &&
+          rawChildLabel != null && rawLabel != null &&
+          child.children.isEmpty() && child.bounds != null &&
+          rawLabel.contains(rawChildLabel) &&
+          !rawLabel.startsWith("$rawChildLabel: ")
+        if (childLabel != null && !childInteractive && !isInTextLink) {
           // Non-interactive text → quoted string (skip if already emitted)
           if (childLabel !in emittedLabels) {
             lines.add("$indent  \"$childLabel\"")
             emittedLabels.add(childLabel)
           }
-        } else if (childLabel == null || childLabel != label) {
-          buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
+        } else {
+          // Interactive, label-less, or in-text-link child: recurse for its own ref. No
+          // mirrored-label guard is needed here — the raw-label dedupe above already skipped
+          // children that repeat the parent's label, and a truncation collision (equal display
+          // labels, different raws) must still recurse or the promoted link would be dropped.
+          buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter, promotedInTextLink = isInTextLink)
         }
       }
     } else {
@@ -297,7 +336,10 @@ object IosCompactElementList {
    * that are clearly chrome (scroll indicators, battery badges).
    */
   private fun isSystemUi(detail: DriverNodeDetail.IosMaestro, node: TrailblazeNode): Boolean {
-    val label = detail.text ?: detail.accessibilityText
+    // Blank-aware like resolveLabel: captures serialize `text` as "" on nodes labeled only
+    // via accessibilityText, and a plain elvis would take the empty string — making a wide
+    // one-line link ("Terms of Service") look label-less to the aspect-ratio branch below.
+    val label = detail.text?.takeIf { it.isNotBlank() } ?: detail.accessibilityText
     // Chevron disclosure indicators — decorative
     if (label == "chevron") return true
 
@@ -319,9 +361,28 @@ object IosCompactElementList {
       return true
     }
 
+    // UIScrollView indicators carry UIKit's own accessibility label ("Vertical scroll bar,
+    // 3 pages" + value "0%"), so once labeled leaves are exempt from the aspect-ratio
+    // heuristic below they'd resurface as ref-able elements. This prefix match is an
+    // English-only fast path (UIKit localizes the label); the locale-independent net is
+    // the percent-value pairing on the aspect-ratio branch below.
+    val accessibilityText = detail.accessibilityText
+    if (!detail.clickable && accessibilityText != null &&
+      (accessibilityText.startsWith("Vertical scroll bar") || accessibilityText.startsWith("Horizontal scroll bar"))
+    ) {
+      return true
+    }
+
     // Scroll indicators: non-interactive elements with extreme aspect ratios
-    // (very tall+narrow = vertical scrollbar, very wide+short = horizontal scrollbar)
-    if (!detail.clickable && node.children.isEmpty()) {
+    // (very tall+narrow = vertical scrollbar, very wide+short = horizontal scrollbar).
+    // Only when the leaf is label-less or labeled with a bare percent value — the
+    // indicator's value ("0%", scroll position) is the one locale-independent marker it
+    // carries, and on non-English runtimes `label` resolves to exactly that value while
+    // the localized platform label misses the prefix check above. A single line of real
+    // text is exactly this shape too (e.g. a 334x29 wrapped link range inside a legal
+    // footer, or any full-width one-line disclaimer) — dropping it here would hide it
+    // from the element list before the quoted-string/link-promotion paths ever see it.
+    if (!detail.clickable && node.children.isEmpty() && (label.isNullOrBlank() || isPercentValue(label))) {
       val ratio = if (bounds.height > 0) bounds.width.toFloat() / bounds.height else 1f
       // Vertical scrollbar: ratio < 0.1 (e.g., 30px wide x 696px tall)
       // Horizontal scrollbar: ratio > 10 (e.g., 278px wide x 30px tall)
@@ -332,6 +393,20 @@ object IosCompactElementList {
 
     return false
   }
+
+  /**
+   * True for a bare percentage in any locale's digits ("0%", "50 %", "٠٪") — the value
+   * UIKit puts on scroll indicators (scroll position as a percent). Unlike the localized
+   * "Vertical scroll bar, N pages" label, the percent shape survives locale changes.
+   */
+  private fun isPercentValue(text: String): Boolean {
+    val trimmed = text.trim()
+    val digits = trimmed.trim { it.isWhitespace() || it in PERCENT_SIGNS }
+    return digits.length < trimmed.length && digits.isNotEmpty() && digits.length <= 3 &&
+      digits.all { it.isDigit() }
+  }
+
+  private val PERCENT_SIGNS = setOf('%', '٪', '﹪', '％')
 
   /**
    * Builds state annotation string. Only non-default states are shown.

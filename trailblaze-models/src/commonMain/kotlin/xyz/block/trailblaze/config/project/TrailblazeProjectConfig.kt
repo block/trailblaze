@@ -22,6 +22,8 @@ import xyz.block.trailblaze.llm.config.LlmConfig
  *   - my-app
  *   - another-target
  *
+ * trails: legacy-trails
+ *
  * llm:
  *   defaults:
  *     model: openai/gpt-5.6-terra
@@ -66,6 +68,29 @@ data class TrailblazeProjectConfig(
   @SerialName("tools") val tools: List<ToolEntry> = emptyList(),
   @SerialName("providers") val providers: List<ProviderEntry> = emptyList(),
   @SerialName("llm") val llm: LlmConfig? = null,
+  /**
+   * Directory holding this workspace's `.trail.yaml` files, relative to the workspace root
+   * (the directory containing `trailblaze-config/`, or containing `trails/` in the legacy
+   * layout). An absolute path is used as-is; a relative one may not escape that root.
+   *
+   * Omit it unless the trails live somewhere other than `<workspace-root>/trails` — that
+   * convention is the default and needs no declaration. Declare it when the repo keeps its
+   * trails under a different name (`trails: legacy-trails`), so the desktop app and Trail
+   * Runner browse the right tree on launch instead of each developer pointing their own
+   * Settings at it.
+   *
+   * A declared directory that isn't there is logged and ignored rather than failing the
+   * launch, matching how an unknown [ProjectDefaults.target] degrades.
+   *
+   * This is the workspace's *trails* root, which is a different thing from its *config* dir —
+   * the one holding this file. They coincide only in the legacy layout, where the config dir is
+   * nested at `trails/config/`; anything resolving both must carry them separately (see
+   * `WorkspaceTrailsDeclaration`).
+   *
+   * Declared last so adding it stayed additive in the tracked `.api` baselines rather than
+   * shifting every following component/positional-constructor slot.
+   */
+  @SerialName("trails") val trails: String? = null,
 )
 
 /**

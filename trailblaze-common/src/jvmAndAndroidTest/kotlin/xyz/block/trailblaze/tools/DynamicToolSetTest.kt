@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
-import xyz.block.trailblaze.toolcalls.getInitialToolClassesForDriver
+import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
@@ -121,10 +121,10 @@ class DynamicToolSetTest {
     assertTrue("objectiveStatus" in androidClasses, "meta should still be present")
   }
 
-  // -- TrailblazeHostAppTarget.getInitialToolClassesForDriver (target + driver aware) --
+  // -- TrailblazeHostAppTarget.resolveToolScopeForDriver (target + driver aware) --
 
   @Test
-  fun `getInitialToolClassesForDriver layers base plus custom minus excluded`() {
+  fun `resolveToolScopeForDriver layers trailmap plus custom minus excluded`() {
     // Verify the composite layering semantics in isolation:
     //   1. driver-compatible base — provides `objectiveStatus` (meta) and `tap` (core_interaction)
     //   2. `+` target custom — adds `MaestroTrailblazeTool` (deliberately not in any YAML toolset,
@@ -141,9 +141,9 @@ class DynamicToolSetTest {
         setOf(TapTrailblazeTool::class)
     }
 
-    val result = fakeTarget.getInitialToolClassesForDriver(
+    val result = fakeTarget.resolveToolScopeForDriver(
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-    )
+    ).toolClasses
     val names = result.map { it.toolName().toolName }.toSet()
 
     assertTrue("mobile_maestro" in names, "Target's custom overlay must surface in the result")
@@ -177,10 +177,10 @@ class DynamicToolSetTest {
       override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
         setOf(MaestroTrailblazeTool::class)
     }
-    val result = fakeTarget.getInitialToolClassesForDriver(
+    val result = fakeTarget.resolveToolScopeForDriver(
       driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       catalog = emptyList(),
-    )
+    ).toolClasses
     assertEquals(
       expected = setOf(MaestroTrailblazeTool::class),
       actual = result,

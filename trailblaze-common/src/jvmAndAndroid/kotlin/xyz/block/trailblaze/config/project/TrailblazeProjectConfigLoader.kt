@@ -190,6 +190,10 @@ object TrailblazeProjectConfigLoader {
         }
       },
       llm = raw.llm,
+      // Carried through like `defaults` and `llm`: it names a directory rather than a reference
+      // to resolve, so there is nothing for resolution to do to it — but dropping it would hand
+      // every `loadResolved` / `loadResolvedRuntime` caller a null for a key the YAML declared.
+      trails = raw.trails,
     )
     return TrailblazeResolvedConfig(
       projectConfig = projectConfig,

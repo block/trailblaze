@@ -127,35 +127,161 @@ data class TrailblazeNode(
   }
 
   /**
-   * Hit-tests the tree at (x, y) and returns the frontmost node whose bounds contain
-   * the point, or null if no node contains it.
+   * Hit-tests the tree at (x, y) and returns the node a touch there would act on, or null
+   * if no node contains the point.
    *
-   * Priority order:
-   * 1. Interactive nodes (clickable, focusable, etc.) first — hitTest models what the OS
-   *    routes touch events to. A non-interactive node can never be a real tap target and
-   *    should not be used as a selector source even if it has a resourceId.
-   * 2. Nodes with identifiable driver properties (text, resourceId, etc.) over
-   *    propertyless containers — among interactive (or equally non-interactive) nodes,
-   *    identifiable ones produce more stable selectors.
-   * 3. Smallest area — the most specific element wins when interactivity and
-   *    identifiability are tied.
+   * This models real touch dispatch (Android `ViewGroup.dispatchTouchEvent`, iOS
+   * `hitTest:withEvent:`): the point picks out one element, and an enclosing control can
+   * only claim that touch when it is on that element's **own ancestor chain**. Two steps:
    *
-   * On iOS with the default Maestro hierarchy, buttons often contain a small icon child
-   * (e.g. UIImageView with resourceId="x") that is non-interactive and smaller than the
-   * parent NativeButton. Putting isInteractive first ensures the tappable parent wins.
+   * 1. **Pick the frontmost element** among the nodes whose bounds contain the point:
+   *    a node with real area over a degenerate (zero-area) one, then identifiable
+   *    (text, resourceId, …) over propertyless containers, then smallest area, ties going
+   *    to a *labeled* descendant when the tied nodes sit on one ancestor chain (the
+   *    deepest element is what OS hit-testing returns) — unless the tied ancestor is
+   *    itself interactive, because a control captured with bounds identical to its child
+   *    keeps its own touch. A label-less descendant never displaces its ancestor, and
+   *    sibling ties go to the first node in document order. Zero-area
+   *    nodes sort last because
+   *    [Bounds.containsPoint] is inclusive on both ends, so a `left == right` node contains
+   *    its own center and its area of 0 would otherwise beat every real element there —
+   *    but nothing can be tapped on a node with no pixels. The identifiability key only
+   *    discriminates where propertyless nodes exist at all; on `androidAccessibility` every
+   *    node carries a className, so step 1 is plain smallest-area there.
+   * 2. **Climb to the control that owns it.** If the picked element is already interactive
+   *    it takes the touch itself. Otherwise walk *its own ancestors*, nearest first, and
+   *    return the first interactive one that **also contains the point** — the iOS case
+   *    this exists for is a NativeButton wrapping a small non-interactive UIImageView icon,
+   *    where the tappable parent is the real target. The climb stops at the first ancestor
+   *    that encloses **more than one piece of text**: a control owns its own icon and
+   *    label, whereas a scroll container, list or full-screen layout merely hosts
+   *    independent items and is not what the tap is "on".
+   *
+   * The containment check on the climb is not redundant with step 1. Bounds do not nest in
+   * every capture — in the committed web (ARIA) captures 77% of parent/child pairs are
+   * non-nested — and without it the climb can return a control on the other side of the
+   * screen from the point.
+   *
+   * The multiple-label bound is the difference between a control and a container, and it is
+   * load-bearing. Ranking by interactivity alone (the pre-existing rule) let *any*
+   * interactive node outrank a smaller one, so a focusable/scrollable ViewPager wrapping a
+   * product list won every point on the screen: every row's own text lost to the pager, the
+   * report inspector reported a tap mismatch on practically every element, and recorded taps
+   * resolved their selector from the pager instead of the row. The bound deliberately also
+   * excludes a clickable row carrying two labels of its own (title + subtitle) — the tap
+   * resolves to the leaf under the point instead. That direction is safe (a gesture at the
+   * leaf's center still lands inside the row) and measured better on the committed corpus
+   * than every looser bound tried; see `hitTest returns the leaf inside a clickable row that
+   * carries two labels of its own`.
    */
-  fun hitTest(x: Int, y: Int): TrailblazeNode? =
-    aggregate()
-      .filter { it.bounds?.containsPoint(x, y) == true }
-      .minWithOrNull(
-        compareByDescending<TrailblazeNode> { it.driverDetail.isInteractive }
-          .thenByDescending { it.driverDetail.hasIdentifiableProperties }
-          .thenBy {
-            val b = it.bounds!!
-            b.width.toLong() * b.height.toLong()
-          },
-      )
+  fun hitTest(x: Int, y: Int): TrailblazeNode? {
+    val ancestors = mutableListOf<TrailblazeNode>()
+    var best: TrailblazeNode? = null
+    var bestDegenerate = true
+    var bestIdentifiable = false
+    var bestArea = Long.MAX_VALUE
+    var bestAncestors: List<TrailblazeNode> = emptyList()
+
+    fun visit(node: TrailblazeNode) {
+      val bounds = node.bounds
+      if (bounds != null && bounds.containsPoint(x, y)) {
+        val area = bounds.width.toLong() * bounds.height.toLong()
+        val degenerate = area <= 0L
+        val identifiable = node.driverDetail.hasIdentifiableProperties
+        val wins = when {
+          best == null -> true
+          degenerate != bestDegenerate -> !degenerate
+          identifiable != bestIdentifiable -> identifiable
+          area != bestArea -> area < bestArea
+          // Exact-area tie on one ancestor chain: the descendant is what real hit-testing
+          // returns (UIKit walks subviews deepest-first; Android dispatches to children
+          // before the parent's own handler). Matters for elements captured with bounds
+          // identical to their ancestor's, e.g. an iOS in-text-link child spanning its
+          // whole paragraph — without this the recorded selector silently describes the
+          // paragraph instead of the link the tap resolved. Deliberately narrowed to that
+          // shape, in both directions. The descendant must carry its own label: a
+          // label-less structural descendant (a bare RecyclerView inside an id-bearing
+          // container) would only swap the ancestor's stable selector for a weaker
+          // class-name one. And the tied ancestor must not itself be interactive: the
+          // control that owns the tap (with the ACTION_CLICK route and the stable id)
+          // keeps its own touch, and step 2 could not recover it — a mirrored-label child
+          // makes the wrapper "enclose multiple labels", which stops the climb. Sibling
+          // ties (no ancestor relation) still go to the first node in document order.
+          else -> node.driverDetail.ownLabel() != null &&
+            best?.driverDetail?.isInteractive != true &&
+            ancestors.any { it === best }
+        }
+        if (wins) {
+          best = node
+          bestDegenerate = degenerate
+          bestIdentifiable = identifiable
+          bestArea = area
+          bestAncestors = ancestors.toList()
+        }
+      }
+      ancestors.add(node)
+      node.children.forEach { visit(it) }
+      ancestors.removeAt(ancestors.size - 1)
+    }
+    visit(this)
+
+    val target = best ?: return null
+    if (target.driverDetail.isInteractive) return target
+    // `bestAncestors` is root-first, so iterate backwards to walk outward from the node.
+    for (i in bestAncestors.indices.reversed()) {
+      val ancestor = bestAncestors[i]
+      if (ancestor.enclosesMultipleLabels()) break
+      val bounds = ancestor.bounds ?: continue
+      if (bounds.containsPoint(x, y) && ancestor.driverDetail.isInteractive) return ancestor
+    }
+    return target
+  }
+
+  /** True when this node's subtree carries two or more distinct pieces of text. */
+  private fun enclosesMultipleLabels(): Boolean = countLabels(limit = 2) >= 2
+
+  /** Counts label-bearing nodes in this subtree, stopping as soon as [limit] is reached. */
+  private fun countLabels(limit: Int): Int {
+    var count = if (driverDetail.ownLabel() != null) 1 else 0
+    for (child in children) {
+      if (count >= limit) return count
+      count += child.countLabels(limit - count)
+    }
+    return count
+  }
 }
+
+/**
+ * The node's own visible or spoken text, or null when it carries none.
+ *
+ * Distinct from [DriverNodeDetail.hasIdentifiableProperties], which also counts identity
+ * properties a selector can match on (resourceId, className, testTag). Only text marks a
+ * node as content a user reads, which is what separates a control from a container in
+ * [TrailblazeNode.hitTest].
+ *
+ * Blank-aware at every step of each variant's fallback chain — NOT delegated to
+ * `resolveText()`: captures serialize `text` as "" on nodes labeled only via
+ * accessibilityText, and `resolveText()`'s elvis stops at the blank, so a trailing
+ * blank-check would report such a node as unlabeled instead of falling back.
+ *
+ * Deliberately excludes `hintText` (unlike `resolveText()`): a hint is a prompt for
+ * *absent* content, not content the node carries. An empty Search `EditText`
+ * (`text = ""`, `hintText = "Search"`) wrapping its static `TextView("Search")` must not
+ * read as labeled here, or the climb-stop counts two labels, treats the control as a
+ * container, and strands the tap on the static child instead of the editable field.
+ * In-text link children always carry their real text, so the tie never needs the hint.
+ */
+private fun DriverNodeDetail.ownLabel(): String? = when (this) {
+  is DriverNodeDetail.AndroidAccessibility -> firstNonBlank(text, contentDescription)
+  is DriverNodeDetail.AndroidMaestro -> firstNonBlank(text, accessibilityText)
+  is DriverNodeDetail.IosMaestro -> firstNonBlank(text, accessibilityText)
+  is DriverNodeDetail.IosAxe -> resolveText() // already blank-aware per step
+  is DriverNodeDetail.Compose -> firstNonBlank(editableText, text, contentDescription)
+  is DriverNodeDetail.Web -> ariaName?.takeIf { it.isNotBlank() }
+}
+
+private fun firstNonBlank(vararg candidates: String?): String? =
+  candidates.firstOrNull { !it.isNullOrBlank() }
 
 /**
  * Concise human-readable description of this node, e.g. `'Money' (Button)`.

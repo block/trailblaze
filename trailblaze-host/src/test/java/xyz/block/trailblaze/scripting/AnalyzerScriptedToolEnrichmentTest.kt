@@ -59,15 +59,18 @@ class AnalyzerScriptedToolEnrichmentTest {
     meta: JsonObject? = null,
     requiresHost: Boolean = false,
     supportedPlatforms: List<String>? = null,
+    name: String? = null,
+    sensitiveArgNames: List<String>? = null,
   ): ScriptedToolEnrichment.DeferredDescriptor =
     ScriptedToolEnrichment.DeferredDescriptor(
       relativePath = relativePath,
       descriptor = TrailmapScriptedToolFile(
         script = script,
-        name = null,
+        name = name,
         meta = meta,
         requiresHost = requiresHost,
         supportedPlatforms = supportedPlatforms,
+        sensitiveArgNames = sensitiveArgNames,
       ),
     )
 
@@ -883,6 +886,148 @@ class AnalyzerScriptedToolEnrichmentTest {
     // meta is null here (no shortcuts, no explicit _meta, null spec) — no surface/record keys.
     assertNull(config.meta?.get("trailblaze/surfaceToLlm"))
     assertNull(config.meta?.get("trailblaze/isRecordable"))
+    assertNull(config.meta?.get("trailblaze/sensitiveArgNames"))
+  }
+
+  @Test
+  fun `analyzer-extracted sensitiveArgNames folds into meta`() {
+    // The `.ts`-spec path for credential masking: an author writes `sensitiveArgNames: ["password"]`
+    // in the typed spec and the namespaced `_meta` key is what both runtimes read to redact the arg
+    // at the log-encode boundary. Without this projection the declaration is silently dropped and
+    // the credential is written to the session log, which ships as a CI artifact.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "signIn.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "signIn",
+          sourcePath = script.absolutePath,
+          spec = JsonObject(
+            mapOf(
+              "sensitiveArgNames" to JsonArray(listOf(JsonPrimitive("password"))),
+            ),
+          ),
+        ),
+      )
+    }
+    val enrichment = AnalyzerScriptedToolEnrichment(analyzer)
+    val results = enrichment.enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(relativePath = "tools/signIn.yaml", script = "./signIn.ts"),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val meta = assertNotNull(config.meta, "sensitiveArgNames must produce a non-null _meta")
+    assertEquals(
+      JsonArray(listOf(JsonPrimitive("password"))),
+      meta.get("trailblaze/sensitiveArgNames"),
+    )
+  }
+
+  @Test
+  fun `a partial descriptor's YAML sensitiveArgNames survives enrichment`() {
+    // A descriptor that needs analyzer enrichment takes a different assembly path than
+    // `toInlineScriptToolConfig()`. A YAML-declared `sensitiveArgNames:` that got dropped here
+    // would leave both runtimes masking nothing and persist the credential in plaintext.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "signIn.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "signIn", sourcePath = script.absolutePath, spec = null))
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/signIn.yaml",
+          script = "./signIn.ts",
+          name = "signIn",
+          sensitiveArgNames = listOf("password"),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val meta = assertNotNull(config.meta, "a YAML sensitiveArgNames must survive enrichment")
+    assertEquals(
+      JsonArray(listOf(JsonPrimitive("password"))),
+      meta.get("trailblaze/sensitiveArgNames"),
+    )
+  }
+
+  @Test
+  fun `YAML and analyzer sensitiveArgNames union rather than override`() {
+    // Every other key resolves by precedence, which for this one could only un-mask an arg some
+    // author already declared secret. Union is the only combine that can't lose a declaration.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "signIn.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(
+        stubDef(
+          name = "signIn",
+          sourcePath = script.absolutePath,
+          spec = JsonObject(
+            mapOf("sensitiveArgNames" to JsonArray(listOf(JsonPrimitive("otpCode")))),
+          ),
+        ),
+      )
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/signIn.yaml",
+          script = "./signIn.ts",
+          name = "signIn",
+          sensitiveArgNames = listOf("password"),
+        ),
+      ),
+    )
+
+    val config = assertIs<ScriptedToolEnrichment.EnrichmentResult.Resolved>(results.single()).configs.single()
+    val meta = assertNotNull(config.meta)
+    assertEquals(
+      JsonArray(listOf(JsonPrimitive("otpCode"), JsonPrimitive("password"))),
+      meta.get("trailblaze/sensitiveArgNames"),
+      "both the .ts spec's and the descriptor's names must be masked",
+    )
+  }
+
+  @Test
+  fun `a malformed _meta sensitiveArgNames fails the descriptor on the enrichment path`() {
+    // This path runs its own `validateKnownMetaShapes`, so the model-side check doesn't cover it.
+    // A malformed value reads downstream as "mask nothing" — fail the descriptor instead.
+    val trailmapDir = mkTrailmapDir()
+    val script = mkScript(trailmapDir, "signIn.ts")
+    val analyzer = FakeAnalyzer { _ ->
+      listOf(stubDef(name = "signIn", sourcePath = script.absolutePath, spec = null))
+    }
+    val results = AnalyzerScriptedToolEnrichment(analyzer).enrich(
+      trailmapId = "sampleapp",
+      trailmapDir = trailmapDir,
+      trailmapToolsDir = File(trailmapDir, "tools"),
+      deferredDescriptors = listOf(
+        deferred(
+          relativePath = "tools/signIn.yaml",
+          script = "./signIn.ts",
+          name = "signIn",
+          meta = buildJsonObject { put("trailblaze/sensitiveArgNames", JsonPrimitive("password")) },
+        ),
+      ),
+    )
+
+    val failure = assertIs<ScriptedToolEnrichment.EnrichmentResult.Failed>(results.single())
+    assertTrue(
+      failure.reason.contains("trailblaze/sensitiveArgNames"),
+      "expected the offending key in: ${failure.reason}",
+    )
   }
 
   // ============================================================================

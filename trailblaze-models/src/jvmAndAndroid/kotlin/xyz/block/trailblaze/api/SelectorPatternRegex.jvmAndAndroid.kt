@@ -5,7 +5,7 @@ package xyz.block.trailblaze.api
  * pattern surface selectors use (`\Q...\E` quote sections, inline flags, dotAll). See the
  * expect declaration for the contract and the Maestro `toRegexSafe` degrade.
  */
-internal actual fun selectorPatternRegexMatches(
+actual fun selectorPatternRegexMatches(
   pattern: String,
   text: String,
   maestroDialect: Boolean,

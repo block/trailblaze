@@ -23,12 +23,16 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
  *    omit declared-optional args fall through unchanged (the JS handler sees `undefined`
  *    for those keys, matching TS `?:` semantics).
  *
- * **Scope on purpose:** invoked only from the scripted-tool dispatch path — the JVM
- * [JsScriptingCallbackDispatcher] (HTTP subprocess MCP + on-device QuickJS bridge) and the
- * in-process [xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding]. The LLM agent
- * path (`DirectMcpToolExecutor.deserializeTool` → `TrailblazeToolRepo.toolCallToTrailblazeTool`)
- * goes around this wrapper and remains tolerant of authoring-hint keys the LLM emits today.
- * If that policy needs to flip for the LLM too, do it as a separate follow-up — tracked in #3214.
+ * **Scope on purpose:** invoked only where an explicit tool sequence is dispatched by name —
+ * the JVM [JsScriptingCallbackDispatcher] (HTTP subprocess MCP + on-device QuickJS bridge),
+ * the in-process [xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding], and the
+ * daemon's direct-tools pre-validation (`StepToolSet.parseAndValidateDirectTools`, the path
+ * behind `trailblaze tool` / `step(tools = …)` — including a `tools:` sequence sent by an
+ * external MCP agent, since an explicit sequence is authored input, not the tolerant agent
+ * loop). The daemon's INNER LLM agent path (`DirectMcpToolExecutor.deserializeTool` →
+ * `TrailblazeToolRepo.toolCallToTrailblazeTool`) goes around this wrapper and remains tolerant
+ * of authoring-hint keys the LLM emits today. If that policy needs to flip for the LLM too,
+ * do it as a separate follow-up — tracked in #3214.
  */
 object JsScriptingCallbackArgumentValidator {
 

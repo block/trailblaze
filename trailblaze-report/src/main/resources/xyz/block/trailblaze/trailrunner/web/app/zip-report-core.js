@@ -270,6 +270,20 @@
     }
   }
 
+  // SessionResult.failurePayloadOf + failureCodeOf: the structured failure payload's
+  // top-level string `code` (object payload only; non-string codes yield null).
+  function failureCode(status) {
+    switch (statusKind(status)) {
+      case 'Ended.Failed':
+      case 'Ended.FailedWithSelfHeal':
+        var payload = status.failurePayload;
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+        return typeof payload.code === 'string' ? payload.code : null;
+      default:
+        return null;
+    }
+  }
+
   // RunReportGenerator.formatDuration.
   function formatDuration(ms) {
     if (ms < 1000) return ms + 'ms';
@@ -329,6 +343,8 @@
     if (trailFilePath && trailFilePath.trim() !== '') meta.cmd = './trailblaze run ' + trailFilePath;
     var error = failureReason(status);
     if (error) meta.error = error;
+    var code = failureCode(status);
+    if (code) meta.failureCode = code;
     var kind = statusKind(status);
     if (kind === 'Ended.SucceededWithSelfHeal' || kind === 'Ended.FailedWithSelfHeal' || usedSelfHeal(logs)) {
       meta.selfHeal = true;

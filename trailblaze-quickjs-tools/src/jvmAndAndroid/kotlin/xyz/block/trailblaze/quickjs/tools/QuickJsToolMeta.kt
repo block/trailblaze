@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 
 /**
  * Trailblaze-specific metadata read off a registered tool's `spec._meta` object. Lean
@@ -40,6 +41,13 @@ data class QuickJsToolMeta(
    * `true`.
    */
   val isRecordable: Boolean = true,
+  /**
+   * Which args are masked in persisted session logs. Like [surfaceToLlm] this is not a
+   * [shouldRegister] gate — the runtime threads it onto the decoded tool so the log-encode
+   * boundary redacts those values. A malformed declaration resolves to "mask everything" rather
+   * than "mask nothing"; see [DeclaredSensitiveArgs].
+   */
+  val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
 ) {
 
   /**
@@ -83,6 +91,9 @@ data class QuickJsToolMeta(
         supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
         surfaceToLlm = (meta[KEY_SURFACE_TO_LLM] as? JsonPrimitive)?.booleanOrNull ?: true,
         isRecordable = (meta[KEY_IS_RECORDABLE] as? JsonPrimitive)?.booleanOrNull ?: true,
+        // NOT `readStringList` — that treats a malformed shape as absent, which for this key means
+        // "mask nothing" and silently leaks the credential. See [DeclaredSensitiveArgs].
+        sensitiveArgs = DeclaredSensitiveArgs.fromMeta(meta),
       )
     }
 

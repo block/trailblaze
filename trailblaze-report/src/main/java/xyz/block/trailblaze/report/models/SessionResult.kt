@@ -1,7 +1,36 @@
 package xyz.block.trailblaze.report.models
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
+
+/**
+ * Lifts [SessionResult.failure_code] out of a structured failure payload: the top-level
+ * string `code` member of a JSON-object payload, else null. Single owner of the rule so
+ * the gradle-CLI ([xyz.block.trailblaze.report.GenerateTestResultsCliCommand]) and
+ * daemon-CLI (`CliReportGenerator`) report paths cannot drift.
+ */
+fun failureCodeOf(payload: JsonElement?): String? =
+  ((payload as? JsonObject)?.get("code") as? JsonPrimitive)
+    ?.takeIf { it.isString }
+    ?.content
+
+/**
+ * The structured failure payload a terminal session status carries, else null. Single owner
+ * of the status-to-payload extraction [failureCodeOf] is always paired with, for the same
+ * reason: the report paths that stamp [SessionResult.failure_payload] and the run-report
+ * meta cannot drift.
+ */
+fun failurePayloadOf(status: SessionStatus): JsonElement? = when (status) {
+  is SessionStatus.Ended.Failed -> status.failurePayload
+  is SessionStatus.Ended.FailedWithSelfHeal -> status.failurePayload
+  else -> null
+}
 
 
 const val SOURCE_TYPE_HANDWRITTEN = "HANDWRITTEN"
@@ -13,6 +42,7 @@ data class CiSummaryReport(
   val results: List<SessionResult>,
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class SessionResult(
   val session_id: SessionId,
@@ -110,6 +140,31 @@ data class SessionResult(
    */
   val failure_kind: String? = null,
 
+  /**
+   * Machine-readable failure code, extracted from [failure_payload]'s top-level `code`
+   * member when the payload is a JSON object carrying a string one. The framework only
+   * lifts the field — it never interprets the values; the payload-emitting repo owns the
+   * vocabulary (open enum: consumers ignore unknown codes). Refines [failure_kind]:
+   * kind says WHICH structured failure family (e.g. "TRAILHEAD"), code says HOW it failed
+   * within that family. Null when the failure carried no payload, the payload had no
+   * string `code`, and on reports written before the field existed.
+   *
+   * [EncodeDefault.Mode.NEVER] (here and on [failure_payload]) because the report writers
+   * encode with `encodeDefaults = true`: without it every payload-less row — i.e. every row
+   * written today — would gain explicit-null keys, breaking the additive/legacy-shape
+   * guarantee for consumers that distinguish absent from null.
+   */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val failure_code: String? = null,
+
+  /**
+   * The raw structured error payload the failing tool attached (see
+   * `SessionStatus.Ended.Failed.failurePayload`), verbatim, for consumers that need more
+   * than [failure_code]. Null whenever no payload was carried.
+   */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val failure_payload: JsonElement? = null,
+
   /** Excerpt from device logs (logcat) around the failure, if available */
   val device_log_excerpt: String? = null,
 
@@ -195,8 +250,13 @@ data class SessionResult(
    * What this test's attempts, taken together, say about the product — see [CombinedVerdict].
    *
    * [outcome] describes only the attempt that survived dedup, so on its own it cannot distinguish
-   * a failure that reproduced from one a retry replaced with a timeout. Null on reports generated
-   * before this existed, which consumers must render as unclassified rather than as any verdict.
+   * a failure that reproduced from one a retry replaced with a timeout.
+   *
+   * Always set on a generated report, including for a test that ran exactly once. Nullable only so
+   * a report generated before this existed still deserializes, and consumers must render that
+   * absence as unclassified rather than as any verdict. Absence must never be read as "no retry,
+   * so nothing to classify": that would give a lone pass and a lone unretried failure the same
+   * signature, which is the ambiguity this field exists to remove.
    */
   val combined_verdict: CombinedVerdict? = null,
 

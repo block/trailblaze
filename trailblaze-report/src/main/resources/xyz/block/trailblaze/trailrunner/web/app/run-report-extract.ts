@@ -62,6 +62,69 @@ function localRunAgentPrompt(meta: RunMeta | null | undefined): string | null {
   return `Run this Trailblaze test locally and report the result.\n\n${context ? `${context}\n\n` : ''}From the repository root, use either:\n- Trailblaze CLI: \`${meta.cmd}\`\n- Trail Runner: run \`./trailblaze app\`, select ${trail}, and run it.\n\nUse the same target and platform as the original run. If local setup blocks execution, diagnose it, fix it when safe, and retry the test.`;
 }
 
+// A web capture logs the SAME ARIA snapshot as two parallel trees, whose bounds come from two
+// different DOM correlations: `trailblazeNodeTree` (the shape the inspector prefers — ariaRole /
+// test id / landmark detail) gets bounds from a fuzzy role+name walk that leaves most nodes with
+// no geometry at all, while the legacy `viewHierarchy` sibling gets them from the ref-resolved
+// batched pass and covers 3–10x more nodes (a real dashboard-style web form: 60 vs 212 of 272). Hit-testing
+// the sparse tree resolved most of the screenshot to whatever giant landmark container still had
+// bounds (`<main>`, a dialog) because the element actually under the cursor had none. Graft the
+// dense bounds onto the ARIA tree so the inspector gets the semantics AND the geometry.
+//
+// The two trees are parsed from one snapshot, so they are structurally parallel; this walks them
+// in lockstep and copies each legacy node's rect onto its ARIA twin. Where both carry bounds the
+// legacy rect wins — its fast pass is cardinality-gated and the remainder is resolved through
+// Playwright's own aria refs, whereas the ARIA tree's unguarded matcher is the one that assigns
+// an occluded background element's rect to a foreground node. Any structural disagreement
+// (child-count or role mismatch at any position) returns the ARIA tree untouched — never worse
+// than not merging. Non-web trees pass through untouched.
+//
+// Coordinate-space caveat: the two producers don't share one — the ARIA tree's walk adds
+// window.scrollX/Y (page coordinates) while all three legacy producers keep the raw viewport
+// rect. At scroll 0 (every committed capture) the spaces coincide. On a scrolled capture the
+// graft moves merged nodes into viewport space — what the screenshot actually shows, a net win —
+// but ARIA-only stragglers keep page coordinates, so the tree comes out mixed rather than
+// uniformly page-space. Resolving that belongs to the deferred scroll-anchoring work.
+function mergeWebHierarchyBounds(nodeTree: unknown, legacyTree: unknown): unknown {
+  const tree = nodeTree as any;
+  const legacy = legacyTree as any;
+  if (!tree || typeof tree !== 'object' || !legacy || typeof legacy !== 'object') return nodeTree || null;
+  const detail = tree.driverDetail;
+  if (!detail || typeof detail !== 'object' || detail.class !== 'web') return nodeTree;
+  // Legacy-shape bounds read (x1..y2 ints, all-zero means "unset") — same rule the inspector's
+  // own bounds reader applies to this shape, so a rect grafted here is exactly a rect it shows.
+  const legacyRect = (n: any): { left: number; top: number; right: number; bottom: number } | null => {
+    if (!n || typeof n !== 'object') return null;
+    if (![n.x1, n.y1, n.x2, n.y2].some((v: unknown) => typeof v === 'number' && v !== 0)) return null;
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    const [x1, y1, x2, y2] = [num(n.x1), num(n.y1), num(n.x2), num(n.y2)];
+    return x2 >= x1 && y2 >= y1 ? { left: x1, top: y1, right: x2, bottom: y2 } : null;
+  };
+  const kids = (n: any): any[] => (Array.isArray(n.children) ? n.children : []);
+  const compatible = (a: any, b: any): boolean => {
+    const aObj = a && typeof a === 'object';
+    if (aObj !== (b && typeof b === 'object')) return false;
+    if (!aObj) return true;
+    const role = a.driverDetail && typeof a.driverDetail === 'object' ? a.driverDetail.ariaRole : null;
+    if (role != null && b.className != null && role !== b.className) return false;
+    const ac = kids(a);
+    const bc = kids(b);
+    return ac.length === bc.length && ac.every((child, i) => compatible(child, bc[i]));
+  };
+  if (!compatible(tree, legacy)) return nodeTree;
+  const graft = (a: any, b: any): any => {
+    if (!a || typeof a !== 'object') return a;
+    const bc = kids(b);
+    const rect = legacyRect(b);
+    return {
+      ...a,
+      ...(rect ? { bounds: rect } : {}),
+      children: Array.isArray(a.children) ? a.children.map((child: any, i: number) => graft(child, bc[i])) : a.children,
+    };
+  };
+  return graft(tree, legacy);
+}
+
 function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
   // Trailblaze writes several log records per logical step; the timeline collapses
   // them so each user-meaningful step shows once:
@@ -139,7 +202,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     const promptText = stepText(log.promptStep) || (typeof log.instructions === 'string' ? log.instructions : null);
     const err = typeof log.errorMessage === 'string' ? log.errorMessage : null;
     const screenshotFile = log.screenshotFile || null;
-    const viewHierarchy = log.viewHierarchyFiltered || log.trailblazeNodeTree || log.viewHierarchy || null;
+    const viewHierarchy = log.viewHierarchyFiltered || mergeWebHierarchyBounds(log.trailblazeNodeTree, log.viewHierarchy) || log.viewHierarchy || null;
     // The log's device/viewport extent — the coordinate space the screenshot shows. Carried beside
     // the hierarchy because the tree's own extent can't reconstruct it: a web trailblazeNodeTree has
     // page-relative bounds (they run to the full scroll height) and off-viewport nodes (hidden
@@ -264,9 +327,24 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     const { _sig, _trace, count, note, ...rest } = r;
     const merged = count > 1 ? (note ? note + ' · ×' + count : '×' + count) : note;
     const children = toolChildren(r);
-    const withChildren = children ? { ...rest, children } : rest;
+    const params = children ? toolParams(r) : null;
+    const withChildren = children ? { ...rest, children, ...(params ? { params } : {}) } : rest;
     return merged != null ? { ...withChildren, note: merged, i: idx + 1 } : { ...withChildren, i: idx + 1 };
   });
+}
+
+// Every parameter of a composite tool call, unabridged. A composite (a scripted trailhead) is
+// configured, not inferred — its arguments ARE its documentation — so the row lists all of them
+// instead of the three-key crop summarizeToolArgs gives ordinary rows.
+function toolParams(r: any): string[] | null {
+  const log = (r._logs || [])[0];
+  const raw = log && log.trailblazeTool && log.trailblazeTool.raw && typeof log.trailblazeTool.raw === 'object' ? log.trailblazeTool.raw : null;
+  if (!raw) return null;
+  const skip = { reason: 1, reasoning: 1 };
+  const out = Object.keys(raw)
+    .filter((k) => !skip[k] && raw[k] != null)
+    .map((k) => `${k}=${typeof raw[k] === 'object' ? JSON.stringify(raw[k]) : String(raw[k])}`);
+  return out.length ? out : null;
 }
 
 // Every tool call this row stands for besides the one it is labelled with, from two sources:
@@ -275,6 +353,16 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
 // Both are already collapsed into this single row, so surfacing them as expandable children is
 // what makes "this step ran those tools" followable. Returns null for a row that really did stand
 // for one tool (primitives, scripted host-side tools calling backend APIs directly, raw actions).
+/**
+ * Lift the machine-readable code off a structured tool-error payload (`TrailblazeToolLog.errorPayload`).
+ * TS twin of the Kotlin `failureCodeOf`: an object payload's top-level string `code`, nothing else —
+ * non-object payloads, missing `code`, and non-string `code` values all yield null.
+ */
+function errorCodeOf(payload: any): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  return typeof payload.code === 'string' ? payload.code : null;
+}
+
 function toolChildren(r: any): TraceChild[] | null {
   const logs: any[] = r._logs || [];
   const isDelegating = (l: any) => logClass(l) === 'DelegatingTrailblazeToolLog';
@@ -286,7 +374,7 @@ function toolChildren(r: any): TraceChild[] | null {
   const executed = logs
     .map((l, i) => ({ l, i }))
     .filter(({ l, i }) => i > 0 && l && isExecuted(l))
-    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary }));
+    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null }));
   // A delegating log is a dispatch wrapper, not a step: it declares executors the device then logs
   // itself under the same traceId. Keep executed records; surface a declaration only to fill in an
   // executor that never logged — matched to its executor by name AND args (not name alone) and by
@@ -297,19 +385,38 @@ function toolChildren(r: any): TraceChild[] | null {
   // re-declaring exactly it is absorbed — a separate same-named dispatch with other args still shows.
   unmatched.set(key(r), (unmatched.get(key(r)) || 0) + 1);
   for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
-  const declared: Array<{ i: number; label: string; tool: string }> = [];
+  const declared: Array<{ i: number; label: string; tool: string; sig: string; ms: number | null; ok: boolean; err: string | null; code: string | null }> = [];
   logs.forEach((l, i) => {
     if (!isDelegating(l)) return;
     for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
-      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}) };
+      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}), sig: JSON.stringify((e && e.raw) ?? null), ms: null, ok: true, err: null, code: null };
       if (!c.label) continue;
       const n = unmatched.get(key(c)) || 0;
       if (n > 0) { unmatched.set(key(c), n - 1); continue; }
       declared.push(c);
     }
   });
-  // Order by log position so children read in dispatch order, not declarations-first.
-  const kids = [...executed, ...declared].sort((a, b) => a.i - b.i).map((c) => ({ label: c.label, tool: c.tool }));
+  // Order by log position so children read in dispatch order, not declarations-first. Then fold
+  // consecutive identical dispatches into one ×N child with the durations summed — a composite
+  // trailhead tool (a scripted UI sign-in) dispatches the same primitive dozens of times in a row,
+  // and N identical lines hide the one that matters. Only same-outcome runs fold, so a failed
+  // dispatch never disappears into a green ×N. The fold compares the raw args (`sig`), not the
+  // lossy display summary, so two dispatches whose differences were truncated away stay separate;
+  // it also requires matching ms-nullity so an executed dispatch never folds into a declared-only
+  // one (whose null ms means "never logged", not "took 0ms").
+  const ordered = [...executed, ...declared].sort((a, b) => a.i - b.i);
+  const kids: TraceChild[] = [];
+  let prevSig = '';
+  for (const c of ordered) {
+    const prev = kids[kids.length - 1];
+    if (prev && prev.label === c.label && prev.tool === c.tool && prev.ok === c.ok && prevSig === c.sig && (prev.ms == null) === (c.ms == null)) {
+      prev.count = (prev.count || 1) + 1;
+      if (c.ms != null) prev.ms = (prev.ms || 0) + c.ms;
+      continue;
+    }
+    kids.push({ label: c.label, tool: c.tool, ms: c.ms, ok: c.ok, err: c.err ?? null, code: c.code ?? null, count: 1 });
+    prevSig = c.sig;
+  }
   return kids.length ? kids : null;
 }
 
@@ -604,6 +711,16 @@ function summarizeToolArgs(raw: any, delegated: any): string {
   if (a.value != null && typeof a.value !== 'object') return `"${truncate(String(a.value), 40)}"`;
   if (a.x != null && a.y != null) return `(${a.x}, ${a.y})`;
   if (a.appId) return String(a.appId);
+  // Structured-payload tools used to summarize to nothing (the generic scan below drops every
+  // object-valued arg), leaving a bare tool name in the timeline. Name the work instead:
+  // `commands` is the maestro contract (a list of single-key command objects), `argv` is exec's.
+  if (Array.isArray(a.commands) && a.commands.length) {
+    const names = a.commands
+      .map((c: any) => (c && typeof c === 'object' ? Object.keys(c)[0] : String(c)))
+      .filter(Boolean);
+    if (names.length) return truncate(names.join(' · '), 60);
+  }
+  if (Array.isArray(a.argv) && a.argv.length) return truncate(a.argv.join(' '), 60);
   const skip = { reason: 1, reasoning: 1, ref: 1, selector: 1 };
   const keys = Object.keys(a).filter((k) => !skip[k] && typeof a[k] !== 'object');
   return keys.length ? keys.slice(0, 3).map((k) => `${k}=${truncate(String(a[k]), 24)}`).join(' ') : '';
@@ -650,7 +767,11 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // The capture's viewport — the inspector's coordinate anchor (see TraceStep.viewport). Kept
     // only where a hierarchy rides along; ~20 bytes, unlike the hierarchy it describes.
     ...(t.viewport && t.viewHierarchy != null ? { viewport: t.viewport } : {}),
-    children: (t.children || []).map((c) => ({ label: c.label, tool: c.tool || '' })),
+    // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold)
+    // — the common green declared-or-single dispatch slims to just label+tool.
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}) })) } : {}),
+    // The composite call's full argument list (see toolParams). Only present beside children.
+    ...(t.params && t.params.length ? { params: t.params } : {}),
   }));
 }
 
@@ -707,7 +828,8 @@ function traceStepCount(trace: TraceStep[]): number {
 // dispatched call the timeline exposes, so they count too. These two counters feed the report's
 // index entries (buildMultiReportHtml) AND the viewer's per-run stats, so both always agree.
 function traceToolCallCount(trace: TraceStep[]): number {
-  return trace.filter((t) => !t.objective && !t.terminal && !isLlmTurnRow(t)).reduce((n, t) => n + 1 + (t.children || []).length, 0);
+  return trace.filter((t) => !t.objective && !t.terminal && !isLlmTurnRow(t))
+    .reduce((n, t) => n + 1 + (t.children || []).reduce((m, c) => m + (c.count || 1), 0), 0);
 }
 
 // Keep what makes the LLM view skimmable — the model, token/cost accounting, the step it ran
@@ -859,7 +981,7 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
 }
 
 export {
-  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace,
+  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
   toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp, stepText, toolDetail,
   summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads,
   isLlmTurnRow, traceStepCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,

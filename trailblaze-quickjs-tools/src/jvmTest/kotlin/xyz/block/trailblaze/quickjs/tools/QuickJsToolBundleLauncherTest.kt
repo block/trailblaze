@@ -3,6 +3,7 @@ package xyz.block.trailblaze.quickjs.tools
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -101,6 +102,117 @@ class QuickJsToolBundleLauncherTest {
     launchedRuntime = runtime
     val registered = toolRepo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet()
     assertEquals(setOf("alpha", "beta"), registered)
+  }
+
+  @Test
+  fun `an undeclared bundle export registers for dispatch but is not advertised`() = runBlocking {
+    // The generated bundle wrapper registers EVERY exported function, so a tool module's exported
+    // helpers arrive alongside its real tools. A caller that knows what it declared passes
+    // declaredToolNames and the rest stay out of the LLM's array. A real target's on-device session
+    // shipped 72 such helpers in a 161-tool array, over the API's 128 cap.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["declaredTool"] = {
+        handler: async () => ({ content: [{ type: "text", text: "declared" }] }),
+      };
+      tools["sha256Hex"] = {
+        handler: async () => ({ content: [{ type: "text", text: "helper" }] }),
+      };
+    """.trimIndent()
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      advertisementOverrides = mapOf(
+        ToolName("declaredTool") to QuickJsToolAdvertisement(
+          descriptor = TrailblazeToolDescriptor(name = "declaredTool", description = "A real tool."),
+          meta = QuickJsToolMeta(),
+        ),
+      ),
+      declaredToolNames = setOf(ToolName("declaredTool")),
+    )
+    launchedRuntime = runtime
+
+    // Both register — a recorded step or a sibling tool can still dispatch the helper by name.
+    assertEquals(
+      setOf("declaredTool", "sha256Hex"),
+      toolRepo.getRegisteredDynamicTools().keys.map { it.toolName }.toSet(),
+    )
+    // Only the declared one is offered to the LLM.
+    val advertised = toolRepo.getCurrentToolDescriptors().map { it.name }.toSet()
+    assertTrue("declaredTool" in advertised)
+    assertFalse("sha256Hex" in advertised)
+  }
+
+  @Test
+  fun `a spec-less bundle entry is advertised when the caller passes no declaration list`() = runBlocking {
+    // `listTools()` normalizes a missing `spec` and an explicit `spec: {}` to the same `{}`, so an
+    // empty spec cannot stand in for "not a tool". A caller with no declaration list — the
+    // AndroidTrailblazeRule `quickjsToolBundles` path, whose generated wrappers never populate
+    // `spec` — must still advertise everything the bundle registers, or its whole tool surface
+    // silently disappears from the LLM.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["zeroArgTool"] = {
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+    """.trimIndent()
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+    )
+    launchedRuntime = runtime
+    assertTrue("zeroArgTool" in toolRepo.getCurrentToolDescriptors().map { it.name }.toSet())
+  }
+
+  @Test
+  fun `an empty declaration list advertises rather than suppressing the whole surface`() = runBlocking {
+    // A caller that resolved zero declarations means "I have nothing to say about these bundles",
+    // not "declare nothing". Reading it the other way empties the tool array — the LLM gets no way
+    // to drive the app, and the session fails with no signal about why.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["someTool"] = {
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+    """.trimIndent()
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+      declaredToolNames = emptySet(),
+    )
+    launchedRuntime = runtime
+    assertTrue("someTool" in toolRepo.getCurrentToolDescriptors().map { it.name }.toSet())
+  }
+
+  @Test
+  fun `a bundle entry that populates its own spec is still advertised without an override`() = runBlocking {
+    // A hand-written bundle that advertises a `spec` describes itself, so it needs no override to
+    // reach the LLM.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["selfDescribed"] = {
+        spec: { description: "Describes itself." },
+        handler: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+    """.trimIndent()
+    val runtime = QuickJsToolBundleLauncher.launchAll(
+      bundles = listOf(McpServerConfig(script = "ignored.js")),
+      deviceInfo = deviceInfo,
+      sessionId = sessionId,
+      toolRepo = toolRepo,
+      bundleSourceResolver = { InlineBundleSource(bundleJs) },
+    )
+    launchedRuntime = runtime
+    assertTrue("selfDescribed" in toolRepo.getCurrentToolDescriptors().map { it.name }.toSet())
   }
 
   @Test

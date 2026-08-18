@@ -1,4 +1,10 @@
 # Tools for remembering and comparing values across steps.
+#
+# `drivers:` is intentionally omitted. These tools read and write the agent's own memory and
+# compare values already in it — they never touch a device or a page, so every driver can run
+# them. The catalog reads an absent `drivers:` as "compatible with every driver", which is
+# correct here; this note is so a future audit of driver-agnostic toolsets can tell a deliberate
+# omission from an oversight.
 id: memory
 description: "Store text, numbers, and use AI to extract and compare information."
 tools:

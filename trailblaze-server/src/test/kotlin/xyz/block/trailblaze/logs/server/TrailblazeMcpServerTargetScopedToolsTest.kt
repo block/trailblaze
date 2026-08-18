@@ -86,13 +86,52 @@ class TrailblazeMcpServerTargetScopedToolsTest {
 
     val resolved = server.resolveTargetScopedToolClasses(newSessionContext())
 
-    val expected = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList()).toolClasses
-    assertTrue(expected.isNotEmpty(), "Catalog sanity: always-enabled Android surface must be non-empty")
+    // Both backings must move together here. A refactor once left the class path with its
+    // no-target fallback while the YAML path dropped to empty, so a target-less session kept
+    // `tap` but silently lost `eraseText` — a split nothing in `tools/list` describes.
+    val expected = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList())
+    assertTrue(
+      expected.toolClasses.isNotEmpty() && expected.yamlToolNames.isNotEmpty(),
+      "Catalog sanity: the always-enabled Android surface must carry both backings",
+    )
     assertEquals(
-      expected,
+      expected.toolClasses,
       resolved,
       "With a driver but no target, only the catalog's always-enabled toolsets for " +
         "that driver are advertised — NOT the full cross-target catalog.",
+    )
+  }
+
+  @Test
+  fun `a bound target that declares no toolsets advertises the whole driver catalog`() {
+    // "No target bound" and "target bound but unconfigured" are different situations and the
+    // daemon must not conflate them. With no target it stays narrow (the test above) because the
+    // client hasn't picked an app yet. Once a target IS bound, an empty `tool_sets:` means
+    // unconfigured, and the session repo composes the whole driver catalog — so `tools/list` has
+    // to say the same thing. It didn't: the fallback lived only in the repo composer, so the
+    // daemon advertised `always_enabled` alone while the session could dispatch everything.
+    val target = TestAppTarget(id = "unconfiguredapp")
+    val server = newServer(
+      ToolSurfaceBridge(
+        driverType = androidDriver,
+        availableTargets = setOf(target),
+        daemonWideTargetId = target.id,
+      ),
+    )
+
+    val resolved = server.resolveTargetScopedToolClasses(newSessionContext())
+
+    val wholeCatalog = TrailblazeToolSetCatalog.defaultToolClassesForDriver(androidDriver)
+    val alwaysEnabled = TrailblazeToolSetCatalog.resolveForDriver(androidDriver, emptyList()).toolClasses
+    assertTrue(
+      alwaysEnabled.size < wholeCatalog.size,
+      "Catalog sanity: always-enabled must be a strict subset, or this asserts nothing",
+    )
+    assertEquals(
+      wholeCatalog,
+      resolved,
+      "A bound-but-unconfigured target must advertise what its session repo can dispatch — the " +
+        "whole driver-compatible catalog, not just always-enabled.",
     )
   }
 

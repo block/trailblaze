@@ -51,6 +51,7 @@ import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
+import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.model.toTrailblazeToolRepo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
@@ -317,10 +318,19 @@ open class AndroidTrailblazeRule(
   // Declared BEFORE [trailblazeAgent] so the lazy agent initializer reads a fully-assigned repo.
   // Prefer the caller-supplied [trailblazeToolRepoOverride] — when an [agentOverride] is present,
   // that's the repo the override agent was built with, so the launcher must register into it.
-  private val trailblazeToolRepo =
+  //
+  // `by lazy` is load-bearing, not style: `driverTypeOverride` is a `var` that callers assign AFTER
+  // constructing this rule (a `-e trailblaze.driverType` arg, or a per-request driver on the
+  // on-device server). Reading it eagerly here would scope the repo to the DEFAULT driver and
+  // silently ignore the requested one — resolving the right tools for the wrong driver.
+  private val trailblazeToolRepo by lazy {
     trailblazeToolRepoOverride
       ?: customToolClasses?.toTrailblazeToolRepo()
-      ?: TrailblazeToolRepo.withDynamicToolSets()
+      // Last-resort fallback: no caller-supplied surface. Thread the driver so this at least gets
+      // the driver-compatible catalog rather than every driver's tools. `target` may be null, which
+      // `toSessionToolRepo` handles as "nothing to scope to — keep the whole catalog".
+      ?: target.toSessionToolRepo(driverType = trailblazeLoggingRule.driverTypeOverride)
+  }
 
   val trailblazeAgent: MaestroTrailblazeAgent by lazy {
     agentOverride ?: when (trailblazeLoggingRule.driverTypeOverride) {

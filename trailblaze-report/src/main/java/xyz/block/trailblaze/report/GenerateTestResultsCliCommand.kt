@@ -19,6 +19,7 @@ import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
@@ -34,6 +35,8 @@ import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.combinedVerdictOf
+import xyz.block.trailblaze.report.models.failureCodeOf
+import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
@@ -256,6 +259,8 @@ open class GenerateTestResultsCliCommand(
             failure_reason = extractFailureReason(sessionInfo.latestStatus),
             failure_stack = extractFailureStack(sessionInfo.latestStatus),
             failure_kind = extractFailureKind(sessionInfo.latestStatus),
+            failure_code = failureCodeOf(failurePayloadOf(sessionInfo.latestStatus)),
+            failure_payload = failurePayloadOf(sessionInfo.latestStatus),
             device_log_excerpt = deviceLogExcerpt,
             has_recorded_steps = sessionInfo.hasRecordedSteps,
             recording_skip_reason = sessionRecordingInfo.skipReason,
@@ -635,16 +640,32 @@ open class GenerateTestResultsCliCommand(
    * replaced session IDs). Using device_classifier ensures that the same test run on different
    * devices (e.g. phone vs tablet) is preserved as separate results. Using test_key (rather than
    * the human-readable title) ensures distinct tests that share a title stay separate.
+   *
+   * Every group leaves here classified, whether or not it had anything to deduplicate. A test that
+   * ran once has no retry metadata to add, but it does have a verdict — and the single-attempt
+   * verdicts are the ones that most need saying, since that is the only population that can
+   * produce [CombinedVerdict.FAILED_UNRETRIED].
    */
   private fun deduplicateRetries(results: List<SessionResult>): List<SessionResult> {
     return results
       .groupBy { listOf(it.test_key ?: it.title, it.device_classifier.orEmpty()) }
       .values
       .map { attempts ->
-        if (attempts.size == 1) return@map attempts.single()
-
         // Sort by start time so attempt numbering is chronological
         val sorted = attempts.sortedBy { it.started_at_epoch_ms ?: 0L }
+
+        // Classified from the whole chronological run of attempts, including the one kept.
+        // Computed here because this is the only place every attempt is still in hand, and
+        // computed BEFORE the single-attempt shortcut below so no branch can return a row
+        // without a verdict: an absent verdict says both "passed first time, nothing to retry"
+        // and "failed and nobody retried it", which are opposite facts with one signature.
+        val verdict = combinedVerdictOf(sorted.map { AttemptSignal(it.outcome, it.failure_kind) })
+
+        // Nothing to deduplicate, so the row passes through carrying only its verdict. It must
+        // not acquire the retry metadata below: `total_attempts` and the `replaced_*` lists
+        // describe a group with more than one attempt, and setting them here would report a
+        // retry that never happened.
+        if (attempts.size == 1) return@map attempts.single().copy(combined_verdict = verdict)
 
         // A pass anywhere in the sequence is the verdict, whatever order the attempts came in.
         //
@@ -673,9 +694,7 @@ open class GenerateTestResultsCliCommand(
           replaced_failure_kinds = replaced.mapNotNull { it.failure_kind },
           replaced_outcomes = replaced.map { it.outcome },
           replaced_agent_names = replaced.mapNotNull { it.ci_agent_name },
-          // Classified from the whole chronological run of attempts, including the one kept.
-          // Computed here because this is the only place every attempt is still in hand.
-          combined_verdict = combinedVerdictOf(sorted.map { AttemptSignal(it.outcome, it.failure_kind) }),
+          combined_verdict = verdict,
         )
       }
   }

@@ -359,6 +359,14 @@ object PerTrailmapTsconfigEmitter {
    *   banner + both entries.
    * - File exists with one entry → append only the missing one with the banner.
    * - File exists with both entries → no-op.
+   *
+   * **A negated entry (`!tools/tsconfig.json`) counts as handled.** Ignoring an artifact is only
+   * the DEFAULT (see [GITIGNORE_ENTRIES]); a trailmap that commits one instead says so with git's
+   * own negation syntax, and re-appending the plain entry underneath would silently override that
+   * — later patterns win — while dirtying the file on every run in a repo whose committed
+   * `.gitignore` deliberately omits it. Lines are compared as git would read them (see
+   * [gitignorePatternOf]), so a trailing space can't defeat the negation here while git still
+   * honors it — and, just as importantly, a trailing tab isn't mistaken for a working entry.
    */
   internal fun ensureGitignoreEntries(gitignorePath: Path) {
     val existing = if (Files.isRegularFile(gitignorePath)) Files.readString(gitignorePath) else null
@@ -368,8 +376,8 @@ object PerTrailmapTsconfigEmitter {
       Files.writeString(gitignorePath, GITIGNORE_BLOCK_HEADER + GITIGNORE_ENTRIES_BLOCK)
       return
     }
-    val existingLines = existing!!.lines().toSet()
-    val missing = GITIGNORE_ENTRIES.filter { it !in existingLines }
+    val existingLines = existing!!.lines().map(::gitignorePatternOf).toSet()
+    val missing = GITIGNORE_ENTRIES.filter { it !in existingLines && "!$it" !in existingLines }
     if (missing.isEmpty()) return
     val toAppend = buildString {
       if (!existing.endsWith('\n')) append('\n')
@@ -378,6 +386,34 @@ object PerTrailmapTsconfigEmitter {
       missing.forEach { append(it).append('\n') }
     }
     Files.writeString(gitignorePath, existing + toAppend)
+  }
+
+  /**
+   * The pattern git would actually read from a `.gitignore` [line], for comparison against
+   * [GITIGNORE_ENTRIES].
+   *
+   * Git drops **trailing spaces only**, and only unescaped ones — every other trailing whitespace
+   * character is part of the pattern. So `tools/tsconfig.json<TAB>` does NOT ignore the artifact,
+   * and neither does `tools/tsconfig.json\ ` (the backslash quotes the space, making the pattern
+   * end in a literal space). A blanket `trimEnd()` would read all three spellings as the plain
+   * entry and skip appending a working one, leaving the generated file visible to git — the exact
+   * job this function exists to do.
+   */
+  internal fun gitignorePatternOf(line: String): String {
+    var end = line.length
+    while (end > 0 && line[end - 1] == ' ') {
+      // An odd run of backslashes immediately before the space escapes it, so it's significant and
+      // stripping stops here.
+      var backslashes = 0
+      var scan = end - 1
+      while (scan > 0 && line[scan - 1] == '\\') {
+        backslashes++
+        scan--
+      }
+      if (backslashes % 2 == 1) break
+      end--
+    }
+    return line.substring(0, end)
   }
 
   /** Trailmap-relative subdirectory the tsconfig lives under. Matches the existing
@@ -425,9 +461,15 @@ object PerTrailmapTsconfigEmitter {
    * `.gitignore` doesn't reach a portable trailmap, so any new derived artifact must be added
    * here too or it lands as an untracked file after `trailblaze check`.
    *
-   * Default gitignore mode is "treat as derived output." Authors who instead want to commit
-   * a file (treat the typed surface as a checked-in API contract) can — already-tracked
-   * files are unaffected by these ignore rules.
+   * Default gitignore mode is "treat as derived output." Authors who instead want to commit a file
+   * (treat the typed surface as a checked-in API contract) can — already-tracked files are
+   * unaffected by these ignore rules, and a `!`-negated entry opts the path out here for good.
+   *
+   * The negation, not mere tracked-ness, is what makes that decision portable: ignore rules don't
+   * apply to a file git ALREADY tracks, so an in-place repo looks fine either way, but a fresh COPY
+   * of the trailmap (staged into another repo, or scaffolded into a new one) has nothing tracked
+   * yet — there the plain entry silently excludes the committed file from `git add`. A negation
+   * travels with the trailmap and keeps it addable.
    */
   internal val GITIGNORE_ENTRIES: List<String> = listOf(
     "$TOOLS_SUBDIR/$TSCONFIG_FILENAME",

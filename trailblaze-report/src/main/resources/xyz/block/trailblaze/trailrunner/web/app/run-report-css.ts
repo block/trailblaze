@@ -73,12 +73,17 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 body { background: var(--bg); color: var(--txt); font: var(--type-body)/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-rendering: optimizeLegibility; transition: background-color 140ms ease-out,color 140ms ease-out; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; min-height: 0; overflow: hidden; }
-#tb-boot { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--sub); }
-#tb-boot .tb-boot-spinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line2); border-top-color: var(--run); animation: tbBootSpin .8s linear infinite; }
-#tb-boot .tb-boot-title { font-size: var(--type-body); font-weight: 650; color: var(--txt); }
-#tb-boot .tb-boot-note { font-size: var(--type-small); }
+/* The static boot loader and the viewer's still-downloading-this-run view read as the same thing,
+   so they share one presentation; only the box they fill differs (#tb-boot is a flex child of #app,
+   .runloading fills <main>). */
+#tb-boot, .runloading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); color: var(--sub); text-align: center; }
+#tb-boot { flex: 1; }
+.runloading { min-height: 100%; box-sizing: border-box; }
+.tb-boot-spinner { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line2); border-top-color: var(--run); animation: tbBootSpin .8s linear infinite; }
+.tb-boot-title { font-size: var(--type-body); font-weight: 650; color: var(--txt); }
+.tb-boot-note { font-size: var(--type-small); max-width: 46ch; text-wrap: balance; }
 @keyframes tbBootSpin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { #tb-boot .tb-boot-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .tb-boot-spinner { animation: none; } }
 @keyframes reportPageForward { from { opacity: .35; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes reportPageBack { from { opacity: .35; transform: translateX(-18px); } to { opacity: 1; transform: translateX(0); } }
 #app.page-enter-forward { animation: reportPageForward 220ms cubic-bezier(.16,1,.3,1) both; }
@@ -197,7 +202,7 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .grphdr.trailhead .chip { color: var(--purple); background: var(--violet-surface); }
 .grphdr .dot { width: 8px; height: 8px; border-radius: 99px; }
 .grphdr .lbl { grid-column: 1 / -1; display: block; font-size: 14px; font-weight: 650; margin-top: 4px; line-height: 1.4; }
-.step { display: flex; gap: 10px; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
+.step { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
 .step.child { padding-left: 22px; }
 .step:hover { background: var(--bg3); }
 .step.sel { background: var(--accent-surface); }
@@ -213,9 +218,23 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .step .lbl { font-size: 13px; font-weight: 560; }
 .step .tl-tool { font-size: 11px; color: var(--sub); margin-top: 2px; word-break: break-word; }
 .step .note { font-size: 11.5px; color: var(--sub2); margin-top: 3px; line-height: 1.4; }
-.kids { margin-top: 6px; border-left: 1px solid var(--line2); padding-left: 10px; }
-.kids div { font-size: 11.5px; margin-top: 3px; }
-.kids .kt { color: var(--sub); }
+/* A full-width flex row below the [num][icon][label][time] line: the kid durations right-align
+   to the same edge as the step's own time, and the list's left aligns with the label text. */
+.kids { flex-basis: 100%; margin-top: -4px; padding-left: 54px; }
+.step.child .kids { padding-left: 24px; }
+.kids .kid { display: flex; gap: 6px; align-items: baseline; font-size: 11.5px; margin-top: 3px; min-width: 0; }
+.kids .kt { color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kids .kcount { color: var(--sub); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.kids .kms { margin-left: auto; color: var(--sub); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.kids .kid.bad, .kids .kid.bad .kt, .kids .bad { color: var(--fail); }
+.kids .kiderr { color: var(--fail); font-size: 11px; margin-top: 2px; line-height: 1.4; overflow-wrap: anywhere; opacity: .85; }
+.kidcode, .failurecode { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .06em; color: var(--danger-text); background: color-mix(in srgb,var(--danger-border) 26%,var(--danger-surface)); border-radius: 5px; padding: 1.5px 6px; white-space: nowrap; flex-shrink: 0; }
+.kids .kiderr .kidcode { margin-right: 6px; }
+.kids .kidsummary .kidcode { margin-left: 6px; }
+.kids .kidsummary { cursor: pointer; font-size: 11.5px; color: var(--sub); user-select: none; }
+.kids .kidsummary::before { content: '▸'; display: inline-block; margin-right: 5px; transition: transform .12s ease; }
+.kids .kidsummary.open::before { transform: rotate(90deg); }
+.kids .kidsummary .mono { color: var(--text); }
 .timeline-list { grid-row: 2; }
 .preview { position: static; grid-row: 1; min-width: 0; display: flex; justify-content: center; }
 .deviceplayer { width: fit-content; max-width: 100%; display: grid; grid-template-rows: minmax(0,1fr) auto; overflow: hidden; border: 2px solid var(--player-line); border-radius: 22px; background: var(--raised); box-shadow: var(--shadow-raised); }
@@ -512,6 +531,9 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .detailheader { padding-top: var(--space-4); }
 .detailheader h1 { font-size: 20px; }
 .detailheader nav { margin-top: var(--space-3); }
+/* header's bottom padding is 0 because the tab nav supplies that space. A header rendered without
+   tabs (the still-loading run view) has to supply it itself or the title sits on the border. */
+.detailheader.notabs { padding-bottom: var(--page-y); }
 .detailtitle { min-height: 32px; max-width: none; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; }
 .detailtitle.noback { grid-template-columns: minmax(0,1fr) auto; }
 .detailedge { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
@@ -740,6 +762,57 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
 .inspdetails .r .v { word-break: break-word; }
 .inspdetails .r.inspreview .k, .inspdetails .r.inspreview .v { color: var(--pass); font-weight: 600; }
 .inspflag { display: inline-block; margin: 0 4px 2px 0; padding: 1px 6px; border-radius: 99px; background: var(--accent-surface); color: var(--run); font-size: 10.5px; font-weight: 600; }
+/* Selector suggestions — ranked nodeSelector candidates for the COMMITTED selection, computed by
+   the embedded Kotlin/JS selector engine (the daemon's own generator/resolver). Lives in the
+   capped data column (the screenshot stays the priority claimant on space) and is empty — and
+   therefore invisible — when nothing is committed, the capture is a legacy-shaped tree, or the
+   report carries no engine payload. */
+.inspselectors { flex-shrink: 0; max-height: 44%; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.inspselectors:empty { display: none; }
+.inspseltitle { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--sub); }
+/* The subject label + preview chip say WHICH element the cards describe — suggestions follow the
+   hovered node (like the properties card) and revert to the committed selection on hover-out. */
+.inspselsubject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--txt); font-size: 11px; }
+.inspselpreviewchip { flex-shrink: 0; padding: 1px 6px; border-radius: 99px; background: var(--success-surface); color: var(--pass); font-size: 9px; letter-spacing: .03em; }
+.inspselgroup { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--sub); margin-top: 2px; }
+.inspselnote { color: var(--sub); font-size: 12px; }
+.inspselcard { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); padding: 8px 10px; display: grid; gap: 5px; }
+.inspselcard.best { border-color: color-mix(in srgb, var(--run) 55%, var(--line)); background: var(--accent-surface); }
+.inspselhead { display: flex; align-items: center; gap: 8px; }
+.inspselstrategy { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 650; color: var(--sub2); }
+.inspselbadges { display: inline-flex; gap: 5px; flex-shrink: 0; }
+.inspselbadge { display: inline-block; padding: 1px 6px; border-radius: 99px; font-size: 9.5px; font-weight: 800; letter-spacing: .03em; }
+.inspselbadge.unique { background: var(--success-surface); color: var(--success-text); }
+.inspselbadge.multi { background: var(--warning-surface); color: var(--warning-text); }
+.inspselbadge.nomatch { background: var(--danger-surface); color: var(--danger-text); }
+.inspselbadge.bestpick { background: var(--accent-surface); color: var(--run); box-shadow: inset 0 0 0 1px var(--run); }
+.inspselverify { font-size: 10.5px; color: var(--sub); }
+.inspselverify.ok { color: var(--pass); }
+.inspselverify.bad { color: var(--fail); }
+.inspselvizhint { margin-left: 6px; color: var(--sub); font-size: 9.5px; }
+/* A mismatch card is engageable: pointing at it (or clicking to pin) paints the mismatch on the
+   screenshot via the .inspselvizlayer below. */
+.inspselcard[data-inspselviz] { cursor: pointer; }
+.inspselcard[data-inspselviz]:hover { border-color: color-mix(in srgb, var(--fail) 55%, var(--line)); }
+/* Mismatch visualization — its own overlay layer above the hover/selection rects so engaging a
+   card never repaints or fights them. Intended element in the selection accent, the element that
+   would actually receive the tap in the failure color, the tap point as a ring marker. */
+.inspselvizlayer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 4; }
+.inspselvizlayer:empty { display: none; }
+.inspselvizrect { position: absolute; }
+.inspselvizrect.intended { border: 2px solid var(--run); background: color-mix(in srgb, var(--run) 14%, transparent); }
+.inspselvizrect.actual { border: 2px solid var(--fail); background: color-mix(in srgb, var(--fail) 16%, transparent); }
+.inspselviztap { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2.5px solid var(--fail); border-radius: 50%; background: color-mix(in srgb, var(--fail) 40%, transparent); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--bg) 85%, transparent); }
+.inspselvizlegend { position: absolute; left: 6px; bottom: 6px; display: flex; gap: 9px; align-items: center; padding: 3px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: 9.5px; color: var(--txt); white-space: nowrap; }
+.inspselvizlegend .k { display: inline-flex; align-items: center; gap: 4px; }
+.inspselvizlegend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.inspselvizlegend .sw.intended { background: var(--run); }
+.inspselvizlegend .sw.actual { background: var(--fail); }
+.inspselvizlegend .sw.tappt { width: 8px; height: 8px; border-radius: 50%; background: transparent; border: 2px solid var(--fail); }
+.inspselyaml { margin: 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--code-surface); color: var(--code-text); font-size: 11px; line-height: 1.45; overflow: auto; }
+.inspselcopy { flex: none; min-height: 22px; display: inline-flex; align-items: center; border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 2px 7px; background: var(--bg2); color: var(--sub2); font: inherit; font-size: 10px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.inspselcopy:hover { color: var(--txt); border-color: var(--run); }
+.inspselcopy:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .insptree { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); padding: 8px 10px; font-size: 12px; }
 .insptree details { margin: 0; }
 .insptree summary { list-style: revert; cursor: default; }
@@ -756,4 +829,10 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
 .inspraw { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-surface); color: var(--code-text); padding: 10px 12px; font-size: 11.5px; margin: 0; }
 .inspnote { color: var(--sub); font-size: 12.5px; padding: 12px; }
 @media (max-width: 760px) { .inspbody { grid-template-columns: 1fr; } .inspshotwrap img { max-height: 38vh; } }
+
+/* Export capture framing (?autoplay=1) - the document the CLI's --video/--gif/--webp exporters
+   screen-record. Affordances nobody can click are chrome in a recording, and an in-flight
+   transition is a frame the encoder keeps, so both are dropped for the capture only. */
+html[data-tb-autoplay] .detailactions { display: none; }
+html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autoplay] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 `;

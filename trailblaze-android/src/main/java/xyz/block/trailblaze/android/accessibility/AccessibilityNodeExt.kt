@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.android.accessibility
 
 import android.graphics.Rect
+import android.graphics.RectF
+import android.os.Bundle
+import android.text.Spanned
+import android.text.style.ClickableSpan
 import android.view.accessibility.AccessibilityNodeInfo
 import xyz.block.trailblaze.android.AndroidSdkVersion
 
@@ -93,6 +97,20 @@ internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCoun
     }
   }
 
+  // In-text links: the platform exposes tappable link ranges (Compose `LinkAnnotation`,
+  // classic LinkMovementMethod spans) as ClickableSpans INSIDE the node's text, not as
+  // nodes of their own — `text?.toString()` below would silently discard them, leaving
+  // no addressable handle for "tap the Terms of Service link" inside a legal paragraph.
+  // Synthesize one child node per span so links are selectable like any other element.
+  val linkChildren = textLinkChildNodes(
+    specs = extractTextLinkSpecs(),
+    parentClassName = className?.toString(),
+    parentPackageName = packageName?.toString(),
+    parentIsVisibleToUser = isVisibleToUser,
+    parentIsEnabled = isEnabled,
+    nodeIdCounter = nodeIdCounter,
+  )
+
   return AccessibilityNode(
     nodeId = nodeIdCounter.next(),
 
@@ -143,7 +161,7 @@ internal fun AccessibilityNodeInfo.toAccessibilityNode(nodeIdCounter: NodeIdCoun
 
     // Relationships
     labeledByText = labeledByText,
-    children = childNodes,
+    children = childNodes + linkChildren,
 
     // Actions
     actions = actionNames,
@@ -203,6 +221,165 @@ internal fun List<AccessibilityNodeInfo>.toMergedAccessibilityNode(): Accessibil
 internal class NodeIdCounter {
   private var counter = 0L
   fun next(): Long = ++counter
+}
+
+/**
+ * One ClickableSpan range extracted from a node's text: the span's substring and its on-screen
+ * bounds (null when per-character location data is unavailable — no synthetic child is
+ * emitted then, see [textLinkChildNodes]).
+ */
+internal data class TextLinkSpec(
+  val text: String,
+  val bounds: AccessibilityNode.Bounds?,
+)
+
+/**
+ * Extracts a [TextLinkSpec] per ClickableSpan in this node's text. Spans arrive on the
+ * accessibility-service side as `AccessibilityClickableSpan`/`AccessibilityURLSpan` (both
+ * `ClickableSpan` subclasses); per-span bounds come from the platform's per-character location
+ * extra when the node advertises it (Compose and TextView both do).
+ */
+private fun AccessibilityNodeInfo.extractTextLinkSpecs(): List<TextLinkSpec> {
+  val spanned = text as? Spanned ?: return emptyList()
+  val spans = spanned.getSpans(0, spanned.length, ClickableSpan::class.java)
+  if (spans.isEmpty()) return emptyList()
+  val supportsCharLocations =
+    availableExtraData.contains(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+  return spans.mapNotNull { span ->
+    val start = spanned.getSpanStart(span)
+    val end = spanned.getSpanEnd(span)
+    if (start < 0 || end <= start) return@mapNotNull null
+    val linkText = spanned.subSequence(start, end).toString()
+    if (linkText.isBlank()) return@mapNotNull null
+    val spanBounds = if (supportsCharLocations) charRangeBounds(start, end - start) else null
+    TextLinkSpec(text = linkText, bounds = spanBounds)
+  }
+}
+
+/**
+ * On-screen bounds of the largest single-line fragment of the character range starting at
+ * [startIndex] (see [largestLineRunBounds]) — NOT a full-range bounding box: a wrapped range
+ * yields a rect covering only its largest fragment, so don't trust this for full-range
+ * hit-testing or scroll-into-view. Per-char rects come via
+ * `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` — an IPC round-trip to the
+ * app, so callers only invoke this for nodes that actually carry ClickableSpans. Null when
+ * the refresh fails or no character in the range has a visible location.
+ */
+internal fun AccessibilityNodeInfo.charRangeBounds(startIndex: Int, length: Int): AccessibilityNode.Bounds? {
+  val args = Bundle().apply {
+    putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, startIndex)
+    putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, length)
+  }
+  if (!refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)) {
+    return null
+  }
+  val charBounds = extras
+    .getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+    ?.map { rect ->
+      (rect as? RectF)?.let {
+        AccessibilityNode.Bounds(
+          left = it.left.toInt(),
+          top = it.top.toInt(),
+          right = it.right.toInt(),
+          bottom = it.bottom.toInt(),
+        )
+      }
+    }
+    ?: return null
+  return largestLineRunBounds(charBounds)
+}
+
+/**
+ * Bounds of the largest contiguous same-line run of visible characters (entries are null for
+ * characters the platform reports no visible location for; they are skipped without breaking
+ * a run). A wrapped multi-line range must NOT be unioned into one rectangle: the union covers
+ * plain text and whitespace between the line fragments, and a synthetic link child carrying
+ * that envelope steals recorded-tap hit-testing from non-link text inside it. The largest
+ * fragment contains only link characters, so it is a truthful clickable rect; a tap on a
+ * smaller fragment hit-tests to the parent and replays as a plain gesture at the recorded
+ * point, which still lands on the link. Pure function — see [AccessibilityNodeExtTest].
+ */
+internal fun largestLineRunBounds(charBounds: List<AccessibilityNode.Bounds?>): AccessibilityNode.Bounds? {
+  val runs = mutableListOf<MutableList<AccessibilityNode.Bounds>>()
+  for (rect in charBounds) {
+    if (rect == null) continue
+    val run = runs.lastOrNull()
+    // Same line iff the character's vertical extent overlaps the run's previous character.
+    if (run != null && rect.top < run.last().bottom && rect.bottom > run.last().top) {
+      run.add(rect)
+    } else {
+      runs.add(mutableListOf(rect))
+    }
+  }
+  return runs
+    .map { run ->
+      AccessibilityNode.Bounds(
+        left = run.minOf { it.left },
+        top = run.minOf { it.top },
+        right = run.maxOf { it.right },
+        bottom = run.maxOf { it.bottom },
+      )
+    }
+    .maxByOrNull { (it.right - it.left).toLong() * (it.bottom - it.top) }
+}
+
+/**
+ * Picks which of several same-text link spans a tap targeted: the first candidate whose
+ * bounds contain the tap point, or null when none do (a click-time bounds re-derivation
+ * can transiently fail, or the tap point can sit outside every candidate after the tree
+ * shifted). Null means the duplicates are positionally indistinguishable — clicking an
+ * arbitrary one could activate the wrong link, so the caller must treat it as a miss and
+ * let the gesture fallback aim at the resolved child's own coordinates instead. Pure
+ * function — see [AccessibilityNodeExtTest].
+ */
+internal fun pickTextLinkSpanIndex(
+  candidateBounds: List<AccessibilityNode.Bounds?>,
+  targetX: Int,
+  targetY: Int,
+): Int? {
+  val hit = candidateBounds.indexOfFirst {
+    it != null && targetX in it.left..it.right && targetY in it.top..it.bottom
+  }
+  return if (hit >= 0) hit else null
+}
+
+/**
+ * Builds the synthetic child node per extracted link span. `isClickable = true` because the
+ * span IS an activation target — it gives the child its own ref in the compact element list
+ * and lets `isClickable`-based selectors match. `actions` stays empty on purpose: the child
+ * is not a live node, so the ACTION_CLICK dispatch route must decline it; activation goes
+ * through the span-click tap route (keyed on [AccessibilityNode.isTextLink]) with a gesture
+ * fallback at the child's bounds. Pure function — see [AccessibilityNodeExtTest].
+ *
+ * Specs without bounds (no character-location extras, or the whole range scrolled out of
+ * view) emit NO child rather than one with fabricated bounds. A clickable child carrying its
+ * parent's whole-paragraph bounds poisons recorded-tap hit-testing in both directions: under
+ * a non-interactive parent it shadows the paragraph, so a tap on plain text records link #1;
+ * under an interactive parent it loses the equal-bounds tie, so link taps record the
+ * paragraph. Every supported text surface (TextView and Compose, API 26+) advertises
+ * character locations, and capture re-runs per resolution attempt, so a transient extras
+ * failure only affects that one snapshot.
+ */
+internal fun textLinkChildNodes(
+  specs: List<TextLinkSpec>,
+  parentClassName: String?,
+  parentPackageName: String?,
+  parentIsVisibleToUser: Boolean,
+  parentIsEnabled: Boolean,
+  nodeIdCounter: NodeIdCounter,
+): List<AccessibilityNode> = specs.mapNotNull { spec ->
+  val bounds = spec.bounds ?: return@mapNotNull null
+  AccessibilityNode(
+    nodeId = nodeIdCounter.next(),
+    className = parentClassName,
+    packageName = parentPackageName,
+    text = spec.text,
+    isClickable = true,
+    isTextLink = true,
+    isVisibleToUser = parentIsVisibleToUser,
+    isEnabled = parentIsEnabled,
+    boundsInScreen = bounds,
+  )
 }
 
 /**

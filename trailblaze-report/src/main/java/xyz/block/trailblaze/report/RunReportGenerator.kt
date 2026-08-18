@@ -10,10 +10,13 @@ import kotlin.time.TimeSource
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -21,6 +24,8 @@ import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.failureCodeOf
+import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
@@ -77,13 +82,20 @@ class RunReportGenerator(
     sessionIds: List<SessionId>,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
+    imageBaseUrl: String? = null,
   ): File? {
     if (sessionIds.isEmpty()) return null
     if (bunBinary == null) {
       logBunUnavailable()
       return null
     }
-    return generateFromSnapshots(logsRepo, SessionLogSnapshot.captureAll(logsRepo, sessionIds), shareUrl, fullEventPayloads)
+    return generateFromSnapshots(
+      logsRepo,
+      SessionLogSnapshot.captureAll(logsRepo, sessionIds),
+      shareUrl,
+      fullEventPayloads,
+      imageBaseUrl,
+    )
   }
 
   /**
@@ -97,6 +109,14 @@ class RunReportGenerator(
    * @param fullEventPayloads when true (the `--full-report-payloads` CLI flag), event formatters
    *   embed full payloads even for passed sessions instead of applying their report size budgets
    *   (grep REPORT_SIZE_BUDGET). Failed sessions always embed full payloads regardless.
+   * @param imageBaseUrl when non-null, screenshots and video sprite sheets that live on disk are
+   *   REFERENCED at `<imageBaseUrl><sessionId>/<file>` instead of base64-embedded, so the report is
+   *   a small document plus images the browser fetches. The two hosts that already serve that
+   *   layout pass their own prefix: the daemon `/static/`, CI `""` (document-relative against the
+   *   report's own artifact URL). Null — the default — embeds, which is what makes the report a
+   *   portable single file; a report generated with a base URL only renders where that base
+   *   resolves. Screenshots that are already absolute URLs (device-farm legs) are referenced
+   *   either way and are unaffected by this.
    */
   @JvmOverloads
   fun generateFromSnapshots(
@@ -104,6 +124,7 @@ class RunReportGenerator(
     snapshots: List<SessionLogSnapshot>,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
+    imageBaseUrl: String? = null,
   ): File? {
     if (snapshots.isEmpty()) return null
     val bun = bunBinary
@@ -134,6 +155,12 @@ class RunReportGenerator(
       copyResource(DRIVER_RESOURCE, File(workDir, "run-report-cli.ts"))
       copyResource(EVENTS_RESOURCE, File(workDir, "run-report-events.ts"))
       copyResource(SPRITES_RESOURCE, File(workDir, "run-report-sprites.ts"))
+      // The Kotlin/JS selector engine for the UI Inspector's suggestions. OPTIONAL by design: the
+      // resource is only in the JAR when :trailblaze-selector-engine-js's bundle task ran at build
+      // time, and an older/bundle-less JAR must keep producing reports — the driver embeds it (once
+      // per report, gz+base64) only when staged AND a session carries hierarchies, and the viewer
+      // degrades to no suggestions section when it's absent.
+      val selectorEngineStaged = copyOptionalResource(SELECTOR_ENGINE_RESOURCE, File(workDir, SELECTOR_ENGINE_FILE_NAME))
       val formatterNames = stageEventFormatters(workDir)
       val inputJson = buildJsonObject {
         put("generatedAt", generatedAt)
@@ -142,6 +169,11 @@ class RunReportGenerator(
           put("formatters", buildJsonArray { formatterNames.forEach { add(it) } })
         }
         if (fullEventPayloads) put("fullEventPayloads", true)
+        // Emitted even when EMPTY (CI's document-relative case) — the driver switches on
+        // present-vs-absent, so "" is a meaningful base here, not "unset". Deliberately unlike
+        // `shareUrl` two lines up, where blank does mean unset.
+        if (imageBaseUrl != null) put("imageBaseUrl", imageBaseUrl)
+        if (selectorEngineStaged) put("selectorEngine", SELECTOR_ENGINE_FILE_NAME)
         put("sessions", sessionsJson)
       }
       val inputFile = ReportTiming.stage("RunReportGenerator.serializeAndWriteInputJson") {
@@ -166,6 +198,14 @@ class RunReportGenerator(
       ReportTiming.stage("RunReportGenerator.outputCopy") {
         outputFile.copyTo(dest, overwrite = true)
       }
+      // Name the image mode on every generation. A report whose screenshots don't load is the
+      // failure this switch can cause, and "was it even linking?" is the first question — without
+      // this line there is nothing to grep, since the driver's own stdout is only surfaced when
+      // the subprocess fails.
+      Console.log(
+        "[RunReportGenerator] images: " +
+          if (imageBaseUrl == null) "embedded" else "linked at '$imageBaseUrl<sessionId>/<file>'",
+      )
       Console.log("[RunReportGenerator] report generated at ${dest.absolutePath}")
       return dest
     } finally {
@@ -175,10 +215,13 @@ class RunReportGenerator(
   }
 
   private fun logBunUnavailable() {
-    Console.log(
-      "[RunReportGenerator] bun not found on PATH — cannot build the interactive report. " +
-        "Install bun (it ships with the repo toolchain via `source bin/activate-hermit`) or " +
-        "run `trailblaze report --legacy` for the WASM report.",
+    // bun is a hard prerequisite of Trailblaze, not an optional accelerator — so a missing bun
+    // is an actionable error about a broken install, NOT a reason to quietly serve the
+    // deprecated legacy report in place of the standard one.
+    Console.error(
+      "[RunReportGenerator] bun not found on PATH — cannot build the Trailblaze report. " +
+        "bun is a required dependency; install it (`source bin/activate-hermit` in this repo, " +
+        "or https://bun.sh/install) and re-run.",
     )
   }
 
@@ -222,6 +265,13 @@ class RunReportGenerator(
     val stream = javaClass.classLoader.getResourceAsStream(resourcePath)
       ?: error("Missing report resource on classpath: $resourcePath")
     stream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+  }
+
+  /** [copyResource] for a resource the report degrades gracefully without; true when staged. */
+  private fun copyOptionalResource(resourcePath: String, dest: File): Boolean {
+    val stream = javaClass.classLoader.getResourceAsStream(resourcePath) ?: return false
+    stream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+    return true
   }
 
   /**
@@ -280,6 +330,15 @@ class RunReportGenerator(
     private const val DRIVER_RESOURCE = "xyz/block/trailblaze/report/run-report-cli.ts"
     private const val EVENTS_RESOURCE = "xyz/block/trailblaze/report/run-report-events.ts"
     private const val SPRITES_RESOURCE = "xyz/block/trailblaze/report/run-report-sprites.ts"
+
+    /**
+     * The Kotlin/JS selector engine (built by `:trailblaze-selector-engine-js:bundleSelectorEngine`,
+     * staged into this JAR by `copySelectorEngineResource` — see build.gradle.kts). Optional on the
+     * classpath: the bundle task skips cleanly when `bun` is unavailable, and reports generated
+     * without it simply carry no selector suggestions in the UI Inspector.
+     */
+    private const val SELECTOR_ENGINE_RESOURCE = "xyz/block/trailblaze/report/trailblaze-selector-engine.min.js"
+    private const val SELECTOR_ENGINE_FILE_NAME = "trailblaze-selector-engine.min.js"
 
     /**
      * Classpath directory scanned for event-formatter modules. Any module on the runtime classpath
@@ -351,12 +410,13 @@ class RunReportGenerator(
 
     // View-hierarchy fields a log record may carry, in the priority order the interactive report's
     // extractor reads them (run-report-extract.ts: viewHierarchyFiltered || trailblazeNodeTree ||
-    // viewHierarchy). Only the first present field is ever rendered — it feeds the report's UI
-    // Inspector — so the rest are redundant weight in input.json and are dropped at the seam.
+    // viewHierarchy). Only the first present field is rendered (a web trailblazeNodeTree also
+    // consumes its viewHierarchy sibling's bounds — see slimViewHierarchyFields) — the rest are
+    // redundant weight in input.json and are dropped at the seam.
     private val VIEW_HIERARCHY_LOG_FIELDS = listOf("viewHierarchyFiltered", "trailblazeNodeTree", "viewHierarchy")
 
     /**
-     * Keep exactly the ONE view-hierarchy field the interactive renderer reads (the first present
+     * Keep exactly the view-hierarchy field(s) the interactive renderer reads (the first present
      * in [VIEW_HIERARCHY_LOG_FIELDS]) and drop the redundant siblings — a record commonly carries
      * both `trailblazeNodeTree` and the legacy `viewHierarchy`, and shipping both across the bun
      * process boundary only inflates input.json for no output. The kept field is what the report
@@ -367,14 +427,34 @@ class RunReportGenerator(
      * `trailblazeNodeTree` (and the dead null key is dropped alongside the redundant siblings).
      * A non-object element, or one with no other hierarchy field to drop, is returned unchanged
      * (no reallocation).
+     *
+     * One deliberate exception to "exactly one": a WEB `trailblazeNodeTree` also keeps its legacy
+     * `viewHierarchy` sibling. The two are parallel views of one ARIA snapshot with bounds from
+     * different DOM correlations — the ARIA tree's fuzzy role+name walk leaves most nodes with no
+     * geometry, while the legacy tree's ref-resolved pass covers 3–10x more nodes — and the
+     * extractor grafts the dense legacy bounds onto the ARIA tree for the inspector's hit-testing
+     * (`mergeWebHierarchyBounds` in run-report-extract.ts). Only the merged tree is embedded in
+     * report.html, so the extra weight is confined to input.json and only on web records.
      */
     internal fun slimViewHierarchyFields(element: JsonElement): JsonElement {
       val obj = element as? JsonObject ?: return element
       val usable = VIEW_HIERARCHY_LOG_FIELDS.filter { obj[it].let { v -> v != null && v != JsonNull } }
       if (usable.isEmpty()) return element
-      val redundant = VIEW_HIERARCHY_LOG_FIELDS.filter { it != usable.first() && it in obj.keys }
+      val kept = buildSet {
+        add(usable.first())
+        if (usable.first() == "trailblazeNodeTree" && "viewHierarchy" in usable && isWebNodeTree(obj["trailblazeNodeTree"])) {
+          add("viewHierarchy")
+        }
+      }
+      val redundant = VIEW_HIERARCHY_LOG_FIELDS.filter { it !in kept && it in obj.keys }
       if (redundant.isEmpty()) return element
       return JsonObject(obj.filterKeys { it !in redundant })
+    }
+
+    /** Whether a serialized TrailblazeNode tree carries the web driver detail at its root. */
+    private fun isWebNodeTree(tree: JsonElement?): Boolean {
+      val detail = (tree as? JsonObject)?.get("driverDetail") as? JsonObject ?: return false
+      return (detail[TrailblazeJson.POLYMORPHIC_CLASS_DISCRIMINATOR] as? JsonPrimitive)?.contentOrNull == "web"
     }
 
     /**
@@ -439,6 +519,7 @@ class RunReportGenerator(
       }
       sessionInfo.trailFilePath?.takeIf { it.isNotBlank() }?.let { put("cmd", "./trailblaze run $it") }
       failureReason(status)?.let { put("error", it) }
+      failureCodeOf(failurePayloadOf(status))?.let { put("failureCode", it) }
       // Self-heal keeps its pass/fail badge (so tallies stay honest) and gains a separate marker
       // badge in the viewer — the legacy report's SelfHealChip distinction. Asking
       // ExecutionMode.selfHealed keeps this key in step with the `SELF_HEAL` execution mode the
@@ -461,7 +542,7 @@ class RunReportGenerator(
       val buildNumber = environment.firstValue("CI_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "GITHUB_RUN_NUMBER")
       val commit = environment.firstValue("GIT_COMMIT", "BUILDKITE_COMMIT", "GITHUB_SHA")
       val branch = environment.firstValue("GIT_BRANCH", "BUILDKITE_BRANCH", "GITHUB_REF_NAME")
-      val repository = githubRepositoryUrl(environment["BUILDKITE_REPO"])
+      val repository = GitRepoUrls.webBaseUrl(environment["BUILDKITE_REPO"])
         ?: environment["GITHUB_REPOSITORY"]?.let { repo ->
           "${environment["GITHUB_SERVER_URL"] ?: "https://github.com"}/$repo"
         }
@@ -477,16 +558,6 @@ class RunReportGenerator(
 
     private fun Map<String, String>.firstValue(vararg keys: String): String? =
       keys.firstNotNullOfOrNull { key -> get(key)?.takeIf { it.isNotBlank() } }
-
-    private fun githubRepositoryUrl(raw: String?): String? {
-      val value = raw?.trim()?.removeSuffix(".git")?.takeIf { it.isNotEmpty() } ?: return null
-      return when {
-        value.startsWith("git@github.com:") -> "https://github.com/${value.removePrefix("git@github.com:")}"
-        value.startsWith("ssh://git@github.com/") -> "https://github.com/${value.removePrefix("ssh://git@github.com/")}"
-        value.startsWith("https://github.com/") -> value
-        else -> null
-      }
-    }
 
     /** Map a [SessionStatus] to the badge class the viewer expects (passed/failed/cancelled/running/unknown). */
     internal fun statusLabel(status: SessionStatus): String = when (status) {

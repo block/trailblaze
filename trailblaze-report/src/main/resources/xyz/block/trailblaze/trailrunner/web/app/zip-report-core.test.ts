@@ -251,6 +251,21 @@ describe("run meta derivation", () => {
     );
     expect(failed.status).toBe("failed");
     expect(failed.error).toBe("Element not found: Save");
+    expect(failed.failureCode).toBeUndefined();
+
+    // A structured failurePayload's top-level string `code` lands as meta.failureCode — same
+    // lift as sessionMetaJson, so archive reports render the banner chip too.
+    const coded = Zip.buildRunMeta(
+      [startedLog(), endedLog("Ended.Failed", { exceptionMessage: "locked out", failurePayload: { schema: "example-repo/trailhead-error/v1", code: "account-state" } })],
+      {},
+    );
+    expect(coded.failureCode).toBe("account-state");
+    // Non-string codes are not coerced.
+    const numeric = Zip.buildRunMeta(
+      [startedLog(), endedLog("Ended.Failed", { exceptionMessage: "boom", failurePayload: { code: 7 } })],
+      {},
+    );
+    expect(numeric.failureCode).toBeUndefined();
 
     const healed = Zip.buildRunMeta([startedLog(), endedLog("Ended.SucceededWithSelfHeal")], {});
     expect(healed.status).toBe("passed");

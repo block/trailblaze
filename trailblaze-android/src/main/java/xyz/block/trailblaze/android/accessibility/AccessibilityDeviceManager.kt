@@ -982,6 +982,27 @@ class AccessibilityDeviceManager(
       tapOrLongPress(centerX, centerY, longPress)
       return TapDispatchRoute.GESTURE
     }
+    planTextLinkClickRoute(resolvedNode, longPress, tapRoute)?.let { linkText ->
+      return dispatchAndAwaitSettleBlocking {
+        if (TrailblazeAccessibilityService.clickTextLinkSpan(linkText, centerX, centerY)) {
+          Console.log("[tap-route] link-span click dispatched for \"$linkText\"")
+          TapDispatchRoute.TEXT_LINK_SPAN
+        } else {
+          // Live tree no longer carries a matching span (tree mutated between resolve and
+          // dispatch, or the span didn't survive the IPC parceling). Gesture at the synthetic
+          // child's own bounds center — dispatched directly (not via `tap()`) so it shares
+          // the span attempt's single settle-wait, mirroring the ACTION_CLICK miss path.
+          Console.log(
+            "[tap-route] link-span lookup miss for \"$linkText\", gesture fallback at ($centerX,$centerY)",
+          )
+          failIfGestureNotDispatched(
+            TrailblazeAccessibilityService.tap(centerX, centerY),
+            "gesture-fallback tap at ($centerX, $centerY) after a link-span lookup miss",
+          )
+          TapDispatchRoute.GESTURE_AFTER_TEXT_LINK_SPAN_MISS
+        }
+      }
+    }
     val plan = planActionClickRoute(resolvedNode, longPress, tapRoute)
     if (plan == null) {
       // Surface the gate-relevant fields of the resolved node so an oncall debugging
@@ -1238,6 +1259,35 @@ internal fun planActionClickRoute(
     }
   }
   return ActionClickPlan(bounds, detail.className, detail.resourceId)
+}
+
+/**
+ * Returns the link text to activate via the accessibility span-click route when [node] is a
+ * synthetic in-text-link child (see `AccessibilityNodeExt`'s link-span capture), or null when
+ * normal tap routing applies. The span, not a coordinate, is the durable activation target:
+ * it survives the layout reflow and scroll drift that can move a link between capture and
+ * dispatch, and it activates a wrapped link as a whole rather than whichever line fragment
+ * the recorded point landed on. Long-press has no span equivalent — gesture handles it. An
+ * explicit [tapRoute] pin means the author took manual control of routing for this step, so
+ * it disables the span route the same way it overrides the ACTION_CLICK heuristics. Disabled
+ * and not-visible-to-user links decline for the same reason [planActionClickRoute] gates on
+ * those flags: a real gesture at a hidden link hits the overlay above it, and a real gesture
+ * on a disabled control is a no-op — the span transport must not succeed where a physical
+ * tap could not.
+ * Pure function — `internal` for the same JVM-unit-testability reasons as [planActionClickRoute].
+ */
+internal fun planTextLinkClickRoute(
+  node: TrailblazeNode,
+  longPress: Boolean,
+  tapRoute: TapRouteOverride? = null,
+): String? {
+  if (longPress) return null
+  if (tapRoute != null) return null
+  val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility ?: return null
+  if (!detail.isTextLink) return null
+  if (!detail.isEnabled) return null
+  if (!detail.isVisibleToUser) return null
+  return detail.text?.takeIf { it.isNotBlank() }
 }
 
 internal fun TrailblazeNode.Bounds.toAndroidRect(): Rect = Rect(left, top, right, bottom)

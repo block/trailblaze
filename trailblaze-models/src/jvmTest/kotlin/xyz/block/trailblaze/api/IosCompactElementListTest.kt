@@ -891,4 +891,295 @@ class IosCompactElementListTest {
     assertContains(result.text, "\"Close\"")
     assertTrue(!result.text.contains(":"), "no colon when only ax label present")
   }
+
+  // -- In-text link children (link ranges inside a larger text element) --
+
+  @Test
+  fun `in-text link child gets its own element ref instead of a quoted string`() {
+    // A disclosure sentence whose tappable link range is exposed as its own child
+    // accessibility element (own bounds, no clickable flag from the driver). The child's
+    // label is a proper substring of the parent's, so it must be promoted to a ref —
+    // a quoted string would hide the only directly-tappable handle for the link.
+    val link =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "conversion fee"),
+        bounds = TrailblazeNode.Bounds(239, 728, 341, 748),
+      )
+    val sentence =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            accessibilityText = "Exchange rate may include a conversion fee.",
+          ),
+        bounds = TrailblazeNode.Bounds(16, 727, 386, 747),
+        children = listOf(link),
+      )
+    val root = node(children = listOf(sentence))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "\"Exchange rate may include a conversion fee.\"")
+    assertContains(result.text, "\"conversion fee\"")
+    assertFalse(
+      result.text.lines().any { it.trim() == "\"conversion fee\"" },
+      "link child must be an element line with a ref, not a bare quoted string",
+    )
+    assertTrue(
+      result.elementNodeIds.contains(link.nodeId),
+      "link child must be addressable (present in elementNodeIds)",
+    )
+  }
+
+  @Test
+  fun `multiple in-text links are each promoted, including one whose bounds match the parent`() {
+    // A legal footer with three link ranges. One link wraps onto a second line, so the OS
+    // reports its frame as the parent's full union rect — bounds equality must not block
+    // promotion.
+    val footerLabel = "Sample's Privacy Notice, Terms of Service and Open Source Software"
+    val privacy =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Privacy Notice"),
+        bounds = TrailblazeNode.Bounds(106, 689, 194, 705),
+      )
+    val terms =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Terms of Service"),
+        bounds = TrailblazeNode.Bounds(207, 689, 308, 705),
+      )
+    val oss =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Open Source Software"),
+        bounds = TrailblazeNode.Bounds(34, 689, 368, 718),
+      )
+    val footer =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = footerLabel),
+        bounds = TrailblazeNode.Bounds(34, 689, 368, 718),
+        children = listOf(privacy, terms, oss),
+      )
+    val root = node(children = listOf(footer))
+    val result = IosCompactElementList.build(root)
+
+    for (child in listOf(privacy, terms, oss)) {
+      assertTrue(
+        result.elementNodeIds.contains(child.nodeId),
+        "expected link child ${child.nodeId} to be addressable",
+      )
+    }
+  }
+
+  @Test
+  fun `child text that is not a substring of the parent label stays a quoted string`() {
+    val subtitle =
+      node(detail = DriverNodeDetail.IosMaestro(text = "Manage your devices"))
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Connected Devices"),
+        children = listOf(subtitle),
+      )
+    val root = node(children = listOf(row))
+    val result = IosCompactElementList.build(root)
+
+    assertTrue(
+      result.text.lines().any { it.trim() == "\"Manage your devices\"" },
+      "non-link child text must stay a bare quoted string",
+    )
+    assertFalse(result.elementNodeIds.contains(subtitle.nodeId))
+  }
+
+  @Test
+  fun `mirrored-label wrapper child is not promoted as an in-text link`() {
+    // The common wrapper shape: a container whose single child repeats the container's
+    // whole label. The child-label dedupe skips mirrored labels before the in-text-link
+    // gate is evaluated, so the child must stay demoted — promoting it would double every
+    // plain text element.
+    val mirror =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Exchange rate applies"),
+        bounds = TrailblazeNode.Bounds(16, 727, 386, 747),
+      )
+    val wrapper =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = "Exchange rate applies"),
+        bounds = TrailblazeNode.Bounds(16, 727, 386, 747),
+        children = listOf(mirror),
+      )
+    val root = node(children = listOf(wrapper))
+    val result = IosCompactElementList.build(root)
+
+    assertFalse(
+      result.elementNodeIds.contains(mirror.nodeId),
+      "a child whose label equals the parent's must not be promoted",
+    )
+  }
+
+  @Test
+  fun `labeled scroll indicators are still filtered as system UI`() {
+    // Real UIScrollView indicators carry UIKit's own accessibility label and a percent
+    // value (serialized waypoint captures show text "0%" + "Vertical scroll bar, 3 pages"),
+    // so the labeled-leaf exemption from the aspect-ratio heuristic must not resurface
+    // them — they're matched by the stable platform label instead.
+    val vertical =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            text = "0%",
+            accessibilityText = "Vertical scroll bar, 3 pages",
+          ),
+        bounds = TrailblazeNode.Bounds(369, 91, 399, 788),
+      )
+    val horizontal =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            text = "0%",
+            accessibilityText = "Horizontal scroll bar, 1 page",
+          ),
+        bounds = TrailblazeNode.Bounds(20, 750, 398, 780),
+      )
+    val root = node(children = listOf(vertical, horizontal))
+    val result = IosCompactElementList.build(root)
+
+    assertFalse(result.elementNodeIds.contains(vertical.nodeId), "vertical scrollbar must stay filtered")
+    assertFalse(result.elementNodeIds.contains(horizontal.nodeId), "horizontal scrollbar must stay filtered")
+    assertFalse(result.text.contains("scroll bar"), "scrollbar labels must not appear in the element list")
+  }
+
+  @Test
+  fun `localized scroll indicators are filtered by their percent value`() {
+    // UIKit localizes "Vertical scroll bar, N pages", so the English prefix fast path
+    // misses on non-English runtimes — but the indicator's value stays a bare percent,
+    // which pairs with the extreme aspect ratio to catch it in any locale. A percent
+    // label on a normal-ratio element is real content and must keep its ref.
+    val vertical =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            text = "0%",
+            accessibilityText = "Vertikale Bildlaufleiste, 3 Seiten",
+          ),
+        bounds = TrailblazeNode.Bounds(369, 91, 399, 788),
+      )
+    val percentText =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "50%"),
+        bounds = TrailblazeNode.Bounds(20, 300, 120, 340),
+      )
+    val root = node(children = listOf(vertical, percentText))
+    val result = IosCompactElementList.build(root)
+
+    assertFalse(result.elementNodeIds.contains(vertical.nodeId), "localized scrollbar must be filtered")
+    assertTrue(result.elementNodeIds.contains(percentText.nodeId), "a normal-ratio percent label is real content")
+  }
+
+  @Test
+  fun `blank text with a real accessibilityText does not look label-less to the scroll filter`() {
+    // Captures serialize `text` as "" on nodes labeled only via accessibilityText. A plain
+    // `text ?: accessibilityText` fallback takes the empty string, so a wide one-line link
+    // (scrollbar-shaped, ratio > 10) would be dropped as a label-less scroll indicator
+    // before the link-promotion path ever sees it.
+    val link =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            text = "",
+            accessibilityText = "Terms of Service",
+          ),
+        bounds = TrailblazeNode.Bounds(16, 727, 350, 756),
+      )
+    val root = node(children = listOf(link))
+    val result = IosCompactElementList.build(root)
+
+    assertTrue(
+      result.elementNodeIds.contains(link.nodeId),
+      "a blank-text link labeled via accessibilityText must keep its ref",
+    )
+  }
+
+  @Test
+  fun `long link child whose truncated label collides with the parent's is still promoted`() {
+    // Two raw labels longer than the 80-char display cap that share their first 79 chars
+    // truncate to the same display string. The dedupe must compare RAW labels, or this
+    // proper-substring link never reaches the in-text-link gate and loses its ref.
+    val linkText =
+      "By continuing, you agree to the Terms of Service and acknowledge the Privacy Policy"
+    check(linkText.length > 80) { "fixture must exceed the display cap to exercise the collision" }
+    val link =
+      node(
+        detail = DriverNodeDetail.IosMaestro(accessibilityText = linkText),
+        bounds = TrailblazeNode.Bounds(16, 727, 386, 790),
+      )
+    val paragraph =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            accessibilityText = "$linkText, including its arbitration clause.",
+          ),
+        bounds = TrailblazeNode.Bounds(16, 727, 386, 812),
+        children = listOf(link),
+      )
+    val root = node(children = listOf(paragraph))
+    val result = IosCompactElementList.build(root)
+
+    assertTrue(
+      result.elementNodeIds.contains(link.nodeId),
+      "a truncation-colliding proper-substring link child must be promoted",
+    )
+  }
+
+  @Test
+  fun `composite row value child is deduped even when the composed label exceeds the display cap`() {
+    // A category row composes its label as "category: value". When the composite exceeds
+    // the 80-char display cap, truncation cuts the ": value" suffix, so a truncated-suffix
+    // dedupe stops recognizing the value-mirror child — which is a proper substring of the
+    // raw composite and would leak through the in-text-link gate as a noisy ref.
+    val value = "Send, spend, and transfer your balance anytime without fees or waiting"
+    val composite = "Balance details: $value"
+    check(composite.length > 80) { "composed fixture must exceed the display cap" }
+    val valueMirror =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = value),
+        bounds = TrailblazeNode.Bounds(16, 400, 386, 440),
+      )
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = value, accessibilityText = "Balance details"),
+        bounds = TrailblazeNode.Bounds(16, 380, 386, 440),
+        children = listOf(valueMirror),
+      )
+    val root = node(children = listOf(row))
+    val result = IosCompactElementList.build(root)
+
+    assertFalse(
+      result.elementNodeIds.contains(valueMirror.nodeId),
+      "a composite row's value-mirror child is static text, not an in-text link",
+    )
+  }
+
+  @Test
+  fun `composite row category child keeps its quoted string and is not promoted as a link`() {
+    // A "Search: Kate" row also carries its CATEGORY as a static child (the non-clickable
+    // "Search" magnifying-glass element). "Search" is a proper substring of the raw
+    // composite, so without the prefix exclusion the in-text-link gate promotes it to a
+    // noisy addressable ref.
+    val categoryMirror =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Search"),
+        bounds = TrailblazeNode.Bounds(16, 100, 56, 140),
+      )
+    val row =
+      node(
+        detail = DriverNodeDetail.IosMaestro(text = "Kate", accessibilityText = "Search"),
+        bounds = TrailblazeNode.Bounds(16, 100, 386, 140),
+        children = listOf(categoryMirror),
+      )
+    val root = node(children = listOf(row))
+    val result = IosCompactElementList.build(root)
+
+    assertFalse(
+      result.elementNodeIds.contains(categoryMirror.nodeId),
+      "a composite row's category-mirror child is static text, not an in-text link",
+    )
+    assertContains(result.text, "\"Search\"")
+  }
+
 }

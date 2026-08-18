@@ -13,6 +13,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.KnownTargetWorkspace
+import xyz.block.trailblaze.config.KnownTargetWorkspaceLoader
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.TargetIconConvention
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
@@ -59,9 +61,64 @@ object TrailmapCatalogBuilder {
       ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.lowercase() }
       ?.takeIf { it.isNotEmpty() }
 
+  /**
+   * The Trailmaps screen's whole payload: the installed catalog plus the targets a
+   * `KnownTargetWorkspace` record declares this installation doesn't carry. Resolves the records
+   * once and shares them, so the two halves can't disagree about what counts as installed.
+   */
+  fun buildResponse(
+    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
+    workspaceConfigDir: File? = WorkspaceConfigDirHolder.resolver(),
+  ): TrailmapsResponse {
+    val knownWorkspaces = discoverKnownWorkspaces(resourceSource)
+    val trailmaps = build(resourceSource, workspaceConfigDir, knownWorkspaces)
+    return TrailmapsResponse(
+      trailmaps = trailmaps,
+      notInstalledTargets = notInstalledTargets(
+        installedIds = trailmaps.map { it.id },
+        knownWorkspaces = knownWorkspaces,
+      ),
+    )
+  }
+
+  /**
+   * Records of the repos that home targets, or an empty list when none are declared (every OSS
+   * install today). Failures degrade to "no records" — a browsing screen must still render its
+   * catalog when a pointer file is unreadable.
+   */
+  private fun discoverKnownWorkspaces(resourceSource: ConfigResourceSource) =
+    KnownTargetWorkspaceLoader.discover(resourceSource)
+
+  /**
+   * Every declared target absent from [installedIds], deduplicated by id — two records naming the
+   * same target (a workspace record repeating a bundled one), or one record listing it twice, must
+   * not produce two catalog rows with the same id for an id-keyed UI to collide on.
+   */
+  fun notInstalledTargets(
+    installedIds: Collection<String>,
+    knownWorkspaces: List<KnownTargetWorkspace>,
+  ): List<NotInstalledTargetEntry> = knownWorkspaces
+    .flatMap { workspace ->
+      workspace.targets
+        .filterNot { declared -> installedIds.any { it.equals(declared, ignoreCase = true) } }
+        .map { declared ->
+          NotInstalledTargetEntry(
+            id = declared,
+            repo = workspace.repo,
+            shortName = workspace.shortName,
+            cloneCommand = workspace.cloneCommand,
+            url = workspace.url,
+            description = workspace.description,
+          )
+        }
+    }
+    .distinctBy { it.id.lowercase() }
+    .sortedBy { it.id }
+
   fun build(
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
     workspaceConfigDir: File? = WorkspaceConfigDirHolder.resolver(),
+    knownWorkspaces: List<KnownTargetWorkspace> = KnownTargetWorkspaceLoader.discover(resourceSource),
   ): List<TrailmapEntry> {
     // resolveRuntime does its own filesystem/classpath discovery (it can't consume the abstract
     // ConfigResourceSource — see TrailblazeTrailmapManifestLoader's kdoc on why trailmap-manifest
@@ -145,9 +202,16 @@ object TrailmapCatalogBuilder {
     val allIds = (entriesById.keys + systemPromptsById.keys).toSortedSet()
     return allIds.map { id ->
       val entry = entriesById[id] ?: TrailmapEntry(id = id)
+      // A trailmap that IS installed can still be at home in another repo — bundled here from a
+      // pinned copy while its trails exist only there. Annotating it is what gives an empty Trails
+      // tab an explanation.
+      val home = KnownTargetWorkspaceLoader.workspaceFor(id, knownWorkspaces)
       entry.copy(
         systemPrompts = systemPromptsById[id].orEmpty().sortedBy { it.name },
         workspaceListed = targetAllowList.isEmpty() || id in targetAllowList,
+        homeRepo = home?.repo,
+        homeShortName = home?.shortName,
+        homeUrl = home?.url,
       )
     }
   }

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
@@ -330,9 +331,12 @@ class ToolDiscoveryToolSet(
 
     if (targetApp == null) {
       val available = allTargets.map { it.id }
+      // A target declared as living in another repo gets the clone pointer appended — without it the
+      // available-list reads as "pick another one", which is never the right recovery.
+      val elsewhere = KnownTargetMessages.unavailableTargetHint(targetId)?.let { "\n$it" }.orEmpty()
       return jsonFormat.encodeToString(
         ToolDiscoveryTargetResult(
-          error = "Target '$targetId' not found. Available targets: ${available.joinToString(", ")}",
+          error = "Target '$targetId' not found. Available targets: ${available.joinToString(", ")}$elsewhere",
         )
       )
     }

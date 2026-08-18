@@ -160,9 +160,15 @@ abstract class TrailblazeHostAppTarget(
    * dumping the entire driver-compatible catalog.
    *
    * Empty default for non-YAML targets and for targets that don't declare any toolsets on
-   * a given driver. The implication of an empty list is "use only the catalog's
-   * `always_enabled` toolsets" — that's the explicit, opt-in surface, not a kitchen sink.
-   * Targets that need richer surfaces declare them explicitly.
+   * a given driver. An empty list means **unconfigured, not "declare nothing"**: this signature
+   * can't distinguish the two, and reading it as "declare nothing" collapses the session to
+   * `always_enabled` alone, which can neither verify nor navigate. So an empty list keeps the
+   * whole driver-compatible catalog, exactly as it did before scoping existed. Targets that want
+   * a narrower surface declare it explicitly.
+   *
+   * That fallback is applied once, in
+   * [xyz.block.trailblaze.toolcalls.ResolvedTargetToolScope] — see its `isScoped` — so every
+   * runtime inherits it rather than each deciding for itself.
    */
   open fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> = emptyList()
 

@@ -16,8 +16,8 @@ import xyz.block.trailblaze.report.utils.LogsRepo
  *
  * Renders a server-side list of available sessions with quick summary info
  * (status, title, when, duration). Each row links to `/report?session=<id>`,
- * which generates a single-session WASM bundle that auto-advances to the
- * session detail page — much smaller than the all-sessions report.
+ * which generates that one session's interactive report and opens straight on
+ * its detail view — much smaller than the all-sessions report.
  */
 object HomeEndpoint {
 
@@ -42,6 +42,24 @@ object HomeEndpoint {
       """<a class="button primary" href="${htmlEscape(path)}">Open Trail Runner <span aria-hidden="true">&rarr;</span></a>"""
     }.orEmpty()
     val reportButtonClass = if (hasTrailRunner) "button" else "button primary"
+    // `/report` covers the most recent DEFAULT_SESSION_LIMIT sessions; say so rather than
+    // implying it covers everything, and offer the explicit opt-in when it doesn't.
+    val cappedReport = sessions.size > GenerateReportEndpoint.DEFAULT_SESSION_LIMIT
+    val reportScopeDescription = if (cappedReport) {
+      "The ${GenerateReportEndpoint.DEFAULT_SESSION_LIMIT} most recent of ${sessions.size} runs, in one shareable HTML page"
+    } else {
+      "Every captured run in one shareable HTML page"
+    }
+    val allSessionsUtility = if (cappedReport) {
+      """
+              <a class="utility" href="/report?limit=all">
+                <span class="utility-copy"><strong>All ${sessions.size} sessions</strong><span>Every run in one page &mdash; slower and much larger</span></span>
+                <span class="utility-arrow" aria-hidden="true">&rarr;</span>
+              </a>
+      """.trimIndent()
+    } else {
+      ""
+    }
     val trailRunnerWorkflow = if (hasTrailRunner) {
       """
               <div class="workflow" aria-hidden="true">
@@ -281,7 +299,7 @@ object HomeEndpoint {
           .flow-copy span { display: block; margin-top: 2px; color: var(--text-subtle); font-size: 11.5px; }
           .utilities {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 12px;
             padding: 18px;
             border-bottom: 1px solid var(--tb-hairline);
@@ -385,7 +403,7 @@ object HomeEndpoint {
                 <p class="lede">$heroDescription</p>
                 <div class="hero-actions">
                   $trailRunnerButton
-                  <a class="$reportButtonClass" href="/report">View all sessions</a>
+                  <a class="$reportButtonClass" href="/report">Open the interactive report</a>
                 </div>
               </div>
               $trailRunnerWorkflow
@@ -393,9 +411,10 @@ object HomeEndpoint {
 
             <nav class="utilities" aria-label="Daemon utilities">
               <a class="utility" href="/report">
-                <span class="utility-copy"><strong>All-session report</strong><span>Explore every captured run</span></span>
+                <span class="utility-copy"><strong>Interactive report</strong><span>$reportScopeDescription</span></span>
                 <span class="utility-arrow" aria-hidden="true">&rarr;</span>
               </a>
+              $allSessionsUtility
               <a class="utility" href="/devices">
                 <span class="utility-copy"><strong>Connected devices</strong><span>Inspect the available test surfaces</span></span>
                 <span class="utility-arrow" aria-hidden="true">&rarr;</span>

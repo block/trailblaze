@@ -12,12 +12,16 @@ import xyz.block.trailblaze.bundle.ToolFrameworkMetadata
 import xyz.block.trailblaze.bundle.WorkspaceClientDtsGenerator
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.InlineScriptToolConfig
+import xyz.block.trailblaze.config.PlatformConfig
+import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.TrailblazeToolParameterConfig
 import xyz.block.trailblaze.config.project.TrailmapSource
 import xyz.block.trailblaze.config.project.ResolvedTrailmap
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
 import xyz.block.trailblaze.config.project.TrailmapTargetConfig
+import xyz.block.trailblaze.config.project.toInlineScriptToolConfigs
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.scripting.ScriptedToolDefinition
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionAnalyzer
@@ -26,6 +30,7 @@ import xyz.block.trailblaze.scripting.ScriptedToolDefinitionCache
 import xyz.block.trailblaze.scripting.ScriptedToolDefinitionException
 import xyz.block.trailblaze.toolcalls.HandCuratedRecordableTools
 import xyz.block.trailblaze.toolcalls.SelectorParamTs
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
@@ -64,6 +69,13 @@ import xyz.block.trailblaze.util.Console
  *   3. **Transitively-inherited scripted tools** from deps' `exports:` field — for each
  *      dep in the trailmap's closure, scripted tools whose name appears in that dep's
  *      `exports:` list flow into the consumer's typed surface.
+ *   4. **Toolset-delivered scripted tools** (e.g. the framework `core_interaction` toolset's
+ *      `openUrl`) — every catalog scripted name compatible with the trailmap's platform
+ *      driver types ([TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver], the
+ *      same set every replay launch path registers via
+ *      `TrailblazeToolRepo.allCatalogScriptedToolNames`), bridged to JAR/classpath
+ *      descriptors through [ScriptedToolNameDiscoverer]. Lowest precedence on a name
+ *      collision (trailmap-local + dep-exported declarations win).
  *
  * Classpath-backed trailmaps are skipped — they live inside JARs and can't accept written
  * `trailblaze-client.d.ts` files. Their consumers still get typed bindings through the workspace
@@ -129,11 +141,20 @@ object PerTrailmapClientDtsEmitter {
     val analyzerOutputByTrailmapId: Map<String, List<ScriptedToolDefinition>> =
       analyzeAllTrailmapsOnce(resolvedTrailmaps, analyzer)
 
+    // One classpath scan shared across every trailmap in this emit — the descriptor index only
+    // feeds toolset-delivered scripted-tool resolution, so a scan failure degrades to "those
+    // tools are missing from the surface" (visible as validator findings), never a codegen abort.
+    val scriptedDescriptorsByName = discoverScriptedDescriptorsOrEmpty()
+    val warnedMissingNames = mutableSetOf<ToolName>()
+
     return resolvedTrailmaps.mapNotNull { trailmap ->
       val trailmapDir = (trailmap.source as? TrailmapSource.Filesystem)?.trailmapDir ?: return@mapNotNull null
 
       val kotlinTools = resolveKotlinToolDescriptorsForTrailmap(trailmap, catalog)
-      val scriptedTools = collectTrailmapTypedScriptedTools(trailmap, trailmapsById)
+      val scriptedTools = mergeScriptedToolsFirstWriteWins(
+        collectTrailmapTypedScriptedTools(trailmap, trailmapsById),
+        collectToolsetDeliveredScriptedTools(trailmap, catalog, scriptedDescriptorsByName, warnedMissingNames),
+      )
       val typedOverrides = collectTypedToolOverridesForClosure(
         trailmap = trailmap,
         trailmapsById = trailmapsById,
@@ -235,6 +256,8 @@ object PerTrailmapClientDtsEmitter {
   ): List<Path> {
     if (targetConfigs.isEmpty()) return emptyList()
     val generator = WorkspaceClientDtsGenerator()
+    val scriptedDescriptorsByName = discoverScriptedDescriptorsOrEmpty()
+    val warnedMissingNames = mutableSetOf<ToolName>()
 
     return targetConfigs.mapNotNull { config ->
       if (config.id in excludeIds) return@mapNotNull null
@@ -261,7 +284,10 @@ object PerTrailmapClientDtsEmitter {
           waypoints = emptyList(),
         )
         val kotlinTools = resolveKotlinToolDescriptorsForTrailmap(synthetic, catalog)
-        val scriptedTools = collectTrailmapTypedScriptedTools(synthetic, mapOf(config.id to synthetic))
+        val scriptedTools = mergeScriptedToolsFirstWriteWins(
+          collectTrailmapTypedScriptedTools(synthetic, mapOf(config.id to synthetic)),
+          collectToolsetDeliveredScriptedTools(synthetic, catalog, scriptedDescriptorsByName, warnedMissingNames),
+        )
         val emittedPath = generator.generateForTrailmapFromResolved(
           trailmapDir = hostDir,
           toolDescriptors = kotlinTools.descriptors,
@@ -739,4 +765,127 @@ object PerTrailmapClientDtsEmitter {
 
     return byName.values.toList()
   }
+
+  /**
+   * Scripted tools delivered to [trailmap] by TOOLSETS — e.g. the framework `navigation`
+   * toolset's `openUrl`, shipped as a JAR-bundled descriptor + pre-compiled `.bundle.js`
+   * under `trails/config/trailmaps/trailblaze/tools/`. Until this collector existed they were
+   * invisible to the typed surface (the toolset resolve consumed only `.toolClasses`), so every
+   * recorded `openUrl:` step read as a TS2339 finding in `trailblaze check`'s trail-recording gate.
+   *
+   * The name set is the union, over every driver type the trailmap's platforms resolve to, of
+   * [TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver] — every DRIVER-COMPATIBLE
+   * catalog scripted name, NOT a resolve over the trailmap's requested `tool_sets:`. That is
+   * deliberate mirroring, not over-breadth: all three replay launch paths (the daemon's
+   * `ensureSessionScriptToolRuntime`, `HostScriptedToolLauncher`, and the on-device
+   * `OnDeviceScriptedToolBundleLauncher`) register `TrailblazeToolRepo.allCatalogScriptedToolNames`
+   * — exactly this driver-compatible set — "so recorded replays can dispatch a scripted tool even
+   * when it's hidden from the LLM" (its kdoc). Deriving the surface from requested toolsets
+   * instead would diverge from dispatch in both directions: a mobile trailmap with NO `tool_sets:`
+   * would miss always-enabled deliveries like `core_interaction`'s `openUrl` (a live TS2339 gap),
+   * and a web-only trailmap with any toolset would gain mobile-only names its Playwright session
+   * never registers (accepting recordings replay would reject).
+   *
+   * Names resolve to configs via [ScriptedToolNameDiscoverer] → [toInlineScriptToolConfigs], the
+   * same descriptor bridge the launchers dispatch through. A name with no discoverable descriptor
+   * is skipped with one warning per emit (see [warnedMissingNames]); the runtime-mode filter is
+   * deliberately NOT applied — subprocess-runtime tools are still recordable on the host, so the
+   * surface must admit them.
+   */
+  private fun collectToolsetDeliveredScriptedTools(
+    trailmap: ResolvedTrailmap,
+    catalog: List<ToolSetCatalogEntry>,
+    scriptedDescriptorsByName: Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor>,
+    warnedMissingNames: MutableSet<ToolName>,
+  ): List<InlineScriptToolConfig> {
+    if (scriptedDescriptorsByName.isEmpty()) return emptyList()
+    val driverTypes = collectPlatformDriverTypes(trailmap)
+    if (driverTypes.isEmpty()) return emptyList()
+    val scriptedNames = driverTypes
+      .flatMap { TrailblazeToolSetCatalog.defaultScriptedToolNamesForDriver(it, catalog) }
+      .toSet()
+    return scriptedNames.mapNotNull { name ->
+      val discovered = scriptedDescriptorsByName[name]
+      if (discovered == null) {
+        // Once per name per emit — the same undiscoverable name recurs for every trailmap that
+        // shares the toolset, and this collector runs once per trailmap per daemon start /
+        // compile / check.
+        if (warnedMissingNames.add(name)) {
+          Console.error(
+            "[PerTrailmapClientDtsEmitter] toolset-delivered scripted tool '${name.toolName}' " +
+              "(first seen on trailmap '${trailmap.manifest.id}') has no discoverable descriptor — " +
+              "skipped from every typed surface in this emit; recorded calls to it will read as " +
+              "validator findings.",
+          )
+        }
+        return@mapNotNull null
+      }
+      val config = discovered.descriptor.toInlineScriptToolConfigs().firstOrNull { it.name == name.toolName }
+      if (config == null && warnedMissingNames.add(name)) {
+        Console.error(
+          "[PerTrailmapClientDtsEmitter] descriptor '${discovered.relPath}' produced no tool " +
+            "config named '${name.toolName}' — skipped from the typed surface.",
+        )
+      }
+      config
+    }
+  }
+
+  /**
+   * Every [TrailblazeDriverType] the trailmap's platform sections resolve to — explicit
+   * `drivers:` lists win, otherwise the platform key's defaults ([PlatformConfig.resolveDriverTypes]).
+   * Union of the RESOLVED target's flattened platforms (carries `dependencies:`-inherited shape)
+   * and the AUTHORED manifest's target/library platforms, so a library trailmap with no resolved
+   * target still contributes its declared platforms.
+   */
+  private fun collectPlatformDriverTypes(trailmap: ResolvedTrailmap): Set<TrailblazeDriverType> {
+    val platformMaps = listOfNotNull(
+      trailmap.target?.platforms,
+      trailmap.manifest.target?.platforms,
+      trailmap.manifest.platforms,
+    )
+    val drivers = mutableSetOf<TrailblazeDriverType>()
+    platformMaps.forEach { platforms ->
+      platforms.forEach { (platformKey, config) -> drivers += config.resolveDriverTypes(platformKey) }
+    }
+    return drivers
+  }
+
+  /**
+   * Merge scripted-tool groups first-write-wins by name, preserving encounter order. Earlier
+   * groups take precedence — callers pass target-declared/dep-exported tools first so a
+   * trailmap-local declaration beats a toolset-delivered one of the same name, matching the
+   * runtime collision rule (`InProcessScriptedToolLauncher.launch`'s `skipNames`).
+   */
+  private fun mergeScriptedToolsFirstWriteWins(
+    vararg groups: List<InlineScriptToolConfig>,
+  ): List<InlineScriptToolConfig> {
+    val byName = linkedMapOf<String, InlineScriptToolConfig>()
+    groups.forEach { group -> group.forEach { byName.putIfAbsent(it.name, it) } }
+    return byName.values.toList()
+  }
+
+  /**
+   * One-shot classpath scan for scripted-tool descriptors, degraded to empty on failure. A scan
+   * failure (or a global name collision, which [ScriptedToolNameDiscoverer.discoverDescriptorsByName]
+   * rejects) must not abort typed-binding codegen — the cost is toolset-delivered scripted tools
+   * missing from the surface, which reads as validator findings rather than a silent hole.
+   *
+   * The whole-scan degradation on a name collision is deliberately not finer-grained: a workspace
+   * whose descriptors collide with a bundled name can't run ANY trail today — the runtime launcher
+   * ([xyz.block.trailblaze.scripting.InProcessScriptedToolLauncher.resolveInProcessScriptedTools])
+   * calls the same strict discovery uncaught at every session init — so degrading check surfaces
+   * for that already-hard-broken state isn't worth a lenient discovery variant. Same
+   * runCatching-to-empty posture as [ResolvedTargetReportEmitter]'s descriptor index.
+   */
+  private fun discoverScriptedDescriptorsOrEmpty(): Map<ToolName, ScriptedToolNameDiscoverer.DiscoveredDescriptor> =
+    try {
+      ScriptedToolNameDiscoverer.discoverDescriptorsByName()
+    } catch (e: Exception) {
+      Console.error(
+        "[PerTrailmapClientDtsEmitter] scripted-tool descriptor discovery failed (toolset-delivered " +
+          "scripted tools will be missing from emitted surfaces): ${e.message ?: e::class.simpleName}",
+      )
+      emptyMap()
+    }
 }

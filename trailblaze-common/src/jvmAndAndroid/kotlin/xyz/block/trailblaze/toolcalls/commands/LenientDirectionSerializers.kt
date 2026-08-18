@@ -8,6 +8,6 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 // enum per CaseInsensitiveEnumSerializer's documented pattern — these standalone objects are
 // applied at the property site via @Serializable(with = ...) instead.
 
-object LenientScrollDirectionSerializer : CaseInsensitiveEnumSerializer<ScrollDirection>(ScrollDirection::class)
+object LenientScrollDirectionSerializer : CaseInsensitiveEnumSerializer<ScrollDirection>(ScrollDirection::class, ScrollDirection.entries)
 
-object LenientSwipeDirectionSerializer : CaseInsensitiveEnumSerializer<SwipeDirection>(SwipeDirection::class)
+object LenientSwipeDirectionSerializer : CaseInsensitiveEnumSerializer<SwipeDirection>(SwipeDirection::class, SwipeDirection.entries)

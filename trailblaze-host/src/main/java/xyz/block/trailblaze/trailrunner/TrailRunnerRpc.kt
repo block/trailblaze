@@ -159,7 +159,7 @@ internal class GetToolsHandler : RpcHandler<GetToolsRequest, ToolCatalogResponse
 internal class GetTrailmapsHandler : RpcHandler<GetTrailmapsRequest, TrailmapsResponse> {
   // Blocking filesystem discovery — dispatch off the request coroutine, matching TrailmapRoutes.kt.
   override suspend fun handle(request: GetTrailmapsRequest): RpcResult<TrailmapsResponse> =
-    RpcResult.Success(TrailmapsResponse(withContext(Dispatchers.IO) { TrailmapCatalogBuilder.build() }))
+    RpcResult.Success(withContext(Dispatchers.IO) { TrailmapCatalogBuilder.buildResponse() })
 }
 
 // The build*Response helpers below already dispatch their blocking filesystem/git work onto

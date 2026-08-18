@@ -357,6 +357,36 @@ class QuickJsTrailblazeToolTest {
   }
 
   @Test
+  fun `execute threads handler error structuredContent onto ExceptionThrown structuredPayload`() = runBlocking {
+    // Error-side counterpart to the Success structured-content pin above, keeping the
+    // on-device path symmetric with the subprocess `CallToolResultMapperTest`: an isError
+    // envelope's structuredContent (the TS SDK's `ToolError.data`) must survive onto
+    // `ExceptionThrown.structuredPayload` on this transport too.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["failingTyped"] = {
+        name: "failingTyped",
+        spec: {},
+        handler: async () => ({
+          isError: true,
+          content: [{ type: "text", text: "ToolError: session did not survive" }],
+          structuredContent: { code: "session" },
+        }),
+      };
+      """.trimIndent(),
+    )
+    val tool = QuickJsTrailblazeTool(host, ToolName("failingTyped"), buildJsonObject {})
+    val result = tool.execute(buildContext())
+    val error = result as? TrailblazeToolResult.Error.ExceptionThrown
+      ?: fail("expected ExceptionThrown, got $result")
+    assertEquals("ToolError: session did not survive", error.errorMessage)
+    val payload = error.structuredPayload?.jsonObject
+      ?: fail("expected structuredPayload on ExceptionThrown, got null")
+    assertEquals("session", payload["code"]!!.jsonPrimitive.content)
+  }
+
+  @Test
   fun `execute flushes result memoryDelta into the shared AgentMemory`() = runBlocking {
     // Root-cause regression for the write-then-read hand-off between two scripted tools: a scripted
     // tool's `ctx.memory.set(...)` is buffered on the JS side and surfaced as

@@ -135,9 +135,16 @@ object TrailblazeToolSetCatalog {
    * workspace trailmap toolsets, and any other source the discovery's composite resource source
    * picked up).
    *
-   * Idempotent for identical inputs; subsequent calls REPLACE the overlay rather than
-   * appending — the host-side discovery pipeline is the single source of truth for "what
-   * workspace toolsets should be visible right now."
+   * Subsequent calls REPLACE the overlay rather than appending — the host-side discovery
+   * pipeline is the single source of truth for "what workspace toolsets should be visible
+   * right now."
+   *
+   * **Idempotent in the overlay it leaves behind, NOT in its effects.** Every call re-arms
+   * [resetDeclaredToolSetProblemReporting], so re-registering identical entries makes an
+   * already-reported broken `tool_sets:` report again — deliberately, since that is how a
+   * developer who reintroduces the same typo hears about it a second time. Don't call this from
+   * a hotter path than discovery on the strength of "the input hasn't changed"; the warning
+   * cadence is tied to how often this runs.
    *
    * **Override contract.** When a workspace toolset's id collides with a classpath-bundled
    * toolset's id, the overlay wins in [defaultEntries]'s merge — same precedence as the
@@ -151,6 +158,13 @@ object TrailblazeToolSetCatalog {
    */
   fun registerWorkspaceToolSets(entries: List<ToolSetCatalogEntry>) {
     workspaceCatalogEntries = entries
+    // Replacing the overlay changes what a target's declared `tool_sets:` resolve to, so a problem
+    // already reported against the old overlay is no longer known to be true — and a problem that
+    // is still true deserves saying again. This is the only choke point every discovery pass goes
+    // through, and discovery re-runs in a live daemon (Trail Runner's create-target flow), so
+    // hooking it here rather than at a caller is what keeps the guarantee from depending on which
+    // entry point ran.
+    resetDeclaredToolSetProblemReporting()
   }
 
   /**
@@ -230,7 +244,7 @@ object TrailblazeToolSetCatalog {
    * list includes [driverType] or is absent/empty, meaning "driver-agnostic").
    *
    * Shared plumbing for the three driver-aware public helpers ([resolveForDriver],
-   * [defaultToolClassesForDriver], and the [TrailblazeHostAppTarget.getInitialToolClassesForDriver]
+   * [defaultToolClassesForDriver], and the [TrailblazeHostAppTarget.resolveToolScopeForDriver]
    * extension) so they all apply the same filter.
    */
   private fun compatibleEntries(
@@ -246,7 +260,7 @@ object TrailblazeToolSetCatalog {
    * to activate (`requestedIds`), and you want only the driver-compatible ones. For "every
    * driver-compatible tool class" (the flat, eager surface), use [defaultToolClassesForDriver]
    * instead; for "every driver-compatible tool class combined with a target's custom overlay
-   * and exclusions," use [TrailblazeHostAppTarget.getInitialToolClassesForDriver].
+   * and exclusions," use [TrailblazeHostAppTarget.resolveToolScopeForDriver].
    */
   fun resolveForDriver(
     driverType: TrailblazeDriverType,
@@ -283,7 +297,7 @@ object TrailblazeToolSetCatalog {
    * Driver-aware replacement for [TrailblazeToolSet.DefaultLlmTrailblazeTools]. Use this
    * for the **eager, flat** case: a caller knows its driver and wants every catalog tool
    * that can run on it. For progressive opt-in to specific toolsets, use [resolveForDriver];
-   * for target-scoped composition, use [TrailblazeHostAppTarget.getInitialToolClassesForDriver].
+   * for target-scoped composition, use [TrailblazeHostAppTarget.resolveToolScopeForDriver].
    *
    * Avoids advertising mobile-only tools (e.g. `hideKeyboard`, `tapOnPoint` from
    * `core_interaction.yaml`) in Playwright / Compose / Revyl sessions, and vice versa.

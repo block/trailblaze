@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.exception
 
+import kotlinx.serialization.json.JsonElement
+
 /**
  * Thrown when a trail's `trailhead:` - the deterministic bootstrap that reaches the trail's
  * starting state - fails. A trailhead failure means the trail never began: every subsequent
@@ -10,11 +12,18 @@ package xyz.block.trailblaze.exception
  * by [detail]. CI summaries surface only the first line of a failure reason, so [headline]
  * must be self-contained (say which tool/step failed); [detail] carries the full report
  * (tool call, underlying failure, stack trace).
+ *
+ * [payload] carries the failing tool's structured error payload
+ * ([xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error.ExceptionThrown.structuredPayload])
+ * when the tool attached one — detail WITHIN [KIND], never a new kind: the kind says "the
+ * trailhead failed", the payload says how (its schema is owned by the downstream repo whose
+ * tool emitted it). Null for text-only failures and the NL-trailhead path.
  */
 class TrailheadException(
   headline: String,
   detail: String = "",
   cause: Throwable? = null,
+  val payload: JsonElement? = null,
 ) : TrailblazeException("$MESSAGE_PREFIX: $headline\n$detail", cause) {
   companion object {
     /**

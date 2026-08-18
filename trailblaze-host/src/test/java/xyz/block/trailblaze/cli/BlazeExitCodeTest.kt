@@ -94,6 +94,29 @@ class BlazeExitCodeTest {
   }
 
   @Test
+  fun `unknown argument keys markdown returns MISUSE`() {
+    // The direct-tools arg-shape gate (StepToolSet + JsScriptingCallbackArgumentValidator):
+    // a scripted tool invoked with a key its inputSchema doesn't declare is user input,
+    // not infrastructure — e.g. `trailblaze tool myapp_launchAppSignedIn key=…` where
+    // `key` belongs to the sibling myapp_launchAppSignedInWithAccount.
+    val result = CliMcpClient.ToolResult(
+      content = "**❌ Error** — Tool 'myapp_launchAppSignedIn' was called with unknown " +
+        "argument keys: [\"key\"]. Expected one of: email, password.",
+    )
+    assertEquals(TrailblazeExitCode.MISUSE.code, blazeExitCode(result))
+  }
+
+  @Test
+  fun `missing required argument keys markdown returns MISUSE`() {
+    // Same gate, the missing-required branch.
+    val result = CliMcpClient.ToolResult(
+      content = "**❌ Error** — Tool 'myapp_launchAppSignedIn' was called without required " +
+        "argument keys: [\"password\"]. Required: email, password.",
+    )
+    assertEquals(TrailblazeExitCode.MISUSE.code, blazeExitCode(result))
+  }
+
+  @Test
   fun `marker phrase without an error status is NOT misuse`() {
     // Reversed from the earlier "defense in depth" verdict (PR #4403): now that a
     // successful read/shell tool returns its real payload through this path, a marker

@@ -7,6 +7,8 @@ import com.sun.jna.NativeLibrary
 import com.sun.jna.NativeLong
 import com.sun.jna.Pointer
 import xyz.block.trailblaze.bundle.yaml.YamlEmitter
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.config.project.WorkspaceTrailsDeclaration
 import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.goose.GooseRecipe
@@ -21,6 +23,8 @@ import java.io.File
 import java.io.FileWriter
 import java.net.URI
 import java.net.URLEncoder
+import java.nio.file.Paths
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -194,12 +198,149 @@ object TrailblazeDesktopUtil {
 
   /**
    * Gets the effective trails directory based on the app config.
+   *
+   * Precedence:
+   *  1. An explicit user choice — [TrailblazeServerState.SavedTrailblazeAppConfig.trailsDirectory],
+   *     when it names something other than [defaultTrailsDirectory].
+   *  2. A `trails:` declaration in the workspace this process launched in
+   *     ([launchWorkspaceDeclaration]).
+   *  3. [defaultTrailsDirectory].
+   *
+   * A person who picked a directory keeps it — the workspace only answers the question nobody
+   * has answered yet, which is what makes a clean install work the first time it opens a
+   * workspace. Rung 2 also fires only on an explicit declaration, so a workspace that doesn't
+   * opt in changes nothing for anyone.
+   *
+   * **Why rung 1 is "non-null AND not the default" rather than just non-null.** Settings files
+   * written before `trailsDirectory` stopped being materialized carry the derived default as if
+   * it were a choice (see `CliConfigHelper.hydrateDefaults`). Treating that as an override would
+   * make rung 2 unreachable for every existing install — the whole point of the field being
+   * nullable. A value equal to the default is indistinguishable from never having chosen, and
+   * behaves identically either way except for letting the workspace answer.
+   *
    * @param appConfig The current app configuration
-   * @return The effective trails directory (configured or default relative to app data directory)
+   * @return The effective trails directory
    */
   fun getEffectiveTrailsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
-    return appConfig.trailsDirectory ?: "${getEffectiveAppDataDirectory(appConfig)}/trails"
+    val declaration = launchWorkspaceDeclaration()
+    val effective = getEffectiveTrailsDirectory(appConfig, workspaceTrailsDirProvider = { declaration?.trailsDir })
+    if (declaration != null) logDeclarationOutcomeOnce(declaration, effective)
+    return effective
   }
+
+  /**
+   * One line per process for a workspace that declares `trails:`, saying whether the declaration
+   * won. Both outcomes are worth a breadcrumb, and only the caller of this function knows which
+   * happened — resolving the declaration does not mean using it, and the same resolution also
+   * feeds config-dir lookups that have no opinion about trails at all.
+   *
+   * The override case is the one a headless daemon otherwise can't explain: the repo says
+   * `trails: legacy-trails`, the Trails tab shows something else, and the Settings screen that
+   * would show the provenance isn't on screen.
+   */
+  private fun logDeclarationOutcomeOnce(declaration: WorkspaceTrailsDeclaration, effective: String) {
+    if (!loggedDeclarationOutcome.compareAndSet(false, true)) return
+    Console.log(declarationOutcomeMessage(declaration, effective))
+  }
+
+  /** The message body of [logDeclarationOutcomeOnce], split out so it is testable without stdout. */
+  internal fun declarationOutcomeMessage(declaration: WorkspaceTrailsDeclaration, effective: String): String {
+    val declared = declaration.trailsDir.absolutePath
+    val inEffect = runCatching {
+      File(effective).canonicalPath == declaration.trailsDir.canonicalPath
+    }.getOrDefault(effective == declared)
+    return if (inEffect) {
+      "Using trails directory $declared declared by `trails:` in ${declaration.configFile.absolutePath}."
+    } else {
+      "Ignoring the `trails:` declaration in ${declaration.configFile.absolutePath} ($declared): " +
+        "the trails directory in Settings names $effective instead. Clear it to use the workspace's."
+    }
+  }
+
+  private val loggedDeclarationOutcome = AtomicBoolean(false)
+
+  /**
+   * Testable overload: callers pass the workspace-declared trails directory explicitly rather
+   * than depending on the JVM's launch cwd or on [launchWorkspaceDeclaration]'s memoization.
+   */
+  internal fun getEffectiveTrailsDirectory(
+    appConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
+    workspaceTrailsDirProvider: () -> File?,
+  ): String {
+    val default = defaultTrailsDirectory(appConfig)
+    return explicitTrailsDirectoryOrNull(appConfig, default)
+      ?: workspaceTrailsDirProvider()?.absolutePath
+      ?: default
+  }
+
+  /**
+   * True when the user has actually picked a trails directory, as opposed to carrying a
+   * materialized default. Drives whether the Settings picker reports the workspace as the source.
+   */
+  fun hasExplicitTrailsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): Boolean =
+    explicitTrailsDirectoryOrNull(appConfig, defaultTrailsDirectory(appConfig)) != null
+
+  private fun explicitTrailsDirectoryOrNull(
+    appConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
+    default: String,
+  ): String? = appConfig.trailsDirectory
+    ?.takeIf { it.isNotBlank() }
+    // Compared canonically: the persisted value and the derived default are both produced by
+    // `canonicalPath`, but a hand-edited settings file need not be.
+    ?.takeIf { runCatching { File(it).canonicalPath != File(default).canonicalPath }.getOrDefault(it != default) }
+
+  /**
+   * Where trails live when nobody has said otherwise: `<app data dir>/../trails`.
+   *
+   * The sibling-of-app-data shape (rather than a child) is what
+   * `CliConfigHelper.derivedTrailsDirectory` has always written, and this is the single
+   * definition both now share. They used to disagree — the CLI wrote the sibling while this
+   * object's inline fallback built a child — which stayed invisible only because the CLI
+   * materialized its value into the config on every read, leaving the fallback unreachable.
+   * Making the field genuinely nullable makes the fallback live, so the two must agree or a
+   * clean install would silently browse a different directory than an upgraded one.
+   */
+  fun defaultTrailsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String =
+    defaultTrailsDirectory(File(getEffectiveAppDataDirectory(appConfig)))
+
+  fun defaultTrailsDirectory(appDataDir: File): String {
+    val root = appDataDir.canonicalFile.parentFile ?: appDataDir.canonicalFile
+    return File(root, "trails").canonicalPath
+  }
+
+  /**
+   * The `trails:` declaration of the workspace this process launched in, or null when there is
+   * none. Resolved from the JVM's launch cwd, so for the daemon it is the directory the user ran
+   * `trailblaze app` from.
+   *
+   * **Only successful resolutions are memoized.** It feeds Compose recomposition paths (the
+   * Trails and Settings tabs) where a walk-up plus YAML parse per read would be far too hot, but
+   * caching a `null` would be permanent for the process: a workspace whose declared directory
+   * shows up later — a branch checkout, a clone still finishing, a directory the user creates
+   * after seeing the log line — would never re-resolve. A miss costs one walk-up, which is what
+   * every non-declaring workspace already pays today for `defaults.target`.
+   *
+   * Deliberately silent: a resolution is not a decision. Callers also use it for the declaring
+   * workspace's *config* dir, where the trails directory is irrelevant, and the trails rung can
+   * lose to an explicit choice — so [logDeclarationOutcomeOnce] logs at the decision instead.
+   *
+   * A consequence worth knowing either way: an ALREADY-RUNNING daemon does not re-anchor when
+   * you launch from a different repo, because `trailblaze app` hands off to the existing window
+   * rather than starting a process with the new cwd. Restart it (`trailblaze app --stop`) to
+   * switch workspaces.
+   */
+  internal fun launchWorkspaceDeclaration(): WorkspaceTrailsDeclaration? {
+    memoizedLaunchDeclaration?.let { return it }
+    val resolved = TrailblazeWorkspaceConfigResolver.workspaceTrailsDeclaration(
+      fromPath = Paths.get(""),
+      consumer = "desktop trails directory",
+    )
+    if (resolved != null) memoizedLaunchDeclaration = resolved
+    return resolved
+  }
+
+  @Volatile
+  private var memoizedLaunchDeclaration: WorkspaceTrailsDeclaration? = null
 
   /**
    * Sets the taskbar icon for macOS.

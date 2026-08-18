@@ -737,4 +737,174 @@ class DeviceClassifierResolverTest {
       DeviceClassifierResolver.classifiersFor(TrailblazeDevicePlatform.ANDROID, "neg-test-udid", probe).map { it.classifier },
     )
   }
+
+  /**
+   * `definitive` exists so a caller whose answer *selects behavior* (recording-leg lowering) can
+   * tell a measured classification from a best-effort guess. The three cases below are the ones the
+   * resolver already refused to cache; the fourth is the measured happy path.
+   */
+  @Test
+  fun `a failed dim probe is reported as non-definitive`() {
+    val classification = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "unprobeable-udid",
+      dimensionsProbe = probeOf(emptyMap()),
+    )
+    assertEquals(listOf("android"), classification.classifiers.map { it.classifier })
+    assertEquals(false, classification.definitive)
+  }
+
+  @Test
+  fun `an android classification computed without density is reported as non-definitive`() {
+    // The low-density-tablet trap: 1920x1080 with no density reads as `phone` off the raw-pixel
+    // heuristic. The classifiers are still handed back (best effort), but flagged as a guess.
+    val classification = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "densityless-udid",
+      dimensionsProbe = probeOf(
+        mapOf(
+          (TrailblazeDevicePlatform.ANDROID to "densityless-udid") to
+            DeviceClassifierResolver.DeviceProbe(1920, 1080, densityDpi = null),
+        ),
+      ),
+    )
+    assertEquals(listOf("android", "phone"), classification.classifiers.map { it.classifier })
+    assertEquals(false, classification.definitive)
+  }
+
+  /**
+   * A declining override means "don't MEMOIZE this, I may claim the device once my shell probe is
+   * ready" — it says nothing about the dim probe, which measured everything it needed. Reporting
+   * this as non-definitive would strip the sub-category from every device an installed override
+   * doesn't claim — an override recognizes only its own hardware, so it declines every stock
+   * emulator and phone and (typically) every iOS device. `HostProbedDeviceClassifiers` would then
+   * discard a measured `[android, phone]` and hand back bare `[android]`, worse than the value it
+   * replaced.
+   */
+  @Test
+  fun `a dim fallback taken because an installed override declined stays definitive but uncached`() {
+    DeviceClassifierResolver.installOverride { _, _ -> null }
+    val probeCalls = AtomicInteger(0)
+    val probe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      probeCalls.incrementAndGet()
+      DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400)
+    }
+    val first = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "declined-udid",
+      dimensionsProbe = probe,
+    )
+    assertEquals(listOf("android", "phone"), first.classifiers.map { it.classifier })
+    assertTrue(first.definitive, "wm size + wm density both succeeded — nothing was guessed")
+
+    // Still not cached, so a later call can let the override reclaim the device.
+    DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "declined-udid",
+      dimensionsProbe = probe,
+    )
+    assertEquals(2, probeCalls.get(), "a declined override must not cache the dim fallback")
+  }
+
+  /**
+   * The same rule on the platform an override can't even apply to. The internal override returns
+   * null for every non-Android platform, so an iOS-bound session would otherwise lose its measured
+   * `ios-iphone`/`ios-ipad` sub-category purely because the distribution installed an Android
+   * override.
+   */
+  @Test
+  fun `an iOS classification stays definitive when the installed override only handles android`() {
+    DeviceClassifierResolver.installOverride { platform, _ ->
+      if (platform == TrailblazeDevicePlatform.ANDROID) listOf(TrailblazeDeviceClassifier("kiosk")) else null
+    }
+    val classification = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.IOS,
+      instanceId = "IOS-UDID",
+      dimensionsProbe = probeOf(
+        mapOf(
+          (TrailblazeDevicePlatform.IOS to "IOS-UDID") to
+            DeviceClassifierResolver.DeviceProbe(1179, 2556),
+        ),
+      ),
+    )
+    assertEquals(listOf("ios", "iphone"), classification.classifiers.map { it.classifier })
+    assertTrue(classification.definitive, "the screenshot probe measured the dims; nothing was guessed")
+  }
+
+  @Test
+  fun `a fully probed classification, an override match, and a non-probe platform are definitive`() {
+    val phoneProbe = probeOf(
+      mapOf(
+        (TrailblazeDevicePlatform.ANDROID to "definitive-udid") to
+          DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400),
+      ),
+    )
+    val probed = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "definitive-udid",
+      dimensionsProbe = phoneProbe,
+    )
+    assertEquals(listOf("android", "phone"), probed.classifiers.map { it.classifier })
+    assertEquals(true, probed.definitive)
+
+    // A platform with no host classifier path (web) is deterministic, not a guess.
+    val web = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.WEB,
+      instanceId = "chromium",
+      dimensionsProbe = probeOf(emptyMap()),
+    )
+    assertEquals(listOf("web"), web.classifiers.map { it.classifier })
+    assertEquals(true, web.definitive)
+
+    // An override that recognizes the device is the distribution's final word.
+    DeviceClassifierResolver.installOverride { _, _ -> listOf(TrailblazeDeviceClassifier("kiosk")) }
+    val overridden = DeviceClassifierResolver.classificationFor(
+      platform = TrailblazeDevicePlatform.ANDROID,
+      instanceId = "override-definitive-udid",
+      dimensionsProbe = phoneProbe,
+    )
+    assertEquals(listOf("kiosk"), overridden.classifiers.map { it.classifier })
+    assertEquals(true, overridden.definitive)
+  }
+
+  /**
+   * A non-definitive answer is never cached — the incomplete probe that produced it is exactly what
+   * a retry is supposed to correct. (The converse doesn't hold: a definitive answer may still be
+   * uncached when an installed override declined, pinned above.)
+   */
+  @Test
+  fun `a non-definitive classification is never cached`() {
+    val definitiveCalls = AtomicInteger(0)
+    val definitiveProbe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      definitiveCalls.incrementAndGet()
+      DeviceClassifierResolver.DeviceProbe(1080, 2340, densityDpi = 400)
+    }
+    repeat(2) {
+      assertTrue(
+        DeviceClassifierResolver.classificationFor(
+          TrailblazeDevicePlatform.ANDROID,
+          "cache-agreement-definitive",
+          definitiveProbe,
+        ).definitive,
+      )
+    }
+    assertEquals(1, definitiveCalls.get(), "a definitive classification with no override is cached, so the probe runs once")
+
+    val guessCalls = AtomicInteger(0)
+    val guessProbe = DeviceClassifierResolver.DimensionsProbe { _, _ ->
+      guessCalls.incrementAndGet()
+      DeviceClassifierResolver.DeviceProbe(1920, 1080, densityDpi = null)
+    }
+    repeat(2) {
+      assertEquals(
+        false,
+        DeviceClassifierResolver.classificationFor(
+          TrailblazeDevicePlatform.ANDROID,
+          "cache-agreement-guess",
+          guessProbe,
+        ).definitive,
+      )
+    }
+    assertEquals(2, guessCalls.get(), "a non-definitive classification is not cached, so the probe re-runs")
+  }
 }

@@ -964,7 +964,36 @@ data class SettingsPatchRequest(
 // A trailmap is the directory that defines one test target. The Trailmaps screen
 // browses each trailmap and the component files inside it, grouped by type.
 @Serializable
-data class TrailmapsResponse(val trailmaps: List<TrailmapEntry>)
+data class TrailmapsResponse(
+  val trailmaps: List<TrailmapEntry>,
+  // Targets declared to live in another repo that this installation doesn't carry. A SEPARATE list
+  // rather than flagged entries in [trailmaps]: every existing consumer iterates `trailmaps` (the
+  // target picker, the New-Component trailmap dropdown), and a pointer with no components would
+  // show up in all of them as a bogus, unusable choice unless each one remembered to filter it out.
+  // A list nothing iterates yet can't be got wrong by omission.
+  val notInstalledTargets: List<NotInstalledTargetEntry> = emptyList(),
+)
+
+/**
+ * A target this installation knows OF but doesn't have — declared by a `KnownTargetWorkspace` record
+ * as living in [repo]. Carries no components: the pointer is the whole payload, which is why it
+ * isn't a [TrailmapEntry].
+ *
+ * [shortName] and [cloneCommand] are computed server-side from the record (KnownTargetWorkspace's
+ * own derivations) rather than re-derived in each UI, so the repo name and the recovery command a
+ * screen shows can't drift from what the CLI's error messages print.
+ */
+@Serializable
+data class NotInstalledTargetEntry(
+  val id: String,
+  val repo: String,
+  /** `org/repo` display form of [repo]. */
+  val shortName: String,
+  /** The command that gets someone from this pointer to a working workspace. */
+  val cloneCommand: String,
+  val url: String? = null,
+  val description: String? = null,
+)
 
 @Serializable
 data class TrailmapEntry(
@@ -983,6 +1012,16 @@ data class TrailmapEntry(
   // does NOT include this id — the runtime will never load such a target, so the picker must not
   // offer it as a card that could activate. The Trailmaps screen still browses everything.
   val workspaceListed: Boolean = true,
+  // Clone URL of the repo that homes this target, when one is declared. Present on entries that ARE
+  // installed here: a trailmap can be bundled in the binary while its trails live only in that repo,
+  // so the screen can explain an empty Trails tab. Absent targets are not entries at all — see
+  // [TrailmapsResponse.notInstalledTargets].
+  val homeRepo: String? = null,
+  // `org/repo` display form of [homeRepo], server-computed (KnownTargetWorkspace.shortName) so UIs
+  // never re-derive — and drift from — the CLI's wording.
+  val homeShortName: String? = null,
+  // Browse URL for [homeRepo], for UIs that want a link rather than a clone command.
+  val homeUrl: String? = null,
 )
 
 @Serializable

@@ -112,6 +112,8 @@ object TrailblazeBuiltInTabs {
           trailblazeSettingsRepo = trailblazeSettingsRepo,
           yamlRunner = yamlRunner,
           additionalInstrumentationArgs = additionalInstrumentationArgs,
+          // An explicit pick outranks a workspace `trails:` declaration, so this stays live in
+          // every workspace — picking here is exactly how someone overrides the declaration.
           onChangeDirectory = { newPath ->
             trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
           }

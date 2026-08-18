@@ -108,6 +108,11 @@ fun TrailblazeTool.requiresHostInstance(): Boolean {
  * A [SensitiveArgsTrailblazeTool] instance gets its declared arg values masked in the returned
  * payload — this is the LOG encode, so secrets (credentials, session seeds) must not survive it.
  * The wire/execution encode ([toOtherTrailblazeToolPayload] called directly) stays unredacted.
+ *
+ * SISTER-IMPL-TAG: tool-payload-encoders. This is the REDACTED half of the pair; every path that
+ * persists a tool payload must come through here rather than calling the canonical encoder
+ * directly. See [toOtherTrailblazeToolPayload]'s kdoc for the full invariant and the indirect
+ * ways (`@Contextual TrailblazeTool` fields) the unredacted one gets reached.
  */
 fun TrailblazeTool.toLogPayload(): OtherTrailblazeTool = toLogPayloadUnredacted().let { payload ->
   if (this is SensitiveArgsTrailblazeTool) payload.withSensitiveArgsRedacted(sensitiveArgNames) else payload

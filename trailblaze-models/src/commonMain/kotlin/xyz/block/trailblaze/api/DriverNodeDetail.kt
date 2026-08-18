@@ -60,13 +60,14 @@ sealed interface DriverNodeDetail {
    * Current consumers:
    * - `InspectTrailblazeNodeComposable` — fills interactive nodes on the inspector overlay.
    * - `BridgeUiActionExecutor` — filter for which nodes are candidates for MCP UI actions.
+   * - [TrailblazeNode.hitTest] — decides whether a node takes a touch itself, and which of
+   *   its ancestors claims the touch otherwise.
    *
-   * Note: this property is NOT consumed by `TrailblazeNode.hitTest` or
-   * `TrailblazeNodeSelectorGenerator.resolveFromTap`. Those use [hasIdentifiableProperties]
-   * for their ranking — "can we generate a stable selector for this node?" — which is a
-   * separate concern from "is the user likely to tap it?". Don't conflate the two: a node
-   * can be `hasIdentifiableProperties=true, isInteractive=false` (a labeled heading) or
+   * Keep it distinct from [hasIdentifiableProperties] — "is the user likely to act on
+   * this?" versus "can we generate a stable selector for it?". A node can be
+   * `hasIdentifiableProperties=true, isInteractive=false` (a labeled heading) or
    * `hasIdentifiableProperties=false, isInteractive=true` (an anonymous clickable row).
+   * `hitTest` uses both, for different steps.
    *
    * Per-variant definitions reflect each driver's native actionability signals (e.g.
    * `isClickable` on Android, `hasClickAction` on Compose, custom actions + AX role
@@ -92,9 +93,11 @@ sealed interface DriverNodeDetail {
    * [isEditable], [isScrollable], [isPassword], [isHeading], [isMultiLine], [inputType],
    * [collectionItemInfo]
    *
-   * ## Display-only properties (transient, for LLM context only)
+   * ## Non-matchable properties (not for selectors)
+   * Mostly transient display/LLM context, though some drive driver-side behavior —
+   * [isVisibleToUser] and [isTextLink] gate the Android driver's tap routing.
    * [packageName], [tooltipText], [error], [isShowingHintText], [isContentInvalid],
-   * [isVisibleToUser], [isLongClickable], [isFocusable], [drawingOrder],
+   * [isVisibleToUser], [isLongClickable], [isFocusable], [isTextLink], [drawingOrder],
    * [maxTextLength], [actions], [collectionInfo], [rangeInfo]
    */
   @Serializable
@@ -346,6 +349,17 @@ sealed interface DriverNodeDetail {
     val maxTextLength: Int = 0,
 
     // --- Display-only: Interaction ---
+
+    /**
+     * True for synthetic children the Android accessibility capture emits for ClickableSpan
+     * ranges inside a text node (in-text links, e.g. Compose `LinkAnnotation`). The platform
+     * exposes such links as spans *inside* the parent's text rather than as nodes of their
+     * own, so Trailblaze synthesizes one addressable child per span. Drives the span-click
+     * tap route on the Android accessibility driver.
+     *
+     * **Display-only.** Match links by [text] (plus [isClickable]) like any other element.
+     */
+    val isTextLink: Boolean = false,
 
     /**
      * Available accessibility actions (e.g., "ACTION_CLICK", "ACTION_SET_TEXT").

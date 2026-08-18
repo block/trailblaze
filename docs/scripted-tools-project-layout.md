@@ -51,6 +51,23 @@ your trailmap can dispatch). You don't commit any of it, and you don't set up th
 either — `check` writes the `.gitignore` and seeds your local `.git/info/exclude`, so generated
 files never clutter `git status`.
 
+### Committing a generated file anyway
+
+Occasionally a trailmap needs one of those files committed — most often `tools/tsconfig.json`, so
+that `bun test` resolves `@trailblaze/scripting` on a fresh checkout without running `check` first.
+Say so by **negating** the entry in the trailmap's `.gitignore`:
+
+```gitignore
+!tools/tsconfig.json
+```
+
+`check` treats a negated entry as already handled and won't re-add the plain one, so the file stops
+reappearing in `git status` on every run. Negate it rather than just deleting the line: git ignore
+rules never apply to a file that's already tracked, so deleting the line looks fine in the repo you
+committed from, but a fresh **copy** of the trailmap tracks nothing yet — and there the entry
+silently keeps your committed file out of `git add`. The negation travels with the trailmap, and it
+also overrides the `.git/info/exclude` rule `check` seeds locally.
+
 ## Why aren't the typed bindings committed?
 
 They're coupled to your installed Trailblaze version: the tool surface — and so the generated

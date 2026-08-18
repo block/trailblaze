@@ -160,6 +160,12 @@ sealed interface IosDriverAction {
      * the way Maestro's are.
      */
     val permissions: Map<String, String>? = null,
+    /**
+     * Argv appended after the bundle id by `xcrun simctl launch`, already flattened by the
+     * converter. Deliberately excluded from [description] and redacted in [toString]: the values
+     * can carry session credentials, and both strings end up in logs.
+     */
+    val launchArguments: List<String> = emptyList(),
   ) : IosDriverAction {
     override val description get() = "Launch app $bundleId" +
       when {
@@ -170,6 +176,13 @@ sealed interface IosDriverAction {
         stopFirst -> " (force restart)"
         else -> ""
       }
+
+    // The generated data-class toString() would print the launch-argument values into any
+    // "$action" interpolation; redact them structurally instead of relying on log-site care.
+    override fun toString(): String =
+      "LaunchApp(bundleId=$bundleId, stopFirst=$stopFirst, clearState=$clearState, " +
+        "clearKeychain=$clearKeychain, permissions=$permissions, " +
+        "launchArguments=<${launchArguments.size} redacted>)"
   }
 
   data class StopApp(val bundleId: String) : IosDriverAction {

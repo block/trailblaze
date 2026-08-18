@@ -9,6 +9,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -29,6 +30,8 @@ import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
+import xyz.block.trailblaze.report.models.failureCodeOf
+import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
@@ -158,9 +161,10 @@ open class CliReportGenerator {
    * [xyz.block.trailblaze.report.GenerateReportCliCommand]. Routes each leg through the
    * open [generateReport] / [generateInteractiveReport] seams so subclass overrides apply.
    *
-   * Either leg can individually be unavailable (missing WASM template / missing bun) —
-   * the corresponding artifact is null. [generateWasm] false skips the WASM leg entirely
-   * (the `--no-wasm-report` path).
+   * Either leg can individually be unavailable — the corresponding artifact is null. For the
+   * legacy leg that is routine (no WASM template); for the interactive leg it means a broken
+   * `bun`, which is a required dependency rather than an optional one. [generateWasm] false
+   * skips the legacy leg entirely (the `--no-wasm-report` path).
    *
    * The session logs are parsed ONCE here (into immutable [SessionLogSnapshot]s) and shared
    * by both legs. Before this, each leg independently re-read + re-decoded every log file:
@@ -190,13 +194,15 @@ open class CliReportGenerator {
   }
 
   /**
-   * Generates the lightweight, self-contained interactive HTML report — the same artifact the
-   * Trail Runner app's "Share as HTML" button produces. Report-producing surfaces generate this
-   * ALONGSIDE the legacy WASM report from [generateReport]; there is no format selector.
+   * Generates the lightweight, self-contained interactive HTML report — the Trailblaze report,
+   * and the same artifact the Trail Runner app's "Share as HTML" button produces. Report-producing
+   * surfaces generate this ALONGSIDE the deprecated WASM report from [generateReport]; there is no
+   * format selector.
    *
    * Generated headlessly by [RunReportGenerator] (a bun subprocess over the shared run-report
-   * renderer). Returns null when it can't be produced — `bun` missing, subprocess failure — with
-   * the cause logged; callers still have the legacy artifact in that case.
+   * renderer). Returns null when it can't be produced — a broken `bun` (a required Trailblaze
+   * dependency), or a subprocess failure — with the cause logged. The deprecated legacy artifact
+   * a caller may still hold is not a substitute; the fix is to repair the install.
    *
    * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports],
    *   which shares one parse across both report legs). Null — e.g. a direct call to this seam —
@@ -610,6 +616,8 @@ open class CliReportGenerator {
       failure_reason = extractJsonFailureReason(status),
       failure_stack = extractJsonFailureStack(status),
       failure_kind = extractJsonFailureKind(status),
+      failure_code = failureCodeOf(failurePayloadOf(status)),
+      failure_payload = failurePayloadOf(status),
       device_log_excerpt = deviceLogExcerpt,
       has_recorded_steps = sessionInfo.hasRecordedSteps,
       recording_skip_reason = recordingInfo.skipReason,

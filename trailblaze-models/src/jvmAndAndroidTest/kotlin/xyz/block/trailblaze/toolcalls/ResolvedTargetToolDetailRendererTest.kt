@@ -316,7 +316,7 @@ class ResolvedTargetToolDetailRendererTest {
       md.contains("- Script: `./tools/makePost.ts`")
     }
     assertTrue("origin trailmap") { md.contains("Origin trailmap: `blog` (declared by this trailmap)") }
-    assertTrue("host-only flag") { md.contains("- Host-only: yes (`requires_host: true`)") }
+    assertTrue("host-only flag") { md.contains("- Host-only: yes (`requiresHost: true`)") }
     assertTrue("required param") {
       md.contains("### Required parameters") &&
         md.contains("- `title` — `string`") &&
@@ -330,11 +330,10 @@ class ResolvedTargetToolDetailRendererTest {
   }
 
   @Test
-  fun `scripted Contract renders host-only no when requiresHost is false`() {
-    // Scripted tools don't carry surfaceToLlm or isRecordable fields on InlineScriptToolConfig
-    // — the runtime treats them as always-LLM-visible and always-recordable — so the Contract
-    // section for scripted tools is host-only-only. Pin that the line renders even in the
-    // requiresHost=false case so a reader sees the explicit "no" rather than an absent line.
+  fun `scripted Contract renders all three flags at their defaults`() {
+    // A scripted tool that declares none of the three flags should still get the complete
+    // three-row Contract view — same shape a class-backed tool gets — rather than an absent
+    // line a reader has to interpret.
     val config = InlineScriptToolConfig(
       script = "./tools/noHost.ts",
       name = "noHost",
@@ -350,14 +349,127 @@ class ResolvedTargetToolDetailRendererTest {
     )
     val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
     assertTrue("Contract section header") { md.contains("## Contract") }
+    assertTrue("LLM-visible default=yes") {
+      md.contains("- Visible to LLM: yes (`surfaceToLlm: true`)")
+    }
+    assertTrue("Recordable default=yes") {
+      md.contains("- Recordable: yes (`isRecordable: true`)")
+    }
     assertTrue("Host-only line renders `no` explicitly") {
-      md.contains("- Host-only: no (`requires_host: false`)")
+      md.contains("- Host-only: no (`requiresHost: false`)")
     }
-    assertFalse("scripted Contract does not invent surfaceToLlm") {
-      md.contains("- Visible to LLM:")
+  }
+
+  @Test
+  fun `scripted Contract reflects the typed surfaceToLlm and isRecordable opt-outs`() {
+    // The authoring shape a `.ts` spec produces (`trailblaze.tool<A>({surfaceToLlm: false, …})`
+    // lowers to the typed InlineScriptToolConfig fields). Without this, a reader of an
+    // LLM-hidden scripted tool's page had no way to tell it was hidden from the agent — the
+    // Contract section named only `requires_host`.
+    val config = InlineScriptToolConfig(
+      script = "./tools/deleteThing.ts",
+      name = "deleteThing",
+      description = "Destructive self-clean step a trail invokes explicitly.",
+      surfaceToLlm = false,
+      isRecordable = false,
+      inputSchema = buildJsonObject { put("type", JsonPrimitive("object")) },
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.Scripted(
+      name = "deleteThing",
+      config = config,
+      originTrailmapId = "trailmap",
+      consumerTrailmapId = "trailmap",
+    )
+    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
+    assertTrue("LLM-visible reflects surfaceToLlm=false, got:\n$md") {
+      md.contains("- Visible to LLM: no (`surfaceToLlm: false`)")
     }
-    assertFalse("scripted Contract does not invent isRecordable") {
-      md.contains("- Recordable:")
+    assertTrue("Recordable reflects isRecordable=false") {
+      md.contains("- Recordable: no (`isRecordable: false`)")
+    }
+    assertTrue("Host-only untouched by the other two flags") {
+      md.contains("- Host-only: no (`requiresHost: false`)")
+    }
+  }
+
+  @Test
+  fun `scripted Contract honors _meta opt-outs authored without the typed shortcut`() {
+    // A hand-authored `target.tools:` entry can carry the namespaced `_meta` keys alone, with no
+    // typed shortcut field. The runtime combines both sides (opt-out AND for surfaceToLlm /
+    // isRecordable, opt-in OR for requiresHost); reading only the typed field would render a
+    // hidden, non-recordable, host-only tool as visible/recordable/device-capable.
+    val config = InlineScriptToolConfig(
+      script = "./tools/internalStep.ts",
+      name = "internalStep",
+      description = "Internal launch step composed by an orchestrator.",
+      meta = buildJsonObject {
+        put("trailblaze/surfaceToLlm", JsonPrimitive(false))
+        put("trailblaze/isRecordable", JsonPrimitive(false))
+        put("trailblaze/requiresHost", JsonPrimitive(true))
+      },
+      inputSchema = buildJsonObject { put("type", JsonPrimitive("object")) },
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.Scripted(
+      name = "internalStep",
+      config = config,
+      originTrailmapId = "trailmap",
+      consumerTrailmapId = "trailmap",
+    )
+    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
+    assertTrue("LLM-visible reflects `_meta.trailblaze/surfaceToLlm: false`, got:\n$md") {
+      md.contains("- Visible to LLM: no (`surfaceToLlm: false`)")
+    }
+    assertTrue("Recordable reflects `_meta.trailblaze/isRecordable: false`") {
+      md.contains("- Recordable: no (`isRecordable: false`)")
+    }
+    assertTrue("Host-only reflects `_meta.trailblaze/requiresHost: true`") {
+      md.contains("- Host-only: yes (`requiresHost: true`)")
+    }
+  }
+
+  @Test
+  fun `scripted Contract never renders the snake_case YAML flag spellings`() {
+    // `InlineScriptToolConfig` declares no `@SerialName`, so camelCase is the only key a scripted
+    // descriptor decodes — and because every scripted decode path runs `strictMode = false`, an
+    // author who copies `surface_to_llm: false` off a page gets a silent no-op that leaves the tool
+    // LLM-VISIBLE, the opposite of what they asked for. Pin the absence, not just the presence:
+    // the tokens are the copy-paste contract, so a future refactor that re-shares one literal
+    // across both kinds has to fail here.
+    val config = InlineScriptToolConfig(
+      script = "./tools/spelling.ts",
+      name = "spelling",
+      description = "Checks the rendered flag spelling.",
+      inputSchema = buildJsonObject { put("type", JsonPrimitive("object")) },
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.Scripted(
+      name = "spelling",
+      config = config,
+      originTrailmapId = "trailmap",
+      consumerTrailmapId = "trailmap",
+    )
+    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
+    listOf("surface_to_llm", "is_recordable", "requires_host").forEach { yamlOnlyKey ->
+      assertFalse("scripted page must not advertise the YAML-only key `$yamlOnlyKey`, got:\n$md") {
+        md.contains(yamlOnlyKey)
+      }
+    }
+  }
+
+  @Test
+  fun `yaml-defined Contract keeps the snake_case spellings its decoder accepts`() {
+    // The other half of the split: `ToolYamlConfig` carries `@SerialName("surface_to_llm")`, so
+    // snake_case IS the settable key there and must NOT drift to camelCase along with scripted.
+    val config = ToolYamlConfig(
+      id = "spelling",
+      description = "Checks the rendered flag spelling.",
+      parameters = emptyList(),
+      toolsList = listOf(buildJsonObject { put("noop", JsonPrimitive(true)) }),
+    )
+    val detail = ResolvedTargetToolDetailRenderer.ToolDetail.YamlDefined(name = "spelling", config = config)
+    val md = ResolvedTargetToolDetailRenderer.renderMarkdown(detail, targetId = "fixture")
+    assertTrue("yaml page keeps `surface_to_llm`, got:\n$md") { md.contains("`surface_to_llm: true`") }
+    assertFalse("yaml page must not render the scripted camelCase key") {
+      md.contains("`surfaceToLlm:")
     }
   }
 

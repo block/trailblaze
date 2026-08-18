@@ -125,8 +125,14 @@ class FileWatchService(
 
     Console.log("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms)")
 
-    // Start the watch loop in a background thread
-    watchThread = thread(name = "FileWatcher-${dirToWatch.name}") {
+    // Start the watch loop in a background thread.
+    //
+    // Daemon, because the loop parks in `ws.take()` until someone calls stopWatching(): as a
+    // non-daemon thread it kept the whole JVM alive in `DestroyJavaVM` after main returned, so any
+    // CLI command that opened the logs repo and exited 0 hung until SIGKILL (`TrailblazeCli.run`
+    // only force-exits on non-zero codes). Watching is strictly background work — nothing should
+    // outlive the process on its account.
+    watchThread = thread(name = "FileWatcher-${dirToWatch.name}", isDaemon = true) {
       try {
         // Infinite loop to watch for events
         while (!Thread.currentThread().isInterrupted) {

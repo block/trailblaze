@@ -198,6 +198,15 @@ standalone `trailblaze-config/` directory at the workspace root instead. The top
 `trails/` directory with `trails/config/trailblaze.yaml` remains fully supported as the
 legacy layout.
 
+If your trails live under a differently-named directory, name it in `trailblaze.yaml` so the
+desktop app and Trail Runner browse it on launch instead of guessing `trails/`:
+
+```yaml
+trails: legacy-trails
+```
+
+See [Declaring a trails directory](configuration.md#declaring-a-trails-directory).
+
 **Can I organize by feature?**
 Yes, and it's often clearer. Put a trail next to the code it covers (e.g., `features/checkout/trail.yaml`) and run it with `trailblaze run features/checkout/trail.yaml`, point the CLI at the directory (`trailblaze run features/checkout/`), or glob the whole tree with `trailblaze run features/**/trail.yaml`.
 

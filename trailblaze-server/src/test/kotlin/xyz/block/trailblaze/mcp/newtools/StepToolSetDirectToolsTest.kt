@@ -23,8 +23,15 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration
+import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -572,6 +579,215 @@ class StepToolSetDirectToolsTest {
     assertContains(result, "not valid for the current device/target")
     assertContains(result, "openUrl")
     assertFalse(result.contains("web_navigate"), "Web hint must not leak when web_navigate is unavailable")
+  }
+
+  // -- 6c. Scripted-tool arg-shape gate -----------------------------------------
+  //
+  // Dynamic/scripted tools carry raw JsonObject args with no deserializer to reject a
+  // wrong shape, so parseAndValidateDirectTools runs JsScriptingCallbackArgumentValidator
+  // over them. Regression coverage for `trailblaze tool <scripted-launch-tool> key=…`
+  // (the arg shape of a sibling tool): the undefined email/password used to flow through
+  // to the device and fail deep inside the tool as a BroadcastExtra decode error instead
+  // of an up-front rejection.
+
+  /** Repo with one dynamic tool whose descriptor declares the given parameter split. */
+  private fun repoWithDynamicTool(
+    name: String = "fake_scripted_login",
+    required: List<String> = listOf("email", "password"),
+    optional: List<String> = listOf("mode"),
+    exhaustive: Boolean = false,
+  ): TrailblazeToolRepo {
+    val repo = TrailblazeToolRepo(
+      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "arg-gate-test-set",
+        toolClasses = emptySet(),
+        yamlToolNames = emptySet(),
+      ),
+    )
+    val registeredName = name
+    repo.addDynamicTools(
+      listOf(
+        object : DynamicTrailblazeToolRegistration {
+          override val name: ToolName = ToolName(registeredName)
+          override val declaresExhaustiveParameters: Boolean = exhaustive
+          override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+            name = registeredName,
+            description = "fake scripted tool",
+            requiredParameters = required.map { TrailblazeToolParameterDescriptor(name = it, type = "string") },
+            optionalParameters = optional.map { TrailblazeToolParameterDescriptor(name = it, type = "string") },
+          )
+
+          override fun buildKoogTool(
+            trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+          ): TrailblazeKoogTool<out TrailblazeTool> =
+            error("buildKoogTool not used — direct tools dispatch via decodeToolCall")
+
+          // A real serializable tool so downstream logging/recording paths stay happy;
+          // the identity is irrelevant to the gate under test.
+          override fun decodeToolCall(argumentsJson: String): TrailblazeTool =
+            TapOnPointTrailblazeTool(x = 0, y = 0)
+        },
+      ),
+    )
+    return repo
+  }
+
+  @Test
+  fun `direct tools reject scripted tool called with unknown argument keys`() = runTest {
+    var screenStateInvocations = 0
+    var executorCalled = false
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ ->
+          screenStateInvocations++
+          dummyScreenState
+        },
+        rawToolExecutor = { _, _ ->
+          executorCalled = true
+          "OK"
+        },
+        dynamicToolRepoProvider = { repoWithDynamicTool() },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Launch signed in",
+        tools = "- fake_scripted_login:\n    key: defaults/standard-merchant",
+      )
+
+    // "was called with unknown argument keys" is in the CLI's MISUSE_MARKERS list.
+    assertContains(result, "was called with unknown argument keys")
+    assertContains(result, "\"key\"")
+    assertContains(result, "email")
+    assertFalse(executorCalled, "rawToolExecutor must not run for a wrong-shaped scripted-tool call")
+    assertEquals(
+      0,
+      screenStateInvocations,
+      "the arg-shape rejection must short-circuit before awaitScreenState like the other pre-validation rejections",
+    )
+  }
+
+  @Test
+  fun `direct tools reject scripted tool missing required argument keys`() = runTest {
+    var executorCalled = false
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ ->
+          executorCalled = true
+          "OK"
+        },
+        dynamicToolRepoProvider = { repoWithDynamicTool() },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Launch signed in",
+        tools = "- fake_scripted_login:\n    email: merchant@example.com",
+      )
+
+    // "was called without required argument keys" is in the CLI's MISUSE_MARKERS list.
+    assertContains(result, "was called without required argument keys")
+    assertContains(result, "\"password\"")
+    assertFalse(executorCalled, "rawToolExecutor must not run when a required arg is missing")
+  }
+
+  @Test
+  fun `direct tools execute scripted tool whose args satisfy the schema`() = runTest {
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+        dynamicToolRepoProvider = { repoWithDynamicTool() },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Launch signed in",
+        tools = "- fake_scripted_login:\n    email: merchant@example.com\n    password: hunter2",
+      )
+
+    assertEquals(1, executedTools.size)
+    assertContains(result, "Done")
+  }
+
+  @Test
+  fun `direct tools skip arg-shape gate for dynamic tool with no declared parameters`() = runTest {
+    // A dynamic registration that advertises no schema WITHOUT claiming exhaustiveness
+    // (subprocess MCP servers can legitimately do this — declaresExhaustiveParameters
+    // defaults to false) must NOT be rejected — the validator's introspection returns
+    // null and the call falls through unchanged.
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+        dynamicToolRepoProvider = {
+          repoWithDynamicTool(name = "schemaless_tool", required = emptyList(), optional = emptyList())
+        },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Run schemaless tool",
+        tools = "- schemaless_tool:\n    anything: goes",
+      )
+
+    assertEquals(1, executedTools.size)
+    assertContains(result, "Done")
+  }
+
+  @Test
+  fun `direct tools reject stray keys on a no-arg tool whose schema is exhaustive`() = runTest {
+    // The mirror image of the skip above: a scripted `.ts` tool with no arguments still
+    // carries an exhaustive analyzer-generated schema (`properties: {}`), so its
+    // registration sets declaresExhaustiveParameters = true and a stray key is the same
+    // typo class the gate exists to catch — it must reject, not silently swallow.
+    var executorCalled = false
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ ->
+          executorCalled = true
+          "OK"
+        },
+        dynamicToolRepoProvider = {
+          repoWithDynamicTool(
+            name = "no_arg_tool",
+            required = emptyList(),
+            optional = emptyList(),
+            exhaustive = true,
+          )
+        },
+      )
+
+    val result =
+      toolSet.step(
+        objective = "Open the debug drawer",
+        tools = "- no_arg_tool:\n    bogus: 1",
+      )
+
+    assertContains(result, "was called with unknown argument keys")
+    assertContains(result, "\"bogus\"")
+    assertContains(result, "no arguments")
+    assertFalse(executorCalled, "rawToolExecutor must not run for a stray key on a no-arg exhaustive tool")
   }
 
   // -- 6e. Pre-validation: unknown / wrong-driver rejections short-circuit -----

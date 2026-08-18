@@ -382,6 +382,126 @@ class PerTrailmapTsconfigEmitterTest {
   }
 
   @Test
+  fun `a negated entry is left alone instead of being re-added`() {
+    // A trailmap that COMMITS an artifact says so with git's negation syntax. Re-appending the
+    // plain entry underneath would silently win (later patterns take precedence) and would dirty
+    // the file on every run, since the committed `.gitignore` deliberately omits it.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val trailmapDir = File(workspaceRoot, "config/trailmaps/negated").apply { mkdirs() }
+    val gitignore = File(trailmapDir, ".gitignore")
+    val authoredContent = "tools/trailblaze-client.d.ts\n" +
+      "tools/trailblaze-tool-descriptors.json\n" +
+      "!tools/tsconfig.json\n"
+    gitignore.writeText(authoredContent)
+
+    val trailmap = filesystemTrailmap(id = "negated", trailmapDir = trailmapDir)
+    PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
+
+    assertEquals(
+      authoredContent,
+      gitignore.readText(),
+      "A negated entry means the author committed that artifact deliberately — the file must be " +
+        "left byte-identical rather than having the plain entry appended underneath it",
+    )
+  }
+
+  @Test
+  fun `a negated entry survives trailing whitespace, the way git reads it`() {
+    // git strips trailing whitespace from a .gitignore pattern, so it honors `!tools/tsconfig.json `.
+    // If the emitter didn't, a stray space would silently bring the churn back.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val trailmapDir = File(workspaceRoot, "config/trailmaps/negated_ws").apply { mkdirs() }
+    val gitignore = File(trailmapDir, ".gitignore")
+    val authoredContent = "tools/trailblaze-client.d.ts\n" +
+      "tools/trailblaze-tool-descriptors.json\n" +
+      "!tools/tsconfig.json  \n"
+    gitignore.writeText(authoredContent)
+
+    val trailmap = filesystemTrailmap(id = "negated_ws", trailmapDir = trailmapDir)
+    PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
+
+    assertEquals(authoredContent, gitignore.readText())
+  }
+
+  @Test
+  fun `gitignorePatternOf drops only the trailing spaces git itself drops`() {
+    // Verified against git 2.51: `tools/tsconfig.json<TAB>` does NOT ignore the artifact, while
+    // `tools/tsconfig.json  ` does. Reading a tab-terminated line as the plain entry would make the
+    // emitter skip appending a working one and leave the generated file visible to git.
+    assertEquals("tools/tsconfig.json", PerTrailmapTsconfigEmitter.gitignorePatternOf("tools/tsconfig.json  "))
+    assertEquals("tools/tsconfig.json\t", PerTrailmapTsconfigEmitter.gitignorePatternOf("tools/tsconfig.json\t"))
+    assertEquals("tools/tsconfig.json", PerTrailmapTsconfigEmitter.gitignorePatternOf("tools/tsconfig.json"))
+    // A backslash quotes the space, so the pattern genuinely ends in one and is NOT our entry.
+    assertEquals("tools/tsconfig.json\\ ", PerTrailmapTsconfigEmitter.gitignorePatternOf("tools/tsconfig.json\\ "))
+    // An even run of backslashes leaves the space unescaped, so it still goes.
+    assertEquals("tools/tsconfig.json\\\\", PerTrailmapTsconfigEmitter.gitignorePatternOf("tools/tsconfig.json\\\\ "))
+  }
+
+  @Test
+  fun `an entry terminated by a tab is not mistaken for the real one`() {
+    // git treats the tab as part of the pattern, so that line ignores nothing — the emitter must
+    // still append a working entry rather than reading the line as already satisfying it.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val trailmapDir = File(workspaceRoot, "config/trailmaps/tabbed").apply { mkdirs() }
+    val gitignore = File(trailmapDir, ".gitignore")
+    gitignore.writeText("tools/tsconfig.json\t\n")
+
+    val trailmap = filesystemTrailmap(id = "tabbed", trailmapDir = trailmapDir)
+    PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
+
+    val updated = gitignore.readText()
+    assertTrue("a working tools/tsconfig.json entry must be appended: $updated") {
+      updated.lines().any { it == "tools/tsconfig.json" }
+    }
+  }
+
+  @Test
+  fun `a negation terminated by a tab does not suppress the entry`() {
+    // Same rule on the opt-out side: `!tools/tsconfig.json<TAB>` is not a negation of our path, so
+    // it must not be read as the author opting out.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val trailmapDir = File(workspaceRoot, "config/trailmaps/tabbed_neg").apply { mkdirs() }
+    val gitignore = File(trailmapDir, ".gitignore")
+    gitignore.writeText("!tools/tsconfig.json\t\n")
+
+    val trailmap = filesystemTrailmap(id = "tabbed_neg", trailmapDir = trailmapDir)
+    PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
+
+    assertTrue("the entry must still be appended: ${gitignore.readText()}") {
+      gitignore.readText().lines().any { it == "tools/tsconfig.json" }
+    }
+  }
+
+  @Test
+  fun `a negation for one entry does not suppress the others`() {
+    // The opt-out is per-path: negating the tsconfig must still let a genuinely missing derived
+    // artifact get added, or one negation would silently disable the whole mechanism.
+    val workspaceRoot = newWorkspaceRootWithBundle()
+    val trailmapDir = File(workspaceRoot, "config/trailmaps/partial_neg").apply { mkdirs() }
+    val gitignore = File(trailmapDir, ".gitignore")
+    gitignore.writeText("!tools/tsconfig.json\n")
+
+    val trailmap = filesystemTrailmap(id = "partial_neg", trailmapDir = trailmapDir)
+    PerTrailmapTsconfigEmitter.emit(workspaceRoot = workspaceRoot.toPath(), resolvedTrailmaps = listOf(trailmap))
+
+    val updated = gitignore.readText()
+    assertTrue("the negation must be preserved verbatim: $updated") {
+      updated.lines().any { it == "!tools/tsconfig.json" }
+    }
+    assertFalse("the negated path must not also be added as a plain entry: $updated") {
+      updated.lines().any { it == "tools/tsconfig.json" }
+    }
+    // Assert EVERY non-negated entry, not just the first: keying the assertion to one path would
+    // still pass if the negation swallowed the sidecar too.
+    val expectedAdded = PerTrailmapTsconfigEmitter.GITIGNORE_ENTRIES.filter { it != "tools/tsconfig.json" }
+    assertEquals(
+      expectedAdded.toSet(),
+      updated.lines().filter { it in expectedAdded }.toSet(),
+      "every derived artifact except the negated one must still be added: $updated",
+    )
+  }
+
+  @Test
   fun `gitignore append does not duplicate framework entries already present`() {
     val workspaceRoot = newWorkspaceRootWithBundle()
     val trailmapDir = File(workspaceRoot, "config/trailmaps/no_dup").apply { mkdirs() }

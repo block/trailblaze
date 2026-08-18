@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.client
 
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailheadException
@@ -263,6 +264,7 @@ class TrailblazeSessionManager(
         exceptionMessage = formatExceptionMessage(exception),
         exceptionStackTrace = exception?.stackTraceToString(),
         failureKind = failureKind(exception),
+        failurePayload = failurePayload(exception),
       )
       isSuccess -> SessionStatus.Ended.Succeeded(durationMs)
       else -> SessionStatus.Ended.Failed(
@@ -270,6 +272,7 @@ class TrailblazeSessionManager(
         exceptionMessage = formatExceptionMessage(exception),
         exceptionStackTrace = exception?.stackTraceToString(),
         failureKind = failureKind(exception),
+        failurePayload = failurePayload(exception),
       )
     }
   }
@@ -290,6 +293,14 @@ class TrailblazeSessionManager(
     is TrailheadException -> TrailheadException.KIND
     else -> null
   }
+
+  /**
+   * Structured payload carried by the session-ending exception — see
+   * [SessionStatus.Ended.Failed.failurePayload]. Null for everything but a
+   * [TrailheadException] whose failing tool attached one.
+   */
+  private fun failurePayload(exception: Throwable?): JsonElement? =
+    (exception as? TrailheadException)?.payload
 
   companion object {
     @Suppress("SimpleDateFormat")

@@ -1,5 +1,10 @@
 # Framework meta tools — always enabled.
 # - objectiveStatus: lets the LLM declare a step complete or failed.
+#
+# `drivers:` is intentionally omitted. Every driver's agent needs a way to end a step, so this
+# toolset is genuinely driver-agnostic; the catalog reads an absent `drivers:` as "compatible
+# with every driver". Noted explicitly so a future audit of driver-agnostic toolsets can tell a
+# deliberate omission from an oversight.
 id: meta
 description: "Framework meta tools for objective reporting."
 always_enabled: true

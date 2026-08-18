@@ -124,6 +124,17 @@ data class TrailmapScriptedToolFile(
    */
   val isRecordable: Boolean = true,
   /**
+   * Top-level shortcut for `_meta: { trailblaze/sensitiveArgNames: [...] }`. Names the tool's
+   * arguments whose values carry secret material (a password, a session token) and must never
+   * reach a persisted session log — session logs ship as CI artifacts. Mirrors a Kotlin tool
+   * implementing `SensitiveArgsTrailblazeTool`.
+   *
+   * Masking is log-only: the tool still executes with the real values. Translated by
+   * [toInlineScriptToolConfig] into `_meta["trailblaze/sensitiveArgNames"]`. `null` (the default)
+   * is a no-op.
+   */
+  val sensitiveArgNames: List<String>? = null,
+  /**
    * Runtime selector (`subprocess` or `inProcess`) — see [ScriptedToolRuntime].
    *
    * `null` (the default) means in-process QuickJS. Set this to `subprocess` only when the
@@ -304,6 +315,14 @@ data class TrailmapScriptedToolEntry(
   /** `null` (default) = inherit file-wide [TrailmapScriptedToolFile.isRecordable]. */
   val isRecordable: Boolean? = null,
   /**
+   * `null` or empty (default) = inherit file-wide [TrailmapScriptedToolFile.sensitiveArgNames].
+   * Empty is "inherit" rather than "mask nothing" so a multi-tool descriptor's file-wide
+   * declaration can't be silently dropped by an author writing `sensitiveArgNames: []` — the
+   * failure mode of guessing wrong here is a leaked credential, so the safe reading wins. An entry
+   * that genuinely masks nothing while its siblings do belongs in its own descriptor.
+   */
+  val sensitiveArgNames: List<String>? = null,
+  /**
    * Per-entry `_meta` keys. Merged with the file-wide [TrailmapScriptedToolFile.meta] — keys
    * present on both win on the entry side.
    */
@@ -397,6 +416,7 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig 
     requiresHost = requiresHost,
     surfaceToLlm = surfaceToLlm,
     isRecordable = isRecordable,
+    sensitiveArgNames = sensitiveArgNames,
   )
   return InlineScriptToolConfig(
     script = script,
@@ -408,6 +428,11 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig 
     runtime = runtime,
     meta = mergedMeta,
     inputSchema = buildInputSchemaObject(inputSchema),
+    // Exhaustive ONLY when the author actually declared properties. An absent `inputSchema:`
+    // still synthesizes `properties: {}` above (harmless — the analyzer's real schema wins
+    // wherever enrichment runs), but that shape means "schema comes from the .ts type", so it
+    // must not be read as "takes no arguments" on the no-analyzer catalog path.
+    inputSchemaExhaustive = inputSchema.isNotEmpty(),
   )
 }
 
@@ -484,6 +509,8 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
       entry.supportedPlatforms?.takeIf { it.isNotEmpty() } ?: supportedPlatforms
     val effectiveSurfaceToLlm = entry.surfaceToLlm ?: surfaceToLlm
     val effectiveIsRecordable = entry.isRecordable ?: isRecordable
+    val effectiveSensitiveArgNames =
+      entry.sensitiveArgNames?.takeIf { it.isNotEmpty() } ?: sensitiveArgNames
     // Merge file-wide defaults under per-entry overrides — per-entry keys win.
     val mergedExplicitMeta = when {
       meta == null && entry.meta == null -> null
@@ -500,6 +527,7 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
       requiresHost = effectiveRequiresHost,
       surfaceToLlm = effectiveSurfaceToLlm,
       isRecordable = effectiveIsRecordable,
+      sensitiveArgNames = effectiveSensitiveArgNames,
     )
     InlineScriptToolConfig(
       script = script,
@@ -511,6 +539,9 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
       runtime = runtime,
       meta = mergedMeta,
       inputSchema = buildInputSchemaObject(entry.inputSchema),
+      // Same provenance rule as the single-tool path above: only an author-declared
+      // `inputSchema:` is the complete contract.
+      inputSchemaExhaustive = entry.inputSchema.isNotEmpty(),
     )
   }
 }
@@ -522,7 +553,8 @@ fun TrailmapScriptedToolFile.toInlineScriptToolConfigs(): List<InlineScriptToolC
  * far from the descriptor file. We'd rather throw here with the descriptor name in the message.
  *
  * Only validates keys we know about (`trailblaze/requiresHost`, `trailblaze/supportedPlatforms`,
- * `trailblaze/surfaceToLlm`, `trailblaze/isRecordable`); arbitrary author keys flow through unchecked.
+ * `trailblaze/surfaceToLlm`, `trailblaze/isRecordable`, `trailblaze/sensitiveArgNames`); arbitrary
+ * author keys flow through unchecked.
  */
 private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
   if (meta == null) return
@@ -551,6 +583,17 @@ private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
         "`supportedPlatforms: [...]` shortcut instead of authoring this key directly."
     }
   }
+  // A wrong shape here reads downstream as an empty list — i.e. "mask nothing" — so the author's
+  // credential would silently land in the session log. Loudest possible failure is the right
+  // trade for that.
+  meta["trailblaze/sensitiveArgNames"]?.let { v ->
+    require(v is JsonArray && v.all { it is JsonPrimitive && it.isString }) {
+      "Tool '$toolName' `_meta.trailblaze/sensitiveArgNames`: expected a YAML list of argument " +
+        "names (e.g. `[password]`), got ${v::class.simpleName}. A malformed value masks NOTHING, " +
+        "so the named credential would be written to the session log in plaintext. Prefer the " +
+        "top-level `sensitiveArgNames: [...]` shortcut instead of authoring this key directly."
+    }
+  }
 }
 
 /** Recognizes `true` and `false` JSON literals; rejects e.g. the string `"true"`. */
@@ -569,9 +612,11 @@ private fun mergeMetaShortcuts(
   requiresHost: Boolean,
   surfaceToLlm: Boolean = true,
   isRecordable: Boolean = true,
+  sensitiveArgNames: List<String>? = null,
 ): JsonObject? {
   val explicit = explicitMeta ?: JsonObject(emptyMap())
   val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
+  val needsSensitiveArgNames = !sensitiveArgNames.isNullOrEmpty()
   // Only fold the requiresHost shortcut into _meta when it's `true`. A false top-level value
   // is the schema default — emitting `trailblaze/requiresHost: false` into the meta object
   // would change the wire shape for the common case (descriptor without an explicit
@@ -588,7 +633,8 @@ private fun mergeMetaShortcuts(
     !needsSupportedPlatforms &&
     !needsRequiresHost &&
     !needsSurfaceToLlm &&
-    !needsIsRecordable
+    !needsIsRecordable &&
+    !needsSensitiveArgNames
   ) {
     return null
   }
@@ -611,6 +657,12 @@ private fun mergeMetaShortcuts(
     }
     if (needsIsRecordable) {
       put("trailblaze/isRecordable", JsonPrimitive(false))
+    }
+    if (needsSensitiveArgNames) {
+      put(
+        "trailblaze/sensitiveArgNames",
+        buildJsonArray { sensitiveArgNames!!.forEach { add(JsonPrimitive(it)) } },
+      )
     }
   }
 }

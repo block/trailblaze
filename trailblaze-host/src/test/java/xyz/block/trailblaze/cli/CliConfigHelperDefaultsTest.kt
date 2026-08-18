@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
@@ -29,7 +30,7 @@ class CliConfigHelperDefaultsTest {
   }
 
   @Test
-  fun `defaultConfig derives sibling logs and trails paths and enables web driver`() {
+  fun `defaultConfig derives sibling logs path and enables web driver`() {
     val appDataDir = tempFolder.newFolder("runtime", "appdata")
     System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
 
@@ -37,11 +38,50 @@ class CliConfigHelperDefaultsTest {
 
     assertEquals(appDataDir.canonicalPath, config.appDataDirectory)
     assertEquals(File(appDataDir.parentFile, "logs").canonicalPath, config.logsDirectory)
-    assertEquals(File(appDataDir.parentFile, "trails").canonicalPath, config.trailsDirectory)
     assertEquals(
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       config.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.WEB],
     )
+  }
+
+  @Test
+  fun `trails directory stays null unless the user picks one (tri-state)`() {
+    // Exactly the argument the selectedTargetAppId test below makes, for the same reason: a
+    // directory persisted without user intent is indistinguishable from a real choice, and would
+    // permanently mask the workspace `trails:` rung. Readers derive the default themselves via
+    // TrailblazeDesktopUtil.getEffectiveTrailsDirectory.
+    val appDataDir = tempFolder.newFolder("runtime", "appdata")
+    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+
+    assertNull(CliConfigHelper.defaultConfig().trailsDirectory)
+
+    // First-run write path must not persist one...
+    CliConfigHelper.getOrCreateConfig()
+    assertNull(CliConfigHelper.readConfigRaw()?.trailsDirectory)
+
+    // ...read-side hydration must not materialize one, and an unrelated mutation must not
+    // write one.
+    CliConfigHelper.updateConfig { it }
+    assertNull(CliConfigHelper.readConfig()?.trailsDirectory)
+    assertNull(CliConfigHelper.readConfigRaw()?.trailsDirectory)
+
+    // The settings file on disk must not even mention the key.
+    assertFalse(
+      File(appDataDir, "trailblaze-settings.json").readText().contains("trailsDirectory"),
+      "an unchosen trails directory must not be written to the settings file",
+    )
+  }
+
+  @Test
+  fun `an explicitly chosen trails directory is preserved`() {
+    val appDataDir = tempFolder.newFolder("runtime", "appdata")
+    System.setProperty("trailblaze.appdata.dir", appDataDir.absolutePath)
+    val chosen = tempFolder.newFolder("my-trails").canonicalPath
+
+    CliConfigHelper.updateConfig { it.copy(trailsDirectory = chosen) }
+
+    assertEquals(chosen, CliConfigHelper.readConfigRaw()?.trailsDirectory)
+    assertEquals(chosen, CliConfigHelper.readConfig()?.trailsDirectory)
   }
 
   @Test
@@ -86,7 +126,7 @@ class CliConfigHelperDefaultsTest {
     val updated = CliConfigHelper.readConfigRaw()
     assertEquals(appDataDir.canonicalPath, updated?.appDataDirectory)
     assertEquals(File(appDataDir.parentFile, "logs").canonicalPath, updated?.logsDirectory)
-    assertEquals(File(appDataDir.parentFile, "trails").canonicalPath, updated?.trailsDirectory)
+    assertNull(updated?.trailsDirectory, "hydration must not invent a trails directory")
     assertEquals(
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       updated?.selectedTrailblazeDriverTypes?.get(TrailblazeDevicePlatform.WEB),

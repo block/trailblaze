@@ -353,6 +353,7 @@ export interface ExceptionThrown {
   errorMessage: string;
   command?: unknown | null;
   stackTrace?: string | null;
+  structuredPayload?: unknown | null;
 }
 
 export interface ExternalAgentEventDto {
@@ -464,6 +465,7 @@ export interface Failed {
   exceptionMessage?: string | null;
   exceptionStackTrace?: string | null;
   failureKind?: string | null;
+  failurePayload?: unknown | null;
 }
 
 export interface FailedWithSelfHeal {
@@ -473,6 +475,7 @@ export interface FailedWithSelfHeal {
   usedSelfHeal?: boolean;
   exceptionStackTrace?: string | null;
   failureKind?: string | null;
+  failurePayload?: unknown | null;
 }
 
 export interface Failure {
@@ -893,6 +896,15 @@ export interface NewComponentResponse {
   error?: string | null;
 }
 
+export interface NotInstalledTargetEntry {
+  id: string;
+  repo: string;
+  shortName: string;
+  cloneCommand: string;
+  url?: string | null;
+  description?: string | null;
+}
+
 export interface ObjectiveComplete {
   class: "xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete";
   statusData: AgentTaskStatusData;
@@ -1281,7 +1293,7 @@ export interface Swipe {
   type?: AgentActionType;
 }
 
-export type TapDispatchRoute = "ACTION_CLICK" | "GESTURE" | "GESTURE_AFTER_ACTION_CLICK_MISS";
+export type TapDispatchRoute = "ACTION_CLICK" | "GESTURE" | "GESTURE_AFTER_ACTION_CLICK_MISS" | "TEXT_LINK_SPAN" | "GESTURE_AFTER_TEXT_LINK_SPAN_MISS";
 
 export interface TapPoint {
   class: "xyz.block.trailblaze.api.AgentDriverAction.TapPoint";
@@ -1642,6 +1654,7 @@ export interface TrailblazeToolLog {
   successful: boolean;
   traceId?: string | null;
   exceptionMessage?: string | null;
+  errorPayload?: unknown | null;
   durationMs: number;
   session: string;
   timestamp: string;
@@ -1698,10 +1711,14 @@ export interface TrailmapEntry {
   systemPrompts?: TrailmapComponent[];
   platforms?: string[];
   workspaceListed?: boolean;
+  homeRepo?: string | null;
+  homeShortName?: string | null;
+  homeUrl?: string | null;
 }
 
 export interface TrailmapsResponse {
   trailmaps: TrailmapEntry[];
+  notInstalledTargets?: NotInstalledTargetEntry[];
 }
 
 export interface URL {
@@ -1821,6 +1838,7 @@ export interface androidAccessibility {
   isImportantForAccessibility?: boolean;
   drawingOrder?: number;
   maxTextLength?: number;
+  isTextLink?: boolean;
   actions?: string[];
   collectionInfo?: CollectionInfo | null;
   rangeInfo?: RangeInfo | null;

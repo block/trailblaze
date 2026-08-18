@@ -47,6 +47,17 @@ enum class TapDispatchRoute {
   ACTION_CLICK,
   GESTURE,
   GESTURE_AFTER_ACTION_CLICK_MISS,
+
+  /**
+   * The tap resolved to a synthetic in-text-link child and was delivered by invoking the
+   * matching ClickableSpan's own `onClick` — no pointer routing and no accessibility click
+   * action; the span transport is the only route that can activate a link range inside a
+   * text node.
+   */
+  TEXT_LINK_SPAN,
+
+  /** The live tree carried no span matching the resolved link; gesture fallback was used. */
+  GESTURE_AFTER_TEXT_LINK_SPAN_MISS,
 }
 
 /**

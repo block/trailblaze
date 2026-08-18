@@ -26,6 +26,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -45,7 +46,6 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -130,6 +130,24 @@ class DesktopYamlRunner(
         createTrailblazeYaml().extractTrailConfig(trailYaml, deviceClassifiers)?.driver
       }.getOrNull(),
     )
+
+    /**
+     * True when [sessionInfo]'s session-start record names [deviceInstanceId] — the cancellation
+     * fallback's "does this new session belong to this device?" probe.
+     *
+     * Decides on PARSED log content, never on filenames: local CLI runs, farm pulls, and the CI
+     * log reshaper each name log files differently, and the session-start advisory drain or a
+     * mid-session daemon restart shuffles which log holds the `001_` slot. Callers pass
+     * [LogsRepo.getSessionInfoSummary], which derives these fields from the session's Started
+     * status — status logs only, so this stays off the full-session parse that
+     * [LogsRepo.saveLogToDisk] documents as having exhausted a trail-driver heap at session end,
+     * which is exactly when this runs.
+     */
+    internal fun sessionBelongsToDevice(sessionInfo: SessionInfo?, deviceInstanceId: String): Boolean {
+      if (sessionInfo == null) return false
+      return sessionInfo.trailblazeDeviceId?.instanceId == deviceInstanceId ||
+        sessionInfo.trailblazeDeviceInfo?.trailblazeDeviceId?.instanceId == deviceInstanceId
+    }
   }
 
   /**
@@ -313,6 +331,20 @@ class DesktopYamlRunner(
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
 
+      // Advisories raised while this run was being assembled (see
+      // [DesktopAppRunYamlParams.sessionStartAdvisories]) attach to the session log the moment
+      // the session id is known. Declared outside the try so the finally-block backstop below
+      // can drain them on paths that throw before their branch returns a session id. Skipped
+      // under --no-logging, which writes no session files.
+      val pendingAdvisories = PendingSessionStartAdvisories(
+        advisories = if (desktopAppRunYamlParams.noLogging) {
+          emptyList()
+        } else {
+          desktopAppRunYamlParams.sessionStartAdvisories
+        },
+        saveLog = trailblazeDeviceManager.logsRepo::saveLogToDisk,
+      )
+
       try {
         trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
         prefixedProgressMessage(
@@ -327,6 +359,7 @@ class DesktopYamlRunner(
         // converge on the same activator wiring without duplicating the `runCatching` /
         // `maybeStartAndroidNetworkCapture` plumbing.
         val captureSessionStarted: (SessionId) -> Unit = { sid ->
+          pendingAdvisories.logTo(sid)
           // Idempotent — MCP path may have started this already via
           // getOrCreateSessionResolution with appConfig-derived options. The
           // coordinator's reserve-then-start makes the second call a no-op so we
@@ -633,11 +666,13 @@ class DesktopYamlRunner(
             val newSessions = trailblazeDeviceManager.logsRepo.getSessionIds()
               .filter { it !in preExistingSessionIds }
             val deviceInstanceId = trailblazeDeviceId.instanceId
-            // Match by checking the first log file for this device's instance ID
+            // Match by parsing the session's logs and checking its Started record for this
+            // device's instance ID (see [sessionBelongsToDevice] for why never by filename).
             val matched = newSessions.firstOrNull { sid ->
-              val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sid)
-              val firstLog = File(sessionDir, "001_TrailblazeSessionStatusChangeLog.json")
-              firstLog.exists() && firstLog.readText().contains(deviceInstanceId)
+              sessionBelongsToDevice(
+                sessionInfo = trailblazeDeviceManager.logsRepo.getSessionInfoSummary(sid),
+                deviceInstanceId = deviceInstanceId,
+              )
             }
             deviceMatched = matched != null
             // The bare fallback may be a concurrent run's session on another device: it only
@@ -645,6 +680,15 @@ class DesktopYamlRunner(
             // finalization barrier (which tombstones the session's capture registries).
             matched ?: newSessions.firstOrNull()
           }
+        // Land pre-run advisories on branches that never fire captureSessionStarted or that threw
+        // before returning their session id: the Playwright-native web/Electron/Compose/Revyl
+        // paths only surface the id after the trail completes, so a mid-run throw would otherwise
+        // lose the advisory on exactly the failed session that needs it. Drain-once makes this a
+        // no-op when captureSessionStarted already ran; the ownership guard keeps the bare
+        // newSessions fallback from writing advisories into a concurrent run's session.
+        if (resolvedSessionId != null && (sessionId != null || deviceMatched)) {
+          pendingAdvisories.logTo(resolvedSessionId)
+        }
         // Stop capture for the session if we own it (i.e. the runner's
         // captureSessionStarted callback fired and started it). Idempotent — if the
         // MCP path or another caller already stopped it via endSessionForDevice,

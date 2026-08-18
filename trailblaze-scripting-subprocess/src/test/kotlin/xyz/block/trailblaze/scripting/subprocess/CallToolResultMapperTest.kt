@@ -121,13 +121,11 @@ class CallToolResultMapperTest {
       .isEqualTo(null)
   }
 
-  @Test fun `isError true with structuredContent maps to ExceptionThrown and drops the payload`() {
-    // Pins the design decision documented in [toTrailblazeToolResult]'s error branch:
-    // `Error.ExceptionThrown` is text-only by design, so any structuredContent on an
-    // isError MCP response is intentionally dropped. If a future refactor extends the
-    // Error variant with a structured payload field but forgets to thread it here, this
-    // test fails and surfaces the gap — the comment in `CallToolResultMapper` calls out
-    // exactly this scenario.
+  @Test fun `isError true with structuredContent threads the payload onto ExceptionThrown`() {
+    // The mirror of `Success threads structuredContent through unchanged`: an isError MCP
+    // response's structuredContent lands verbatim on ExceptionThrown.structuredPayload —
+    // the opaque channel a downstream repo's tool uses to emit a machine-readable failure
+    // (e.g. a trailhead error code) beside the human-readable message.
     val payload = buildJsonObject {
       put("errorCode", JsonPrimitive("E_TIMEOUT"))
       put("retryAfterSeconds", JsonPrimitive(30))
@@ -141,9 +139,22 @@ class CallToolResultMapperTest {
     assertThat(mapped).isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
       .prop(TrailblazeToolResult.Error.ExceptionThrown::errorMessage)
       .isEqualTo("tool timed out")
-    // The ExceptionThrown variant has no field to carry structuredContent — verifying the
-    // mapped result is the ExceptionThrown shape (not Success-with-structuredContent) is
-    // the pin. If a future Error variant gains a structuredContent field, update this test
-    // to assert on it explicitly rather than relying on absence.
+    assertThat(mapped)
+      .isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+      .prop(TrailblazeToolResult.Error.ExceptionThrown::structuredPayload)
+      .isEqualTo(payload)
+  }
+
+  @Test fun `isError true without structuredContent keeps a null payload`() {
+    // Payload-less failures — every tool that hasn't opted in — keep the exact shape they
+    // had before the field existed.
+    val result = CallToolResult(
+      content = listOf(TextContent(text = "plain failure")),
+      isError = true,
+    )
+    assertThat(result.toTrailblazeToolResult())
+      .isInstanceOf(TrailblazeToolResult.Error.ExceptionThrown::class)
+      .prop(TrailblazeToolResult.Error.ExceptionThrown::structuredPayload)
+      .isEqualTo(null)
   }
 }

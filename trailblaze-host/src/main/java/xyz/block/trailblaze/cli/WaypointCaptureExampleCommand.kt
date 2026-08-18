@@ -680,7 +680,9 @@ class WaypointCaptureExampleCommand : Callable<Int> {
 
     private const val WAYPOINT_SUFFIX = ".waypoint.yaml"
     private val IMAGE_EXTENSIONS = listOf(".webp", ".png", ".jpg", ".jpeg")
-    private val JSON_OUT = TrailblazeJson.defaultWithoutToolsInstance
+    // Example captures are machine-read fixtures (whole-tree view hierarchies), so pretty-printing
+    // costs ~8x the bytes for no reader. Scoped here — the shared instance stays pretty.
+    private val JSON_OUT = Json(TrailblazeJson.defaultWithoutToolsInstance) { prettyPrint = false }
 
     /**
      * Filename infix for an example pair: `example` (unlabeled default) or `example.<classifier>`

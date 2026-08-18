@@ -66,4 +66,12 @@ class DesktopAppRunYamlParams(
   val captureLogcat: Boolean? = null,
   /** Override capture iOS Simulator system logs setting (null = use app config default). */
   val captureIosLogs: Boolean? = null,
+  /**
+   * Advisory messages raised while this run was being assembled — before any session existed —
+   * that must also land in the session log once the runner creates the session (e.g. the daemon's
+   * warning that the trail's `config.target` names a target this installation doesn't carry).
+   * Console and CLI progress streams see these at build time; without this, a CI run whose only
+   * surviving artifact is the session JSON has no record of them. Ignored when [noLogging] is true.
+   */
+  val sessionStartAdvisories: List<String> = emptyList(),
 )

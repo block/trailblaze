@@ -152,6 +152,78 @@ class MaxArtifactSizeTest {
     assertEquals(MaxArtifactSize.SCALE_WIDTHS.size, invocations)
   }
 
+  @Test
+  fun `an unpassed --max-size resolves to the 10MB default, non-strict`() {
+    // The default exists so an export you paste into a PR fits GitHub's inline limit
+    // without having to think about it — but nobody asked for it, so it must not be
+    // allowed to fail an export that would otherwise have succeeded.
+    val cap = MaxArtifactSize.resolveCap(null)
+    assertEquals(10L * 1024 * 1024, cap.maxBytes)
+    assertEquals(MaxArtifactSize.DEFAULT_MAX_BYTES, cap.maxBytes)
+    assertFalse(cap.strict, "the default cap must degrade with a warning, not fail the export")
+  }
+
+  @Test
+  fun `an explicit --max-size resolves to that size, strict`() {
+    // An explicitly-requested cap is a guarantee the user asked for, so exhausting the
+    // readability floor stays a hard failure — the pre-default behavior, unchanged.
+    val cap = MaxArtifactSize.resolveCap("5MB")
+    assertEquals(5L * 1024 * 1024, cap.maxBytes)
+    assertTrue(cap.strict)
+  }
+
+  @Test
+  fun `--max-size none and 0 mean uncapped`() {
+    // The opt-out for a genuinely uncapped export. `0` would otherwise be rejected by
+    // parseSize's sub-byte guard, so it has to be recognized before parsing.
+    for (token in listOf("none", "NONE", " none ", "0")) {
+      val cap = MaxArtifactSize.resolveCap(token)
+      assertNull(cap.maxBytes, "'$token' should produce an uncapped export")
+    }
+  }
+
+  @Test
+  fun `resolveCap rejects garbage the same way parseSize does`() {
+    assertFailsWith<IllegalArgumentException> { MaxArtifactSize.resolveCap("garbage") }
+    assertFailsWith<IllegalArgumentException> { MaxArtifactSize.resolveCap("10TB") }
+  }
+
+  @Test
+  fun `failOrWarn throws under an explicit cap and leaves the artifact on disk`() {
+    val artifact = tempFile(byteSize = 50_000)
+    val failure = assertFailsWith<IllegalStateException> {
+      MaxArtifactSize.failOrWarn(
+        strict = true,
+        artifact = artifact,
+        formatLabel = "WebP",
+        maxBytes = 1_000,
+        remedies = "Shorten the session.",
+      )
+    }
+    val message = failure.message ?: ""
+    assertTrue(message.contains("WebP"), "message should name the format, was: $message")
+    assertTrue(message.contains("1000"), "message should name the cap, was: $message")
+    assertTrue(message.contains("50000"), "message should name the actual size, was: $message")
+    assertTrue(message.contains("Shorten the session."), "message should carry the remedies, was: $message")
+    assertTrue(artifact.exists(), "a too-big export is still a usable export — never delete it")
+  }
+
+  @Test
+  fun `failOrWarn keeps the oversized artifact under the default cap instead of failing`() {
+    val artifact = tempFile(byteSize = 50_000)
+    // No throw: the default cap degrades. The warning itself goes to stderr via Console,
+    // which isn't part of the contract worth pinning — that the export survives is.
+    MaxArtifactSize.failOrWarn(
+      strict = false,
+      artifact = artifact,
+      formatLabel = "WebP",
+      maxBytes = MaxArtifactSize.DEFAULT_MAX_BYTES,
+      remedies = "Shorten the session.",
+    )
+    assertTrue(artifact.exists())
+    assertEquals(50_000L, artifact.length(), "the artifact must be left exactly as encoded")
+  }
+
   private fun tempFile(byteSize: Int): File {
     val f = Files.createTempFile("max-artifact-size-test-", ".bin").toFile()
     f.writeBytes(ByteArray(byteSize))

@@ -5,6 +5,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -489,6 +491,66 @@ class TrailblazeRunnerUtilTest {
     assertTrue(message.contains(tool("launchSignedIn").trailblazeTool.toString()), message)
     assertTrue(message.contains("app never signed in"), message)
     assertTrue(runner.recoverCalls.isEmpty(), "a trailhead failure must not hand off to self-heal")
+  }
+
+  @Test
+  fun `trailhead failure carries the failing tool's structured payload`() {
+    // The structured-error channel: a tool's ExceptionThrown.structuredPayload (e.g. a
+    // machine-readable trailhead error code from a downstream repo) must ride the thrown
+    // TrailheadException so the session status / report row can surface it — the message
+    // text stays for humans, the payload is what CI classifiers dispatch on.
+    val payload = buildJsonObject { put("code", "session") }
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ ->
+          TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "app never signed in",
+            structuredPayload = payload,
+          )
+        },
+        trailblazeRunner = FakeTestAgentRunner(),
+      )
+    val trailheadStep =
+      TrailheadDefinition(step = "Launch signed in", tools = listOf(tool("launchSignedIn")))
+        .toPromptStep()
+
+    val ex =
+      assertFailsWith<TrailheadException> {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(trailheadStep),
+            useRecordedSteps = true,
+            selfHeal = true,
+          )
+        }
+      }
+    assertEquals(payload, ex.payload)
+  }
+
+  @Test
+  fun `trailhead failure without a payload keeps a null payload`() {
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { _ ->
+          TrailblazeToolResult.Error.ExceptionThrown(errorMessage = "app never signed in")
+        },
+        trailblazeRunner = FakeTestAgentRunner(),
+      )
+    val trailheadStep =
+      TrailheadDefinition(step = "Launch signed in", tools = listOf(tool("launchSignedIn")))
+        .toPromptStep()
+
+    val ex =
+      assertFailsWith<TrailheadException> {
+        runBlocking {
+          util.runPromptSuspend(
+            prompts = listOf(trailheadStep),
+            useRecordedSteps = true,
+            selfHeal = false,
+          )
+        }
+      }
+    assertEquals(null, ex.payload)
   }
 
   @Test

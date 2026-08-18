@@ -1406,6 +1406,93 @@ class GenerateTestResultsCliCommandTest {
   }
 
   @Test
+  fun `a test that ran once is classified, so a lone failure is not shaped like a lone pass`() {
+    val logsDir = Files.createTempDirectory("trailblaze-single-attempt-verdict").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val deviceInfo = webDeviceInfo()
+
+      // None of these is retried, which is the ordinary case rather than an edge one: most tests
+      // run exactly once. Their outcomes are opposite, so if the rows come back sharing a verdict
+      // field -- including sharing an unset one -- the field cannot support the distinction it
+      // exists to make, and a reader cannot tell a clean run from a failure nobody looked at.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_lone_pass_attempt1"),
+        trailFilePath = "trails/sample-app/lone-pass.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Succeeded(durationMs = 5_000),
+      )
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_lone_fail_attempt1"),
+        trailFilePath = "trails/sample-app/lone-fail.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(durationMs = 3_000, exceptionMessage = "expected text not found"),
+      )
+      // A setup break that was never retried stays a setup break. Retrying a broken fixture
+      // reproduces the broken fixture, so attempt count carries no meaning for this one -- it must
+      // not land in the unretried-failure population just because it ran once.
+      writeTrailRun(
+        logsDir, deviceInfo, SessionId("2026_06_15_lone_trailhead_attempt1"),
+        trailFilePath = "trails/sample-app/lone-trailhead.trail.yaml",
+        startedAt = "2026-06-15T10:00:00Z",
+        ended = SessionStatus.Ended.Failed(
+          durationMs = 2_000,
+          exceptionMessage = "TRAILHEAD FAILED: could not reach the starting state",
+          failureKind = "TRAILHEAD",
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand().main(
+          arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
+        )
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      fun resultFor(trail: String) = report.results.single { it.title.contains(trail) }
+
+      // Asserted over every row rather than the three by name: a consumer that has to skip
+      // unclassified rows can only speak for whichever tests happened to be retried.
+      assertTrue(
+        report.results.all { it.combined_verdict != null },
+        "every row must carry a verdict, unclassified: " +
+          "${report.results.filter { it.combined_verdict == null }.map { it.title }}",
+      )
+
+      assertEquals(
+        CombinedVerdict.PASSED,
+        resultFor("lone-pass").combined_verdict,
+        "a test that passed on its only attempt passed",
+      )
+      assertEquals(
+        CombinedVerdict.FAILED_UNRETRIED,
+        resultFor("lone-fail").combined_verdict,
+        "a failure nobody retried is a different claim from one that reproduced",
+      )
+      assertEquals(
+        CombinedVerdict.SETUP_FAILED,
+        resultFor("lone-trailhead").combined_verdict,
+        "one broken fixture is a broken fixture, not an unretried product failure",
+      )
+
+      // The rest of the row is untouched. Classifying a single attempt must not invent a retry:
+      // these are the fields a consumer reads to decide whether a test was re-run at all, and a
+      // row claiming a second attempt that never existed is worse than an unclassified one.
+      report.results.forEach { result ->
+        assertEquals(1, result.attempt, "${result.title} ran once")
+        assertEquals(1, result.total_attempts, "${result.title} ran once")
+        assertTrue(result.replaced_session_ids.isEmpty(), "${result.title} superseded nothing")
+        assertTrue(result.replaced_outcomes.isEmpty(), "${result.title} superseded nothing")
+        assertTrue(result.replaced_failure_reasons.isEmpty(), "${result.title} superseded nothing")
+        assertTrue(result.replaced_failure_kinds.isEmpty(), "${result.title} superseded nothing")
+        assertTrue(result.replaced_agent_names.isEmpty(), "${result.title} superseded nothing")
+      }
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
   fun `dedup keeps the failure classification of the attempts it replaced`() {
     val logsDir = Files.createTempDirectory("trailblaze-replaced-kinds").toFile()
     val outputFile = File(logsDir, "results.json")

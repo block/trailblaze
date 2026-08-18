@@ -93,6 +93,12 @@ object TrailblazeConfigPaths {
   const val TRAILMAPS_DIR = "$CONFIG_DIR/trailmaps"
 
   /**
+   * Classpath resource directory for the repos that home targets this installation may not carry
+   * (one `KnownTargetWorkspace` record per YAML file). Pointers only — nothing here is fetched.
+   */
+  const val KNOWN_TARGET_WORKSPACES_DIR = "$CONFIG_DIR/known-target-workspaces"
+
+  /**
    * Subpath under [WORKSPACE_CONFIG_DIR] that owns workspace compile outputs.
    * Both `trailblaze compile` and the daemon-init lazy rebundle write here.
    */

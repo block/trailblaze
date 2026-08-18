@@ -118,8 +118,17 @@ class TrailblazeSettingsRepo(
     }
   }
 
+  /**
+   * The trails root for this daemon, honoring the same precedence the UI shows.
+   *
+   * Routes through [TrailblazeDesktopUtil.getEffectiveTrailsDirectory] rather than reading
+   * `trailsDirectory` raw: this feeds the MCP server's `trailsDirProvider` in both desktop
+   * distributions, and an agent listing trails through MCP must see the same tree as the
+   * Trails tab. Reading the raw field left MCP on the persisted per-machine path while the UI
+   * followed a workspace `trails:` declaration.
+   */
   fun getCurrentTrailsDir(): File {
-    return File(serverStateFlow.value.appConfig.trailsDirectory ?: ".")
+    return File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverStateFlow.value.appConfig))
   }
 
   /**
@@ -229,11 +238,17 @@ class TrailblazeSettingsRepo(
    * an in-place edit of the same workspace's `trailblaze.yaml` still needs a restart (the
    * per-seed freeze documented on the cache).
    */
-  private fun workspaceAnchorSeedPath(): Path =
-    File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverStateFlow.value.appConfig))
+  private fun workspaceAnchorSeedPath(): Path {
+    // When a workspace `trails:` declaration supplied the trails dir, seed from the declaring
+    // anchor's own directory instead. The declared dir need not sit under the config dir — an
+    // absolute declaration can leave the repo entirely — and walking up from there would land
+    // on Scratch, so the very file that redirected the app would lose its own `defaults.target`.
+    TrailblazeDesktopUtil.launchWorkspaceDeclaration()?.let { return it.configDir.toPath() }
+    return File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverStateFlow.value.appConfig))
       .takeIf { it.isDirectory }
       ?.toPath()
       ?: Paths.get("")
+  }
 
   /**
    * Testable overload: callers can pass an explicit [cwd] (used to discover the workspace

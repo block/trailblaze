@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.cli
 
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Iterative scale-down loop shared by the report exporters (`--gif`, `--video`, `--webp`).
@@ -41,6 +42,75 @@ internal object MaxArtifactSize {
 
   /** Floor below which we refuse to scale — see class kdoc. */
   const val READABILITY_FLOOR_PX: Int = 480
+
+  /**
+   * Cap applied when the user doesn't pass `--max-size` at all. 10MB is GitHub's inline
+   * attachment limit, and it's the value every caller in this repo that bothers to pass
+   * the flag already passes, so making it the default changes nothing for them and closes
+   * the hole for everyone who forgets.
+   */
+  const val DEFAULT_MAX_BYTES: Long = 10L * 1024 * 1024
+
+  /** Values of `--max-size` that mean "don't cap this at all". */
+  private val UNCAPPED_TOKENS = setOf("none", "0")
+
+  /**
+   * The cap in effect for one export, plus whether exhausting the readability floor is
+   * fatal.
+   *
+   * [strict] is the whole point of the type: a default the user never asked for must not
+   * turn a working export into a failure, so floor exhaustion under the default keeps the
+   * oversized artifact and warns. An explicitly-passed `--max-size` is a guarantee the
+   * user asked for, so it still fails hard.
+   */
+  data class Cap(
+    /** Byte ceiling, or `null` for an uncapped export. */
+    val maxBytes: Long?,
+    /** Whether floor exhaustion throws (explicit cap) or warns (default cap). */
+    val strict: Boolean,
+  )
+
+  /**
+   * Resolve the raw `--max-size` string into a [Cap].
+   *
+   *  - `null` (flag not passed) → [DEFAULT_MAX_BYTES], non-strict.
+   *  - `none` / `0` → uncapped.
+   *  - anything else → [parseSize], strict. Throws [IllegalArgumentException] on garbage,
+   *    which the CLI surfaces as a usage error.
+   */
+  fun resolveCap(rawMaxSize: String?): Cap {
+    if (rawMaxSize == null) return Cap(maxBytes = DEFAULT_MAX_BYTES, strict = false)
+    val token = rawMaxSize.trim().lowercase()
+    if (token in UNCAPPED_TOKENS) return Cap(maxBytes = null, strict = true)
+    return Cap(maxBytes = parseSize(rawMaxSize), strict = true)
+  }
+
+  /**
+   * Called by every exporter when [enforce] came back `fits = false`. Under an explicit
+   * cap this throws with the format-specific [remedies] appended (the pre-default
+   * behavior, unchanged); under the default cap it keeps the artifact on disk and writes
+   * a loud stderr warning instead.
+   *
+   * The artifact is never deleted either way — a too-big export is still a usable export.
+   */
+  fun failOrWarn(
+    strict: Boolean,
+    artifact: File,
+    formatLabel: String,
+    maxBytes: Long,
+    remedies: String,
+  ) {
+    val head = "$formatLabel still exceeds ${maxBytes}B at the ${READABILITY_FLOOR_PX}px " +
+      "readability floor (current size: ${artifact.length()}B)."
+    if (strict) error("$head $remedies")
+    Console.error(
+      "Warning: $head Keeping the oversized artifact at ${artifact.absolutePath} — " +
+        "${maxBytes}B is the default cap (GitHub rejects inline attachments over 10MB), " +
+        "not something you asked for, so the export isn't failed over it. $remedies " +
+        "Pass --max-size=<size> to make the cap a hard requirement, or --max-size=none " +
+        "to skip it entirely.",
+    )
+  }
 
   /**
    * Walk [SCALE_WIDTHS] until `artifact.length() <= maxBytes`. Returns the final

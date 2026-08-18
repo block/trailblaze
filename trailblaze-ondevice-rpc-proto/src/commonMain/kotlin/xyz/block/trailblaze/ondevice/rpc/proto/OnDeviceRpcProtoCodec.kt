@@ -787,6 +787,7 @@ object OnDeviceRpcProtoCodec {
       is_important_for_accessibility = isImportantForAccessibility,
       drawing_order = drawingOrder,
       max_text_length = maxTextLength,
+      is_text_link = isTextLink,
       actions = actions,
       collection_info = collectionInfo?.let {
         CollectionInfo(it.rowCount, it.columnCount, it.isHierarchical)
@@ -840,6 +841,7 @@ object OnDeviceRpcProtoCodec {
       isImportantForAccessibility = is_important_for_accessibility,
       drawingOrder = drawing_order,
       maxTextLength = max_text_length,
+      isTextLink = is_text_link,
       actions = actions,
       collectionInfo = collection_info?.let {
         DriverNodeDetail.AndroidAccessibility.CollectionInfo(

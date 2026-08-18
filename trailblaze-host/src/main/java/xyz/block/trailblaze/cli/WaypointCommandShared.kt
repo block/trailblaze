@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import xyz.block.trailblaze.api.TargetTemplateContext
 import xyz.block.trailblaze.api.waypoint.WaypointMatchResult
 import xyz.block.trailblaze.cli.tune.WaypointSiblingCollisionGuard
+import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigException
@@ -271,7 +272,8 @@ internal fun resolveTargetTemplateContext(
     }
     return TargetContextResolution.Error(
       "--target $targetId: no such target in the resolved workspace + classpath trailmaps. " +
-        "Check the spelling, or that the trailmap is on the workspace's `trailmaps:` list / framework classpath.",
+        "Check the spelling, or that the trailmap is on the workspace's `trailmaps:` list / framework classpath." +
+        KnownTargetMessages.unavailableTargetHint(targetId)?.let { "\n$it" }.orEmpty(),
     )
   }
   val trailmapAppIds = targetCfg.platforms?.values

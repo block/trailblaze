@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.recording.rpc
 
+import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.host.rpc.SetCurrentTargetAppRequest
 import xyz.block.trailblaze.host.rpc.SetCurrentTargetAppResponse
 import xyz.block.trailblaze.mcp.RpcHandler
@@ -16,7 +17,8 @@ class SetCurrentTargetAppHandler(
     val target = deviceManager.availableAppTargets.firstOrNull { it.id == request.targetAppId }
       ?: return RpcResult.Failure(
         errorType = RpcResult.ErrorType.HTTP_ERROR,
-        message = "Unknown target app id: ${request.targetAppId}",
+        message = "Unknown target app id: ${request.targetAppId}" +
+          KnownTargetMessages.unavailableTargetHint(request.targetAppId)?.let { "\n$it" }.orEmpty(),
       )
     deviceManager.settingsRepo.targetAppSelected(target)
     return RpcResult.Success(SetCurrentTargetAppResponse(success = true))

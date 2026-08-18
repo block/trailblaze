@@ -103,7 +103,11 @@ function useTrailmaps() {
   return useFetched(async () => {
     // Trailmaps come from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
     const raw = await window.TbRpc.getTrailmaps();
-    return { data: raw?.trailmaps ?? [], mock: false };
+    // `data` stays the installed-trailmaps array every existing consumer iterates. The
+    // declared-but-absent targets ride on useFetched's `extra` passthrough instead of joining
+    // `data`, so no picker or dropdown can offer a target this installation can't load — the same
+    // separation the daemon enforces by carrying them in TrailmapsResponse.notInstalledTargets.
+    return { data: raw?.trailmaps ?? [], mock: false, extra: { notInstalledTargets: raw?.notInstalledTargets ?? [] } };
   });
 }
 

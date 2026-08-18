@@ -48,7 +48,7 @@ data class PlaywrightNativeScrollTool(
     RIGHT,
     ;
 
-    object Serializer : CaseInsensitiveEnumSerializer<ScrollDirection>(ScrollDirection::class)
+    object Serializer : CaseInsensitiveEnumSerializer<ScrollDirection>(ScrollDirection::class, ScrollDirection.entries)
   }
 
   override suspend fun executeWithPlaywright(

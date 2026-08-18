@@ -4,6 +4,8 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.config.KnownTargetMessages
+import xyz.block.trailblaze.config.KnownTargetWorkspaceLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.desktop.LlmTokenStatus
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
@@ -408,7 +410,13 @@ class ConfigTargetCommand : Callable<Int> {
     if (canonicalId == null) {
       Console.error(
         "Error: '$rawTarget' is not a known target app.\n" +
-          "Available: ${availableIds.sorted().joinToString(", ")}"
+          "Available: ${availableIds.sorted().joinToString(", ")}" +
+          KnownTargetMessages.unavailableTargetHint(
+            targetId = rawTarget,
+            // Absolute: callerCwd() is `Paths.get("")` for a direct (non-daemon-forwarded)
+            // invocation, and "You are running from ." teaches nobody anything.
+            workingDirectory = CliCallerContext.callerCwd().toAbsolutePath().normalize().toString(),
+          )?.let { "\n$it" }.orEmpty()
       )
       return TrailblazeExitCode.MISUSE.code
     }
@@ -449,14 +457,35 @@ class ConfigTargetCommand : Callable<Int> {
     Console.info("Available Targets:")
     Console.info(ITEM_DIVIDER)
 
+    // Resolved ONCE for the whole listing, then passed explicitly. Inside a workspace,
+    // `platformConfigResourceSource()` hands back a fresh layered source per call, so the loader's
+    // identity-based cache never engages there — a per-row default argument would re-walk every
+    // classpath jar and the workspace tree once per target, and repeat any parse warning per row.
+    val knownWorkspaces = Console.runQuiet { KnownTargetWorkspaceLoader.discover() }
+
     for (target in targets) {
       val current = when (target.id) {
         currentTargetId -> " (current)"
         workspaceDefaultId -> " (current — workspace default)"
         else -> ""
       }
-      Console.info("  [${target.id}] ${target.displayName}$current")
+      // A target can be loadable here while its trails live in another repo (a trailmap bundled from
+      // a pinned copy). Annotate the row so someone who CAN run it still learns where the trails
+      // are, instead of finding an empty Trails tab and no explanation.
+      val home = KnownTargetMessages.homeAnnotation(target.id, knownWorkspaces)
+        ?.let { " — $it" }
+        .orEmpty()
+      Console.info("  [${target.id}] ${target.displayName}$current$home")
     }
+
+    // Targets this installation doesn't carry at all. Listed proactively so nobody has to guess a
+    // name wrong first to discover the repo it lives in.
+    KnownTargetMessages.notInstalledListing(targets.map { it.id }, knownWorkspaces)
+      .takeIf { it.isNotEmpty() }
+      ?.let { lines ->
+        Console.info("")
+        lines.forEach { Console.info(it) }
+      }
 
     Console.info("")
     Console.info("Set with: trailblaze config target <id>")

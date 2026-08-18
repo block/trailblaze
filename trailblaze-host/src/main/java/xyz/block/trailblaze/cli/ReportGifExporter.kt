@@ -39,12 +39,16 @@ object ReportGifExporter {
    * @param maxBytes When non-null, iteratively re-assemble at smaller widths until the
    *   output fits under the cap. See [MaxArtifactSize]. If even the readability floor
    *   can't satisfy the cap, this throws — callers should surface the message verbatim.
+   * @param maxBytesStrict Whether floor exhaustion is fatal. `true` (the default) is the
+   *   behavior an explicitly-requested cap gets; the CLI passes `false` when the cap is
+   *   only [MaxArtifactSize.DEFAULT_MAX_BYTES], which warns and keeps the oversized GIF.
    */
   internal fun encode(
     framesDir: File,
     capture: PlaywrightReportCapture.CaptureResult,
     outputGif: File,
     maxBytes: Long? = null,
+    maxBytesStrict: Boolean = true,
   ) {
     outputGif.parentFile?.mkdirs()
     if (outputGif.exists()) outputGif.delete()
@@ -74,13 +78,16 @@ object ReportGifExporter {
         // Note: we deliberately don't suggest lowering the autoplay speed here — a
         // slower playback makes the *wall-clock* longer, which produces a LARGER GIF,
         // not smaller. The actionable levers are recording length and codec.
-        error(
-          "GIF still exceeds ${maxBytes}B at the ${MaxArtifactSize.READABILITY_FLOOR_PX}px " +
-            "readability floor (current size: ${outputGif.length()}B). GIF's per-frame " +
-            "256-color palette is the least space-efficient of the three formats. Switch " +
-            "to --webp (typically 25–50% smaller at the same width) or --video (libx264 " +
-            "compresses dramatically better), or shorten the session — split the trail " +
-            "into smaller recordings, or remove intermediate verification steps.",
+        MaxArtifactSize.failOrWarn(
+          strict = maxBytesStrict,
+          artifact = outputGif,
+          formatLabel = "GIF",
+          maxBytes = maxBytes,
+          remedies = "GIF's per-frame 256-color palette is the least space-efficient of " +
+            "the three formats. Switch to --webp (typically 25–50% smaller at the same " +
+            "width) or --video (libx264 compresses dramatically better), or shorten the " +
+            "session — split the trail into smaller recordings, or remove intermediate " +
+            "verification steps.",
         )
       }
       if (result.widthPx != null) {

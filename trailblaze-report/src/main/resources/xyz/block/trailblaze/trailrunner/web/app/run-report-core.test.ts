@@ -6,7 +6,7 @@
 // regressions in the refactor, without coupling to render internals.
 //
 // Run: `bun test app/run-report-core.test.ts` from the web/ directory.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 // Tests exercise the TypeScript SOURCE directly (bun strips types in memory); the packaged
 // run-report-core.js artifact is exercised end-to-end by RunReportGeneratorTest's bun-subprocess
@@ -14,9 +14,12 @@ import { describe, expect, test } from "bun:test";
 // graph embeds the prebuilt viewer script through a bun macro, and bun 1.3.14's sync CJS loader
 // spins forever on a require()'d graph that combines a macro import with sibling imports.
 import * as RUN_REPORT_CORE_MODULE from "./run-report-core";
-import { traceToolCallCount } from "./run-report-extract";
+import { mergeWebHierarchyBounds, traceToolCallCount } from "./run-report-extract";
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from "./run-report-inspector";
 import { whenDocumentComplete } from "./run-report-viewer";
+// A real captured web hierarchy (405 nodes, both parallel trees), scrubbed of page content — see
+// its _source note. Excluded from the packaged JAR alongside the other test fixtures.
+import webMergeFixture from "./web-hierarchy-merge-fixtures.json";
 
 const core = RUN_REPORT_CORE_MODULE as unknown as {
   originalYamlFromLogs: (logs: unknown[]) => string | null;
@@ -32,6 +35,8 @@ const core = RUN_REPORT_CORE_MODULE as unknown as {
   videoEndMs: (v: unknown) => number;
   spriteFrameCss: (v: unknown, logical: number) => { sheet: number; size: string; position: string };
   buildPlaybackSchedule: (rows: Array<{ ts?: number | null; ms?: number | null }>, video: unknown) => { mode: string; clock0: number | null; offsets: number[]; totalMs: number; video: unknown; haveTs: boolean; lo: number; hi: number };
+  buildExportSchedule: (rows: Array<{ ts?: number | null; ms?: number | null }>, video: unknown) => { mode: string; clock0: number | null; offsets: number[]; totalMs: number; video: unknown; haveTs: boolean; lo: number; hi: number; clockAnchors?: number[] | null };
+  exportGapMs: (gap: number) => number;
   playbackPositionAt: (schedule: unknown, playMs: number) => { stepIndex: number; clockMs: number | null; frame: number | null; done: boolean };
   videoLoopFrame: (base: number, total: number, fps: number, elapsedMs: number) => number;
 };
@@ -116,10 +121,10 @@ type PlaybackDriveContext = {
   clickShot: () => void;
 };
 
-type ViewerOptions = { session?: number; step?: number; clickGroup?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; popstate?: string; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[] };
+type ViewerOptions = { session?: number; step?: number; clickGroup?: number; toggleKids?: number; routeStep?: number; query?: string; legacyHash?: string; protocol?: string; copyLink?: boolean; clipboardRejects?: boolean; tab?: string; toggleCell?: string; lightboxAll?: boolean; galZoom?: number[]; zoomShot?: string; zoomKey?: "ArrowLeft" | "ArrowRight"; timelineKey?: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"; timelineKeyTarget?: string; tlStream?: number; tlStreamBeforeTab?: number; spaceOnStep?: number; timelineScrollTop?: number; focusedStep?: number; focusedTlStream?: number; llmEnter?: number; llmClick?: number; openTx?: number; txEscape?: boolean; inspect?: number; popstate?: string; transport?: "prev" | "next"; stackedTimeline?: boolean; shotLayoutShift?: boolean; copyLocalPrompt?: boolean; exportLogs?: boolean; pointerDown?: "outside" | "insideTimelineMenu"; viewer?: () => void; drive?: (ctx: PlaybackDriveContext) => void; payloadViaGlobal?: boolean; sprites?: Record<string, string[]>; deferBoot?: boolean; rebootViewer?: boolean; shellDocument?: boolean; chunks?: { index: string; sessions: Record<string, string>; sprites: Record<string, string> }; holdChunks?: number[]; holdSpriteChunks?: number[]; streamingChunks?: number[]; loadingDocument?: boolean };
 
-function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void; documentKeyListeners: Array<(e: any) => void>; llmScrolledTo: string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null } {
-  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; group: Record<string, () => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, group: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {} };
+function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: string; htmlBeforeBoot: string; liveHtml: () => string; readHtml: () => string; timelineScrollTop: number; mainScrollTop: number; restoredFocus: string | null; route: string; zoomSrc: string | null; zoomRoot: any; copiedText: string | null; copyBtnText: () => string; timelineMenuOpen: boolean; spriteMeasures: Array<{ src: string; fireLoad: (naturalWidth: number) => void }>; tlvframeStyle: Record<string, string>; releaseChunks: () => void; partialChunkReads: () => number; loadingProgressWrites: () => number; settleDocument: () => void; documentKeyListeners: Array<(e: any) => void>; autoplayMarker: () => string | undefined; llmScrolledTo: string | null; llmRow: (i: number) => any; readRestoredFocus: () => string | null } {
+  const handlers: { session: Record<string, () => void>; tab: Record<string, () => void>; step: Record<string, () => void>; group: Record<string, () => void>; kids: Record<string, (e: any) => void>; stepKey: Record<string, (e: any) => void>; shot: Record<string, () => void>; tlStream: Record<string, () => void>; cellToggle: Record<string, (e: any) => void>; galZoom: Record<string, () => void>; llmKey: Record<string, (e: any) => void>; llmClick: Record<string, () => void>; txOpen: Record<string, () => void>; inspect: Record<string, () => void>; documentKey?: (e: any) => void; timelinePlay?: () => void; gridMode?: () => void; prev?: () => void; next?: () => void; shotLoad?: () => void; copyLocalPrompt?: () => void; copyLink?: () => void; exportLogs?: () => void } = { session: {}, tab: {}, step: {}, group: {}, kids: {}, stepKey: {}, shot: {}, tlStream: {}, cellToggle: {}, galZoom: {}, llmKey: {}, llmClick: {}, txOpen: {}, inspect: {} };
   let shotLoaded = !opts.shotLayoutShift;
   const mainScroller: any = { scrollTop: 0, clientHeight: 400, get scrollHeight() { return opts.shotLayoutShift && !shotLoaded ? 800 : 1200; }, parentElement: null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
   const timelineList: any = { scrollTop: 0, clientHeight: 400, scrollHeight: opts.stackedTimeline ? 400 : 1200, parentElement: opts.stackedTimeline ? mainScroller : null, getBoundingClientRect: () => ({ top: 0 }), scrollTo({ top }: { top: number }) { this.scrollTop = top; } };
@@ -188,15 +193,25 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   // full renders. `prev` starts disabled, mirroring the full render parked on the first row.
   const prevBtn: any = { disabled: true, set onclick(fn: () => void) { handlers.prev = fn; } };
   const nextBtn: any = { disabled: false, set onclick(fn: () => void) { handlers.next = fn; } };
+  // The loading view's progress note, seeded from the rendered markup like the real node and reset
+  // by each render. Writes are counted because it sits in a role=status live region: assigning the
+  // same sentence back would have a screen reader announce it again on every poll turn.
+  let progressText: string | null = null;
+  let progressWrites = 0;
+  const progressNote: any = {
+    get textContent() { return progressText; },
+    set textContent(v: string) { progressWrites++; progressText = v; },
+  };
   const app: any = {
     _h: "",
-    set innerHTML(v: string) { this._h = v; timelineList.scrollTop = 0; renders++; },
+    set innerHTML(v: string) { this._h = v; timelineList.scrollTop = 0; renders++; progressText = null; },
     get innerHTML() { return this._h; },
     querySelectorAll(sel: string) {
       if (sel === "[data-session]") return [...this._h.matchAll(/data-session="(\d+)"/g)].map((m: any) => ({ dataset: { session: m[1] }, set onclick(fn: () => void) { handlers.session[m[1]] = fn; } }));
       if (sel === "[data-tab]") return [...this._h.matchAll(/data-tab="([a-z]+)"/g)].map((m: any) => ({ dataset: { tab: m[1] }, set onclick(fn: () => void) { handlers.tab[m[1]] = fn; } }));
       if (sel === "[data-step]") return [...this._h.matchAll(/data-step="(\d+)"/g)].map((m: any) => ({ dataset: { step: m[1] }, set onclick(fn: () => void) { handlers.step[m[1]] = fn; } }));
       if (sel === "[data-group]") return [...this._h.matchAll(/data-group="(\d+)"/g)].map((m: any) => ({ dataset: { group: m[1] }, set onclick(fn: () => void) { handlers.group[m[1]] = fn; } }));
+      if (sel === "[data-kids]") return [...this._h.matchAll(/data-kids="(\d+)" data-open="(\d)"/g)].map((m: any) => ({ dataset: { kids: m[1], open: m[2] }, set onclick(fn: (e: any) => void) { handlers.kids[m[1]] = fn; } }));
       if (sel === "[data-tlstream]") return [...this._h.matchAll(/data-tlstream="(\d+)"/g)].map((m: any) => ({ dataset: { tlstream: m[1] }, set onclick(fn: () => void) { handlers.tlStream[m[1]] = fn; } }));
       if (sel === "[data-shot]") return [...this._h.matchAll(/data-shot="([^"]+)"(?: data-shot-token="([^"]*)")?(?: data-shot-label="([^"]*)")?(?: data-shot-tool="([^"]*)")?/g)].map((m: any) => ({ dataset: { shot: m[1], shotToken: m[2], shotLabel: m[3], shotTool: m[4] }, set onclick(fn: () => void) { handlers.shot[m[1]] = fn; } }));
       if (sel === "[data-cell-toggle]") return [...this._h.matchAll(/data-cell-toggle="([^"]+)"/g)].map((m: any) => ({ dataset: { cellToggle: m[1] }, set onclick(fn: (e: any) => void) { handlers.cellToggle[m[1]] = fn; }, set onkeydown(_fn: unknown) {} }));
@@ -226,6 +241,10 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       if (sel === ".preview .shot" && this._h.includes('class="shot')) return { complete: shotLoaded, addEventListener: (_name: string, fn: () => void) => { handlers.shotLoad = fn; } };
       if (sel === ".preview .shotwrap" && this._h.includes('class="shotwrap"')) return shotWrap;
       if (sel === "[data-scrub]" && this._h.includes("data-scrub")) return scrubEl;
+      if (sel === "[data-run-loading-progress]" && this._h.includes("data-run-loading-progress")) {
+        if (progressText === null) progressText = (this._h.match(/data-run-loading-progress>([^<]*)</) || [])[1] || "";
+        return progressNote;
+      }
       const step = sel.match(/^\[data-step="(\d+)"\]$/);
       if (step && this._h.includes(`data-step="${step[1]}"`)) return stepEl(step[1]);
       const tlStream = sel.match(/^\[data-tlstream="(\d+)"\]$/);
@@ -380,6 +399,8 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
         [...html.matchAll(/<(?:span|div)\s+class="([^"]*)"\s+data-inspnode="(\d+)"/g)].forEach((m) => { push({ "data-inspnode": m[2] }, m[1])._branch = branchOf[m[2]] || null; });
         [...html.matchAll(/<div class="([^"]*)" data-insprect="(\d+)"/g)].forEach((m) => push({ "data-insprect": m[2] }, m[1]));
         [...html.matchAll(/<div class="(inspdetails|insptree)"/g)].forEach((m) => push({}, m[1]));
+        [...html.matchAll(/<div class="(inspselectors)" (data-inspselectors)/g)].forEach((m) => push({ "data-inspselectors": "" }, m[1]));
+        [...html.matchAll(/<div class="(inspselvizlayer)" (data-inspselvizlayer)/g)].forEach((m) => push({ "data-inspselvizlayer": "" }, m[1]));
         [...html.matchAll(/<div class="(inspshotwrap)" (data-insphit)/g)].forEach((m) => push({ "data-insphit": "" }, m[1]));
         [...html.matchAll(/<span class="([^"]*)" (data-insphovlabel)/g)].forEach((m) => push({ "data-insphovlabel": "" }, m[1]));
       },
@@ -393,25 +414,43 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   // #tb-index plus per-session chunks; opts.holdChunks / opts.holdSpriteChunks list session
   // indices whose #tb-session / #tb-sprites chunk hasn't "streamed in" yet — releaseChunks()
   // (returned below) makes them appear, the way the parser would as the document tail downloads.
+  // opts.streamingChunks models the state IN BETWEEN, which is what a real browser shows for most
+  // of a big report's download: the parser has seen the chunk's start tag, so the element exists
+  // and its text keeps growing, but the `</script>` end tag (and with it `nextSibling`) hasn't
+  // landed. Reads of that partial text are counted, since the viewer must not keep parsing it.
   const heldChunks = new Set((opts.holdChunks || []).map(String));
   const heldSpriteChunks = new Set((opts.holdSpriteChunks || []).map(String));
+  const streamingChunks = new Set((opts.streamingChunks || []).map(String));
+  let partialChunkReads = 0;
+  let documentLoading = !!opts.loadingDocument;
+  // A chunk the parser has closed: the next node after it exists.
+  const closedChunk = (textContent: string) => ({ textContent, nextSibling: {} });
   const chunkElement = (id: string) => {
     if (!opts.chunks) return null;
-    if (id === "tb-index") return { textContent: opts.chunks.index };
+    if (id === "tb-index") return closedChunk(opts.chunks.index);
     const session = id.match(/^tb-session-(\d+)$/);
-    if (session) return opts.chunks.sessions[session[1]] != null && !heldChunks.has(session[1]) ? { textContent: opts.chunks.sessions[session[1]] } : null;
+    if (session) {
+      const text = opts.chunks.sessions[session[1]];
+      if (text == null || heldChunks.has(session[1])) return null;
+      if (!streamingChunks.has(session[1])) return closedChunk(text);
+      return { get textContent() { partialChunkReads++; return text.slice(0, Math.floor(text.length / 2)); }, nextSibling: null };
+    }
     const sprites = id.match(/^tb-sprites-(\d+)$/);
-    if (sprites) return opts.chunks.sprites[sprites[1]] != null && !heldSpriteChunks.has(sprites[1]) ? { textContent: opts.chunks.sprites[sprites[1]] } : null;
+    if (sprites) return opts.chunks.sprites[sprites[1]] != null && !heldSpriteChunks.has(sprites[1]) ? closedChunk(opts.chunks.sprites[sprites[1]]) : null;
     return null;
   };
   // Every keydown listener currently registered on the document, in registration order — a viewer
   // that boots twice into ONE document must leave exactly one behind (disposeViewerGlobals).
   const documentKeyListeners: Array<(e: any) => void> = [];
+  // Hoisted so a test can read back the capture-framing marker autoplay stamps on it.
+  const documentElement = { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument };
   (globalThis as Record<string, unknown>).document = {
     get activeElement() { return overlayFocus && !overlayFocus.detached ? overlayFocus : activeElement; },
     // While a held chunk is pending the document reads as still loading, so the viewer keeps
-    // polling instead of giving up on hydration.
-    get readyState() { return heldChunks.size || heldSpriteChunks.size ? "loading" : undefined; },
+    // polling instead of giving up on hydration. opts.loadingDocument models the same thing without
+    // chunk plumbing (the document tail — where the selector-engine chunk rides — still streaming);
+    // settleDocument() below is the "tail arrived" edge.
+    get readyState() { return documentLoading || heldChunks.size || heldSpriteChunks.size || streamingChunks.size ? "loading" : undefined; },
     getElementById: (id: string) => (opts.chunks && chunkElement(id))
       || (id === "app" ? app
       : id === "tb-run-data" && !opts.payloadViaGlobal && !opts.chunks ? { textContent: dataJson }
@@ -429,7 +468,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
       : null),
     // The viewer's boot asks whether this document is a viewer shell (no payload yet, loader chrome
     // in place) before deciding to auto-boot.
-    documentElement: { dataset: {} as Record<string, string>, hasAttribute: (name: string) => name === "data-tb-shell" && !!opts.shellDocument },
+    documentElement,
     addEventListener: (name: string, fn: (e: any) => void) => {
       if (name !== "keydown") return;
       handlers.documentKey = fn;
@@ -486,6 +525,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   if (opts.timelineScrollTop != null) timelineList.scrollTop = opts.timelineScrollTop;
   if (opts.step != null && handlers.step[String(opts.step)]) handlers.step[String(opts.step)]();
   if (opts.clickGroup != null && handlers.group[String(opts.clickGroup)]) handlers.group[String(opts.clickGroup)]();
+  if (opts.toggleKids != null && handlers.kids[String(opts.toggleKids)]) handlers.kids[String(opts.toggleKids)]({ preventDefault() {}, stopPropagation() {} });
   if (opts.tlStreamBeforeTab != null && handlers.tlStream[String(opts.tlStreamBeforeTab)]) handlers.tlStream[String(opts.tlStreamBeforeTab)]();
   if (opts.tab && handlers.tab[opts.tab]) handlers.tab[opts.tab]();
   if (opts.openTx != null && handlers.txOpen[String(opts.openTx)]) handlers.txOpen[String(opts.openTx)]();
@@ -550,7 +590,7 @@ function renderViewerState(payload: unknown, opts: ViewerOptions = {}): { html: 
   bootTimeouts.forEach((cb) => cb());
   // readHtml re-reads the rendered html after the synchronous pass — for asserting on renders
   // triggered by async work (e.g. the lazy gz inflation re-render).
-  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); }, documentKeyListeners, llmScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus };
+  return { html: app._h, htmlBeforeBoot, liveHtml: () => app._h as string, readHtml: () => app._h as string, timelineScrollTop: timelineList.scrollTop, mainScrollTop: mainScroller.scrollTop, restoredFocus, route, zoomSrc, zoomRoot, copiedText, copyBtnText: () => copyBtn.textContent as string, timelineMenuOpen: timelineMenu.open, spriteMeasures, tlvframeStyle: tlvframeNode.style, releaseChunks: () => { heldChunks.clear(); heldSpriteChunks.clear(); streamingChunks.clear(); }, partialChunkReads: () => partialChunkReads, loadingProgressWrites: () => progressWrites, settleDocument: () => { documentLoading = false; }, documentKeyListeners, autoplayMarker: () => documentElement.dataset.tbAutoplay, llmScrolledTo, llmRow: (i: number) => llmRowEl(String(i)), readRestoredFocus: () => restoredFocus };
 }
 
 function renderViewer(payload: unknown, opts: ViewerOptions = {}): string {
@@ -885,6 +925,105 @@ describe("extractTrace", () => {
     expect((row.children as Array<Record<string, unknown>>).map((c) => c.label)).toEqual(["tapOnElementBySelector"]);
     expect((row.children as Array<Record<string, unknown>>).map((c) => c.tool)).toEqual(["text: Second"]);
   });
+
+  test("children carry duration and outcome, and consecutive identical dispatches fold to ×N", () => {
+    // A composite scripted tool (a trailhead's UI sign-in) dispatches the same primitive dozens of
+    // times in a row under one traceId. N identical unannotated lines hid both where the time went
+    // and which dispatch failed; the fold keeps the list scannable, the per-child ms/ok keep it
+    // dissectible, and a failed dispatch is never absorbed into a green ×N.
+    const maestro = (s: number, extra: Record<string, unknown> = {}) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th1", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text: "Next" } }] } },
+      timestamp: `2024-01-01T00:00:0${s}Z`, ...extra,
+    });
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Launch signed in", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "demo_signedInToClientRoute", traceId: "th1", successful: true,
+        durationMs: 5000, trailblazeTool: { raw: { startingClientRoute: "/dl/view/activity", account: "user@example.com", flags: { newHome: true } } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      maestro(2), maestro(3), maestro(4),
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "exec", traceId: "th1", successful: true,
+        durationMs: 40, trailblazeTool: { raw: { argv: ["adb", "shell", "am", "broadcast"], timeoutSeconds: 30 } }, timestamp: "2024-01-01T00:00:05Z",
+      },
+      maestro(6, { successful: false, durationMs: 900, exceptionMessage: "Element not found: Next", errorPayload: { schema: "example-repo/trailhead-error/v1", code: "navigation", ticket: "TICKET-123" } }),
+    ];
+    const trace = core.extractTrace(logs);
+    const row = trace.find((r) => r.label === "demo_signedInToClientRoute");
+    const kids = row.children as Array<Record<string, unknown>>;
+    expect(kids.map((c) => [c.label, c.count, c.ms, c.ok])).toEqual([
+      ["mobile_maestro", 3, 300, true],
+      ["exec", 1, 40, true],
+      ["mobile_maestro", 1, 900, false],
+    ]);
+    // Structured payloads summarize instead of vanishing: maestro names its commands, exec its argv.
+    expect(kids.map((c) => c.tool)).toEqual(["tapOn", "adb shell am broadcast", "tapOn"]);
+    // The failed dispatch keeps its error (the JVM log spells it exceptionMessage); passes carry none.
+    expect(kids.map((c) => c.err)).toEqual([null, null, "Element not found: Next"]);
+    // A structured errorPayload's top-level string `code` rides beside the message; passes carry none.
+    expect(kids.map((c) => c.code)).toEqual([null, null, "navigation"]);
+    // The composite call keeps ALL its arguments — including the object-valued one the three-key
+    // `tool` summary drops — because a trailhead's config is its documentation.
+    expect(row.params).toEqual(["startingClientRoute=/dl/view/activity", "account=user@example.com", 'flags={"newHome":true}']);
+    // The fold is lossless for the index's tool-call count (5 dispatches + the row itself), and the
+    // annotations survive the share slimming the standalone report renders from.
+    const slim = core.slimTraceForShare(trace);
+    expect(traceToolCallCount(slim)).toBe(6);
+    const slimRow = slim.find((r: any) => r.label === "demo_signedInToClientRoute");
+    // Slim children keep only fields that carry signal: ms when executed, ok/err only on failure,
+    // count only past 1 — the viewer treats each absent field as its default.
+    expect(slimRow.children.map((c: any) => [c.count, c.ms, c.ok, c.err, c.code])).toEqual([[3, 300, undefined, undefined, undefined], [undefined, 40, undefined, undefined, undefined], [undefined, 900, false, "Element not found: Next", "navigation"]]);
+    expect(slimRow.params).toEqual(row.params);
+  });
+
+  test("dispatches whose display summaries collide but whose raw args differ do not fold", () => {
+    // The `tool` summary is lossy (a maestro command summarizes to just its command name), so the
+    // fold must compare the raw args — otherwise a tap on "Next" and a tap on "Back" collapse into
+    // a misleading ×2 of the first.
+    const tap = (s: number, text: string) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th2", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text } }] } },
+      timestamp: `2024-01-01T00:00:0${s}Z`,
+    });
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Launch signed in", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "demo_signedInToClientRoute", traceId: "th2", successful: true,
+        durationMs: 5000, trailblazeTool: { raw: { startingClientRoute: "/dl/view/activity" } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      tap(2, "Next"), tap(3, "Back"), tap(4, "Back"),
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "demo_signedInToClientRoute");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => [c.tool, c.count])).toEqual([["tapOn", 1], ["tapOn", 2]]);
+  });
+
+  test("only an object payload's top-level string `code` becomes a child code (Kotlin failureCodeOf twin)", () => {
+    // Mirror of FailureCodeOfTest's lift rules: non-object payloads, missing `code`, and
+    // non-string `code` values (7, true) all yield null — the chip renders nothing rather
+    // than a coerced value the CI classifier would never see.
+    const failing = (s: number, errorPayload: unknown) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "th3", successful: false,
+      durationMs: 100, errorMessage: "boom", trailblazeTool: { raw: { commands: [{ tapOn: { text: `s${s}` } }] } },
+      timestamp: `2024-01-01T00:00:0${s}Z`, ...(errorPayload !== undefined ? { errorPayload } : {}),
+    });
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Launch signed in", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "demo_signedInToClientRoute", traceId: "th3", successful: true,
+        durationMs: 5000, trailblazeTool: { raw: { startingClientRoute: "/x" } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      failing(2, { code: "session" }),
+      failing(3, { code: 7 }),
+      failing(4, { code: true }),
+      failing(5, "session"),
+      failing(6, ["session"]),
+      failing(7, undefined),
+      failing(8, { detail: "none" }),
+    ];
+    const row = core.extractTrace(logs).find((r) => r.label === "demo_signedInToClientRoute");
+    expect((row.children as Array<Record<string, unknown>>).map((c) => c.code)).toEqual(["session", null, null, null, null, null, null]);
+  });
 });
 
 describe("shotForStep (timeline preview image)", () => {
@@ -1166,6 +1305,39 @@ describe("chunked session hydration (lazy #tb-session parsing)", () => {
     expect(state.readHtml()).toContain("Tap login");
   });
 
+  test("a chunk that is still streaming in is left alone until the parser closes it", async () => {
+    // The element exists but its payload is half-arrived. Re-reading and re-parsing that partial
+    // text every 50ms is what turns a big report's deep link into an apparently hung page: the
+    // chunk can be tens of megabytes, and the parse burns the same main thread the download runs
+    // on. The viewer must wait for the parser's end-tag signal instead.
+    const state = renderViewerState(null, { chunks: chunksOf(html), streamingChunks: [1], session: 1 });
+    expect(state.html).toContain("Loading run");
+    await new Promise((resolve) => setTimeout(resolve, 200)); // several poll turns
+    expect(state.partialChunkReads()).toBe(0);
+    expect(state.readHtml()).toContain("Loading run");
+    state.releaseChunks();
+    for (let i = 0; i < 100 && state.readHtml().includes("Loading run"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.readHtml()).toContain("Tap login");
+  });
+
+  test("the loading view reports download progress and keeps the run index one click away", () => {
+    const state = renderViewerState(null, { chunks: chunksOf(html), streamingChunks: [1], session: 1 });
+    // Chunks arrive in order, so run A's is already parsed while run B's is still streaming.
+    expect(state.html).toContain("Downloaded 1 of 2 runs");
+    expect(state.html).toContain("data-back"); // an escape to the index, which #tb-index already rendered
+    // The tab nav is what normally gives the detail header its bottom padding; without tabs the
+    // header has to supply it or the title sits flush on the header border.
+    expect(state.html).toContain('class="detailheader notabs"');
+  });
+
+  test("the loading view only rewrites its progress line when the download actually advances", async () => {
+    const state = renderViewerState(null, { chunks: chunksOf(html), streamingChunks: [1], session: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 200)); // several poll turns, no new chunk
+    // The note lives in a role=status live region, so a repaint per poll turn is a screen reader
+    // reading the same sentence out 20 times a second.
+    expect(state.loadingProgressWrites()).toBe(0);
+  });
+
   test("a chunk missing from a fully-loaded document opens with index data instead of hanging", () => {
     const chunks = chunksOf(html);
     delete chunks.sessions["1"];
@@ -1365,13 +1537,15 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
       generatedAt: "now",
       sessions: [
         { ...session("Checkout flow", "passed"), meta: { title: "Checkout flow", status: "passed", platform: "android", device: "Pixel Demo" } },
-        { ...session("Sign-in flow", "failed"), meta: { title: "Sign-in flow", status: "failed", platform: "ios", device: "iPhone Demo" } },
+        { ...session("Sign-in flow", "failed"), meta: { title: "Sign-in flow", status: "failed", platform: "ios", device: "iPhone Demo", failureCode: "account-state" } },
       ],
     });
     expect(out).toContain('type="search"');
     expect(out).toContain('aria-label="Search runs"');
     expect(out).not.toContain('id="runcount"');
     expect(out).toContain('data-search="checkout flow passed android pixel demo"');
+    // The failure code joins the haystack, so a reader can filter the index to one code.
+    expect(out).toContain('data-search="sign-in flow failed ios iphone demo account-state"');
     expect(out).toContain("No runs match these filters.");
     expect(out).toContain('aria-label="Sort runs"');
     expect(out).not.toContain("<span>Sort</span>");
@@ -2102,6 +2276,94 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out).not.toContain(">STEP 2</span>");
   });
 
+  // A composite trailhead tool folds dozens of dispatches into one row's children. The shared
+  // fixture mirrors that shape: one scripted tool whose traceId fold merged a repeated primitive,
+  // an exec, and (optionally) one failed dispatch.
+  const compositeToolLogs = (failLast: boolean) => {
+    const maestro = (s: number, extra: Record<string, unknown> = {}) => ({
+      class: `${T}.TrailblazeToolLog`, toolName: "mobile_maestro", traceId: "thv", successful: true,
+      durationMs: 100, trailblazeTool: { raw: { commands: [{ tapOn: { text: "Next" } }] } },
+      timestamp: `2024-01-01T00:00:${String(s).padStart(2, "0")}Z`, ...extra,
+    });
+    return [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Launch signed in", isTrailhead: true }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "demo_signedInToClientRoute", traceId: "thv", successful: true,
+        durationMs: 9000, trailblazeTool: { raw: { startingClientRoute: "/dl/view/activity", account: "user@example.com" } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      { class: `${T}.TrailblazeToolLog`, toolName: "demo_signInViaUI", traceId: "thv", successful: true, durationMs: 6000, trailblazeTool: { raw: { email: "a@b.c" } }, timestamp: "2024-01-01T00:00:02Z" },
+      maestro(3), maestro(4), maestro(5),
+      { class: `${T}.TrailblazeToolLog`, toolName: "exec", traceId: "thv", successful: true, durationMs: 40, trailblazeTool: { raw: { argv: ["adb", "shell", "am", "broadcast"] } }, timestamp: "2024-01-01T00:00:06Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "demo_bootstrapTarget", traceId: "thv", successful: true, durationMs: 1200, trailblazeTool: { raw: { relaunch: false } }, timestamp: "2024-01-01T00:00:07Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "demo_launchClientRoute", traceId: "thv", successful: !failLast, durationMs: 800, trailblazeTool: { raw: { route: "app://home" } }, timestamp: "2024-01-01T00:00:08Z", ...(failLast ? { errorMessage: "Deep link route crashed", errorPayload: { schema: "example-repo/trailhead-error/v1", code: "navigation" } } : {}) },
+    ];
+  };
+
+  test("a long dispatch list collapses to a summary that names the biggest time sink", () => {
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace: core.extractTrace(compositeToolLogs(false)), llmLogs: [], shots: {} });
+    const out = renderViewer(payloadOf(html));
+    // Collapsed by default: the summary counts DISPATCHES (the ×3 fold still counts as 3) and
+    // names the slowest dispatch, and no child rows render until the reader expands.
+    expect(out).toContain('data-open="0"');
+    expect(out).toContain('7 tool dispatches · slowest <span class="mono">demo_signInViaUI</span> 6.0s');
+    expect(out).not.toContain('<span class="kt mono">tapOn</span>');
+    // The composite call itself stays fully legible: every parameter on its own line, not the
+    // summarized three-key crop ordinary rows get.
+    expect(out).toContain('<div class="tl-tool mono">startingClientRoute=/dl/view/activity</div>');
+    expect(out).toContain('<div class="tl-tool mono">account=user@example.com</div>');
+  });
+
+  test("a failed dispatch stays visible with its error while the list is collapsed", () => {
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "failed" }, trace: core.extractTrace(compositeToolLogs(true)), llmLogs: [], shots: {} });
+    const out = renderViewer(payloadOf(html));
+    // Still collapsed — but the summary counts the failure and the failed row (with its error
+    // message) renders anyway, so the line the reader came for needs no expanding.
+    expect(out).toContain('data-open="0"');
+    expect(out).toContain('1 failed</span>');
+    expect(out).toContain('class="kid bad"');
+    expect(out).toContain('demo_launchClientRoute');
+    // The structured payload's code renders as a chip on both surfaces the reader scans: the
+    // collapsed summary line and the failed dispatch's error line.
+    expect(out).toContain('1 failed</span><span class="kidcode">navigation</span>');
+    expect(out).toContain('<div class="kiderr"><span class="kidcode">navigation</span>Deep link route crashed</div>');
+    // The passing plumbing stays hidden.
+    expect(out).not.toContain('<span class="kt mono">tapOn</span>');
+  });
+
+  test("toggling the dispatch list survives the re-render its own click causes", () => {
+    // The summary sits inside a selectable step row and every state change re-renders from st,
+    // so the open state must live in st.kidsOpen, not the DOM.
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace: core.extractTrace(compositeToolLogs(false)), llmLogs: [], shots: {} });
+    const payload = payloadOf(html);
+    const row = payload.sessions[0].trace.find((t: any) => t.label === "demo_signedInToClientRoute");
+    const out = renderViewer(payload, { toggleKids: row.i });
+    // Expanded: each child row carries its duration and ×N so the fold stays dissectible.
+    expect(out).toContain(`data-kids="${Number(row.i)}" data-open="1"`);
+    expect(out).toContain('<span class="kcount">×3</span>');
+    expect(out).toContain('<span class="kms">300ms</span>');
+    expect(out).toContain('<span class="kt mono">tapOn</span>');
+    expect(out).toContain('<span class="kt mono">adb shell am broadcast</span>');
+  });
+
+  test("a short delegation list stays inline, annotated the same way", () => {
+    const logs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap the row" }, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementWithNodeId", traceId: "inl", successful: true,
+        durationMs: 30, trailblazeTool: { raw: { nodeId: 7 } }, timestamp: "2024-01-01T00:00:01Z",
+      },
+      {
+        class: `${T}.TrailblazeToolLog`, toolName: "tapOnElementBySelector", traceId: "inl", successful: true,
+        durationMs: 25, trailblazeTool: { raw: { selector: { text: "Row" } } }, timestamp: "2024-01-01T00:00:02Z",
+      },
+    ];
+    const html = core.buildRunReportHtml({ meta: { title: "R", status: "passed" }, trace: core.extractTrace(logs), llmLogs: [], shots: {} });
+    const out = renderViewer(payloadOf(html));
+    expect(out).toContain('<div class="kids">');
+    expect(out).not.toContain('kidsummary');
+    expect(out).toContain('<span class="kms">25ms</span>');
+  });
+
   test("a high-volume Trailhead yields visual priority to the authored Trail", () => {
     const trace = [
       { i: 1, label: "Prepare the app", objective: true, trailhead: true, ok: true, ts: 1, ms: 0 },
@@ -2550,6 +2812,20 @@ describe("RUN_REPORT_VIEWER (rendered output)", () => {
     expect(out.match(/Fees disclosure did not appear before checkout/g)).toHaveLength(1);
     expect(core.RUN_REPORT_CSS).toContain(".stepgroup.failed { background: var(--danger-surface); }");
     expect(core.RUN_REPORT_CSS).not.toContain(".stepgroup.failed::after");
+  });
+
+  test("the failure banner renders meta.failureCode as a chip, and only when the meta carries one", () => {
+    const trace = [
+      { i: 1, label: "Launch signed in", tool: "agent step", note: null, ms: 0, ts: 1, ok: true, err: null, screenshotFile: null, objective: true, trailhead: true, count: null, mark: null, children: [] },
+      { i: 2, label: "demo_signedInToClientRoute", tool: "route: /x", note: null, ms: 900, ts: 2, ok: false, err: "TrailheadException: staging account locked out", screenshotFile: null, objective: false, trailhead: false, count: null, mark: null, children: [] },
+    ];
+    const session = (meta: Record<string, unknown>) => ({ generatedAt: "now", sessions: [{ meta, trace, llm: [], shots: {} }] });
+    const out = renderViewer(session({ title: "Failed", status: "failed", failureCode: "account-state" }));
+    expect(out).toContain('<span class="failurecode">account-state</span>');
+    // Legacy/uncoded failures render the banner exactly as before — no empty chip.
+    const uncoded = renderViewer(session({ title: "Failed", status: "failed" }));
+    expect(uncoded).toContain('class="failurepanel"');
+    expect(uncoded).not.toContain('failurecode');
   });
 
   test("tolerated failures inside a passing trailhead don't steal the failure attribution", () => {
@@ -3804,6 +4080,156 @@ describe("timeline playback drive (rAF engine + paint in place)", () => {
   });
 });
 
+describe("autoplay-capture contract (?autoplay=1)", () => {
+  // The document `trailblaze report --video/--gif/--webp` loads in headless Chromium: four steps,
+  // 500ms apart, then a 9-minute idle. The exporter screen-records the tab and stops on
+  // `globalThis.__tbPlaybackEnded`, so the contract is "play start to finish unattended, then say
+  // so once" — and that idle must not become 9 minutes of a static screen.
+  const capturePayload = () => ({
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "Capture run", status: "passed" },
+      trace: [
+        { i: 1, label: "Open app", ts: 100000, ms: 100, ok: true, screenshotFile: "s1.png" },
+        { i: 2, label: "Tap login", ts: 100500, ms: 100, ok: true, screenshotFile: "s2.png" },
+        { i: 3, label: "Enter code", ts: 101000, ms: 100, ok: true, screenshotFile: "s3.png" },
+        { i: 4, label: "See home", ts: 641000, ms: 100, ok: true, screenshotFile: "s4.png" },
+      ],
+      llm: [],
+      shots: { "s1.png": "data:image/png;base64,S1", "s2.png": "data:image/png;base64,S2", "s3.png": "data:image/png;base64,S3", "s4.png": "data:image/png;base64,S4" },
+      recordingYaml: null,
+    }],
+  });
+
+  // Records every write to the global the recorder polls, so "raised exactly once, and not before
+  // the end" is observable rather than inferred from a final boolean.
+  const trackEndFlag = () => {
+    let value: unknown;
+    const writes: unknown[] = [];
+    Object.defineProperty(globalThis, "__tbPlaybackEnded", {
+      configurable: true,
+      get() { return value; },
+      set(next: unknown) { value = next; writes.push(next); },
+    });
+    return { writes, dispose: () => { delete (globalThis as Record<string, unknown>).__tbPlaybackEnded; } };
+  };
+
+  test("plays start to finish with no interaction and raises the end flag once, after the last step is on screen", () => {
+    const flag = trackEndFlag();
+    try {
+      const state = renderViewerState(capturePayload(), {
+        query: "?autoplay=1",
+        drive: (ctx) => {
+          // Note the absence of ctx.play(): the document started itself.
+          expect(ctx.html()).toContain('aria-label="Pause timeline"');
+          ctx.advance(0);
+          expect(ctx.html()).toContain('class="step sel" data-step="1"'); // playback starts at the top
+          ctx.advance(600); // past the 350ms offset
+          expect(ctx.selectedSteps()).toEqual(["2"]);
+          expect(ctx.shotImg.src).toBe("data:image/png;base64,S2");
+          expect(flag.writes).toEqual([]);
+          ctx.advance(1200); // 1800ms → past the COMPRESSED 1700ms offset of the post-idle row
+          expect(ctx.selectedSteps()).toEqual(["4"]);
+          expect(flag.writes).toEqual([]); // still dwelling on the last step
+          ctx.advance(300); // 2100ms ≥ totalMs 2050 → playback ends
+          expect(ctx.html()).toContain('class="step sel" data-step="4"');
+          expect(ctx.html()).toContain('aria-label="Play timeline"');
+          expect(flag.writes).toEqual([]); // the final frame has to paint before the recorder stops
+          ctx.advance(0);
+          ctx.advance(0);
+          expect(flag.writes).toEqual([true]);
+          // A replay tells the recorder nothing new — it already stopped on the first signal.
+          ctx.play();
+          ctx.advance(0);
+          ctx.advance(3000);
+          ctx.advance(0);
+          ctx.advance(0);
+          expect(flag.writes).toEqual([true]);
+        },
+      });
+      expect(state.autoplayMarker()).toBe("1"); // capture framing is stamped on the document
+    } finally {
+      flag.dispose();
+    }
+  });
+
+  test("a run with nothing to play raises the flag immediately instead of stalling the recorder", () => {
+    const flag = trackEndFlag();
+    try {
+      renderViewerState(
+        { generatedAt: "now", sessions: [{ meta: { title: "Nothing ran", status: "failed" }, trace: [], llm: [], shots: {}, recordingYaml: null }] },
+        { query: "?autoplay=1" },
+      );
+      expect(flag.writes).toEqual([true]);
+    } finally {
+      flag.dispose();
+    }
+  });
+
+  test("a report opened without the flag never plays itself and never signals", () => {
+    const flag = trackEndFlag();
+    try {
+      const state = renderViewerState(capturePayload(), {
+        drive: (ctx) => {
+          ctx.advance(10000);
+          expect(ctx.html()).toContain('aria-label="Play timeline"');
+          expect(ctx.html()).toContain('class="step sel" data-step="1"');
+          expect(flag.writes).toEqual([]);
+        },
+      });
+      expect(state.autoplayMarker()).toBeUndefined();
+    } finally {
+      flag.dispose();
+    }
+  });
+});
+
+describe("export playback schedule (idle-gap compression)", () => {
+  const pure = core;
+  // 500ms of real activity, then a 10-minute idle.
+  const rows = [{ ts: 10000, ms: 100 }, { ts: 10500, ms: 100 }, { ts: 610500, ms: 100 }];
+  const video = { sprites: [{ uri: "data:image/webp;base64,X", rows: 5 }], fps: 2, frames: 10, columns: 2, rows: 5, frameHeight: 100, frameMap: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], startFrame: 0, endFrame: 9, startMs: 10000 };
+
+  test("exportGapMs plays at 4x, caps an idle at 1s, and floors a fast burst at one captured frame", () => {
+    expect(pure.exportGapMs(2000)).toBe(500); // real activity plays through at 4x
+    expect(pure.exportGapMs(20)).toBe(350); // a sub-frame burst still survives the 5fps shutter
+    expect(pure.exportGapMs(600000)).toBe(1000); // a 10-minute idle costs one second of animation
+  });
+
+  test("a long idle collapses to the same second an hour of dead air would", () => {
+    const exported = pure.buildExportSchedule(rows, null);
+    expect(exported.offsets).toEqual([0, 350, 1350]);
+    expect(exported.totalMs).toBe(1700); // + the last row's own floored dwell
+    // Interactive playback keeps its own wider window — compression is an export-only concern.
+    expect(pure.buildPlaybackSchedule(rows, null).offsets).toEqual([0, 500, 4500]);
+  });
+
+  test("a video rides the compressed clock instead of stretching the export to the session's wall clock", () => {
+    const plain = pure.buildPlaybackSchedule(rows, video);
+    const exported = pure.buildExportSchedule(rows, video);
+    expect(plain.mode).toBe("video");
+    expect(plain.totalMs).toBeGreaterThan(600000); // real-time playback: 10 minutes of dead air
+    expect(exported.mode).toBe("video");
+    expect(exported.totalMs).toBe(1700);
+    // The run clock still lands on each row's real timestamp — it just fast-forwards between them,
+    // so the sprite frame tracks the session rather than freezing.
+    expect(pure.playbackPositionAt(exported, 0).clockMs).toBe(10000);
+    expect(pure.playbackPositionAt(exported, 350).clockMs).toBe(10500);
+    expect(pure.playbackPositionAt(exported, 850).clockMs).toBe(310500); // halfway across the collapsed idle
+    expect(pure.playbackPositionAt(exported, 1350).clockMs).toBe(610500);
+    expect(pure.playbackPositionAt(exported, 0).frame).toBe(0);
+    expect(pure.playbackPositionAt(exported, 1350).frame).toBe(9); // clamped to the last playable frame
+  });
+
+  test("an untimed row rides the previous row's clock and still gets its own dwell", () => {
+    const mixed = [{ ts: 10000, ms: 100 }, { ms: 800 }, { ts: 11000, ms: 100 }];
+    const exported = pure.buildExportSchedule(mixed, null);
+    expect(exported.offsets).toEqual([0, 350, 700]);
+    expect(exported.clockAnchors).toBeNull(); // no video → the scrub head runs off playback time
+    expect(pure.buildExportSchedule(mixed, video).clockAnchors).toEqual([10000, 10000, 11000]);
+  });
+});
+
 describe("compressed device/network logs (SessionPayload.deviceLogGz / networkGz)", () => {
   const slim = (core as any).slimTraceForShare(core.extractTrace(sampleLogs));
   const gzText = (value: string) => require("zlib").gzipSync(value).toString("base64");
@@ -4806,6 +5232,69 @@ describe("UI Inspector data path (SessionPayload.hierarchies / hierarchiesGz)", 
     expect(overlay.innerHTML).toContain("com.example:id/login");
   });
 
+  // ── iOS coordinate space ─────────────────────────────────────────────────────────────────────
+  // An iOS (XCUITest) capture: the tree is in POINTS, the root declares no bounds, and a
+  // descendant overhangs the screen on every side (real captures carry one at exactly 3x the
+  // screen). The screenshot is in PIXELS at the device scale — which must not matter, since every
+  // rect is a percentage of the tree's own extent. Shape taken from the committed
+  // trails/config/trailmaps/contacts/waypoints/ios captures.
+  const iosTree = {
+    nodeId: 0,
+    bounds: { left: 0, top: 0, right: 0, bottom: 0 },
+    driverDetail: { class: "iosMaestro", elementType: "Application" },
+    children: [{
+      nodeId: 1,
+      bounds: { left: 0, top: 0, right: 402, bottom: 874 },
+      driverDetail: { class: "iosMaestro", elementType: "Window" },
+      children: [
+        // The off-screen container: 3x the screen, origin outside it.
+        { nodeId: 2, bounds: { left: -402, top: -874, right: 804, bottom: 1748 }, driverDetail: { class: "iosMaestro", elementType: "Other" } },
+        { nodeId: 3, bounds: { left: 0, top: 68, right: 402, bottom: 124 }, driverDetail: { class: "iosMaestro", elementType: "NavigationBar", label: "Contacts" } },
+      ],
+    }],
+  };
+  // The failing shape: the hierarchy-bearing log carries no device dims, so the anchor has to come
+  // from the tree itself.
+  const iosPayload = () => payloadOf(core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{
+      meta: { title: "iOS run", status: "failed" },
+      trace: core.extractTrace([
+        { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Launch the app" }, timestamp: "2024-01-01T00:00:00Z" },
+        { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "i1", trailblazeTool: { raw: { text: "Contacts" } }, screenshotFile: "i.png", trailblazeNodeTree: iosTree, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+      ]),
+      llmLogs: [],
+      shots: { "i.png": "data:image/png;base64,III" },
+    }],
+  }));
+
+  for (const scale of [2, 3]) {
+    test(`an iOS capture's rects match the points tree, not the ${scale}x screenshot or the off-screen container`, async () => {
+      const payload = iosPayload();
+      const state = renderViewerState(payload, { inspect: stepOf(payload, "tapOnElement") });
+      const overlay = state.zoomRoot;
+      const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+      // Screenshot in device pixels (402x874 points at <scale>x), rendered 100 wide.
+      patchImg(overlay, { w: 402 * scale, h: 874 * scale }, { left: 0, top: 0, width: 100, height: 217.4 });
+      // Hit-testing shares the anchor: mid-width, 10% down the image is inside the nav bar (68-124
+      // of 874 points). This also drives the in-place restyle the assertions below read.
+      movePointer(overlay, overlay.querySelector(".inspshotwrap"), { clientX: 50, clientY: 217.4 * 0.1 });
+      await settled();
+      expect(hoverLabel(overlay).textContent).toContain("Contacts");
+      // The window fills the capture…
+      expect(rectFor(overlay, 1).style.left).toBe("0.000%");
+      expect(rectFor(overlay, 1).style.width).toBe("100.000%");
+      expect(rectFor(overlay, 1).style.height).toBe("100.000%");
+      // …the navigation bar spans its full width at 68/874 down…
+      expect(rectFor(overlay, 3).style.width).toBe("100.000%");
+      expect(rectFor(overlay, 3).style.top).toBe("7.780%");
+      expect(rectFor(overlay, 3).style.height).toBe("6.407%");
+      // …and the off-screen container still reads as off-screen (negative origin, overhanging).
+      expect(parseFloat(rectFor(overlay, 2).style.left)).toBeLessThan(0);
+      expect(parseFloat(rectFor(overlay, 2).style.width)).toBeGreaterThan(100);
+    });
+  }
+
   test("a compressed hierarchies payload inflates when the inspector opens", async () => {
     const payload = inspectorPayload();
     const tapStep = stepOf(payload, "tapOnElement");
@@ -4856,6 +5345,27 @@ describe("UI Inspector model (pure builders)", () => {
     expect(model.nodes[1].fields).toContainEqual({ k: "Class", v: "android.widget.Button" });
     expect(model.nodes[1].fields).toContainEqual({ k: "Ref", v: "y778" });
     expect(model.nodes[1].flags).toContain("isClickable");
+  });
+
+  // iOS trees declare no root bounds and carry containers that overhang the screen, so the widest
+  // extent overall is a multiple of the screen. The anchor comes from the origin-anchored nodes.
+  test("a rootless tree anchors on its origin-anchored extent, ignoring off-screen overhang", () => {
+    const model = inspectorModel({
+      nodeId: 0, bounds: { left: 0, top: 0, right: 0, bottom: 0 }, driverDetail: { class: "iosMaestro" },
+      children: [{
+        nodeId: 1, bounds: { left: 0, top: 0, right: 402, bottom: 874 }, driverDetail: { class: "iosMaestro" },
+        children: [{ nodeId: 2, bounds: { left: -402, top: -874, right: 804, bottom: 1748 }, driverDetail: { class: "iosMaestro" } }],
+      }],
+    })!;
+    expect(model.dims).toEqual({ w: 402, h: 874 });
+  });
+
+  test("with nothing anchored at the origin, dims still fall back to the widest extent", () => {
+    const model = inspectorModel({
+      nodeId: 0, bounds: { left: 0, top: 0, right: 0, bottom: 0 }, driverDetail: { class: "iosMaestro" },
+      children: [{ nodeId: 1, bounds: { left: 10, top: 20, right: 300, bottom: 500 }, driverDetail: { class: "iosMaestro" } }],
+    })!;
+    expect(model.dims).toEqual({ w: 300, h: 500 });
   });
 
   test("parses legacy centerPoint/dimensions bounds and falls back to max extent for dims", () => {
@@ -4945,6 +5455,227 @@ describe("UI Inspector model (pure builders)", () => {
   });
 });
 
+// ── web bounds merge + dialog-scoped hit-testing ──────────────────────────────────────────────
+// A web capture logs the same ARIA snapshot as two parallel trees whose bounds come from two
+// different DOM correlations: `trailblazeNodeTree` (the shape the inspector renders) gets bounds
+// from a fuzzy role+name walk that leaves most nodes with no geometry — and occasionally assigns
+// a node the rect of a same-named element elsewhere on the page — while the legacy
+// `viewHierarchy` sibling gets ref-resolved bounds covering 3–10x more nodes. Hit-testing the
+// sparse tree resolved most of a form to its giant `<main>` landmark (the reported bug: on a
+// web app's "Create item" dialog, only rows whose node happened to have bounds were selectable;
+// everything else lit up the whole main container). The fix has two halves, both covered here:
+//  - extraction grafts the dense legacy bounds onto the ARIA tree (mergeWebHierarchyBounds);
+//  - hitTestNode scopes candidates to the last dialog containing the point, so the occluded page
+//    UNDER a modal (which keeps its bounds in the capture) can't steal the hit.
+describe("web hierarchy bounds merge + dialog-scoped hit-testing", () => {
+  // Shaped like the session this was reported against: a full-screen "Create item" dialog over
+  // an items table, a `<main>` landmark filling the dialog, and form rows where only some nodes
+  // carry bounds in the ARIA tree while the legacy tree has them all.
+  const createItemNodeTree = {
+    driverDetail: { class: "web", ariaRole: "document", ariaDescriptor: "document" },
+    children: [
+      // The occluded page under the dialog — still in the snapshot, with real bounds.
+      {
+        bounds: { left: 312, top: 170, right: 1248, bottom: 569 },
+        driverDetail: { class: "web", ariaRole: "table" },
+        children: [{ bounds: { left: 312, top: 218, right: 653, bottom: 275 }, driverDetail: { class: "web", ariaRole: "cell", ariaName: "Row A" } }],
+      },
+      {
+        bounds: { left: 0, top: 0, right: 1280, bottom: 800 },
+        driverDetail: { class: "web", ariaRole: "dialog", ariaName: "Create item" },
+        children: [{
+          bounds: { left: 0, top: 152, right: 1280, bottom: 784 },
+          driverDetail: { class: "web", ariaRole: "main", isLandmark: true },
+          children: [
+            { bounds: { left: 44, top: 152, right: 844, bottom: 216 }, driverDetail: { class: "web", ariaRole: "combobox", ariaName: "Item type", dataTestId: "field_select_itemData.productType" } },
+            { driverDetail: { class: "web", ariaRole: "text", ariaName: "Name (required)" } }, // no bounds in either tree
+            { driverDetail: { class: "web", ariaRole: "textbox", ariaName: "Name (required)" } }, // bounds only in the legacy tree
+            { driverDetail: { class: "web", ariaRole: "button", ariaName: "Auto create" } }, // bounds only in the legacy tree
+            { bounds: { left: 60, top: 344, right: 693, bottom: 368 }, driverDetail: { class: "web", ariaRole: "textbox", ariaName: "Price" } },
+            { driverDetail: { class: "web", ariaRole: "textbox", ariaName: "Customer-facing description" } }, // bounds only in the legacy tree
+          ],
+        }],
+      },
+    ],
+  };
+  // Same structure in the legacy ViewHierarchyTreeNode shape, with the dense ref-resolved bounds.
+  const createItemLegacyTree = {
+    children: [
+      {
+        className: "table", x1: 312, y1: 170, x2: 1248, y2: 569,
+        children: [{ className: "cell", text: "Row A", x1: 312, y1: 218, x2: 653, y2: 275 }],
+      },
+      {
+        className: "dialog", text: "Create item", x1: 0, y1: 0, x2: 1280, y2: 800,
+        children: [{
+          className: "main", x1: 0, y1: 152, x2: 1280, y2: 784,
+          children: [
+            { className: "combobox", text: "Item type", x1: 44, y1: 152, x2: 844, y2: 216 },
+            { className: "text", text: "Name (required)" },
+            { className: "textbox", text: "Name (required)", x1: 60, y1: 252, x2: 732, y2: 276 },
+            { className: "button", text: "Auto create", x1: 748, y1: 244, x2: 788, y2: 284 },
+            { className: "textbox", text: "Price", x1: 60, y1: 344, x2: 693, y2: 368 },
+            { className: "textbox", text: "Customer-facing description", x1: 60, y1: 464, x2: 828, y2: 486 },
+          ],
+        }],
+      },
+    ],
+  };
+  // Pre-order keys of the merged model: 0 document, 1 table, 2 cell, 3 dialog, 4 main,
+  // 5 combobox, 6 text Name, 7 textbox Name, 8 button Auto create, 9 textbox Price,
+  // 10 textbox description.
+  const KEY = { table: 1, cell: 2, dialog: 3, main: 4, combobox: 5, nameBox: 7, autoCreate: 8, price: 9, description: 10 };
+
+  test("hovering each form row resolves the row's element, not the <main> landmark it sits in", () => {
+    const merged = mergeWebHierarchyBounds(createItemNodeTree, createItemLegacyTree);
+    const model = inspectorModel(merged)!;
+    // The rows whose ARIA nodes had no geometry — the reported failure — now resolve themselves…
+    expect(hitTestNode(model, 396, 264)).toBe(KEY.nameBox); // "Name (required)" textbox
+    expect(hitTestNode(model, 768, 264)).toBe(KEY.autoCreate); // "Auto create" button
+    expect(hitTestNode(model, 444, 475)).toBe(KEY.description); // "Customer-facing description"
+    // …the rows that already worked keep working…
+    expect(hitTestNode(model, 444, 184)).toBe(KEY.combobox); // "Item type" combobox
+    expect(hitTestNode(model, 376, 356)).toBe(KEY.price); // "Price" textbox
+    // …and a gap between rows honestly resolves the most specific thing there: <main>.
+    expect(hitTestNode(model, 400, 320)).toBe(KEY.main);
+    // The merge keeps the ARIA tree's detail — the reason we graft bounds instead of swapping
+    // to the legacy tree, which has no test ids / landmark flags.
+    expect(model.nodes[KEY.combobox].fields).toContainEqual({ k: "Test ID", v: "field_select_itemData.productType" });
+    // Without the merge the same probes dead-end at giant containers (main under dialog scoping):
+    // the failure this fix exists for.
+    const sparse = inspectorModel(createItemNodeTree)!;
+    expect(hitTestNode(sparse, 396, 264)).toBe(KEY.main);
+    expect(hitTestNode(sparse, 768, 264)).toBe(KEY.main);
+  });
+
+  test("a point inside the dialog never resolves to the occluded page underneath it", () => {
+    const merged = mergeWebHierarchyBounds(createItemNodeTree, createItemLegacyTree);
+    const model = inspectorModel(merged)!;
+    // (330, 230) sits inside the background table's cell (smaller than <main>), but the dialog
+    // covers it — the visible surface there is the dialog's main region.
+    expect(hitTestNode(model, 330, 230)).toBe(KEY.main);
+    // Sanity: the same point on a model WITHOUT the dialog present would resolve the cell.
+    const noDialog = inspectorModel({
+      driverDetail: { class: "web", ariaRole: "document" },
+      children: [(createItemNodeTree.children as any[])[0]],
+    })!;
+    expect(hitTestNode(noDialog, 330, 230)).toBe(2); // cell "Row A" (document → table → cell)
+  });
+
+  test("stacked and nested dialogs scope to the last one containing the point", () => {
+    const model = inspectorModel({
+      driverDetail: { class: "web", ariaRole: "document" },
+      children: [
+        { bounds: { left: 0, top: 0, right: 100, bottom: 100 }, driverDetail: { class: "web", ariaRole: "button", ariaName: "under everything" } },
+        {
+          bounds: { left: 10, top: 10, right: 90, bottom: 90 }, driverDetail: { class: "web", ariaRole: "dialog", ariaName: "first" },
+          children: [
+            { bounds: { left: 20, top: 20, right: 40, bottom: 40 }, driverDetail: { class: "web", ariaRole: "button", ariaName: "in first" } },
+            {
+              bounds: { left: 30, top: 30, right: 80, bottom: 80 }, driverDetail: { class: "web", ariaRole: "dialog", ariaName: "nested" },
+              children: [{ bounds: { left: 60, top: 60, right: 70, bottom: 70 }, driverDetail: { class: "web", ariaRole: "button", ariaName: "in nested" } }],
+            },
+          ],
+        },
+      ],
+    })!;
+    // Keys: 0 document, 1 under-everything button, 2 first dialog, 3 in-first button,
+    // 4 nested dialog, 5 in-nested button.
+    expect(hitTestNode(model, 65, 65)).toBe(5); // nested dialog's own button
+    expect(hitTestNode(model, 35, 35)).toBe(4); // covered by the nested dialog — not "in first" (3)
+    expect(hitTestNode(model, 25, 25)).toBe(3); // first dialog's button, outside the nested one
+    expect(hitTestNode(model, 5, 5)).toBe(1); // outside every dialog: the page is the surface
+  });
+
+  test("extractTrace lifts the MERGED hierarchy onto the trace row for web records", () => {
+    const trace = core.extractTrace([
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "w1", trailblazeTool: { raw: { text: "Item type" } }, screenshotFile: "w.png", trailblazeNodeTree: createItemNodeTree, viewHierarchy: createItemLegacyTree, deviceWidth: 1280, deviceHeight: 800, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+    ]);
+    const row = trace.find((t: any) => t.label === "tapOnElement") as any;
+    const model = inspectorModel(row.viewHierarchy)!;
+    expect(hitTestNode(model, 396, 264)).toBe(KEY.nameBox);
+    // The raw record itself is untouched — the merge builds a new tree for the row.
+    expect((createItemNodeTree.children[1].children[0].children[2] as any).bounds).toBeUndefined();
+  });
+
+  test("merge policy: legacy bounds win, node-tree bounds survive where the legacy tree has none", () => {
+    const merged = mergeWebHierarchyBounds(
+      {
+        driverDetail: { class: "web", ariaRole: "document" },
+        children: [
+          // Fuzzy-matched to the WRONG element (a same-named node elsewhere on the page) — the
+          // ref-resolved legacy rect must override it.
+          { bounds: { left: 0, top: 900, right: 10, bottom: 910 }, driverDetail: { class: "web", ariaRole: "link", ariaName: "Pricing" } },
+          // No legacy bounds → the node tree's own rect survives.
+          { bounds: { left: 5, top: 5, right: 15, bottom: 15 }, driverDetail: { class: "web", ariaRole: "img" } },
+          // All-zero legacy coordinates mean "unset", not a rect at the origin.
+          { driverDetail: { class: "web", ariaRole: "text", ariaName: "loose" } },
+        ],
+      },
+      {
+        children: [
+          { className: "link", text: "Pricing", x1: 40, y1: 4, x2: 80, y2: 20 },
+          { className: "img" },
+          { className: "text", text: "loose", x1: 0, y1: 0, x2: 0, y2: 0 },
+        ],
+      },
+    ) as any;
+    expect(merged.children[0].bounds).toEqual({ left: 40, top: 4, right: 80, bottom: 20 });
+    expect(merged.children[1].bounds).toEqual({ left: 5, top: 5, right: 15, bottom: 15 });
+    expect(merged.children[2].bounds).toBeUndefined();
+  });
+
+  test("merge bails to the untouched node tree on any structural or role disagreement, and skips non-web trees", () => {
+    const webTree = { driverDetail: { class: "web", ariaRole: "document" }, children: [{ driverDetail: { class: "web", ariaRole: "button", ariaName: "Go" } }] };
+    // Child-count mismatch → same instance back.
+    expect(mergeWebHierarchyBounds(webTree, { children: [] })).toBe(webTree);
+    // Role mismatch at any position → same instance back.
+    expect(mergeWebHierarchyBounds(webTree, { children: [{ className: "link", x1: 1, y1: 1, x2: 2, y2: 2 }] })).toBe(webTree);
+    // A non-web tree (Android accessibility) is never rewritten, even with a parallel legacy tree.
+    const androidTree = { driverDetail: { class: "androidAccessibility", className: "android.view.View" }, children: [] };
+    expect(mergeWebHierarchyBounds(androidTree, { children: [] })).toBe(androidTree);
+    // Missing either side degrades to the extractor's existing fallthrough.
+    expect(mergeWebHierarchyBounds(null, { children: [] })).toBe(null);
+    expect(mergeWebHierarchyBounds(webTree, null)).toBe(webTree);
+  });
+
+  // A real capture, scrubbed: 405 nodes from a web session with a sticky header nav and a long
+  // scrolling body (see the fixture's _source note). Its ARIA tree carries bounds on 202 nodes —
+  // and the fuzzy matcher SWAPPED the header nav link's rect with a same-named footer list item's
+  // (node 15 sits at y≈9636 in the ARIA tree, node 395 at y≈5) — while the legacy tree carries
+  // ref-resolved bounds on 260.
+  test("a real 405-node web capture: merged bounds are denser and the header nav link wins its own hover", () => {
+    const raw = inspectorModel(webMergeFixture.trailblazeNodeTree)!;
+    const merged = inspectorModel(mergeWebHierarchyBounds(webMergeFixture.trailblazeNodeTree, webMergeFixture.viewHierarchy))!;
+    const bounded = (m: ReturnType<typeof inspectorModel>) => m!.nodes.filter((n) => n.bounds).length;
+    expect(bounded(raw)).toBe(202);
+    expect(bounded(merged)).toBe(263); // 260 legacy rects, plus 3 the ARIA walk alone resolved
+    // Hovering the header nav link (node 15; its on-screen rect is 402,4–479,67) used to light the
+    // footer list item that stole its rect. With the ref-resolved bounds grafted on, it wins.
+    expect(hitTestNode(raw, 440, 35)).toBe(395);
+    expect(hitTestNode(merged, 440, 35)).toBe(15);
+    // Sweep a 16×10 grid over the 1280×800 viewport (the capture's bounds are page-relative and
+    // run far below the fold, so this probes the first viewport only): the share of points that
+    // resolve to a node covering more than half the viewport — the "everything selects a giant
+    // container" failure — must drop once the dense bounds are in place. Deliberately relative,
+    // not exact counts: the absolute numbers also encode the tie-break, the grid resolution, and
+    // the dialog scoping, and would redden this test on unrelated hit-test tuning.
+    const bigHits = (m: ReturnType<typeof inspectorModel>) => {
+      const { deviceWidth: w, deviceHeight: h } = webMergeFixture;
+      let big = 0;
+      for (let gx = 0; gx < 16; gx++) {
+        for (let gy = 0; gy < 10; gy++) {
+          const key = hitTestNode(m!, (w * (gx + 0.5)) / 16, (h * (gy + 0.5)) / 10);
+          const b = key != null ? m!.nodes[key].bounds : null;
+          if (b && (b.x2 - b.x1) * (b.y2 - b.y1) > 0.5 * w * h) big++;
+        }
+      }
+      return big;
+    };
+    expect(bigHits(merged)).toBeLessThan(bigHits(raw));
+  });
+});
+
 // The packaged bundle republishes its exports to bun consumers via a CJS footer that reads the
 // __TRAILBLAZE_RUN_REPORT_CORE__ global the entry module publishes (see bundleRunReportCore in
 // build.gradle.kts). This pins the two surfaces together: an export added to the module but not
@@ -4954,5 +5685,297 @@ describe("bundle export surface (CJS footer parity)", () => {
   test("the module's ESM exports equal the __TRAILBLAZE_RUN_REPORT_CORE__ surface the footer republishes", () => {
     const published = (globalThis as Record<string, unknown>).__TRAILBLAZE_RUN_REPORT_CORE__ as Record<string, unknown>;
     expect(Object.keys(RUN_REPORT_CORE_MODULE).sort()).toEqual(Object.keys(published).sort());
+  });
+});
+
+// ── Selector suggestions (UI Inspector, committed selection) ─────────────────────────────────────
+// Viewer-level contract for run-report-selectors.ts: suggestions render for the COMMITTED selection
+// of a TrailblazeNode capture when an engine is present, and every absence path (no engine, legacy
+// tree) leaves the inspector exactly as it was — empty container, no note, no errors. The engine is
+// stubbed at its DOCUMENTED contract: the raw string-in/string-out global the Kotlin/JS bundle
+// installs (SelectorEngineJs.kt); the real compiled engine is pinned byte-identical to the JVM by
+// :trailblaze-selector-engine-js's parity suite.
+describe("UI Inspector selector suggestions", () => {
+  // A TrailblazeNode capture (accessibility driver): required driverDetail, {left,top,right,bottom}
+  // bounds — pre-order inspector keys: 0 = root (nodeId 7), 1 = "Login" (nodeId 3),
+  // 2 = "Help" (nodeId 5).
+  const tbTree = {
+    nodeId: 7,
+    bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+    driverDetail: { class: "androidAccessibility", className: "android.widget.FrameLayout" },
+    children: [{
+      nodeId: 3,
+      bounds: { left: 90, top: 600, right: 990, bottom: 720 },
+      driverDetail: { class: "androidAccessibility", text: "Login", className: "android.widget.Button", clickable: true },
+    }, {
+      nodeId: 5,
+      bounds: { left: 90, top: 800, right: 990, bottom: 920 },
+      driverDetail: { class: "androidAccessibility", text: "Help", className: "android.widget.Button", clickable: true },
+    }],
+  };
+  const tbLogs = [
+    { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap login" }, timestamp: "2024-01-01T00:00:00Z" },
+    { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t1", trailblazeTool: { raw: { text: "Login" } }, screenshotFile: "a.png", trailblazeNodeTree: tbTree, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+  ];
+  const tbShots = { "a.png": "data:image/png;base64,AAA" };
+  const tbPayload = () => payloadOf(core.buildMultiReportHtml({
+    generatedAt: "now",
+    sessions: [{ meta: { title: "Run", status: "failed" }, trace: core.extractTrace(tbLogs), llmLogs: [], shots: tbShots }],
+  }));
+  const tapStepOf = (payload: any) => payload.sessions[0].trace.find((t: any) => t.label === "tapOnElement").i;
+  const suggestionsBox = (overlay: any) => overlay.querySelector("[data-inspselectors]");
+  const nodeRowOf = (overlay: any, key: number) => overlay.querySelectorAll("[data-inspnode]").find((el: any) => el.dataset.inspnode === String(key));
+  const commitNode = (overlay: any, key: number) => overlay.onclick({ preventDefault() {}, target: nodeRowOf(overlay, key) });
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 25));
+  // The documented raw-global contract, instrumented so tests can observe when and with what the
+  // engine is asked. Installed per test; afterEach removes it so absence tests stay absent.
+  const installEngineStub = () => {
+    const seen: Array<{ tree: unknown; nodeId: string }> = [];
+    (globalThis as Record<string, unknown>).TrailblazeSelectorEngine = {
+      computeSelectorAnalysis: (tree: string, nodeId: string) => {
+        seen.push({ tree: JSON.parse(tree), nodeId });
+        return JSON.stringify({
+          options: [
+            { selector: { androidAccessibility: { textRegex: "Login" } }, strategy: "Text", isBest: true, matchCount: 1, matchingNodeIds: [3], resolvedCenterX: 540, resolvedCenterY: 660, hitsTarget: true },
+            { selector: { androidAccessibility: { classNameRegex: "android.widget.Button" }, index: 0 }, strategy: "Structural: class + index", isBest: false, matchCount: 1, matchingNodeIds: [3], resolvedCenterX: 540, resolvedCenterY: 660, hitsTarget: true },
+          ],
+        });
+      },
+      resolveTapTarget: () => JSON.stringify({ roundTripValid: false }),
+      resolveSelector: () => JSON.stringify({ matchCount: 0, matchingNodeIds: [] }),
+    };
+    return seen;
+  };
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).TrailblazeSelectorEngine;
+  });
+
+  test("committing a selection renders ranked suggestions computed for that node's nodeId", async () => {
+    const seen = installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    // Inspector key 1 (pre-order first child) maps to nodeId 3 — the id the engine was asked about.
+    expect(seen).toHaveLength(1);
+    expect(seen[0].nodeId).toBe("3");
+    const html = String(suggestionsBox(overlay).innerHTML);
+    expect(html).toContain("Selector suggestions");
+    expect(html).toContain("UNIQUE");
+    expect(html).toContain("BEST");
+    expect(html).toContain("textRegex: Login");
+    expect(html).toContain("Structural (content-free)");
+    expect(html).toContain('data-inspselcopy="0"');
+  });
+
+  test("re-committing the same node renders from cache — the engine is asked once per node", async () => {
+    const seen = installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    commitNode(overlay, 1);
+    await settled();
+    expect(seen).toHaveLength(1);
+  });
+
+  // The suggestions subject follows HOVER (like the properties card), reverting to the committed
+  // selection on hover-out. The fake screenshot is 100x200 for a 1080x2400 capture: (50, 55)
+  // maps into "Login" (key 1) and (50, 72) into "Help" (key 2).
+  const hoverShot = (overlay: any, clientX: number, clientY: number) =>
+    overlay.onpointermove({ pointerType: "mouse", target: overlay.querySelector(".inspshotwrap"), clientX, clientY });
+  // rAF-less hover throttle (~16ms) + the 120ms hover debounce + the async render.
+  const hoverSettled = () => new Promise((resolve) => setTimeout(resolve, 300));
+
+  test("hovering the screenshot computes suggestions for the hovered node, labeled as a preview", async () => {
+    const seen = installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 0);
+    await settled();
+    expect(seen.map((s) => s.nodeId)).toEqual(["7"]);
+    hoverShot(overlay, 50, 55);
+    await hoverSettled();
+    expect(seen.map((s) => s.nodeId)).toEqual(["7", "3"]);
+    const html = String(suggestionsBox(overlay).innerHTML);
+    expect(html).toContain("hover preview");
+    expect(html).toContain("&quot;Login&quot;"); // the subject label names the hovered node
+    // Hover-out restores the committed node's suggestions from cache — no new engine call.
+    overlay.onpointerleave();
+    await settled();
+    expect(seen).toHaveLength(2);
+    const restored = String(suggestionsBox(overlay).innerHTML);
+    expect(restored).not.toContain("hover preview");
+    expect(restored).toContain("&lt;FrameLayout&gt;"); // the committed root's label
+  });
+
+  test("a hover sweep debounces: only the node the pointer dwells on is computed", async () => {
+    const seen = installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    hoverShot(overlay, 50, 55); // "Login" — swept over, never dwelt on
+    await new Promise((resolve) => setTimeout(resolve, 60)); // > rAF fallback, < debounce
+    hoverShot(overlay, 50, 72); // "Help" — the dwell target
+    await hoverSettled();
+    expect(seen.map((s) => s.nodeId)).toEqual(["5"]);
+  });
+
+  test("committing while a hover preview is showing re-labels it as the selection", async () => {
+    installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    hoverShot(overlay, 50, 55);
+    await hoverSettled();
+    expect(String(suggestionsBox(overlay).innerHTML)).toContain("hover preview");
+    // Clicking the same point commits the hovered node; same cards, no longer a preview.
+    overlay.onclick({ preventDefault() {}, target: overlay.querySelector(".inspshotwrap"), clientX: 50, clientY: 55 });
+    await settled();
+    expect(String(suggestionsBox(overlay).innerHTML)).not.toContain("hover preview");
+  });
+
+  // ── mismatch visualization ────────────────────────────────────────────────────────────────────
+  // A card whose resolved tap would land on a DIFFERENT element names the interceptor and, while
+  // engaged (hover or click-pin), paints the mismatch onto the screenshot: intended bounds,
+  // actual receiver bounds, tap point, legend.
+  const installMismatchStub = () => {
+    (globalThis as Record<string, unknown>).TrailblazeSelectorEngine = {
+      computeSelectorAnalysis: () => JSON.stringify({
+        options: [
+          // Tap for "Login" (nodeId 3) resolves to (540, 660) but the hit test says the root
+          // (nodeId 7) would receive it.
+          { selector: { androidAccessibility: { textRegex: "Login" } }, strategy: "Text", isBest: true, matchCount: 1, matchingNodeIds: [3], resolvedCenterX: 540, resolvedCenterY: 660, hitsTarget: false, hitNodeId: 7 },
+        ],
+      }),
+      resolveTapTarget: () => JSON.stringify({ roundTripValid: false }),
+      resolveSelector: () => JSON.stringify({ matchCount: 0, matchingNodeIds: [] }),
+    };
+  };
+  const vizLayer = (overlay: any) => overlay.querySelector("[data-inspselvizlayer]");
+  const vizCardTarget = { closest: (sel: string) => (sel === "[data-inspselviz]" ? { dataset: { inspselviz: "0" } } : null) };
+
+  test("a mismatch card names the intercepting element and paints/clears the visualization on engage/disengage", async () => {
+    installMismatchStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    const html = String(suggestionsBox(overlay).innerHTML);
+    expect(html).toContain("Tap (540, 660) lands on &lt;FrameLayout&gt; — not this element");
+    expect(html).toContain('data-inspselviz="0"');
+    expect(String(vizLayer(overlay).innerHTML)).toBe("");
+    // Engage (pointer over the card): intended = "Login" bounds (90..990 x 600..720 of 1080x2400),
+    // actual = the root, tap marker at (540, 660), plus the legend.
+    overlay.onpointerover({ target: vizCardTarget });
+    const painted = String(vizLayer(overlay).innerHTML);
+    expect(painted).toContain('class="inspselvizrect intended"');
+    expect(painted).toContain("left:8.333%");
+    expect(painted).toContain('class="inspselvizrect actual"');
+    expect(painted).toContain('class="inspselviztap"');
+    expect(painted).toContain("left:50.000%;top:27.500%");
+    expect(painted).toContain("actual tap target");
+    // The existing selection paint is untouched by the viz layer.
+    expect(overlay.querySelectorAll("[data-insprect]").find((el: any) => el.dataset.insprect === "1").classList.contains("sel")).toBe(true);
+    // Disengage (pointer out, not pinned) clears the paint.
+    overlay.onpointerout({ target: vizCardTarget });
+    expect(String(vizLayer(overlay).innerHTML)).toBe("");
+  });
+
+  test("clicking a mismatch card pins the visualization; clicking again unpins", async () => {
+    installMismatchStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    overlay.onclick({ preventDefault() {}, target: vizCardTarget });
+    expect(String(vizLayer(overlay).innerHTML)).toContain("inspselvizrect");
+    // A pointer-out no longer clears a pinned paint.
+    overlay.onpointerout({ target: vizCardTarget });
+    expect(String(vizLayer(overlay).innerHTML)).toContain("inspselvizrect");
+    // Toggling the card off clears it.
+    overlay.onclick({ preventDefault() {}, target: vizCardTarget });
+    expect(String(vizLayer(overlay).innerHTML)).toBe("");
+  });
+
+  test("the copy button yields that suggestion's trail-file nodeSelector YAML", async () => {
+    installEngineStub();
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    let copied: string | null = null;
+    (globalThis as Record<string, unknown>).navigator = { clipboard: { writeText(text: string) { copied = text; return Promise.resolve(); } } };
+    const copyBtn = { dataset: { inspselcopy: "0" }, textContent: "Copy" };
+    overlay.onclick({ preventDefault() {}, target: { closest: (sel: string) => (sel === "[data-inspselcopy]" ? copyBtn : null) } });
+    await settled();
+    expect(copied).toBe("nodeSelector:\n  androidAccessibility:\n    textRegex: Login");
+  });
+
+  test("no engine anywhere → committing renders no suggestions section and the inspector still works", async () => {
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    expect(String(suggestionsBox(overlay).innerHTML)).toBe("");
+    // The rest of the inspector is untouched: the committed row highlights and details render.
+    expect(nodeRowOf(overlay, 1).classList.contains("sel")).toBe(true);
+    expect(String(overlay.querySelector(".inspdetails").innerHTML)).toContain("Login");
+  });
+
+  // The engine chunk rides after the session chunks, so an inspector can be open and usable before
+  // the chunk exists. That window must not read like the permanent no-engine path.
+  test("a selection made while the document tail is still streaming picks up the engine when it lands", async () => {
+    const payload = tbPayload();
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload), loadingDocument: true });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    expect(String(suggestionsBox(overlay).innerHTML)).toBe("");
+    // The tail arrives: the chunk evaluates (installing the global) and the document completes.
+    const seen = installEngineStub();
+    state.settleDocument();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(seen.map((s) => s.nodeId)).toEqual(["3"]);
+    expect(String(suggestionsBox(overlay).innerHTML)).toContain("inspselcard");
+  });
+
+  test("legacy ViewHierarchyTreeNode captures get no suggestions section even with an engine present", async () => {
+    const seen = installEngineStub();
+    // The legacy shape: no driverDetail, x1..y2 bounds — the excluded TapSelectorV2 domain.
+    const legacyLogs = [
+      { class: `${T}.ObjectiveStartLog`, promptStep: { step: "Tap login" }, timestamp: "2024-01-01T00:00:00Z" },
+      { class: `${T}.TrailblazeToolLog`, toolName: "tapOnElement", traceId: "t1", trailblazeTool: { raw: { text: "Login" } }, screenshotFile: "a.png", viewHierarchyFiltered: { nodeId: 1, className: "android.widget.FrameLayout", x1: 0, y1: 0, x2: 1080, y2: 2400, children: [{ nodeId: 2, text: "Login", x1: 90, y1: 600, x2: 990, y2: 720 }] }, successful: true, durationMs: 100, timestamp: "2024-01-01T00:00:01Z" },
+    ];
+    const payload = payloadOf(core.buildMultiReportHtml({
+      generatedAt: "now",
+      sessions: [{ meta: { title: "Run", status: "failed" }, trace: core.extractTrace(legacyLogs), llmLogs: [], shots: tbShots }],
+    }));
+    const state = renderViewerState(payload, { inspect: tapStepOf(payload) });
+    const overlay = state.zoomRoot;
+    commitNode(overlay, 1);
+    await settled();
+    expect(seen).toHaveLength(0);
+    expect(String(suggestionsBox(overlay).innerHTML)).toBe("");
+    expect(nodeRowOf(overlay, 1).classList.contains("sel")).toBe(true);
+  });
+
+  test("buildMultiReportHtml embeds the engine chunk once at document level, only when passed", () => {
+    const sessions = [{ meta: { title: "Run", status: "failed" }, trace: core.extractTrace(tbLogs), llmLogs: [], shots: tbShots }];
+    const without = core.buildMultiReportHtml({ generatedAt: "now", sessions });
+    expect(without).not.toContain('id="tb-selector-engine"');
+    const withEngine = (core.buildMultiReportHtml as any)({ generatedAt: "now", sessions, selectorEngine: { gz: "abc123" } });
+    expect(withEngine.split('id="tb-selector-engine"')).toHaveLength(2);
+    expect(withEngine).toContain('<script type="application/json" id="tb-selector-engine">{"gz":"abc123"}</script>');
+    // …and never inside the boot index or a session chunk.
+    expect(chunksOf(withEngine).index).not.toContain("abc123");
+    expect(chunksOf(withEngine).sessions["0"]).not.toContain("abc123");
   });
 });

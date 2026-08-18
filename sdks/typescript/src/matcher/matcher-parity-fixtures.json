@@ -428,5 +428,860 @@
       "help": null,
       "matches": false
     }
+  ],
+  "_hitTestComment": "Shared behavioral contract for TrailblazeNode.hitTest — which node a touch at (x, y) acts on. Consumed by the Kotlin `TrailblazeNode.hitTest` (via MatcherParityFixturesTest in trailblaze-models jvmTest) and the TS mirror `trailblaze-node.ts` (via matcher-parity.test.ts), so the two can't drift: the expected-analysis.txt golden only locks Kotlin against its own Kotlin/JS compile and never sees the hand-written TS port. `expectedNodeId` is null when no node contains the point. Add a case here whenever hit-test semantics change - never encode new semantics in only one language's tests.",
+  "hitTestCases": [
+    {
+      "name": "text leaf inside a scrollable pager resolves to the leaf, never the pager",
+      "x": 560,
+      "y": 250,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 200,
+              "right": 1080,
+              "bottom": 900
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "androidx.viewpager.widget.ViewPager",
+              "resourceId": "com.example:id/view_pager",
+              "isFocusable": true,
+              "isScrollable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 180,
+                  "top": 230,
+                  "right": 940,
+                  "bottom": 270
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Services"
+                }
+              },
+              {
+                "nodeId": 4,
+                "bounds": {
+                  "left": 180,
+                  "top": 330,
+                  "right": 940,
+                  "bottom": 370
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Discounts"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "text leaf inside a clickable row resolves to the row",
+      "x": 560,
+      "y": 250,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 200,
+              "right": 1080,
+              "bottom": 300
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.ViewGroup",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 180,
+                  "top": 230,
+                  "right": 940,
+                  "bottom": 270
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Services"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "clickable row carrying two labels resolves to the leaf under the point",
+      "x": 560,
+      "y": 250,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 200,
+              "right": 1080,
+              "bottom": 320
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.ViewGroup",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 180,
+                  "top": 230,
+                  "right": 940,
+                  "bottom": 270
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Services"
+                }
+              },
+              {
+                "nodeId": 4,
+                "bounds": {
+                  "left": 180,
+                  "top": 280,
+                  "right": 940,
+                  "bottom": 310
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "3 available"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "non-interactive icon inside a clickable button resolves to the button",
+      "x": 358,
+      "y": 615,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 400,
+          "bottom": 874
+        },
+        "driverDetail": {
+          "class": "iosMaestro"
+        },
+        "children": [
+          {
+            "nodeId": 3,
+            "bounds": {
+              "left": 346,
+              "top": 602,
+              "right": 370,
+              "bottom": 628
+            },
+            "driverDetail": {
+              "class": "iosMaestro",
+              "className": "NativeButton",
+              "clickable": true
+            },
+            "children": [
+              {
+                "nodeId": 4,
+                "bounds": {
+                  "left": 346,
+                  "top": 603,
+                  "right": 370,
+                  "bottom": 627
+                },
+                "driverDetail": {
+                  "class": "iosMaestro",
+                  "className": "UIImageView",
+                  "resourceId": "x"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "nested interactive controls resolve to the innermost",
+      "x": 60,
+      "y": 60,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 400,
+          "bottom": 800
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 400,
+              "bottom": 200
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.ViewGroup",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 20,
+                  "top": 20,
+                  "right": 100,
+                  "bottom": 100
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.Button",
+                  "isClickable": true
+                },
+                "children": [
+                  {
+                    "nodeId": 4,
+                    "bounds": {
+                      "left": 40,
+                      "top": 40,
+                      "right": 80,
+                      "bottom": 80
+                    },
+                    "driverDetail": {
+                      "class": "androidAccessibility",
+                      "className": "android.widget.ImageView"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "interactive container that is not an ancestor of the element is ignored",
+      "x": 540,
+      "y": 430,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 1080,
+              "bottom": 1920
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "isClickable": true
+            }
+          },
+          {
+            "nodeId": 4,
+            "bounds": {
+              "left": 60,
+              "top": 360,
+              "right": 1020,
+              "bottom": 900
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.ViewGroup"
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 400,
+                  "right": 980,
+                  "bottom": 460
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Details"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "interactive ancestor whose bounds exclude the point does not claim the touch",
+      "x": 200,
+      "y": 1400,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 300,
+              "bottom": 200
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.ViewGroup",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 1380,
+                  "right": 400,
+                  "bottom": 1420
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Close chat"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "zero-area node loses to a real element containing the point",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "Subtotal"
+            }
+          },
+          {
+            "nodeId": 3,
+            "bounds": {
+              "left": 540,
+              "top": 300,
+              "right": 540,
+              "bottom": 300
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "com.example:id/spacer"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "zero-area node still wins when it is the only node containing the point",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 100,
+          "bottom": 100
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 800,
+              "right": 980,
+              "bottom": 900
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "Subtotal"
+            }
+          },
+          {
+            "nodeId": 3,
+            "bounds": {
+              "left": 540,
+              "top": 300,
+              "right": 540,
+              "bottom": 300
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.view.View",
+              "resourceId": "com.example:id/spacer"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "no node contains the point",
+      "x": 5000,
+      "y": 5000,
+      "expectedNodeId": null,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "Subtotal"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "equal-bounds tie on one ancestor chain resolves to the descendant",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "The price includes a currency spread charged by the exchange"
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 260,
+                  "right": 980,
+                  "bottom": 340
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "currency spread"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "equal-bounds tie against an interactive ancestor stays on the ancestor",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.FrameLayout",
+              "text": "Exchange rate applies",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 260,
+                  "right": 980,
+                  "bottom": 340
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Exchange rate applies"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "equal-bounds tie counts a blank-text descendant labeled via accessibilityText",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 3,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "iosMaestro",
+          "className": "Other"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "iosMaestro",
+              "accessibilityText": "The price includes a currency spread charged by the exchange"
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 260,
+                  "right": 980,
+                  "bottom": 340
+                },
+                "driverDetail": {
+                  "class": "iosMaestro",
+                  "text": "",
+                  "accessibilityText": "currency spread"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "equal-bounds tie with a label-less descendant stays on the ancestor",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.FrameLayout",
+              "resourceId": "com.example:id/fragment_container"
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 100,
+                  "top": 260,
+                  "right": 980,
+                  "bottom": 340
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.support.v7.widget.RecyclerView"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "equal-bounds tie between siblings resolves to the first in document order",
+      "x": 540,
+      "y": 300,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "First"
+            }
+          },
+          {
+            "nodeId": 3,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.TextView",
+              "text": "Second"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "an empty editable field's hint does not stop the climb at its static label",
+      "x": 300,
+      "y": 300,
+      "expectedNodeId": 2,
+      "tree": {
+        "nodeId": 1,
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 1080,
+          "bottom": 1920
+        },
+        "driverDetail": {
+          "class": "androidAccessibility",
+          "className": "android.widget.FrameLayout"
+        },
+        "children": [
+          {
+            "nodeId": 2,
+            "bounds": {
+              "left": 100,
+              "top": 260,
+              "right": 980,
+              "bottom": 340
+            },
+            "driverDetail": {
+              "class": "androidAccessibility",
+              "className": "android.widget.EditText",
+              "text": "",
+              "hintText": "Search",
+              "isClickable": true
+            },
+            "children": [
+              {
+                "nodeId": 3,
+                "bounds": {
+                  "left": 200,
+                  "top": 280,
+                  "right": 400,
+                  "bottom": 320
+                },
+                "driverDetail": {
+                  "class": "androidAccessibility",
+                  "className": "android.widget.TextView",
+                  "text": "Search"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
   ]
 }

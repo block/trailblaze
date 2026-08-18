@@ -6,8 +6,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.applyScriptedToolMemoryDelta
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SensitiveArgsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
@@ -60,7 +62,26 @@ class QuickJsTrailblazeTool(
    * host's non-reentrant `evalMutex`. Default `true`.
    */
   internal val isRecordable: Boolean = true,
-) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
+  /**
+   * 1:1 with the scripted tool's declared `sensitiveArgNames`, sourced from the tool's `_meta`
+   * ([QuickJsToolMeta.sensitiveArgs]). Resolved against this call's args by [sensitiveArgNames]
+   * below. [DeclaredSensitiveArgs.None] (the default) leaves the payload untouched.
+   */
+  internal val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
+) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool, SensitiveArgsTrailblazeTool {
+
+  /**
+   * Satisfies [SensitiveArgsTrailblazeTool] so the log-encode boundary masks these args' values in
+   * the persisted session log (which ships as a CI artifact) — the same protection a class-backed
+   * Kotlin tool gets by implementing the interface directly.
+   *
+   * Resolved against [args] rather than stored, so an unreadable declaration can mask every arg
+   * this call actually carries (see [DeclaredSensitiveArgs.AllArgsDeclarationUnreadable]).
+   *
+   * Deliberately does NOT affect [rawToolArguments], [execute], or the wire encode — the bundle
+   * still receives the real values; only the log payload is masked.
+   */
+  override val sensitiveArgNames: Set<String> get() = sensitiveArgs.resolve(args.keys)
 
   constructor(host: QuickJsToolHost, advertisedName: ToolName, args: JsonObject) :
     this(host, advertisedName, args, null)
@@ -214,6 +235,9 @@ internal fun JsonObject.toTrailblazeToolResult(toolName: String? = null): Trailb
     val rendered = envelope.renderContent()
     return TrailblazeToolResult.Error.ExceptionThrown(
       errorMessage = rendered.ifBlank { "QuickJS tool returned isError without text content" },
+      // Mirror of the Success branch below: an isError envelope's `structuredContent`
+      // (a `ToolError` payload from the bundle handler) rides through verbatim.
+      structuredPayload = envelope.structuredContent,
     )
   }
   // A missing `content` decodes to an empty list (data-class default). Distinguish "the

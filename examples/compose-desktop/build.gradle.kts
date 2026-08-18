@@ -48,7 +48,15 @@ configurations.testImplementation {
 
 tasks.test {
   useJUnit()
-  workingDir = rootProject.projectDir.resolve("opensource")
+  // The tests resolve their trails from `user.dir`, so this must be the `opensource` root. Derive
+  // it from this module's own path: `rootProject` differs when this build is included from another composite root.
+  workingDir = projectDir.parentFile.parentFile
+
+  // Gradle treats `workingDir` as @Internal, so the trails read through it are invisible to the
+  // build cache. Without this, editing a trail restores the old result instead of replaying it.
+  inputs.dir(workingDir.resolve("trails/compose-desktop"))
+    .withPropertyName("evalTrails")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // Don't run tests as part of "check" — only when explicitly requested via "test"

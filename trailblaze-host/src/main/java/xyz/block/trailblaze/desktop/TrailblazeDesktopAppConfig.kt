@@ -187,6 +187,14 @@ abstract class TrailblazeDesktopAppConfig(
       ?.let { File(it) }
       ?.takeIf { it.isDirectory }
       ?.let { return it }
+    // A workspace that declares `trails:` hands back its own config dir. Re-deriving it by
+    // walking up from the trails dir only works while the config dir is an ANCESTOR of it,
+    // which a declaration is free to break: `legacy-trails/` and `trailblaze-config/` are
+    // siblings, and an absolute declaration can leave the repo entirely. In the legacy layout
+    // the walk-up would find no `trailblaze-config/` at all and fall back to
+    // `<declared-dir>/config` — a directory that doesn't exist — silently emptying target,
+    // trailmap, and scripted-tool discovery for the very workspace that asked to be used.
+    TrailblazeDesktopUtil.launchWorkspaceDeclaration()?.let { return it.configDir }
     val trailsDir = File(
       TrailblazeDesktopUtil.getEffectiveTrailsDirectory(trailblazeSettingsRepo.serverStateFlow.value.appConfig),
     )

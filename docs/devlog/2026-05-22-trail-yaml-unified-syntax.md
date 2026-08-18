@@ -801,7 +801,7 @@ and nothing changes.
 
 ## Revision — 2026-07-08: `verify:` steps
 
-The unified format initially modeled only `- step:`, but ~80% of checked-in v1 trails use
+The unified format initially modeled only `- step:`, but most checked-in v1 trails use
 `- verify:` steps, and verify semantics are load-bearing at run time: a verify step advertises only
 assertion tools (the agent can't tap/scroll mid-assertion), auto-terminates with an assertion
 ledger, and is never self-healed. Lowering `verify:` to `step:` silently discards all of that, so

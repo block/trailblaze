@@ -298,6 +298,173 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
   }
 
   @Test
+  fun `hitTest equal-bounds tie on one ancestor chain goes to the descendant`() {
+    nextId = 1L
+    // An in-text-link child captured with bounds identical to its paragraph parent: real
+    // OS hit-testing returns the deepest element, so the recorded selector must describe
+    // the link, not the paragraph that merely contains it.
+    val link = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "currency spread"),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+    )
+    val paragraph = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "The price includes a currency spread charged by the exchange",
+      ),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+      children = listOf(link),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(paragraph),
+    )
+
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(link.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest equal-bounds tie between siblings still goes to the first in document order`() {
+    nextId = 1L
+    val first = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "First"),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+    )
+    val second = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Second"),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(first, second),
+    )
+
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(first.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest equal-bounds tie against an interactive ancestor stays on the ancestor`() {
+    nextId = 1L
+    // A clickable wrapper captured with a non-interactive mirrored-label child at identical
+    // bounds: the wrapper is the control that owns the tap (ACTION_CLICK, stable id), and
+    // the climb cannot recover it — the mirrored label makes the wrapper "enclose multiple
+    // labels" — so the tie itself must keep the wrapper.
+    val mirror = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Exchange rate applies"),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+    )
+    val wrapper = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "Exchange rate applies",
+        isClickable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+      children = listOf(mirror),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(wrapper),
+    )
+
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(wrapper.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest equal-bounds tie with a label-less descendant stays on the ancestor`() {
+    nextId = 1L
+    // A bare structural descendant (no text of its own) captured with bounds identical to
+    // its id-bearing container: letting it win would only swap the ancestor's stable
+    // resource-id selector for a weaker class-name one.
+    val list = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.support.v7.widget.RecyclerView",
+      ),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+    )
+    val container = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.FrameLayout",
+        resourceId = "com.example:id/fragment_container",
+      ),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+      children = listOf(list),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(container),
+    )
+
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(container.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest equal-bounds tie counts a blank-text descendant labeled via accessibilityText`() {
+    nextId = 1L
+    // Captures serialize `text` as "" on nodes labeled only via accessibilityText. The
+    // labeled-descendant requirement must see through the blank, or the recorded selector
+    // regresses to describing the paragraph instead of the link.
+    val link = TrailblazeNode(
+      nodeId = 2L,
+      children = emptyList(),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+      driverDetail = DriverNodeDetail.IosMaestro(text = "", accessibilityText = "currency spread"),
+    )
+    val paragraph = TrailblazeNode(
+      nodeId = 1L,
+      children = listOf(link),
+      bounds = TrailblazeNode.Bounds(10, 10, 90, 40),
+      driverDetail = DriverNodeDetail.IosMaestro(
+        accessibilityText = "The price includes a currency spread charged by the exchange",
+      ),
+    )
+
+    val hit = paragraph.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(link.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest climbs past an empty editable field's hint to the field itself`() {
+    nextId = 1L
+    // An empty Search EditText carries `text = ""` plus a hint, and wraps its static
+    // TextView label. A hint is a prompt for absent content, not a label the field
+    // carries — if it counted, the field would "enclose multiple labels", the climb
+    // would stop, and the tap would strand on the static child instead of the field.
+    val staticLabel = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        text = "Search",
+      ),
+      bounds = TrailblazeNode.Bounds(30, 15, 80, 35),
+    )
+    val searchField = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.EditText",
+        text = "",
+        hintText = "Search",
+        isClickable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(10, 10, 200, 40),
+      children = listOf(staticLabel),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 400, 100),
+      children = listOf(searchField),
+    )
+
+    val hit = root.hitTest(55, 25)
+    assertNotNull(hit)
+    assertEquals(searchField.nodeId, hit.nodeId)
+  }
+
+  @Test
   fun `hitTest iOS propertyless container scenario`() {
     nextId = 1L
     // Simulates the iOS scenario: small className-only container nested inside an identifiable element
@@ -374,6 +541,216 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
     assertNotNull(hit)
     // Must be NativeButton (interactive), not the UIImageView icon child (non-interactive)
     assertEquals(nativeButton.nodeId, hit!!.nodeId)
+  }
+
+  // ======================================================================
+  // hitTest: an interactive container must not swallow the content inside it
+  // ======================================================================
+
+  /**
+   * A scrollable pager wrapping a list of rows is interactive (focusable/scrollable) and
+   * contains every point on the screen, so ranking by interactivity alone handed it every
+   * tap: the inspector reported "this tap lands on the pager, not this element" for every
+   * row, and a recorded tap resolved its selector from the pager.
+   *
+   * The row's own label is what a tap there is on.
+   */
+  @Test
+  fun `hitTest returns the row label rather than the scrollable pager wrapping the list`() {
+    nextId = 1L
+    val rows = (0..2).map { i ->
+      node(
+        detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup"),
+        bounds = TrailblazeNode.Bounds(0, 200 + i * 100, 1080, 300 + i * 100),
+        children = listOf(
+          node(
+            detail = DriverNodeDetail.AndroidAccessibility(
+              className = "android.widget.TextView",
+              text = listOf("Items", "Services", "Discounts")[i],
+              resourceId = "com.example:id/list_row_title",
+            ),
+            bounds = TrailblazeNode.Bounds(180, 230 + i * 100, 940, 270 + i * 100),
+          ),
+        ),
+      )
+    }
+    val pager = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "androidx.viewpager.widget.ViewPager",
+        resourceId = "com.example:id/view_pager",
+        isFocusable = true,
+        isScrollable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 200, 1080, 900),
+      children = rows,
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920), children = listOf(pager))
+
+    val hit = root.hitTest(560, 350) // center of the "Services" label
+    assertNotNull(hit)
+    assertEquals(rows[1].children.single().nodeId, hit.nodeId)
+  }
+
+  /** The same list, with rows that carry the click handler: the row is the tap target. */
+  @Test
+  fun `hitTest returns the clickable row when the row itself is the control`() {
+    nextId = 1L
+    val label = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Services"),
+      bounds = TrailblazeNode.Bounds(180, 230, 940, 270),
+    )
+    val row = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+      bounds = TrailblazeNode.Bounds(0, 200, 1080, 300),
+      children = listOf(label),
+    )
+    val pager = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "androidx.viewpager.widget.ViewPager",
+        resourceId = "com.example:id/view_pager",
+        isFocusable = true,
+        isScrollable = true,
+      ),
+      bounds = TrailblazeNode.Bounds(0, 200, 1080, 900),
+      children = listOf(row),
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920), children = listOf(pager))
+
+    val hit = root.hitTest(560, 250)
+    assertNotNull(hit)
+    assertEquals(row.nodeId, hit.nodeId)
+  }
+
+  /**
+   * The multiple-label bound is the single condition separating a control from a container, so
+   * pin both sides of it: one label climbs (the test above), two stops here. A clickable row
+   * carrying a title *and* a subtitle reads as a container, and the tap resolves to the leaf
+   * under the point.
+   *
+   * The direction is deliberate and safe — a gesture at the leaf's center still lands inside
+   * the row — and measured better across the committed captures than every looser bound tried
+   * (counting distinct label values, allowing two labels, or requiring the ancestor to have no
+   * interactive descendant). The cost is that the leaf's text may not be unique on the screen,
+   * so the generator can fall through to a weaker selector than the row would have produced.
+   */
+  @Test
+  fun `hitTest returns the leaf inside a clickable row that carries two labels of its own`() {
+    nextId = 1L
+    val title = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Services"),
+      bounds = TrailblazeNode.Bounds(180, 230, 940, 270),
+    )
+    val subtitle = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "3 available"),
+      bounds = TrailblazeNode.Bounds(180, 280, 940, 310),
+    )
+    val row = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+      bounds = TrailblazeNode.Bounds(0, 200, 1080, 320),
+      children = listOf(title, subtitle),
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920), children = listOf(row))
+
+    val hit = root.hitTest(560, 250)
+    assertNotNull(hit)
+    assertEquals(title.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest skips an interactive ancestor whose bounds exclude the point`() {
+    nextId = 1L
+    // Bounds do not nest in every capture — 77% of parent/child pairs in the committed web
+    // (ARIA) captures are non-nested — so the climb has to re-check containment or it can
+    // return a control on the other side of the screen.
+    val label = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Close chat"),
+      bounds = TrailblazeNode.Bounds(100, 1380, 400, 1420),
+    )
+    val detachedControl = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+      bounds = TrailblazeNode.Bounds(0, 0, 300, 200),
+      children = listOf(label),
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920), children = listOf(detachedControl))
+
+    val hit = root.hitTest(200, 1400)
+    assertNotNull(hit)
+    assertEquals(label.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest prefers a real element over a zero-area node at the same point`() {
+    nextId = 1L
+    // Bounds.containsPoint is inclusive on both ends, so a left == right node contains its own
+    // center and its area of 0 would otherwise beat every real element there.
+    val text = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Subtotal"),
+      bounds = TrailblazeNode.Bounds(100, 260, 980, 340),
+    )
+    val spacer = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.view.View",
+        resourceId = "com.example:id/spacer",
+      ),
+      bounds = TrailblazeNode.Bounds(540, 300, 540, 300),
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920), children = listOf(text, spacer))
+
+    val hit = root.hitTest(540, 300)
+    assertNotNull(hit)
+    assertEquals(text.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest returns the innermost control when interactive nodes nest`() {
+    nextId = 1L
+    val icon = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.ImageView"),
+      bounds = TrailblazeNode.Bounds(40, 40, 80, 80),
+    )
+    val innerButton = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.Button", isClickable = true),
+      bounds = TrailblazeNode.Bounds(20, 20, 100, 100),
+      children = listOf(icon),
+    )
+    val outerCard = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup", isClickable = true),
+      bounds = TrailblazeNode.Bounds(0, 0, 400, 200),
+      children = listOf(innerButton),
+    )
+    val root = node(bounds = TrailblazeNode.Bounds(0, 0, 400, 800), children = listOf(outerCard))
+
+    val hit = root.hitTest(60, 60)
+    assertNotNull(hit)
+    assertEquals(innerButton.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest ignores an interactive container that is not an ancestor of the tapped element`() {
+    nextId = 1L
+    // A full-screen clickable scrim drawn behind the sheet: it contains the point, is
+    // interactive, and is unrelated to what was tapped.
+    val scrim = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.View", isClickable = true),
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920),
+    )
+    val heading = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.widget.TextView", text = "Details"),
+      bounds = TrailblazeNode.Bounds(100, 400, 980, 460),
+    )
+    val sheet = node(
+      detail = DriverNodeDetail.AndroidAccessibility(className = "android.view.ViewGroup"),
+      bounds = TrailblazeNode.Bounds(60, 360, 1020, 900),
+      children = listOf(heading),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 1080, 1920),
+      children = listOf(scrim, sheet),
+    )
+
+    val hit = root.hitTest(540, 430)
+    assertNotNull(hit)
+    assertEquals(heading.nodeId, hit.nodeId)
   }
 
   // ======================================================================

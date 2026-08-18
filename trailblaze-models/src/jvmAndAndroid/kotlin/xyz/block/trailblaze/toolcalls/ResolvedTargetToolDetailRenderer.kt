@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
@@ -200,10 +201,11 @@ object ResolvedTargetToolDetailRenderer {
     appendLine()
     val annotation = detail.kclass.findAnnotation<TrailblazeToolClass>()
     if (annotation != null) {
-      renderClassBackedContract(
+      renderContract(
         surfaceToLlm = annotation.surfaceToLlm,
         isRecordable = annotation.isRecordable,
         requiresHost = annotation.requiresHost,
+        keys = ContractKeys.YAML_SERIAL_NAMES,
       )
     }
     if (descriptor == null) {
@@ -243,10 +245,11 @@ object ResolvedTargetToolDetailRenderer {
     appendLine("- Kind: YAML-defined")
     appendLine("- Tool id: `${detail.config.id}`")
     appendLine()
-    renderClassBackedContract(
+    renderContract(
       surfaceToLlm = detail.config.surfaceToLlm ?: true,
       isRecordable = detail.config.isRecordable ?: true,
       requiresHost = detail.config.requiresHost ?: false,
+      keys = ContractKeys.YAML_SERIAL_NAMES,
     )
     if (descriptor != null) {
       renderKoogParams(
@@ -283,9 +286,41 @@ object ResolvedTargetToolDetailRenderer {
     }
     detail.config.runtime?.let { appendLine("- Runtime: `$it` (explicit override)") }
     appendLine()
-    renderScriptedContract(requiresHost = detail.config.requiresHost)
+    val meta = detail.config.meta
+    renderContract(
+      // A scripted tool can declare a flag through the typed shortcut field, through the
+      // namespaced `_meta` key, or both, so the effective value combines the two.
+      //
+      // `surfaceToLlm` / `isRecordable` are opt-out AND, exactly as
+      // `LazyYamlScriptedToolRegistration:73-74` computes them.
+      //
+      // `requiresHost` is opt-in OR, which no single runtime site computes — the flag is genuinely
+      // three-way. `SubprocessToolRegistrar.advertisedMeta` folds a typed `requiresHost = true`
+      // into the `_meta` key at advertisement time (the OR); `ScriptedToolHostOnlyPartitioner`
+      // reads the typed field alone; `QuickJsToolBundleLauncher` hands `QuickJsToolMeta.fromSpec`
+      // only `_meta`, so it reads that side alone. The OR is the union, and a tool that any of
+      // those three treats as host-only is one a reader should see as host-only.
+      surfaceToLlm = detail.config.surfaceToLlm && meta.metaFlag(META_SURFACE_TO_LLM, default = true),
+      isRecordable = detail.config.isRecordable && meta.metaFlag(META_IS_RECORDABLE, default = true),
+      requiresHost = detail.config.requiresHost || meta.metaFlag(META_REQUIRES_HOST, default = false),
+      keys = ContractKeys.SCRIPTED_FIELD_NAMES,
+    )
     renderScriptedInputSchema(detail.config.inputSchema)
   }
+
+  private const val META_SURFACE_TO_LLM = "trailblaze/surfaceToLlm"
+  private const val META_IS_RECORDABLE = "trailblaze/isRecordable"
+  private const val META_REQUIRES_HOST = "trailblaze/requiresHost"
+
+  /**
+   * Reads a namespaced boolean off a scripted tool's `_meta` block. A missing key — and a
+   * non-boolean value, which `TrailmapScriptedToolFile.validateKnownMetaShapes` already rejects at
+   * descriptor-load time — falls back to [default], mirroring `QuickJsToolMeta.fromSpec`'s
+   * `booleanOrNull ?: default` read so the doc can't claim a stricter contract than the runtime
+   * enforces.
+   */
+  private fun JsonObject?.metaFlag(key: String, default: Boolean): Boolean =
+    (this?.get(key) as? JsonPrimitive)?.booleanOrNull ?: default
 
   private fun StringBuilder.renderScriptedInputSchema(schema: JsonObject) {
     if (schema.isEmpty()) {
@@ -338,43 +373,53 @@ object ResolvedTargetToolDetailRenderer {
   private fun JsonPrimitive.contentOrNull(): String = content
 
   /**
-   * Renders the `## Contract` block for class-backed and YAML-defined tools. All three flags
-   * are sourced authoritatively (annotation reflection for class-backed; `ToolYamlConfig`
-   * fields with `null`-default fallback for YAML-defined) and always emitted, so a reader
-   * scanning a sidecar can answer "is this LLM-visible / recordable / host-only?" without
-   * having to grep Kotlin source or the runtime registry. The literal `surface_to_llm` /
-   * `is_recordable` / `requires_host` tokens mirror the YAML schema keys so a YAML author
-   * sees the exact field name they would set.
+   * The spelling of the three contract flags for one tool kind. The rendered token has to be the
+   * key that kind's decoder actually accepts: every scripted-tool decode path runs with
+   * `strictMode = false`, so an author who copies a token that doesn't exist gets a silent no-op
+   * that leaves the flag at the opposite of what they wanted — not a parse error.
+   */
+  private enum class ContractKeys(
+    val surfaceToLlm: String,
+    val isRecordable: String,
+    val requiresHost: String,
+  ) {
+    /**
+     * [ToolYamlConfig] carries `@SerialName("surface_to_llm")` and friends, so snake_case is what a
+     * `tools:`-mode YAML author sets. Class-backed pages also render this spelling: their flags come
+     * from a Kotlin annotation, a `class:`-mode `.tool.yaml` *rejects* all three, so no token there
+     * is a settable key either way — this is the shipped spelling, left alone deliberately.
+     */
+    YAML_SERIAL_NAMES("surface_to_llm", "is_recordable", "requires_host"),
+
+    /** [InlineScriptToolConfig] declares no `@SerialName`, so the property name is the wire name. */
+    SCRIPTED_FIELD_NAMES("surfaceToLlm", "isRecordable", "requiresHost"),
+  }
+
+  /**
+   * Renders the `## Contract` block. All three flags are sourced authoritatively (annotation
+   * reflection for class-backed; `ToolYamlConfig` fields with `null`-default fallback for
+   * YAML-defined; typed field combined with the namespaced `_meta` key for scripted) and always
+   * emitted for every tool kind, so a reader scanning a sidecar can answer "is this LLM-visible /
+   * recordable / host-only?" without having to grep Kotlin source, a `.ts` spec, or the runtime
+   * registry. Each token is the field name an author of THAT kind would set — see [ContractKeys],
+   * which is why the spelling differs per kind rather than being one shared literal.
    *
    * Catches the bug class that motivated this section — PR #3407 added `isRecordable = false`
    * to `AndroidSendBroadcastTrailblazeTool` after a sibling tool's kdoc claimed it was
    * non-recordable but the annotation hadn't actually set the flag. Surfacing the flag in
    * the per-tool sidecar makes those mismatches diff-reviewable.
    */
-  private fun StringBuilder.renderClassBackedContract(
+  private fun StringBuilder.renderContract(
     surfaceToLlm: Boolean,
     isRecordable: Boolean,
     requiresHost: Boolean,
+    keys: ContractKeys,
   ) {
     appendLine("## Contract")
     appendLine()
-    appendLine("- Visible to LLM: ${yesNo(surfaceToLlm)} (`surface_to_llm: $surfaceToLlm`)")
-    appendLine("- Recordable: ${yesNo(isRecordable)} (`is_recordable: $isRecordable`)")
-    appendLine("- Host-only: ${yesNo(requiresHost)} (`requires_host: $requiresHost`)")
-    appendLine()
-  }
-
-  /**
-   * Scripted-tool variant of [renderClassBackedContract]. Only `requires_host` carries
-   * authored intent for scripted tools — `surfaceToLlm` and `isRecordable` aren't fields on
-   * [InlineScriptToolConfig] and the runtime treats scripted tools as always LLM-visible and
-   * always recordable. Rendering the irrelevant flags would imply they're tunable per-tool,
-   * which they aren't at this layer.
-   */
-  private fun StringBuilder.renderScriptedContract(requiresHost: Boolean) {
-    appendLine("## Contract")
-    appendLine()
-    appendLine("- Host-only: ${yesNo(requiresHost)} (`requires_host: $requiresHost`)")
+    appendLine("- Visible to LLM: ${yesNo(surfaceToLlm)} (`${keys.surfaceToLlm}: $surfaceToLlm`)")
+    appendLine("- Recordable: ${yesNo(isRecordable)} (`${keys.isRecordable}: $isRecordable`)")
+    appendLine("- Host-only: ${yesNo(requiresHost)} (`${keys.requiresHost}: $requiresHost`)")
     appendLine()
   }
 

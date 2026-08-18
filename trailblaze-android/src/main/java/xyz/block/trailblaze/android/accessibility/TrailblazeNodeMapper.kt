@@ -155,6 +155,7 @@ fun AccessibilityNode.toTrailblazeNode(): TrailblazeNode {
       isFocusable = isFocusable,
       isTextSelectable = isTextSelectable,
       isImportantForAccessibility = isImportantForAccessibility,
+      isTextLink = isTextLink,
 
       // Input
       inputType = inputType,

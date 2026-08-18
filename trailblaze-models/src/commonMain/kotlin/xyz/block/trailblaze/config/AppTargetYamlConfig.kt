@@ -211,6 +211,26 @@ data class InlineScriptToolConfig(
    * YAML-sourced index.
    */
   val trailhead: TrailheadMetadata? = null,
+  /**
+   * Whether [inputSchema] is the tool's **complete** argument contract — i.e. an empty
+   * `properties` map means "this tool takes no arguments," not "the schema isn't known here."
+   * Drives [xyz.block.trailblaze.toolcalls.DynamicTrailblazeToolRegistration.declaresExhaustiveParameters],
+   * which the argument-shape gates consult before rejecting an unknown key.
+   *
+   * Must be set by **provenance, never inferred from the schema's shape** — an
+   * analyzer-generated no-arg schema and a schema synthesized from an author's empty
+   * `inputSchema:` map are byte-identical (`{type: object, properties: {}}`), and only the
+   * former is exhaustive. `true` is set by the analyzer-enrichment paths (the `<I>` generic IS
+   * the contract) and by the YAML translation only when the author actually declared
+   * properties. It stays `false` for a descriptor whose `inputSchema:` is absent — that shape
+   * means "the analyzer supplies the real schema", and treating it as exhaustive rejected
+   * every argument on tools resolved through the no-analyzer catalog path — an app launch tool
+   * whose descriptor omits `inputSchema:` had every argument refused mid-session.
+   *
+   * Deliberately NOT serialized into YAML: it's derived provenance, not an authoring knob.
+   */
+  @kotlinx.serialization.Transient
+  val inputSchemaExhaustive: Boolean = false,
 ) {
   init {
     // Enforce at the canonical runtime construction site so EVERY decode path is gated:

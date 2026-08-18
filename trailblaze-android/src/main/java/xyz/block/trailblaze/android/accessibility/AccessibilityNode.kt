@@ -126,6 +126,12 @@ data class AccessibilityNode(
   /** Whether the node is important for accessibility. */
   val isImportantForAccessibility: Boolean = true,
 
+  /**
+   * True for synthetic children emitted for ClickableSpan ranges inside a text node's text
+   * (in-text links). See the link-span capture in `AccessibilityNodeExt`.
+   */
+  val isTextLink: Boolean = false,
+
   // --- Input ---
   /**
    * The input type for editable fields, matching Android's `InputType` constants.

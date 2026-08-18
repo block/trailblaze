@@ -1461,15 +1461,40 @@ object SettingsTabComposables {
             TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
           }
 
+          // Which of the three rungs produced the path above. Without this, a directory coming
+          // from a workspace `trails:` declaration is indistinguishable from one the user chose,
+          // and "Reset to Default" appears to do nothing when it actually hands control back to
+          // the workspace.
+          val hasExplicitChoice = remember(serverState.appConfig) {
+            TrailblazeDesktopUtil.hasExplicitTrailsDirectory(serverState.appConfig)
+          }
+          // Tracked independently of whether it currently wins: an explicit choice overrides the
+          // declaration but does not make it disappear, and the "clear" button needs to know it
+          // is there to say what clearing will fall back to.
+          val workspaceDeclaration = remember { TrailblazeDesktopUtil.launchWorkspaceDeclaration() }
+          val workspaceDeclarationInEffect = !hasExplicitChoice && workspaceDeclaration != null
+
           SelectableText(
-            text = if (serverState.appConfig.trailsDirectory != null) {
-              effectiveTrailsDirectory
-            } else {
-              "Using default location ($effectiveTrailsDirectory)"
+            text = when {
+              hasExplicitChoice || workspaceDeclarationInEffect -> effectiveTrailsDirectory
+              else -> "Using default location ($effectiveTrailsDirectory)"
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
+          if (workspaceDeclaration != null) {
+            SelectableText(
+              text = if (workspaceDeclarationInEffect) {
+                "Set by `trails:` in ${workspaceDeclaration.configFile.absolutePath}. " +
+                  "Choosing a location below overrides it for this machine."
+              } else {
+                "This workspace declares `trails:` in ${workspaceDeclaration.configFile.absolutePath}; " +
+                  "your choice above is being used instead."
+              },
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
               // Determine the starting directory for the file chooser
@@ -1509,13 +1534,16 @@ object SettingsTabComposables {
               Text("Change Location")
             }
 
-            if (serverState.appConfig.trailsDirectory != null) {
+            // Clearing the field hands the decision back to the workspace declaration, or to the
+            // built-in default when there is none — so it is offered whenever a choice is stored,
+            // including one that a workspace would otherwise have answered.
+            if (hasExplicitChoice) {
               Button(onClick = {
                 trailblazeSettingsRepo.updateAppConfig {
                   it.copy(trailsDirectory = null)
                 }
               }) {
-                Text("Reset to Default")
+                Text(if (workspaceDeclaration != null) "Use Workspace Location" else "Reset to Default")
               }
             }
           }

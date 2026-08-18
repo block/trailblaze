@@ -26,12 +26,10 @@ import xyz.block.trailblaze.util.Console
  * drift. The result lands in the temp dir as `video.mp4`; we move it to the
  * caller-supplied [outputMp4].
  *
- * Wall-clock recording: the timeline's in-app `playbackSpeed` setting (default 4x in
- * the report UI) decides how fast the autoplay advances. The exporter just records
- * what the viewport shows in real time, so a 60s session at 4x autoplay lands as a
- * ~15s MP4. 4x can occasionally produce a torn frame when the Compose canvas hasn't
- * finished painting before the scrubber moves on; users who care about export fidelity
- * over length can drop to 2x via the timeline speed picker before re-running.
+ * Wall-clock recording: the report's own autoplay timeline decides how fast playback
+ * advances, and the exporter just records what the viewport shows in real time. Both
+ * artifacts compress idle gaps on the autoplay path, so the MP4's length tracks the
+ * session's step count rather than its recorded wall clock.
  *
  * No session log dir is created — the exporter doesn't go through `HostTrailblazeLoggingRule`
  * or `LogsRepo`. The only artifact is the MP4 at [outputMp4].
@@ -39,10 +37,9 @@ import xyz.block.trailblaze.util.Console
 object ReportVideoExporter {
 
   /**
-   * @param reportHtml The generated `trailblaze_report*.html` (single-session reports are
-   *   already auto-advanced to the session detail view by the WASM app — multi-session
-   *   reports land on the session list and won't trigger autoplay; pass a single-session
-   *   report for now).
+   * @param reportHtml A generated single-session report — either the interactive report or
+   *   the legacy WASM one. Both honor `?autoplay=1` by opening the run's timeline and
+   *   playing it through.
    * @param outputMp4 Destination path for the final MP4. Created (and parents created)
    *   as needed; overwrites if it already exists.
    * @param headless When true (default), the browser window is hidden. Set false locally
@@ -50,8 +47,17 @@ object ReportVideoExporter {
    * @param maxBytes When non-null, the MP4 is iteratively re-encoded at smaller widths
    *   until it fits under the cap. See [MaxArtifactSize]. If even the readability floor
    *   can't satisfy the cap, this throws.
+   * @param maxBytesStrict Whether floor exhaustion is fatal. `true` (the default) is the
+   *   behavior an explicitly-requested cap gets; the CLI passes `false` when the cap is
+   *   only [MaxArtifactSize.DEFAULT_MAX_BYTES], which warns and keeps the oversized MP4.
    */
-  fun export(reportHtml: File, outputMp4: File, headless: Boolean = true, maxBytes: Long? = null) {
+  fun export(
+    reportHtml: File,
+    outputMp4: File,
+    headless: Boolean = true,
+    maxBytes: Long? = null,
+    maxBytesStrict: Boolean = true,
+  ) {
     require(reportHtml.exists() && reportHtml.isFile) {
       "Report HTML not found: ${reportHtml.absolutePath}"
     }
@@ -107,9 +113,9 @@ object ReportVideoExporter {
         val url = PlaywrightReportCapture.buildReportUrl(reportHtml)
         Console.log("[ReportVideoExporter] navigating to $url")
         page.navigate(url)
-        // DOMCONTENTLOADED is enough — the WASM app boots on `window.onload`, but the
-        // autoplay LaunchedEffect is gated on the timeline session-end timestamps being
-        // populated, so the wait below for `__tbPlaybackEnded` is the real timing bound.
+        // DOMCONTENTLOADED is enough — a report's autoplay is gated on its own payload
+        // being in place (the WASM app's session timestamps, the interactive viewer's
+        // document-complete), so the wait below for `__tbPlaybackEnded` is the real bound.
         page.waitForLoadState(LoadState.DOMCONTENTLOADED)
 
         Console.log("[ReportVideoExporter] waiting for timeline playback to finish...")
@@ -125,7 +131,9 @@ object ReportVideoExporter {
         } catch (_: TimeoutError) {
           // Fail soft: the WebM has been recording continuously, so let the finally block
           // finalize a best-effort truncated MP4 rather than aborting with no output.
-          Console.log(
+          // Console.error so quiet mode can't swallow the one line that says the artifact
+          // is short; the exit code stays 0 for the same reason as the frame-capture path.
+          Console.error(
             "[ReportVideoExporter] WARNING: timeline playback did not signal completion " +
               "within ${waitMs / 1000}s — finalizing a truncated MP4. Set " +
               "${PlaywrightReportCapture.MAX_PLAYBACK_WAIT_ENV} (ms) higher to capture the " +
@@ -193,12 +201,14 @@ object ReportVideoExporter {
         }
         val rescaleElapsedMs = System.currentTimeMillis() - rescaleStartMs
         if (!result.fits) {
-          error(
-            "MP4 still exceeds ${maxBytes}B at the ${MaxArtifactSize.READABILITY_FLOOR_PX}px " +
-              "readability floor (current size: ${outputMp4.length()}B). libx264 already " +
-              "compresses well, so this usually means the session is just long. Shorten the " +
-              "session — split the trail into smaller recordings, or remove intermediate " +
-              "verification steps.",
+          MaxArtifactSize.failOrWarn(
+            strict = maxBytesStrict,
+            artifact = outputMp4,
+            formatLabel = "MP4",
+            maxBytes = maxBytes,
+            remedies = "libx264 already compresses well, so this usually means the " +
+              "session is just long. Shorten the session — split the trail into smaller " +
+              "recordings, or remove intermediate verification steps.",
           )
         }
         if (result.widthPx != null) {

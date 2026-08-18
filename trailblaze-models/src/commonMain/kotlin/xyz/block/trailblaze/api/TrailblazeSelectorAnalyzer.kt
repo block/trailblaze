@@ -116,7 +116,7 @@ internal object TrailblazeSelectorAnalyzer {
     }
 
     val resolvedCenter = TrailblazeNodeSelectorResolver.resolveToCenter(root, selector)
-    val hitsTarget = resolvedCenter?.let { (x, y) -> root.hitTest(x, y)?.nodeId == target.nodeId } ?: false
+    val hitNode = resolvedCenter?.let { (x, y) -> root.hitTest(x, y) }
 
     return TrailblazeSelectorOption(
       selector = selector,
@@ -124,7 +124,8 @@ internal object TrailblazeSelectorAnalyzer {
       matchingNodeIds = matchingIds,
       resolvedCenterX = resolvedCenter?.first,
       resolvedCenterY = resolvedCenter?.second,
-      hitsTarget = hitsTarget,
+      hitsTarget = hitNode?.nodeId == target.nodeId,
+      hitNodeId = hitNode?.nodeId,
     )
   }
 

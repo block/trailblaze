@@ -1,4 +1,5 @@
 import java.io.RandomAccessFile
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import java.nio.channels.OverlappingFileLockException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -299,6 +300,17 @@ kotlin {
     freeCompilerArgs.add("-Xexpect-actual-classes")
   }
 
+  // Same opt-in gate as trailblaze-models: with the wasmJs target declared, KGP enables
+  // compileCommonMainKotlinMetadata, so every commonMain file is compiler-enforced KMP-clean
+  // instead of grep-screened. Off by default to keep local JVM/Android builds fast; CI's
+  // hard-gated wasm step runs with -Ptrailblaze.wasm=true.
+  if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+      browser()
+    }
+  }
+
   androidTarget {
     compilerOptions {
       jvmTarget = JvmTarget.JVM_17
@@ -315,11 +327,14 @@ kotlin {
   applyDefaultHierarchyTemplate()
 
   sourceSets {
+    // KMP-capable dependencies only. JVM-only libraries (junit, gson, exp4j, the OkHttp
+    // ktor engine, kotlin-reflect, jackson) are declared on jvmAndAndroid below — they were
+    // never used from commonMain code, and declaring them here would block ever adding a
+    // non-JVM target to this module.
     commonMain.dependencies {
       api(libs.kotlinx.datetime)
       api(libs.kotlinx.serialization.json)
       api(libs.coroutines)
-      api(libs.junit)
       api(libs.kaml)
       api(libs.okio)
       api(libs.koog.agents.tools)
@@ -329,19 +344,12 @@ kotlin {
       implementation(project(":trailblaze-ondevice-rpc-proto"))
       implementation(project(":trailblaze-tracing"))
 
-      implementation(libs.exp4j)
-      implementation(libs.gson)
       implementation(libs.koog.prompt.model)
       implementation(libs.kotlinx.serialization.core)
       implementation(libs.ktor.client.logging)
-      implementation(libs.ktor.client.okhttp)
       implementation(libs.ktor.client.websockets)
       implementation(libs.ktor.http)
       implementation(libs.ktor.utils)
-      implementation(libs.kotlin.reflect)
-
-      runtimeOnly(libs.jackson.dataformat.yaml)
-      runtimeOnly(libs.jackson.module.kotlin)
     }
 
 
@@ -355,6 +363,16 @@ kotlin {
         // level below.
         implementation(libs.koog.agents)
         implementation(libs.koog.prompt.executor.clients)
+        // JVM-only libraries, homed with the code that uses them (rules/, GenericGsonJsonSerializer,
+        // AssertMath, the reflective Koog agents, jackson-tolerant YAML paths). `api(libs.junit)`
+        // keeps junit on downstream JVM/Android compile classpaths exactly as before.
+        api(libs.junit)
+        implementation(libs.exp4j)
+        implementation(libs.gson)
+        implementation(libs.ktor.client.okhttp)
+        implementation(libs.kotlin.reflect)
+        runtimeOnly(libs.jackson.dataformat.yaml)
+        runtimeOnly(libs.jackson.module.kotlin)
       }
     }
 
@@ -533,3 +551,20 @@ tasks.matching { t ->
     (t.name.startsWith("merge") &&
       (t.name.endsWith("Resources") || t.name.endsWith("Assets") || t.name.endsWith("JavaResource")))
 }.configureEach { dependsOn(bundleFrameworkToolsTask) }
+
+// The wasmJs target above exists ONLY as a compile-time KMP-cleanliness gate (it makes
+// `compileCommonMainKotlinMetadata` run), so its publication is suppressed: nothing consumes a
+// wasmJs variant of this module, and the release pipeline publishes with
+// `-Ptrailblaze.wasm=true`, which would otherwise start shipping a new artifact variant to the
+// Maven repository as a silent side effect of the lint gate. `:trailblaze-models` DOES publish
+// its wasmJs variant — the report UI consumes it — which is the distinction here.
+//
+// Known residual: this disables the publish TASKS, so no wasmJs artifact is ever uploaded, but
+// the root Gradle Module Metadata still advertises `wasmJs*Elements-published` variants whose
+// `available-at` coordinate never receives an upload. KMP offers no first-class "declare a
+// target but don't publish it" switch, so the task disable is the standard workaround and this
+// dangling variant entry is its known cost. Harmless while no wasmJs consumer of this module
+// exists — JVM and Android consumers never resolve those variants — revisit if one appears.
+tasks.matching { it.name.startsWith("publish") && it.name.contains("WasmJs") }.configureEach {
+  enabled = false
+}

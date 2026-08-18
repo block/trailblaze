@@ -8,6 +8,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.toolcalls.DeclaredSensitiveArgs
 import xyz.block.trailblaze.toolcalls.ToolName
 
 /**
@@ -34,6 +35,12 @@ class QuickJsToolSerializer(
    * [QuickJsTrailblazeTool] for `SessionScopedHostBinding`'s same-host re-entry guard.
    */
   private val isRecordable: Boolean = true,
+  /**
+   * Forwarded onto the decoded [QuickJsTrailblazeTool] so its `SensitiveArgsTrailblazeTool`
+   * declaration masks those args in the persisted session log. Threaded here for the same reason
+   * [isRecordable] is — the decoded instance must stay a [QuickJsTrailblazeTool].
+   */
+  private val sensitiveArgs: DeclaredSensitiveArgs = DeclaredSensitiveArgs.None,
 ) : KSerializer<QuickJsTrailblazeTool> {
 
   constructor(advertisedName: ToolName, host: QuickJsToolHost) : this(advertisedName, host, null)
@@ -52,6 +59,7 @@ class QuickJsToolSerializer(
       args = args,
       binding = binding,
       isRecordable = isRecordable,
+      sensitiveArgs = sensitiveArgs,
     )
   }
 

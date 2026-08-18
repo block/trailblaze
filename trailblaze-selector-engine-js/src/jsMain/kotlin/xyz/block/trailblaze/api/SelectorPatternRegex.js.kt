@@ -20,7 +20,7 @@ import kotlin.js.RegExp
  * compile here and falls back to the caller's literal-equality leg, which is safe (the
  * selector still resolves somehow) but stricter than the JVM.
  */
-internal actual fun selectorPatternRegexMatches(
+actual fun selectorPatternRegexMatches(
   pattern: String,
   text: String,
   maestroDialect: Boolean,

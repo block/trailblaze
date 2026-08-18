@@ -61,7 +61,12 @@ class SubprocessToolRegistration(
     // doesn't model today (`array`, `object`, etc.); those fall back to String rather than
     // crashing session startup.
     val descriptor = trailblazeDescriptor.toKoogToolDescriptor(strict = false)
-    val serializer = SubprocessToolSerializer(registered.advertisedName, sessionProvider, callbackContext)
+    val serializer = SubprocessToolSerializer(
+      registered.advertisedName,
+      sessionProvider,
+      callbackContext,
+      registered.meta.sensitiveArgs,
+    )
     return TrailblazeKoogTool(
       argsSerializer = serializer,
       descriptor = descriptor,
@@ -74,7 +79,12 @@ class SubprocessToolRegistration(
   }
 
   override fun decodeToolCall(argumentsJson: String): TrailblazeTool {
-    val serializer = SubprocessToolSerializer(registered.advertisedName, sessionProvider, callbackContext)
+    val serializer = SubprocessToolSerializer(
+      registered.advertisedName,
+      sessionProvider,
+      callbackContext,
+      registered.meta.sensitiveArgs,
+    )
     return Json.decodeFromString(serializer, argumentsJson)
   }
 }

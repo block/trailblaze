@@ -30,6 +30,7 @@ import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
 import xyz.block.trailblaze.mcp.RecordedToolCall
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackArgumentValidator
 import xyz.block.trailblaze.toolcalls.CoreTools
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
@@ -681,6 +682,34 @@ class StepToolSet(
         val msg = "Tool${if (notValidForDevice.size > 1) "s" else ""} not valid for the current device/target: " +
           "${notValidForDevice.joinToString(", ")}.$hints Use toolbox() to see available tools."
         return fail(msg)
+      }
+    }
+
+    // Arg-shape gate for dynamic/scripted tools — the same unknown-key + missing-required
+    // check the scripted-tool callback path runs (`JsScriptingCallbackArgumentValidator`).
+    // Class-backed and YAML-defined tools already fail the YAML decode above on a missing
+    // required field, but a dynamic tool's args ride through as a raw JsonObject and would
+    // otherwise reach the tool's implementation unchecked — where a missing required arg
+    // surfaces as a deep, misleading error (e.g. a launch tool invoked with a sibling tool's
+    // arg shape propagated `email: undefined` into a broadcast extra and failed as a
+    // BroadcastExtra decode error on-device). NOTE the asymmetry on the unknown-key half:
+    // the trail YAML decode is lenient (`strictMode = false`), so a class-backed tool still
+    // silently DROPS a misspelled key at parse — this gate makes scripted tools stricter
+    // than built-ins, not the whole CLI typo-safe. Gated on the ORIGINAL wrappers so it
+    // covers exactly the names the dynamic repo resolved; runs after the unknown-tool and
+    // device-validity gates so those more fundamental rejections keep precedence. The
+    // validator returns null for tools whose schema can't be introspected (a subprocess MCP
+    // server that advertises no schema) — but a scripted tool whose analyzer-generated
+    // schema is exhaustively empty (`properties: {}`) IS validated, so a no-arg tool still
+    // rejects stray keys (see DynamicTrailblazeToolRegistration.declaresExhaustiveParameters).
+    if (dynamicRepo != null) {
+      toolWrappers.forEach { wrapper ->
+        val otherTool = wrapper.trailblazeTool as? OtherTrailblazeTool ?: return@forEach
+        JsScriptingCallbackArgumentValidator.validate(
+          repo = dynamicRepo,
+          toolName = wrapper.name,
+          argumentsJson = otherTool.raw.toString(),
+        )?.let { return fail(it) }
       }
     }
 

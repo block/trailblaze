@@ -5,7 +5,7 @@ package xyz.block.trailblaze.api
  * `RegExp`), so the full JVM-compatible pattern surface — `\Q...\E` quote sections, inline
  * flags, `DOT_MATCHES_ALL` — is available and this actual is identical to the JVM one.
  */
-internal actual fun selectorPatternRegexMatches(
+actual fun selectorPatternRegexMatches(
   pattern: String,
   text: String,
   maestroDialect: Boolean,

@@ -44,7 +44,7 @@ data class PressKeyTrailblazeTool(
     ESCAPE,
     ;
 
-    object Serializer : CaseInsensitiveEnumSerializer<PressKeyCode>(PressKeyCode::class)
+    object Serializer : CaseInsensitiveEnumSerializer<PressKeyCode>(PressKeyCode::class, PressKeyCode.entries)
   }
 
   override fun toMaestroCommands(): List<Command> = listOf(

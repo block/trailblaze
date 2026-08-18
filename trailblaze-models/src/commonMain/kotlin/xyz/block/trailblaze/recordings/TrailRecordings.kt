@@ -194,8 +194,8 @@ object TrailRecordings {
    *
    * A v1 trail is a YAML *list* (`- config:` … at the root) and never carries a column-0 `trail:`
    * key; the unified format is a mapping whose required `trail:` key sits at column 0. This mirrors
-   * the discriminator the coverage scripts use (`generate_testcase_coverage_summary_doc.sh` greps
-   * `^trail:`; `scripts/dashboard-coverage/merge.py` uses `line.startswith("trail:")`) so CI
+   * the discriminator the coverage scripts use (`scripts/dashboard-coverage/merge.py` uses
+   * `line.startswith("trail:")`) so CI
    * selection, the coverage reports, and the runtime agree on what "unified" means.
    *
    * Cheap by design — a line scan, no YAML parse — so a caller can classify a large corpus without
