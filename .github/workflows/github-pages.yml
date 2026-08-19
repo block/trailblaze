@@ -133,6 +133,18 @@ jobs:
           fetch_assets "ios-contacts-trails.yml" "docs/report-assets/ios-contacts"
           fetch_assets "clock-trails.yml" "docs/report-assets/clock"
 
+      - name: Set up Bun
+        # `scripts/build-viewer-shell.sh` transpiles the viewer with bun macros.
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Build the standalone report viewer
+        # docs/report-viewer/index.html is generated, never committed (see .gitignore).
+        # Without this step docs_hooks.py drops its stand-in page and the published
+        # viewer is a placeholder that cannot open a session archive.
+        # Deliberately NOT continue-on-error: the script guards its own output, and a
+        # viewer that silently degrades to the placeholder is the failure mode to avoid.
+        run: ./scripts/build-viewer-shell.sh docs/report-viewer
+
       - name: Build MkDocs site
         run: mkdocs build --strict
 
