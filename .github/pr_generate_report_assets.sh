@@ -41,11 +41,11 @@ else
   echo "WARNING: ffmpeg with libwebp_anim not found — the animated timeline.webp will be skipped."
 fi
 
-# The WASM report template ships embedded in the prebuilt uber JAR (the
-# `build-uber-jar` workflow job invokes Gradle with -Ptrailblaze.wasm=true,
-# which makes `packageUberJarForCurrentOS` depend on `bundleReportTemplate`).
-# `trailblaze report` resolves it from the JAR's classpath, so no separate
-# template build step is needed here.
+# Nothing here builds or publishes the legacy WASM report: every invocation below passes
+# --no-wasm-report, so the gallery depends only on the interactive report and survives the
+# WASM report's removal untouched. (It also drops the CPU-bound WASM render from this job.)
+# Once that removal lands, the `-Ptrailblaze.wasm=true` the build-uber-jar job passes to
+# bundle the WASM template is dead weight for this workflow too.
 
 # Resolve the single session this trail produced. Session logs are per-session dirs under
 # $LOGS_DIR; skip the sibling `reports/` output dir. Newest wins if there's more than one.
@@ -60,13 +60,29 @@ echo "Using session: $SESSION_ID"
 # under any inline limits; the HTML report itself is not size-capped (it's a download/link-out).
 echo "Exporting storyboard + interactive report..."
 trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
-  --storyboard --max-size=8MB
+  --storyboard --no-wasm-report --max-size=8MB
 
 if [ "$HAS_WEBP_ANIM" = 1 ]; then
   # --no-gif: we only embed the WebP (GitHub/the docs render it the same, smaller file).
+  # The animated timeline records the interactive report (--export-from's default).
   echo "Exporting animated WebP timeline..."
   trailblaze report --id "$SESSION_ID" --output-dir "$OUT_DIR" \
-    --webp --no-gif --max-size=8MB
+    --webp --no-gif --no-wasm-report --max-size=8MB
+fi
+
+# The session archive the hosted report viewer reads. Same shape the daemon's
+# /api/session/{id}/export.zip produces — entries prefixed with the session directory —
+# so a plain `zip -r` from the logs root is the whole job. Published alongside the other
+# assets so the gallery can deep-link report-viewer/?zip=<this>, which renders the run
+# through the live viewer instead of shipping a frozen self-contained HTML.
+echo "Archiving the session for the hosted report viewer..."
+if command -v zip >/dev/null 2>&1; then
+  rm -f "$OUT_DIR/session.zip"
+  (cd "$LOGS_DIR" && zip -q -r "$OUT_DIR/session.zip" "$SESSION_ID") \
+    && echo "✓ session.zip ($(du -h "$OUT_DIR/session.zip" | cut -f1))" \
+    || echo "WARNING: session archive failed — the gallery deep-link will fall back to its error state."
+else
+  echo "WARNING: zip not on PATH — skipping the session archive."
 fi
 
 echo "========================================="
@@ -74,8 +90,10 @@ echo "Asset gen complete. Contents of $OUT_DIR:"
 ls -lh "$OUT_DIR" 2>/dev/null || echo "  (output dir not created — export failed)"
 echo "========================================="
 
-# Surface (without failing) whether the three files the docs page needs are present.
-for f in storyboard.webp timeline.webp report.html; do
+# Surface (without failing) whether the files the docs page needs are present.
+# report.html (the legacy WASM export) is deliberately NOT in this list: `trailblaze
+# report` still writes it, but the gallery publishes report-interactive.html.
+for f in storyboard.webp timeline.webp report-interactive.html session.zip; do
   if [ -f "$OUT_DIR/$f" ]; then
     echo "✓ $f"
   else

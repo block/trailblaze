@@ -79,7 +79,10 @@ jobs:
             local workflow="$1" dest="$2"
             local slug="${dest##*/}"
             local artifact="docs-report-$slug"
-            local files="storyboard.webp timeline.webp report.html"
+            # report-interactive.html, not report.html: `trailblaze report` writes both, and
+            # the WASM one is the deprecated format (and ~8x the size). session.zip is what
+            # the gallery's report-viewer deep-link loads.
+            local files="storyboard.webp timeline.webp report-interactive.html session.zip"
             mkdir -p "$dest"
 
             # Tier 1: freshest completed run carrying the artifact (newest-first walk).

@@ -36,13 +36,14 @@ an emulator via Trailblaze's host-RPC Android driver — no LLM at replay time. 
 
 ### Storyboard
 
-[![Set-alarm clock trail storyboard — every step tiled into a grid](report-assets/clock/storyboard.webp)](report-assets/clock/report.html)
+[![Set-alarm clock trail storyboard — every step tiled into a grid](report-assets/clock/storyboard.webp)](report-viewer/index.html?zip=../report-assets/clock/session.zip)
 
 ### Timeline
 
-[![Set-alarm clock trail timeline — animated walkthrough of each step](report-assets/clock/timeline.webp)](report-assets/clock/report.html)
+[![Set-alarm clock trail timeline — animated walkthrough of each step](report-assets/clock/timeline.webp)](report-viewer/index.html?zip=../report-assets/clock/session.zip)
 
-[**Open the full interactive report →**](report-assets/clock/report.html)
+[**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/clock/session.zip)
+<br/>*or download the [self-contained report file](report-assets/clock/report-interactive.html) — one HTML file, no network.*
 
 ---
 
@@ -55,13 +56,14 @@ Source: [`trails/ios-contacts/test-create-then-delete`](https://github.com/block
 
 ### Storyboard
 
-[![iOS Contacts trail storyboard — every step tiled into a grid](report-assets/ios-contacts/storyboard.webp)](report-assets/ios-contacts/report.html)
+[![iOS Contacts trail storyboard — every step tiled into a grid](report-assets/ios-contacts/storyboard.webp)](report-viewer/index.html?zip=../report-assets/ios-contacts/session.zip)
 
 ### Timeline
 
-[![iOS Contacts trail timeline — animated walkthrough of each step](report-assets/ios-contacts/timeline.webp)](report-assets/ios-contacts/report.html)
+[![iOS Contacts trail timeline — animated walkthrough of each step](report-assets/ios-contacts/timeline.webp)](report-viewer/index.html?zip=../report-assets/ios-contacts/session.zip)
 
-[**Open the full interactive report →**](report-assets/ios-contacts/report.html)
+[**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/ios-contacts/session.zip)
+<br/>*or download the [self-contained report file](report-assets/ios-contacts/report-interactive.html) — one HTML file, no network.*
 
 ---
 
@@ -73,21 +75,23 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 
 ### Storyboard
 
-[![Wikipedia trail storyboard — every step tiled into a grid](report-assets/wikipedia/storyboard.webp)](report-assets/wikipedia/report.html)
+[![Wikipedia trail storyboard — every step tiled into a grid](report-assets/wikipedia/storyboard.webp)](report-viewer/index.html?zip=../report-assets/wikipedia/session.zip)
 
 ### Timeline
 
-[![Wikipedia trail timeline — animated walkthrough of each step](report-assets/wikipedia/timeline.webp)](report-assets/wikipedia/report.html)
+[![Wikipedia trail timeline — animated walkthrough of each step](report-assets/wikipedia/timeline.webp)](report-viewer/index.html?zip=../report-assets/wikipedia/session.zip)
 
-[**Open the full interactive report →**](report-assets/wikipedia/report.html)
+[**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/wikipedia/session.zip)
+<br/>*or download the [self-contained report file](report-assets/wikipedia/report-interactive.html) — one HTML file, no network.*
 
 ---
 
 ## Open one of your own sessions in the browser
 
-The reports above are exported files. If what you have is a **session archive** — the `.zip`
-a run leaves behind, or one downloaded from CI — you don't need to export anything to read
-it:
+Every run above opens through that same viewer: the gallery publishes each session's `.zip`
+next to its images and links `?zip=` at it, so those pages are the viewer doing exactly what
+it does for your own archives. If what you have is a **session archive** of your own — the
+`.zip` a run leaves behind, or one downloaded from CI — nothing needs exporting either:
 
 [**Open the report viewer →**](report-viewer/index.html)
 

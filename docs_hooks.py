@@ -4,7 +4,8 @@ Report-gallery placeholder filling
 -----------------------------------
 The Report Gallery (`docs/reports.md`) and the landing-page embed reference per-trail
 report assets under `docs/report-assets/<trail>/` (`storyboard.webp`, `timeline.webp`,
-`report.html`). Those are produced by CI (`trailblaze report --storyboard --webp`),
+`report-interactive.html`, `session.zip`). Those are produced by CI (`trailblaze report
+--storyboard --webp`, plus a `zip -r` of the session),
 uploaded as artifacts, and fetched into the build workspace by the GitHub Pages workflow
 — they are NOT committed (the per-trail dirs are gitignored), so the repo carries no
 per-trail binaries.
@@ -116,6 +117,11 @@ def on_pre_build(config):
             target = trail_dir / webp
             if not target.exists():
                 target.write_bytes(pending_bytes)
-        report_html = trail_dir / "report.html"
+        report_html = trail_dir / "report-interactive.html"
         if not report_html.exists():
             report_html.write_text(_PENDING_HTML, encoding="utf-8")
+        # No stand-in for session.zip: the gallery's viewer deep-link resolves against
+        # report-viewer/index.html (which always exists, so --strict is satisfied), and a
+        # fabricated archive would render as a broken report rather than an honest
+        # "couldn't download that" with the drop zone still offered. A missing zip is
+        # self-healing — the next completed trail run publishes one.
