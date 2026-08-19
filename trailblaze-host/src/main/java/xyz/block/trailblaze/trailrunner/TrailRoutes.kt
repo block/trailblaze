@@ -241,9 +241,13 @@ internal suspend fun buildCreateTrailResponse(deps: TrailRunnerDeps, request: Cr
       val file = File(primary, segments.joinToString("/") + ".trail.yaml")
       val rootCanon = primary.canonicalPath
       require(file.canonicalPath.startsWith("$rootCanon/")) { "path escapes the trails workspace" }
-      require(!file.exists()) { "${file.name} already exists at that path" }
-      file.parentFile?.mkdirs()
-      file.writeText(yaml)
+      val parent = requireNotNull(file.parentFile)
+      parent.mkdirs()
+      when (BundleStore.writeFile(parent, file.name, yaml, operation = "create")) {
+        BundleStore.FileWriteResult.WRITTEN -> Unit
+        BundleStore.FileWriteResult.ALREADY_EXISTS -> error("${file.name} already exists at that path")
+        else -> error("Unable to create ${file.name}")
+      }
       file.absolutePath
     }
   }

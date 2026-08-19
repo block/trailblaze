@@ -21,6 +21,196 @@ import TM from "./screens/trail-model.js";
 import TY from "./trail-yaml.js";
 const parse = (s: string) => (Bun as any).YAML.parse(s);
 
+describe("normalizeScratchTrailYaml", () => {
+  test("keeps a complete trail unchanged", () => {
+    const source = "# keep me\nconfig:\n  title: Complete\ntrail:\n  - step: Sign in";
+    const out = TY.normalizeScratchTrailYaml(source, ["android"], "Ignored", "sample");
+    expect(out.yaml).toBe(source);
+    expect(out.kind).toBe("trail");
+  });
+
+  test("rejects document-shaped YAML that has nothing runnable", () => {
+    expect(TY.normalizeScratchTrailYaml("config:\n  title: Empty", ["android"], "Ignored", null).error)
+      .toContain("at least one step");
+    expect(TY.normalizeScratchTrailYaml("config: {}\ntrail: []", ["android"], "Ignored", null).error)
+      .toContain("at least one step");
+    expect(TY.normalizeScratchTrailYaml("- config:\n    title: Empty", ["android"], "Ignored", null).error)
+      .toContain("at least one step");
+  });
+
+  test("converts a legacy list-root trail before daemon validation", () => {
+    const source = [
+      "- config:",
+      "    title: Legacy",
+      "    platform: android",
+      "- prompts:",
+      '    - step: "Open settings"',
+      '    - verify: "Settings are visible"',
+      "      recording:",
+      "        tools:",
+      "          - tapOn:",
+      "              text: Settings",
+    ].join("\n");
+    const out = TY.normalizeScratchTrailYaml(
+      source,
+      ["android-phone", "ios-iphone"],
+      "Ignored",
+      null,
+    );
+    expect(parse(out.yaml)).toEqual({
+      config: { title: "Legacy" },
+      trail: [
+        { step: "Open settings" },
+        {
+          verify: "Settings are visible",
+          recording: {
+            android: [{ tapOn: { text: "Settings" } }],
+            ios: [{ tapOn: { text: "Settings" } }],
+          },
+        },
+      ],
+    });
+    expect(out.kind).toBe("trail");
+    expect(out.steps).toBe(2);
+  });
+
+  test("converts legacy trailhead and top-level tools in file order", () => {
+    const source = [
+      "- config:",
+      "    title: Legacy recording",
+      "- trailhead: signed_in",
+      "- tools:",
+      "    - tapOn:",
+      "        text: Continue",
+      "- prompts:",
+      '    - step: "Verify the next screen"',
+    ].join("\n");
+    const out = TY.normalizeScratchTrailYaml(source, ["android-phone"], "Ignored", null);
+    expect(parse(out.yaml)).toEqual({
+      config: { title: "Legacy recording" },
+      trailhead: {
+        step: "Reach the trailhead starting state",
+        recording: { android: { signed_in: {} } },
+      },
+      trail: [
+        {
+          step: "Run tapOn",
+          recording: { android: [{ tapOn: { text: "Continue" } }] },
+        },
+        { step: "Verify the next screen" },
+      ],
+    });
+    expect(out.kind).toBe("trail");
+    expect(out.steps).toBe(3);
+  });
+
+  test("converts a legacy object trailhead into a unified recorded step", () => {
+    const source = [
+      "- config:",
+      "    title: Legacy object trailhead",
+      "- trailhead:",
+      '    step: "Sign in as the demo account"',
+      "    tools:",
+      "      - demo_signIn:",
+      "          account: standard",
+      "- prompts:",
+      '    - step: "Open settings"',
+    ].join("\n");
+    const out = TY.normalizeScratchTrailYaml(source, ["ios-iphone"], "Ignored", null);
+    expect(parse(out.yaml).trailhead).toEqual({
+      step: "Sign in as the demo account",
+      recording: { ios: { demo_signIn: { account: "standard" } } },
+    });
+  });
+
+  test("rejects a legacy trailhead with more than one tool", () => {
+    const source = [
+      "- config: {}",
+      "- trailhead:",
+      "    tools:",
+      "      - clearState: {}",
+      "      - launchApp: {}",
+      "- prompts:",
+      '    - step: "Continue"',
+    ].join("\n");
+    expect(TY.normalizeScratchTrailYaml(source, ["android"], "Ignored", null).error)
+      .toContain("only one tool");
+  });
+
+  test("treats mixed tools and steps as scratch fragments, not a legacy document", () => {
+    const source = [
+      "- tools:",
+      "    - tapOn:",
+      "        text: Continue",
+      '- step: "Verify the next screen"',
+    ].join("\n");
+    const out = TY.normalizeScratchTrailYaml(source, ["android"], "Partial", null);
+    expect(parse(out.yaml).trail).toEqual([
+      {
+        step: "Run tapOn",
+        recording: { android: [{ tapOn: { text: "Continue" } }] },
+      },
+      { step: "Verify the next screen" },
+    ]);
+  });
+
+  test("requires a device to convert a top-level tools fragment", () => {
+    const out = TY.normalizeScratchTrailYaml(
+      "- tools:\n    - tapOn:\n        text: Continue",
+      [],
+      "Ignored",
+      null,
+    );
+    expect(out.error).toContain("device");
+  });
+
+  test("wraps one natural-language step in a runnable trail", () => {
+    const out = TY.normalizeScratchTrailYaml('- step: "Open settings"', ["android"], "Quick check", "sample");
+    expect(parse(out.yaml)).toEqual({
+      config: { title: "Quick check", target: "sample" },
+      trail: [{ step: "Open settings" }],
+    });
+    expect(out.steps).toBe(1);
+  });
+
+  test("wraps a bare tool command for every selected platform", () => {
+    const out = TY.normalizeScratchTrailYaml("tapOn:\n  text: Continue", ["android-phone", "ios-iphone"], "Tap", null);
+    expect(parse(out.yaml).trail).toEqual([{
+      step: "Run tapOn",
+      recording: {
+        android: [{ tapOn: { text: "Continue" } }],
+        ios: [{ tapOn: { text: "Continue" } }],
+      },
+    }]);
+    expect(out.kind).toBe("recording");
+  });
+
+  test("accepts a contiguous mixed group including an old recording.tools step", () => {
+    const source = [
+      '- step: "Enter email"',
+      "  recording:",
+      "    tools:",
+      "      - inputText:",
+      "          text: person@example.com",
+      '- verify: "Home is visible"',
+    ].join("\n");
+    const out = TY.normalizeScratchTrailYaml(source, ["android"], "Partial", null);
+    expect(parse(out.yaml).trail).toEqual([
+      {
+        step: "Enter email",
+        recording: { android: [{ inputText: { text: "person@example.com" } }] },
+      },
+      { verify: "Home is visible" },
+    ]);
+    expect(out.steps).toBe(2);
+  });
+
+  test("returns actionable errors for invalid yaml and recorded commands without a device", () => {
+    expect(TY.normalizeScratchTrailYaml("- step: [", ["android"], "Bad", null).error).toBeTruthy();
+    expect(TY.normalizeScratchTrailYaml("tapOn: {}", [], "No device", null).error).toContain("device");
+  });
+});
+
 describe("buildRecordedTrailYaml", () => {
   const steps = [
     { text: "Open settings", yaml: "- tools:\n  - tapOn: { text: Settings }" },

@@ -132,6 +132,203 @@
     return lines.join('\n');
   }
 
+  // Turn the small fragments people paste into the old YAML tab into one normal unified trail.
+  // Full trail documents pass through unchanged. Fragments may be a natural-language step, a
+  // `tools:` block, a bare tool call (`tapOn: { text: Go }`), or an ordered list mixing those
+  // shapes. Bare tool calls are recorded for every selected platform so one scratch dispatch can
+  // target (for example) Android and iOS without manufacturing a different document per device.
+  // Returns `{ yaml, kind, steps }` or `{ error }`; YAML parsing/serialization stays at this edge so
+  // the caller can show syntax errors before contacting the daemon.
+  function normalizeScratchTrailYaml(source, platforms, title, target) {
+    if (!window.jsyaml) return { error: 'YAML support is unavailable.' };
+    var raw = String(source == null ? '' : source).trim();
+    if (!raw) return { error: 'Enter a command or step to run.' };
+    var doc;
+    try { doc = window.jsyaml.load(raw); }
+    catch (e) { return { error: (e && e.message) ? e.message : String(e) }; }
+    if (doc == null) return { error: 'Enter a command or step to run.' };
+
+    var classifiers = [];
+    (platforms || []).forEach(function (p) {
+      var base = String(p || '').split(/[-_]/)[0].toLowerCase();
+      if (base && classifiers.indexOf(base) < 0) classifiers.push(base);
+    });
+    var recordingFor = function (tools) {
+      if (!classifiers.length) return null;
+      var out = {};
+      classifiers.forEach(function (p) { out[p] = tools; });
+      return out;
+    };
+    var normalizeRecording = function (rec) {
+      if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return rec;
+      if (Array.isArray(rec.tools)) return recordingFor(rec.tools) || rec;
+      return rec;
+    };
+    var invalidLegacyTrailhead = null;
+    var legacyTrailheadToUnified = function (value) {
+      var step = 'Reach the trailhead starting state';
+      var tools = [];
+      if (typeof value === 'string') {
+        var shorthand = {};
+        shorthand[value] = {};
+        tools = [shorthand];
+      } else if (Array.isArray(value)) {
+        tools = value;
+      } else if (value && typeof value === 'object') {
+        step = String(value.step || value.prompt || value.verify || step);
+        if (Array.isArray(value.tools)) tools = value.tools;
+        else if (value.recording && Array.isArray(value.recording.tools)) tools = value.recording.tools;
+        else if (value.step == null && value.prompt == null && value.verify == null && value.recording == null) {
+          tools = [value];
+        }
+      }
+      var unified = { step: step };
+      if (tools.length) {
+        if (tools.length !== 1) {
+          invalidLegacyTrailhead = 'A trailhead can run only one tool per device.';
+          return null;
+        }
+        if (!classifiers.length) return null;
+        var recording = {};
+        classifiers.forEach(function (p) { recording[p] = tools[0]; });
+        unified.recording = recording;
+      }
+      return unified;
+    };
+
+    // Unified maps are already runnable. Do not reserialize them: preserving the authored text
+    // keeps comments and formatting intact in the scratch editor. Legacy list-root documents are
+    // converted below because the daemon validator accepts only the unified mapping root.
+    // A config-only document is valid metadata in a saved file, but it is not an executable
+    // scratch request. Reject it here instead of misclassifying `config` as a bare tool command.
+    if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
+      var hasDocumentRoot = doc.config != null || doc.trail != null || doc.trailhead != null;
+      var runnableTrail = Array.isArray(doc.trail) && doc.trail.length > 0;
+      var runnableTrailhead = doc.trailhead != null;
+      if (hasDocumentRoot && !runnableTrail && !runnableTrailhead) {
+        return { error: 'Trail must contain at least one step or trailhead.' };
+      }
+      if (runnableTrail || runnableTrailhead) {
+        return { yaml: raw, kind: 'trail', steps: runnableTrail ? doc.trail.length : 1 };
+      }
+    }
+    if (Array.isArray(doc)) {
+      var hasLegacyDocumentRoot = doc.some(function (it) {
+        return it && typeof it === 'object' && !Array.isArray(it) &&
+          (it.config != null || it.prompts != null || it.trailhead != null);
+      });
+      if (hasLegacyDocumentRoot) {
+        var runnableLegacy = doc.some(function (it) {
+          return (Array.isArray(it.prompts) && it.prompts.length > 0) ||
+            (Array.isArray(it.tools) && it.tools.length > 0) || it.trailhead != null;
+        });
+        if (!runnableLegacy) return { error: 'Trail must contain at least one step or trailhead.' };
+        if (doc.some(function (it) {
+          return !it || typeof it !== 'object' || Array.isArray(it) ||
+            Object.keys(it).some(function (key) {
+              return key !== 'config' && key !== 'prompts' && key !== 'trailhead' && key !== 'tools';
+            });
+        })) {
+          return { error: 'Use a config, trailhead, prompts, or tools block in a legacy trail.' };
+        }
+        var config = {};
+        var trailhead = null;
+        var trail = [];
+        var missingRecordingClassifier = false;
+        doc.forEach(function (it) {
+          if (it.config && typeof it.config === 'object') config = Object.assign({}, it.config);
+          if (it.trailhead != null) {
+            trailhead = legacyTrailheadToUnified(it.trailhead);
+            if (!trailhead) missingRecordingClassifier = true;
+          }
+          if (Array.isArray(it.tools) && it.tools.length > 0) {
+            var toolsRecording = recordingFor(it.tools);
+            if (!toolsRecording) {
+              missingRecordingClassifier = true;
+            } else {
+              var toolNames = it.tools.map(function (tool) {
+                return tool && typeof tool === 'object' ? Object.keys(tool)[0] : String(tool || '');
+              }).filter(Boolean);
+              trail.push({
+                step: toolNames.length ? 'Run ' + toolNames.join(', ') : 'Run tools',
+                recording: toolsRecording,
+              });
+            }
+          }
+          (Array.isArray(it.prompts) ? it.prompts : []).forEach(function (prompt) {
+            var step = Object.assign({}, prompt);
+            if (step.recording && Array.isArray(step.recording.tools)) {
+              var recording = recordingFor(step.recording.tools);
+              if (!recording) missingRecordingClassifier = true;
+              else step.recording = recording;
+            }
+            trail.push(step);
+          });
+        });
+        if (invalidLegacyTrailhead) {
+          return { error: invalidLegacyTrailhead };
+        }
+        if (missingRecordingClassifier) {
+          return { error: 'Choose a device before running recorded commands.' };
+        }
+        delete config.platform;
+        var converted = { config: config, trail: trail };
+        if (trailhead != null) converted.trailhead = trailhead;
+        return {
+          yaml: window.jsyaml.dump(converted, { lineWidth: -1, noRefs: true }).trimEnd(),
+          kind: 'trail',
+          steps: trail.length + (trailhead != null ? 1 : 0),
+        };
+      }
+    }
+    var fragmentToStep = function (it) {
+      if (typeof it === 'string') return { step: it };
+      if (!it || typeof it !== 'object' || Array.isArray(it)) return null;
+      if (it.step != null || it.verify != null || it.prompt != null) {
+        var step = Object.assign({}, it);
+        if (step.prompt != null && step.step == null && step.verify == null) {
+          step.step = step.prompt;
+          delete step.prompt;
+        }
+        if (step.recording != null) step.recording = normalizeRecording(step.recording);
+        return step;
+      }
+      if (Array.isArray(it.tools)) {
+        var toolsRec = recordingFor(it.tools);
+        if (!toolsRec) return null;
+        var names = it.tools.map(function (t) { return t && typeof t === 'object' ? Object.keys(t)[0] : String(t || ''); }).filter(Boolean);
+        return { step: names.length ? 'Run ' + names.join(', ') : 'Run tools', recording: toolsRec };
+      }
+      var keys = Object.keys(it);
+      if (keys.length === 1) {
+        var rec = recordingFor([it]);
+        if (!rec) return null;
+        return { step: 'Run ' + keys[0], recording: rec };
+      }
+      return null;
+    };
+
+    var fragments = Array.isArray(doc) ? doc : [doc];
+    var steps = fragments.map(fragmentToStep);
+    if (steps.some(function (s) { return !s; })) {
+      return { error: classifiers.length
+        ? 'Use a step, verify, tools block, bare tool command, or full trail document.'
+        : 'Choose at least one device before running recorded tool commands.' };
+    }
+    if (!steps.length) return { error: 'Add at least one step to run.' };
+    var config = { title: title || 'Ad hoc run' };
+    if (target) config.target = target;
+    try {
+      return {
+        yaml: window.jsyaml.dump({ config: config, trail: steps }, { lineWidth: -1, noRefs: true }).trimEnd(),
+        kind: steps.some(function (s) { return s.recording; }) ? 'recording' : 'steps',
+        steps: steps.length,
+      };
+    } catch (e) {
+      return { error: (e && e.message) ? e.message : String(e) };
+    }
+  }
+
   // `prependSteps`: ordered recorded steps to replay before the AI objective, each
   // { label, tool, args }. The runner replays steps that have a recording and lets the agent
   // drive the ones that don't, so these put the app in a known state first, such as clearing app data
@@ -325,6 +522,7 @@
   const api = {
     recordYamlValue, parseRecordStepTools, trailheadRunTools,
     buildRecordedTrailYaml, buildRunnableToolYaml, buildToolListRunYaml, buildTrailheadRunYaml,
+    normalizeScratchTrailYaml,
     buildPromptTrailYaml, buildBlazeYaml, mergeBlazeYaml,
     normalizeTrailDoc, applyRecordingEdit,
   };

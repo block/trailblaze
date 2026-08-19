@@ -273,6 +273,18 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     setNewTitle(''); setCreateErr(null); setNewOpen(true);
   };
   const newPathIsDir = newPath.trim().endsWith('/') && newPath.trim().replace(/\/+$/, '') !== '';
+  const closeDetail = () => {
+    setSelected(null);
+    setFolderView(null);
+    setEditHighlight(null);
+  };
+  // At compact desktop widths the detail becomes a focused workspace and the tree yields its width.
+  // This affordance is CSS-hidden at wide widths, where the tree remains visible beside the detail.
+  const trailIndexBack = () => (
+    <button type="button" className="tb-btn ghost sm tb-trails-index-back" onClick={closeDetail}>
+      <Ico n="arrow-left" s={15} /> All trails
+    </button>
+  );
   const doCreateTrail = async () => {
     const isDir = newPathIsDir;
     const p = newPath.trim().replace(/^\/+|\/+$/g, '').replace(/\.trail\.yaml$/, '');
@@ -298,7 +310,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   };
 
   return (
-    <div className="tb-in tb-trails-layout" style={{ display: 'flex', height: '100%' }}>
+    <div className={'tb-in tb-trails-layout' + ((folderView || current) ? ' tb-trails-layout--detail' : '')} style={{ display: 'flex', height: '100%' }}>
       <TrailTree
         width={treeW}
         rows={rows}
@@ -394,7 +406,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
           </div>
         </div>
       )}
-      <Splitter onDown={startTreeDrag} />
+      <Splitter className="tb-trails-splitter" onDown={startTreeDrag} />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         {trails.loading && (
           <div style={{ padding: 32 }}><Skeleton rows={4} /></div>
@@ -415,6 +427,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                   title; the pin (favorite) moves to the far right. */}
               <DetailHeader
                 title={fvTitle}
+                leading={trailIndexBack()}
                 meta={(
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     {fvTarget && <Chip tone="blue">{fvTarget}</Chip>}
@@ -451,13 +464,18 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
               {/* No breadcrumb (the sidebar shows location); tokens under the title; pin to the right. */}
               <DetailHeader
                 title={current.title}
-                leading={current.folder ? (
-                  <button
-                    onClick={() => { setFolderView(current.folder); setEditHighlight(null); }}
-                    title="Back to the bundle’s implementations"
-                    style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 8, border: '1px solid var(--tb-hairline)', background: 'transparent', cursor: 'pointer', color: 'var(--text-subtle-variant)' }}
-                  ><Ico n="arrow-left" s={17} /></button>
-                ) : null}
+                leading={(
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {trailIndexBack()}
+                    {current.folder ? (
+                      <button
+                        onClick={() => { setFolderView(current.folder); setEditHighlight(null); }}
+                        title="Back to the bundle’s implementations"
+                        style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 8, border: '1px solid var(--tb-hairline)', background: 'transparent', cursor: 'pointer', color: 'var(--text-subtle-variant)' }}
+                      ><Ico n="layers" s={16} /></button>
+                    ) : null}
+                  </div>
+                )}
                 meta={(
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     {current.kind === 'blaze' && <Chip tone="amber"><Ico n="flame" s={11} /> Blaze · {current.hasRecordedSteps ? 'recorded' : 'prompt-only'}</Chip>}
@@ -534,7 +552,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
               </div>
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '14px 28px 20px' }}>
                 <TrailYamlEditor content={viewFile.content} editable tools={isBlaze ? null : scopedTools}
-                  onSave={(t) => TB.saveTrailFolderFile(fvFolderId, viewFile.name, t)}
+                  onSave={(t) => TB.saveTrailFolderFile(fvFolderId, viewFile.name, t, 'update')}
                   onSaved={() => { trails.reload(); setBoardReloadKey((k) => k + 1); }}
                   dirtyRef={editorDirty} highlight={viewFile.highlight} />
               </div>

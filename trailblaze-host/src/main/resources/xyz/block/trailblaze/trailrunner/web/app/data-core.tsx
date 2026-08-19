@@ -102,12 +102,19 @@ function useFetched(loader, deps = []) {
     // The workspace-switch call sites dispatch `tb:workspace-changed` after the change is applied.
     // `tb:daemon-recovered` (from the shell's health watchdog) refetches the same way: while the
     // daemon was unreachable every in-flight fetch hung or failed, so all data is suspect.
-    const onWorkspaceChanged = () => setVersion((v) => v + 1);
+    const onWorkspaceChanged = () => {
+      // A workspace switch is not a background refresh: every object belongs to the old repo.
+      // Clear it immediately so a large recursive scan shows an honest loading state instead of
+      // leaving the previous workspace's trail count and rows on screen for several seconds.
+      setState({ data: null, loading: true, error: null, mock: false });
+      setVersion((v) => v + 1);
+    };
+    const onDaemonRecovered = () => setVersion((v) => v + 1);
     window.addEventListener('tb:workspace-changed', onWorkspaceChanged);
-    window.addEventListener('tb:daemon-recovered', onWorkspaceChanged);
+    window.addEventListener('tb:daemon-recovered', onDaemonRecovered);
     return () => {
       window.removeEventListener('tb:workspace-changed', onWorkspaceChanged);
-      window.removeEventListener('tb:daemon-recovered', onWorkspaceChanged);
+      window.removeEventListener('tb:daemon-recovered', onDaemonRecovered);
     };
   }, []);
   return { ...state, reload: () => setVersion((v) => v + 1) };
@@ -282,17 +289,18 @@ function pickDirectoryViaShell(initialDir) {
   if (typeof window.trailblazePickDirectory === 'function') {
     return window.trailblazePickDirectory(initialDir);
   }
-  // Plain browsers cannot expose an absolute path through <input type="file"> or the File System
-  // Access API. Ask the app shell to collect it in a real Trail Runner dialog instead of falling
-  // back to window.prompt(), which embedded browsers intentionally do not support.
-  return new Promise((resolve) => {
-    const handled = !window.dispatchEvent(new CustomEvent('tb:pick-directory', {
-      cancelable: true,
-      detail: { initialDir: initialDir || '', resolve },
-    }));
-    // This can only happen if the picker is called before the app shell mounts. Resolve as a
-    // cancellation rather than leaving the caller's loading state pending forever.
-    if (!handled) resolve(null);
+  // A regular browser cannot reveal an absolute path from its file APIs. Ask the local daemon to
+  // open the operating system's real directory picker instead; on macOS this is the same
+  // Finder-style panel used by the native wrapper.
+  return fetch('/trailrunner/api/workspace/pick-directory', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ initialDirectory: initialDir || null }),
+  }).then(async (response) => {
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error((body && body.error) || `Folder picker failed (HTTP ${response.status})`);
+    return (body && body.path) || null;
   });
 }
 
@@ -574,11 +582,11 @@ async function fetchTrailFolderFile(folderId, name) {
 
 // Write any single file in a trail folder (blaze.yaml or a <platform>.trail.yaml). Creates the file
 // if it doesn't exist yet — including a brand-new blaze.yaml when promoting a recordings-only bundle.
-async function saveTrailFolderFile(folderId, name, yaml) {
+async function saveTrailFolderFile(folderId, name, yaml, operation = 'upsert') {
   try {
     const r = await fetch('/trailrunner/api/folder/file', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: folderId, name, yaml }),
+      body: JSON.stringify({ id: folderId, name, yaml, operation }),
     });
     const body = await r.json().catch(() => ({}));
     // A `success:false` body can ride a 200, so don't fall back to "HTTP 200" — that reads as success.

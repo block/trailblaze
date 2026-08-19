@@ -3,6 +3,7 @@ package xyz.block.trailblaze.trailrunner
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveParameters
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -215,6 +216,45 @@ internal fun buildWorkspaceTargetDriftResponse(deps: TrailRunnerDeps): Workspace
 }
 
 internal fun Route.settingsRoutes(deps: TrailRunnerDeps) {
+  post("$PATH_BASE/api/workspace/pick-directory") {
+    val request = runCatching { call.receive<DirectoryPickerRequest>() }.getOrElse { e ->
+      Console.log("[TrailRunnerEndpoint] POST /workspace/pick-directory bad body: ${e.message}")
+      call.respond(HttpStatusCode.BadRequest, DirectoryPickerResponse(error = "invalid request"))
+      return@post
+    }
+    val initial = request.initialDirectory?.trim()?.takeIf { it.isNotEmpty() }?.let(::File)
+    val selected = withContext(Dispatchers.IO) { runCatching { deps.directoryPicker(initial) } }
+    selected.fold(
+      onSuccess = { call.respond(DirectoryPickerResponse(path = it?.absolutePath)) },
+      onFailure = {
+        Console.log("[TrailRunnerEndpoint] native directory picker failed: ${it.message}")
+        call.respond(
+          HttpStatusCode.ServiceUnavailable,
+          DirectoryPickerResponse(error = it.message ?: "folder picker unavailable"),
+        )
+      },
+    )
+  }
+
+  // The CLI sends its git root here immediately before opening Trail Runner. Form encoding keeps
+  // arbitrary local paths intact without making the shell hand-roll JSON escaping.
+  put("$PATH_BASE/api/workspace") {
+    val requested = call.receiveParameters()["path"]?.trim().orEmpty()
+    if (requested.isEmpty() || !File(requested).isDirectory) {
+      call.respond(HttpStatusCode.BadRequest, mapOf("error" to "workspace must be a readable directory"))
+      return@put
+    }
+    val dto = buildSettingsPatchResponse(deps, SettingsPatchRequest(trailsDirectory = requested))
+    if (dto == null) {
+      call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "settings not available"))
+      return@put
+    }
+    call.respondText(
+      text = JSON.encodeToString(SettingsDto.serializer(), dto),
+      contentType = ContentType.Application.Json,
+    )
+  }
+
   get("$PATH_BASE/api/workspace/target-drift") {
     // Discovery touches disk (and may spawn the scripted-tool analyzer), so run it off the request
     // thread. This is hit once per workspace switch (a deliberate user action), not on a poll.

@@ -26,8 +26,11 @@ async function fetchAsDataUrl(url) {
 
 // Fetch every screenshot the trace references (deduped by filename) and return a
 // { filename -> dataURI } map. `onProgress(done, total)` drives the modal's progress text.
+// Folded child dispatches carry their own frames (the viewer's per-interaction preview and the
+// Lightbox "Show all" read them), so gather those too — same walk as run-report-cli.ts and
+// zip-report-core.js, keeping all three report producers in agreement.
 async function collectScreenshots(trace, sessionId, onProgress) {
-  const files = [...new Set((trace || []).map((t) => t.screenshotFile).filter(Boolean))];
+  const files = [...new Set((trace || []).flatMap((t) => [t.screenshotFile, ...(t.children || []).map((c) => c.screenshotFile)]).filter(Boolean))];
   const shots = {};
   let done = 0;
   if (onProgress) onProgress(0, files.length);

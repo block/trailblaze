@@ -960,6 +960,12 @@ data class SettingsPatchRequest(
   val screenshotCompressionQuality: Float? = null,
 ) : RpcRequest<SettingsDto>
 
+@Serializable
+data class DirectoryPickerRequest(val initialDirectory: String? = null)
+
+@Serializable
+data class DirectoryPickerResponse(val path: String? = null, val error: String? = null)
+
 // ─── Trailmaps ──────────────────────────────────────────────────────────────
 // A trailmap is the directory that defines one test target. The Trailmaps screen
 // browses each trailmap and the component files inside it, grouped by type.
@@ -1205,7 +1211,14 @@ data class CreateBundleRequest(val destination: String, val yaml: String)
 data class CreateBundleResponse(val success: Boolean, val id: String? = null, val error: String? = null)
 
 @Serializable
-data class BundleVariant(val name: String, val platform: String? = null)
+data class BundleVariant(
+  val name: String,
+  val platform: String? = null,
+  /** Device classifier slots actually recorded in this file (for example ios-iphone). */
+  val classifiers: List<String> = emptyList(),
+  /** Filesystem timestamp used by the library to show which recording was updated most recently. */
+  val updatedAtMs: Long? = null,
+)
 
 @Serializable
 data class BundleDetailResponse(
@@ -1249,4 +1262,10 @@ data class RecordBundleRequest(
 data class RecordBundleResponse(val sessionIds: List<String> = emptyList(), val error: String? = null)
 
 @Serializable
-data class UpdateBundleFileRequest(val id: String, val name: String, val yaml: String)
+data class UpdateBundleFileRequest(
+  val id: String,
+  val name: String,
+  val yaml: String,
+  /** `create`, `update`, or legacy-compatible `upsert`. Explicit modes prevent accidental loss. */
+  val operation: String = "upsert",
+)

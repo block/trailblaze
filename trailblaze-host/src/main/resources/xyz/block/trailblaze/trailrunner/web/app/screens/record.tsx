@@ -192,7 +192,7 @@ async function saveTrailToLibrary({ dest, target, platform, objective, steps }) 
   if (!created.success) return { ok: false, error: created.error || 'Could not create the trail.' };
   const variant = `${platform || 'recording'}.trail.yaml`;
   const trailYaml = buildRecordedTrailYaml(nm, target, platform, steps);
-  const wrote = await TB.saveTrailFolderFile(created.id, variant, trailYaml);
+  const wrote = await TB.saveTrailFolderFile(created.id, variant, trailYaml, 'create');
   if (!wrote.success) return { ok: false, error: wrote.error || `Saved the trail but could not write ${variant}.` };
   return { ok: true, id: created.id };
 }
@@ -470,6 +470,10 @@ function RecordScreen({ go, active, yamlSeed }) {
   const [gt] = TB.useGlobalTarget();
   const devices = TB.useDevices();
   const tools = TB.useTools();
+  // Test YAML is a standalone task, even though it reuses the recorder's dispatch machinery.
+  // Keeping that distinction in the render contract prevents a secondary "Close" action from
+  // dropping people into the unrelated manual-recording workflow.
+  const yamlOnly = !!(yamlSeed && (yamlSeed.openYaml || yamlSeed.yaml));
   // Catalog tool ids — lets a recorded tool name render as a link into the Tools screen.
   const toolMap = React.useMemo(() => new Set((tools.data || []).map((t) => t.id)), [tools.data]);
   const deviceList = (devices.data || []).filter((d) => d.connected);
@@ -700,20 +704,36 @@ function RecordScreen({ go, active, yamlSeed }) {
   // Intent for the next mirror tap: 'interact' drives the app; 'check' records an assertion.
   const [mode, setMode] = React.useState('interact');
   // Right panel: the recorded trail ('steps'), the on-screen element inspector ('elements'),
-  // or the ad hoc YAML runner ('runyaml' — the old standalone Run YAML screen, folded in).
+  // or the ad hoc YAML tester ('runyaml' — the old standalone YAML screen, folded in).
   const [rightTab, setRightTab] = React.useState('steps');
   // Ad hoc YAML runner state: paste trail YAML, dispatch it as a full run on this device.
   const [adhocYaml, setAdhocYaml] = React.useState('');
   const [adhocName, setAdhocName] = React.useState('');
   const [adhocRunning, setAdhocRunning] = React.useState(false);
   const [adhocErr, setAdhocErr] = React.useState(null);
-  // A `go('interact', { openYaml, yaml, name })` payload (the command palette's "Run ad hoc
-  // YAML…" action) opens the Run YAML tab, prefilled when it carries yaml. Keyed on the payload
+  const [adhocDeviceIds, setAdhocDeviceIds] = React.useState([]);
+  const [adhocRuns, setAdhocRuns] = React.useState([]); // [{device, sessionId, ok, error}]
+  // Default the scratch runner to the target picker's whole device set (the multi-device case this
+  // exists for), falling back to the Record screen's current device. Preserve later manual
+  // toggles; only seed when no selection remains resolvable.
+  React.useEffect(() => {
+    const available = new Set(deviceList.map((d) => d.id));
+    const kept = adhocDeviceIds.filter((id) => available.has(id));
+    if (kept.length) {
+      if (kept.length !== adhocDeviceIds.length) setAdhocDeviceIds(kept);
+      return;
+    }
+    const preferred = ((gt && gt.deviceIds) || []).filter((id) => available.has(id));
+    const fallback = preferred.length ? preferred : (selectedId && available.has(selectedId) ? [selectedId] : []);
+    if (fallback.length) setAdhocDeviceIds(fallback);
+  }, [devices.data, selectedId, gt && (gt.deviceIds || []).join('|')]);
+  // A `go('interact', { openYaml, yaml, name })` payload (the command palette's "Test YAML…"
+  // action) opens the Test YAML tab, prefilled when it carries yaml. Keyed on the payload
   // object itself — each navigation delivers a fresh one, so re-invoking it re-opens the tab.
   React.useEffect(() => {
     if (!yamlSeed || (!yamlSeed.openYaml && !yamlSeed.yaml)) return;
     setRightTab('runyaml');
-    if (yamlSeed.yaml) { setAdhocYaml(yamlSeed.yaml); setAdhocName(yamlSeed.name || ''); setAdhocErr(null); }
+    if (yamlSeed.yaml) { setAdhocYaml(yamlSeed.yaml); setAdhocName(yamlSeed.name || ''); setAdhocErr(null); setAdhocRuns([]); }
   }, [yamlSeed]);
   const [els, setEls] = React.useState([]);
   const [elsLoading, setElsLoading] = React.useState(false);
@@ -1136,16 +1156,17 @@ function RecordScreen({ go, active, yamlSeed }) {
     return { ok: false, text, ms: r.durationMs || 0 };
   }
 
-  // Replay every recorded step on the device, top to bottom, lighting each card up as it runs.
+  // Replay recorded steps from [startIndex] to the end, lighting each card up as it runs. This
+  // preserves the old YAML editor's useful "run this group without starting over" workflow.
   // Stops at the first failure; runs from the current screen. Prompt-only steps are skipped.
-  async function testTrail() {
+  async function testTrail(startIndex = 0) {
     if (testing) return;
     const id = connDeviceRef.current;
     if (!id) { setSaveErr('Connect a device first to test the trail.'); return; }
     const runnable = (s) => buildRunnableToolYaml(s.label || 'step', s.yaml, platform);
-    if (!steps.some(runnable)) { setSaveErr('No runnable steps to test yet — add a tool step first.'); return; }
+    if (!steps.slice(startIndex).some(runnable)) { setSaveErr('No runnable steps from here — add a tool step first.'); return; }
     setSaveErr(null); setShowYaml(false); setTestStatus({}); setTesting(true); testAbortRef.current = false;
-    for (let i = 0; i < steps.length; i++) {
+    for (let i = startIndex; i < steps.length; i++) {
       if (testAbortRef.current) break;
       const s = steps[i];
       if (!runnable(s)) continue;
@@ -1159,29 +1180,57 @@ function RecordScreen({ go, active, yamlSeed }) {
   }
   const stopTest = () => { testAbortRef.current = true; };
 
-  // Dispatch the pasted ad hoc YAML as a full run on this device (same recipe as the trail
-  // run flow: connect, dispatch, then follow it live in Active).
+  // Normalize + validate a pasted fragment, then dispatch the same normal trail run to every
+  // selected device. Each dispatch gets its own ordinary session, so Active provides cancellation,
+  // progress, screenshots, logs, and later retry/share exactly like a saved trail run.
   async function runAdhocYaml() {
-    const id = tbId();
-    if (!adhocYaml.trim() || !id || adhocRunning) return;
-    setAdhocRunning(true); setAdhocErr(null);
+    const picked = adhocDeviceIds.map((sid) => ({ device: deviceList.find((d) => d.id === sid), id: tbIdFor(sid) })).filter((x) => x.device && x.id);
+    if (!adhocYaml.trim() || !picked.length || adhocRunning) return;
+    const normalized = window.TrailYamlBuild.normalizeScratchTrailYaml(
+      adhocYaml,
+      picked.map((x) => x.device.platform),
+      adhocName || 'Ad hoc run',
+      target,
+    );
+    if (normalized.error) { setAdhocErr(normalized.error); return; }
+    setAdhocRunning(true); setAdhocErr(null); setAdhocRuns([]);
     try {
-      const connected = platform === 'web' ? true : await TB.connectDevice(id);
-      if (!connected) { setAdhocErr('Could not connect to the selected device.'); return; }
-      const resp = await TB.dispatchRun(id, adhocYaml);
-      if (!resp || resp.ok === false || resp.success === false) {
-        setAdhocErr((resp && resp.error) || 'Could not start the run.');
+      const validation = await TB.validateTrail(normalized.yaml);
+      if (!validation || validation.unavailable) {
+        setAdhocErr('Could not validate this YAML. Check the daemon and try again.');
         return;
       }
-      const parsed = parseTrailYaml(adhocYaml);
-      const cfg = parsed.ok ? (parsed.config || {}) : {};
-      TB.recordPendingRun({
-        title: cfg.title || adhocName || 'Pasted YAML',
-        target: cfg.target,
-        device: (device && device.name) || selectedId,
-        sessionId: resp.sessionId,
-      });
-      go('active', { followLive: Date.now() });
+      if (validation.valid === false) {
+        const first = (validation.errors || [])[0];
+        setAdhocErr(first ? ((first.line ? `Line ${first.line}: ` : '') + first.message) : 'This YAML is not runnable.');
+        return;
+      }
+      const results = await Promise.all(picked.map(async ({ device: runDevice, id }) => {
+        try {
+          const connected = runDevice.platform === 'web' ? true : await TB.connectDevice(id);
+          if (!connected) return { device: runDevice, ok: false, error: 'Could not connect.' };
+          const resp = await TB.dispatchRun(id, normalized.yaml);
+          if (!resp || resp.ok === false || resp.success === false) {
+            return { device: runDevice, ok: false, error: (resp && resp.error) || 'Could not start.' };
+          }
+          return { device: runDevice, ok: true, sessionId: resp.sessionId };
+        } catch (e) {
+          return { device: runDevice, ok: false, error: (e && e.message) || String(e) };
+        }
+      }));
+      setAdhocRuns(results);
+      const started = results.filter((r) => r.ok);
+      const failed = results.filter((r) => !r.ok);
+      if (started.length) {
+        const first = started[0];
+        TB.recordPendingRun({
+          title: adhocName || (normalized.steps === 1 ? 'Ad hoc step' : `Ad hoc · ${normalized.steps} steps`),
+          target,
+          device: started.length === 1 ? first.device.name : `${started.length} devices`,
+          sessionId: first.sessionId,
+        });
+      }
+      if (failed.length) setAdhocErr(`${failed.length} of ${results.length} device${results.length === 1 ? '' : 's'} could not start.`);
     } catch (e) {
       setAdhocErr((e && e.message) || 'Could not start the run.');
     } finally {
@@ -1336,40 +1385,86 @@ function RecordScreen({ go, active, yamlSeed }) {
     return els.filter((e) => [e.label, e.type].some((v) => v && String(v).toLowerCase().includes(q)));
   }, [els, elQuery]);
 
-  // Ad hoc YAML runner card + its Run footer. Shared by the connected right panel's "Run YAML"
+  // Ad hoc YAML tester card + its Run footer. Shared by the connected right panel's "Test YAML"
   // tab and the disconnected view (the command palette can open this before a Record session
   // exists — dispatching a run doesn't need the mirror, it connects the device itself).
   const runYamlCard = (
-    <div className="tb-card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="tb-card tb-record-yaml-card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid var(--tb-hairline)' }}>
         <Ico n="braces" s={14} c="var(--text-subtle)" />
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)' }}>{adhocName || 'Trail YAML'}</span>
-        <span className="tb-sub" style={{ fontSize: 11 }}>runs on {(device && device.name) || 'the selected device'}</span>
+        <label id="tb-test-yaml-editor-label" htmlFor="tb-test-yaml-editor" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)' }}>{adhocName || 'YAML'}</label>
       </div>
-      <textarea value={adhocYaml} onChange={(e) => { setAdhocYaml(e.target.value); setAdhocErr(null); }} spellCheck={false}
-        placeholder={'config:\n  title: "Ad hoc run"\ntrail:\n  - step: "Open the app"'}
+      <textarea id="tb-test-yaml-editor" aria-labelledby="tb-test-yaml-editor-label" value={adhocYaml} onChange={(e) => { setAdhocYaml(e.target.value); setAdhocErr(null); setAdhocRuns([]); }} spellCheck={false}
+        placeholder={'- step: "Open the app"\n\n# or one tool command:\ntapOn:\n  text: Continue'}
         style={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', display: 'block', resize: 'none', border: 'none', outline: 'none', background: '#0a0a0a', color: '#d7dee8', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.55, tabSize: 2 }} />
+      <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--tb-hairline)', padding: '9px 12px' }}>
+        <div className="tb-eyebrow" style={{ fontSize: 9.5, marginBottom: 7 }}>Run on</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+          {deviceList.map((d) => {
+            const on = adhocDeviceIds.includes(d.id);
+            return (
+              <button key={d.id} type="button" aria-pressed={on} onClick={() => setAdhocDeviceIds((ids) => on ? ids.filter((id) => id !== d.id) : [...ids, d.id])}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, padding: '5px 9px', cursor: 'pointer', font: 'inherit', fontSize: 11.5,
+                  border: '1px solid ' + (on ? 'var(--tb-selection)' : 'var(--tb-hairline)'), background: on ? 'var(--bg-prominent)' : 'transparent', color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>
+                <PlatformGlyph platform={d.platform} s={12} c={on ? 'var(--tb-running)' : 'var(--text-subtle)'} />
+                {d.name}
+                {on && <Ico n="check" s={11} c="var(--tb-pass)" />}
+              </button>
+            );
+          })}
+          {!deviceList.length && <span className="tb-sub" style={{ fontSize: 11.5 }}>No connected devices.</span>}
+        </div>
+      </div>
     </div>
   );
   const runYamlFooter = (
-    <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+    <div style={{ borderTop: '1px solid var(--tb-hairline)', paddingTop: 12, marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      {adhocRuns.length > 0 && <div style={{ flexBasis: '100%', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {adhocRuns.map((r) => r.ok
+          ? <button key={r.device.id} type="button" onClick={() => go('runs', { sel: r.sessionId })}
+              style={{ border: '1px solid var(--tb-hairline)', borderRadius: 6, background: 'var(--bg-elevated)', color: 'var(--text-standard)', padding: '5px 8px', cursor: 'pointer', font: 'inherit', fontSize: 11.5 }}>
+              {r.device.name} · View session
+            </button>
+          : <span key={r.device.id} title={r.error} style={{ border: '1px solid var(--tb-danger-border)', borderRadius: 6, color: 'var(--tb-danger-text)', padding: '5px 8px', fontSize: 11.5 }}>
+              {r.device.name} · Failed
+            </span>)}
+      </div>}
       <span className="tb-sub" style={{ fontSize: 11.5, flex: 1, minWidth: 0 }}>{adhocErr
         ? <span role="alert" style={{ color: 'var(--tb-danger-text)' }}>{adhocErr}</span>
-        : 'Runs the pasted YAML as a full run — follow it in Active.'}</span>
-      <Btn kind="primary" ico={adhocRunning ? 'loader-2' : 'play'} spin={adhocRunning} onClick={runAdhocYaml} disabled={!adhocYaml.trim() || adhocRunning || !device}>
-        {adhocRunning ? 'Starting…' : 'Run YAML'}
+        : adhocRuns.length ? `${adhocRuns.filter((r) => r.ok).length} run${adhocRuns.filter((r) => r.ok).length === 1 ? '' : 's'} started.`
+        : 'Each device starts a normal run.'}</span>
+      {adhocRuns.some((r) => r.ok) && <Btn kind="ghost" ico="radio" onClick={() => go('active', { followLive: Date.now() })}>View active runs</Btn>}
+      <Btn kind="primary" ico={adhocRunning ? 'loader-2' : 'play'} spin={adhocRunning} onClick={runAdhocYaml} disabled={!adhocYaml.trim() || adhocRunning || adhocDeviceIds.length === 0}>
+        {adhocRunning ? 'Starting…' : `Run on ${adhocDeviceIds.length || 0}`}
       </Btn>
     </div>
   );
+
+  if (yamlOnly) {
+    return (
+      <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', minHeight: 56, alignItems: 'center', gap: 7, padding: '0 32px', borderBottom: '1px solid var(--tb-hairline)' }}>
+          <Ico n="braces" s={17} c="var(--text-subtle-variant)" style={{ flex: '0 0 auto' }} />
+          <h1 className="tb-h2" style={{ fontSize: 16, minWidth: 0 }}>Test YAML</h1>
+          <span style={{ flex: 1 }} />
+          <Btn sm kind="ghost" ico="trash-2" onClick={() => { setAdhocYaml(''); setAdhocName(''); setAdhocErr(null); setAdhocRuns([]); }} disabled={!adhocYaml.trim()}>Clear</Btn>
+        </div>
+        <div className="tb-test-yaml-workspace">
+          {runYamlCard}
+          {runYamlFooter}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Header band — title on the left, connection cluster on the right. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '18px 32px', borderBottom: '1px solid var(--tb-hairline)' }}>
-        <Ico n="pointer" s={19} c="var(--tb-ai)" style={{ flex: '0 0 auto' }} />
+        <Ico n={rightTab === 'runyaml' ? 'braces' : 'pointer'} s={19} c="var(--tb-ai)" style={{ flex: '0 0 auto' }} />
         <div style={{ minWidth: 0, flex: '0 0 auto' }}>
-          <div style={{ fontSize: 16, fontWeight: 650, fontFamily: 'var(--font-display)', color: 'var(--text-standard)', lineHeight: 1.2 }}>Compose a trail</div>
-          <div className="tb-sub" style={{ fontSize: 12, marginTop: 1 }}>Drive a real device. Every action becomes an editable step.</div>
+          <div style={{ fontSize: 16, fontWeight: 650, fontFamily: 'var(--font-display)', color: 'var(--text-standard)', lineHeight: 1.2 }}>{rightTab === 'runyaml' ? 'Test YAML' : 'Compose a trail'}</div>
+          <div className="tb-sub" style={{ fontSize: 12, marginTop: 1 }}>{rightTab === 'runyaml' ? 'Run a command, step, group, recording, or full trail.' : 'Drive a real device. Every action becomes an editable step.'}</div>
         </div>
         <span style={{ flex: 1 }} />
         <AppIcon target={target} size={24} radius={6} fallbackColor="var(--text-subtle-variant)" />
@@ -1384,17 +1479,17 @@ function RecordScreen({ go, active, yamlSeed }) {
 
       {!conn ? (
         /* Disconnected: the device frame holds the chooser — pick a device, then Connect. */
-        <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0, padding: '16px 32px 24px' }}>
+        <div className={'tb-record-body tb-record-body--disconnected' + (rightTab === 'runyaml' ? ' tb-record-body--yaml' : '')} style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0, padding: '16px 32px 24px' }}>
           {/* Left — device frame with the chooser inside. overflow:visible so the frame's soft drop
               shadow isn't clipped into a hard-edged band (the frame nearly fills this column's width). */}
-          <div style={{ width: leftW, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'visible' }}>
-            <div style={{ width: frameW + 14, margin: '0 auto', boxSizing: 'border-box', borderRadius: 24, background: '#0b0b0c', border: '1px solid var(--tb-hairline)', padding: 7, boxShadow: '0 12px 40px rgba(0,0,0,.45)', transition: frameAnim }}>
+          <div className="tb-record-device-pane" style={{ width: leftW, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'visible' }}>
+            <div className="tb-device-frame" style={{ width: frameW + 14, margin: '0 auto', boxSizing: 'border-box', borderRadius: 24, background: '#0b0b0c', border: '1px solid var(--tb-hairline)', padding: 7, boxShadow: '0 12px 40px rgba(0,0,0,.45)', transition: frameAnim }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px 9px' }}>
-                <PlatformGlyph platform={device ? device.platform : null} s={14} c="var(--text-subtle)" />
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-subtle-variant)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}>{device ? device.name + (platLabel ? ' · ' + platLabel : '') : 'Choose a device'}</span>
+                <PlatformGlyph platform={device ? device.platform : null} s={14} c="var(--tb-inverse-muted)" />
+                <span className="tb-device-frame-meta" style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}>{device ? device.name + (platLabel ? ' · ' + platLabel : '') : 'Choose a device'}</span>
               </div>
               {/* The chooser fits its rows, capped at the device aspect height so a long list scrolls. */}
-              <div style={{ width: '100%', height: connecting ? frameH : undefined, maxHeight: frameH, borderRadius: 18, background: '#000', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: frameAnim }}>
+              <div className="tb-device-chooser" style={{ width: '100%', height: connecting ? frameH : undefined, maxHeight: frameH, borderRadius: 18, background: '#000', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column', transition: frameAnim }}>
                 {devicesPending ? (
                   <div style={{ flex: 1, padding: '18px 16px' }}>
                     <Skeleton rows={4} label="Loading devices" />
@@ -1404,16 +1499,16 @@ function RecordScreen({ go, active, yamlSeed }) {
                     <div>
                       <Ico n="triangle-alert" s={22} c="var(--tb-amber)" />
                       <div style={{ marginTop: 10, fontSize: 13, color: 'var(--tb-amber)' }}>No device connected</div>
-                      <div className="tb-sub" style={{ fontSize: 11.5, lineHeight: 1.5, maxWidth: 220, margin: '6px auto 0' }}><a onClick={() => go('home')} style={{ color: 'var(--tb-primary-green)', cursor: 'pointer', textDecoration: 'underline' }}>Pick a target &amp; device on Home</a>.</div>
+                      <div className="tb-device-frame-meta" style={{ fontSize: 11.5, lineHeight: 1.5, maxWidth: 220, margin: '6px auto 0' }}><a onClick={() => go('home')} style={{ color: 'var(--tb-primary-green)', cursor: 'pointer', textDecoration: 'underline' }}>Pick a target &amp; device on Home</a>.</div>
                     </div>
                   </div>
                 ) : (
                   <>
                     <div style={{ padding: '12px 12px 8px', display: 'flex', alignItems: 'center', gap: 9, flex: '0 0 auto' }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)' }}>{connecting ? 'Connecting…' : 'Choose a device'}</span>
+                      <span className="tb-device-frame-title" style={{ fontSize: 12.5, fontWeight: 700 }}>{connecting ? 'Connecting…' : 'Choose a device'}</span>
                       {deviceList.length > 0 && <Chip>{deviceList.length}</Chip>}
                     </div>
-                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div className="tb-device-option-list" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {deviceList.map((d) => {
                         const sel = d.id === selectedId;
                         // Lock device switching while a connect is in flight.
@@ -1422,10 +1517,10 @@ function RecordScreen({ go, active, yamlSeed }) {
                             onKeyDown={connecting ? undefined : (e) => { if (e.key === 'Enter') setSelectedId(d.id); }}
                             style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', borderRadius: 10, cursor: connecting ? 'default' : 'pointer', opacity: connecting && !sel ? 0.45 : 1,
                               border: '1px solid ' + (sel ? 'var(--tb-primary-green)' : 'rgba(255,255,255,.08)'), background: sel ? 'rgba(0,224,19,.08)' : 'rgba(255,255,255,.03)' }}>
-                            <PlatformGlyph platform={d.platform} s={18} c={sel ? 'var(--tb-primary-green)' : 'var(--text-subtle)'} />
+                            <PlatformGlyph platform={d.platform} s={18} c={sel ? 'var(--tb-primary-green)' : 'var(--tb-inverse-muted)'} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-standard)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
-                              <div className="tb-sub" style={{ fontSize: 11.5 }}>{d.platform}{d.driver && d.driver !== '?' ? ' · ' + d.driver : ''}</div>
+                              <div className="tb-device-option-name" style={{ fontSize: 13.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
+                              <div className="tb-device-option-meta" style={{ fontSize: 11.5 }}>{d.platform}{d.driver && d.driver !== '?' ? ' · ' + d.driver : ''}</div>
                             </div>
                             {sel && <Ico n={connecting ? 'loader-2' : 'check-circle-2'} s={16} c="var(--tb-primary-green)" spin={connecting} />}
                           </div>
@@ -1443,15 +1538,13 @@ function RecordScreen({ go, active, yamlSeed }) {
               </div>
             </div>
           </div>
-          <Splitter onDown={startDrag} />
+          <Splitter className="tb-record-splitter" onDown={startDrag} />
           {rightTab === 'runyaml' ? (
-            /* The palette's "Run ad hoc YAML…" lands here when no Record session exists yet — the
+            /* The palette's "Test YAML…" lands here when no Record session exists yet — the
                runner doesn't need the mirror (dispatching connects the device itself), so show it
                against the device selected in the chooser instead of hiding it behind Connect. */
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-                <span style={{ fontSize: 12.5, fontWeight: 700 }}>Run YAML</span>
-                <span style={{ flex: 1 }} />
+            <div className="tb-record-yaml-pane" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, padding: 6 }}>
+              <div aria-label="Test YAML actions" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                 <Btn sm kind="ghost" ico="trash-2" onClick={() => { setAdhocYaml(''); setAdhocName(''); setAdhocErr(null); }} disabled={!adhocYaml.trim()}>Clear</Btn>
                 <Btn sm kind="ghost" ico="x" onClick={() => setRightTab('steps')}>Close</Btn>
               </div>
@@ -1476,8 +1569,8 @@ function RecordScreen({ go, active, yamlSeed }) {
         <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0, padding: '16px 32px 24px' }}>
           {/* Left — the device stage, framed like a simulator. overflow:visible so the frame's soft
               drop shadow isn't clipped into a hard-edged band (the frame nearly fills this column). */}
-          <div style={{ width: leftW, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'visible' }}>
-            <div style={{ width: frameW + 14, margin: '0 auto', boxSizing: 'border-box', borderRadius: 24, background: '#0b0b0c', border: '1px solid var(--tb-hairline)', padding: 7, boxShadow: '0 12px 40px rgba(0,0,0,.45)', transition: frameAnim }}>
+          <div className="tb-record-device-pane" style={{ width: leftW, flex: '0 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'visible' }}>
+            <div className="tb-device-frame" style={{ width: frameW + 14, margin: '0 auto', boxSizing: 'border-box', borderRadius: 24, background: '#0b0b0c', border: '1px solid var(--tb-hairline)', padding: 7, boxShadow: '0 12px 40px rgba(0,0,0,.45)', transition: frameAnim }}>
               {/* Device toolbar: device picker + hardware-button equivalents + disconnect. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 6px 9px' }}>
                 <Select value={selectedId || ''} onChange={(e) => switchDevice(e.target.value)}
@@ -1485,16 +1578,16 @@ function RecordScreen({ go, active, yamlSeed }) {
                   options={deviceList.map((d) => ({ value: d.id, label: d.name + ' · ' + (d.platform === 'ios' ? 'iOS' : d.platform === 'android' ? 'Android' : d.platform) }))} />
                 {platform === 'android' && (
                   <button onClick={() => dispatch({ type: 'pressKey', key: 'Back' })} disabled={busy} title="Back" style={navBtn(busy)}>
-                    <Ico n="arrow-left" s={14} c="var(--text-subtle-variant)" />
+                    <Ico n="arrow-left" s={14} c="var(--tb-inverse-muted)" />
                   </button>
                 )}
                 {(platform === 'ios' || platform === 'android') && (
                   <button onClick={() => dispatch({ type: 'pressKey', key: 'Home' })} disabled={busy} title="Home" style={navBtn(busy)}>
-                    <Ico n="house" s={13} c="var(--text-subtle-variant)" />
+                    <Ico n="house" s={13} c="var(--tb-inverse-muted)" />
                   </button>
                 )}
                 <button onClick={disconnect} title="Disconnect" style={navBtn(false)}>
-                  <Ico n="unplug" s={13} c="var(--text-subtle)" />
+                  <Ico n="unplug" s={13} c="var(--tb-inverse-muted)" />
                 </button>
               </div>
               <div ref={imgWrapRef}
@@ -1506,7 +1599,7 @@ function RecordScreen({ go, active, yamlSeed }) {
                     write into them and toggle their display (canvas for H.264, img for JPEG/poll). */}
                 <img ref={mirrorImgRef} alt="device" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', display: 'none', pointerEvents: 'none' }} />
                 <canvas ref={mirrorCanvasRef} aria-label="device" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', display: 'none', pointerEvents: 'none' }} />
-                {!frame && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'var(--text-subtle)', fontSize: 13 }}><Ico n="loader-2" s={20} spin /> </div>}
+                {!frame && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'var(--tb-inverse-muted)', fontSize: 13 }}><Ico n="loader-2" s={20} spin /> </div>}
                 {busy && <div style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(0,0,0,.62)', color: '#fff', fontSize: 11, padding: '4px 8px', borderRadius: 8, display: 'flex', gap: 6, alignItems: 'center' }}><Ico n="loader-2" s={12} spin /> capturing</div>}
                 {/* Armed to append a tap/verify tool to the open step on the next tap. */}
                 {appendArm && !busy && (
@@ -1564,10 +1657,10 @@ function RecordScreen({ go, active, yamlSeed }) {
               collapse this pane and its full-width textareas to a sliver. */}
           <div style={{ flex: 1, minWidth: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {/* Tabs: the recorded trail, the on-screen element inspector (the accessibility tree),
-                or the ad hoc YAML runner. */}
+                or the ad hoc YAML tester. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div style={{ display: 'inline-flex', border: '1px solid var(--tb-hairline)', borderRadius: 9, overflow: 'hidden' }}>
-                {[['steps', 'Steps', steps.length], ['elements', 'Elements', els.length], ['runyaml', 'Run YAML', null]].map(([val, lbl, n]) => {
+                {[['steps', 'Steps', steps.length], ['elements', 'Elements', els.length], ['runyaml', 'Test YAML', null]].map(([val, lbl, n]) => {
                   const on = rightTab === val;
                   const showN = val === 'steps' || (val === 'elements' && els.length > 0);
                   return (
@@ -1619,8 +1712,8 @@ function RecordScreen({ go, active, yamlSeed }) {
                 </div>
                 {/* Committed steps in order, top to bottom; the pending proposal is appended at the end. */}
                 {steps.map((s, i) => (
-                  <StepCard key={s.id} step={s} index={i} count={steps.length} canRun={!!conn} toolMap={toolMap} go={go} runStatus={testStatus[s.id]}
-                    onChange={(patch) => updateStep(s.id, patch)} onRemove={() => removeStep(s.id)} onMove={(dir) => moveStep(s.id, dir)} onRun={() => runStep(s)} onAddTool={() => openToolPalette(s.id)} />
+                  <StepCard key={s.id} step={s} index={i} count={steps.length} canRun={!!conn && !testing} toolMap={toolMap} go={go} runStatus={testStatus[s.id]}
+                    onChange={(patch) => updateStep(s.id, patch)} onRemove={() => removeStep(s.id)} onMove={(dir) => moveStep(s.id, dir)} onRun={() => runStep(s)} onRunFrom={() => testTrail(i)} onAddTool={() => openToolPalette(s.id)} />
                 ))}
                 {/* Stage 3 of the guided flow — the steps. Dimmed until the trailhead is set; the
                     "Add the next step" affordance gets the accent ring once it's the focus. */}
@@ -1691,7 +1784,7 @@ function RecordScreen({ go, active, yamlSeed }) {
                 </Btn>
               )}
               {/* Test the whole trail — runs each step on the device, highlighting it inline. */}
-              <Btn sm kind={testing ? 'danger' : 'ghost'} ico={testing ? 'square' : 'play'} onClick={testing ? stopTest : testTrail}
+              <Btn sm kind={testing ? 'danger' : 'ghost'} ico={testing ? 'square' : 'play'} onClick={testing ? stopTest : () => testTrail(0)}
                 disabled={!conn || steps.length === 0} title={!conn ? 'Connect a device first' : 'Run every step on the device'}>
                 {testing ? 'Stop' : 'Test trail'}
               </Btn>
@@ -1765,7 +1858,7 @@ function RecordScreen({ go, active, yamlSeed }) {
 
 // One committed step. Display mode reuses trail-detail's StepRow with a hover control strip; edit
 // mode swaps in the prompt field + a raw YAML editor.
-function StepCard({ step, index, count, canRun, toolMap = new Set(), go, onChange, onRemove, onMove, onRun, onAddTool, runStatus }) {
+function StepCard({ step, index, count, canRun, toolMap = new Set(), go, onChange, onRemove, onMove, onRun, onRunFrom, onAddTool, runStatus }) {
   useLucide();
   const [editing, setEditing] = React.useState(false);
   const [running, setRunning] = React.useState(false);
@@ -1836,6 +1929,7 @@ function StepCard({ step, index, count, canRun, toolMap = new Set(), go, onChang
       ) : (
       <div style={{ position: 'absolute', top: 9, right: 11, display: 'flex', alignItems: 'center', gap: 1 }}>
         {hasTools && <button title={canRun ? 'Run this step on the device' : 'Connect a device to run'} onClick={run} disabled={running || !canRun} style={iconBtn(running || !canRun)}><Ico n={running ? 'loader-2' : 'play'} s={14} c="var(--tb-pass)" spin={running} /></button>}
+        {hasTools && index < count - 1 && <button title={canRun ? 'Run from this step to the end' : 'Connect a device to run'} onClick={onRunFrom} disabled={running || !canRun} style={iconBtn(running || !canRun)}><Ico n="list-start" s={14} c="var(--tb-link)" /></button>}
         {onAddTool && <button title="Add another tool to this step" onClick={onAddTool} style={iconBtn(false)}><Ico n="wrench" s={13} c="var(--text-subtle)" /></button>}
         <button title="Edit step" onClick={() => setEditing(true)} style={iconBtn(false)}><Ico n="pencil" s={13} c="var(--text-subtle)" /></button>
         <button title="Move up" onClick={() => onMove(-1)} disabled={index === 0} style={iconBtn(index === 0)}><Ico n="chevron-up" s={14} /></button>

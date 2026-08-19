@@ -11,10 +11,10 @@ import java.util.concurrent.Callable
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Launch, stop, or check the status of the Trailblaze application.
+ * Launch Trail Runner, stop its daemon, or check the daemon status.
  *
  * Examples:
- *   trailblaze app                   - Launch desktop GUI
+ *   trailblaze app                   - Open Trail Runner in its native desktop window
  *   trailblaze app start             - Same as `trailblaze app` (explicit verb)
  *   trailblaze app --headless        - Start headless daemon (no GUI)
  *   trailblaze app start --headless  - Same, spelled with the explicit verb
@@ -25,7 +25,7 @@ import kotlin.time.Duration.Companion.seconds
   name = "app",
   mixinStandardHelpOptions = true,
   subcommands = [AppStartCommand::class],
-  description = ["Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service)"]
+  description = ["Open Trail Runner for viewing sessions and managing trails (use --headless for a daemon-only background service)"]
 )
 open class AppCommand : Callable<Int> {
 
@@ -198,7 +198,7 @@ open class AppCommand : Callable<Int> {
 @Command(
   name = "start",
   mixinStandardHelpOptions = true,
-  description = ["Start the Trailblaze app in the background (same as `trailblaze app`)"]
+  description = ["Open Trail Runner (same as `trailblaze app`)"]
 )
 class AppStartCommand : Callable<Int> {
 

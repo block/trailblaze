@@ -1,6 +1,27 @@
 import Cocoa
 import WebKit
 
+// The headless daemon cannot create AppKit windows. A browser-hosted Trail Runner asks this same
+// cached native executable to perform just the directory-selection operation, then reads the
+// chosen absolute path from stdout. The normal WKWebView app path below is unchanged.
+if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "--pick-directory" {
+  let initialDir = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : ""
+  let pickerApp = NSApplication.shared
+  pickerApp.setActivationPolicy(.accessory)
+  pickerApp.activate(ignoringOtherApps: true)
+  let panel = NSOpenPanel()
+  panel.canChooseDirectories = true
+  panel.canChooseFiles = false
+  panel.allowsMultipleSelection = false
+  panel.prompt = "Choose"
+  panel.message = "Choose a Trail Runner workspace"
+  if !initialDir.isEmpty { panel.directoryURL = URL(fileURLWithPath: initialDir) }
+  if panel.runModal() == .OK, let path = panel.url?.path {
+    FileHandle.standardOutput.write(Data(path.utf8))
+  }
+  exit(0)
+}
+
 let url: URL = {
   if let argv = CommandLine.arguments.dropFirst().first, !argv.isEmpty,
      let parsed = URL(string: argv) {

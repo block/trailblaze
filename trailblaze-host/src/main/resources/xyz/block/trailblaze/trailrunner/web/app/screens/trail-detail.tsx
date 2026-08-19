@@ -244,7 +244,7 @@ function UnifiedStepsTable({ data }) {
 // onSaveYaml. Recordings are bound to their step by identity, so reorder/rename carries them (no
 // text-realignment guesswork the multi-file bundle needed). `target` scopes the tool-call editor's
 // autocomplete. onSaveYaml(yaml) -> { success, error }.
-function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
+function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = [] }) {
   useLucide();
   const devices = TB.useDevices();
   const [model, setModel] = React.useState(() => parseUnifiedModel(yaml));
@@ -256,8 +256,9 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
   const [addPlatOpen, setAddPlatOpen] = React.useState(false);
   const [dragStep, setDragStep] = React.useState(-1);
   const [dropStep, setDropStep] = React.useState(-1);
+  const [runRange, setRunRange] = React.useState(null); // { anchor, start, end }, always contiguous
   // Re-derive from disk whenever the file changes (initial load, and after a save reloads it).
-  React.useEffect(() => { setModel(parseUnifiedModel(yaml)); setErr(null); }, [yaml]);
+  React.useEffect(() => { setModel(parseUnifiedModel(yaml)); setErr(null); setRunRange(null); }, [yaml]);
   const savedYaml = React.useMemo(() => { const m = parseUnifiedModel(yaml); return m ? serializeUnifiedModel(m) : null; }, [yaml]);
   const curYaml = React.useMemo(() => (model ? serializeUnifiedModel(model) : null), [model]);
   const dirty = savedYaml != null && curYaml != null && curYaml !== savedYaml;
@@ -306,6 +307,18 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
     };
   });
   const availBases = ['android', 'ios', 'web'].filter((b) => !model.platforms.some((p) => platformBase(p) === b));
+  const runCount = runRange ? runRange.end - runRange.start + 1 : 0;
+  const selectForRun = (i) => setRunRange((r) => {
+    if (!r) return { anchor: i, start: i, end: i };
+    if (r.start === i && r.end === i) return null;
+    if (i >= r.start && i <= r.end) return { anchor: i, start: i, end: i };
+    return { anchor: r.anchor, start: Math.min(r.anchor, i), end: Math.max(r.anchor, i) };
+  });
+  const runSelected = () => {
+    if (!runRange || !onRunFragment) return;
+    const partial = window.TM.sliceSteps(model, runRange.start, runRange.end);
+    if (partial) onRunFragment(serializeUnifiedModel(partial), runCount);
+  };
 
   // Persist a specific model to the file. Takes the model explicitly (not `curYaml`, which lags a
   // just-applied setState) so an edit-then-save gesture writes the fresh state in one go.
@@ -317,7 +330,7 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
     setSaving(false);
   }
   const save = () => persist(model);
-  // Dispatch a cell's tool calls to a connected device of that platform (like Run YAML) — resolve +
+  // Dispatch a cell's tool calls to a connected device of that platform (like Test YAML) — resolve +
   // connect the device, then runToolQuick. Returns { ok, text } for the popover to display.
   async function runTools(toolsArray, platform, deviceId) {
     try {
@@ -367,6 +380,16 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
         <div className="tb-board-pin" onMouseEnter={() => setHoveredRow(rowId)} onMouseLeave={() => setHoveredRow((h) => (h === rowId ? null : h))} {...dragProps}
           style={{ borderTop: dropBorder, padding: '10px 12px', background: 'var(--bg-standard)', display: 'flex', alignItems: 'flex-start', gap: 6, opacity: dragStep === rowKey ? 0.4 : 1 }}>
           {!isTh && (
+            <button type="button" aria-label={(runRange && rowKey >= runRange.start && rowKey <= runRange.end ? 'Remove' : 'Select') + ` step ${rowKey + 1} for a partial run`}
+              aria-pressed={!!(runRange && rowKey >= runRange.start && rowKey <= runRange.end)} onClick={() => selectForRun(rowKey)}
+              title="Select one step, then another to run the contiguous range"
+              style={{ width: 18, height: 18, padding: 0, marginTop: 2, borderRadius: 5, cursor: 'pointer', flex: '0 0 auto', display: 'grid', placeItems: 'center',
+                border: '1px solid ' + (runRange && rowKey >= runRange.start && rowKey <= runRange.end ? 'var(--tb-selection)' : 'var(--tb-hairline-strong)'),
+                background: runRange && rowKey >= runRange.start && rowKey <= runRange.end ? 'var(--bg-prominent)' : 'transparent' }}>
+              {runRange && rowKey >= runRange.start && rowKey <= runRange.end ? <Ico n="check" s={12} c="var(--tb-pass)" /> : null}
+            </button>
+          )}
+          {!isTh && (
             <span draggable title="Drag to reorder" aria-label="Drag to reorder step"
               onDragStart={(e) => { setDragStep(rowKey); if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(rowKey)); } }}
               onDragEnd={() => { setDragStep(-1); setDropStep(-1); }}
@@ -397,11 +420,18 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, catalog = [] }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div className="tb-unified-steps-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <Btn kind="primary" sm ico={saving ? 'loader-2' : 'save'} spin={saving} disabled={!dirty || saving} onClick={save}>Save</Btn>
         {dirty && <span className="tb-sub" style={{ fontSize: 12, color: 'var(--tb-amber)' }}>Unsaved changes</span>}
         {err && <span style={{ fontSize: 12, color: 'var(--tb-fail)' }}>{err}</span>}
-        <span style={{ flex: 1 }} />
+        {runCount > 0 && onRunFragment && (
+          <React.Fragment>
+            <Btn kind="primary" sm ico="play" onClick={runSelected}>Run {runCount === 1 ? 'step' : `${runCount} steps`}</Btn>
+            <Btn kind="ghost" sm onClick={() => setRunRange(null)}>Clear selection</Btn>
+            <span className="tb-sub" style={{ fontSize: 11.5 }}>Starts from the device’s current screen.</span>
+          </React.Fragment>
+        )}
+        <span className="tb-unified-steps-toolbar-spacer" style={{ flex: 1 }} />
         {availBases.length > 0 && (
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <Btn kind="ghost" sm ico="plus" onClick={() => setAddPlatOpen((o) => !o)}>Platform</Btn>
@@ -552,6 +582,60 @@ function TrailConfigCard({ config }) {
   );
 }
 
+// Legacy per-platform recordings still appear in existing trail libraries. Give them the same partial
+// execution affordance as unified trails: select one step, then another to form an inclusive range,
+// and hand the fragment to the shared scratch runner. The fragment deliberately uses the old
+// `recording.tools` shape; normalizeScratchTrailYaml converts it for every device the user selects.
+function LegacyStepsRunList({ steps, go, toolMap }) {
+  const [range, setRange] = React.useState(null);
+  const count = range ? range.end - range.start + 1 : 0;
+  const pick = (i) => setRange((r) => {
+    if (!r) return { anchor: i, start: i, end: i };
+    if (r.start === i && r.end === i) return null;
+    if (i >= r.start && i <= r.end) return { anchor: i, start: i, end: i };
+    return { anchor: r.anchor, start: Math.min(r.anchor, i), end: Math.max(r.anchor, i) };
+  });
+  const run = () => {
+    if (!range || !go || !window.jsyaml) return;
+    const fragment = steps.slice(range.start, range.end + 1).map((s) => {
+      const out = { [s.kind === 'verify' ? 'verify' : 'step']: s.text || '' };
+      if ((s.tools || []).length) out.recording = { tools: s.tools.map((t) => ({ [t.name]: t.args == null ? {} : t.args })) };
+      return out;
+    });
+    const yaml = window.jsyaml.dump(fragment, { lineWidth: -1, noRefs: true }).trimEnd();
+    go('interact', { openYaml: true, yaml, name: count === 1 ? 'Selected step' : `${count} selected steps` });
+  };
+  let ordinal = 0;
+  return (
+    <div>
+      {count > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+          <Btn kind="primary" sm ico="play" onClick={run}>Run {count === 1 ? 'step' : `${count} steps`}</Btn>
+          <Btn kind="ghost" sm onClick={() => setRange(null)}>Clear selection</Btn>
+          <span className="tb-sub" style={{ fontSize: 11.5 }}>Starts from the device’s current screen.</span>
+        </div>
+      )}
+      {steps.map((s, i) => {
+        const idx = s.kind === 'trailhead' ? null : ordinal++;
+        const selected = s.kind !== 'trailhead' && !!(range && i >= range.start && i <= range.end);
+        return (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr)', gap: 5, alignItems: 'start' }}>
+            {s.kind === 'trailhead'
+              ? <span />
+              : <button type="button" aria-pressed={selected} aria-label={(selected ? 'Remove' : 'Select') + ` step ${idx + 1} for a partial run`}
+                  onClick={() => pick(i)} title="Select one step, then another to run the contiguous range"
+                  style={{ width: 18, height: 18, padding: 0, marginTop: 12, borderRadius: 5, cursor: 'pointer', display: 'grid', placeItems: 'center',
+                    border: '1px solid ' + (selected ? 'var(--tb-selection)' : 'var(--tb-hairline-strong)'), background: selected ? 'var(--bg-prominent)' : 'transparent' }}>
+                  {selected && <Ico n="check" s={12} c="var(--tb-pass)" />}
+                </button>}
+            <StepRow step={s} idx={idx} go={go} toolMap={toolMap} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // `yaml` (optional): parse steps from this YAML directly instead of fetching by trail id — lets a
 // folder file (not in the workspace index) reuse this view. `configTrail` overrides the config card.
 function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) {
@@ -596,7 +680,8 @@ function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) 
     return (
       <div>
         {canEdit
-          ? <UnifiedStepsBoard yaml={effYaml} target={cfgObj.target} onSaveYaml={saveYaml} catalog={catalog.data || []} />
+          ? <UnifiedStepsBoard yaml={effYaml} target={cfgObj.target} onSaveYaml={saveYaml} catalog={catalog.data || []}
+              onRunFragment={go ? (fragmentYaml, count) => go('interact', { openYaml: true, yaml: fragmentYaml, name: count === 1 ? 'Selected step' : `${count} selected steps` }) : null} />
           : unified
             ? <UnifiedStepsTable data={unified} />
             : <EmptyState ico="list" title="No steps" />}
@@ -611,7 +696,7 @@ function StepsMode({ trail, go, yaml, configTrail, editable, onSave, onSaved }) 
         {!loading && steps.length === 0 && (
           <EmptyState ico="list" title="No steps" />
         )}
-        {(() => { let n = 0; return steps.map((s, i) => <StepRow key={i} step={s} idx={s.kind === 'trailhead' ? null : n++} go={go} toolMap={toolMap} />); })()}
+        {steps.length > 0 && <LegacyStepsRunList steps={steps} go={go} toolMap={toolMap} />}
       </div>
     </div>
   );
@@ -724,7 +809,7 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
       destination: (cfg.metadata && cfg.metadata.destination) || null,
       steps: next,
     });
-    const r = await TB.saveTrailFolderFile(folderId, 'blaze.yaml', yaml);
+    const r = await TB.saveTrailFolderFile(folderId, 'blaze.yaml', yaml, hasBlaze ? 'update' : 'create');
     if (r.success) reloadAll();
     return r;
   }
@@ -763,13 +848,13 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
     const r0 = await patchVariantRecording(TB.fetchTrailFolderFile, folderId, variantName, promptIndex, newToolsArray, stepInfo);
     if (r0.error) return { success: false, error: r0.error };
     if (r0.noop) return { success: true };
-    const r = await TB.saveTrailFolderFile(folderId, variantName, r0.yaml);
+    const r = await TB.saveTrailFolderFile(folderId, variantName, r0.yaml, 'update');
     if (r.success) setVariantDocs((prev) => ({ ...prev, [variantName]: parseTrailYaml(r0.yaml) }));
     return r;
   }
   // Full-file writer for the expanded variant's inline raw-YAML editor. Hot-updates the parsed doc.
   async function saveVariantYaml(name, yaml) {
-    const r = await TB.saveTrailFolderFile(folderId, name, yaml);
+    const r = await TB.saveTrailFolderFile(folderId, name, yaml, 'update');
     if (r.success) setVariantDocs((prev) => ({ ...prev, [name]: parseTrailYaml(yaml) }));
     return r;
   }

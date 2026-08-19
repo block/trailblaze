@@ -3,7 +3,8 @@
 # Trailblaze launcher
 #
 # Usage:
-#   ./trailblaze                     - Launch desktop GUI
+#   ./trailblaze app                 - Open Trail Runner in its native desktop window
+#   ./trailblaze trailrunner         - Compatibility alias for `app`
 #   ./trailblaze --stop              - Stop the daemon
 #   ./trailblaze app --headless      - Start headless daemon
 #   ./trailblaze app --stop          - Stop the daemon
@@ -461,6 +462,92 @@ get_status() {
     fi
 }
 
+# Open Trail Runner in its native desktop shell. `app --headless`, `app --status`,
+# `app --stop`, and `app --foreground` remain daemon/diagnostic commands; only the
+# ordinary `app` and `app start` user entry points take this path.
+open_trailrunner_window() {
+    local url="http://localhost:${TRAILBLAZE_PORT}/trailrunner/"
+    echo "Opening Trail Runner at $url" >&2
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        local shell_url="http://localhost:${TRAILBLAZE_PORT}/trailrunner/native/TrailblazeTrailRunner.swift"
+        local shell_dir="${HOME}/.trailblaze/bin"
+        local shell_src="${shell_dir}/TrailblazeTrailRunner.swift"
+        local shell_bin="${shell_dir}/Trail Runner"
+        mkdir -p "$shell_dir"
+
+        if ! curl -sf -o "${shell_src}.new" "$shell_url"; then
+            echo "ERROR: could not fetch the Trail Runner shell from $shell_url." >&2
+            echo "       Open $url in a browser, or restart the daemon and retry." >&2
+            return 1
+        fi
+        if [ ! -f "$shell_src" ] || ! cmp -s "${shell_src}.new" "$shell_src" || [ ! -x "$shell_bin" ]; then
+            mv "${shell_src}.new" "$shell_src"
+            echo "Compiling native Trail Runner shell..." >&2
+            if ! xcrun swiftc -O -o "$shell_bin" "$shell_src" -framework Cocoa -framework WebKit; then
+                echo "ERROR: failed to compile Trail Runner with 'xcrun swiftc'." >&2
+                echo "       Install Xcode command-line tools, then retry. You can still open $url." >&2
+                return 1
+            fi
+        else
+            rm -f "${shell_src}.new"
+        fi
+        # Keep the current window alive until its replacement has been fetched and compiled.
+        # Closing it immediately before launch also leaves one authoritative app window focused.
+        pkill -f "bin/Trail Runner .*:${TRAILBLAZE_PORT}/" 2>/dev/null || true
+        nohup "$shell_bin" "$url" >/dev/null 2>&1 &
+        disown
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$url"
+    else
+        echo "Open this URL in your browser: $url" >&2
+    fi
+}
+
+# Make the repo containing the caller's current directory the active Trail Runner workspace. The
+# daemon is long-lived, so inheriting cwd only works on its first launch; this explicit handoff also
+# makes a later `trailblaze app` from another checkout switch the already-running app. The daemon
+# scans this whole root recursively (including layouts such as `jobs/**/trails`).
+activate_trailrunner_workspace() {
+    local repo_root
+    if ! repo_root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); then
+        return 0
+    fi
+    if curl -sf -X PUT --data-urlencode "path=${repo_root}" \
+        "http://localhost:${TRAILBLAZE_PORT}/trailrunner/api/workspace" >/dev/null; then
+        printf '%s\n' "Active workspace: ${repo_root}" >&2
+        return 0
+    fi
+    printf '%s\n' "WARNING: the app opened, but could not switch its workspace to ${repo_root}." >&2
+    return 1
+}
+
+launch_trailrunner_app() {
+    if ! is_daemon_running; then
+        abort_if_stuck_daemon
+        echo "Starting Trailblaze daemon..." >&2
+        tb_check_java_version || return 1
+        tb_run_background app --foreground --headless
+        record_daemon_pid "$!"
+
+        echo -n "Waiting for Trailblaze daemon" >&2
+        local attempts=0
+        while [ "$attempts" -lt 120 ] && ! is_daemon_running; do
+            echo -n "." >&2
+            sleep 1
+            attempts=$((attempts + 1))
+        done
+        echo "" >&2
+        if ! is_daemon_running; then
+            echo "ERROR: Trailblaze did not become ready on port ${TRAILBLAZE_PORT}." >&2
+            return 1
+        fi
+        echo "Trailblaze daemon ready." >&2
+    fi
+    activate_trailrunner_workspace || true
+    open_trailrunner_window
+}
+
 # ---------------------------------------------------------------------------
 # Path resolution helper
 # ---------------------------------------------------------------------------
@@ -486,6 +573,7 @@ STDIO_MODE=false
 HAS_MCP=false
 HAS_HTTP=false
 HAS_DIRECT=false
+NATIVE_APP_MODE=false
 ARGS_ARRAY=()
 for arg in "$@"; do
     if [ "$arg" = "mcp" ]; then
@@ -510,6 +598,12 @@ done
 # Flat string for functions that need it (backward compat)
 ARGS="${ARGS_ARRAY[*]}"
 
+if [ "${#ARGS_ARRAY[@]}" -eq 1 ] && { [ "${ARGS_ARRAY[0]}" = "app" ] || [ "${ARGS_ARRAY[0]}" = "trailrunner" ]; }; then
+    NATIVE_APP_MODE=true
+elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARGS_ARRAY[1]}" = "start" ]; then
+    NATIVE_APP_MODE=true
+fi
+
 # STDIO mode: `mcp` subcommand without `--http` flag (includes --bridge mode)
 if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
     STDIO_MODE=true
@@ -519,7 +613,9 @@ fi
 # Main logic
 # ---------------------------------------------------------------------------
 
-if [ "$1" = "stop" ]; then
+if [ "$NATIVE_APP_MODE" = true ]; then
+    launch_trailrunner_app
+elif [ "$1" = "stop" ]; then
     stop_daemon
 elif [ "$1" = "status" ]; then
     get_status

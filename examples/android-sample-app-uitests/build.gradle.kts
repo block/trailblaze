@@ -154,7 +154,7 @@ val stageSampleAppTrails =
     // Eval trails: `trails/eval/android/sample-app/<basename>.trail.yaml` →
     // `trails/GeneratedSampleAppTests/<basenameCamel>.trail.yaml`. Repo-root layout per
     // `trails/eval/README.md`; the eval set deliberately lives outside the sample-app dir so
-    // the `pr_eval_android.sh` Square-POS-targeted runner's `find -maxdepth 1` doesn't scoop
+    // the Square-POS-targeted agent-eval lane's single-segment trail glob doesn't scoop
     // them up.
     // That path resolves outside this tree and is not published with it, so the directory is
     // absent in the public repo. Stage the eval trails only where they actually exist.

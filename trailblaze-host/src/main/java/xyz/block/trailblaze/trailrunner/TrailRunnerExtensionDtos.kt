@@ -26,7 +26,22 @@ data class IntegrationDto(
 )
 
 @Serializable
-data class IntegrationActionDto(val id: String, val label: String)
+data class IntegrationActionDto(
+  val id: String,
+  val label: String,
+  /**
+   * Optional same-origin destination within `/trailrunner` for an integration-owned workspace. When
+   * present, Trail
+   * Runner mounts the destination as a sub-app inside its content pane instead of invoking
+   * [TrailRunnerExtension.integrationActionHandler]. This keeps downstream UI and routes
+   * downstream while the OSS shell owns navigation and framing.
+   */
+  val href: String? = null,
+  /** Optional shorter label when this workspace is promoted into Trail Runner navigation. */
+  val navigationLabel: String? = null,
+  /** Optional Lucide icon name for the promoted workspace. */
+  val navigationIcon: String? = null,
+)
 
 @Serializable
 data class AnalyticsEventDto(

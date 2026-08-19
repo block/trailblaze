@@ -546,8 +546,8 @@ function useResizableWidth(key, initial, min, max, invert = false) {
   return [w, startDrag];
 }
 
-function Splitter({ onDown }) {
-  return <div className="tb-colsplit" data-testid="col-splitter" onMouseDown={onDown} title="Drag to resize" />;
+function Splitter({ onDown, className }) {
+  return <div className={'tb-colsplit' + (className ? ' ' + className : '')} data-testid="col-splitter" onMouseDown={onDown} title="Drag to resize" />;
 }
 
 function applyTheme(mode) {

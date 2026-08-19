@@ -39,6 +39,9 @@ object TrailRunnerEndpoint {
     // from, so the pre-restart compile check exercises the right sources on EVERY launch path
     // (not just launches that happen to export the TRAILBLAZE_REBUILD_GRADLE_TASK override).
     rebuildGradleTask: String = DEFAULT_REBUILD_GRADLE_TASK,
+    // Native directory selection for browser-hosted Trail Runner. The macOS wrapper supplies its
+    // own NSOpenPanel bridge, while a regular browser reaches this provider through the daemon.
+    directoryPicker: (File?) -> File? = ::pickDirectoryWithNativeDialog,
   ) {
     val deps = TrailRunnerDeps(
       trailsRootProvider = trailsRootProvider,
@@ -57,6 +60,7 @@ object TrailRunnerEndpoint {
       selectorAdviceProvider = extension.selectorAdviceProvider,
       appTargetIdsProvider = extension.appTargetIdsProvider,
       rebuildGradleTask = rebuildGradleTask,
+      directoryPicker = directoryPicker,
     )
     // API JSON must never be served from an HTTP cache: the desktop shell's WKWebView keeps a
     // persistent NSURLCache that happily replays header-less GET responses, so a bundle's readiness
@@ -143,6 +147,7 @@ internal class TrailRunnerDeps(
   // Gradle task compiled by the rebuild-and-restart route before the daemon restarts. See
   // [TrailRunnerEndpoint.register].
   val rebuildGradleTask: String = DEFAULT_REBUILD_GRADLE_TASK,
+  val directoryPicker: (File?) -> File? = ::pickDirectoryWithNativeDialog,
 )
 
 // See the install site in [TrailRunnerEndpoint.register] for why API/RPC JSON is marked no-store.

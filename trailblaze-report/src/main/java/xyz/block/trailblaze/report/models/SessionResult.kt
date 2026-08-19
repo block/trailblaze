@@ -286,7 +286,7 @@ data class SessionResult(
    * Filename of the per-session zip artifact that contains this session's logs
    * (e.g. `logs_uitest-sample-app-accessibility_0__a1b2c3d4.zip`). Despite the legacy `logs_`
    * prefix, the artifact this points to is the *per-session* zip (one zip per session),
-   * not a step-wide bundle — see `scripts/buildkite/buildkite_upload_logs.sh`. Combined
+   * not a step-wide bundle — the CI log-upload step decides the grouping. Combined
    * with [ci_job_id] and the build's organization/pipeline/number from [CiRunMetadata], a
    * consumer can resolve the artifact's deep-link URL via the CI provider's CLI without
    * inspecting zip contents.

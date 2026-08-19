@@ -76,6 +76,34 @@ describe("tool body fidelity (scalar / list / empty args)", () => {
   });
 });
 
+describe("sliceSteps", () => {
+  const model = TM.unifiedDocToMatrix({
+    config: { title: "Checkout", target: "sample", devices: { android: "ANDROID_ONDEVICE_ACCESSIBILITY" } },
+    trailhead: { step: "Launch", recording: { android: { launchApp: {} } } },
+    trail: [
+      { step: "Open cart", recording: { android: [{ tapOn: { text: "Cart" } }] } },
+      { step: "Enter address", recording: { android: [{ inputText: { text: "1 Main" } }] } },
+      { verify: "Total is visible", skip: { web: "mobile only" } },
+      { step: "Pay" },
+    ],
+  });
+
+  test("keeps exactly one selected step and omits the trailhead", () => {
+    const out = TM.matrixToUnifiedDoc(TM.sliceSteps(model, 1, 1));
+    expect(out.trailhead).toBeUndefined();
+    expect(out.trail).toEqual([{ step: "Enter address", recording: { android: [{ inputText: { text: "1 Main" } }] } }]);
+    expect(out.config.target).toBe("sample");
+    expect(out.config.title).toContain("(2)");
+  });
+
+  test("normalizes either selection order to one contiguous inclusive group", () => {
+    const out = TM.matrixToUnifiedDoc(TM.sliceSteps(model, 2, 0));
+    expect(out.trail.map((s: any) => s.step || s.verify)).toEqual(["Open cart", "Enter address", "Total is visible"]);
+    expect(out.trail[2].skip).toEqual({ web: "mobile only" });
+    expect(out.config.title).toContain("(1–3)");
+  });
+});
+
 describe("round-trip: matrixToUnifiedDoc(unifiedDocToMatrix(doc)) is semantically identity", () => {
   const cases: Record<string, any> = {
     "trailhead + steps + multi-platform": {

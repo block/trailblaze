@@ -540,6 +540,37 @@ open class ScriptedToolDefinitionAnalyzer(
     internal const val BUNDLED_ANALYZER_SHIM_RESOURCE: String =
       "trails/config/analyzer/extract-tool-defs.mjs"
 
+    /**
+     * JAR-resource path of the TypeScript `lib*.d.ts` payload that accompanies the bundled
+     * shim, zipped with each file keyed by its path relative to the SDK root.
+     *
+     * The bundle inlines TypeScript's *code* but not its standard library: those are `.d.ts`
+     * data files that TypeScript locates relative to its own `__filename`, which `bun build`
+     * freezes to the build machine's absolute path. Shipping the libs and redirecting that
+     * frozen path at them ([ANALYZER_SDK_ROOT_PLACEHOLDER]) is what lets an installed CLI
+     * resolve `Record`, `Partial`, `Pick` and every other lib-declared type in a tool's I/O
+     * types instead of failing extraction on them.
+     *
+     * SISTER-IMPL-TAG: analyzer-bundle-lib-payload — see `:trailblaze-models`'s
+     * `bundleScriptedToolAnalyzerShim`, which writes this resource.
+     */
+    internal const val BUNDLED_ANALYZER_TS_LIB_RESOURCE: String =
+      "trails/config/analyzer/ts-lib.zip"
+
+    /**
+     * Token standing in for the SDK root that `bun build` baked into the bundle's CJS
+     * `__dirname` / `__filename` literals. Replaced at extraction time with
+     * [bundledTsLibRoot], under which the shipped libs are unpacked at their original
+     * SDK-relative paths — so the frozen paths resolve without the bundle knowing anything
+     * about where it ended up.
+     *
+     * SISTER-IMPL-TAG: analyzer-bundle-lib-payload.
+     */
+    internal const val ANALYZER_SDK_ROOT_PLACEHOLDER: String = "__TRAILBLAZE_ANALYZER_SDK_ROOT__"
+
+    /** Directory under a bundled-shim cache root holding the unpacked TypeScript libs. */
+    internal fun bundledTsLibRoot(cacheRoot: File): File = File(cacheRoot, "ts-lib")
+
     /** Per-process memo of the extracted bundled-shim dir. The bundle is fixed for a given
      *  CLI build, so the ~7 MB resource is read + validated at most once per JVM (a CLI
      *  upgrade is a new process, which re-validates). `@Volatile` + idempotent extraction
@@ -587,7 +618,7 @@ open class ScriptedToolDefinitionAnalyzer(
           )
           null
         }
-        else -> extractBundledShim(bytes, cacheRoot).also {
+        else -> extractBundledShim(bytes, cacheRoot, tsLibArchive = readBundledTsLibArchive()).also {
           Console.info("[ScriptedToolDefinitionAnalyzer] using JAR-bundled analyzer shim at $it")
         }
       }
@@ -599,30 +630,170 @@ open class ScriptedToolDefinitionAnalyzer(
       null
     }
 
+    /** Read the shipped TypeScript lib archive, or null when the JAR didn't carry one. */
+    private fun readBundledTsLibArchive(): ByteArray? = ScriptedToolDefinitionAnalyzer::class.java
+      .classLoader
+      ?.getResourceAsStream(BUNDLED_ANALYZER_TS_LIB_RESOURCE)
+      ?.use { it.readBytes() }
+      ?.takeIf { it.isNotEmpty() }
+
     /**
      * Write [shimBytes] to `<cacheRoot>/tools/extract-tool-defs.mjs` (the layout
      * [resolveExtractorShim] expects) and return [cacheRoot]. Skip-write-if-content-matches
      * keeps the cached shim's mtime stable across runs of the same framework build. Split
      * out so it's unit-testable without a JAR on the classpath.
+     *
+     * [tsLibArchive] is the zipped TypeScript `lib*.d.ts` payload
+     * ([BUNDLED_ANALYZER_TS_LIB_RESOURCE]). It's unpacked under [bundledTsLibRoot], and every
+     * [ANALYZER_SDK_ROOT_PLACEHOLDER] in the shim is rewritten to that directory so the
+     * bundle's frozen build-machine paths resolve to the shipped libs. A null archive (an
+     * older or stripped build) writes the shim verbatim: the placeholder stays put and lib
+     * resolution stays broken, which is no worse than not shipping libs at all — but it's
+     * reported, because the failure it produces downstream (`Unhandled error while creating
+     * Base Type` on any `Record` / `Partial` / `Pick`) points nowhere near the cause.
      */
-    internal fun extractBundledShim(shimBytes: ByteArray, cacheRoot: File): File {
+    internal fun extractBundledShim(
+      shimBytes: ByteArray,
+      cacheRoot: File,
+      tsLibArchive: ByteArray? = null,
+    ): File {
+      val resolvedBytes = if (tsLibArchive != null) {
+        val libRoot = bundledTsLibRoot(cacheRoot)
+        extractTsLibArchive(tsLibArchive, libRoot)
+        shimBytes.toString(Charsets.UTF_8)
+          .replace(ANALYZER_SDK_ROOT_PLACEHOLDER, libRoot.absolutePath)
+          .toByteArray(Charsets.UTF_8)
+      } else {
+        if (ANALYZER_SDK_ROOT_PLACEHOLDER in shimBytes.toString(Charsets.UTF_8)) {
+          Console.info(
+            "[ScriptedToolDefinitionAnalyzer] bundled analyzer shim expects a TypeScript lib " +
+              "payload ($BUNDLED_ANALYZER_TS_LIB_RESOURCE) that this build didn't ship — types " +
+              "declared in TypeScript's standard library (Record, Partial, Pick, …) will fail " +
+              "to extract.",
+          )
+        }
+        shimBytes
+      }
+
       val shimFile = File(cacheRoot, "tools/extract-tool-defs.mjs")
       val stale = !shimFile.isFile ||
-        shimFile.length() != shimBytes.size.toLong() ||
-        !shimFile.readBytes().contentEquals(shimBytes)
+        shimFile.length() != resolvedBytes.size.toLong() ||
+        !shimFile.readBytes().contentEquals(resolvedBytes)
       if (stale) {
         shimFile.parentFile.mkdirs()
-        shimFile.writeBytes(shimBytes)
+        // Staged like the lib files: this is the file `bun` executes, so a concurrent reader
+        // catching it half-written is the worst version of this failure.
+        writeAtomically(shimFile, resolvedBytes)
       }
       // Marker so [analyzerToolingAvailable] recognizes this dir as the self-contained
       // bundle — it has no `node_modules/` (the deps are inlined into the shim), which the
-      // source-tree preflight would otherwise reject.
+      // source-tree preflight would otherwise reject. Written LAST: it's the gate other
+      // callers check, so it must not appear before the payload it vouches for.
       val marker = File(cacheRoot, BUNDLED_ANALYZER_MARKER_FILENAME)
       if (!marker.isFile) {
         marker.parentFile.mkdirs()
-        marker.writeText("Trailblaze self-contained scripted-tool analyzer shim bundle.\n")
+        writeAtomically(
+          marker,
+          "Trailblaze self-contained scripted-tool analyzer shim bundle.\n".toByteArray(),
+        )
       }
       return cacheRoot
+    }
+
+    /**
+     * Unpack the zipped TypeScript lib payload under [libRoot], preserving each entry's
+     * SDK-relative path (`node_modules/typescript/lib/lib.es5.d.ts`, and the same tail for any
+     * nested copy) — those tails are what the bundle's rewritten paths point at.
+     *
+     * Entries whose content already matches are left alone, so re-running against the same
+     * build rewrites nothing and the extracted mtimes stay stable. Equality is by **content**,
+     * not size: two TypeScript releases can ship a same-length `lib.*.d.ts`, and a size-only
+     * check would leave the old one in place and silently resolve types against the wrong
+     * standard library.
+     *
+     * Each file is staged to a sibling and renamed into place. This cache is shared
+     * process-wide (`~/.trailblaze/analyzer`), so a second CLI writing it while this one's
+     * `bun` subprocess reads could otherwise hand the compiler a half-written `.d.ts` — a
+     * plausible-looking partial file is worse to debug than a missing one.
+     */
+    internal fun extractTsLibArchive(archiveBytes: ByteArray, libRoot: File) {
+      val canonicalRoot = libRoot.canonicalFile
+      java.util.zip.ZipInputStream(archiveBytes.inputStream()).use { zip ->
+        while (true) {
+          val entry = zip.nextEntry ?: break
+          if (entry.isDirectory) {
+            zip.closeEntry()
+            continue
+          }
+          val target = File(canonicalRoot, entry.name)
+          // Refuse entries that escape the extraction root. The archive is ours, but an
+          // unpacker that trusts entry names is the kind of thing that stops being true later.
+          if (!target.canonicalFile.toPath().startsWith(canonicalRoot.toPath())) {
+            Console.info(
+              "[ScriptedToolDefinitionAnalyzer] skipping analyzer lib entry outside the " +
+                "extraction root: ${entry.name}",
+            )
+            zip.closeEntry()
+            continue
+          }
+          val bytes = zip.readBytes()
+          zip.closeEntry()
+          // Length first so an obvious mismatch skips reading the file back.
+          if (target.isFile &&
+            target.length() == bytes.size.toLong() &&
+            target.readBytes().contentEquals(bytes)
+          ) {
+            continue
+          }
+          target.parentFile?.mkdirs()
+          writeAtomically(target, bytes)
+        }
+      }
+    }
+
+    /**
+     * Write [bytes] to [target] via a staged sibling so a concurrent reader sees either the old
+     * file or the new one, never a partial write.
+     *
+     * The staging name comes from [java.nio.file.Files.createTempFile], not from a name derived
+     * from the PID: [resolveBundledAnalyzerSdkDir]'s memo deliberately tolerates a two-thread
+     * double-extract, and two threads of one process would share any per-process name. They'd
+     * then interleave writes into the same staged file, and the loser's move would fail once the
+     * winner renamed it away — turning a previously harmless race into "analyzer unavailable".
+     * [ScriptedToolDefinitionCache.put] hit exactly this and resolved it the same way.
+     *
+     * The temp file is created in [target]'s own directory so the move is a same-filesystem
+     * rename rather than a cross-device copy.
+     */
+    private fun writeAtomically(target: File, bytes: ByteArray) {
+      val parent = target.parentFile
+      var staged: File? = null
+      try {
+        staged = java.nio.file.Files
+          .createTempFile(parent.toPath(), "${target.name}.", ".tmp")
+          .toFile()
+        staged.writeBytes(bytes)
+        try {
+          java.nio.file.Files.move(
+            staged.toPath(),
+            target.toPath(),
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+          )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+          // Filesystems that can't promise atomicity (cross-device tmpfs in CI, some network
+          // mounts) still get the staged write, which is strictly better than writing the
+          // target in place: a reader sees old-or-new rather than a half-written file.
+          java.nio.file.Files.move(
+            staged.toPath(),
+            target.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+          )
+        }
+        staged = null // ownership transferred to the target by the rename.
+      } finally {
+        staged?.delete()
+      }
     }
 
     /** Marker file written into the bundled-shim cache dir by [extractBundledShim]; its

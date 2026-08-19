@@ -210,7 +210,7 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
     return () => clearInterval(id);
   }, [view, !!pending, running.length]);
 
-  const title = view === 'active' ? 'Active' : view === 'all' ? 'Runs' : 'Completed';
+  const title = view === 'active' ? 'Active' : view === 'all' ? 'Runs' : 'History';
 
   const onAfterDelete = (deletedId) => {
     if (deletedId === sel) { setSel(null); setListCollapsed(false); }
@@ -283,14 +283,14 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
     setStopOutcome(r.ok
       ? r.reason === 'released_device'
         ? { ok: true, text: 'This run had already ended but was still holding its device - the device has been released for the next run.' }
-        : { ok: true, text: 'Run stopped. It will show as Cancelled under Completed.' }
+        : { ok: true, text: 'Run stopped. It will show as Cancelled under History.' }
       : r.reason === 'already_ended'
         ? { ok: true, text: 'This run had already finished before the stop landed - its recorded result is unchanged.' }
         : { ok: false, text: 'Nothing was stopped: no live execution was found for this run. It may have just finished; the list has been refreshed.' });
   };
 
   return (
-    <div className="tb-in" style={{ display: 'flex', height: '100%' }}>
+    <div className={'tb-in tb-sessions-layout' + (pool.length === 0 && !showPending ? ' tb-sessions-layout--empty' : '')} style={{ display: 'flex', height: '100%' }}>
       {confirmStop && (
         <div onClick={closeConfirm} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className="tb-card" onClick={(e) => e.stopPropagation()} style={{ width: 'min(380px, 92vw)', padding: 16, background: 'var(--bg-elevated)', boxShadow: '0 16px 44px rgba(0,0,0,.5)' }}>
@@ -319,7 +319,7 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           </div>
         </div>
       )}
-      <div style={{ position: 'relative', width: listCollapsed ? 0 : listW, flex: listCollapsed ? '0 0 0px' : '0 0 ' + listW + 'px', borderRight: listCollapsed ? 'none' : '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'width .2s var(--ease-out-soft), flex-basis .2s var(--ease-out-soft)' }}>
+      <div className="tb-sessions-index" style={{ position: 'relative', width: listCollapsed ? 0 : listW, flex: listCollapsed ? '0 0 0px' : '0 0 ' + listW + 'px', borderRight: listCollapsed ? 'none' : '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'width .2s var(--ease-out-soft), flex-basis .2s var(--ease-out-soft)' }}>
         <RailHeader
           ico={view === 'active' ? 'radio' : 'history'}
           iconColor={view === 'active' ? 'var(--tb-running)' : 'var(--text-subtle-variant)'}
@@ -397,14 +397,9 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           )}
         </div>
         {(sessions.data || !sessions.loading) && filtered.length === 0 && !showPending && (
-          // Centered in the full column height (not just the list area) so it
-          // lines up with the "Select a run" placeholder in the detail pane.
-          // pointerEvents:none keeps the header filter clickable underneath.
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-            <EmptyState
-              ico={view === 'active' ? 'radio' : 'history'}
-              title={view === 'active' ? 'No active runs' : 'No completed runs yet'}
-            />
+          <div className="tb-sessions-index-empty">
+            <Ico n={filter && pool.length > 0 ? 'search-x' : (view === 'active' ? 'radio' : 'history')} s={14} />
+            <span>{filter && pool.length > 0 ? 'No matching runs' : 'No runs'}</span>
           </div>
         )}
       </div>
@@ -421,7 +416,7 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
             Each step appears here as it executes, with status and screenshots arriving in real time. You don't have to keep watching - the run continues on the daemon either way.
           </HelpCard>
           <HelpCard ico="octagon-x" color="var(--tb-fail)" title="Stop">
-            Stop cancels the run on the device; whatever was already executed keeps its trace, so a stopped run is still inspectable under Completed.
+            Stop cancels the run on the device; whatever was already executed keeps its trace, so a stopped run is still inspectable under History.
           </HelpCard>
         </HelpOverlay>
       )}
@@ -446,7 +441,7 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
         </HelpOverlay>
       )}
       {!listCollapsed && <Splitter onDown={startListDrag} />}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+      <div className="tb-sessions-detail" style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
         {cur
           ? <TraceViewer s={cur} onDeleted={() => onAfterDelete(cur.id)} go={go} listCollapsed={listCollapsed} onToggleList={() => setListCollapsed((c) => !c)} onStop={onStop} stopping={stopping} />
           : showPendingDetail
@@ -461,7 +456,20 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
             </div>
           )
           : pool.length === 0
-          ? <div style={{ flex: 1, minWidth: 0, height: '100%' }} />
+          ? (
+            <div className="tb-sessions-empty-workspace">
+              <EmptyState
+                ico={view === 'active' ? 'radio' : 'history'}
+                icoColor={view === 'active' ? 'var(--tb-running)' : 'var(--text-subtle-variant)'}
+                title={view === 'active' ? 'No active runs' : 'No run history yet'}
+                sub={view === 'active' ? 'A run appears here as soon as it starts.' : 'Finished, cancelled, and failed runs appear here.'}
+              />
+              <div className="tb-sessions-empty-actions">
+                <Btn kind="primary" sm ico="route" onClick={() => go('trails')}>Browse trails</Btn>
+                {view !== 'active' && <Btn sm ico="archive-restore" onClick={() => archiveInputRef.current?.click()}>Import archive</Btn>}
+              </div>
+            </div>
+          )
           : (
             <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <EmptyState ico="gallery-vertical-end" title="Select a run" />

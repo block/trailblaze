@@ -544,9 +544,10 @@ function main(): void {
     const logs = s.logs || [];
     const trace = core.extractTrace(logs);
     const llmLogs = core.extractLlmLogs(logs);
-    // Inline only the screenshots the timeline actually references (deduped), mirroring the
-    // in-app Share path (share-export.jsx#collectScreenshots).
-    const files = [...new Set(trace.map((t) => t.screenshotFile).filter(Boolean))] as string[];
+    // Inline only the screenshots the timeline actually references (deduped) — each row's frame
+    // plus each folded child dispatch's own frame (the per-interaction captures a batched step's
+    // children preview), mirroring the zip pipeline's collection in zip-report-core.js.
+    const files = [...new Set(trace.flatMap((t) => [t.screenshotFile, ...(t.children || []).map((c) => c.screenshotFile)]).filter(Boolean))] as string[];
     // Session id == the session dir's own name, the segment both hosts address images under.
     const sessionId = basename(s.sessionDir);
     // In linked-image mode a file that isn't on disk is dropped rather than referenced, matching

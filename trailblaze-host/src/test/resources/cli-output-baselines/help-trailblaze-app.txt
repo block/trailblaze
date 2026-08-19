@@ -7,8 +7,8 @@
 # ----------------------------------------------------------------------
 Usage: trailblaze app [-hV] [--foreground] [--headless] [--status] [--stop]
                       [COMMAND]
-Launch the Trailblaze desktop app for viewing sessions and managing trails (use
---headless for a daemon-only background service)
+Open Trail Runner for viewing sessions and managing trails (use --headless for
+a daemon-only background service)
       --foreground   Run in foreground (blocks terminal). Use for debugging
                        with an attached IDE.
   -h, --help         Show this help message and exit.
@@ -17,4 +17,4 @@ Launch the Trailblaze desktop app for viewing sessions and managing trails (use
       --stop         Stop the running daemon
   -V, --version      Print version information and exit.
 Commands:
-  start  Start the Trailblaze app in the background (same as `trailblaze app`)
+  start  Open Trail Runner (same as `trailblaze app`)

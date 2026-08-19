@@ -116,6 +116,7 @@ class TrailRunnerIntegrationTest {
   private fun withTrailRunner(
     settingsRepo: TrailblazeSettingsRepo? = null,
     integrationActionHandler: (suspend (integrationId: String, actionId: String) -> Unit)? = null,
+    directoryPicker: (File?) -> File? = { null },
     // Lets a test drive the full extension seam (e.g. a throwing integrationsProvider). When null,
     // an extension carrying just [integrationActionHandler] is used, matching the default wiring.
     extension: TrailRunnerExtension? = null,
@@ -137,6 +138,7 @@ class TrailRunnerIntegrationTest {
             trailsRootProvider = { trailsDir },
             logsRepo = logsRepo,
             settingsRepo = settingsRepo,
+            directoryPicker = directoryPicker,
             extension = extension
               ?: object : TrailRunnerExtension {
                 override val integrationActionHandler = integrationActionHandler
@@ -166,6 +168,57 @@ class TrailRunnerIntegrationTest {
         TrailblazeDriverType.IOS_HOST,
       ),
     )
+
+  @Test
+  fun `POST workspace picker returns the directory chosen by the native picker`() {
+    val initial = tmp.newFolder("picker-initial")
+    val selected = tmp.newFolder("picker-selected")
+    var receivedInitial: File? = null
+
+    withTrailRunner(directoryPicker = {
+      receivedInitial = it
+      selected
+    }) {
+      val response = client.post("/trailrunner/api/workspace/pick-directory") {
+        contentType(ContentType.Application.Json)
+        setBody("""{"initialDirectory":"${initial.absolutePath}"}""")
+      }
+
+      assertEquals(HttpStatusCode.OK, response.status)
+      assertEquals(initial.absolutePath, receivedInitial?.absolutePath)
+      assertTrue(response.bodyAsText().contains(selected.absolutePath), "response should carry the selected absolute path")
+    }
+  }
+
+  @Test
+  fun `POST workspace picker returns no path when the person cancels`() =
+    withTrailRunner(directoryPicker = { null }) {
+      val response = client.post("/trailrunner/api/workspace/pick-directory") {
+        contentType(ContentType.Application.Json)
+        setBody("""{"initialDirectory":null}""")
+      }
+
+      assertEquals(HttpStatusCode.OK, response.status)
+      val body = response.bodyAsText().replace(Regex("\\s"), "")
+      assertTrue(body == "{}" || body.contains("\"path\":null"), "cancel should not return a selected path: $body")
+    }
+
+  @Test
+  fun `PUT workspace activates a repo root with spaces`() {
+    val settingsRepo = newSettingsRepo()
+    val workspace = tmp.newFolder("repo with spaces")
+
+    withTrailRunner(settingsRepo = settingsRepo) {
+      val response = client.put("/trailrunner/api/workspace") {
+        contentType(ContentType.Application.FormUrlEncoded)
+        setBody("path=${java.net.URLEncoder.encode(workspace.absolutePath, Charsets.UTF_8)}")
+      }
+
+      assertEquals(HttpStatusCode.OK, response.status)
+      assertTrue(response.bodyAsText().contains(workspace.absolutePath), "response should carry the active repo root")
+      assertEquals(workspace.absolutePath, settingsRepo.serverStateFlow.value.appConfig.trailsDirectory)
+    }
+  }
 
   @Test
   fun `LSP tool-schema route serves the tool-definition JSON schema`() = withTrailRunner {
@@ -889,6 +942,21 @@ class TrailRunnerIntegrationTest {
     val flat = response.bodyAsText().replace(Regex("\\s"), "")
     assertTrue(flat.contains("\"success\":true"), "expected success=true: ${response.bodyAsText().take(200)}")
     assertTrue(File(trailsDir, "myapp/new.trail.yaml").isFile, "trail file should exist on disk")
+  }
+
+  @Test
+  fun `POST rpc CreateTrailRequest never replaces an existing trail`() = withTrailRunner {
+    val existing = writeTrail("myapp/existing.trail.yaml", title = "Keep me")
+    val original = existing.readText()
+
+    val response = client.post("/rpc/CreateTrailRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"path":"myapp/existing","yaml":"config:\n  title: Replacement\ntrail:\n  - step: noop"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    assertTrue(response.bodyAsText().replace(Regex("\\s"), "").contains("\"success\":false"))
+    assertEquals(original, existing.readText())
   }
 
   @Test

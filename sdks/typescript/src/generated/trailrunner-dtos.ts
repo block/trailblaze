@@ -605,6 +605,9 @@ export interface InstalledAppsResponse {
 export interface IntegrationActionDto {
   id: string;
   label: string;
+  href?: string | null;
+  navigationLabel?: string | null;
+  navigationIcon?: string | null;
 }
 
 export interface IntegrationActionRequest {

@@ -8,7 +8,7 @@ function integrationIcon(id) {
   return 'puzzle';
 }
 
-function IntegrationCard({ it }) {
+function IntegrationCard({ it, go }) {
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState(null);
   const connected = !!it.connected;
@@ -17,6 +17,22 @@ function IntegrationCard({ it }) {
 
   async function runAction() {
     if (busy) return;
+    if (it.action && it.action.href) {
+      try {
+        const promoted = TbWorkspaceNavigation.items([it])[0];
+        if (promoted && go) {
+          go(promoted.route);
+          return;
+        }
+        if (!TbWorkspaceNavigation.navigate(it.action)) {
+          throw new Error('Integration workspaces must stay inside Trail Runner.');
+        }
+      } catch (e) {
+        setResult(e?.message || 'Invalid integration workspace.');
+        setTimeout(() => setResult(null), 2500);
+      }
+      return;
+    }
     setBusy(true);
     setResult(null);
     const res = it.action
@@ -57,7 +73,7 @@ function IntegrationCard({ it }) {
   );
 }
 
-function IntegrationsScreen({ embedded }) {
+function IntegrationsScreen({ embedded, go }) {
   useLucide();
   const status = TB.useStatus();
   const integrations = TB.useIntegrations();
@@ -165,7 +181,7 @@ function IntegrationsScreen({ embedded }) {
             <React.Fragment>
               <div className="tb-eyebrow" style={{ marginBottom: 11 }}>Connected</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12, marginBottom: 26 }}>
-                {connected.map((it) => <IntegrationCard key={it.id} it={it} />)}
+                {connected.map((it) => <IntegrationCard key={it.id} it={it} go={go} />)}
               </div>
             </React.Fragment>
           )}
@@ -173,7 +189,7 @@ function IntegrationsScreen({ embedded }) {
             <React.Fragment>
               <div className="tb-eyebrow" style={{ marginBottom: 11 }}>Not connected</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
-                {notConnected.map((it) => <IntegrationCard key={it.id} it={it} />)}
+                {notConnected.map((it) => <IntegrationCard key={it.id} it={it} go={go} />)}
               </div>
             </React.Fragment>
           )}

@@ -28,9 +28,9 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 object WaypointProposer {
 
   /**
-   * Shape produced by `scripts/buildkite/waypoints_aggregate.sh` — one cluster line in
-   * `unmatched-clusters.jsonl`. See devlog 2026-05-18-trailblaze-waypoints-pipeline
-   * for the producer side.
+   * Shape produced by the waypoints pipeline's aggregation step — one cluster line in
+   * `unmatched-clusters.jsonl`. The aggregation step that emits it owns the producer
+   * side of this shape.
    */
   @Serializable
   data class ClusterFingerprint(

@@ -113,11 +113,38 @@
     return doc;
   }
 
+  // Copy a contiguous range of authored steps into a runnable partial trail. The trailhead is
+  // intentionally omitted: this workflow starts from the device's current screen instead of
+  // replaying the test from the beginning. Config (target, devices, driver, memory, etc.) and each
+  // selected step's full recording/extra data are preserved. Pure so both the saved-trail UI and
+  // tests agree on exactly what partial execution means.
+  function sliceSteps(model, start, end) {
+    if (!model || !Array.isArray(model.steps) || !model.steps.length) return null;
+    var lo = Math.max(0, Math.min(Number(start), Number(end)));
+    var hi = Math.min(model.steps.length - 1, Math.max(Number(start), Number(end)));
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return null;
+    var config = Object.assign({}, model.config || {});
+    var originalTitle = config.title || 'Trail';
+    config.title = 'Partial: ' + originalTitle + ' (' + (lo + 1) + (lo === hi ? '' : '–' + (hi + 1)) + ')';
+    return {
+      config: config,
+      platforms: (model.platforms || []).slice(),
+      trailhead: null,
+      steps: model.steps.slice(lo, hi + 1).map(function (s) {
+        return Object.assign({}, s, {
+          recording: Object.assign({}, s.recording || {}),
+          extra: Object.assign({}, s.extra || {}),
+        });
+      }),
+    };
+  }
+
   var api = {
     recToTools: recToTools,
     toolsToRec: toolsToRec,
     unifiedDocToMatrix: unifiedDocToMatrix,
     matrixToUnifiedDoc: matrixToUnifiedDoc,
+    sliceSteps: sliceSteps,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // bun test / CommonJS

@@ -197,14 +197,15 @@ function PERF_VIEWER(): void {
 
   // Same sun/moon toggle as the interactive run report (theme state shares its localStorage key,
   // the icons are CSS-swapped on [data-theme]).
-  const themeToggleHtml = `<button class="themetoggle" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme"><svg class="themeicon sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" stroke-width="3.2"/><path d="M12 2.5v2M12 19.5v2M5.28 5.28l1.42 1.42M17.3 17.3l1.42 1.42M2.5 12h2M19.5 12h2M5.28 18.72l1.42-1.42M17.3 6.7l1.42-1.42" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="themeicon moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 15.1A8 8 0 0 1 8.9 4.5a8 8 0 1 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  const themeToggleHtml = `<button class="themetoggle" type="button" data-theme-toggle aria-label="Toggle theme" title="Toggle theme"><svg class="themeicon sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 2.5v2M12 19.5v2M5.28 5.28l1.42 1.42M17.3 17.3l1.42 1.42M2.5 12h2M19.5 12h2M5.28 18.72l1.42-1.42M17.3 6.7l1.42-1.42" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="themeicon moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 15.1A8 8 0 0 1 8.9 4.5a8 8 0 1 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  const backIconSvg = '<svg class="backicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 5 12l7 7M5 12h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   // ---- skeleton ----
   app.innerHTML = `
     <div id="pf-index" hidden></div>
     <div id="pf-detail" hidden>
     <div class="perf-header">
-      ${MULTI ? '<button class="back" type="button" id="pf-back" aria-label="All runs" title="All runs"><span class="backarrow" aria-hidden="true">←</span></button>' : ''}
+      ${MULTI ? `<button class="back" type="button" id="pf-back" aria-label="All runs" title="All runs">${backIconSvg}</button>` : ''}
       <h1>Performance Analysis</h1>
       <span class="badge" id="pf-badge" hidden></span>
       <span class="spacer"></span>

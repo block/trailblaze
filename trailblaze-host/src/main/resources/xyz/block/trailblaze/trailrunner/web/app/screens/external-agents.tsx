@@ -1652,7 +1652,7 @@ function AgentYamlPanel({ events, go, save, pickedTrailhead }) {
                 content={state.text}
                 editable
                 tools={null}
-                onSave={(txt) => TB.saveTrailFolderFile(detected.trailId, detected.file, txt)} />
+                onSave={(txt) => TB.saveTrailFolderFile(detected.trailId, detected.file, txt, 'update')} />
             </div>
           )}
         </>

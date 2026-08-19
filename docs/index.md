@@ -115,9 +115,9 @@ the full LLM transcript (when an LLM was involved), and video replay when captur
 
 Same viewer surface, three ways:
 
-- **Desktop app** — `trailblaze app` opens the Sessions list across every device and
-  run, with live updates while a session is running, one-click "show me the trail YAML"
-  to copy back into your project, and inline trail editing.
+- **Trail Runner desktop app** — `trailblaze app` opens one workspace for trails,
+  live and completed runs, recording, and integrations, with rich trace inspection
+  and inline editing.
 - **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install
   required.
 - **On disk** under `~/.trailblaze/logs/<sessionId>/` if you ever need to grep raw

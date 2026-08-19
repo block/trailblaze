@@ -2,7 +2,10 @@ package xyz.block.trailblaze.trailrunner
 
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 import java.io.File
+import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -26,11 +29,34 @@ internal object BundleStore {
     val base = TrailDetailBuilder.build(root, blaze)
     val config = runCatching { createTrailblazeYaml().extractTrailConfig(blaze.readText()) }.getOrNull()
     val objective = config?.metadata?.get("objective")
-    val variants = variantFiles(dir).map { f ->
-      val platform = runCatching {
-        createTrailblazeYaml().extractTrailConfig(f.readText())?.platform
-      }.getOrNull() ?: f.name.removeSuffix(".trail.yaml")
-      BundleVariant(name = f.name, platform = platform)
+    val variants = variantFiles(dir).mapNotNull { f ->
+      runCatching {
+        val yaml = f.readText()
+        val parser = createTrailblazeYaml()
+        val classifiers = runCatching {
+          UnifiedTrailTargets.declaredClassifiers(parser.decodeUnifiedTrail(yaml)).sorted()
+        }.getOrDefault(emptyList())
+        val platform = runCatching { parser.extractTrailConfig(yaml)?.platform }.getOrNull()
+          ?: classifiers.firstOrNull()?.substringBefore('-')
+          ?: f.name.removeSuffix(".trail.yaml")
+        BundleVariant(
+          name = f.name,
+          platform = platform,
+          classifiers = classifiers,
+          updatedAtMs = f.lastModified().takeIf { it > 0L },
+        )
+      }.getOrElse {
+        // The list and read are separate filesystem operations. If a recording remains present but
+        // becomes unreadable between them, keep its row visible so the user can still replace or
+        // delete the colliding file. Only a variant that actually disappeared is omitted.
+        if (!f.exists()) return@mapNotNull null
+        BundleVariant(
+          name = f.name,
+          platform = f.name.removeSuffix(".trail.yaml"),
+          classifiers = emptyList(),
+          updatedAtMs = f.lastModified().takeIf { modified -> modified > 0L },
+        )
+      }
     }
     return BundleDetailResponse(
       id = id,
@@ -67,6 +93,7 @@ internal object BundleStore {
    * to a safe charset; a taken destination dedupes with `-2`, `-3`… suffixes on the last segment.
    * Returns the id (`"0/<relPath>"`).
    */
+  @Synchronized
   fun createAt(primary: File, destination: String, yaml: String): String {
     val segments = destination.trim().trim('/').split('/')
       .map { it.lowercase().replace(Regex("[^a-z0-9._]+"), "-").trim('-') }
@@ -80,8 +107,12 @@ internal object BundleStore {
       n++
     }
     require(dir.canonicalPath.startsWith(primary.canonicalPath + "/")) { "destination escapes the trails workspace" }
-    dir.mkdirs()
-    File(dir, BLAZE_FILE).writeText(yaml)
+    check(dir.mkdirs()) { "could not create trail bundle directory" }
+    val result = writeFile(dir, BLAZE_FILE, yaml, operation = "create")
+    if (result != FileWriteResult.WRITTEN) {
+      dir.deleteRecursively()
+      error("could not create trail bundle file: $result")
+    }
     return "0/${dir.relativeTo(primary).invariantSeparatorsPath}"
   }
 
@@ -94,18 +125,77 @@ internal object BundleStore {
     return file.readText()
   }
 
-  /** Writes any single file inside the bundle folder (blaze.yaml or a `<platform>.trail.yaml`). The
-   *  name is a plain filename kept inside [dir]; returns false if it would escape the folder. */
-  fun writeFile(dir: File, name: String, content: String): Boolean {
-    if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) return false
+  /** Writes one file inside the bundle folder without exposing a partially-written YAML document.
+   *
+   * [operation] makes destructive intent explicit. `create` refuses a collision, `update` refuses a
+   * missing file, and `upsert` preserves the legacy endpoint contract. The check and move are kept
+   * in one JVM critical section so simultaneous TrailRunner saves cannot both win a stale check.
+   */
+  @Synchronized
+  fun writeFile(dir: File, name: String, content: String, operation: String = "upsert"): FileWriteResult {
+    if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) return FileWriteResult.INVALID
     val file = File(dir, name)
-    if (!file.canonicalPath.startsWith(dir.canonicalPath + "/")) return false
-    file.writeText(content)
-    return true
+    if (!file.canonicalPath.startsWith(dir.canonicalPath + "/")) return FileWriteResult.INVALID
+    when (operation.lowercase()) {
+      "create" -> if (file.exists()) return FileWriteResult.ALREADY_EXISTS
+      "update" -> if (!file.isFile) return FileWriteResult.NOT_FOUND
+      "upsert" -> Unit
+      else -> return FileWriteResult.INVALID_OPERATION
+    }
+    val tmp = File(dir, ".$name.${java.util.UUID.randomUUID()}.tmp")
+    return runCatching {
+      tmp.writeText(content)
+      if (operation.equals("create", ignoreCase = true)) {
+        // ATOMIC_MOVE leaves collision behavior provider-specific; macOS replaces the target even
+        // without REPLACE_EXISTING. A hard link publishes the already-complete temp file atomically
+        // and has strict create-new semantics, including against writers outside this JVM monitor.
+        try {
+          Files.createLink(file.toPath(), tmp.toPath())
+          Files.deleteIfExists(tmp.toPath())
+        } catch (_: IOException) {
+          // Some removable and network filesystems cannot create hard links. The existence check
+          // remains inside this JVM's write lock; use their atomic rename support as the portable
+          // publication fallback rather than failing every create on that workspace.
+          if (file.exists()) throw java.nio.file.FileAlreadyExistsException(file.path)
+          moveWithAtomicFallback(tmp, file, replace = false)
+        }
+      } else {
+        moveWithAtomicFallback(tmp, file, replace = true)
+      }
+      FileWriteResult.WRITTEN
+    }.getOrElse {
+      runCatching { tmp.delete() }
+      if (file.exists() && operation.equals("create", ignoreCase = true)) {
+        FileWriteResult.ALREADY_EXISTS
+      } else {
+        Console.log("[BundleStore] failed to write $name into ${dir.name}: ${it.message}")
+        FileWriteResult.FAILED
+      }
+    }
+  }
+
+  private fun moveWithAtomicFallback(source: File, target: File, replace: Boolean) {
+    try {
+      if (replace) {
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+      } else {
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+      }
+    } catch (_: AtomicMoveNotSupportedException) {
+      // The temp file is a same-directory sibling and this method runs under writeFile's lock, so a
+      // regular rename still avoids interleaving writers on filesystems that cannot promise atomicity.
+      if (replace) {
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+      } else {
+        Files.move(source.toPath(), target.toPath())
+      }
+    }
   }
 
   /** Deletes a single recorded variant inside the bundle folder. Refuses to delete `blaze.yaml` (the
-   *  source) and anything that would escape the folder. */
+   *  source) and anything that would escape the folder. Deletion shares the write lock so an update
+   *  cannot pass its existence check and recreate a variant after this removes it. */
+  @Synchronized
   fun deleteFile(dir: File, name: String): Boolean {
     if (name.isEmpty() || name == BLAZE_FILE || name.contains('/') || name.contains('\\') || name.contains("..")) return false
     val file = File(dir, name)
@@ -114,6 +204,7 @@ internal object BundleStore {
   }
 
   /** Recursively deletes the bundle folder. Returns false if the OS reports the delete didn't fully succeed. */
+  @Synchronized
   fun delete(dir: File): Boolean = dir.deleteRecursively()
 
   /** The file-name slug a variant writes as: `<variantSlug(v)>.trail.yaml`. */
@@ -125,6 +216,7 @@ internal object BundleStore {
    *  edit) never observes a partially-written YAML and a re-record can't interleave a half file.
    *  Returns the written file, or null when the write failed (callers that must announce the save -
    *  the companion recording-saved event - gate on it; the run paths ignore it). */
+  @Synchronized
   fun writeVariant(dir: File, variant: String, yaml: String): File? {
     val safe = variantSlug(variant)
     // Unique tmp name per write so two concurrent re-records of the same platform each own their own
@@ -151,4 +243,13 @@ internal object BundleStore {
     val rootIdx: Int,
     val home: String,
   )
+
+  enum class FileWriteResult {
+    WRITTEN,
+    ALREADY_EXISTS,
+    NOT_FOUND,
+    INVALID,
+    INVALID_OPERATION,
+    FAILED,
+  }
 }

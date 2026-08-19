@@ -56,13 +56,22 @@
 // **TypeScript-version coupling.** Both `import ts from "typescript"` and
 // `ts-json-schema-generator` resolve TypeScript via Node's module-resolution from
 // `sdks/typescript/node_modules/`. The SDK pins `typescript@6.0.3` directly; the
-// generator package declares its own dep on `typescript: ^5.9.3`. Today's bun/npm
-// install hoists the SDK's TS 6 to the top level so BOTH consumers see the same
-// version — verified working. A future generator bump that tightens its pin to TS
-// 5 exclusively, or a TS 7+ feature the generator can't parse, would break this
-// assumption. If `ts-json-schema-generator` is bumped, re-run the analyzer test
-// suite (which exercises Date / Record / discriminated unions / function-type
-// rejection) to confirm the resolved version still handles the supported subset.
+// generator package declares its own dep on `typescript: ^5.9.3`, which that pin does not
+// satisfy — so the install produces TWO copies: the hoisted TS 6 this shim imports, and a
+// nested `node_modules/ts-json-schema-generator/node_modules/typescript` the generator
+// imports. They are separate module instances, so anything mutated on `ts` here (e.g.
+// `ts.sys`) is invisible to the program the generator builds. If `ts-json-schema-generator`
+// is bumped, re-run the analyzer test suite (which exercises Date / Record / discriminated
+// unions / function-type rejection) to confirm the resolved versions still handle the
+// supported subset.
+//
+// **The shipped bundle needs TypeScript's lib files alongside it.** `Record`, `Partial`,
+// `Pick` and friends are declared in `lib.es5.d.ts`, which TypeScript loads from disk
+// relative to its own `__filename`. `bun build` inlines TypeScript's code but freezes that
+// path to the build machine, so `:trailblaze-models`'s `bundleScriptedToolAnalyzerShim`
+// rewrites it to a placeholder and ships the lib files for both copies. Without that, an
+// installed CLI resolves no standard library and every lib-declared type in a tool's I/O
+// type fails extraction — see SISTER-IMPL-TAG: analyzer-bundle-lib-payload.
 
 import ts from "typescript";
 import { createGenerator } from "ts-json-schema-generator";
@@ -154,6 +163,13 @@ const RECOGNIZED_SPEC_FIELDS = new Set([
  * [RECOGNIZED_SPEC_FIELDS] above guard against.
  */
 const MAX_LITERAL_DEPTH = 8;
+
+/**
+ * How many links of an error's `cause` chain [describeGeneratorError] will walk. The chains that
+ * matter here are short — `UnhandledError` wrapping one underlying throw — so this exists to
+ * terminate on a cyclic or absurdly deep chain rather than to cap useful output.
+ */
+const MAX_CAUSE_CHAIN_DEPTH = 8;
 
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -675,8 +691,22 @@ function describeGeneratorError(e) {
   // `LogicError`, ...) with rich context. Keep the human-readable surface but trim
   // stack frames — they're irrelevant to the author and clutter the analyzer's
   // exception text.
-  const msg = e?.message ?? String(e);
-  return msg.split("\n")[0];
+  const msg = (e?.message ?? String(e)).split("\n")[0];
+  // `UnhandledError` wraps the real failure and its own first line says only "Unhandled error
+  // while creating Base Type." — a message that names neither the type nor the reason. Reporting
+  // that alone sent one investigation to a wrong root cause (a supposed `Record<K,V>` bug) when
+  // the truth was one `cause` deeper, so append the chain's first lines.
+  // Bound the WALK, not the number of messages kept. Bounding on `causes.length` looks
+  // equivalent but isn't: a cyclic `cause` chain whose messages repeat pushes nothing, so the
+  // counter never advances and the loop spins forever — hanging extraction instead of
+  // reporting an error.
+  const causes = [];
+  let cause = e?.cause;
+  for (let step = 0; cause && step < MAX_CAUSE_CHAIN_DEPTH; step++, cause = cause.cause) {
+    const line = (cause.message ?? String(cause)).split("\n")[0].trim();
+    if (line && !causes.includes(line) && line !== msg) causes.push(line);
+  }
+  return causes.length > 0 ? `${msg} (${causes.join("; ")})` : msg;
 }
 
 /**

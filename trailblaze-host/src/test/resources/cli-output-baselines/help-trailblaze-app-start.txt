@@ -6,7 +6,7 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze app start [-hV] [--foreground] [--headless]
-Start the Trailblaze app in the background (same as `trailblaze app`)
+Open Trail Runner (same as `trailblaze app`)
       --foreground   Run in foreground (blocks terminal). Use for debugging
                        with an attached IDE.
   -h, --help         Show this help message and exit.

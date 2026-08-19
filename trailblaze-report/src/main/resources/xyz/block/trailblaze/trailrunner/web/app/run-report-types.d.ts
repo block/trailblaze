@@ -86,6 +86,14 @@ interface TraceChild {
   code?: string | null;
   /** Consecutive identical dispatches folded into this child (×N); 1 when it ran once. */
   count?: number | null;
+  /** Full tool call as trail-file YAML (`- toolName:` + indented args) — what the selected child
+   * expands to, matching the WASM report's per-call YAML detail. Absent when the call had no args. */
+  args?: string | null;
+  /** This dispatch's own captured frame (its log's, else the driver log in its span) — the
+   * screenshot the preview pane shows when the child is selected. Absent when none was captured. */
+  screenshotFile?: string | null;
+  /** Tap/swipe/assert overlay for this dispatch's frame (see ActionMark). */
+  mark?: ActionMark | null;
 }
 
 /** One timeline row after slimTraceForShare — the embedded shape the viewer renders. */
@@ -119,6 +127,14 @@ interface TraceStep {
   /** Fold count for repeated actions / polled assertions (rendered as ×N), or null. */
   count: number | null;
   mark: ActionMark | null;
+  /**
+   * Full call content as trail-file YAML — a tool row's complete arguments (`- toolName:` +
+   * indented args, the WASM report's toolToYaml shape) or a raw device action's full fields (the
+   * untruncated assert condition). Rendered expanded under the SELECTED row, so what a step
+   * tapped/validated is readable in full, not just the `tool` summary's crop. Absent when the
+   * call carried nothing beyond its label.
+   */
+  args?: string | null;
   /**
    * Index into the session's llm call list (extractLlmLogs order) for LLM-call rows — the link
    * that lets the timeline open this call's transcript/usage. Absent on every other row.

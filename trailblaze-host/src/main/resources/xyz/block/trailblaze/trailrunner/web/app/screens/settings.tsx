@@ -87,27 +87,36 @@ function SettingsScreen({ go, initTab }) {
 
   // Pick a directory via the native shell and persist it to the given config field.
   const pickDir = async (field) => {
-    const path = await TB.pickDirectoryViaShell(status.data?.trailsDirectory);
-    if (!path) return;
     setWsBusy(true);
-    // The trails directory IS the workspace: route it through switchWorkspace so it persists, broadcasts
-    // tb:workspace-changed (every useFetched view re-resolves), and reports empty/error. Restart-needed
-    // (app targets) surfaces on the always-visible workspace chip badge. Other dirs are plain settings.
-    if (field === 'trailsDirectory') {
-      setWsNotice(null);
-      setWsError(null);
-      const res = await TB.switchWorkspace(path);
-      setWsBusy(false);
-      if (!res.ok) {
-        setWsError(res.error || 'Could not switch to that folder. It may not be a readable directory.');
+    setWsError(null);
+    try {
+      const path = await TB.pickDirectoryViaShell(status.data?.trailsDirectory);
+      if (!path) return;
+      // The trails directory IS the workspace: route it through switchWorkspace so it persists, broadcasts
+      // tb:workspace-changed (every useFetched view re-resolves), and reports empty/error. Restart-needed
+      // (app targets) surfaces on the always-visible workspace chip badge. Other dirs are plain settings.
+      if (field === 'trailsDirectory') {
+        setWsNotice(null);
+        const res = await TB.switchWorkspace(path);
+        if (!res.ok) {
+          setWsError(res.error || 'Could not switch to that folder. It may not be a readable directory.');
+          return;
+        }
+        if (res.empty) setWsNotice(TB.WORKSPACE_EMPTY_NOTICE);
         return;
       }
-      if (res.empty) setWsNotice(TB.WORKSPACE_EMPTY_NOTICE);
-      return;
+      const res = await TB.updateSetting({ [field]: path });
+      if (!res.ok) {
+        setWsError(res.error || 'Could not save that folder.');
+        return;
+      }
+      status.reload();
+      settings.reload();
+    } catch (error) {
+      setWsError(error instanceof Error ? error.message : 'Could not open the folder picker.');
+    } finally {
+      setWsBusy(false);
     }
-    const res = await TB.updateSetting({ [field]: path });
-    setWsBusy(false);
-    if (res.ok) { status.reload(); settings.reload(); }
   };
   const dirRowStyle = { display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' };
   const DEFAULT_HTTP_PORT = 52525;
@@ -222,7 +231,7 @@ function SettingsScreen({ go, initTab }) {
     );
   };
 
-  const IntegrationsBody = () => <IntegrationsScreen embedded />;
+  const IntegrationsBody = () => <IntegrationsScreen embedded go={go} />;
 
   const RunsBody = () => {
     if (!available) return <NotWired />;

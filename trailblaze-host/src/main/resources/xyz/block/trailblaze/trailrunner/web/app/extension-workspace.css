@@ -1,0 +1,174 @@
+/* Shared visual contract for extension-owned workspaces embedded in Trail Runner.
+ * Product-specific pages keep their own layout, while controls, type, surfaces, and
+ * state use the same tokens as the host shell. */
+:root {
+  color-scheme: dark;
+  --bg: var(--bg-sheet);
+  --chrome: var(--bg-subtle);
+  --panel: var(--bg-subtle);
+  --raised: var(--bg-prominent);
+  --line: var(--tb-hairline);
+  --text: var(--text-standard);
+  --ink: var(--text-standard);
+  --muted: var(--text-subtle);
+  --blue: var(--accent-blue);
+  --green: var(--status-success);
+  --amber: var(--status-warning);
+  --red: var(--status-danger);
+  --code: var(--bg-app);
+  --code-text: var(--text-standard);
+}
+
+html[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; }
+body {
+  overflow: hidden;
+  background: var(--bg-sheet);
+  color: var(--text-standard);
+  font: 13.5px/1.45 var(--font-ui);
+  font-kerning: normal;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; }
+button, a.btn { cursor: pointer; }
+a { color: var(--tb-link); }
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--tb-selection);
+  outline-offset: 2px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--tb-hairline-strong);
+  border: 2px solid transparent;
+  border-radius: 99px;
+  background-clip: content-box;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--tb-hairline);
+  background: var(--bg-sheet);
+}
+.top-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+.top-title svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  color: var(--text-subtle-variant);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+.top h1, h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.top a, .back {
+  color: var(--text-subtle-variant);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+html[data-embedded="true"] .back,
+html[data-embedded="true"] .top > a { display: none; }
+.sub, .meta { color: var(--text-subtle); }
+.sub { margin-top: 2px; font-size: 12.5px; }
+.meta { font-size: 11.5px; }
+
+button, .btn, a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 11px;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 999px;
+  background: var(--bg-prominent);
+  color: var(--text-standard);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  transition: background .12s, border-color .12s;
+}
+button:hover, .btn:hover, a.btn:hover {
+  border-color: var(--tb-hairline-stronger);
+  background: var(--bg-extra-prominent);
+}
+button.primary, .btn.primary {
+  border-color: transparent;
+  background: var(--tb-primary-green);
+  color: #00220a;
+  font-weight: 700;
+}
+html[data-theme="light"] button.primary,
+html[data-theme="light"] .btn.primary { color: #fff; }
+button.primary:hover, .btn.primary:hover { background: var(--tb-primary-green-pressed); }
+button.danger, .btn.danger { color: var(--status-danger); }
+button:disabled, .btn:disabled { cursor: not-allowed; opacity: .4; }
+
+input:not([type="checkbox"]):not([type="radio"]), select, textarea, .field {
+  min-height: 34px;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg-standard);
+  color: var(--text-standard);
+}
+input:not([type="checkbox"]):not([type="radio"]), select { padding: 7px 10px; }
+input::placeholder, textarea::placeholder { color: var(--text-subtle-input); }
+input:focus, select:focus, textarea:focus, .field:focus { border-color: var(--tb-selection); }
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-subtle-variant);
+  font-size: 12px;
+}
+.dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--status-danger); }
+.dot.ok { background: var(--status-success); }
+.dot.off { background: var(--status-danger); }
+.notice, .error {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 8px;
+}
+.notice { background: var(--tb-warning-surface); color: var(--tb-warning-text); }
+.error { background: color-mix(in srgb, var(--status-danger) 9%, transparent); color: var(--tb-danger-text); }
+.empty, .loading {
+  padding: 24px 14px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-subtle);
+  text-align: center;
+}
+.hidden { display: none !important; }
+
+dialog {
+  width: min(760px, calc(100% - 32px));
+  padding: 0;
+  border: 1px solid var(--tb-hairline-strong);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  color: var(--text-standard);
+  box-shadow: 0 20px 60px rgba(0,0,0,.42);
+}
+dialog::backdrop { background: rgba(0,0,0,.62); }
+dialog h2 { margin: 0; font-size: 17px; }

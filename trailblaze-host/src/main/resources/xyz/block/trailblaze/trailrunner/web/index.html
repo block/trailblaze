@@ -62,6 +62,10 @@
 <!-- Groups the declared-but-absent targets (TrailmapsResponse.notInstalledTargets) by home repo for
      the Trailmaps screens' "lives in another repo" section. Plain JS with a sibling bun test. -->
 <script src="./app/screens/not-installed-targets-model.js"></script>
+<!-- Generic extension workspace navigation: downstream integrations opt into the primary rail by
+     supplying a same-origin action href. The shell mounts those sub-apps inside its content pane;
+     labels, assets, APIs, and implementation stay downstream-owned. -->
+<script src="./app/workspace-navigation.js"></script>
 <!-- Live device mirror transport (H.264/CDP live stream with layered JPEG/poll fallback), shared by
      the recorder + companion mirror. Plain JS with a sibling live-device-stream.test.ts; loaded
      before the babel screens so they see window.TbLiveDeviceStream. -->

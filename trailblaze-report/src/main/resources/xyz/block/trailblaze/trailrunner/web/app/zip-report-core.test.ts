@@ -357,7 +357,9 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
       extractTrace: () => [
         { screenshotFile: "shot_1.webp", label: "in-zip" },
         { screenshotFile: REMOTE, label: "remote" },
-        { screenshotFile: null, label: "no shot" },
+        // A folded batch: the row itself captured nothing, but its child dispatch did — that frame
+        // must be gathered too (it's what the child previews when selected).
+        { screenshotFile: null, label: "no shot", children: [{ label: "tapOnElementBySelector", tool: "", screenshotFile: "kid_1.webp" }] },
       ],
       extractLlmLogs: () => [{ id: "llm-1" }],
       originalYamlFromLogs: () => "orig: yaml",
@@ -372,6 +374,7 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
       { name: dir + "001_Log.json", text: JSON.stringify(startedLog()) },
       { name: dir + "002_Log.json", text: JSON.stringify(endedLog("Ended.Succeeded")) },
       { name: dir + "shot_1.webp", data: new Uint8Array([1, 2, 3, 4]) },
+      { name: dir + "kid_1.webp", data: new Uint8Array([5, 6]) },
     ]);
     const captured: { input?: any } = {};
     const built = await Zip.buildReportHtmlFromZipBytes(zip, {
@@ -382,10 +385,12 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
     expect(built.sessions.length).toBe(1);
     expect(built.zipBytes).toBe(zip.length);
     // The trace's in-zip screenshot resolves to a data URI; a remote-URL screenshot passes through;
-    // a null screenshotFile is skipped. This is the screenshot-gathering contract callers rely on.
+    // a null screenshotFile is skipped; a folded child dispatch's own frame is gathered like a
+    // row's. This is the screenshot-gathering contract callers rely on.
     expect(captured.input.shots["shot_1.webp"]).toBe("data:image/webp;base64," + Buffer.from([1, 2, 3, 4]).toString("base64"));
     expect(captured.input.shots[REMOTE]).toBe(REMOTE);
-    expect(Object.keys(captured.input.shots).sort()).toEqual([REMOTE, "shot_1.webp"]);
+    expect(captured.input.shots["kid_1.webp"]).toBe("data:image/webp;base64," + Buffer.from([5, 6]).toString("base64"));
+    expect(Object.keys(captured.input.shots).sort()).toEqual([REMOTE, "kid_1.webp", "shot_1.webp"]);
     // trace + llmLogs are handed to the renderer verbatim; the injected generatedAt reaches the meta.
     expect(captured.input.trace.length).toBe(3);
     expect(captured.input.llmLogs).toEqual([{ id: "llm-1" }]);

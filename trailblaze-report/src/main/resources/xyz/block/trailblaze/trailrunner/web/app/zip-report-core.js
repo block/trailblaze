@@ -470,10 +470,14 @@
             recordingYaml: session.recordingYaml, originalYaml: originalYaml, generatedAt: generatedAt,
           });
           // Only the screenshots the trace references — the archive may also hold sprite sheets and
-          // other image-shaped artifacts the report never shows.
+          // other image-shaped artifacts the report never shows. Each row's frame plus each folded
+          // child dispatch's own frame (the per-interaction captures a batched step's children
+          // preview), mirroring run-report-cli.ts's collection.
           var wanted = [];
+          var want = function (file) { if (file && wanted.indexOf(file) < 0) wanted.push(file); };
           trace.forEach(function (t) {
-            if (t.screenshotFile && wanted.indexOf(t.screenshotFile) < 0) wanted.push(t.screenshotFile);
+            want(t.screenshotFile);
+            (t.children || []).forEach(function (c) { want(c.screenshotFile); });
           });
           var shots = {};
           var shotChain = Promise.resolve();

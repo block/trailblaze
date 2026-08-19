@@ -16,6 +16,11 @@
   --tb-danger-text: #ffb3b8;
   --tb-selection: var(--tb-running);    /* selected · focused · current */
   --tb-on-selection: #071426;
+  /* Content that intentionally stays dark in both themes (device mirrors / frames) must not
+     inherit the light theme's dark foreground ramp. */
+  --tb-inverse-text: #f4f4f3;
+  --tb-inverse-muted: #aaa9a5;
+  --tb-inverse-subtle: #85847f;
 
   --fz-2xs: 10.5px; --fz-xs: 11.5px; --fz-sm: 12.5px; --fz-md: 13.5px;
   --fz-lg: 15.5px; --fz-xl: 20px; --fz-2xl: 26px;
@@ -82,10 +87,9 @@ button { font-family: inherit; cursor: pointer; }
   position: relative; transition: background .12s, color .12s; margin-bottom: 1px;
 }
 .tb-nav:hover { background: var(--bg-standard); color: var(--text-standard); }
-/* Nav items carry their own active highlight (bg + blue bar), so the global focus-visible ring
-   is redundant noise here — replace it with a quiet background (keyboard feedback, no border). Listed
-   before .active so a focused active item keeps its prominent fill. */
-.tb-nav:focus-visible { outline: none; background: var(--bg-standard); color: var(--text-standard); }
+/* Selection and keyboard focus are independent states: the blue edge marks the current route,
+   while an inset ring shows where the next keyboard action lands. */
+.tb-nav:focus-visible { outline: 2px solid var(--tb-selection); outline-offset: -2px; background: var(--bg-standard); color: var(--text-standard); }
 .tb-nav.active { background: var(--bg-prominent); color: var(--text-standard); font-weight: 600; }
 .tb-nav.active::before { content:""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 3px; border-radius: 99px; background: var(--tb-selection); }
 .tb-nav .ico { flex: 0 0 18px; display: inline-flex; }
@@ -127,6 +131,8 @@ button { font-family: inherit; cursor: pointer; }
 }
 .tb-colsplit:hover, .tb-colsplit:active { background: var(--tb-hairline-strong); }
 .tb-screen { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+.tb-extension-workspace { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.tb-extension-workspace-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg-sheet); }
 
 .tb-kbd { font-size: 11px; color: var(--text-subtle); border: 1px solid var(--tb-hairline-strong); border-radius: 5px; padding: 1px 6px; font-family: var(--font-mono); }
 
@@ -139,7 +145,16 @@ button { font-family: inherit; cursor: pointer; }
 html[data-theme="light"] .tb-btn.primary { color: #ffffff; }
 .tb-btn:disabled { opacity: .4; cursor: not-allowed; }
 .tb-btn:disabled:hover { background: var(--bg-prominent); }
-.tb-btn.primary:disabled:hover { background: var(--tb-primary-green); }
+.tb-btn.primary:disabled,
+.tb-btn.primary:disabled:hover {
+  opacity: 1;
+  color: var(--text-subtle);
+  background: var(--bg-prominent);
+  border-color: var(--tb-hairline);
+  box-shadow: none;
+}
+html[data-theme="light"] .tb-btn.primary:disabled,
+html[data-theme="light"] .tb-btn.primary:disabled:hover { color: var(--text-subtle); }
 .tb-btn.sm { padding: 6px 11px; font-size: 12.5px; }
 .tb-btn.danger { color: var(--status-danger); border-color: rgba(248,71,82,.3); background: rgba(248,71,82,.08); }
 
@@ -199,6 +214,28 @@ html[data-theme="light"] .tb-eyebrow.trailhead { color: #5b21b6; }
    shadow appears only once scrolled (data-scrolled set by the container's onScroll). */
 .tb-board-pin { position: sticky; left: 0; z-index: 3; border-right: 2px solid var(--tb-hairline-stronger); }
 .tb-board-scroll[data-scrolled="true"] .tb-board-pin { box-shadow: 7px 0 14px -3px rgba(0, 0, 0, .55); }
+
+/* Empty run lists remain a deliberate master/detail workspace: the index states its local result,
+   while the detail surface explains what belongs there and offers the next useful action. */
+.tb-sessions-index-empty {
+  position: absolute; inset: 104px 0 0; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 24px 14px; color: var(--text-subtle); font-size: 12px;
+}
+.tb-sessions-empty-workspace {
+  flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 32px;
+  background: radial-gradient(circle at 50% 42%, var(--bg-subtle) 0, transparent 44%);
+}
+.tb-sessions-empty-workspace > div:first-child { padding-bottom: 14px !important; }
+.tb-sessions-empty-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+
+/* Wide Trails keeps its index beside the detail. Compact desktop windows give a selected trail the
+   full sheet, with an explicit route back to the index; this prevents editable matrix columns and
+   actions from collapsing into unusable slivers while retaining familiar master/detail navigation. */
+.tb-trails-index-back { display: none; }
+.tb-unified-steps-toolbar { flex-wrap: wrap; }
+.tb-unified-steps-toolbar-spacer { min-width: 12px; }
 
 /* "jump to step" flash in the YAML editor: a step's block lights up then fades after navigation */
 .CodeMirror .cm-flash { background-color: rgba(94,155,255,.30); animation: cmFlash 1.9s var(--ease-out-soft) forwards; }
@@ -286,12 +323,14 @@ html[data-theme="light"] .tb-trail-config {
   border-color: #dfddd4;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
 }
-html[data-theme="light"] .tb-trail-detail-body .tb-btn.primary:disabled {
-  opacity: 1;
-  color: var(--text-subtle);
-  background: var(--bg-prominent);
-  border-color: var(--tb-hairline);
-}
+/* The device frame is intentionally black in both themes. Its foreground roles are therefore
+   inverse tokens, independent from the surrounding sheet's theme. */
+.tb-device-frame { color: var(--tb-inverse-text); }
+.tb-device-frame-meta,
+.tb-device-option-meta { color: var(--tb-inverse-muted) !important; }
+.tb-device-frame-title,
+.tb-device-option-name { color: var(--tb-inverse-text) !important; }
+.tb-device-frame-subtle { color: var(--tb-inverse-subtle) !important; }
 
 html[data-theme="light"] .tb-overlay { background: rgba(42,39,32,.34); }
 html[data-theme="light"] .tb-run-dialog {
@@ -325,7 +364,52 @@ html[data-theme="light"] .tb-run-mark {
   .tb-run-form { padding: 20px 22px !important; }
   .tb-run-field { align-items: flex-start !important; }
 }
+.tb-test-yaml-workspace {
+  align-self: center;
+  box-sizing: border-box;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: min(1040px, 100%);
+  padding: 24px 32px 28px;
+}
+
+/* The manual recorder can still expose its own scratch runner while connected. Keep that
+   embedded variant usable when the app's persistent rail leaves less than a full workspace. */
+@media (max-width: 1180px) {
+  .tb-trails-layout--detail > .tb-trails-tree,
+  .tb-trails-layout--detail > .tb-trails-splitter { display: none !important; }
+  .tb-trails-layout--detail .tb-trails-index-back { display: inline-flex; }
+  .tb-trails-layout--detail .tb-trail-detail-body { padding-left: 20px !important; padding-right: 20px !important; }
+  .tb-trails-layout--detail .tb-trail-detail-head { padding-left: 20px !important; padding-right: 20px !important; }
+  .tb-record-body--yaml.tb-record-body--disconnected {
+    flex-direction: column !important;
+    gap: 12px !important;
+    overflow-y: auto !important;
+  }
+  .tb-record-body--yaml.tb-record-body--disconnected .tb-record-device-pane {
+    width: 100% !important;
+    flex: 0 0 auto !important;
+  }
+  .tb-record-body--yaml.tb-record-body--disconnected .tb-device-frame {
+    width: min(420px, 100%) !important;
+  }
+  .tb-record-body--yaml.tb-record-body--disconnected .tb-device-chooser {
+    height: 220px !important;
+    max-height: 220px !important;
+  }
+  .tb-record-body--yaml.tb-record-body--disconnected .tb-record-splitter {
+    display: none;
+  }
+  .tb-record-body--yaml.tb-record-body--disconnected .tb-record-yaml-pane {
+    flex: 1 0 360px !important;
+    min-height: 360px !important;
+    padding: 0 !important;
+  }
+}
 @media (max-width: 880px) {
+  .tb-test-yaml-workspace { padding: 18px 20px 22px; }
   .tb-run-grid { grid-template-columns: 176px minmax(0, 1fr) !important; }
   .tb-run-preview { display: none; }
   .tb-trail-detail-head { padding-left: 20px !important; padding-right: 20px !important; }

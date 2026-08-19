@@ -53,12 +53,16 @@ const NAV = [
   // Home is reached via the target chip at the top of the rail (no standalone nav item) — it folds
   // in the target/device picker. The Create group (one door: drive the device, describe a flow,
   // or both) renders its own session list above these, in NavRail.
-  { group: 'Trails', items: [['trails', 'List', 'route']] },
-  { group: 'Runs', items: [['active', 'Active', 'radio'], ['completed', 'Completed', 'check-circle-2']] },
+  { group: 'Trails', items: [['trails', 'Trails', 'route']] },
 ];
+const RUNS_NAV = [{ group: 'Runs', items: [['active', 'Active', 'radio'], ['completed', 'History', 'check-circle-2']] }];
 // Trailmaps is reference material, not part of the Blaze→Trails authoring flow — pin it to the
 // bottom of the rail (just above Search), visually separated by a divider.
-const TRAILMAPS = [['trailheads', 'Trailheads', 'flag'], ['tools', 'Tools', 'wrench']];
+const TRAILMAPS = [
+  ['trailheads', 'Trailheads', 'flag'],
+  ['tools', 'Tools', 'wrench'],
+  ['interact', 'Test YAML', 'braces', { openYaml: true }],
+];
 // Integrations is folded into the Settings screen (reached from there), so the rail foot is just
 // Settings. The `integrations` route still exists; Settings links to it.
 const FOOT = [['settings', 'Settings', 'settings']];
@@ -248,13 +252,6 @@ function WorkspaceChip({ collapsed }) {
           {!collapsed && (
             <span className="label" style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden' }}>
               <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
-              {gitLabel && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-subtle)', overflow: 'hidden' }}>
-                  <Ico n="git-branch" s={10} c={isWorktree ? 'var(--tb-running)' : 'var(--text-subtle)'} style={{ flex: '0 0 auto' }} />
-                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{gitLabel}</span>
-                  {isWorktree && <span style={{ flex: '0 0 auto', color: 'var(--tb-running)', fontWeight: 600 }}>· worktree</span>}
-                </span>
-              )}
             </span>
           )}
           {!collapsed && restart && <span aria-label="Restart needed" title="Restart needed to load this workspace’s app targets" style={{ flex: '0 0 auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--tb-amber)' }} />}
@@ -295,64 +292,6 @@ function WorkspaceChip({ collapsed }) {
           </div>
         </React.Fragment>
       )}
-    </div>
-  );
-}
-
-// Browser fallback for the native macOS folder picker. Web APIs deliberately hide absolute local
-// paths, but the daemon needs one to change its workspace, so the browser build collects that path
-// in-app. The native shell continues to use NSOpenPanel through trailblazePickDirectory.
-function BrowserDirectoryPicker() {
-  useLucide();
-  const [request, setRequest] = React.useState(null);
-  const [path, setPath] = React.useState('');
-  const requestRef = React.useRef(null);
-
-  React.useEffect(() => {
-    const onRequest = (event) => {
-      event.preventDefault();
-      if (requestRef.current) requestRef.current.resolve(null);
-      requestRef.current = event.detail;
-      setRequest(event.detail);
-      setPath(event.detail.initialDir || '');
-    };
-    window.addEventListener('tb:pick-directory', onRequest);
-    return () => window.removeEventListener('tb:pick-directory', onRequest);
-  }, []);
-
-  if (!request) return null;
-  const finish = (value) => {
-    const active = requestRef.current;
-    requestRef.current = null;
-    setRequest(null);
-    if (active) active.resolve(value);
-  };
-  const selected = path.trim();
-
-  return (
-    <div className="tb-overlay" role="presentation" onClick={() => finish(null)}
-      style={{ position: 'fixed', zIndex: 100, alignItems: 'center', padding: 24 }}>
-      <div className="tb-card" role="dialog" aria-modal="true" aria-labelledby="tb-directory-picker-title"
-        onClick={(event) => event.stopPropagation()} style={{ width: 'min(520px, 94vw)', padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Ico n="folder-git-2" s={19} c="var(--tb-pass)" />
-          <h2 id="tb-directory-picker-title" className="tb-h2" style={{ flex: 1, fontSize: 17, margin: 0 }}>Choose workspace</h2>
-          <Btn sm kind="ghost" ico="x" aria-label="Cancel" onClick={() => finish(null)} />
-        </div>
-        <div className="tb-sub" style={{ fontSize: 12.5, margin: '12px 0 8px' }}>Enter the absolute path to your trails folder.</div>
-        <input autoFocus value={path} spellCheck={false} aria-label="Workspace folder path"
-          onChange={(event) => setPath(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && selected) finish(selected);
-            if (event.key === 'Escape') finish(null);
-          }}
-          placeholder="/Users/you/project/trails"
-          style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '9px 11px', color: 'var(--text-standard)', font: 'inherit', fontSize: 13, outline: 'none' }} />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-          <Btn onClick={() => finish(null)}>Cancel</Btn>
-          <Btn kind="primary" ico="folder-open" disabled={!selected} onClick={() => finish(selected)}>Use folder</Btn>
-        </div>
-      </div>
     </div>
   );
 }
@@ -408,11 +347,35 @@ function useNarrowRail() {
   return narrow;
 }
 
+function RailNavigationGroups({ groups, route, go, badges, compact }) {
+  return groups.map((g, gi) => (
+    <div className="tb-rail-group" key={gi}>
+      {g.group && <div className="tb-rail-h">{g.group}</div>}
+      {g.items.map(([id, label, ico, params]) => {
+        const on = route === id;
+        const tip = id === 'trails' ? 'Trails' : id === 'active' ? 'Active runs' : id === 'completed' ? 'Run history' : label;
+        // Parameterized destinations use their payload object as an effect trigger. Copy it for
+        // every activation so clicking an already-visited destination (notably Test YAML) reopens
+        // the requested panel instead of reusing a stale object reference.
+        const activate = () => go(id, params && { ...params });
+        return (
+          <RailHoverTip key={id} compact={compact} tip={tip}>
+            <div className={'tb-nav' + (on ? ' active' : '')} onClick={activate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={tip}>
+              {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-selection)' }}></span>}
+              <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span><NavBadge badge={badges[id]} />
+            </div>
+          </RailHoverTip>
+        );
+      })}
+    </div>
+  ));
+}
+
 // How many agent conversations the rail lists before folding the rest behind "N older" (the daemon
 // retains up to 50 finished conversations - the rail must not become a 50-row scroll by default).
 const RAIL_AGENT_SESSIONS_VISIBLE = 6;
 
-function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSel, companionSel, goStudio, interactSession, goInteract }) {
+function NavRail({ route, go, badges = {}, workspaceNavigation = [], openPalette, agentRuns = [], studioSel, companionSel, goStudio, interactSession, goInteract }) {
   const [collapsed, setCollapsed] = useStickyState('tb-rail-collapsed', false);
   const narrow = useNarrowRail();
   const [narrowExpanded, setNarrowExpanded] = useState(false);
@@ -491,22 +454,22 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
               on={route === 'interact'} onClick={goInteract} />
           )}
         </div>
-        {NAV.map((g, gi) => (
-          <div className="tb-rail-group" key={gi}>
-            {g.group && <div className="tb-rail-h">{g.group}</div>}
-            {g.items.map(([id, label, ico]) => {
-              const on = route === id;
-              const tip = id === 'trails' ? 'Trails' : id === 'active' ? 'Active runs' : id === 'completed' ? 'Completed runs' : label;
-              return (
-              <RailHoverTip key={id} compact={compact} tip={tip}>
-                <div className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={tip}>
-                  {on && <span style={{ position: 'absolute', left: -10, top: 7, bottom: 7, width: 3, borderRadius: 99, background: 'var(--tb-selection)' }}></span>}
-                  <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span><NavBadge badge={badges[id]} />
+        <RailNavigationGroups groups={NAV} route={route} go={go} badges={badges} compact={compact} />
+        <RailNavigationGroups groups={RUNS_NAV} route={route} go={go} badges={badges} compact={compact} />
+        {workspaceNavigation.length > 0 && (
+          <div className="tb-rail-group">
+            <div className="tb-rail-h">Automation</div>
+            {workspaceNavigation.map((item) => (
+              <RailHoverTip key={item.id} compact={compact} tip={item.label}>
+                <div className={'tb-nav' + (route === item.route ? ' active' : '')} onClick={() => go(item.route)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(item.route); } }}
+                  role="button" tabIndex={0} title={compact ? undefined : item.label} aria-label={item.label}>
+                  <span className="ico"><Ico n={item.icon} s={18} /></span><span className="label">{item.label}</span>
                 </div>
               </RailHoverTip>
-            ); })}
+            ))}
           </div>
-        ))}
+        )}
       </div>
       {/* Trailmaps = reference material, pinned to the bottom of the rail just above Settings. The
           flex-grow scroll area above is the spacer that pushes it down; it only scrolls (rather
@@ -514,11 +477,12 @@ function NavRail({ route, go, badges = {}, openPalette, agentRuns = [], studioSe
       <div style={{ height: 1, background: 'var(--tb-hairline)', margin: '4px 8px 8px' }} />
       <div className="tb-rail-group" style={{ marginBottom: 0 }}>
         <div className="tb-rail-h">Trailmaps</div>
-        {TRAILMAPS.map(([id, label, ico]) => {
+        {TRAILMAPS.map(([id, label, ico, params]) => {
           const on = route === id;
+          const activate = () => go(id, params && { ...params });
           return (
             <RailHoverTip key={id} compact={compact} tip={label}>
-              <div className={'tb-nav' + (on ? ' active' : '')} onClick={() => go(id)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(id); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={label}>
+              <div className={'tb-nav' + (on ? ' active' : '')} onClick={activate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); } }} role="button" tabIndex={0} title={compact ? undefined : label} aria-label={label}>
                 <span className="ico"><Ico n={ico} s={18} /></span><span className="label">{label}</span>
               </div>
             </RailHoverTip>
@@ -553,7 +517,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
 
   const actions = [
     ['sparkles', 'Create a trail', '⌘B', () => { go('create'); close(); }],
-    ['braces', 'Run ad hoc YAML…', null, () => { go('interact', { openYaml: true }); close(); }],
+    ['braces', 'Test YAML…', null, () => { go('interact', { openYaml: true }); close(); }],
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
     ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
     ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('completed'); close(); }],
@@ -692,6 +656,56 @@ function DaemonDownBanner({ retry }) {
   );
 }
 
+// Downstream integrations own their workspace UI and HTTP routes, while the Trail Runner shell
+// owns navigation and framing. Keep the workspace mounted after its first visit (the same contract
+// as native screens) so a selected case, filters, or an in-progress configuration survives a trip
+// to Runs. The iframe is same-origin by construction (workspace-navigation rejects other origins),
+// which also lets the shell keep the sub-app theme in lockstep with Settings.
+function ExtensionWorkspaceScreen({ item, go }) {
+  const frameRef = React.useRef(null);
+  const syncTheme = React.useCallback(() => {
+    const frame = frameRef.current;
+    const doc = frame && frame.contentDocument;
+    if (!doc) return;
+    const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+    doc.documentElement.setAttribute('data-theme', theme);
+    doc.documentElement.setAttribute('data-embedded', 'true');
+  }, []);
+  const connectShellNavigation = React.useCallback(() => {
+    const frame = frameRef.current;
+    const doc = frame && frame.contentDocument;
+    if (!doc) return;
+    if (frame.__tbShellNavigationCleanup) frame.__tbShellNavigationCleanup();
+    const onClick = (event) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+      const target = event.target;
+      const anchor = target && typeof target.closest === 'function' && target.closest('a[data-trailrunner-route]');
+      const request = TbWorkspaceNavigation.embeddedRequest(anchor, window.location);
+      if (!request) return;
+      event.preventDefault();
+      go(request.route, request.params);
+    };
+    doc.addEventListener('click', onClick);
+    frame.__tbShellNavigationCleanup = () => doc.removeEventListener('click', onClick);
+  }, [go]);
+  React.useEffect(() => {
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    syncTheme();
+    return () => {
+      observer.disconnect();
+      const frame = frameRef.current;
+      if (frame && frame.__tbShellNavigationCleanup) frame.__tbShellNavigationCleanup();
+    };
+  }, [syncTheme]);
+  return (
+    <div className="tb-extension-workspace">
+      <iframe ref={frameRef} className="tb-extension-workspace-frame" src={item.href}
+        title={item.label} onLoad={() => { syncTheme(); connectShellNavigation(); }} />
+    </div>
+  );
+}
+
 // The one deep link the SPA honors: #companion/<runId>, set by `trailblaze companion start` so
 // the window opens straight onto that companion session. Read once at boot - there is no hash
 // router; in-app navigation stays go()-driven.
@@ -818,6 +832,8 @@ function App() {
     return () => { stale = true; };
   }, [gt && gt.target]);
   const sessions = TB.useSessions();
+  const integrations = TB.useIntegrations();
+  const workspaceNavigation = TbWorkspaceNavigation.items(integrations.data || []);
   const externalAgents = TB.useExternalAgents();
   // Create session selection lives here (not in the screen) because the rail lists the
   // sessions: rail rows and the screen must agree on which one is open. 'new' = composer.
@@ -887,7 +903,7 @@ function App() {
     active: <SessionsScreen view="active" initSel={pf('active').sel} followLive={pf('active').followLive} go={go} />,
     completed: <SessionsScreen view="completed" initSel={pf('completed').sel} followLive={pf('completed').followLive} go={go} />,
     runs: <SessionsScreen view="all" initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
-    integrations: <IntegrationsScreen />,
+    integrations: <IntegrationsScreen go={go} />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
     // Deep-link only (#companion/<runId>, opened by `trailblaze companion start`): the read-only
     // window onto a session an external agent CLI drives from the user's own repo. The boot deep
@@ -898,6 +914,9 @@ function App() {
     // downloaded session archive (e.g. a CI-published results zip) — no daemon data involved.
     'zip-report': <ZipReportScreen initZipUrl={pf('zip-report').zipUrl} />,
   };
+  workspaceNavigation.forEach((item) => {
+    screens[item.route] = <ExtensionWorkspaceScreen item={item} go={go} />;
+  });
   // Fall back to Home for any route that no longer maps to a screen, so an upgrade can't strand the
   // main pane blank.
   const activeRoute = screens[route] ? route : 'home';
@@ -907,7 +926,7 @@ function App() {
     <div className="tb-window">
       {health.down && <DaemonDownBanner retry={health.retry} />}
       <div className="tb-body">
-        <NavRail route={activeRoute} go={go} badges={navBadges} openPalette={() => setPalette(true)}
+        <NavRail route={activeRoute} go={go} badges={navBadges} workspaceNavigation={workspaceNavigation} openPalette={() => setPalette(true)}
           agentRuns={createSidebarRuns} studioSel={studioSel} goStudio={goStudio}
           companionSel={activeRoute === 'companion' ? pf('companion').runId : null}
           interactSession={interactSession} goInteract={() => go('interact')} />
@@ -930,7 +949,6 @@ function App() {
       </div>
       {palette && <Boundary><CommandPalette go={go} openRun={openRun} close={closePalette} closing={paletteClosing} trails={trails.data || []} /></Boundary>}
       {run && <Boundary><RunConfigDialog trail={run.trail} seed={run.seed} pinnedId={pinnedId} go={go} close={closeRun} closing={runClosing} /></Boundary>}
-      <BrowserDirectoryPicker />
     </div>
   );
 }

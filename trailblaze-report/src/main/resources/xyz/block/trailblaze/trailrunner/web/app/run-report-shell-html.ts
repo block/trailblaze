@@ -38,7 +38,7 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   border-bottom: 1px solid var(--line); background: var(--header);
 }
-#tb-shell-bar .tb-shell-brand { font-weight: 700; font-size: var(--type-small); white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+#tb-shell-bar .tb-shell-brand { font-weight: var(--font-weight-emphasis); font-size: var(--type-small); white-space: nowrap; display: flex; align-items: center; gap: 8px; }
 #tb-shell-bar .tb-shell-brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pass); }
 #tb-shell-url {
   flex: 1; min-width: 120px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -47,7 +47,7 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
 }
 #tb-shell-url:focus { border-color: var(--focus); }
 #tb-shell-bar button {
-  font: 600 12.5px inherit; padding: 7px 14px; border-radius: var(--r-md); cursor: pointer; white-space: nowrap;
+  font: 500 12.5px inherit; padding: 7px 14px; border-radius: var(--r-md); cursor: pointer; white-space: nowrap;
   border: 1px solid var(--line); background: var(--raised); color: var(--txt);
 }
 #tb-shell-render { border-color: transparent !important; background: var(--pass) !important; color: var(--bg) !important; }
@@ -58,7 +58,7 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 48px 24px; text-align: center;
 }
-#tb-shell-panel .tb-shell-title { font-size: var(--type-small); font-weight: 600; }
+#tb-shell-panel .tb-shell-title { font-size: var(--type-small); font-weight: var(--font-weight-emphasis); }
 #tb-shell-panel .tb-shell-sub { font-size: var(--type-caption); color: var(--sub); max-width: 520px; }
 #tb-shell-panel .tb-shell-err { font-size: var(--type-caption); color: var(--fail); max-width: 560px; user-select: text; white-space: pre-line; }
 #tb-shell-panel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--type-micro); color: var(--sub); word-break: break-all; }
@@ -74,10 +74,10 @@ body:has(> #tb-shell) > #app { flex: 1 1 auto; height: auto; min-height: 0; }
   align-items: center; justify-content: center; text-align: center;
   background: color-mix(in srgb, var(--bg) 90%, transparent);
   border: 3px dashed var(--focus); border-radius: var(--r-lg);
-  font-size: 16px; font-weight: 600; color: var(--txt); pointer-events: none;
+  font-size: 16px; font-weight: var(--font-weight-emphasis); color: var(--txt); pointer-events: none;
 }
 #tb-shell-overlay.show { display: flex; }
-#tb-shell-overlay .tb-shell-sub { font-weight: 400; font-size: var(--type-caption); color: var(--sub); margin-top: 6px; }
+#tb-shell-overlay .tb-shell-sub { font-weight: var(--font-weight-body); font-size: var(--type-caption); color: var(--sub); margin-top: 6px; }
 `;
 
 // The data-less edition of the report: the same stylesheet and the same viewer bundle an exported

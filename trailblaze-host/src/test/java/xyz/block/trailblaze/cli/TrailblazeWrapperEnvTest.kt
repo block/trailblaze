@@ -282,4 +282,59 @@ class TrailblazeWrapperEnvTest {
       capturedPayload.delete()
     }
   }
+
+  @Test
+  fun `app activates the callers git root before opening Trail Runner`() {
+    assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
+    assumeTrue("git required for workspace-root test", ProcessBuilder("git", "--version").start().waitFor() == 0)
+    val wrapper = locateWrapperScript()
+    val repo = kotlin.io.path.createTempDirectory("trailrunner-workspace-").toFile()
+    val nested = File(repo, "jobs/example").apply { mkdirs() }
+    val captured = File.createTempFile("trailrunner-active-workspace", ".txt")
+    try {
+      ProcessBuilder("git", "init", "-q", repo.absolutePath).start().also { process ->
+        assertEquals(0, process.waitFor(), "test fixture should initialize as a git repository")
+      }
+      val script = """
+        set -e
+        tb_run() { :; }
+        tb_run_quiet() { :; }
+        tb_run_background() { :; }
+        tb_run_background_quiet() { :; }
+        tb_run_exec_quiet() { :; }
+        uname() { printf 'Linux\\n'; }
+        xdg-open() { :; }
+        curl() {
+          case "${'$'}*" in
+            *"/ping"*) return 0 ;;
+            *"/trailrunner/api/workspace"*)
+              while [ "${'$'}#" -gt 0 ]; do
+                if [ "${'$'}1" = "--data-urlencode" ]; then
+                  shift
+                  printf '%s' "${'$'}{1#path=}" > '${captured.absolutePath}'
+                  return 0
+                fi
+                shift
+              done
+              return 1
+              ;;
+          esac
+          return 0
+        }
+        cd '${nested.absolutePath}'
+        source '${wrapper.absolutePath}' app
+      """.trimIndent()
+
+      val (exitCode, _, stderr) = runBash(script, emptyMap())
+      assertEquals(0, exitCode, "app wrapper should exit cleanly; stderr=\n$stderr")
+      assertEquals(
+        repo.canonicalPath,
+        captured.readText(),
+        "launching from a nested jobs directory should activate the whole git repository",
+      )
+    } finally {
+      captured.delete()
+      repo.deleteRecursively()
+    }
+  }
 }

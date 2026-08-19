@@ -299,7 +299,7 @@ function ToolCallsPopover({ calls, tools, allTools, anchor, busy, onSave, onClos
   const save = () => { const out = buildOut(); if (out) onSave(out); };
   // The Play device: the chosen one if still connected, else the first available.
   const runDeviceEff = (runDevices.find((d) => d.id === runDeviceId) ? runDeviceId : (runDevices[0] && runDevices[0].id)) || '';
-  // Play — dispatch the current (possibly unsaved) tool calls to the SELECTED device, like Run YAML.
+  // Play — dispatch the current (possibly unsaved) tool calls to the SELECTED device, like Test YAML.
   const run = async () => {
     if (!onRunTools || running || !runDevices.length) return;
     setErr(null); setRunResult(null);

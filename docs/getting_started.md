@@ -61,7 +61,7 @@ dispatches to the source-built CLI):
 git clone https://github.com/block/trailblaze.git
 cd trailblaze
 ./trailblaze --help     # CLI usage
-./trailblaze app        # Start the daemon (also opens the desktop app on macOS)
+./trailblaze app        # Start the daemon and open Trail Runner in a native macOS window
 ```
 
 **Bundled with the Homebrew install:**
@@ -264,9 +264,9 @@ transcript (when an LLM was involved), and video replay when capture is enabled.
 
 The same Trace Viewer surface is available three ways:
 
-- **Desktop app** — `trailblaze app` opens the Sessions list across every device and
-  run, with live updates while a session is running, one-click "show me the trail YAML"
-  to copy back into your project, and inline trail editing and re-running.
+- **Trail Runner desktop app** — `trailblaze app` opens one workspace for trails,
+  live and completed runs, recording, and integrations, with rich trace inspection
+  and inline editing and re-running.
 - **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install
   required.
 - **On disk** under `~/.trailblaze/logs/<sessionId>/` if you ever need to grep raw

@@ -199,11 +199,22 @@ internal fun Route.blazeRoutes(deps: TrailRunnerDeps) {
       call.respond(HttpStatusCode.NotFound)
       return@put
     }
-    val ok = withContext(Dispatchers.IO) { runCatching { BundleStore.writeFile(resolved.dir, name, yaml) }.getOrDefault(false) }
-    if (ok) {
-      call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = true, savedPath = resolved.home))
-    } else {
-      call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "could not write $name"), HttpStatusCode.BadRequest)
+    val result = withContext(Dispatchers.IO) {
+      runCatching { BundleStore.writeFile(resolved.dir, name, yaml, body.operation) }
+        .getOrDefault(BundleStore.FileWriteResult.FAILED)
+    }
+    when (result) {
+      BundleStore.FileWriteResult.WRITTEN ->
+        call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = true, savedPath = resolved.home))
+      BundleStore.FileWriteResult.ALREADY_EXISTS ->
+        call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "$name already exists; reload before replacing it"), HttpStatusCode.Conflict)
+      BundleStore.FileWriteResult.NOT_FOUND ->
+        call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "$name no longer exists; reload before saving"), HttpStatusCode.Conflict)
+      BundleStore.FileWriteResult.INVALID_OPERATION ->
+        call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "operation must be create, update, or upsert"), HttpStatusCode.BadRequest)
+      BundleStore.FileWriteResult.INVALID,
+      BundleStore.FileWriteResult.FAILED,
+      -> call.respondJson(SaveTrailResponse.serializer(), SaveTrailResponse(success = false, error = "could not write $name"), HttpStatusCode.BadRequest)
     }
   }
 

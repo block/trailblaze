@@ -4,7 +4,7 @@
 // standalone viewer bundle, and the bun report driver.
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
-import { deflateGzText } from './run-report-payload';
+import { deflateGzText, jsonToYaml } from './run-report-payload';
 
 // Clamps at the last word boundary inside the budget, so a cut label reads as a phrase instead of
 // ending mid-word ("…it may say 'Search al…"). Falls back to a hard cut when the budget holds no
@@ -225,7 +225,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       closeGroup();
       const ok = log.successful !== false && !err;
       const detail = toolDetail(log);
-      group = { _trace: traceId, _logs: [log], label: toolName, tool: detail.summary, note: detail.note, ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts };
+      group = { _trace: traceId, _logs: [log], label: toolName, tool: detail.summary, note: detail.note, args: toolArgsYaml(toolName, log.trailblazeTool && log.trailblazeTool.raw), ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts };
       if (!traceId) closeGroup();
       continue;
     }
@@ -252,14 +252,14 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
         const aerr = aok ? null : (err || `Assertion failed: ${cond}`);
         const open = asserts.get(cond);
         if (open) { open.count++; open.ms += log.durationMs || 0; open.ok = aok; open.err = aerr; if (screenshotFile) open.screenshotFile = screenshotFile; if (viewHierarchy) open.viewHierarchy = viewHierarchy; if (viewport) open.viewport = viewport; open._logs.push(log); continue; }
-        const row = { label: actionType, _logs: [log], tool: describeAction(action), ms: log.durationMs || 0, ok: aok, err: aerr, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) };
+        const row = { label: actionType, _logs: [log], tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: aok, err: aerr, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) };
         out.push(row); asserts.set(cond, row); continue;
       }
       asserts = new Map();
       const sig = actionType + ':' + describeAction(action);
       const prev = out[out.length - 1];
       if (prev && prev._sig === sig) { prev.count = (prev.count || 1) + 1; prev.ms += log.durationMs || 0; if (screenshotFile) prev.screenshotFile = screenshotFile; if (viewHierarchy) prev.viewHierarchy = viewHierarchy; if (viewport) prev.viewport = viewport; prev._logs.push(log); continue; }
-      out.push({ _sig: sig, _logs: [log], label: actionType, tool: describeAction(action), ms: log.durationMs || 0, ok: true, err: null, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) });
+      out.push({ _sig: sig, _logs: [log], label: actionType, tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: true, err: null, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) });
       continue;
     }
 
@@ -371,25 +371,48 @@ function toolChildren(r: any): TraceChild[] | null {
   // Only a TrailblazeToolLog is an executed tool: MCP request/response and agent-iteration logs
   // share the row's id and name, so keying off "anything with a toolName" nests the row under itself.
   const isExecuted = (l: any) => logClass(l) === 'TrailblazeToolLog';
+  // A dispatch's own capture: its log's screenshotFile when present, else the first frame among
+  // the folded logs in its span (after it, up to the next executed tool) — the device logs the
+  // driver action inside the tool that dispatched it, so a span's frame/action belong to that
+  // dispatch. The action also supplies the tap/swipe overlay for the child's frame. This is what
+  // lets a folded batch show EVERY interaction's screenshot (the row itself keeps only the first).
+  const executedAt = logs.map((l, i) => (i > 0 && l && isExecuted(l) ? i : -1)).filter((i) => i >= 0);
+  const spanCapture = (from: number): { screenshotFile: string | null; mark: ActionMark | null } => {
+    const to = executedAt.find((j) => j > from) ?? logs.length;
+    let screenshotFile = (logs[from] && logs[from].screenshotFile) || null;
+    let mark: ActionMark | null = null;
+    for (let j = from + 1; j < to && !(screenshotFile && mark); j++) {
+      const l = logs[j];
+      if (!l) continue;
+      if (!screenshotFile && l.screenshotFile) screenshotFile = l.screenshotFile;
+      const action = logClass(l) === 'MaestroDriverLog' ? l.action : null;
+      if (!mark && action) mark = actionMark(action, l);
+    }
+    return { screenshotFile, mark };
+  };
   const executed = logs
     .map((l, i) => ({ l, i }))
     .filter(({ l, i }) => i > 0 && l && isExecuted(l))
-    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null }));
+    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null, args: toolArgsYaml(l.toolName, l.trailblazeTool && l.trailblazeTool.raw), ...spanCapture(i) }));
   // A delegating log is a dispatch wrapper, not a step: it declares executors the device then logs
   // itself under the same traceId. Keep executed records; surface a declaration only to fill in an
-  // executor that never logged — matched to its executor by name AND args (not name alone) and by
-  // remaining count, so a repeated primitive with one unlogged dispatch still shows the missing call.
-  const key = (c: { label: string; tool: string }) => JSON.stringify([c.label, c.tool]);
+  // executor that never logged — matched to its executor by name AND raw args (`sig`, not the
+  // display summary, which truncates and can collide) and by remaining count, so a repeated
+  // primitive with one unlogged dispatch still shows the missing call.
+  const key = (c: { label: string; sig: string }) => JSON.stringify([c.label, c.sig]);
   const unmatched = new Map<string, number>();
   // Seed logs[0]'s own identity (excluded from `executed` by the i>0 filter) so only a wrapper
   // re-declaring exactly it is absorbed — a separate same-named dispatch with other args still shows.
-  unmatched.set(key(r), (unmatched.get(key(r)) || 0) + 1);
+  const rootIdentity = { label: String((logs[0] && logs[0].toolName) || r.label || ''), sig: JSON.stringify((logs[0] && logs[0].trailblazeTool && logs[0].trailblazeTool.raw) ?? null) };
+  unmatched.set(key(rootIdentity), (unmatched.get(key(rootIdentity)) || 0) + 1);
   for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
-  const declared: Array<{ i: number; label: string; tool: string; sig: string; ms: number | null; ok: boolean; err: string | null; code: string | null }> = [];
+  const declared: Array<{ i: number; label: string; tool: string; sig: string; ms: number | null; ok: boolean; err: string | null; code: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null }> = [];
   logs.forEach((l, i) => {
     if (!isDelegating(l)) return;
     for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
-      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}), sig: JSON.stringify((e && e.raw) ?? null), ms: null, ok: true, err: null, code: null };
+      // Declared-but-never-logged dispatches carry their declared args but no capture (a null ms
+      // already means "never logged"; a frame from the wrapper's span would be a guess).
+      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}), sig: JSON.stringify((e && e.raw) ?? null), ms: null, ok: true, err: null, code: null, args: toolArgsYaml(e && e.toolName, e && e.raw), screenshotFile: null, mark: null };
       if (!c.label) continue;
       const n = unmatched.get(key(c)) || 0;
       if (n > 0) { unmatched.set(key(c), n - 1); continue; }
@@ -414,7 +437,7 @@ function toolChildren(r: any): TraceChild[] | null {
       if (c.ms != null) prev.ms = (prev.ms || 0) + c.ms;
       continue;
     }
-    kids.push({ label: c.label, tool: c.tool, ms: c.ms, ok: c.ok, err: c.err ?? null, code: c.code ?? null, count: 1 });
+    kids.push({ label: c.label, tool: c.tool, ms: c.ms, ok: c.ok, err: c.err ?? null, code: c.code ?? null, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, mark: c.mark ?? null });
     prevSig = c.sig;
   }
   return kids.length ? kids : null;
@@ -690,6 +713,28 @@ function stepText(promptStep: any): string | null {
   if (!promptStep || typeof promptStep !== 'object') return null;
   return promptStep.step || promptStep.verify || promptStep.prompt || null;
 }
+
+// Full call content as trail-file YAML — the `- toolName:` + indented-args shape the WASM report's
+// toolToYaml emits (and transcriptToolCallYaml renders in LLM transcripts), so an expanded timeline
+// row reads exactly like the same call in a trail.yaml and can be pasted into one. Null when the
+// args carry nothing beyond the label, so no detail panel renders for it.
+function toolArgsYaml(toolName: unknown, raw: unknown): string | null {
+  if (!toolName || !raw || typeof raw !== 'object') return null;
+  const argsYaml = jsonToYaml(raw);
+  if (!argsYaml || argsYaml === '{}') return null;
+  const body = argsYaml.split('\n').filter((line) => line.trim() !== '').map((line) => '    ' + line).join('\n');
+  return `- ${toolName}:\n${body}`;
+}
+
+// A raw device action's full fields in the same expanded-YAML shape — most usefully the
+// UNTRUNCATED assert condition (`tool` crops it to 40 chars). The `class` discriminator is
+// dropped: the row label already names the action type.
+function actionArgsYaml(action: any): string | null {
+  if (!action || typeof action !== 'object') return null;
+  const { class: cls, ...fields } = action;
+  const kind = String(cls || '').split('.').pop() || 'action';
+  return toolArgsYaml(kind, fields);
+}
 function toolDetail(log: TrailblazeLogRecord): { summary: string; note: string | null } {
   const raw = (log.trailblazeTool && log.trailblazeTool.raw) || {};
   const delegated = (log.executableTools && log.executableTools[0] && log.executableTools[0].raw) || {};
@@ -702,7 +747,7 @@ function toolDetail(log: TrailblazeLogRecord): { summary: string; note: string |
 
 function summarizeToolArgs(raw: any, delegated: any): string {
   const a = { ...delegated, ...raw };
-  const sel = a.selector || delegated.selector;
+  const sel = a.selector || delegated.selector || nodeSelectorMatch(a.nodeSelector || delegated.nodeSelector);
   if (sel && typeof sel === 'object') {
     const s = describeSelector(sel);
     if (s) return s;
@@ -726,8 +771,31 @@ function summarizeToolArgs(raw: any, delegated: any): string {
   return keys.length ? keys.slice(0, 3).map((k) => `${k}=${truncate(String(a[k]), 24)}`).join(' ') : '';
 }
 
+// Unwrap a TrailblazeNodeSelector arg to the property bag describeSelector can summarize: the
+// selector properties live one level down under the driver-dialect key (androidAccessibility,
+// web, …). Without this, `tapOnElementBySelector` rows whose only arg is the object-valued
+// `nodeSelector` summarized to a bare tool name — unreadable in the timeline. A dialect-less
+// object passes through as-is (a hand-authored flat bag).
+function nodeSelectorMatch(ns: any): any {
+  if (!ns || typeof ns !== 'object') return null;
+  for (const dialect of ['androidAccessibility', 'androidMaestro', 'web', 'compose', 'iosMaestro', 'iosAxe']) {
+    if (ns[dialect] && typeof ns[dialect] === 'object') return ns[dialect];
+  }
+  return ns;
+}
+
 function describeSelector(sel: any): string {
-  const order = ['text', 'textRegex', 'idRegex', 'id', 'accessibilityText', 'contentDescription', 'containsChild'];
+  // Legacy TrailblazeElementSelector keys first, then each dialect's identity-bearing
+  // DriverNodeMatch fields (text before ids before structural state) — see TrailblazeNodeSelector.kt.
+  // iosAxe's labelRegex (AXLabel) is its primary text; valueRegex/titleRegex are weaker identity but
+  // still beat the declaration-order fallback, which would pick roleRegex (`roleRegex: AXButton` —
+  // label-less). Compose's exact-match testTag sits with the other id-style keys.
+  const order = [
+    'text', 'textRegex', 'labelRegex', 'idRegex', 'id', 'accessibilityText', 'accessibilityTextRegex',
+    'contentDescription', 'contentDescriptionRegex', 'resourceIdRegex', 'ariaNameRegex',
+    'composeTestTagRegex', 'testTag', 'uniqueId', 'valueRegex', 'titleRegex',
+    'cssSelector', 'dataTestId', 'hintTextRegex', 'containsChild',
+  ];
   const k = order.find((key) => sel[key] != null) || Object.keys(sel)[0];
   if (!k) return '';
   const v = sel[k];
@@ -761,15 +829,18 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     terminal: !!t.terminal,
     count: t.count || null,
     mark: t.mark || null,
+    // Full call content for the selected row's expanded detail (WASM-report parity).
+    ...(t.args ? { args: t.args } : {}),
     // The row's index into the session's llm call list (extractLlmLogs order) — how the viewer
     // opens the right transcript from a timeline row. Only present on LLM-call rows.
     ...(t.llm != null ? { llm: t.llm } : {}),
     // The capture's viewport — the inspector's coordinate anchor (see TraceStep.viewport). Kept
     // only where a hierarchy rides along; ~20 bytes, unlike the hierarchy it describes.
     ...(t.viewport && t.viewHierarchy != null ? { viewport: t.viewport } : {}),
-    // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold)
-    // — the common green declared-or-single dispatch slims to just label+tool.
-    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}) })) } : {}),
+    // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold,
+    // full args, its own capture) — the common green declared-or-single dispatch slims to just
+    // label+tool.
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
   }));

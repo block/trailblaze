@@ -85,7 +85,7 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
-| `app` | Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service) |
+| `app` | Open Trail Runner for viewing sessions and managing trails (use --headless for a daemon-only background service) |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
@@ -1424,7 +1424,7 @@ trailblaze show [OPTIONS]
 
 ### `trailblaze app`
 
-Launch the Trailblaze desktop app for viewing sessions and managing trails (use --headless for a daemon-only background service)
+Open Trail Runner for viewing sessions and managing trails (use --headless for a daemon-only background service)
 
 **Synopsis:**
 
@@ -1448,7 +1448,7 @@ trailblaze app start
 
 ### `trailblaze app start`
 
-Start the Trailblaze app in the background (same as `trailblaze app`)
+Open Trail Runner (same as `trailblaze app`)
 
 **Synopsis:**
 

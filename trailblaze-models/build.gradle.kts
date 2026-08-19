@@ -1,4 +1,8 @@
 import java.io.File
+// Imported rather than fully qualified at the use site: in a Kotlin DSL script `java` resolves
+// to Gradle's `java` extension, so `java.util.zip.…` doesn't compile.
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -377,6 +381,30 @@ kotlin.sourceSets.commonMain.get().resources.srcDir(
 // build host without `bun` on PATH) still builds — the resource is simply absent and the
 // runtime surfaces the same clean "analyzer unavailable" message it already does. Same
 // tolerance posture as `copyTypescriptCompilerResources` in `:trailblaze-host`.
+//
+// **The bundle is not actually self-contained, and can't be.** `typescript` is CJS, so
+// `bun build` inlines its code but freezes `__dirname` / `__filename` to the absolute paths
+// they had on the BUILD machine. TypeScript locates its own `lib.*.d.ts` files relative to
+// those, and the lib files are data, not code — no bundler inlines them. So a shipped bundle
+// looks for `lib.es5.d.ts` under a build-agent path that exists nowhere else, silently loads
+// no standard library, and fails to resolve every lib-declared type: `Record`, `Partial`,
+// `Pick`, `Omit`. Authors saw `Unhandled error while creating Base Type` on any tool whose
+// I/O type used one, while a raw index signature (needing no lib type) worked — which is
+// what made it read like a `Record<K,V>` bug. It shipped in 2026.08.18 and was invisible in
+// CI and dev checkouts, where the baked path happens to exist.
+//
+// Fix: rewrite the baked SDK root to [ANALYZER_SDK_ROOT_PLACEHOLDER] and ship the lib files
+// alongside, keyed by their SDK-relative paths. `ScriptedToolDefinitionAnalyzer` substitutes
+// its extraction dir for the placeholder, so the frozen paths land on the shipped libs.
+//
+// SISTER-IMPL-TAG: analyzer-bundle-lib-payload. Both constants below are read back by
+// `ScriptedToolDefinitionAnalyzer` at extraction time and must stay byte-identical to the
+// copies declared there. A Gradle script can't reference the Kotlin source set it builds, so
+// there is no compile-time check that they agree — `ScriptedToolAnalyzerBundledShimTest`
+// asserts the shipped resource actually contains the placeholder to cover the gap.
+val ANALYZER_SDK_ROOT_PLACEHOLDER = "__TRAILBLAZE_ANALYZER_SDK_ROOT__"
+val ANALYZER_TS_LIB_ARCHIVE_NAME = "ts-lib.zip"
+
 val bundleScriptedToolAnalyzerShim by tasks.registering(Exec::class) {
   group = "trailblaze"
   description = "Bundles the scripted-tool analyzer shim into a self-contained .mjs for the JAR."
@@ -390,9 +418,22 @@ val bundleScriptedToolAnalyzerShim by tasks.registering(Exec::class) {
   val outFile = layout.buildDirectory.file(
     "generated-resources/analyzer/trails/config/analyzer/extract-tool-defs.mjs",
   )
+  val libArchive = layout.buildDirectory.file(
+    "generated-resources/analyzer/trails/config/analyzer/$ANALYZER_TS_LIB_ARCHIVE_NAME",
+  )
+  // Captured as task-local values so the `doLast` lambda closes over these and not over the
+  // build script object, which the configuration cache can't serialize.
+  val sdkRootPath = sdkDir.asFile.absolutePath
+  val sdkRootDir = sdkDir.asFile
+  val sdkRootPlaceholder = ANALYZER_SDK_ROOT_PLACEHOLDER
   inputs.file(shimSrc)
   inputs.dir(tsjsgDir).optional(true)
+  // `typescript` is an input in its own right: it supplies both the inlined compiler and the
+  // lib payload, so a version bump has to invalidate this task. Declaring only tsjsg meant a
+  // TypeScript upgrade could leave a stale bundle in place.
+  inputs.dir(sdkDir.dir("node_modules/typescript")).optional(true)
   outputs.file(outFile)
+  outputs.file(libArchive)
   // Skip cleanly when the SDK deps aren't installed or `bun` isn't on PATH — never break
   // an unrelated host build over a payload the runtime degrades around.
   onlyIf {
@@ -407,14 +448,72 @@ val bundleScriptedToolAnalyzerShim by tasks.registering(Exec::class) {
     "--bundle", "--minify", "--target=bun",
     "--outfile", outFile.get().asFile.absolutePath,
   )
-  // Fail loudly if `bun build` exits 0 but writes nothing/partial — better a broken build
-  // than a JAR that silently ships an empty shim the runtime would choke on per-trailmap.
   doLast {
     val out = outFile.get().asFile
+    // Fail loudly if `bun build` exits 0 but writes nothing/partial — better a broken build
+    // than a JAR that silently ships an empty shim the runtime would choke on per-trailmap.
     require(out.isFile && out.length() > 0L) {
       "bundleScriptedToolAnalyzerShim: `bun build` produced no usable output at $out " +
         "(${if (out.exists()) "${out.length()} bytes" else "missing"})."
     }
+
+    val bundled = out.readText()
+    val bakedPathCount = Regex(Regex.escape(sdkRootPath)).findAll(bundled).count()
+    // A bundle with no baked build path is either already portable or baked under a path we
+    // don't recognize. Either way the assumption this rewrite rests on no longer holds, and
+    // shipping it unchanged is how the original bug escaped — so stop the build instead.
+    require(bakedPathCount > 0) {
+      "bundleScriptedToolAnalyzerShim: expected `bun build` to bake the SDK path ($sdkRootPath) " +
+        "into the bundle so it can be redirected at the shipped TypeScript libs, but found no " +
+        "occurrence. Re-check how the bundler emits CJS `__dirname` for `typescript`; the " +
+        "analyzer cannot resolve `lib.*.d.ts` without this rewrite."
+    }
+
+    // Ship the libs for exactly the TypeScript copies the bundle asks for, read off the baked
+    // paths themselves rather than by scanning node_modules — several unrelated SDK dev deps
+    // vendor their own `typescript`, and shipping those too would be dead weight. There is
+    // normally more than one real copy: `ts-json-schema-generator` pins its own `typescript`
+    // range, so the generator gets a nested copy while this shim imports the hoisted one, and
+    // each needs the libs matching its own version.
+    val bakedLibDirs = Regex(
+      "${Regex.escape(sdkRootPath)}[^\"']*?/typescript/lib",
+    ).findAll(bundled).map { it.value }.distinct().map { File(it) }.toList()
+    require(bakedLibDirs.isNotEmpty()) {
+      "bundleScriptedToolAnalyzerShim: the bundle bakes $bakedPathCount reference(s) to " +
+        "$sdkRootPath but none resolve to a `typescript/lib` directory, so there is nothing to " +
+        "ship as the standard library. Re-check how the bundler emits CJS `__dirname`."
+    }
+    out.writeText(bundled.replace(sdkRootPath, sdkRootPlaceholder))
+
+    // Keyed by path relative to the SDK root — the same relative tails the baked paths carry,
+    // so one placeholder substitution lands every file where its copy expects it.
+    val libFiles = bakedLibDirs.flatMap { libDir ->
+      libDir.listFiles().orEmpty()
+        .filter { it.isFile && it.name.startsWith("lib") && it.name.endsWith(".d.ts") }
+    }
+    require(libFiles.isNotEmpty()) {
+      "bundleScriptedToolAnalyzerShim: found no TypeScript `lib*.d.ts` files in " +
+        "${bakedLibDirs.joinToString()}. The analyzer needs them to resolve `Record`, " +
+        "`Partial`, and every other lib-declared type in a tool's I/O types."
+    }
+    val archive = libArchive.get().asFile
+    archive.parentFile.mkdirs()
+    ZipOutputStream(archive.outputStream().buffered()).use { zip ->
+      libFiles.sortedBy { it.absolutePath }.forEach { libFile ->
+        zip.putNextEntry(
+          // Sorted entries + a fixed timestamp keep the archive byte-identical for identical
+          // inputs; `ZipEntry` otherwise stamps "now" and the shipped resource would churn on
+          // every build.
+          ZipEntry(libFile.relativeTo(sdkRootDir).invariantSeparatorsPath).apply { time = 0L },
+        )
+        libFile.inputStream().use { it.copyTo(zip) }
+        zip.closeEntry()
+      }
+    }
+    println(
+      "bundleScriptedToolAnalyzerShim: redirected $bakedPathCount baked path(s) and packaged " +
+        "${libFiles.size} TypeScript lib file(s) (${archive.length() / 1024} KiB).",
+    )
   }
 }
 
