@@ -23,10 +23,11 @@ Three export formats are shown for each trail:
   app shows.
 
 !!! tip "These are live artifacts"
-    The WebP and storyboard below link through to the full interactive HTML report —
-    click either image to open it. The HTML report is a single file you can download,
-    open offline, or attach to a PR; embedding it inline doesn't do it justice, so the
-    animations link out to the real thing.
+    The WebP and storyboard below link through to the report viewer, which loads each run
+    from the session archive CI published — click either image to open it. Embedding a
+    report inline doesn't do it justice, so the animations link out to the real thing.
+    Each run also offers its self-contained HTML report: one file you can save, open
+    offline, or attach to a PR.
 
 ## Set an alarm (Android)
 
@@ -43,7 +44,7 @@ an emulator via Trailblaze's host-RPC Android driver — no LLM at replay time. 
 [![Set-alarm clock trail timeline — animated walkthrough of each step](report-assets/clock/timeline.webp)](report-viewer/index.html?zip=../report-assets/clock/session.zip)
 
 [**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/clock/session.zip)
-<br/>*or download the [self-contained report file](report-assets/clock/report-interactive.html) — one HTML file, no network.*
+<br/>*or open the [self-contained report file](report-assets/clock/report-interactive.html) — one HTML file, no network.*
 
 ---
 
@@ -63,7 +64,7 @@ Source: [`trails/ios-contacts/test-create-then-delete`](https://github.com/block
 [![iOS Contacts trail timeline — animated walkthrough of each step](report-assets/ios-contacts/timeline.webp)](report-viewer/index.html?zip=../report-assets/ios-contacts/session.zip)
 
 [**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/ios-contacts/session.zip)
-<br/>*or download the [self-contained report file](report-assets/ios-contacts/report-interactive.html) — one HTML file, no network.*
+<br/>*or open the [self-contained report file](report-assets/ios-contacts/report-interactive.html) — one HTML file, no network.*
 
 ---
 
@@ -82,7 +83,7 @@ Android emulator or iOS simulator required, and no LLM at replay time. Source:
 [![Wikipedia trail timeline — animated walkthrough of each step](report-assets/wikipedia/timeline.webp)](report-viewer/index.html?zip=../report-assets/wikipedia/session.zip)
 
 [**Open this run in the report viewer →**](report-viewer/index.html?zip=../report-assets/wikipedia/session.zip)
-<br/>*or download the [self-contained report file](report-assets/wikipedia/report-interactive.html) — one HTML file, no network.*
+<br/>*or open the [self-contained report file](report-assets/wikipedia/report-interactive.html) — one HTML file, no network.*
 
 ---
 
@@ -118,11 +119,16 @@ route params ride alongside it, so a link can open on a specific place in the re
 .../report-viewer/?zip=https://example.com/runs/my-session.zip&tab=lightbox
 ```
 
-This path is **opt-in on the archive host's side**, because the fetch is cross-origin: it
-only works if whatever serves the `.zip` sends an `Access-Control-Allow-Origin` header that
-permits the viewer's page. Plenty of artifact stores don't, and that's not something the
-viewer can work around — the browser blocks the read before the page sees any bytes. When it
-happens, the viewer says so and you can still drop the file.
+Whether this works depends on where the archive is served from:
+
+- **Same origin as the viewer** — no CORS involved at all, so it always works. That's how
+  the gallery runs above are wired: their `?zip=` values are relative paths to archives
+  published beside the viewer on this site.
+- **Any other host** — the fetch is cross-origin, so it's **opt-in on the archive host's
+  side**: it only works if whatever serves the `.zip` sends an `Access-Control-Allow-Origin`
+  header permitting the viewer's page. Plenty of artifact stores don't, and that's not
+  something the viewer can work around — the browser blocks the read before the page sees
+  any bytes. When it happens, the viewer says so and you can still drop the file.
 
 ## How screenshots travel with a report
 

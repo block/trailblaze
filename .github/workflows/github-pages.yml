@@ -42,8 +42,11 @@ jobs:
 
       - name: Fetch report-gallery assets
         # The landing page and Report Gallery embed per-trail assets (storyboard.webp /
-        # timeline.webp / report.html) that are NOT committed — they are produced by the
-        # trail workflows (`wikipedia-trails.yml` etc.) and pulled in here at build time.
+        # timeline.webp / report-interactive.html / session.zip) that are NOT committed —
+        # they are produced by the trail workflows (`wikipedia-trails.yml` etc.) and pulled
+        # in here at build time. session.zip is the archive the gallery's report-viewer
+        # deep-link loads; until a trail run publishes one, both tiers miss it and every
+        # slug walks all 10 completed runs looking (slow, best-effort, self-resolving).
         # Two tiers, fresh-then-last-good, so the gallery never shows the "generating"
         # placeholder once a real report has ever been published:
         #
