@@ -146,11 +146,18 @@ jobs:
       - name: Set up Java
         # Only for `:trailblaze-selector-engine-js:bundleSelectorEngine` below — the Kotlin/JS
         # compile behind the viewer's UI Inspector. Nothing else in this deploy needs a JVM.
+        #
+        # Deliberately no `cache: gradle` (and no gradle/actions/setup-gradle): this workflow
+        # PUBLISHES — it holds `pages: write` + `id-token: write` and deploys whatever it built to
+        # the live site. Restoring a dependency cache into a publishing workflow is the
+        # cache-poisoning vector zizmor flags, and here it lands squarely on the payload this step
+        # exists to produce: the engine bundle embedded in the published viewer. Same posture as
+        # build-desktop.yml and release.yml, neither of which caches. The cost is a cold compile of
+        # one small Kotlin/JS module per deploy.
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: 17
-          cache: gradle
 
       - name: Build the standalone report viewer
         # docs/report-viewer/index.html is generated, never committed (see .gitignore).
