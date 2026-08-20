@@ -11,10 +11,26 @@
 import { RUN_REPORT_CSS } from './run-report-css';
 import { embeddedShellScript } from './run-report-shell-bundle.macro' with { type: 'macro' };
 import { embeddedViewerScript } from './run-report-viewer-bundle.macro' with { type: 'macro' };
-import { inertScriptBody } from './run-report-payload';
+import { inertScriptBody, toInertJson } from './run-report-payload';
+import { embeddedSelectorEngine } from './selector-engine-bundle.macro' with { type: 'macro' };
 import { embeddedZipReportCoreScript } from './zip-report-core-bundle.macro' with { type: 'macro' };
 
 const RUN_REPORT_VIEWER_SCRIPT: string = embeddedViewerScript();
+
+// The UI Inspector's selector engine, in the same `#tb-selector-engine` transport an exported report
+// uses. Null when the Kotlin/JS bundle wasn't built — the shell then embeds no chunk and the
+// Inspector degrades exactly as it did before, rather than failing the build.
+const SELECTOR_ENGINE = embeddedSelectorEngine();
+
+// Unlike a report — which embeds the engine only when a session carries an analyzable hierarchy —
+// the shell has no session at build time and must carry it unconditionally: any archive dropped
+// later may need it, and there is no second chance to fetch one in an offline, single-file viewer.
+const SELECTOR_ENGINE_CHUNK: string = SELECTOR_ENGINE && (SELECTOR_ENGINE.js || SELECTOR_ENGINE.gz)
+  ? `\n<script type="application/json" id="tb-selector-engine">${toInertJson({
+    ...(SELECTOR_ENGINE.js ? { js: SELECTOR_ENGINE.js } : {}),
+    ...(SELECTOR_ENGINE.gz ? { gz: SELECTOR_ENGINE.gz } : {}),
+  })}</script>`
+  : '';
 
 // The viewer shell's loader script, inlined the same way (see run-report-shell-bundle.macro.ts).
 const VIEWER_SHELL_SCRIPT: string = embeddedShellScript();
@@ -135,7 +151,7 @@ function buildViewerShellHtml(): string {
 </div>
 <script>${inertScriptBody(embeddedZipReportCoreScript())}</script>
 <script>${inertScriptBody(RUN_REPORT_VIEWER_SCRIPT)}</script>
-<script>${inertScriptBody(VIEWER_SHELL_SCRIPT)}</script>
+<script>${inertScriptBody(VIEWER_SHELL_SCRIPT)}</script>${SELECTOR_ENGINE_CHUNK}
 </body>
 </html>`;
 }

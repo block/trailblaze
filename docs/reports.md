@@ -102,8 +102,10 @@ path that always works: the archive is read in your browser, nothing is uploaded
 request leaves the page. It works offline, and on an archive you'd never put on a network.
 
 The viewer is one self-contained file — the same stylesheet and the same renderer an
-exported report carries, with no run baked into it. So it can't drift from the reports it
-renders, and you can host or keep your own copy:
+exported report carries, with no run baked into it. It also carries the selector engine, so
+**Inspect UI** computes the same ranked selector suggestions here as it does in an exported
+report: the daemon's own generator and resolver compiled to JavaScript, not a re-implementation.
+So it can't drift from the reports it renders, and you can host or keep your own copy:
 
 ```
 ./scripts/build-viewer-shell.sh out    # writes out/index.html — serve it anywhere, or just open it
