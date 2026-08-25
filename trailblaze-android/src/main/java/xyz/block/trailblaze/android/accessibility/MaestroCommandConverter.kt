@@ -282,7 +282,7 @@ object MaestroCommandConverter {
 
   private fun convertAssertCondition(command: AssertConditionCommand): List<AccessibilityAction>? {
     val condition = command.condition
-    val timeoutMs = command.timeoutMs() ?: 5_000L
+    val timeoutMs = command.timeoutMs() ?: DEFAULT_ACCESSIBILITY_ASSERT_TIMEOUT_MS
     return when {
       condition.visible != null -> {
         val elementSelector = convertElementSelector(condition.visible!!)

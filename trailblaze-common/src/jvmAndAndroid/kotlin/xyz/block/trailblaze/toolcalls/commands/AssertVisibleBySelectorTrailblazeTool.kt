@@ -83,12 +83,16 @@ data class AssertVisibleBySelectorTrailblazeTool(
     // the Maestro path can express. Drivers that support the modern node-selector path
     // (accessibility, etc.) hit the richer post-pass check in execute() below.
     //
-    // textMatchMode controls how that text becomes the Maestro textRegex: EXACT pins the full
-    // resolved value (byte-identical to the original behavior); PREFIX escapes only the
-    // stable head so a volatile tail (e.g. live item count) can't fail the match; REGEX passes
-    // the value through as the regex pattern directly.
+    // textMatchMode controls how that text becomes the Maestro textRegex: EXACT lowers the value to
+    // the trimmed, case-sensitive literal equality verifyTextEquality applies on the modern path;
+    // PREFIX escapes only the stable head so a volatile tail (e.g. live item count) can't fail the
+    // match; REGEX passes the value through as the regex pattern directly.
     val maestroElement = maestroSelector.toMaestroElementSelector().let { base ->
-      if (expectedText != null) base.copy(textRegex = maestroTextRegexFor()) else base
+      if (expectedText != null) {
+        base.copy(textRegex = conjoinTextRegex(base.textRegex, maestroTextRegexFor()))
+      } else {
+        base
+      }
     }
     return listOf(
       AssertConditionCommand(
@@ -226,33 +230,107 @@ data class AssertVisibleBySelectorTrailblazeTool(
 
   /**
    * Compares a live element's [actual] text against the (already-interpolated, trimmed)
-   * [expected] value using [textMatchMode]. EXACT preserves the original strict equality. A
-   * malformed REGEX pattern is treated as a non-match (surfaced as a normal assertion failure)
-   * rather than thrown, so one bad hand-authored pattern can't turn replay into an infra error.
+   * [expected] value using [textMatchMode]. EXACT preserves the original strict equality, modulo
+   * the space folding described on [ZS]. A malformed REGEX pattern is treated as a non-match
+   * (surfaced as a normal assertion failure) rather than thrown, so one bad hand-authored pattern
+   * can't turn replay into an infra error.
+   *
+   * REGEX deliberately does NOT fold: the author wrote a pattern, so a space there is whatever
+   * they spelled, and `\p{Zs}` is available to them. Folding only applies to the two modes whose
+   * value is a literal, and matches the folding [maestroTextRegexFor] bakes into the legacy path's
+   * pattern, so both paths reach the same verdict.
    */
   private fun matchesExpected(actual: String, expected: String): Boolean = when (textMatchMode) {
-    TextMatchMode.EXACT -> actual == expected
-    TextMatchMode.PREFIX -> actual.startsWith(expected)
+    TextMatchMode.EXACT -> foldSpacesAndTrim(actual) == foldSpacesAndTrim(expected)
+    TextMatchMode.PREFIX -> foldSpacesAndTrim(actual).startsWith(foldSpacesAndTrim(expected))
     TextMatchMode.REGEX -> runCatching { Regex(expected).matches(actual) }.getOrDefault(false)
   }
 
   /**
    * Builds the Maestro `textRegex` for the legacy fallback path from [expectedText] under
    * [textMatchMode]. Memory tokens in [expectedText] are already resolved by the dispatch
-   * boundary. EXACT pins the full resolved value (unchanged from the original
-   * behavior); PREFIX escapes the stable head and allows any volatile tail (incl. newlines)
-   * so the count etc. can't fail the match regardless of Maestro's anchoring; REGEX forwards
-   * the value as the pattern, escaping it to a literal if it doesn't compile so Maestro never
-   * receives a malformed pattern (which would surface as an execution error, not a clean miss).
+   * boundary.
+   *
+   * EXACT reproduces [verifyTextEquality]'s comparison — trimmed, case-sensitive equality — through
+   * a pattern, which takes three pieces because Orchestra compiles `textRegex` with
+   * `IGNORE_CASE | DOT_MATCHES_ALL | MULTILINE` (`Orchestra.REGEX_OPTIONS`) and full-matches it:
+   *  - [escapeLiteralWithSpaceEquivalence] on the value, because unescaped a `?`, `.` or `$` in real
+   *    UI copy is a metacharacter and the assertion can never match the text it was captured from;
+   *  - `(?-i)` to undo Orchestra's IGNORE_CASE, since EXACT is case-sensitive on the modern path;
+   *  - [EDGE_WHITESPACE] on both ends, because the modern path trims both sides while a Maestro full
+   *    match sees the element's untrimmed text. It has to span `Zs` and not just `\s`: `trim()`
+   *    strips 13 space separators that Java's ASCII-only `\s` cannot match, so a plain `\s*` would
+   *    fail on padding the modern path silently absorbs.
+   *
+   * PREFIX escapes the stable head and allows any volatile tail (incl. newlines) so the count etc.
+   * can't fail the match regardless of Maestro's anchoring, and tolerates leading padding for the
+   * same reason EXACT does; REGEX forwards the value as the pattern, escaping it to a literal if it
+   * doesn't compile so Maestro never receives a malformed pattern (which would surface as an
+   * execution error, not a clean miss).
    */
   private fun maestroTextRegexFor(): String {
     val resolved = expectedText!!
     return when (textMatchMode) {
-      TextMatchMode.EXACT -> resolved
-      TextMatchMode.PREFIX -> Regex.escape(resolved) + "[\\s\\S]*"
+      TextMatchMode.EXACT ->
+        "(?-i)" + EDGE_WHITESPACE + escapeLiteralWithSpaceEquivalence(resolved.trim()) + EDGE_WHITESPACE
+      TextMatchMode.PREFIX ->
+        EDGE_WHITESPACE + escapeLiteralWithSpaceEquivalence(resolved.trim()) + "[\\s\\S]*"
       TextMatchMode.REGEX ->
         if (runCatching { Regex(resolved) }.isSuccess) resolved else Regex.escape(resolved)
     }
+  }
+
+  /**
+   * Requires BOTH the selector's own `textRegex` and the [expectedText]-derived pattern of the
+   * element Maestro resolves, expressed as the one `textRegex` field Maestro gives us.
+   *
+   * The modern path checks these separately: the node selector resolves the element (its own
+   * `textRegex` included), then [verifyTextEquality] checks [expectedText] on top. The legacy path
+   * has one text slot, so before this it just overwrote the selector's value — discarding a
+   * constraint the author supplied, and silently so. That loses real precision whenever the two
+   * spell the same string differently: an agent that reads a NO-BREAK SPACE out of the
+   * accessibility tree writes it into the selector verbatim and normalizes it to a plain space in
+   * [expectedText], so the surviving pattern was the one that could never match the tree.
+   *
+   * "Both must hold" is the contract because it's the one the modern path already implements —
+   * making the legacy path agree means a trail can't pass on one driver and fail on the other. The
+   * alternatives both lose: "selector wins" drops [expectedText] entirely on drivers with no node
+   * tree (where [verifyTextEquality] soft-passes and this pattern is the only thing enforcing it),
+   * and "narrower wins" isn't decidable between two arbitrary regexes.
+   *
+   * Conjunction shape: `(?=(?:expected)\z)(?:selector)`. Orchestra full-matches, so the lookahead
+   * pins `expected` across the whole value while `selector` consumes it — `\z` rather than `$`
+   * because Orchestra's MULTILINE would otherwise let `$` stop at a line break. Wrapping each side
+   * in `(?:…)` keeps a top-level `|` from spanning the join, and confines EXACT's leading `(?-i)`
+   * to its own side so the selector keeps the case-insensitivity it meant under Maestro.
+   *
+   * `expected` goes first because group numbering runs left to right across the whole pattern,
+   * lookaheads included, so whichever side comes second has its capture groups renumbered and any
+   * numbered backreference in it silently retargeted. `expected` is the hand- or LLM-authored side
+   * (REGEX mode), while selector patterns come out of the generator as escaped literals and digit
+   * classes — so the authored side is the one that gets to keep its numbering. A backreference in a
+   * hand-written *selector* pattern is still affected; use a named group (`\k<name>`) there, which
+   * numbering can't disturb.
+   *
+   * The selector side becomes `regex-or-exact-literal`, not just the regex. That is what selectors
+   * mean everywhere else: [TrailblazeNodeSelectorResolver]'s `matchesPattern` falls back to
+   * `text == pattern`, mirroring Maestro's own `Filters.textMatches`
+   * (`regex.matches(value) || regex.pattern == value`). Without the alternative, a recorded
+   * `textRegex` of `$5.00` — which compiles fine but can never match, since a bare `$` anchors the
+   * end — would resolve on the modern path and fail here. When the pattern doesn't compile at all
+   * the literal is all that's left, which is also what Orchestra's `toRegexSafe` would have
+   * degraded it to; inlining it raw would instead invalidate the *combined* pattern and take
+   * `expected` down with it.
+   */
+  private fun conjoinTextRegex(selectorTextRegex: String?, expectedTextRegex: String): String {
+    if (selectorTextRegex == null) return expectedTextRegex
+    val asLiteral = Regex.escape(selectorTextRegex)
+    val selectorAlternatives = if (runCatching { Regex(selectorTextRegex) }.isSuccess) {
+      "(?:$selectorTextRegex)|$asLiteral"
+    } else {
+      asLiteral
+    }
+    return "(?=(?:$expectedTextRegex)\\z)(?:$selectorAlternatives)"
   }
 
   /**
@@ -307,5 +385,56 @@ data class AssertVisibleBySelectorTrailblazeTool(
     is DriverNodeDetail.IosAxe -> d.label
     is DriverNodeDetail.Web -> d.ariaName
     else -> null
+  }
+
+  companion object {
+    /**
+     * Every Unicode space separator — all 17 members of category `Zs`. A reader cannot tell any of
+     * them apart from a plain space, so a literal text assertion typed with U+0020 has to match
+     * whichever one the app actually ships.
+     *
+     * UI copy carries them constantly, deliberately (a NO-BREAK SPACE keeping "your receipt?" or
+     * "$4.00" from wrapping) and incidentally (a CMS or the accessibility tree substituting one in).
+     * Nobody types one into an assertion and nobody can see one in a diff, so the failure reads
+     * `expected 'Total due', got 'Total due'`.
+     *
+     * `Zs` rather than a hand-picked subset because the two mechanisms that were supposed to absorb
+     * these each miss a *different* part of it, and neither miss is visible:
+     *  - Java's `\s` is ASCII-only (`[ \t\n\x0B\f\r]`) — Orchestra's REGEX_OPTIONS does not set
+     *    UNICODE_CHARACTER_CLASS — so a regex `\s` matches U+0020 and none of the other 16.
+     *  - Kotlin's `trim()` goes by `Char.isWhitespace`, which excludes exactly the three
+     *    non-breaking ones (U+00A0, U+2007, U+202F), so those survive trimming.
+     * Between them no subset was covered consistently, and the modern and legacy paths disagreed
+     * about which characters they tolerated. Folding all of `Zs` is the one rule that makes both
+     * paths agree.
+     *
+     * Deliberately NOT whitespace at large: `Zs` excludes `\n` and `\t` (they are `Cc`/`Zl`/`Zp`),
+     * and a newline carries real layout meaning in these assertions.
+     */
+    private const val ZS = "\\p{Zs}"
+
+    /** Leading/trailing padding: ASCII whitespace plus every [ZS] character. */
+    private const val EDGE_WHITESPACE = "[\\s$ZS]*"
+
+    private val zsRegex = Regex(ZS)
+
+    /**
+     * Collapses every [ZS] character to a plain space, then trims. Folding before trimming is the
+     * point: the three non-breaking members are not `Char.isWhitespace`, so trimming first would
+     * leave them stuck to the ends.
+     */
+    private fun foldSpacesAndTrim(text: String): String = zsRegex.replace(text, " ").trim()
+
+    /**
+     * `Regex.escape` on [literal], except each [ZS] character becomes the [ZS] class so the emitted
+     * pattern matches the text whichever space it uses — the pattern-side equivalent of
+     * [foldSpacesAndTrim].
+     *
+     * Splitting on the class and escaping the pieces, rather than escaping the whole string and
+     * patching it up, keeps every other character inside a `\Q…\E` quote where it belongs.
+     */
+    private fun escapeLiteralWithSpaceEquivalence(literal: String): String = literal
+      .split(zsRegex)
+      .joinToString(ZS) { Regex.escape(it) }
   }
 }

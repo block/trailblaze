@@ -100,15 +100,17 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .tlphasebody[hidden] { display: none; }
 .timelinecontrols { z-index: 7; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-shrink: 0; margin: 0 0 var(--space-3); padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg2); }
 .timelinecontrols .badge { flex-shrink: 0; }
-.timelinecontrols button.statusjump { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; border: 0; padding: 0; background: transparent; color: var(--danger-text); font-family: inherit; line-height: inherit; cursor: pointer; }
+.timelinecontrols .badge.passed { padding: 0; border-radius: 0; background: transparent; color: var(--status-passed-mark); font-size: var(--type-body); }
+.timelinecontrols button.statusjump { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 34px; border: 0; border-radius: var(--r-md); padding: 7px 9px; color: #fff; font-family: inherit; line-height: inherit; cursor: pointer; transition: background-color 120ms ease-out; }
 .statusjumplabel { font-size: var(--type-body); font-weight: var(--font-weight-emphasis); line-height: 1; letter-spacing: .025em; text-transform: uppercase; }
 .statusjumptoken { border-radius: var(--r-sm); padding: 2px 7px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; white-space: nowrap; }
-.timelinecontrols button.failedjump { color: var(--danger-text); }
-.failedjump .statusjumptoken { background: color-mix(in srgb,var(--danger-border) 26%,var(--danger-surface)); color: var(--danger-text); }
-.timelinecontrols button.failedjump:hover .statusjumptoken { background: color-mix(in srgb,var(--danger-border) 38%,var(--danger-surface)); }
-.timelinecontrols button.selfhealjump { color: var(--status-self-healed-mark); }
-.selfhealjump .statusjumptoken { background: var(--warning-surface); color: var(--status-self-healed-mark); }
-.timelinecontrols button.selfhealjump:hover .statusjumptoken { background: color-mix(in srgb,var(--warning-border) 34%,var(--warning-surface)); }
+.timelinecontrols button.failedjump { background: var(--status-failed-mark); color: #fff; }
+.timelinecontrols button.failedjump:hover { background: color-mix(in srgb,var(--status-failed-mark) 88%,#000); }
+.timelinecontrols button.selfhealjump { background: var(--status-self-healed-mark); color: #15181d; }
+.timelinecontrols button.selfhealjump:hover { background: color-mix(in srgb,var(--status-self-healed-mark) 88%,#000); }
+.failedjump .statusjumptoken { background: rgba(255,255,255,.2); color: #fff; }
+.selfhealjump .statusjumptoken { background: rgba(255,255,255,.3); color: inherit; }
+[data-theme="light"] .timelinecontrols button.selfhealjump { color: #fff; }
 .timelinecontrols button.statusjump:active { transform: translateY(1px); }
 .timelinefilters { min-width: 0; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .timelinecontrols .streammenu { right: 0; left: auto; }
@@ -156,7 +158,7 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .failurestack pre { max-height: 210px; margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--danger-border) 32%,var(--line)); border-radius: 0; background: var(--code-surface); color: var(--code-text); }
 .stepgroupbody > .failurepanel { margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--danger-border) 64%,var(--line2)); border-radius: 0; }
 .stepgroupbody > .selfhealpanel { margin: 0; border: 0; border-top: 1px solid color-mix(in srgb,var(--warning-border) 60%,var(--line2)); border-radius: 0; }
-.tlphase.trailhead .steps { border-color: color-mix(in srgb,var(--trail-mark) 52%,var(--line2)); }
+.tlphase.trailhead .steps { border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); }
 /* overflow: clip (not hidden) — hidden would make .steps a scroll container and break the sticky step headers. */
 .steps { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: clip; background: var(--bg2); box-shadow: inset 0 1px rgba(255,255,255,.025); }
 .tlphase:not(.trailhead) .steps { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
@@ -165,24 +167,46 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .stepgroup { position: relative; }
 .stepgroup.failed { background: var(--danger-surface); }
 .stepgroup.failed .grphdr { background: color-mix(in srgb,var(--danger-surface) 80%,var(--bg3)); }
-.stepgroup.failed .grphdr .chip { color: var(--danger-text); background: color-mix(in srgb,var(--danger-border) 26%,var(--danger-surface)); }
 .stepgroup.failed .step { background-color: transparent; }
 .stepgroup.selfhealed { background: var(--bg2); }
 .stepgroup.selfhealed .grphdr { background: var(--bg3); }
-.stepgroup.selfhealed .grphdr .chip { color: var(--warning-text); background: var(--warning-surface); }
 .stepgroup.selfhealed .step { background-color: var(--bg2); }
-.grphdr { position: sticky; top: 39px; z-index: 5; width: 100%; padding: 12px 14px 11px; background: var(--bg3); color: inherit; border: 0; border-top: 1px solid var(--line2); display: grid; grid-template-columns: auto auto auto 1fr; align-items: center; gap: 8px; font: inherit; text-align: left; cursor: pointer; }
+/* A step the run never reached: present so the reader can see how far the trail had left to go,
+   greyed and inert because there is no captured anything behind it. */
+.tlphase .stepgroup.skipped { background: transparent; border-style: dashed; box-shadow: none; }
+.stepgroup.skipped .grphdr { position: static; background: transparent; cursor: default; color: var(--sub); }
+.stepgroup.skipped .grphdr:hover { background: transparent; }
+/* Nothing to disclose, but the token still lines up with the steps that ran. */
+.stepgroup.skipped .grphdr::before { content: ''; grid-row: 1 / span 2; width: 14px; }
+.grphdr { position: sticky; top: 39px; z-index: 5; width: 100%; padding: 12px 14px 11px; background: var(--bg3); color: inherit; border: 0; border-top: 1px solid var(--line2); display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 2px 8px; font: inherit; text-align: left; cursor: pointer; }
+.grphdr .grpchev { grid-row: 1 / span 2; width: 14px; height: 14px; color: var(--sub); transition: transform 120ms ease-out; }
+.grphdr[aria-expanded="false"] .grpchev { transform: rotate(-90deg); }
+.grphdr .chip { grid-row: 1 / span 2; }
+.grphdr .grpstatus { grid-column: 3; display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--sub); }
+.grphdr .grpstatus .grpstatusicon { width: 13px; height: 13px; flex-shrink: 0; }
+.grphdr .grpstatus.pass .grpstatusicon { color: var(--status-passed-mark); }
+.grphdr .grpstatus.fail .grpstatusicon { color: var(--status-failed-mark); }
+.grphdr .grpstatus.selfheal .grpstatusicon { color: var(--status-self-healed-mark); }
+.grphdr .grpstatus.skip .grpstatusicon { color: var(--sub); }
 .grphdr:hover { background: color-mix(in srgb,var(--bg3) 84%,white); }
 .grphdr:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .steps > .grphdr:first-child, .stepgroup:first-child > .grphdr { border-top: none; }
-.grphdr .chip, .galchip { font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; color: var(--step-token-text); background: var(--step-token-surface); border-radius: var(--r-sm); padding: 2px 7px; white-space: nowrap; flex-shrink: 0; }
-.grphdr.trailhead .chip { color: var(--trail-text); background: var(--trail-surface); }
-.grphdr .dot { width: 8px; height: 8px; border-radius: 99px; }
-.grphdr .lbl { grid-column: 1 / -1; min-width: 0; display: block; font-size: 14px; font-weight: var(--font-weight-emphasis); margin-top: 4px; line-height: 1.4; overflow-wrap: anywhere; }
+.grphdr .chip, .galchip, .scrubtooltiptag { font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; color: var(--step-token-text); background: var(--step-token-surface); border-radius: var(--r-sm); padding: 2px 7px; white-space: nowrap; flex-shrink: 0; }
+/* The token doubles as the outcome mark, so a collapsed trail reads as a column of colours. */
+.grphdr .chip.pass { color: var(--status-passed-mark); background: color-mix(in srgb,var(--status-passed-mark) 16%,transparent); }
+.grphdr .chip.fail { color: var(--status-failed-mark); background: color-mix(in srgb,var(--status-failed-mark) 18%,transparent); }
+.grphdr .chip.selfheal { color: var(--status-self-healed-mark); background: color-mix(in srgb,var(--status-self-healed-mark) 18%,transparent); }
+.grphdr .chip.skip { color: var(--sub); background: color-mix(in srgb,var(--sub) 16%,transparent); }
+/* The trailhead is setup rather than a numbered trail step, so its token stays distinguishable at a
+   glance. It can't do that with hue any more, because hue now means outcome: it takes a ring in
+   whatever colour the outcome already gave it. */
+.grphdr.trailhead .chip { box-shadow: inset 0 0 0 1px currentColor; }
+.grphdr .lbl { grid-column: 3; min-width: 0; display: block; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1.4; overflow-wrap: anywhere; }
 .step { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
 .step.child { padding-left: 22px; }
 .step:hover, .step.sel:hover { background: var(--accent-surface); }
 .step.sel { background: transparent; box-shadow: inset 3px 0 var(--run); }
+.step[role="button"]:focus-visible { outline: 1px dashed var(--sub2); outline-offset: -3px; }
 .stepgroup.failed .step.sel { background: transparent; }
 .stepgroup.failed .step:hover, .stepgroup.failed .step.sel:hover { background: color-mix(in srgb,var(--danger-border) 18%,var(--danger-surface)); }
 .stepgroup.selfhealed .step.selfheal { background: var(--warning-surface); }
@@ -192,23 +216,29 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .step .ic { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1; }
 .step .ic.dot::before { content: ''; width: 9px; height: 9px; border-radius: 99px; background: var(--icon-color); }
 .step .ic.tap { color: var(--sub2); font-size: 13px; }
+.step .ic.tool { color: var(--txt); }
 .step .ic.llm { color: var(--ai); }
-.step .ic.llm svg { width: 14px; height: 14px; display: block; }
+.step .ic.tool svg, .step .ic.llm svg { width: 14px; height: 14px; display: block; }
 .step .ic.verify { color: var(--pass); }
 .step .ic.failure { color: var(--fail); }
 .step .lbl { min-width: 0; font-size: 13px; font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
 .step .tl-tool { font-size: 11px; color: var(--sub); margin-top: 2px; word-break: break-word; }
-.step .note { font-size: 11.5px; color: var(--sub2); margin-top: 3px; line-height: 1.4; overflow-wrap: anywhere; }
+.step .stepreason { margin: 0 0 8px; color: var(--sub2); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
 /* A full-width flex row below the [num][icon][label][time] line: the kid durations right-align
    to the same edge as the step's own time, and the list's left aligns with the label text. */
 .kids { min-width: 0; max-width: 100%; flex-basis: 100%; margin-top: -4px; padding-left: 54px; }
 .step.child .kids { padding-left: 24px; }
-.kids .kid { display: flex; gap: 6px; align-items: baseline; font-size: 11.5px; margin-top: 3px; min-width: 0; cursor: pointer; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
+.kids .kid { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 11.5px; margin-top: 3px; min-width: 0; cursor: pointer; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
+.kids .kid .stepreason { flex-basis: 100%; margin: 0 0 2px; }
 .kids .kid:hover { background: var(--bg3); }
 .kids .kid.sel { background: var(--accent-surface); box-shadow: inset 2px 0 0 var(--run); }
 /* The selected row's / dispatch's full call content, as trail-file YAML (WASM-report parity). */
 .toolargs { margin: 6px 0 2px; padding: 8px 10px; font-size: 11px; line-height: 1.5; color: var(--text); background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; white-space: pre; overflow: auto; max-height: 260px; }
 .kids .toolargs { margin-left: 0; }
+.kids .kidresult { margin: 6px 0 2px; padding: 8px 10px; color: var(--text); background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; }
+.kids .kidresultlabel { margin-bottom: 5px; color: var(--sub); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.kids .kidresultlabel span { margin-left: 7px; color: var(--warn); letter-spacing: 0; text-transform: none; }
+.kids .kidresult pre { margin: 0; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .kids .kt { flex: 1; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kids .kcount { color: var(--sub); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .kids .kms { margin-left: auto; color: var(--sub); font-variant-numeric: tabular-nums; flex-shrink: 0; }
@@ -229,11 +259,13 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .deviceplayer.device-ios { border-radius: var(--r-lg); }
 .deviceplayer.empty { width: min(360px,100%); }
 .previewactions { display: flex; justify-content: center; }
-button.btn.previewinspect { flex-shrink: 0; font-weight: var(--font-weight-strong); }
+button.btn.previewinspect { box-sizing: border-box; inline-size: 100px; block-size: 34px; flex-shrink: 0; font-weight: var(--font-weight-strong); }
+button.btn.previewinspect:disabled { opacity: 1; color: var(--disabled-text); background: var(--bg3); border-color: var(--line2); }
+button.btn.previewinspect:disabled > * { opacity: .45; }
 .previewinspecticon { width: 13px; height: 13px; flex-shrink: 0; }
 .shotwrap { width: fit-content; max-width: 100%; margin: 0; }
 .shot { max-width: 100%; max-height: calc(100vh - 334px); background: #000; border: 0; display: block; cursor: zoom-in; }
-.tlvframe { max-width: 100%; height: calc(100vh - 386px); min-height: 240px; aspect-ratio: 1/2; background-color: #000; background-repeat: no-repeat; display: block; }
+.tlvframe { max-width: 100%; height: calc(100vh - 372px); min-height: 240px; aspect-ratio: 1/2; background-color: #000; background-repeat: no-repeat; display: block; }
 .noshot { width: 100%; aspect-ratio: 1/2; border: 0; display: flex; align-items: center; justify-content: center; color: var(--sub); font-size: 12px; text-align: center; padding: 20px; }
 .scrubtransport { flex-shrink: 0; display: inline-flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); }
 .scrubtransport button.timelinecontrol { width: 32px; height: 30px; min-width: 32px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-left: 1px solid var(--line2); border-radius: 0; background: transparent; color: var(--sub2); cursor: pointer; }
@@ -315,19 +347,50 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 .llmtable tr.llmrow.grouped td.llmreq::before { content: ""; position: absolute; left: 11px; top: 0; bottom: -1px; width: 1px; background: var(--line2); }
 .llmtable tr.llmrow.grouped td.llmreq::after { content: ""; position: absolute; left: 11px; top: 13px; width: 9px; height: 1px; background: var(--line2); }
 .llmtable tbody.llmgroup tr.llmrow.grouped:last-child td.llmreq::before { bottom: 50%; }
-/* The dialog itself: modal over the current view (the report's zoom-overlay language); dismissed
-   by Escape or the close button only — scrim clicks are inert, like the WASM Chat History dialog. */
-.txoverlay { position: fixed; inset: 0; background: rgba(2,6,12,.72); display: flex; align-items: center; justify-content: center; z-index: 99; backdrop-filter: blur(4px); }
-.txpanel { display: flex; flex-direction: column; width: min(940px, 94vw); max-height: 90vh; background: var(--bg); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: 0 24px 64px rgba(0,0,0,.45); overflow: hidden; }
-.txpanelhead { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+/* Secondary report destinations push on as full-page surfaces, using the same motion as opening a
+   run from the index. Keeping this shared between transcript and inspector prevents either view
+   from drifting back toward centered-modal behavior. */
+.txoverlay, .inspector { position: fixed; inset: 0; z-index: 99; display: flex; align-items: stretch; justify-content: stretch; background: var(--bg); animation: reportPageForward 220ms cubic-bezier(.16,1,.3,1) both; }
+.txpanel { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--bg); overflow: hidden; }
+.txpanelhead { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: var(--space-3) var(--page-x); border-bottom: 1px solid var(--line); background: var(--header); flex-shrink: 0; }
 .txpaneltitle { flex: 1; min-width: 0; }
-.txpaneltitle .h { font-size: 13px; font-weight: var(--font-weight-emphasis); }
+.txpanelidentity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.txpaneltitle .h { font-size: 15px; font-weight: var(--font-weight-emphasis); }
 .txpaneltitle .txof { color: var(--sub); font-weight: var(--font-weight-emphasis); }
-.txpanelmeta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
-.txclose { flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); color: var(--sub); font-size: 16px; line-height: 1; cursor: pointer; }
-.txclose:hover { background: var(--bg3); color: var(--txt); }
-.txclose:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.txscroll { overflow: auto; padding: 10px 16px 16px; }
+.txcallposition { padding-left: 8px; border-left: 1px solid var(--line2); color: var(--sub); font-size: 11px; white-space: nowrap; }
+.txpanelmeta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 5px; font-size: 10.5px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.txnav { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.txnavgroup { display: grid; grid-template-columns: auto 30px 30px; align-items: center; overflow: hidden; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); }
+.txnavlabel { padding: 0 8px; color: var(--sub); font-size: 10px; font-weight: var(--font-weight-emphasis); text-transform: uppercase; letter-spacing: .06em; }
+button.btn.txnavbutton { width: 30px; min-width: 30px; min-height: 30px; padding: 0; border-width: 0 0 0 1px; border-radius: 0; }
+.txnavicon { width: 14px; height: 14px; display: block; }
+.txbodylayout { flex: 1; min-height: 0; overflow: hidden; }
+.txworkspace { display: grid; grid-template-columns: minmax(280px, 31vw) minmax(0, 1fr); width: 100%; height: 100%; min-height: 0; }
+.txcontext { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-4) var(--space-5) var(--page-x); border-right: 1px solid var(--line); background: var(--bg2); }
+.txstepcontext { display: grid; gap: 8px; }
+.txcontexttokens { display: flex; align-items: center; gap: 7px; }
+.txsteptoken, .txstatustoken { display: inline-flex; align-items: center; min-height: 22px; padding: 3px 8px; border-radius: var(--r-sm); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; white-space: nowrap; }
+.txsteptoken { background: var(--step-token-surface); color: var(--step-token-text); }
+.txstatustoken.passed { color: var(--success-text); background: var(--success-surface); }
+.txstatustoken.failed { color: var(--danger-text); background: var(--danger-surface); }
+.txstatustoken.selfheal { color: var(--warning-text); background: var(--warning-surface); }
+.txstepcontext h2 { margin: 0; font-size: 17px; line-height: 1.35; font-weight: var(--font-weight-emphasis); }
+.txscreenframe, .txscreenempty { display: flex; align-items: center; justify-content: center; min-height: 180px; max-height: 52vh; overflow: hidden; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg); }
+.txscreenframe img { display: block; width: auto; max-width: 100%; height: auto; max-height: 52vh; object-fit: contain; }
+.txscreenvideo { width: min(100%, calc(52vh * var(--tx-screen-aspect, .461538))); aspect-ratio: var(--tx-screen-aspect, 9 / 19.5); background-repeat: no-repeat; background-color: var(--bg); }
+.txscreenempty { flex-direction: column; gap: 5px; color: var(--sub); font-size: 12px; }
+.txscreenempty small { color: var(--sub2); font-size: 10.5px; }
+.txfailure { display: grid; gap: 6px; padding: 11px 12px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg); }
+.txfailure.failed { border-color: var(--danger-border); background: var(--danger-surface); }
+.txfailure.selfheal { border-color: var(--warning-border); background: var(--warning-surface); }
+.txcontextlabel { color: var(--sub); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); text-transform: uppercase; letter-spacing: .08em; }
+.txfailure strong { font-size: 12.5px; font-weight: var(--font-weight-emphasis); }
+.txfailure.failed strong, .txfailure.failed .txfailuretool { color: var(--danger-text); }
+.txfailure.selfheal strong, .txfailure.selfheal .txfailuretool { color: var(--warning-text); }
+.txfailuretool { font-size: 10.5px; }
+.txfailure p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--sub); font-size: 11px; line-height: 1.45; -webkit-line-clamp: 7; -webkit-box-orient: vertical; }
+.txconversation { min-width: 0; min-height: 0; overflow: auto; padding: var(--space-4) var(--page-x) var(--space-6) var(--space-5); }
+.txconversationinner { width: 100%; max-width: var(--content-reading); margin-inline: auto; }
 .txnote { color: var(--sub); font-size: 12px; padding: 8px 0; }
 /* Message bubbles (rendered only inside the dialog) — conversational, chat-app style. Two
    voices: what the model authored (assistant + its tool calls) sits left with the --ai accent;
@@ -338,7 +401,7 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 .txmsg.voice-llm { max-width: 86%; margin-right: auto; background: rgba(181,140,255,.08); border-color: rgba(181,140,255,.32); border-bottom-left-radius: 4px; }
 .txmsg.voice-user { max-width: 86%; margin-left: auto; background: rgba(77,139,255,.08); border-color: rgba(77,139,255,.30); border-bottom-right-radius: 4px; }
 .txmsg.voice-sys { background: var(--bg2); border-color: var(--line); color: var(--sub); }
-.txmsg.voice-llm pre, .txmsg.voice-user pre { background: transparent; }
+.txmsg.voice-llm pre, .txmsg.voice-user pre, .txmsg.voice-sys pre { background: transparent; }
 .txavatar { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; align-self: center; font-size: 8.5px; font-weight: var(--font-weight-emphasis); letter-spacing: 0; }
 .txavatar.llm { background: rgba(181,140,255,.22); color: var(--ai); }
 .txavatar.user { background: rgba(77,139,255,.22); color: var(--run); }
@@ -349,10 +412,17 @@ button.btn.play { border-color: var(--run); background: var(--accent-surface); c
 .txraw summary::before { content: '› '; }
 .txraw[open] summary::before { content: '⌄ '; }
 .txraw pre { border-top: 1px dashed var(--line); }
-.txmsg .txhead { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px 0; }
+.txmsg .txhead { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; }
+.txmsg .txhead.user-authored { justify-content: flex-end; }
+.txmsg .txhead.user-authored .txrole { order: 1; }
+.txmsg .txhead.user-authored .txavatar { order: 2; }
 .txmsg summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.txmsg summary.user-authored { align-items: center; }
+.txmsg summary.user-authored .txrole { order: 2; margin-left: auto; }
+.txmsg summary.user-authored .txavatar { order: 3; }
 .txmsg summary::-webkit-details-marker { display: none; }
 .txmsg summary::after { content: '›'; color: var(--sub2); font-size: 15px; line-height: 1; margin-left: auto; transition: transform 120ms ease-out; }
+.txmsg summary.user-authored::after { order: 4; margin-left: 0; }
 .txmsg[open] summary::after { transform: rotate(90deg); }
 /* Inset ring: .txmsg clips overflow, so an outset ring on the summary would be invisible. */
 .txmsg summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
@@ -478,7 +548,7 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxmatrixrow { grid-template-columns: minmax(220px,1fr) minmax(0,auto); cursor: default; }
 .idxmatrixrow .nm { font-weight: var(--font-weight-emphasis); }
 .idxcells { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.idxcell { position: relative; width: 164px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg3); transition: border-color 120ms ease-out, background-color 120ms ease-out; }
+.idxcell { position: relative; width: var(--idxcell-w, 164px); box-sizing: border-box; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg3); transition: border-color 120ms ease-out, background-color 120ms ease-out; }
 .idxcell:hover { border-color: var(--run); }
 .idxcellopen { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; width: 100%; box-sizing: border-box; margin: 0; padding: 9px 14px; border: 0; border-radius: var(--r-sm); background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .idxcellopen:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
@@ -488,6 +558,12 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxcell .pv .pvtxt { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .idxcell .pcounts { justify-self: end; text-align: right; font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .idxcell .idxstatusdot { box-shadow: none; }
+/* An index row/cell whose run lives in another report renders as an anchor rather than a button
+   (see openControl in the viewer), or as an inert span when its URL is unusable. An anchor must be
+   visually indistinguishable from the button it replaces; an inert span must not claim to be
+   clickable. */
+a.idxrow, a.idxattemptrow, a.idxcellopen { color: inherit; text-decoration: none; }
+span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 .idxcell.failed { border-color: var(--danger-border); background: var(--danger-surface); }
 .idxcell.selfheal { border-color: var(--warning-border); background: var(--bg2); }
 [data-theme="dark"] .idxcell.failed { border-color: color-mix(in srgb,var(--danger-border) 58%,var(--line2)); }
@@ -548,6 +624,12 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 /* header's bottom padding is 0 because the tab nav supplies that space. A header rendered without
    tabs (the still-loading run view) has to supply it itself or the title sits on the border. */
 .detailheader.notabs { padding-bottom: var(--page-y); }
+/* ?chrome=none: the run's identity row belongs to the embedder, so the tabs take its place on the
+   top line and the export menu rides on the right of them. Both of the title row's leading spaces
+   have to go with it, or the tabs sit in a band of padding with nothing above it. */
+.detailheader.notitle { padding-top: var(--space-2); }
+.detailheader.notitle nav { margin-top: 0; }
+.tabrow { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .detailtitle { min-height: 32px; max-width: none; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; }
 .detailtitle.noback { grid-template-columns: minmax(0,1fr) auto; }
 .detailedge { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
@@ -651,15 +733,33 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .vctl .btn.play { min-width: 84px; }
 .vctl .count { font-variant-numeric: tabular-nums; }
 .vctl input[type=range] { flex: 1; accent-color: var(--run); }
-.scrub { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
+.scrub { position: relative; z-index: 20; flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 7px var(--page-x); border-top: 1px solid var(--line); background: var(--header); user-select: none; }
 .scrubclock { color: var(--sub); font-size: var(--type-micro); text-align: center; font-variant-numeric: tabular-nums; }
 .scrubtrack { position: relative; flex: 1; height: 28px; cursor: pointer; }
+.scrubtrack:focus { outline: none; }
+.scrubtrack:focus-visible { outline: 1px dashed var(--sub2); outline-offset: 2px; border-radius: var(--r-md); }
 .scrubline { position: absolute; top: 50%; height: 1px; transform: translateY(-50%); pointer-events: none; }
-.scrubline.setup { left: 0; height: 0; border-top: 1px dashed color-mix(in srgb,var(--trail-mark) 62%,var(--line2)); }
+.scrubphasebox { position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 0; box-sizing: border-box; border: 1px dashed color-mix(in srgb,var(--trail-mark) 72%,var(--line2)); border-radius: var(--r-md); background: color-mix(in srgb,var(--trail-mark) 5%,transparent); pointer-events: none; }
+.scrubhoverstep { position: absolute; z-index: 0; top: 3px; bottom: 3px; border-radius: var(--r-md); background: color-mix(in srgb,var(--run) 9%,transparent); opacity: 0; pointer-events: none; transition: opacity 100ms ease-out; }
+.scrubhoverstep.visible { opacity: 1; }
 .scrubline.trail { right: 0; background: var(--line2); }
-.scrubphasebreak { position: absolute; top: 50%; width: 11px; height: 11px; border: 2px solid var(--bg); border-radius: 99px; background: var(--trail-mark); box-shadow: 0 0 0 1px color-mix(in srgb,var(--trail-mark) 55%,var(--line2)); transform: translate(-50%,-50%); pointer-events: none; }
-.scrubtick { position: absolute; top: 4px; bottom: 4px; width: 3px; border: 0; padding: 0; border-radius: 2px; opacity: .72; pointer-events: none; }
-.scrubhead { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 99px; transform: translate(-50%,-50%); background: #fff; border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 5px rgba(0,0,0,.6); pointer-events: none; }
+.scrubstatusbox { position: absolute; z-index: 1; top: 3px; bottom: 3px; box-sizing: border-box; border-radius: var(--r-md); }
+.scrubstatusbox.selfhealed { border: 1px dashed var(--status-self-healed-mark); background: color-mix(in srgb,var(--status-self-healed-mark) 9%,transparent); }
+.scrubstatusbox.failed { border: 1px dashed var(--status-failed-mark); background: color-mix(in srgb,var(--status-failed-mark) 9%,transparent); }
+.scrubtick { position: absolute; z-index: 2; top: 4px; bottom: 4px; width: 3px; border: 0; padding: 0; border-radius: 2px; opacity: .78; }
+.scrubtick.objective.failed, .scrubtick.objective.selfhealed { width: 5px; opacity: 1; }
+.scrubtick.event { top: 50%; bottom: auto; width: 5px; height: 5px; border-radius: 99px; opacity: .92; box-shadow: 0 0 0 1px var(--header); transform: translate(-1px,-50%); }
+.scrubtooltip { position: absolute; z-index: 4; left: 50%; bottom: calc(100% + 8px); display: flex; width: max-content; max-width: calc(100vw - 32px); padding: var(--space-3); border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--raised); color: var(--txt); box-shadow: var(--shadow-raised); opacity: 0; pointer-events: none; transform: translate(-50%,4px); transition: opacity 100ms ease-out,transform 100ms ease-out; }
+.scrubtooltipmeta { display: flex; align-items: center; gap: 6px; }
+.scrubtooltiptag { display: inline-flex; align-items: center; min-height: 21px; padding: 3px 11px; font-size: calc(var(--type-micro) * 1.5); line-height: 1; text-transform: uppercase; }
+.scrubtooltipstep { color: var(--step-token-text); background: var(--step-token-surface); }
+.scrubtooltipstep.scrubtooltiptrailhead { color: var(--trail-text); background: var(--trail-surface); }
+.scrubtooltipkind { display: none; color: var(--tick-color); background: color-mix(in srgb,var(--tick-color) 14%,var(--raised)); }
+.scrubtooltipkind.visible { display: inline-flex; }
+.scrubtracktooltip { visibility: hidden; will-change: left; transition: left 45ms linear,opacity 100ms ease-out,transform 100ms ease-out,visibility 0s linear 100ms; }
+.scrubtracktooltip.visible { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
+.scrubtick:hover { z-index: 5; opacity: 1; }
+.scrubhead { position: absolute; z-index: 3; top: 50%; width: 12px; height: 12px; box-sizing: border-box; border-radius: 99px; transform: translate(-50%,-50%); background: transparent; border: 2px solid var(--run); box-shadow: 0 1px 4px color-mix(in srgb,var(--txt) 30%,transparent); pointer-events: none; }
 .streamitems { display: grid; gap: 0; }
 .streamitems.timelineeventitems { margin: 0; }
 .timelineevent { min-width: 0; border-top: 1px solid var(--line); border-left: 3px solid var(--stream-color); background: var(--bg2); }
@@ -701,13 +801,29 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .yamlcopy { min-height: 24px; padding: 3px 7px; border-radius: var(--r-sm); font-size: 10px; }
 .yamlcol .cmd { max-width: none; }
 @media (min-width: 820px) { .yamlcompare { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 900px) {
+  .txpanelhead { align-items: flex-start; flex-wrap: wrap; }
+  .txpaneltitle { padding-top: 4px; }
+  .txnav { width: 100%; padding-left: 36px; }
+  .txbodylayout { overflow: auto; }
+  .txworkspace { display: block; height: auto; min-height: 100%; }
+  .txcontext { display: grid; grid-template-columns: minmax(0,1fr) minmax(170px,34vw); grid-template-areas: "step screen" "failure screen"; align-items: start; overflow: visible; padding: var(--space-4) var(--page-x); border-right: 0; border-bottom: 1px solid var(--line); }
+  .txstepcontext { grid-area: step; }
+  .txscreenframe, .txscreenempty { grid-area: screen; min-height: 140px; max-height: 34vh; }
+  .txscreenframe img { max-height: 34vh; }
+  .txfailure { grid-area: failure; }
+  .txconversation { overflow: visible; padding: var(--space-4) var(--page-x) var(--space-6); }
+}
 @media (min-width: 960px) {
   main.timelinemain { overflow: hidden; }
   .timelinemain .tl { height: 100%; min-height: 0; grid-template-columns: minmax(320px,1fr) minmax(340px,42%); grid-template-rows: minmax(0,1fr); gap: 24px; align-items: stretch; }
   .timelinemain .timeline-list { grid-row: auto; min-height: 0; display: flex; flex-direction: column; overflow: visible; }
-  /* Match the cards' usable width: their scroll pane also gives up the 8px scrollbar gutter. */
+  /* Share the scroll pane's inline inset so the header and timeline cards grow together. The extra
+     8px matches the gutter scrollbar-gutter: stable reserves on the next line (the width set on
+     *::-webkit-scrollbar): a card's right edge lands at pane-right minus that gutter minus
+     --page-x, so controls insetting by --page-x alone would sit 8px wider in BOTH states. */
   .timelinemain .timelinecontrols { margin-right: calc(var(--page-x) + 8px); }
-  .timelinemain .timelinescroll { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; padding-right: var(--page-x); }
+  .timelinemain .timelinescroll { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; padding-right: var(--page-x); }
   .timelinemain .preview { position: static; grid-row: auto; min-height: 0; height: 100%; display: flex; align-items: center; justify-content: center; }
   .timelinemain .devicecolumn { max-height: 100%; }
   .timelinemain .deviceplayer { max-height: 100%; min-height: 0; align-self: center; }
@@ -759,29 +875,36 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .zoom .zoomwrap { position: relative; }
 .zoom .zoomwrap img { display: block; }
 button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn, .txclose { min-width: 44px; min-height: 44px; } }
-@media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back { animation: none; } }
+@media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn { min-width: 44px; min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back, .txoverlay, .inspector { animation: none; } }
 @media (max-width: 640px) {
   :root { --page-x: 18px; --page-y: 20px; }
   main { padding-bottom: var(--space-5); }
   h1 { font-size: 21px; }
   .detailheader h1 { font-size: 18px; }
+  .txpanelidentity { flex-wrap: wrap; }
+  .txcallposition { border-left: 0; padding-left: 0; }
+  .txnav { padding-left: 0; }
+  .txnavgroup { flex: 1; grid-template-columns: minmax(0,1fr) 38px 38px; }
+  button.btn.txnavbutton { width: 38px; min-width: 38px; }
+  .txcontext { display: flex; }
+  .txscreenframe, .txscreenempty { min-height: 160px; max-height: 36vh; }
+  .txscreenframe img { max-height: 36vh; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
-/* ── UI Inspector (per-step view-hierarchy overlay) ─────────────────────────────────────────── */
-.inspector { position: fixed; inset: 0; background: rgba(2,6,12,.72); display: flex; align-items: center; justify-content: center; z-index: 99; backdrop-filter: blur(4px); padding: 24px; }
-.insppanel { display: flex; flex-direction: column; width: min(1240px, 100%); height: 100%; max-height: 94vh; background: var(--bg); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--shadow-raised); overflow: hidden; }
-.insphead { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+/* ── UI Inspector (per-step pushed view) ────────────────────────────────────────────────────── */
+.insppanel { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--bg); overflow: hidden; }
+.insphead { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: var(--space-3) var(--page-x); border-bottom: 1px solid var(--line); background: var(--header); flex-shrink: 0; }
 .insptitle { font-size: 14px; font-weight: var(--font-weight-emphasis); }
 .inspcontext { font-size: 12px; color: var(--sub); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .inspactions { display: flex; gap: 8px; flex-shrink: 0; }
 .inspactions button.btn.inspaction { min-height: 28px; padding: 4px 8px; font-size: 11px; }
 .inspactionicon { width: 13px; height: 13px; display: block; flex-shrink: 0; }
-.inspbody { display: grid; grid-template-columns: minmax(220px, 34%) minmax(0, 1fr); gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+.inspbody { display: grid; grid-template-columns: minmax(220px, 34%) minmax(0, 1fr); gap: var(--space-4); width: 100%; padding: var(--page-y) var(--page-x); flex: 1; min-height: 0; }
 .insppane { min-height: 0; overflow: auto; }
 .inspshotpane { display: flex; align-items: flex-start; justify-content: center; }
 .inspshotwrap { position: relative; max-width: 100%; cursor: crosshair; }
-.inspshotwrap img { display: block; max-width: 100%; max-height: calc(94vh - 120px); border-radius: var(--r-sm); border: 1px solid var(--line2); }
+.inspshotwrap img { display: block; max-width: 100%; max-height: calc(100vh - 120px); border-radius: var(--r-sm); border: 1px solid var(--line2); }
 /* Panel geometry adapts to the CAPTURE's shape (insp-* set from the hierarchy's device extent) and
    the screenshot pane is the priority claimant on space — hovering it is the primary interaction,
    so when space is tight the DATA column is the one that caps (its own scroll), never the image.
@@ -877,7 +1000,7 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
 .inspnoderow.sel { background: var(--accent-surface); box-shadow: none; }
 .inspnoderow .inspkey { color: var(--sub); font-size: 10.5px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .inspnoderow .insplabel { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.inspraw { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-surface); color: var(--code-text); padding: 10px 12px; font-size: 11.5px; margin: 0; }
+.inspraw { flex: 1; min-height: 0; max-height: none; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--code-surface); color: var(--code-text); padding: 10px 12px; font-size: 11.5px; margin: 0; }
 .inspnote { color: var(--sub); font-size: 12.5px; padding: 12px; }
 @media (max-width: 760px) { .inspbody { grid-template-columns: 1fr; } .inspshotwrap img { max-height: 38vh; } }
 
@@ -885,5 +1008,6 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
    screen-record. Affordances nobody can click are chrome in a recording, and an in-flight
    transition is a frame the encoder keeps, so both are dropped for the capture only. */
 html[data-tb-autoplay] .detailactions { display: none; }
+html[data-tb-embedded] body { background: transparent; }
 html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autoplay] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 `;

@@ -158,13 +158,25 @@
     return order.map(function (id) { return groups[id]; });
   }
 
-  // Chronological log order (LogsRepo sorts parsed logs by timestamp). Stable sort keeps the
-  // numbered-filename feed order for identical millisecond stamps, so sub-millisecond fractions
-  // Date.parse truncates can't reorder Kotlin-adjacent logs.
+  // Chronological log order (LogsRepo sorts parsed logs by timestamp — an Instant, so its
+  // comparison runs past the millisecond). Date.parse stops AT the millisecond, and the records
+  // this ordering exists to place — a driver action and the tool call it belongs to — land
+  // microseconds apart, so a millisecond-only key calls them equal and the stable tiebreak falls
+  // back to the numbered-filename order, which is the very order that needs correcting. `sub`
+  // carries the digits past the millisecond; feed order still breaks a genuine tie.
   function sortLogsByTimestamp(logs) {
     return logs
-      .map(function (log, index) { return { log: log, index: index, at: Date.parse(log.timestamp) || 0 }; })
-      .sort(function (a, b) { return (a.at - b.at) || (a.index - b.index); })
+      .map(function (log, index) {
+        var ts = log && typeof log.timestamp === 'string' ? log.timestamp : '';
+        var frac = /\.(\d+)/.exec(ts);
+        return {
+          log: log,
+          index: index,
+          at: Date.parse(ts) || 0,
+          sub: frac ? Number((frac[1] + '000000000').slice(3, 9)) : 0,
+        };
+      })
+      .sort(function (a, b) { return (a.at - b.at) || (a.sub - b.sub) || (a.index - b.index); })
       .map(function (row) { return row.log; });
   }
 
@@ -330,6 +342,14 @@
     if (platform) meta.platform = platform.toLowerCase();
     if (deviceId && deviceId.instanceId) meta.device = deviceId.instanceId;
     if (deviceInfo && deviceInfo.classifiers) {
+      // Same two values sessionMetaJson emits, so a report opened from a zip gets classifier-named
+      // matrix columns and a searchable classifier just like a CI-generated one. The classifier is
+      // the segments joined with '-' — the device's specific compound identity, which is what
+      // TrailblazeClassifierLineage.resolutionChain puts at the head of its chain.
+      var deviceClassifier = deviceInfo.classifiers
+        .filter(function (c) { return c && String(c).trim() !== ''; })
+        .join('-');
+      if (deviceClassifier) meta.deviceClassifier = deviceClassifier;
       var deviceType = deviceInfo.classifiers
         .filter(function (c) { return !platform || c.toLowerCase() !== platform.toLowerCase(); })
         .join(' · ');
@@ -435,6 +455,7 @@
       buildRunReportHtml: render.buildRunReportHtml || g.buildRunReportHtml,
       buildMultiReportHtml: render.buildMultiReportHtml || g.buildMultiReportHtml,
       packSessionInputsHierarchies: render.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
+      traceScreenshotFiles: render.traceScreenshotFiles || g.traceScreenshotFiles,
     };
   }
 
@@ -446,7 +467,8 @@
   // two HTML builders, so it can embed the viewer bundle alone instead of all of run-report-core.
   //
   // options: { render?, onStage?, inflateRaw?, generatedAt? }. render defaults to the browser
-  // globals (only extractTrace / extractLlmLogs / originalYamlFromLogs are consulted here);
+  // globals (only extractTrace / extractLlmLogs / originalYamlFromLogs / traceScreenshotFiles are
+  // consulted here);
   // inflateRaw defaults to null (browser DecompressionStream); generatedAt defaults to now and is
   // shared across every session in a multi-session archive.
   function buildSessionInputsFromZipBytes(zipBytes, options) {
@@ -470,15 +492,8 @@
             recordingYaml: session.recordingYaml, originalYaml: originalYaml, generatedAt: generatedAt,
           });
           // Only the screenshots the trace references — the archive may also hold sprite sheets and
-          // other image-shaped artifacts the report never shows. Each row's frame plus each folded
-          // child dispatch's own frame (the per-interaction captures a batched step's children
-          // preview), mirroring run-report-cli.ts's collection.
-          var wanted = [];
-          var want = function (file) { if (file && wanted.indexOf(file) < 0) wanted.push(file); };
-          trace.forEach(function (t) {
-            want(t.screenshotFile);
-            (t.children || []).forEach(function (c) { want(c.screenshotFile); });
-          });
+          // other image-shaped artifacts the report never shows.
+          var wanted = render.traceScreenshotFiles(trace);
           var shots = {};
           var shotChain = Promise.resolve();
           wanted.forEach(function (file) {

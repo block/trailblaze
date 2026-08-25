@@ -190,11 +190,11 @@ Giving your output — the ONE clear way to hand back a result:
   shown as an output card. Emit it on every meaningful change, not only at the very end.
 
 When changing what else the human should see in Trail Runner would help, emit one standalone line:
-TRAILRUNNER_UI {"version":1,"action":"navigate","route":"active","params":{"sel":"<session id>"}}
+TRAILRUNNER_UI {"version":1,"action":"navigate","route":"runs","params":{"sel":"<session id>"}}
 
 Supported actions:
-- navigate: route is one of home, prompt, create, interact, trails, tools, toolsets, waypoints, shortcuts, trailheads, active, completed, runs, settings, agents. params is optional.
-- open_session: set sessionId, and optionally params.view to active, completed, or runs.
+- navigate: route is one of home, prompt, create, interact, trails, tools, toolsets, waypoints, shortcuts, trailheads, runs, settings, agents. params is optional.
+- open_session: set sessionId. Runs, active and completed alike, all live on the runs route.
 - open_trail: set trailId.
 - trail_output: set trailId and message; optional params.status and params.files. Your primary result channel - declares a trail you produced or changed without navigating away.
 - ask_user: set message (the question) to ask the human a question with clickable answers. Give the choices in params.options as a pipe-separated list, OR set params.source to "trailheads" to have Trail Runner fill the workspace's trailheads as the options. Clicking an answer replies to you; the human can also type instead. Use it for the starting-point question and any either/or decision. Clicking an option ONLY sends its text back as the human's reply - it cannot grant permissions, run commands, or change any setting, so never offer an option that implies the system will perform an action (e.g. "Approve X access").
@@ -1667,7 +1667,7 @@ internal object ExternalAgentSupervisor {
         sessionId = run.id,
         sessionDir = dir,
         deviceId = demo.device,
-        targetAppId = targetAppId,
+        targetAppIds = listOf(targetAppId),
       )
       demo.captureStarted = true
     }.onFailure { Console.log("[demo] network capture start failed: ${it.message}") }

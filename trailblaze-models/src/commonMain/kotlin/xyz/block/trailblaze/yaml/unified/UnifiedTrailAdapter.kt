@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml.unified
 
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -74,19 +75,42 @@ object UnifiedTrailAdapter {
    * @param classifiers the device's broad-first classifier segments (e.g.
    *   `[ios, iphone]`), as emitted by a `TrailblazeDeviceClassifiersProvider`.
    *   Resolved into a most-specific-first lineage chain internally.
+   * @param selectedDeviceConfiguration the multi-device configuration this session explicitly
+   *   selected (a `config.devices:` configuration entry's name), or null for a single-device
+   *   run. Selection is the ONLY way a configuration's recording legs resolve: the name is
+   *   matched exactly, ahead of the start device's classifier chain — configuration names are
+   *   otherwise invisible to lineage.
    */
   fun lowerToTrailItems(
     unified: UnifiedTrail,
     classifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String? = null,
   ): List<TrailYamlItem> {
-    val resolutionChain = TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
-    // Resolve the per-classifier driver pin (config.devices maps classifier -> driver) for THIS
-    // device the same closest-wins way as recordings, collapsing to the single driver the v1
-    // executor consumes for the run.
-    val resolvedDriver = resolveClosestMatch(unified.config.devices, resolutionChain)
+    // Multi-device configuration names are invisible to every chain-based lookup below —
+    // a configuration's legs/pins are reachable only by exact configuration selection.
+    val allConfigurationNames = unified.config.multiDeviceConfigurationNames
+    if (selectedDeviceConfiguration != null) {
+      require(selectedDeviceConfiguration in allConfigurationNames) {
+        "selected device configuration '$selectedDeviceConfiguration' is not declared in " +
+          "config.devices — declared configurations: $allConfigurationNames"
+      }
+    }
+    // The selected configuration's name resolves EXACTLY and first; every other configuration
+    // name stays excluded from the chain walks.
+    val resolutionChain = listOfNotNull(selectedDeviceConfiguration) +
+      TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
+    // Resolve the per-classifier driver pin (config.devices maps classifier -> device definition)
+    // for THIS device the same closest-wins way as recordings, collapsing to the single driver
+    // name the v1 executor consumes for the run. A matched entry that pins no driver resolves to
+    // null the same as no match — the driver then falls back to runtime resolution. ALL
+    // configuration names are excluded here (even the selected one): a configuration entry never
+    // pins the run driver — per-device drivers live on its named devices.
+    val resolvedDriver =
+      resolveClosestMatch(unified.config.devices, resolutionChain, allConfigurationNames)?.driver?.name
     // Resolve the per-classifier skip reason the same closest-wins way, lowering to the single v1
     // `TrailConfig.skip` the runner/CLI consult before executing.
-    val resolvedSkip = resolveSkip(unified.config, classifiers)
+    val resolvedSkip = resolveSkip(unified.config, classifiers, selectedDeviceConfiguration)
     // Observability, mirroring the per-step recording fall-through below: the trail pins drivers
     // for some classifiers but none match this device's chain, so the driver silently falls back
     // to runtime resolution (--driver > app setting). Surface it so an unexpected default-driver
@@ -104,11 +128,11 @@ object UnifiedTrailAdapter {
     if (resolutionChain.isNotEmpty()) {
       Console.log(
         "[unified-resolve] ${resolutionChain.first()}: " +
-          describeRecordingResolution(unified, classifiers).summarize(),
+          describeRecordingResolution(unified, classifiers, selectedDeviceConfiguration).summarize(),
       )
     }
     val promptSteps = unified.trail.map { step ->
-      val tools = resolveClosestMatch(step.recordings, resolutionChain)
+      val tools = resolveClosestMatch(step.recordings, resolutionChain, configurationNames)
       // Observability: a step that DECLARES recordings but matches none on this device's chain
       // lowers to LLM mode indistinguishably from an intentional `recordable`/no-recording step.
       // Surface it so a mis-keyed classifier or a genuine coverage gap is debuggable. Gated on a
@@ -145,7 +169,7 @@ object UnifiedTrailAdapter {
     // The optional trailhead lowers to a TrailheadTrailItem between config and prompts — its
     // per-classifier tools resolve the same closest-wins way as a regular step's recordings.
     val trailheadItem = unified.trailhead?.let { th ->
-      val trailheadTools = resolveClosestMatch(th.recordings, resolutionChain)
+      val trailheadTools = resolveClosestMatch(th.recordings, resolutionChain, configurationNames)
       // Observability: the trailhead is the deterministic step 0, so a declared-but-unmatched
       // recording that silently drops its bootstrap tools is even worse than the per-step case
       // above — surface it the same way. Same non-empty-chain gate keeps the safe-mode decode quiet.
@@ -201,12 +225,14 @@ object UnifiedTrailAdapter {
   ): Boolean {
     val resolutionChain =
       TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    val configurationNames = unified.config.multiDeviceConfigurationNames
     val stepHasRecording = unified.trail.any { step ->
-      resolveClosestMatch(step.recordings, resolutionChain) != null
+      resolveClosestMatch(step.recordings, resolutionChain, configurationNames) != null
     }
     if (stepHasRecording) return true
-    return unified.trailhead?.let { resolveClosestMatch(it.recordings, resolutionChain) != null }
-      ?: false
+    return unified.trailhead?.let {
+      resolveClosestMatch(it.recordings, resolutionChain, configurationNames) != null
+    } ?: false
   }
 
   /**
@@ -397,15 +423,25 @@ object UnifiedTrailAdapter {
    * with no chain to resolve against, the trail counts as skipped if *any* classifier declares a
    * non-blank reason, so the CLI's skip gate still fires. Blank reasons are ignored (v1 semantics:
    * `skip: ""` is not a skip).
+   *
+   * A skip keyed by a multi-device configuration name applies only by exact configuration
+   * selection ([selectedDeviceConfiguration]), checked FIRST — never via a device's classifier
+   * chain, the same invisibility rule as recordings and pins.
    */
   fun resolveSkip(
     config: UnifiedTrailConfig,
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String? = null,
   ): String? {
     val skipMap = config.skip
     if (skipMap.isNullOrEmpty()) return null
+    if (selectedDeviceConfiguration != null) {
+      skipMap[selectedDeviceConfiguration]?.takeIf { it.isNotBlank() }?.let { return it }
+    }
     val resolutionChain = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier }
+    val configurationNames = config.multiDeviceConfigurationNames
     for (classifier in resolutionChain) {
+      if (classifier in configurationNames) continue
       skipMap[classifier]?.takeIf { it.isNotBlank() }?.let { return it }
     }
     // No device chain (device-agnostic caller) → skipped if any classifier declares a reason.
@@ -436,7 +472,8 @@ object UnifiedTrailAdapter {
     deviceClassifiers: List<TrailblazeDeviceClassifier>,
   ): String? {
     val resolutionChain = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers).map { it.classifier }
-    return resolveClosestMatch(config.devices, resolutionChain)
+    return resolveClosestMatch(config.devices, resolutionChain, config.multiDeviceConfigurationNames)
+      ?.driver?.name
   }
 
   /**
@@ -450,16 +487,49 @@ object UnifiedTrailAdapter {
    * Pure and device-free: it reads only the trail document and a classifier list, so a whole corpus
    * can be audited offline. See [TrailRecordingResolution] for what each outcome means and why the
    * existing report fields can't tell them apart.
+   *
+   * A session that bound a multi-device configuration must use the overload that names it.
    */
   fun describeRecordingResolution(
     unified: UnifiedTrail,
     classifiers: List<TrailblazeDeviceClassifier>,
+  ): TrailRecordingResolution = describeRecordingResolution(unified, classifiers, null)
+
+  /**
+   * [describeRecordingResolution] for a session that selected a multi-device configuration.
+   *
+   * [selectedDeviceConfiguration] must be the configuration the session actually bound, exactly as
+   * [lowerToTrailItems] receives it — a multi-device trail keys its legs by the configuration NAME,
+   * and that name is excluded from every classifier walk unless it is the selected one. Omitting it
+   * for a session that selected one reports each of those legs as unmatched, so a fully
+   * deterministic replay reads as an all-LLM run.
+   *
+   * A separate overload rather than a default argument: this module's published ABI is locked down,
+   * and defaulting the parameter would replace the two-argument JVM signature every already-compiled
+   * caller links against.
+   */
+  fun describeRecordingResolution(
+    unified: UnifiedTrail,
+    classifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String?,
   ): TrailRecordingResolution {
-    val resolutionChain = TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    // Same three checks as lowerToTrailItems, and they must stay the same: an undeclared selection
+    // is rejected rather than prepending a phantom chain head that matches nothing, the selected
+    // configuration resolves exactly and first, and every other configuration name stays excluded.
+    val allConfigurationNames = unified.config.multiDeviceConfigurationNames
+    if (selectedDeviceConfiguration != null) {
+      require(selectedDeviceConfiguration in allConfigurationNames) {
+        "selected device configuration '$selectedDeviceConfiguration' is not declared in " +
+          "config.devices — declared configurations: $allConfigurationNames"
+      }
+    }
+    val deviceChain = TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
+    val resolutionChain = listOfNotNull(selectedDeviceConfiguration) + deviceChain
+    val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
     fun describe(stepIndex: Int?, step: UnifiedTrailStep): RecordingResolution {
       // One traversal: the winning key drives both fields, so they cannot disagree about whether
       // the step matched.
-      val key = resolveClosestKey(step.recordings, resolutionChain)
+      val key = resolveClosestKey(step.recordings, resolutionChain, configurationNames)
       return RecordingResolution(
         stepIndex = stepIndex,
         isVerify = step.verify,
@@ -469,7 +539,11 @@ object UnifiedTrailAdapter {
       )
     }
     return TrailRecordingResolution(
-      deviceClassifier = resolutionChain.firstOrNull(),
+      // The DEVICE's own identity, not the chain head: with a configuration selected the chain head
+      // is the configuration, and both are exact keys for this session (see
+      // TrailRecordingResolution.exactIdentities).
+      deviceClassifier = deviceChain.firstOrNull(),
+      selectedConfiguration = selectedDeviceConfiguration,
       resolutionChain = resolutionChain,
       steps = listOfNotNull(unified.trailhead?.let { describe(null, it) }) +
         unified.trail.mapIndexed { index, step -> describe(index, step) },
@@ -486,19 +560,28 @@ object UnifiedTrailAdapter {
   private fun <V> resolveClosestMatch(
     byClassifier: Map<String, V>?,
     resolutionChain: List<String>,
-  ): V? = resolveClosestKey(byClassifier, resolutionChain)?.let { byClassifier?.get(it) }
+    excludedKeys: Set<String> = emptySet(),
+  ): V? = resolveClosestKey(byClassifier, resolutionChain, excludedKeys)?.let { byClassifier?.get(it) }
 
   /**
    * The winning classifier KEY from the same walk [resolveClosestMatch] performs. Callers that need
    * to report *which* entry matched (not just its value) use this, so "did it match" and "what
    * matched" can never come from two different traversals.
+   *
+   * [excludedKeys] carries the trail's multi-device configuration names
+   * ([UnifiedTrailConfig.multiDeviceConfigurationNames]): a key that names a configuration is
+   * matched only by exact configuration selection, never by a device's classifier chain — a
+   * device whose chain contains the name (lineage re-probes bare segments and string-derived
+   * parents, so a configuration named `pair` sits on a `pair-a` device's chain) must not
+   * resolve a configuration's entry as its own.
    */
   private fun <V> resolveClosestKey(
     byClassifier: Map<String, V>?,
     resolutionChain: List<String>,
+    excludedKeys: Set<String> = emptySet(),
   ): String? {
     if (byClassifier.isNullOrEmpty()) return null
-    return resolutionChain.firstOrNull { byClassifier[it] != null }
+    return resolutionChain.firstOrNull { it !in excludedKeys && byClassifier[it] != null }
   }
 
   /**
@@ -535,12 +618,22 @@ object UnifiedTrailAdapter {
    * @param existing the current on-disk unified trail, or `null` for the first write of this trail.
    * @param recordedItems the lowered items from [xyz.block.trailblaze.yaml.generateRecordedTrailItems] for this one device.
    * @param classifier the recorded device's classifier slot (e.g. `android`, `ios-iphone`).
+   * @param selectedDeviceConfiguration the multi-device configuration the run bound, when this
+   *   merge is a configuration session's save-back — the caller's own record of it, so a first
+   *   write (which has no [existing] document to read configuration names from) still knows
+   *   [classifier] names a configuration rather than a device. Must equal [classifier].
    */
   fun mergeRecordedClassifier(
     existing: UnifiedTrail?,
     recordedItems: List<TrailYamlItem>,
     classifier: String,
+    selectedDeviceConfiguration: String? = null,
   ): UnifiedTrail {
+    require(selectedDeviceConfiguration == null || selectedDeviceConfiguration == classifier) {
+      "A configuration session's recording is keyed by its configuration name: merging under " +
+        "`$classifier` while the run selected `$selectedDeviceConfiguration` would write the leg " +
+        "to a slot no replay resolves."
+    }
     val recordedConfig = recordedItems
       .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
       .firstOrNull()?.config
@@ -565,13 +658,44 @@ object UnifiedTrailAdapter {
       }
       ?: UnifiedTrailConfig()
 
-    // Replace this classifier's driver pin: strip it, then re-add if the recording carried one.
-    // Collapse an emptied map back to null so an unpinned trail stays unpinned.
-    val devicesStripped = baseConfig.devices?.minus(classifier)?.ifEmpty { null }
-    val mergedDevices = recordedConfig?.driver
-      ?.let { (devicesStripped ?: emptyMap()) + (classifier to it) }
-      ?: devicesStripped
-    val mergedConfig = baseConfig.copy(devices = mergedDevices)
+    // Replace this classifier's device entry: strip it, then re-add if the recording carried a
+    // driver pin. Collapse an emptied map back to null so an unpinned trail stays unpinned. The
+    // recorded v1 `driver:` is a string; the device model is typed, so an unknown name fails loud
+    // here rather than writing an unparseable pin into the file.
+    //
+    // A key naming a multi-device CONFIGURATION leaves config.devices completely untouched: the
+    // entry is the authored cast (stripping it would delete the cast), and a configuration entry
+    // can't carry `driver:` — per-device drivers live on its named devices. The caller's
+    // [selectedDeviceConfiguration] is the authoritative signal; reading the document is the
+    // fallback for callers that don't carry one, and it can't see a configuration on a first write
+    // (where [baseConfig] is seeded from the recording's own v1 config, which has no cast).
+    val keyNamesConfiguration = selectedDeviceConfiguration != null ||
+      baseConfig.devices?.get(classifier)?.isConfiguration == true
+    val mergedConfig = if (keyNamesConfiguration) {
+      // The recorded driver is the LAUNCH DEVICE's, not the configuration's, so not pinning it is
+      // the contract rather than a downgrade — the cast's member entries pin their own. Logged so a
+      // run whose driver went nowhere is still traceable.
+      recordedConfig?.driver?.let { driverName ->
+        Console.log(
+          "[unified-record] `$classifier` names a multi-device configuration, so this run's " +
+            "`$driverName` driver is not pinned on it — a configuration's drivers live on its " +
+            "named devices.",
+        )
+      }
+      baseConfig
+    } else {
+      val devicesStripped = baseConfig.devices?.minus(classifier)?.ifEmpty { null }
+      val mergedDevices = recordedConfig?.driver
+        ?.let { driverName ->
+          val driver = requireNotNull(TrailblazeDriverType.fromString(driverName)) {
+            "Recorded config for classifier `$classifier` names unknown driver '$driverName' — " +
+              "valid driver types: ${TrailblazeDriverType.entries.joinToString { it.name }}."
+          }
+          (devicesStripped ?: emptyMap()) + (classifier to TrailblazeDeviceDefinition(driver = driver))
+        }
+        ?: devicesStripped
+      baseConfig.copy(devices = mergedDevices)
+    }
 
     // Strip this classifier everywhere first (replace semantics), then overlay the recording.
     val baseSteps = existing?.trail.orEmpty().map { it.withoutClassifier(classifier) }

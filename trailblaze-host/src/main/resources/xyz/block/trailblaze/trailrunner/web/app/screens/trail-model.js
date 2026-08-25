@@ -139,12 +139,179 @@
     };
   }
 
+  // A device classifier such as `android-phone` belongs to the `android` recording family. The
+  // matrix shows concrete runnable legs, while a family recording supplies the fallback for each
+  // compatible leg. Keeping this resolution pure means the UI can collapse family columns without
+  // rewriting or losing the authored YAML.
+  function classifierFamily(key) {
+    var clean = String(key || '').trim();
+    if (!clean) return '';
+    return clean.split(/[-_]/)[0].toLowerCase();
+  }
+
+  // Mirror TrailblazeClassifierLineage.resolutionChain for the classifier shapes exposed by the
+  // browser model: most-specific compound key, progressively broader parents, each bare segment,
+  // then the universal `all` recording. The executor uses the same ordering, so a matrix cell never
+  // claims a deterministic recording is missing when the runtime would replay it.
+  function classifierLineage(key) {
+    var clean = String(key || '').trim().toLowerCase();
+    if (!clean) return [];
+    var parts = clean.split(/[-_]/).filter(Boolean);
+    var chain = [];
+    var add = function (candidate) {
+      if (candidate && chain.indexOf(candidate) < 0 && candidate !== 'all') chain.push(candidate);
+    };
+    add(clean);
+    for (var end = parts.length - 1; end > 0; end -= 1) add(parts.slice(0, end).join('-'));
+    parts.slice().reverse().forEach(add);
+    chain.push('all');
+    return chain;
+  }
+
+  function recordingForLeg(recording, leg) {
+    var rec = recording || {};
+    var lineage = classifierLineage(leg);
+    for (var i = 0; i < lineage.length; i += 1) {
+      var sourceKey = lineage[i];
+      if (Object.prototype.hasOwnProperty.call(rec, sourceKey)) {
+        return { tools: rec[sourceKey], sourceKey: sourceKey, exact: i === 0, explicitNoop: Array.isArray(rec[sourceKey]) && rec[sourceKey].length === 0 };
+      }
+    }
+    return { tools: undefined, sourceKey: null, exact: false, explicitNoop: false };
+  }
+
+  // Group one row's visible legs into the cells a grid should draw. Adjacent legs that resolve to the
+  // SAME authored key are one cell: `android:` covering android-phone and android-tablet is a single
+  // entry in the file, so drawing it once per leg repeats identical content and reads as two
+  // independent recordings. Merging on the resolved key (not on deep-equal tools) keeps the cell
+  // honest - two legs that each authored the same calls stay separate, because they are separate
+  // entries and editing one must not touch the other. A leg with nothing recorded never merges, so
+  // every unrecorded leg keeps its own cell to record into.
+  //
+  // `allLegs` is every leg of the trail, which is wider than `columns` when the declared order
+  // separates same-family legs or when a leg sits past the visible cap. It decides whether a merge
+  // is allowed at all: see below.
+  function legCells(recording, columns, allLegs) {
+    var legs = columns || [];
+    var cellFor = function (leg) {
+      var resolved = recordingForLeg(recording, leg);
+      return {
+        legs: [leg],
+        sourceKey: resolved.sourceKey,
+        tools: resolved.tools,
+        exact: resolved.exact,
+        explicitNoop: resolved.explicitNoop,
+      };
+    };
+    var consumers = {};
+    ((allLegs && allLegs.length ? allLegs : legs)).forEach(function (leg) {
+      var key = recordingForLeg(recording, leg).sourceKey;
+      if (key) consumers[key] = (consumers[key] || 0) + 1;
+    });
+    var runs = [];
+    legs.forEach(function (leg) {
+      var cell = cellFor(leg);
+      var prev = runs[runs.length - 1];
+      if (prev && cell.sourceKey && prev.sourceKey === cell.sourceKey) {
+        prev.legs.push(leg);
+        // `exact` belongs to the whole run: one fallback consumer means the cell shows a broader
+        // entry than its own columns name, which is exactly what the "from <key>" label reports.
+        prev.exact = prev.exact && cell.exact;
+        return;
+      }
+      runs.push(cell);
+    });
+    // A merged cell speaks for the authored entry it edits, so it may only merge when it covers
+    // EVERY leg resolving to that entry. A consumer it cannot show - a same-family leg the declared
+    // column order separated, or one past the visible-column cap - would otherwise be changed by an
+    // edit with nothing on screen to reveal it. Those legs keep one cell each, which writes a
+    // per-leg override and labels itself as one.
+    return runs.reduce(function (out, cell) {
+      var incomplete = cell.legs.length > 1 && consumers[cell.sourceKey] > cell.legs.length;
+      return out.concat(incomplete ? cell.legs.map(cellFor) : [cell]);
+    }, []);
+  }
+
+  // Build the visible logical-leg columns. Declared device keys are authoritative and retain their
+  // order. Recording-only concrete classifiers follow. A generic family remains visible only when
+  // the trail has no concrete leg in that family. The UI deliberately caps the surface at six legs
+  // and returns every omitted key as explicit overflow instead of silently dropping it.
+  function logicalLegs(model, maxVisible) {
+    var max = Number.isFinite(maxVisible) && maxVisible > 0 ? Math.floor(maxVisible) : 6;
+    var declared = Object.keys(((model || {}).config || {}).devices || {});
+    var declaredSet = {};
+    var seen = [];
+    var add = function (p) { if (p && seen.indexOf(p) < 0) seen.push(p); };
+    declared.forEach(function (p) { declaredSet[p] = true; add(p); });
+    ((model || {}).platforms || []).forEach(add);
+    var invalid = seen.filter(function (p) { return !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(p); });
+    var valid = seen.filter(function (p) { return invalid.indexOf(p) < 0; });
+    var hasConcrete = {};
+    valid.forEach(function (p) {
+      var family = classifierFamily(p);
+      if (family && p.toLowerCase() !== family) hasConcrete[family] = true;
+    });
+    var candidates = valid.filter(function (p) {
+      // Every configured device is an independent runnable leg, even when one configured key is
+      // also the family fallback for another (for example `ios` and `ios-iphone`). Only collapse a
+      // generic family that came from recording data alone.
+      if (declaredSet[p]) return true;
+      var family = classifierFamily(p);
+      return p.toLowerCase() !== family || !hasConcrete[family];
+    });
+    var columns = candidates.slice(0, max);
+    var overflow = candidates.slice(max);
+    var warnings = [];
+    if (invalid.length) warnings.push('Unsupported device classifier' + (invalid.length === 1 ? '' : 's') + ': ' + invalid.join(', '));
+    if (overflow.length) warnings.push(overflow.length + ' device leg' + (overflow.length === 1 ? ' is' : 's are') + ' hidden; this view supports ' + max + '.');
+    return { columns: columns, overflow: overflow, warnings: warnings };
+  }
+
+  // Remove one visible device leg without deleting a broader recording that another visible leg
+  // still reuses. A fallback source is removed only when the deleted leg was its final consumer;
+  // otherwise the remaining leg keeps the shared recording and the generic source stays collapsed.
+  function removeLogicalLeg(model, key) {
+    if (!model || !key) return model;
+    var devices = Object.assign({}, ((model.config || {}).devices || {}));
+    delete devices[key];
+    var otherLegs = logicalLegs(model, Number.MAX_SAFE_INTEGER).columns.filter(function (leg) { return leg !== key; });
+    var stripRow = function (row) {
+      if (!row) return row;
+      var recording = Object.assign({}, row.recording || {});
+      var source = recordingForLeg(recording, key).sourceKey;
+      var shared = source && otherLegs.some(function (leg) { return recordingForLeg(recording, leg).sourceKey === source; });
+      delete recording[key];
+      if (source && shared) recording[source] = row.recording[source];
+      else if (source) delete recording[source];
+      return Object.assign({}, row, { recording: recording });
+    };
+    var trailhead = stripRow(model.trailhead);
+    var steps = (model.steps || []).map(stripRow);
+    var retained = {};
+    Object.keys(devices).forEach(function (p) { retained[p] = true; });
+    var retainRecordings = function (row) { Object.keys((row && row.recording) || {}).forEach(function (p) { retained[p] = true; }); };
+    retainRecordings(trailhead);
+    steps.forEach(retainRecordings);
+    return Object.assign({}, model, {
+      platforms: (model.platforms || []).filter(function (p) { return retained[p]; }),
+      config: Object.assign({}, model.config || {}, { devices: devices }),
+      trailhead: trailhead,
+      steps: steps,
+    });
+  }
+
   var api = {
     recToTools: recToTools,
     toolsToRec: toolsToRec,
     unifiedDocToMatrix: unifiedDocToMatrix,
     matrixToUnifiedDoc: matrixToUnifiedDoc,
     sliceSteps: sliceSteps,
+    classifierFamily: classifierFamily,
+    classifierLineage: classifierLineage,
+    recordingForLeg: recordingForLeg,
+    legCells: legCells,
+    logicalLegs: logicalLegs,
+    removeLogicalLeg: removeLogicalLeg,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api; // bun test / CommonJS

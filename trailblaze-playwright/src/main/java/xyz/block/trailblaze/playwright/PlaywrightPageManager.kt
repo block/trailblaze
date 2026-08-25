@@ -6,6 +6,7 @@ import com.microsoft.playwright.Request
 import com.microsoft.playwright.options.LoadState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.util.Console
@@ -32,6 +33,20 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
     domStabilityTimeoutMs: Double = DEFAULT_DOM_STABILITY_TIMEOUT_MS,
   )
   fun resetSession()
+
+  /**
+   * Runs [block] on the Playwright thread and returns its result. Playwright Java objects must
+   * only be touched from the thread that created them; single-device trail runs guarantee this
+   * by wrapping the whole run in `withContext(playwrightDispatcher)`, but multi-device sessions
+   * dispatch each tool from the session's routing thread, so page-touching callers
+   * (e.g. [PlaywrightTrailblazeAgent]) bridge through here instead of assuming the thread.
+   *
+   * Implementations that pin a dispatcher thread override this with [PlaywrightThreadBridge]
+   * so the already-on-thread case runs inline — `runBlocking(playwrightDispatcher)` from the
+   * dispatcher's own thread deadlocks (see the bridge's kdoc). This default exists for test
+   * fakes, which have no real thread affinity.
+   */
+  fun <T> onPlaywrightThread(block: () -> T): T = runBlocking(playwrightDispatcher) { block() }
 
   /**
    * Implements the [DriverDispatch] contract for Playwright: runs [action] and does not return

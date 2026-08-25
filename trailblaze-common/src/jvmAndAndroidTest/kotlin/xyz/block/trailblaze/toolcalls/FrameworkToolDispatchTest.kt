@@ -5,6 +5,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.messageContains
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
@@ -18,6 +19,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 
 /**
  * Covers the [invokeFrameworkTool] surface — the Kotlin-side bridge that lets one tool
@@ -64,6 +66,33 @@ class FrameworkToolDispatchTest {
   @Serializable
   @TrailblazeToolClass(name = "test_declarative_only_dispatch", surfaceToLlm = false)
   data class TestDeclarativeOnlyTool(val ignored: String) : TrailblazeTool
+
+  @Serializable
+  @TrailblazeToolClass(name = "tapOnElementBySelector")
+  @LLMDescription("Public selector tap used to test unknown-tool suggestions.")
+  data class PublicTapOnByElementSelector(
+    @param:LLMDescription("Selector identifying the element to tap.") val nodeSelector: String,
+  ) : TrailblazeTool
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_cap_one")
+  @LLMDescription("First public suggestion-cap test tool.")
+  data class SuggestionCapOne(@param:LLMDescription("Test value.") val value: String) : TrailblazeTool
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_cap_two")
+  @LLMDescription("Second public suggestion-cap test tool.")
+  data class SuggestionCapTwo(@param:LLMDescription("Test value.") val value: String) : TrailblazeTool
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_cap_three")
+  @LLMDescription("Third public suggestion-cap test tool.")
+  data class SuggestionCapThree(@param:LLMDescription("Test value.") val value: String) : TrailblazeTool
+
+  @Serializable
+  @TrailblazeToolClass(name = "test_cap_four")
+  @LLMDescription("Fourth public suggestion-cap test tool.")
+  data class SuggestionCapFour(@param:LLMDescription("Test value.") val value: String) : TrailblazeTool
 
   // -------------------------------------------------------------------------------------------
   // Fixtures
@@ -144,6 +173,46 @@ class FrameworkToolDispatchTest {
     }
     failure.messageContains("Unknown framework tool")
     failure.messageContains("nonexistent_tool")
+  }
+
+  @Test fun `unknown tool name does not suggest a hidden registered tool`() {
+    val repo = repoWith(TapOnByElementSelector::class)
+
+    val failure = runCatching {
+      repo.toolCallToTrailblazeTool("tapOnElement", "{}")
+    }.exceptionOrNull() ?: error("Expected an unknown-tool failure")
+
+    assertThat(failure.message.orEmpty().contains("Could not find Trailblaze tool for name: tapOnElement.")).isEqualTo(true)
+    assertThat(failure.message.orEmpty().contains("tapOnElementBySelector")).isEqualTo(false)
+  }
+
+  @Test fun `unknown tool name suggests an advertised close match through edit distance`() {
+    val repo = repoWith(PublicTapOnByElementSelector::class)
+
+    val failure = assertFailure {
+      repo.toolCallToTrailblazeTool("tpaOnElementBySelector", "{}")
+    }
+
+    failure.messageContains("tapOnElementBySelector")
+    failure.messageContains("nodeSelector")
+  }
+
+  @Test fun `unknown tool suggestions stop after three advertised matches`() {
+    val repo = repoWith(
+      SuggestionCapOne::class,
+      SuggestionCapTwo::class,
+      SuggestionCapThree::class,
+      SuggestionCapFour::class,
+    )
+
+    val failure = runCatching {
+      repo.toolCallToTrailblazeTool("test_cap", "{}")
+    }.exceptionOrNull() ?: error("Expected an unknown-tool failure")
+
+    assertThat(failure.message.orEmpty().contains("test_cap_four")).isEqualTo(true)
+    assertThat(failure.message.orEmpty().contains("test_cap_one")).isEqualTo(true)
+    assertThat(failure.message.orEmpty().contains("test_cap_three")).isEqualTo(true)
+    assertThat(failure.message.orEmpty().contains("test_cap_two")).isEqualTo(false)
   }
 
   @Test fun `non-executable resolved tool produces 'declarative-only' diagnostic`() = runBlocking {

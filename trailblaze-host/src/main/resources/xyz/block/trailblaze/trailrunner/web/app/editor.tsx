@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // Build the YAML snippet for a tool: `- toolId: {}` or `- toolId:` + `<param>: <type>` lines.
@@ -10,16 +10,18 @@ function toolSnippet(t) {
   return `- ${t.id}:\n` + ps.map((p) => `    ${p.name}: <${p.type || 'value'}>`).join('\n');
 }
 
-function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOnly = false, wrap = false, apiRef, highlight }) {
+function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOnly = false, wrap = false, apiRef, highlight, toolRunMarkers = [], onRunTool }) {
   const hostRef = React.useRef(null);
   const flashedRef = React.useRef(null);
   const cmRef = React.useRef(null);
   const changeRef = React.useRef(onChange);
   const saveRef = React.useRef(onSave);
   const lintRef = React.useRef(serverLint);
+  const runToolRef = React.useRef(onRunTool);
   changeRef.current = onChange;
   saveRef.current = onSave;
   lintRef.current = serverLint;
+  runToolRef.current = onRunTool;
 
   const modeKey = typeof mode === 'string' ? mode : JSON.stringify(mode);
   React.useEffect(() => {
@@ -34,7 +36,7 @@ function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOn
       indentUnit: 2,
       tabSize: 2,
       viewportMargin: Infinity,
-      gutters: ['CodeMirror-lint-markers', 'CodeMirror-linenumbers'],
+      gutters: [...(onRunTool ? ['tb-tool-run-gutter'] : []), 'CodeMirror-lint-markers', 'CodeMirror-linenumbers'],
       lint: mode !== 'yaml' ? false : {
         async: true,
         delay: 600,
@@ -114,6 +116,28 @@ function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOn
     const cm = cmRef.current;
     if (cm) cm.setOption('lineWrapping', !!wrap);
   }, [wrap]);
+
+  // CodeMirror fallback parity with Monaco: one real, keyboard-focusable Play button in the far-left
+  // gutter for each independently runnable recorded tool call.
+  React.useEffect(() => {
+    const cm = cmRef.current;
+    if (!cm) return;
+    cm.clearGutter('tb-tool-run-gutter');
+    (toolRunMarkers || []).forEach((marker) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tb-tool-run-button' + (marker.running ? ' is-running' : '');
+      btn.setAttribute('aria-label', (marker.running ? 'Running ' : (marker.disabled ? 'Wait to test ' : 'Test ')) + marker.name + ' on the connected device');
+      // Short, like the Monaco glyph's hover, and the same verb as the aria-label above — which stays
+      // spelled out for screen readers.
+      btn.title = marker.running ? `Running ${marker.name}…` : (marker.disabled ? 'Wait for the running tool to finish' : `Test ${marker.name}`);
+      btn.disabled = !!marker.disabled;
+      btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (runToolRef.current) runToolRef.current(marker); });
+      cm.setGutterMarker(marker.line0, 'tb-tool-run-gutter', btn);
+    });
+    return () => cm.clearGutter('tb-tool-run-gutter');
+  }, [toolRunMarkers]);
 
   // Jump to + flash a step's YAML block when the caller hands us a highlight target (e.g. clicking a
   // board cell). Matches the `- step:`/`- verify:` line carrying the text, then flashes through the
@@ -427,7 +451,7 @@ function findStepLineRange(doc, needle) {
 // under a distinct owner, alongside the schema diagnostics) and the board-cell → YAML flash. Falls back
 // to CodeMirror if Monaco's CDN load or the mount fails. Schema is scoped at mount to the trail's target
 // (open-time scoping — editing config.target re-scopes on the next mount).
-function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, readOnly, apiRef, wrap, highlight }) {
+function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, readOnly, apiRef, wrap, highlight, toolRunMarkers, onRunTool }) {
   const hostRef = React.useRef(null);
   const handleRef = React.useRef(null);
   const flashedRef = React.useRef(null);
@@ -436,8 +460,8 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   // empty, which read as "nothing shows up for a while" on switching to Edit. Track readiness so we
   // can show a loading placeholder over the empty host instead of a blank pane.
   const [ready, setReady] = React.useState(false);
-  const cbRef = React.useRef({ onChange, onSave });
-  cbRef.current = { onChange, onSave };
+  const cbRef = React.useRef({ onChange, onSave, onRunTool });
+  cbRef.current = { onChange, onSave, onRunTool };
   React.useEffect(() => {
     let disposed = false;
     setFailed(false);
@@ -448,6 +472,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
       target, platform, driver, readOnly, wrap,
       onChange: (t) => cbRef.current.onChange && cbRef.current.onChange(t),
       onSave: () => cbRef.current.onSave && cbRef.current.onSave(),
+      onRunTool: onRunTool ? (marker) => cbRef.current.onRunTool && cbRef.current.onRunTool(marker) : undefined,
     }).then((h) => {
       if (disposed) { h.dispose(); return; }
       handleRef.current = h;
@@ -468,15 +493,23 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
     });
     return () => { disposed = true; if (handleRef.current) { handleRef.current.dispose(); handleRef.current = null; } };
   }, [target, platform, driver, readOnly]);
+  // Follow `value`, and re-run once the mount resolves (`ready`). Mounting is asynchronous, so until
+  // it lands there is no handle to write to and a `value` arriving in that window is dropped with
+  // nothing left to re-apply it - which is how switching trails could leave the editor showing the
+  // trail you just left, permanently, while the header named the new one.
   React.useEffect(() => {
     const h = handleRef.current;
     if (h && value != null && h.getValue() !== value) h.setValue(value);
-  }, [value]);
+  }, [value, ready]);
   // Apply the soft-wrap toggle to the Monaco editor (parity with the CodeMirror path's wrap toggle).
   React.useEffect(() => {
     const h = handleRef.current;
     if (h && h.setWrap) h.setWrap(!!wrap);
   }, [wrap]);
+  React.useEffect(() => {
+    const h = handleRef.current;
+    if (h && h.setToolRunMarkers) h.setToolRunMarkers(toolRunMarkers || []);
+  }, [toolRunMarkers, ready]);
   // Server-side semantic lint (beyond what the schema validates) → markers. Debounced; skips the network
   // check when the client-side YAML is unparseable (the schema already flags syntax). Coexists with the
   // language server's schema diagnostics (distinct marker owner).
@@ -504,7 +537,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
     flashedRef.current = highlight;
     if (range) h.revealAndFlashLines(range.start0, Math.min(range.end0, range.start0 + 10));
   }, [highlight, value]);
-  if (failed) return <CodeEditor value={value} onChange={onChange} onSave={onSave} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={readOnly} wrap={wrap} apiRef={apiRef} highlight={highlight} />;
+  if (failed) return <CodeEditor value={value} onChange={onChange} onSave={onSave} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={readOnly} wrap={wrap} apiRef={apiRef} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={onRunTool} />;
   return (
     <div style={{ position: 'relative', height: '100%', minHeight: 0 }}>
       <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />
@@ -517,8 +550,41 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   );
 }
 
-function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey }) {
+// Read-only diff of the working buffer against the version git has committed — the "show me only what
+// I changed" view an IDE gives you, without leaving the trail editor. Uses Monaco's own diff editor,
+// so the change gutter, folding of unchanged regions and inline word-level highlights are the real
+// thing rather than a hand-rolled line diff. The left side is fixed for as long as the baseline is;
+// only the right side follows the buffer, so typing doesn't remount anything.
+function TrailDiffView({ committed, current, wrap }) {
+  const hostRef = React.useRef(null);
+  const handleRef = React.useRef(null);
+  const currentRef = React.useRef(current); currentRef.current = current;
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    let disposed = false;
+    setFailed(false);
+    window.TBMonaco.mountDiff({ host: hostRef.current, original: committed || '', modified: currentRef.current || '', wrap })
+      .then((h) => { if (disposed) { h.dispose(); return; } handleRef.current = h; h.setModified(currentRef.current || ''); })
+      .catch((e) => {
+        if (window.console) console.warn('[TrailDiffView] diff mount failed:', e);
+        if (!disposed) setFailed(true);
+      });
+    return () => { disposed = true; if (handleRef.current) { handleRef.current.dispose(); handleRef.current = null; } };
+  }, [committed]);
+  React.useEffect(() => { if (handleRef.current) handleRef.current.setModified(current || ''); }, [current]);
+  React.useEffect(() => { if (handleRef.current) handleRef.current.setWrap(!!wrap); }, [wrap]);
+  if (failed) return <div className="tb-sub" style={{ padding: 16 }}>Could not load the diff view.</div>;
+  return <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />;
+}
+
+// `trailId` is the id the trail is SAVED under (what `updateTrail` posts), because that's the id the
+// daemon resolves back to a file when the diff asks git for the committed version. Editors that
+// aren't editing a registered trail file (a bundle's blaze.yaml, a board's raw pane) leave it unset
+// and simply get no diff toggle.
+function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey, trailId = null, enableToolRun = false }) {
   useLucide();
+  const devices = TB.useDevices();
+  const [globalTarget] = TB.useGlobalTarget();
   const [text, setText] = React.useState(null);
   const [baseline, setBaseline] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -526,20 +592,58 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const [toolQuery, setToolQuery] = React.useState('');
   const [hoverTool, setHoverTool] = React.useState(null);
   const [wrap, setWrap] = useStickyState('tb-yaml-wrap', true);
+  const [toolRun, setToolRun] = React.useState(null); // { key, status, ok, msg }
+  // What git has committed for this trail, and whether the diff pane is showing. `saves` only exists
+  // to re-read the baseline after a write: the committed text doesn't move, but a file that matched
+  // it a moment ago no longer does.
+  const [gitBaseline, setGitBaseline] = React.useState(null);
+  const [showDiff, setShowDiff] = React.useState(false);
+  // Counts diff OPENINGS, not the toggle: the baseline is re-read when the user goes to look at
+  // it, and closing tells us nothing new. Keying the refetch on `showDiff` itself would fire on
+  // the closing edge too, where a transient failure clears the baseline and takes the Changes
+  // button with it - with the pane already closed, there is no control left to retry from.
+  const [diffOpens, setDiffOpens] = React.useState(0);
+  const [saves, setSaves] = React.useState(0);
   const editorApi = React.useRef(null);
+  const toolRunRef = React.useRef({ generation: 0, pending: false });
   // Mirror the latest text/baseline into refs so the content-sync effect can read them without
   // re-subscribing to every keystroke.
   const textRef = React.useRef(null); textRef.current = text;
   const baselineRef = React.useRef(null); baselineRef.current = baseline;
+  // Set when `content` moved while this buffer had unsaved edits, holding that version until the
+  // user picks a side. The parent polls the file, so this is how an edit made in another IDE (or by
+  // an agent) announces itself instead of being dropped on the floor.
+  const [external, setExternal] = React.useState(null);
   // (Re)seed from `content` on mount AND whenever it changes — switching trails in the sidebar, or an
   // external reload — but NEVER clobber unsaved edits. Previously this seeded only once (`text === null`),
   // so switching trails left the prior trail's YAML in the editor (read as "the detail doesn't update
   // unless you're on the first tab", since only the Edit tab was stale).
   React.useEffect(() => {
-    if (content == null) return;
-    const dirtyNow = textRef.current !== null && textRef.current !== baselineRef.current;
-    if (!dirtyNow) { setText(content); setBaseline(content); }
+    // Read through `window` and guard it, like every other classic-script global here: a bare
+    // identifier would turn a missing or reordered editor-sync.js into a ReferenceError inside this
+    // effect, and the editor would never seed its buffer at all. Without the module, fall back to
+    // the old seed-once behaviour rather than dropping content on the floor.
+    const sync = window.TbEditorSync;
+    const act = sync
+      ? sync.diskChangeAction({ disk: content, text: textRef.current, baseline: baselineRef.current })
+      : (content == null ? 'wait' : (textRef.current == null ? 'seed' : 'keep'));
+    // A trail SWITCH is not a disk change: the parent bumps `resetKey`, and the effect below takes
+    // the incoming file even over unsaved edits. This one only ever reasons about the same file.
+    if (act === 'conflict') { setExternal(content); return; }
+    setExternal(null); // any other outcome means there is nothing left to reconcile
+    if (act === 'wait' || act === 'keep') return;
+    setText(content); setBaseline(content);
   }, [content]);
+  const takeExternal = () => { setText(external); setBaseline(external); setExternal(null); setNote(null); };
+  // Losing Monaco costs every YAML completion, because the CodeMirror fallback has none. Say so:
+  // MonacoTrailEditor already warns when a mount FAILS, but this earlier feature-detect was silent,
+  // so a total loss of autocomplete read as the editor simply not offering any.
+  const monacoAvailable = !!(window.TBMonaco && window.TBMonaco.mountTrailYaml);
+  React.useEffect(() => {
+    if (!monacoAvailable && window.console) {
+      console.warn('[TrailYamlEditor] window.TBMonaco.mountTrailYaml is unavailable; falling back to CodeMirror, which has no YAML completions.');
+    }
+  }, [monacoAvailable]);
   // Discard-on-switch: when the parent swaps to a DIFFERENT trail/file (`resetKey` changes), reset the
   // editor to the incoming content even if there were unsaved edits — this replaces the `key={id}` remount
   // that used to discard the prior trail's state on switch, now that Monaco + the LSP socket are reused
@@ -548,20 +652,60 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const firstResetRef = React.useRef(true);
   React.useEffect(() => {
     if (firstResetRef.current) { firstResetRef.current = false; return; }
-    setText(content); setBaseline(content); setNote(null);
+    setText(content); setBaseline(content); setNote(null); setExternal(null);
     // Also clear per-file editor-surface state so a switch fully resets: a stale palette filter can make
     // the new file's tool list look empty, and a hover popover can get stuck (unmounting the hovered row
     // never fires onMouseLeave).
-    setToolQuery(''); setHoverTool(null);
+    toolRunRef.current.generation++;
+    toolRunRef.current.pending = false;
+    setToolQuery(''); setHoverTool(null); setToolRun(null); setShowDiff(false);
   }, [resetKey]);
   const dirty = editable && text != null && text !== baseline;
   if (dirtyRef) dirtyRef.current = dirty;
+  // The baseline carries the trail it was fetched for, and only counts while that is still the trail
+  // on screen. Opening another trail leaves the previous baseline in state until the new fetch lands
+  // (a `git show` is allowed seconds), and an untracked trail would inherit the last trail's toggle
+  // and be diffed against the last trail's committed text. Clearing it on every fetch instead would
+  // also clear it on the post-save refetch and close a diff the user is reading.
+  const gitBase = gitBaseline && gitBaseline.trailId === trailId ? gitBaseline : null;
+  // The buffer if there is one, else the polled file. Null when neither exists, which is the file
+  // deleted or renamed while open — the case the editor's "Loading…" covers below.
+  const working = text != null ? text : content;
+  // Offer the diff only when there is a real text on both sides — the rule lives in editor-sync.js
+  // with the editor's other reconciliation rules, and is read through `window` and guarded like
+  // every other classic-script global here.
+  const canDiff = !!(window.TbEditorSync && window.TbEditorSync.canDiffTrail(gitBase, working)
+    && monacoAvailable && window.TBMonaco.mountDiff);
+  // Refetched on every signal that the committed text underneath may have moved: our own save, the
+  // polled file changing (an external checkout or commit lands here first), and opening the diff.
+  // A baseline left over from a previous HEAD is worse than none - it renders a real diff against a
+  // branch the user isn't on, with nothing on screen saying so. A failure clears it for the same
+  // reason: the last answer is not an answer about this HEAD, and no diff beats a fabricated one.
+  React.useEffect(() => {
+    if (!trailId) { setGitBaseline(null); return undefined; }
+    let cancelled = false;
+    TB.fetchTrailGitBaseline(trailId)
+      .then((b) => { if (!cancelled) setGitBaseline(Object.assign({ trailId }, b)); })
+      .catch(() => { if (!cancelled) setGitBaseline(null); });
+    return () => { cancelled = true; };
+  }, [trailId, saves, content, diffOpens]);
+  React.useEffect(() => { if (!canDiff) setShowDiff(false); }, [canDiff]);
   const save = async () => {
     if (!editable || text == null || busy) return;
     setBusy(true); setNote(null);
     const r = await onSave(text);
     setBusy(false);
-    if (r && r.success) { setBaseline(text); setNote({ ok: true, msg: 'Saved' }); onSaved && onSaved(); }
+    // Saving is the user choosing this buffer over whatever landed on disk, so the pending external
+    // version goes away with it — but only the buffer that was actually submitted. The editor stays
+    // editable during the write, so a conflict raised against newer typing has not been answered yet
+    // and must survive.
+    if (r && r.success) {
+      setBaseline(text);
+      if (textRef.current === text) setExternal(null);
+      setNote({ ok: true, msg: 'Saved' });
+      setSaves((n) => n + 1);
+      onSaved && onSaved();
+    }
     else setNote({ ok: false, msg: (r && r.error) || 'Save failed' });
   };
   // Scope the trail schema to the trail's target. Derived from `content` (the loaded baseline), not the
@@ -569,16 +713,86 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   // scoping; re-opening the trail picks up a changed target.
   const cfg = parseTrailTargetPlatform(content);
   const palette = editable && (tools || []).length > 0;
+  const markerSource = text != null ? text : (content || '');
+  const toolRunMarkers = React.useMemo(() => (enableToolRun ? window.TrailYamlBuild.runnableToolCalls(markerSource) : []).map((m) => ({
+    ...m,
+    key: `${m.line0}:${m.name}`,
+    running: !!(toolRun && toolRun.status === 'running' && toolRun.key === `${m.line0}:${m.name}`),
+    disabled: !!(toolRun && toolRun.status === 'running'),
+  })), [enableToolRun, markerSource, toolRun && toolRun.key, toolRun && toolRun.status]);
+
+  const runTool = async (marker) => {
+    if (!marker || toolRunRef.current.pending) return;
+    const key = marker.key || `${marker.line0}:${marker.name}`;
+    const generation = ++toolRunRef.current.generation;
+    toolRunRef.current.pending = true;
+    setToolRun({ key, status: 'running', ok: null, msg: `Running ${marker.name}…` });
+    try {
+      const deviceList = devices.data || [];
+      const selectedIds = (globalTarget && globalTarget.deviceIds) || [];
+      const base = (p) => String(p || '').split(/[-_]/)[0].toLowerCase();
+      const requestedPlatform = base(marker.platform || cfg.platform);
+      if (!requestedPlatform) throw new Error('This tool call does not identify a device platform.');
+      let selected = selectedIds.map((id) => deviceList.find((d) => d.id === id)).filter(Boolean);
+      if (requestedPlatform !== 'all') selected = selected.filter((d) => base(d.platform) === requestedPlatform);
+      const deviceLabel = requestedPlatform === 'all' ? '' : `${requestedPlatform} `;
+      if (selected.length === 0) throw new Error(`Select a connected ${deviceLabel}device in the current target.`);
+      if (selected.length > 1) throw new Error(`Select one ${deviceLabel}device before testing this tool.`);
+      const preferred = selected[0];
+      const platform = requestedPlatform === 'all' ? base(preferred.platform) : requestedPlatform;
+      if (!platform) throw new Error('The selected device does not identify a platform.');
+      const trailblazeDeviceId = { instanceId: preferred.id, trailblazeDevicePlatform: platform.toUpperCase() };
+      const connected = await TB.withTimeout(TB.connectDeviceDetailed(trailblazeDeviceId), 45000);
+      if (connected === '__timeout__') throw new Error('The device did not respond while connecting.');
+      if (!connected || !connected.ok) throw new Error((connected && connected.error) || 'Could not connect to the selected device.');
+      const runnable = window.TrailYamlBuild.buildToolListRunYaml(marker.name, [marker.tool], platform);
+      if (!runnable) throw new Error('This tool call is not runnable yet.');
+      const result = await TB.runToolQuick(runnable, trailblazeDeviceId);
+      if (!result || result.success !== true) throw new Error((result && result.error) || 'Tool run failed.');
+      if (toolRunRef.current.generation === generation) setToolRun({ key, status: 'done', ok: true, msg: `${marker.name} ran on ${preferred.name || preferred.id}` });
+    } catch (e) {
+      if (toolRunRef.current.generation === generation) setToolRun({ key, status: 'done', ok: false, msg: String((e && e.message) || e) });
+    } finally {
+      if (toolRunRef.current.generation === generation) toolRunRef.current.pending = false;
+    }
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 10px', flex: '0 0 auto' }}>
         {/* save state lives entirely in the button on the right; only surface a hard error here */}
         {note && !note.ok && <span style={{ fontSize: 12, color: 'var(--tb-danger-text)' }}>{note.msg}</span>}
+        {/* `!== null`, not truthiness: a file emptied on disk is still a conflict worth reporting. */}
+        {external !== null && <>
+          <span style={{ fontSize: 12, color: 'var(--tb-warning-text)' }}>This file changed on disk.</span>
+          <Btn sm ico="refresh-cw" title="Replace this buffer with the version now on disk, discarding your unsaved edits" onClick={takeExternal}>Load from disk</Btn>
+        </>}
+        {toolRun && <span role="status" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: toolRun.status === 'running' ? 'var(--text-subtle)' : (toolRun.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)') }}>
+          <Ico n={toolRun.status === 'running' ? 'loader-2' : (toolRun.ok ? 'check' : 'circle-alert')} s={13} spin={toolRun.status === 'running'} />
+          {toolRun.msg}
+        </span>}
         <span style={{ flex: 1 }} />
-        <span role="button" data-testid="wrap-toggle" title={wrap ? 'Wrap long lines: on' : 'Wrap long lines: off'} onClick={() => setWrap((w) => !w)}
-          style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '4px 6px', borderRadius: 7, border: '1px solid ' + (wrap ? 'rgba(94,155,255,.5)' : 'var(--tb-hairline)'), background: wrap ? 'rgba(94,155,255,.12)' : 'transparent', color: wrap ? 'var(--tb-running)' : 'var(--text-subtle)' }}>
+        {/* Real buttons, not clickable spans: Tab reaches them and Enter/Space toggle them without a
+            hand-rolled key handler. `appearance: none` + `font: inherit` undo the UA control styling
+            that would otherwise repaint the border/background these toggles set themselves. */}
+        {canDiff && (
+          <button type="button" data-testid="diff-toggle"
+            title={showDiff ? 'Back to editing' : 'Compare this trail with the version committed in git'}
+            onClick={() => { if (!showDiff) setDiffOpens((n) => n + 1); setShowDiff((d) => !d); }}
+            style={{ appearance: 'none', font: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', padding: '4px 7px', borderRadius: 7, fontSize: 12, border: '1px solid ' + (showDiff ? 'rgba(94,155,255,.5)' : 'var(--tb-hairline)'), background: showDiff ? 'rgba(94,155,255,.12)' : 'transparent', color: showDiff ? 'var(--tb-running)' : 'var(--text-subtle)' }}>
+            <Ico n="git-compare" s={15} />
+            {/* Say WHICH direction the comparison runs; "Diff" alone doesn't tell you what against. */}
+            {showDiff ? 'Editing' : 'Changes'}
+          </button>
+        )}
+        {/* `aria-pressed` here but not on the diff toggle: this one keeps the same name while its
+            state flips, which is what a toggle button means. The diff toggle relabels itself
+            instead, so its state is already in its name. The title stays state-free for the same
+            reason -- it is this icon-only button's accessible name, so spelling out on/off there
+            would announce the state twice. */}
+        <button type="button" data-testid="wrap-toggle" aria-pressed={wrap} title="Wrap long lines" onClick={() => setWrap((w) => !w)}
+          style={{ appearance: 'none', font: 'inherit', display: 'inline-flex', alignItems: 'center', cursor: 'pointer', padding: '4px 6px', borderRadius: 7, border: '1px solid ' + (wrap ? 'rgba(94,155,255,.5)' : 'var(--tb-hairline)'), background: wrap ? 'rgba(94,155,255,.12)' : 'transparent', color: wrap ? 'var(--tb-running)' : 'var(--text-subtle)' }}>
           <Ico n="wrap-text" s={15} />
-        </span>
+        </button>
         {editable && (
           <Btn sm kind={dirty ? 'primary' : 'ghost'} ico={busy ? 'loader-2' : (dirty ? 'save' : 'check')} spin={busy} onClick={save} disabled={!dirty || busy}>
             {busy ? 'Saving…' : (dirty ? 'Save' : 'Saved')}
@@ -589,14 +803,27 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
           view behind three rails) starved the editor pane to ~0 and wrapped YAML one character
           per line. Overflow scrolls as the last resort instead of squeezing further. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', border: '1px solid var(--tb-hairline)', borderRadius: 10, overflowX: 'auto', overflowY: 'hidden', background: 'var(--bg-standard)' }}>
-        <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 280, border: 'none', borderRadius: 0 }}>
-          {content === null
+        {/* The diff pane sits BESIDE the editor and the editor is hidden with `display`, never
+            unmounted: tearing Monaco down would drop the language-server socket and the unsaved
+            buffer every time you glanced at what changed. */}
+        {showDiff && canDiff && (
+          <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 280, border: 'none', borderRadius: 0 }}>
+            <TrailDiffView committed={gitBase.committed} current={working} wrap={wrap} />
+          </div>
+        )}
+        <div className="tb-editor" style={{ flex: 1, minHeight: 0, minWidth: 280, border: 'none', borderRadius: 0, display: showDiff && canDiff ? 'none' : 'block' }}>
+          {/* Only "Loading…" while there is nothing to show. A buffer outlives its file: the trail's
+              YAML is polled, so a file deleted or renamed elsewhere turns `content` null, and hiding
+              the editor then would put unsaved edits somewhere the user can't even copy them from. */}
+          {content === null && text === null
             ? <div className="tb-sub" style={{ padding: 16 }}>Loading…</div>
-            : (window.TBMonaco && window.TBMonaco.mountTrailYaml
-              ? <MonacoTrailEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} target={cfg.target} platform={cfg.platform} driver={cfg.driver} readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} />
-              : <CodeEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} />)}
+            : (monacoAvailable
+              ? <MonacoTrailEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} target={cfg.target} platform={cfg.platform} driver={cfg.driver} readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={enableToolRun ? runTool : undefined} />
+              : <CodeEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={enableToolRun ? runTool : undefined} />)}
         </div>
-        {palette && (
+        {/* No tool palette next to the diff: a click there would insert into the hidden editor, which
+            reads as the palette doing nothing at all. */}
+        {palette && !showDiff && (
           <div style={{ flex: '0 1 280px', minWidth: 170, borderLeft: '1px solid var(--tb-hairline)', display: 'flex', flexDirection: 'column', minHeight: 0, background: 'var(--bg-subtle)' }}>
             <div style={{ padding: '9px 12px', borderBottom: '1px solid var(--tb-hairline)' }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 7 }}>Tools</div>
@@ -614,17 +841,20 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
                 return order.map((cat) => (
                   <div key={cat} style={{ marginBottom: 6 }}>
                     <div className="tb-eyebrow" style={{ fontSize: 10, padding: '6px 8px 4px', position: 'sticky', top: 0, background: 'var(--bg-subtle)', zIndex: 1 }}>{cat} <span style={{ color: 'var(--text-subtle)', fontWeight: 600 }}>{groups[cat].length}</span></div>
+                    {/* Also a real button, for the same reason as the toolbar toggles. It takes the extra
+                        width/text-align/border/background resets a full-width row needs, and its text
+                        sits in spans because a button may not contain a div. */}
                     {groups[cat].map((t) => (
-                      <div key={t.id} role="button" onClick={() => editorApi.current && editorApi.current.insertTool(t)}
-                        style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 8px', borderRadius: 7, cursor: 'pointer' }}
+                      <button type="button" key={t.id} onClick={() => editorApi.current && editorApi.current.insertTool(t)}
+                        style={{ appearance: 'none', font: 'inherit', color: 'inherit', width: '100%', textAlign: 'start', border: 'none', background: 'transparent', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 8px', borderRadius: 7, cursor: 'pointer' }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-prominent)'; setHoverTool({ tool: t, rect: e.currentTarget.getBoundingClientRect() }); }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; setHoverTool((h) => (h && h.tool.id === t.id ? null : h)); }}>
                         <Ico n="wrench" s={12} c="var(--text-subtle)" style={{ marginTop: 2, flex: '0 0 auto' }} />
-                        <div style={{ minWidth: 0 }}>
-                          <div className="tb-mono" style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-standard)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id}</div>
-                          {(t.parameters || []).length > 0 && <div className="tb-mono tb-sub" style={{ fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.parameters.map((p) => p.name).join(', ')}</div>}
-                        </div>
-                      </div>
+                        <span style={{ minWidth: 0 }}>
+                          <span className="tb-mono" style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-standard)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.id}</span>
+                          {(t.parameters || []).length > 0 && <span className="tb-mono tb-sub" style={{ display: 'block', fontSize: 10.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.parameters.map((p) => p.name).join(', ')}</span>}
+                        </span>
+                      </button>
                     ))}
                   </div>
                 ));
@@ -639,4 +869,4 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   );
 }
 
-Object.assign(window, { CodeEditor, TrailEditor, TrailYamlEditor });
+Object.assign(window, { CodeEditor, TrailEditor, TrailDiffView, TrailYamlEditor });

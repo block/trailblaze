@@ -107,6 +107,134 @@
     return lines.join('\n');
   }
 
+  // Locate independently runnable recorded tool calls in an authored trail. Each result points at
+  // the tool's list-item line so editors can put a Play control in their gutter, and carries the
+  // exact one-tool object + device classifier needed by buildToolListRunYaml. This intentionally
+  // recognizes both the unified `recording: -> <classifier>:` shape and the legacy
+  // `recording: -> tools:` / root `- tools:` shape. Invalid/in-progress YAML simply omits the
+  // affected marker until it becomes parseable; the editor's normal syntax diagnostics remain the
+  // source of truth for the error.
+  function runnableToolCalls(yaml) {
+    if (!window.jsyaml) return [];
+    var lines = String(yaml == null ? '' : yaml).split('\n');
+    var out = [];
+    var recordingIndent = -1;
+    var classifier = null;
+    var classifierIndent = -1;
+    var toolsIndent = -1;
+    var rootToolsIndent = -1;
+    var indentOf = function (s) { var m = String(s).match(/^\s*/); return m ? m[0].length : 0; };
+    var blank = function (s) { return /^\s*(?:#.*)?$/.test(s); };
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (blank(line)) continue;
+      var indent = indentOf(line);
+      var item = line.match(/^\s*-\s+([A-Za-z_][A-Za-z0-9_.-]*)\s*:/);
+      var isRecording = /^\s*recording\s*:\s*(?:#.*)?$/.test(line);
+      var isRootTools = /^\s*-\s*tools\s*:\s*(?:#.*)?$/.test(line);
+
+      if (recordingIndent >= 0 && indent <= recordingIndent && !isRecording) {
+        recordingIndent = -1; classifier = null; classifierIndent = -1; toolsIndent = -1;
+      }
+      if (rootToolsIndent >= 0 && indent <= rootToolsIndent && !isRootTools) rootToolsIndent = -1;
+      if (isRecording) {
+        recordingIndent = indent; classifier = null; classifierIndent = -1; toolsIndent = -1;
+        continue;
+      }
+      if (isRootTools) { rootToolsIndent = indent; continue; }
+
+      // A list item is runnable only while nested under a recognized recording/tools container.
+      // Check it before mapping-key handling because `- tapOn:` is itself a YAML mapping entry.
+      if (item && item[1] !== 'step' && item[1] !== 'verify' && item[1] !== 'prompt'
+          && item[1] !== 'trailhead' && item[1] !== 'tools') {
+        // YAML permits an "indentless sequence", where list items begin at the same indentation
+        // as their mapping key (`android:\n      - tapOn:`). Treat that as belonging to the
+        // classifier too; ordinary nested sequences continue to use the greater indentation.
+        var inClassifier = recordingIndent >= 0 && classifier && indent >= classifierIndent;
+        var inLegacyTools = recordingIndent >= 0 && toolsIndent >= 0 && indent >= toolsIndent;
+        var inRootTools = rootToolsIndent >= 0 && indent > rootToolsIndent;
+        if (inClassifier || inLegacyTools || inRootTools) {
+          var end = i + 1;
+          while (end < lines.length && (blank(lines[end]) || indentOf(lines[end]) > indent)) end++;
+          var snippet = lines.slice(i, end).map(function (s) { return s.slice(Math.min(indent, indentOf(s))); }).join('\n');
+          try {
+            var parsed = window.jsyaml.load(snippet);
+            var tool = Array.isArray(parsed) ? parsed[0] : null;
+            if (tool && typeof tool === 'object' && Object.keys(tool).length === 1) {
+              out.push({
+                line0: i,
+                endLine0: Math.max(i, end - 1),
+                name: item[1],
+                tool: tool,
+                platform: inClassifier ? classifier : null,
+              });
+            }
+          } catch (_) {}
+          i = end - 1;
+        }
+        continue;
+      }
+
+      if (recordingIndent >= 0) {
+        // Compact trailheads may put the classifier and its single tool map on one line. The
+        // ordinary block-key state machine below cannot descend into flow-style YAML, so parse
+        // this line as a complete classifier entry and mark its one tool directly.
+        if (indent > recordingIndent) {
+          try {
+            var inlineEntry = window.jsyaml.load(line.trim());
+            var inlinePlatforms = inlineEntry && typeof inlineEntry === 'object' && !Array.isArray(inlineEntry) ? Object.keys(inlineEntry) : [];
+            if (inlinePlatforms.length === 1) {
+              var inlinePlatform = inlinePlatforms[0];
+              var inlineBody = inlineEntry[inlinePlatform];
+              // A block classifier may contain a compact one-line tool map:
+              // `android:\n  launchApp: {}`. In that shape the current line is the tool, not a
+              // second classifier.
+              if (classifier && toolsIndent < 0 && indent > classifierIndent && inlineBody != null) {
+                out.push({ line0: i, endLine0: i, name: inlinePlatform, tool: inlineEntry, platform: classifier });
+                continue;
+              }
+              var inlineNames = inlineBody && typeof inlineBody === 'object' && !Array.isArray(inlineBody) ? Object.keys(inlineBody) : [];
+              if (inlineNames.length === 1) {
+                var inlineName = inlineNames[0];
+                var inlineTool = {}; inlineTool[inlineName] = inlineBody[inlineName];
+                out.push({ line0: i, endLine0: i, name: inlineName, tool: inlineTool, platform: inlinePlatform });
+                continue;
+              }
+            }
+          } catch (_) {}
+        }
+        var key = line.match(/^\s*([^\s:#][^:#]*)\s*:\s*(?:#.*)?$/);
+        if (key && indent > recordingIndent) {
+          var name = key[1].trim();
+          // Unified trailheads encode their one recorded tool as a map rather than a list:
+          // `recording: -> android: -> launchApp:`. Parse that complete child block before
+          // treating its key as another classifier, so it gets the same runnable marker as a
+          // normal step recording.
+          if (classifier && toolsIndent < 0 && indent > classifierIndent) {
+            var mapEnd = i + 1;
+            while (mapEnd < lines.length && (blank(lines[mapEnd]) || indentOf(lines[mapEnd]) > indent)) mapEnd++;
+            var mapSnippet = lines.slice(i, mapEnd).map(function (s) { return s.slice(Math.min(indent, indentOf(s))); }).join('\n');
+            try {
+              var mapTool = window.jsyaml.load(mapSnippet);
+              if (mapTool && typeof mapTool === 'object' && !Array.isArray(mapTool) && Object.keys(mapTool).length === 1) {
+                out.push({ line0: i, endLine0: Math.max(i, mapEnd - 1), name: name, tool: mapTool, platform: classifier });
+                i = mapEnd - 1;
+                continue;
+              }
+            } catch (_) {}
+          }
+          if (name === 'tools') {
+            toolsIndent = indent; classifier = null; classifierIndent = -1;
+          } else {
+            classifier = name; classifierIndent = indent; toolsIndent = -1;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   // Wrap a step's tool(s) in the single-step unified trail ToolRunRequest needs (a bare `- tools:`
   // item is rejected). Extracts the tool list out of the step's YAML string, then delegates to
   // buildToolListRunYaml. Returns null if the step has no parseable tool.
@@ -522,6 +650,7 @@
   const api = {
     recordYamlValue, parseRecordStepTools, trailheadRunTools,
     buildRecordedTrailYaml, buildRunnableToolYaml, buildToolListRunYaml, buildTrailheadRunYaml,
+    runnableToolCalls,
     normalizeScratchTrailYaml,
     buildPromptTrailYaml, buildBlazeYaml, mergeBlazeYaml,
     normalizeTrailDoc, applyRecordingEdit,

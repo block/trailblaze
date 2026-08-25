@@ -3,8 +3,9 @@
 # Trailblaze launcher
 #
 # Usage:
-#   ./trailblaze app                 - Open Trail Runner in its native desktop window
-#   ./trailblaze trailrunner         - Compatibility alias for `app`
+#   ./trailblaze app                 - Launch the legacy desktop app
+#   ./trailblaze app --v2            - Open Trail Runner in its native desktop window
+#   ./trailblaze trailrunner         - Compatibility alias for `app --v2`
 #   ./trailblaze --stop              - Stop the daemon
 #   ./trailblaze app --headless      - Start headless daemon
 #   ./trailblaze app --stop          - Stop the daemon
@@ -462,9 +463,9 @@ get_status() {
     fi
 }
 
-# Open Trail Runner in its native desktop shell. `app --headless`, `app --status`,
-# `app --stop`, and `app --foreground` remain daemon/diagnostic commands; only the
-# ordinary `app` and `app start` user entry points take this path.
+# Open Trail Runner in its native desktop shell. Bare `app` and `app start`
+# continue to launch the legacy Compose desktop app; `--v2` is the explicit
+# opt-in while the replacement is still being validated.
 open_trailrunner_window() {
     local url="http://localhost:${TRAILBLAZE_PORT}/trailrunner/"
     echo "Opening Trail Runner at $url" >&2
@@ -598,9 +599,9 @@ done
 # Flat string for functions that need it (backward compat)
 ARGS="${ARGS_ARRAY[*]}"
 
-if [ "${#ARGS_ARRAY[@]}" -eq 1 ] && { [ "${ARGS_ARRAY[0]}" = "app" ] || [ "${ARGS_ARRAY[0]}" = "trailrunner" ]; }; then
+if [ "${#ARGS_ARRAY[@]}" -eq 1 ] && [ "${ARGS_ARRAY[0]}" = "trailrunner" ]; then
     NATIVE_APP_MODE=true
-elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARGS_ARRAY[1]}" = "start" ]; then
+elif [ "${#ARGS_ARRAY[@]}" -eq 2 ] && [ "${ARGS_ARRAY[0]}" = "app" ] && [ "${ARGS_ARRAY[1]}" = "--v2" ]; then
     NATIVE_APP_MODE=true
 fi
 

@@ -59,6 +59,46 @@ class ResolveWorkspaceConfigDirTest {
   }
 
   @Test
+  fun `legacy config dir under the picked repo root is found`() {
+    // The shape that forced this: config at `trails/config/`, trails somewhere else entirely
+    // (`jobs/<job>/trails/`), so the repo ROOT is the only pick that lists the trails. Before this
+    // resolved, the root derived `<root>/config` and the workspace contributed no trailmaps at all.
+    val root = tmp.newFolder("ws")
+    val legacy = File(root, "trails/config").apply { mkdirs() }
+    File(root, "jobs/login/trails").mkdirs()
+
+    assertEquals(legacy, resolveWorkspaceConfigDir(root))
+  }
+
+  @Test
+  fun `standalone dir wins over a legacy one at the same root`() {
+    val root = tmp.newFolder("ws")
+    val standalone = File(root, "trailblaze-config").apply { mkdirs() }
+    File(root, "trails/config").mkdirs()
+
+    assertEquals(standalone, resolveWorkspaceConfigDir(root))
+  }
+
+  @Test
+  fun `anchored legacy config dir is found from a deeply-nested picked dir`() {
+    val root = tmp.newFolder("ws")
+    val legacy = File(root, "trails/config").apply { mkdirs() }
+    File(legacy, "trailblaze.yaml").writeText("")
+    val nested = File(root, "jobs/login/trails").apply { mkdirs() }
+
+    assertEquals(legacy, resolveWorkspaceConfigDir(nested))
+  }
+
+  @Test
+  fun `unanchored legacy config dir above the parent does not hijack the workspace`() {
+    val root = tmp.newFolder("ws")
+    File(root, "trails/config").mkdirs() // no trailblaze.yaml
+    val nested = File(root, "jobs/login/trails").apply { mkdirs() }
+
+    assertEquals(File(nested, "config"), resolveWorkspaceConfigDir(nested))
+  }
+
+  @Test
   fun `closest anchored standalone dir wins over a higher one`() {
     val outer = tmp.newFolder("outer")
     File(outer, "trailblaze-config").apply { mkdirs(); File(this, "trailblaze.yaml").writeText("") }

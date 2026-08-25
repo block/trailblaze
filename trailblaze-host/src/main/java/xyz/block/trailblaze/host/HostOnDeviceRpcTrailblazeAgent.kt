@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
@@ -121,6 +122,13 @@ class HostOnDeviceRpcTrailblazeAgent(
    * callers that don't yet supply it.
    */
   sessionDirProvider: ((SessionId) -> File)? = null,
+  /**
+   * Shared [AgentMemory] — see [BaseTrailblazeAgent.memory]. Multi-device sessions construct one
+   * agent per bound device and pass the primary agent's memory here so a `remember` on one device
+   * resolves in `{{var}}` tokens dispatched to another. Defaults to a fresh instance for
+   * single-device callers.
+   */
+  memory: AgentMemory = AgentMemory(),
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -129,6 +137,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   resolvedTarget = resolvedTarget,
   appId = appId,
   sessionDirProvider = sessionDirProvider,
+  memory = memory,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true

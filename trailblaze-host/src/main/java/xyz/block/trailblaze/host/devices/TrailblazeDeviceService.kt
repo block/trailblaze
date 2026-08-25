@@ -1,6 +1,9 @@
 package xyz.block.trailblaze.host.devices
 
-import maestro.Maestro
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -55,7 +58,10 @@ object TrailblazeDeviceService {
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
       ) == trailblazeDeviceId
     } ?: return null
-    val iosDriver: Maestro = HostIosDriverFactory.createIOS(
+    // One owner's lease on the shared cached driver, not the driver itself: closing it releases this
+    // connection's hold and the XCUITest connection survives for whoever else is still driving the
+    // device - see [HostIosDriverFactory.Cached].
+    val iosDriver: Driver = HostIosDriverFactory.createIOS(
       deviceId = connectedDevice.instanceId,
       openDriver = true,
       reinstallDriver = false,
@@ -64,11 +70,19 @@ object TrailblazeDeviceService {
       platformConfiguration = null,
       appTarget = appTarget,
     )
-    return MaestroConnectedDevice(
-      maestroDriver = iosDriver.driver,
-      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-      instanceId = connectedDevice.instanceId,
-    )
+    return try {
+      MaestroConnectedDevice(
+        maestroDriver = iosDriver,
+        trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+        instanceId = connectedDevice.instanceId,
+      )
+    } catch (e: Throwable) {
+      // MaestroConnectedDevice reads deviceInfo() in its constructor, which is a live XCUITest
+      // call. If it throws, the lease above is held by a caller that never received it, and
+      // nothing left could ever release it.
+      iosDriver.close()
+      throw e
+    }
   }
 
   /**
@@ -106,6 +120,37 @@ object TrailblazeDeviceService {
       deviceWidth = bounds.width,
       deviceHeight = bounds.height,
     )
+  }
+
+  /**
+   * [getConnectedDevice] off the caller's thread, releasing the connection if the caller is
+   * cancelled before the result reaches it.
+   *
+   * `withContext` guarantees prompt cancellation, so a device it finished building for a coroutine
+   * that has since been cancelled is discarded rather than returned. On iOS that discarded value
+   * carries this connection's hold on the shared driver, and no caller ever receives a handle to
+   * release it - see [HostIosDriverFactory]. Assigning into a var the cancellation path can still
+   * read is what keeps the hold reachable.
+   */
+  suspend fun connectDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
+    appTarget: TrailblazeHostAppTarget? = null,
+  ): TrailblazeConnectedDevice? {
+    var connected: TrailblazeConnectedDevice? = null
+    try {
+      withContext(Dispatchers.IO) {
+        connected = getConnectedDevice(
+          trailblazeDeviceId = trailblazeDeviceId,
+          driverType = driverType,
+          appTarget = appTarget,
+        )
+      }
+    } catch (e: CancellationException) {
+      (connected as? MaestroConnectedDevice)?.getMaestroDriver()?.close()
+      throw e
+    }
+    return connected
   }
 
   fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> {

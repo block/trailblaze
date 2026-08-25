@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.trailrunner
 
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -24,7 +25,20 @@ object TrailIndexBuilder {
   // with the runtime's notion of "unified filename".
   private val UNIFIED_FILENAME = TrailRecordings.UNIFIED_TRAIL_FILENAME
 
+  // Directories that never hold authored trails but do hold the overwhelming majority of a
+  // workspace's files. The index is re-scanned on every request, so descending into these is the
+  // difference between a walk and a crawl: on a monorepo checkout used as the trails root, skipping
+  // them takes the traversal from ~33,700 directories / ~100,400 files to ~3,100 / ~8,200.
+  //
+  // Taken from [TrailDiscovery] rather than spelled out again, because this index and that walk
+  // answer the same question about the same tree. A name only this list prunes is a trail the CLI
+  // runs and the UI can't see, which reads as a missing file rather than as an exclude. The
+  // leading-dot check below is broader than the shared set and predates it.
+  private val SKIPPED_DIRS = TrailDiscovery.DEFAULT_EXCLUDED_DIRS
+
   fun scan(root: File): List<TrailIndexEntry> = scanAll(primary = root, extras = emptyList())
+
+  private fun File.isSkippedDir(): Boolean = name.startsWith(".") || name in SKIPPED_DIRS
 
   /**
    * Directories with no children at all, labeled like [TrailIndexEntry.folder]
@@ -35,29 +49,13 @@ object TrailIndexBuilder {
    * of the authoring flow.
    */
   fun scanEmptyDirs(primary: File, extras: List<File>): List<String> {
-    val out = mutableListOf<String>()
-    collectEmptyDirs(primary, labelFor(primary, isPrimary = true), out)
-    extras.forEach { collectEmptyDirs(it, labelFor(it, isPrimary = false), out) }
-    return out.sorted()
-  }
-
-  private fun collectEmptyDirs(root: File, rootLabel: String, out: MutableList<String>) {
-    if (!root.exists() || !root.isDirectory) return
-    walkEmptyDirs(root, root, rootLabel, out, 0)
-  }
-
-  private fun walkEmptyDirs(root: File, dir: File, rootLabel: String, out: MutableList<String>, depth: Int) {
-    if (depth > MAX_DEPTH) return
-    val entries = dir.listFiles() ?: return
-    for (entry in entries) {
-      if (!entry.isDirectory || entry.name.startsWith(".")) continue
-      val children = entry.listFiles()
-      if (children.isNullOrEmpty()) {
-        out.add("$rootLabel/${entry.relativeTo(root).invariantSeparatorsPath}")
-      } else {
-        walkEmptyDirs(root, entry, rootLabel, out, depth + 1)
-      }
-    }
+    val roots = listOf(primary to true) + extras.map { it to false }
+    return roots.flatMap { (root, isPrimary) ->
+      // Labeled here rather than inside the walk: the same directory is the primary root in one
+      // workspace and an extra root in the next, and the cached walk is keyed only on its path.
+      val label = labelFor(root, isPrimary)
+      indexRoot(root).emptyDirs.map { "$label/$it" }
+    }.sorted()
   }
 
   fun scanAll(primary: File, extras: List<File>): List<TrailIndexEntry> {
@@ -74,9 +72,7 @@ object TrailIndexBuilder {
       Console.log("[TrailIndexBuilder] trails root does not exist: ${root.absolutePath}")
       return
     }
-    val files = mutableListOf<File>()
-    walk(root, files, 0)
-    files.forEach { out.add(build(root, it, rootIdx, rootLabel)) }
+    indexRoot(root).trailFiles.forEach { out.add(build(root, it, rootIdx, rootLabel)) }
   }
 
   private fun labelFor(root: File, isPrimary: Boolean): String {
@@ -84,19 +80,105 @@ object TrailIndexBuilder {
     return if (isPrimary) name else "$name (${root.parent ?: ""})"
   }
 
-  private fun walk(dir: File, out: MutableList<File>, depth: Int) {
-    if (depth > MAX_DEPTH) return
-    val entries = dir.listFiles() ?: return
+  /**
+   * One traversal's worth of a root: the trail files in it, its childless directories, and the
+   * mtimes that say whether any of that is still true.
+   */
+  private class RootIndex(
+    val trailFiles: List<File>,
+    /** Root-relative, so the same walk can be labeled for whichever root slot it is serving. */
+    val emptyDirs: List<String>,
+    /** Every directory whose children were listed, plus the childless ones we stopped at. */
+    val dirMtimes: Map<String, Long>,
+  ) {
+    /**
+     * This index describes which files exist, not what is in them, and that set only changes when
+     * some directory gains, loses or renames a child — which moves that directory's mtime. So
+     * re-stat'ing the directories we visited is enough. A deleted directory reports mtime 0, which
+     * reads as a mismatch. An in-place content edit needs no invalidation here: every scan rebuilds
+     * its entries through [configCache], which is keyed on the trail file's own mtime.
+     */
+    fun stillValid(): Boolean = dirMtimes.all { (path, mtime) -> File(path).lastModified() == mtime }
+  }
+
+  private val rootIndexCache = java.util.concurrent.ConcurrentHashMap<String, RootIndex>()
+
+  /**
+   * The root's trail files and empty directories, re-walked only when something on disk moved.
+   *
+   * The index is rebuilt from scratch on every request, and the request is polled — so on a
+   * workspace whose trails root is a repo root, the walk WAS the cost of the app: ~3,100
+   * directories and ~8,200 files per pass, twice per request (trails and empty dirs were separate
+   * traversals), about 550ms, several times a second. Everything else the daemon owed the UI —
+   * opening a trail, saving one, answering a completion — queued behind it.
+   *
+   * Validating the previous walk instead costs one stat per known directory: ~5ms against ~308ms of
+   * walking, and the walk only comes back when the answer would actually differ.
+   */
+  private fun indexRoot(root: File): RootIndex {
+    val key = root.absolutePath
+    rootIndexCache[key]?.let { if (it.stillValid()) return it }
+    val trailFiles = mutableListOf<File>()
+    val emptyDirs = mutableListOf<String>()
+    val dirMtimes = mutableMapOf<String, Long>()
+    // Read BEFORE the listing it vouches for, here and in [walk]: a child added between the two
+    // would otherwise be recorded against the mtime it just moved, and the listing that missed it
+    // would then validate forever. Sampling first can only make us re-walk a directory we already
+    // read correctly.
+    val rootMtime = root.lastModified()
+    val rootEntries = root.listFiles()
+    // A root we couldn't list — it doesn't exist yet, or isn't readable — is answered but never
+    // cached. Its walk records no directories, and a validity check with nothing to check is
+    // vacuously true, so caching it would pin an empty index for the life of the daemon: a trails
+    // root that appears later (a workspace folder cloned after startup, a `trails/` directory
+    // someone adds) would never be picked up. Re-answering from scratch costs one failed listing.
+    if (rootEntries == null) return RootIndex(emptyList(), emptyList(), emptyMap())
+    dirMtimes[key] = rootMtime
+    val complete = walk(root, rootEntries, 0, trailFiles, emptyDirs, dirMtimes)
+    val fresh = RootIndex(trailFiles, emptyDirs, dirMtimes)
+    // Same rule as an unlistable root, one level down: a directory we couldn't read makes this index
+    // describe less than the tree holds, and becoming readable moves no mtime, so nothing here would
+    // ever invalidate it. Answer from this walk, then throw it away.
+    if (complete) rootIndexCache[key] = fresh
+    return fresh
+  }
+
+  /** False when any directory in this subtree couldn't be listed, which makes the walk uncacheable. */
+  private fun walk(
+    root: File,
+    entries: Array<File>,
+    depth: Int,
+    trailFiles: MutableList<File>,
+    emptyDirs: MutableList<String>,
+    dirMtimes: MutableMap<String, Long>,
+  ): Boolean {
+    if (depth > MAX_DEPTH) return true
+    var complete = true
     for (entry in entries) {
-      if (entry.isDirectory && !entry.name.startsWith(".")) {
-        walk(entry, out, depth + 1)
+      if (entry.isDirectory) {
+        if (entry.isSkippedDir()) continue
+        // Recorded even for a childless directory: a trail created inside it moves ITS mtime and
+        // nothing above it, so without this the first trail in a new folder would stay invisible.
+        val mtime = entry.lastModified()
+        val children = entry.listFiles()
+        dirMtimes[entry.absolutePath] = mtime
+        if (children == null) {
+          // Unreadable, which is not the same as childless: reporting it as an empty folder would
+          // invent a row in the tree for a directory whose contents we don't know.
+          complete = false
+        } else if (children.isEmpty()) {
+          emptyDirs.add(entry.relativeTo(root).invariantSeparatorsPath)
+        } else {
+          complete = walk(root, children, depth + 1, trailFiles, emptyDirs, dirMtimes) && complete
+        }
       } else if (
         entry.isFile &&
         (entry.name.endsWith(TRAIL_SUFFIX) || entry.name == BLAZE_FILENAME || entry.name == UNIFIED_FILENAME)
       ) {
-        out.add(entry)
+        trailFiles.add(entry)
       }
     }
+    return complete
   }
 
   private fun build(root: File, file: File, rootIdx: Int, rootLabel: String): TrailIndexEntry {
@@ -182,7 +264,12 @@ object TrailIndexBuilder {
     val hasRecordedSteps: Boolean,
   )
 
-  private val configCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, CachedConfig>>()
+  // A null payload is a CACHED FAILURE, not a cache miss. A trail that doesn't parse is re-read and
+  // re-decoded on every scan otherwise, and a YAML parse that ends in an exception costs far more
+  // than one that succeeds — so a handful of malformed files in a workspace dominated the scan and
+  // re-logged the same complaint every few seconds (measured: 14 files, 1330 identical log lines
+  // across 95 scans). A malformed file is as immutable as a valid one until its mtime moves.
+  private val configCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, CachedConfig?>>()
 
   private fun parseConfig(file: File): CachedConfig? {
     val key = file.absolutePath
@@ -213,7 +300,10 @@ object TrailIndexBuilder {
       configCache[key] = mtime to result
       result
     } catch (e: Exception) {
+      // Logged here rather than on every scan: the cache write below means this line is emitted once
+      // per file per edit, which is what makes it readable as "this trail is broken".
       Console.log("[TrailIndexBuilder] config parse failed for ${file.absolutePath}: ${e.message}")
+      configCache[key] = mtime to null
       null
     }
   }

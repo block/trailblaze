@@ -262,7 +262,8 @@ verbatim:
 config:
   target: wikipedia
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   tags:
   - smoke
   - search
@@ -357,7 +358,8 @@ config:
   title: "Wikipedia: Autocomplete suggestions visible while typing search"
   tags: [search, flaky]
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   skip:
     web: "Autocomplete popup is timing-sensitive; remove `skip:` once the suggestion-list probe lands."
 

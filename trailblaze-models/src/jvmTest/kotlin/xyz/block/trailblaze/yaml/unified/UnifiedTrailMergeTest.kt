@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.yaml.unified
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -46,7 +48,7 @@ class UnifiedTrailMergeTest {
 
     assertEquals("app/checkout", merged.config.id)
     assertEquals("app", merged.config.target)
-    assertEquals(mapOf("android" to "ANDROID_ONDEVICE_INSTRUMENTATION"), merged.config.devices)
+    assertEquals(mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")), merged.config.devices)
     assertEquals(2, merged.trail.size)
     assertEquals("Open the cart", merged.trail[0].step)
     assertEquals(listOf("tapCart"), merged.trail[0].recordings["android"]?.map { it.name })
@@ -56,7 +58,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `merging a new classifier preserves the other classifier untouched`() {
     val existing = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "app/checkout", target = "app", devices = mapOf("ios" to "IOS_HOST")),
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app", devices = mapOf("ios" to devicePin("IOS_HOST"))),
       trail = listOf(
         UnifiedTrailStep(step = "Open the cart", recordings = mapOf("ios" to listOf(toolNamed("ios-cart")))),
         UnifiedTrailStep(step = "Pay", recordings = mapOf("ios" to listOf(toolNamed("ios-pay")))),
@@ -74,7 +76,7 @@ class UnifiedTrailMergeTest {
 
     // Both platforms pinned; neither overwrites the other.
     assertEquals(
-      mapOf("ios" to "IOS_HOST", "android" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
+      mapOf("ios" to devicePin("IOS_HOST"), "android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")),
       merged.config.devices,
     )
     assertEquals(listOf("ios-cart"), merged.trail[0].recordings["ios"]?.map { it.name })
@@ -86,7 +88,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `re-recording the same classifier replaces its slot rather than appending`() {
     val existing = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to "OLD_DRIVER")),
+      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"))),
       trail = listOf(
         UnifiedTrailStep(
           step = "Open the cart",
@@ -98,7 +100,7 @@ class UnifiedTrailMergeTest {
       ),
     )
     val recorded = recordedItems(
-      config = v1Config(driver = "NEW_DRIVER", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Open the cart", tool("new-android"))),
     )
 
@@ -110,7 +112,91 @@ class UnifiedTrailMergeTest {
       "android slot must be the new recording, not appended to the old",
     )
     assertEquals(listOf("ios-cart"), merged.trail[0].recordings["ios"]?.map { it.name }, "ios slot untouched")
-    assertEquals("NEW_DRIVER", merged.config.devices?.get("android"), "driver pin replaced")
+    assertEquals(devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"), merged.config.devices?.get("android"), "driver pin replaced")
+  }
+
+  @Test
+  fun `configuration-keyed merge writes the leg under the configuration name and leaves config devices untouched`() {
+    // The authored cast: an `pos-pair` configuration plus an unrelated single-device entry.
+    val posPairCast = TrailblazeDeviceDefinition(
+      devices = linkedMapOf(
+        "seller" to TrailblazeDeviceDefinition(classifier = "lab-a"),
+        "buyer" to TrailblazeDeviceDefinition(classifier = "lab-b"),
+      ),
+    )
+    val existingDevices = linkedMapOf(
+      "pos-pair" to posPairCast,
+      "android-tablet" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+    )
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "pos/tip", target = "pos", devices = existingDevices),
+      trail = listOf(
+        UnifiedTrailStep(step = "The buyer chooses a tip", recordings = mapOf("android-tablet" to listOf(toolNamed("tapTabletTip")))),
+      ),
+    )
+    // The recorded session ran the pos-pair configuration; its v1 config carries the START DEVICE's
+    // driver, which must NOT become an `pos-pair:` driver pin (a configuration entry can't hold one —
+    // stripping/re-adding would delete the authored cast and write an unparseable entry).
+    val recorded = recordedItems(
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "pos/tip", target = "pos"),
+      steps = listOf(directionStep("The buyer chooses a tip", tool("tapTip"))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "pos-pair", selectedDeviceConfiguration = "pos-pair")
+
+    assertEquals(existingDevices, merged.config.devices, "config.devices must be byte-identical: cast preserved, no pos-pair pin")
+    assertEquals(listOf("tapTip"), merged.trail[0].recordings["pos-pair"]?.map { it.name })
+    assertEquals(listOf("tapTabletTip"), merged.trail[0].recordings["android-tablet"]?.map { it.name }, "other leg untouched")
+
+    // Re-recording the configuration replaces its leg in place and still leaves the cast alone.
+    val reRecorded = recordedItems(
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "pos/tip", target = "pos"),
+      steps = listOf(directionStep("The buyer chooses a tip", tool("tapTipV2"))),
+    )
+    val remerged = UnifiedTrailAdapter.mergeRecordedClassifier(merged, reRecorded, "pos-pair", selectedDeviceConfiguration = "pos-pair")
+    assertEquals(existingDevices, remerged.config.devices)
+    assertEquals(listOf("tapTipV2"), remerged.trail[0].recordings["pos-pair"]?.map { it.name })
+  }
+
+  @Test
+  fun `a configuration-keyed first write pins no driver on the configuration`() {
+    // Greenfield: no existing document, so the base config is seeded from the RECORDING's own v1
+    // config — which has no cast to read configuration names off. Only the caller knows the key
+    // names a configuration, and without that a driver pin lands on `pos-pair:`, an entry the parser
+    // rejects (a configuration's drivers live on its named devices).
+    val recorded = recordedItems(
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "pos/tip", target = "pos"),
+      steps = listOf(directionStep("The buyer chooses a tip", tool("tapTip"))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing = null,
+      recordedItems = recorded,
+      classifier = "pos-pair",
+      selectedDeviceConfiguration = "pos-pair",
+    )
+
+    assertNull(merged.config.devices, "no device entry at all — least of all `pos-pair: {driver: ...}`")
+    assertEquals(listOf("tapTip"), merged.trail[0].recordings["pos-pair"]?.map { it.name })
+  }
+
+  @Test
+  fun `merging under a key that is not the selected configuration fails loud`() {
+    val recorded = recordedItems(
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "pos/tip", target = "pos"),
+      steps = listOf(directionStep("The buyer chooses a tip", tool("tapTip"))),
+    )
+
+    // A save site that keys by the launch device while the run bound a configuration is the very
+    // bug this keying fixes: refuse rather than write a leg no replay resolves.
+    assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing = null,
+        recordedItems = recorded,
+        classifier = "lab-a",
+        selectedDeviceConfiguration = "pos-pair",
+      )
+    }
   }
 
   @Test
@@ -120,7 +206,7 @@ class UnifiedTrailMergeTest {
       trail = listOf(UnifiedTrailStep(step = "Open the shopping cart", recordings = mapOf("ios" to listOf(toolNamed("ios"))))),
     )
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Tap the cart icon", tool("android"))),
     )
 
@@ -133,7 +219,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `a recorded step with no tools leaves the classifier absent, not an empty list`() {
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(DirectionStep(step = "LLM-only step", recording = null)),
     )
 
@@ -152,7 +238,7 @@ class UnifiedTrailMergeTest {
       trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("ios" to listOf(toolNamed("ios1"))))),
     )
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(
         directionStep("Step 1", tool("a1")),
         directionStep("Step 2", tool("a2")),
@@ -184,7 +270,7 @@ class UnifiedTrailMergeTest {
     )
     // Re-record android with only ONE step (the device didn't reach step 2 this time).
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Step 1", tool("newA1"))),
     )
 
@@ -208,7 +294,7 @@ class UnifiedTrailMergeTest {
     )
     // Re-record android, but this recording has no trailhead at all.
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Step 1", tool("a1"))),
     )
 
@@ -222,7 +308,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `a first-write trailhead takes the recorded step text`() {
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Step 1", tool("a1"))),
       trailhead = TrailheadDefinition(step = "Sign in first", tools = listOf(toolNamed("launch"))),
     )
@@ -234,7 +320,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `a trailhead recorded with no step text falls back to the default trailhead step`() {
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Step 1", tool("a1"))),
       trailhead = TrailheadDefinition(step = null, tools = listOf(toolNamed("launch"))),
     )
@@ -245,7 +331,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `dropping the only driver pin collapses config devices to null`() {
     val existing = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to "OLD")),
+      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"))),
       trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("android" to listOf(toolNamed("a1"))))),
     )
     // A recording with no driver in its config (e.g. LLM-driven session with no driver marker).
@@ -270,7 +356,7 @@ class UnifiedTrailMergeTest {
       trail = listOf(UnifiedTrailStep(step = "Step 1", recordings = mapOf("ios" to listOf(toolNamed("ios1"))))),
     )
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("Step 1", tool("a1"))),
       trailhead = TrailheadDefinition(step = "Sign in", tools = listOf(toolNamed("android-launch"))),
     )
@@ -290,7 +376,7 @@ class UnifiedTrailMergeTest {
         TrailConfig(
           id = "app/x",
           target = "app",
-          driver = "D",
+          driver = "ANDROID_ONDEVICE_ACCESSIBILITY",
           tags = listOf("smoke", "flaky"),
           skip = "blocked on #123",
         ),
@@ -342,7 +428,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `a blank recorded skip is not carried over`() {
     val recorded = listOf<TrailYamlItem>(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "D", skip = "   ")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "ANDROID_ONDEVICE_ACCESSIBILITY", skip = "   ")),
       TrailYamlItem.PromptsTrailItem(listOf(directionStep("s", tool("t")))),
     )
     val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing = null, recordedItems = recorded, classifier = "android")
@@ -355,7 +441,7 @@ class UnifiedTrailMergeTest {
     // and the parser rejects the combination. Even if the recorder captured tools for such a step,
     // the merge must not write them — otherwise the saved trail.yaml is unreadable on the next run.
     val recorded = listOf<TrailYamlItem>(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "D")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "ANDROID_ONDEVICE_ACCESSIBILITY")),
       TrailYamlItem.PromptsTrailItem(
         listOf(
           DirectionStep(step = "Always-LLM step", recordable = false, recording = ToolRecording(tools = listOf(tool("sneaky")))),
@@ -380,7 +466,7 @@ class UnifiedTrailMergeTest {
       trail = listOf(UnifiedTrailStep(step = "Always-LLM step", recordable = false)),
     )
     val recorded = listOf<TrailYamlItem>(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "D")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "ANDROID_ONDEVICE_ACCESSIBILITY")),
       TrailYamlItem.PromptsTrailItem(
         listOf(DirectionStep(step = "Always-LLM step", recording = ToolRecording(tools = listOf(tool("t"))))),
       ),
@@ -396,7 +482,7 @@ class UnifiedTrailMergeTest {
   @Test
   fun `an appended recorded verification step becomes a unified verify step`() {
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(
         directionStep("Open the cart", tool("tapCart")),
         VerificationStep(verify = "The cart shows 2 items", recording = ToolRecording(tools = listOf(tool("assertItems")))),
@@ -424,7 +510,7 @@ class UnifiedTrailMergeTest {
     )
     // The re-record captured the same step as a plain direction step (kind drift).
     val recorded = recordedItems(
-      config = v1Config(driver = "D", id = "x", target = "y"),
+      config = v1Config(driver = "ANDROID_ONDEVICE_ACCESSIBILITY", id = "x", target = "y"),
       steps = listOf(directionStep("The cart shows 2 items", tool("android-assert"))),
     )
 
@@ -605,3 +691,7 @@ class UnifiedTrailMergeTest {
     ),
   )
 }
+
+/** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
+private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)

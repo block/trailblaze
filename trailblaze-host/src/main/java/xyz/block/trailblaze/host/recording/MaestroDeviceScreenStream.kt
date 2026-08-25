@@ -38,7 +38,7 @@ class MaestroDeviceScreenStream(
   // Simulator UDID enabling the iOS AXe tree overlay; null (or non-iOS) leaves the tree
   // Maestro-only. See [MaestroScreenStateProvider].
   private val iosUdid: String? = null,
-) : DeviceScreenStream {
+) : DeviceScreenStream, AutoCloseable {
 
   private val driverMutex = Mutex()
 
@@ -144,5 +144,19 @@ class MaestroDeviceScreenStream(
 
   private suspend fun refreshScreenState(): GetScreenStateResponse? {
     return provider.getScreenState(includeScreenshot = false)?.also { lastResponse = it }
+  }
+
+  /**
+   * Lets go of [driver]. Both disconnect paths already close a stream that is [AutoCloseable] -
+   * `HostDeviceSessionManager.remove` for a viewer, `RecordRoutes` for the recorder - and this is the
+   * iOS stream finally taking part in that instead of leaving its driver held for the life of the
+   * daemon.
+   *
+   * Safe to do only because `HostIosDriverFactory` hands out a lease rather than the driver itself:
+   * the XCUITest connection goes away when the last owner releases it, so a viewer disconnecting no
+   * longer kills an agent session driving the same simulator.
+   */
+  override fun close() {
+    driver.close()
   }
 }

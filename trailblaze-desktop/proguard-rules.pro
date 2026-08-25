@@ -81,6 +81,37 @@
 -keep class com.dokar.quickjs.** { *; }
 
 # ===========================================================================
+# Coil (ServiceLoader-discovered fetchers/decoders)
+# ===========================================================================
+# Coil's `RealImageLoader` calls `addServiceLoaderComponents()` on EVERY
+# ImageLoader construction, which runs `ServiceLoader.load(FetcherServiceLoaderTarget)`.
+# `coil-network-ktor3` ships META-INF/services/coil3.util.FetcherServiceLoaderTarget
+# naming `KtorNetworkFetcherServiceLoaderTarget` — an `internal` class referenced from
+# nothing but that services file, so the shrinker deletes it while
+# `-adaptresourcefilecontents META-INF/services/**` leaves the services file naming it
+# behind. `ServiceLoader` then throws `ServiceConfigurationError` (an Error, not an
+# Exception), which propagates out of the lazy `fetcherFactories` flatMap and takes down
+# the ENTIRE fetcher list — including `FileUriFetcher`, so even purely local
+# `file:///…` screenshot loads fail. `RealImageLoader.execute` catches Throwable and
+# returns an ErrorResult, so the desktop session views just render blank panes with no
+# error anywhere. Same shrink-away-what-only-a-string-references shape as the quickjs
+# keep above.
+#
+# Confirmed in the shipped 2026.06.01 Homebrew JAR: 228 of Coil's 336 classes survived,
+# `coil3/network/**` was emptied to bare directory entries, and
+# META-INF/services/coil3.util.FetcherServiceLoaderTarget still named the deleted class.
+#
+# The package keep covers Coil's own bundled providers; the two `implements` keeps also
+# cover any provider Coil discovers from outside the `coil3` package. The `implements`
+# keeps alone would likely retain today's one offender, but the package keep is what makes
+# that independent of ProGuard's hierarchy matching — and it costs ~108 classes (~0.1%) in
+# a 228 MB artifact, for a failure mode that only ever appears in a published build.
+-keep class coil3.** { *; }
+-keep class * implements coil3.util.FetcherServiceLoaderTarget { *; }
+-keep class * implements coil3.util.DecoderServiceLoaderTarget { *; }
+-dontwarn coil3.**
+
+# ===========================================================================
 # Kotlin
 # ===========================================================================
 # ProGuard corrupts Kotlin metadata when processing stdlib classes, causing

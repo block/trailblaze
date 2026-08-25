@@ -1,20 +1,74 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 let _pendingRun = null;
+// Counts markers rather than timestamping them: `at` is a clock reading, so two runs started in the
+// same millisecond would share it and a stale answer could land on the newer marker.
+let _pendingRunSeq = 0;
+// Tokens of runs the user stopped before their dispatch reported a session. Kept out here rather than
+// on the marker because the marker is replaced the instant another run is launched, and a stop is
+// about the run that was stopped - which is still running on the device either way. Entries are
+// consumed when that session id arrives; one survives a dispatch that never answers at all.
+const _stoppedRuns = new Set();
+// Returns the marker's own token. A dispatch can answer long after the user has started another
+// run, and the patchers below take that token so a stale answer lands on nothing instead of on the
+// marker for the run they started since.
+//
+// `awaitsDispatch` is the caller promising to patch a session id onto this marker later, and it is
+// what the Active screen waits on before falling back to guessing "newest running row". It has to
+// be declared: a marker with no id yet is indistinguishable from one that will never get one, and
+// waiting on a promise nobody made parks the run on "Starting…" until the marker goes stale. Opt-in
+// for that reason - a caller that forgets it gets the guess, which is imperfect, not stuck.
 function recordPendingRun(info) {
-  _pendingRun = { title: (info && info.title) || 'New run', target: info && info.target, device: info && info.device, at: Date.now(), error: null, sessionId: (info && info.sessionId) || null };
+  _pendingRun = { title: (info && info.title) || 'New run', target: info && info.target, device: info && info.device, at: Date.now(), token: ++_pendingRunSeq, error: null, sessionId: (info && info.sessionId) || null, awaitsDispatch: !!(info && info.awaitsDispatch) };
+  return _pendingRun.token;
 }
 function getPendingRun() { return _pendingRun; }
 function clearPendingRun() { _pendingRun = null; }
+// Whether a patch is aimed at the marker that is actually in flight. Callers with no token (the
+// surfaces that patch whatever run they just started, in the same breath) always match.
+function isPendingRun(token) { return token == null || (_pendingRun && _pendingRun.token === token); }
+
 // Patch the authoritative sessionId (returned by dispatchRun) onto the in-flight pending marker so
 // the Active screen can lock onto the real session instead of guessing "newest running row".
-function setPendingRunSession(sessionId) { if (_pendingRun && sessionId) _pendingRun = { ..._pendingRun, sessionId }; }
+function setPendingRunSession(sessionId, token) {
+  if (!sessionId) return;
+  // Stopped before the dispatch answered, so there was no session to cancel at the time. There is one
+  // now, and cancelling it here is what makes that Stop mean what it said. Checked before the
+  // in-flight test, and against the token rather than the marker: by the time this answer arrives the
+  // user may have launched another run, and the stopped run is still running on the device whether or
+  // not its card is the one on screen. Every launch path reports its session through this function,
+  // so this is the one place that has to know.
+  const owner = token == null ? _pendingRun && _pendingRun.token : token;
+  if (_stoppedRuns.has(owner)) {
+    _stoppedRuns.delete(owner);
+    cancelSession(sessionId).catch(() => null);
+    return;
+  }
+  if (_pendingRun && isPendingRun(token)) _pendingRun = { ..._pendingRun, sessionId };
+}
+// Stop this run even though it hasn't reported a session yet. The dispatch RPC can't be recalled -
+// the run route has no cancellation handle, and abandoning the request stops nothing - so the stop is
+// remembered here and applied above when the session id finally arrives. Without this, Stop during a
+// slow dispatch only stopped WATCHING: the card said stopped and the run kept going.
+function requestPendingRunStop() { if (_pendingRun) _stoppedRuns.add(_pendingRun.token); }
 // Mark the in-flight pending run as failed so the Active screen can show why it never
 // started (e.g. the device couldn't be reached), instead of a marker that just vanishes.
-function failPendingRun(error) { if (_pendingRun) _pendingRun = { ..._pendingRun, error: error || 'Run failed to start' }; }
+function failPendingRun(error, token) { if (_pendingRun && isPendingRun(token)) _pendingRun = { ..._pendingRun, error: error || 'Run failed to start' }; }
+// How long a pending marker stays on screen and worth following before it is treated as stale. One
+// bound for the card, the detail placeholder, the follow loop and the launch steps below, so none of
+// them can give up while another is still showing the run as starting - and so a step that outlives
+// the card, which has nothing left to report to, stops instead of starting a run nobody is watching.
+const PENDING_TTL_MS = 90000;
+// Whether this marker is still worth working towards: still the one in flight, not already stopped
+// or failed, and not yet expired. A launch that takes real time has to re-check between its steps,
+// because both of those can happen while it waits - the pending card offers Stop the whole time it
+// is connecting, and a card nobody is watching any more must not go on to start a run.
+function pendingRunLive(token) {
+  return !!(_pendingRun && isPendingRun(token) && !_pendingRun.error && Date.now() - _pendingRun.at < PENDING_TTL_MS);
+}
 
 // Mirrors TrailblazeRunner.DEFAULT_MAX_STEPS. Sending this value explicitly is equivalent to
 // sending nothing, so the UI omits it and lets the framework own the default.
@@ -65,8 +119,12 @@ function useFetched(loader, deps = []) {
   const [state, setState] = React.useState({ data: null, loading: true, error: null, mock: false });
   const [version, setVersion] = React.useState(0);
   const depsKeyRef = React.useRef(null);
+  // Whether a load is out right now. A ref, not state, so reading it costs no render — pollers use
+  // it to skip a tick rather than queue a second copy of a load that hasn't answered yet.
+  const inFlight = React.useRef(false);
   React.useEffect(() => {
     let cancelled = false;
+    inFlight.current = true;
     // Only surface `loading` on the initial load or a real deps change (a different id/target).
     // A background reload (poll tick, manual refresh, workspace signal) keeps the current data on
     // screen without flipping loading — otherwise every poll blinks skeletons/spinners bound to it.
@@ -81,7 +139,14 @@ function useFetched(loader, deps = []) {
         // keep the PREVIOUS `data` reference so consumers reconcile to the same objects and don't
         // re-render / flash on a no-op refresh. Only a real change swaps in the new array.
         const same = prev.data != null && JSON.stringify(prev.data) === JSON.stringify(result.data);
-        return { data: same ? prev.data : result.data, loading: false, error: null, mock: !!result.mock, extra: result.extra };
+        const next = { data: same ? prev.data : result.data, loading: false, error: null, mock: !!result.mock, extra: result.extra };
+        // Nothing moved at all: return the PREVIOUS state object, which React treats as a no-op and
+        // skips the render. Returning a fresh wrapper would re-render every consumer of this hook on
+        // every tick — and these consumers aren't memoized, so a steady poll would rebuild trees and
+        // editor surfaces several times a second to show exactly what was already on screen.
+        const unchanged = same && !prev.loading && !prev.error && prev.mock === next.mock
+          && JSON.stringify(prev.extra) === JSON.stringify(next.extra);
+        return unchanged ? prev : next;
       });
     }).catch((e) => {
       if (cancelled) return;
@@ -92,6 +157,9 @@ function useFetched(loader, deps = []) {
       setState((prev) => (isReload
         ? { ...prev, loading: false, error: e }
         : { data: null, loading: false, error: e, mock: false }));
+    }).finally(() => {
+      // Cancelled means a newer run of this effect already owns the flag, and has already set it.
+      if (!cancelled) inFlight.current = false;
     });
     return () => { cancelled = true; };
   }, [...deps, version]);
@@ -117,7 +185,7 @@ function useFetched(loader, deps = []) {
       window.removeEventListener('tb:daemon-recovered', onDaemonRecovered);
     };
   }, []);
-  return { ...state, reload: () => setVersion((v) => v + 1) };
+  return { ...state, inFlight, reload: () => setVersion((v) => v + 1) };
 }
 
 function fileUrl(id, name) {
@@ -146,14 +214,23 @@ async function resolveRunDevice(trail, preferredId) {
   return { device, trailblazeDeviceId };
 }
 
-async function connectDevice(trailblazeDeviceId) {
-  return await window.TbRpc.connectToDevice(trailblazeDeviceId);
+// `targetAppId` is the app target this connection is for, when the caller knows it (the Run
+// dialog does - it has the trail's declared target). Omitting it binds the daemon's selected
+// target, which is a different app whenever the run is for another one.
+async function connectDevice(trailblazeDeviceId, targetAppId) {
+  return await window.TbRpc.connectToDevice(trailblazeDeviceId, targetAppId);
 }
 
 // Like connectDevice but returns { ok, error } so callers can show the daemon's real failure
 // reason (e.g. "No target app selected. Pick one in the Target dropdown before connecting.").
-async function connectDeviceDetailed(trailblazeDeviceId) {
-  return await window.TbRpc.connectToDeviceDetailed(trailblazeDeviceId);
+async function connectDeviceDetailed(trailblazeDeviceId, targetAppId) {
+  return await window.TbRpc.connectToDeviceDetailed(trailblazeDeviceId, targetAppId);
+}
+
+// Releases the daemon's live connection. The connect binds a target app for the life of the
+// connection, so this is what lets a device be re-connected for a different one.
+async function disconnectDevice(trailblazeDeviceId) {
+  return await window.TbRpc.disconnectDevice(trailblazeDeviceId);
 }
 
 async function fetchTrailYaml(id) {
@@ -176,19 +253,51 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((res) => setTimeout(() => res('__timeout__'), ms))]);
 }
 
-async function retrySession(session) {
+// A retry runs in two halves, split where it becomes worth navigating for.
+//
+// This half is the part that can refuse instantly: a session with nothing recorded has no retry to
+// follow, and saying so where the user clicked beats sending them to a screen to read it.
+async function prepareRetry(session) {
   if (!session.hasRecordedSteps) return { ok: false, error: 'This session has no recorded steps to retry.' };
   const yaml = await safeText(exportSessionUrl(session.id));
   if (!yaml) return { ok: false, error: 'This session has no recorded steps to retry.' };
   const dev = (session.device || '').toLowerCase();
   const platform = (session.platform || '').toLowerCase()
     || (dev.includes('android') ? 'android' : dev.includes('ios') ? 'ios' : dev.includes('web') ? 'web' : '');
-  const resolved = await resolveRunDevice({ platform }, null);
-  if (resolved.error) return { ok: false, error: resolved.error };
-  const connected = await connectDevice(resolved.trailblazeDeviceId);
-  if (!connected) return { ok: false, error: 'Could not connect to the device to retry.' };
-  dispatchRun(resolved.trailblazeDeviceId, yaml);
-  return { ok: true };
+  return { ok: true, yaml, platform };
+}
+
+// The half that takes real time - resolve, connect, dispatch - reported entirely onto `marker`.
+//
+// Not awaited by the caller and returning nothing on purpose: the caller has already recorded that
+// marker and navigated to the Active screen, so the run is on screen from the click. Awaiting any of
+// this before showing something is how a retry left the user on the session list with no card and no
+// spinner while the daemon took its time. Every exit patches the marker, so nothing is silent.
+async function launchRetry(prepared, marker) {
+  const fail = (error) => failPendingRun(error, marker);
+  if (!prepared.ok) return fail(prepared.error);
+  const resolved = await resolveRunDevice({ platform: prepared.platform }, null);
+  if (resolved.error) return fail(resolved.error);
+  // Bounded, because the daemon probes the device's forwarded port with no timeout of its own: an
+  // unbounded connect can outlive the card it is meant to report to, and then the retry has nowhere
+  // to say what went wrong. Same deadline and the same reason as the prompt-run launch in blaze.tsx.
+  const connected = await withTimeout(connectDevice(resolved.trailblazeDeviceId), 45000);
+  if (connected === '__timeout__') return fail("Couldn't reach the device. Its Trailblaze server isn't responding - make sure it is provisioned and the Trailblaze app is running.");
+  if (!connected) return fail('Could not connect to the device to retry.');
+  // Re-checked here rather than only at the top, because the card has had the whole connect to stop
+  // being worth dispatching for: the user may have hit Stop (it is offered the entire time the card
+  // is up), or the card may have gone stale and stopped being followed. Either way, dispatching now
+  // starts a run nobody is watching, behind a card that says otherwise.
+  if (!pendingRunLive(marker)) return undefined;
+  try {
+    const r = await dispatchRun(resolved.trailblazeDeviceId, prepared.yaml);
+    // A refusal rides a 2xx `{ ok: true }` envelope as `success: false`, and used to fall through as
+    // a success - the retry navigated to Active and sat on a marker that never became a run.
+    if (r && r.ok !== false && r.success !== false && r.sessionId) return setPendingRunSession(r.sessionId, marker);
+    return fail((r && r.error) || 'Could not start the retried run.');
+  } catch (e) {
+    return fail((e && e.message) || String(e));
+  }
 }
 
 async function getTargetApps() {
@@ -275,6 +384,14 @@ async function fetchEditedTrails() {
   return raw?.paths || [];
 }
 
+// The committed version of a trail plus its git state, for diffing the editor buffer against what
+// is in git. A daemon that can't answer at all reads as 'unavailable' rather than as a clean file,
+// so a caller can tell "nothing changed" apart from "git couldn't say".
+async function fetchTrailGitBaseline(id) {
+  const raw = await window.TbRpc.getTrailGitBaseline(id);
+  return raw || { state: 'unavailable', committed: null };
+}
+
 async function updateTrail(id, yaml) {
   // Trail save goes through the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
   return await window.TbRpc.updateTrail(id, yaml);
@@ -344,10 +461,10 @@ async function switchWorkspace(path) {
   let restartNeededForTargets = false;
   let addedTargets = [];
   try {
-    // Trails/trailmaps reload live via the event above; app targets are resolved once at daemon
-    // startup, so ask the daemon whether THIS workspace would declare a different target set (in
-    // which case the picker is stale until a restart). Both checks are advisory — never fail the
-    // switch on them.
+    // Trails/trailmaps reload live via the event above, and the switch itself reloads the daemon's
+    // app targets — so this asks whether anything is STILL out of sync (an edit made to the
+    // workspace after the daemon loaded it, or a reload that failed), in which case the picker is
+    // stale until a restart. Both checks are advisory — never fail the switch on them.
     // `empty` keys off trails only: trails are workspace-exclusive, whereas getTrailmaps() is backed
     // by platformConfigResourceSource() and always includes classpath-bundled trailmaps (revyl, the
     // server runtime), so it can't tell whether the SELECTED folder has authored content.
@@ -1128,7 +1245,7 @@ function applyTrailRunnerUiCommand(command, go) {
     case 'open_session': {
       const sessionId = command.sessionId || valueOf(params.sessionId);
       if (!sessionId || !go) return { ok: false, error: 'missing sessionId' };
-      const view = valueOf(params.view) || 'completed';
+      const view = valueOf(params.view) || 'runs';
       go(String(view), { sel: String(sessionId) });
       return { ok: true };
     }
@@ -1166,11 +1283,11 @@ function applyTrailRunnerUiCommand(command, go) {
 
 Object.assign(window, {
   WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded,
-  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, setPendingRunSession,
+  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, setPendingRunSession, requestPendingRunStop, PENDING_TTL_MS,
   API, safeJson, safeText, useFetched, fileUrl,
   recordConnect, recordScreen, recordFrameStream, recordGesture, recordTree, recordDisconnect, recordSelectorAdvice, recordToolParams, scriptedToolParams, toolToolUsages, toolToolUsageCounts,
-  resolveRunDevice, connectDevice, connectDeviceDetailed, fetchTrailYaml, dispatchRun, retrySession, withTimeout,
-  getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
+  resolveRunDevice, connectDevice, connectDeviceDetailed, disconnectDevice, fetchTrailYaml, dispatchRun, prepareRetry, launchRetry, withTimeout,
+  getTargetApps, setTargetApp, updateTrail, createTrail, createTrailDir, fetchEditedTrails, fetchTrailGitBaseline, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
   pickDirectoryViaShell, addTrailRoot, removeTrailRoot, updateSetting, runIntegrationAction,
   deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive,
   fetchComponentSource, createTrailmapComponent, saveTargetConfig,

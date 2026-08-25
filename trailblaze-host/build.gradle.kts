@@ -76,10 +76,85 @@ abstract class BundleTrailRunnerDaemonTask @Inject constructor(objects: ObjectFa
   }
 }
 
+// Transpiles the Trail Runner web UI's .tsx screens to the plain .js the browser loads, once at
+// build time. See `build-tools/transpile-app.ts` for what the transpile must preserve (classic
+// scripts, one shared global scope, load order) and why it is a per-file transform rather than a
+// bundle. Wired into `processResources` below so the classpath the daemon serves from carries the
+// transpiled artifacts in dev and release alike — TrailRunnerEndpoint reads the app strictly from
+// resources, so there is no dev/prod fork to keep in sync.
+abstract class TranspileTrailRunnerAppTask @Inject constructor(objects: ObjectFactory) : DefaultTask() {
+  // The .tsx screens plus the committed app/**/*.js. The latter are declared because the script
+  // fails the build when a transpiled artifact would land on the same path as a committed script —
+  // an undeclared input would leave this task UP-TO-DATE the day someone adds the colliding file,
+  // which is precisely when the guard needs to run.
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  @get:IgnoreEmptyDirectories
+  val sources: ConfigurableFileCollection = objects.fileCollection()
+
+  // index.html declares which screens load and in what order; the script verifies the document and
+  // the source tree agree, so an edit here has to re-run the check.
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val indexHtml: RegularFileProperty
+
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val transpileScript: RegularFileProperty
+
+  @get:OutputDirectory
+  abstract val outputDir: DirectoryProperty
+
+  @get:Internal
+  abstract val webDir: DirectoryProperty
+
+  @get:Internal
+  abstract val logFile: RegularFileProperty
+
+  @TaskAction
+  fun transpile() {
+    val out = outputDir.get().asFile
+    out.mkdirs()
+    val log = logFile.get().asFile
+    log.parentFile.mkdirs()
+    log.writeText("")
+    val proc = try {
+      ProcessBuilder("bun", "run", "build-tools/transpile-app.ts", out.absolutePath)
+        .directory(webDir.get().asFile)
+        .redirectErrorStream(true)
+        .redirectOutput(ProcessBuilder.Redirect.appendTo(log))
+        .start()
+    } catch (e: java.io.IOException) {
+      throw GradleException(
+        "Could not launch `bun` to transpile the Trail Runner screens in " +
+          "${webDir.get().asFile}. Trailblaze is bun-only and `bun` is a hard build " +
+          "prerequisite — put it on PATH via `source bin/activate-hermit` or install from " +
+          "https://bun.sh/. Cause: ${e.message}",
+        e,
+      )
+    }
+    try {
+      if (!proc.waitFor(2, TimeUnit.MINUTES)) {
+        throw GradleException("Transpiling the Trail Runner screens did not finish within 2 minutes. See ${log.absolutePath}.")
+      }
+      if (proc.exitValue() != 0) {
+        // The script's failures are wiring problems stated in prose ("X is not loaded by
+        // index.html"), so put them in the build output rather than only in a log file.
+        throw GradleException(
+          "Transpiling the Trail Runner screens failed (exit ${proc.exitValue()}). Full log: ${log.absolutePath}\n" +
+            log.readText().lines().takeLast(40).joinToString("\n"),
+        )
+      }
+    } finally {
+      if (proc.isAlive) proc.destroyForcibly()
+    }
+  }
+}
+
 // Type-checks the Trail Runner web UI's TypeScript source (app/**/*.ts + the migrated app/**/*.tsx)
 // with `tsc --noEmit`. The UI ships no npm deps at runtime (React/CodeMirror/… load as CDN UMD
-// globals, Babel-standalone transpiles in-browser), so this is the ONLY thing that actually catches
-// type errors — `bun build` of daemon.ts merely transpiles. Runs `bun install --frozen-lockfile`
+// globals), so this is the ONLY thing that actually catches type errors — the build-time transpile
+// of the screens, like `bun build` of daemon.ts, merely strips types. Runs `bun install --frozen-lockfile`
 // (resolving @types via whatever npm registry the environment configures — the committed bun.lock
 // pins versions and integrity hashes) then `bun run typecheck` (tsconfig.check.json). bun is
 // already a hard build prerequisite for this module.
@@ -713,6 +788,52 @@ val bundleTrailRunnerDaemon by tasks.registering(BundleTrailRunnerDaemonTask::cl
   logFile.set(layout.buildDirectory.file("tmp/bundle-trailrunner-daemon.log"))
 }
 
+// ─── Trail Runner screen transpile ───────────────────────────────────────────
+// `app/**/*.tsx` -> `app/**/*.js`, once per build instead of once per page load. Output lands in a
+// generated resource root at the SAME classpath path the sources occupy, so index.html's relative
+// `./app/<name>.js` URLs resolve without the endpoint knowing a build step exists. The .tsx sources
+// are excluded from the packaged jar below — nothing loads them at runtime any more.
+val transpileTrailRunnerApp by tasks.registering(TranspileTrailRunnerAppTask::class) {
+  group = "trailblaze"
+  description = "Transpiles the Trail Runner .tsx screens into the plain .js the browser loads (bun)."
+  // daemon.bundle.js is one of the app/**/*.js below and is generated into the source tree, so
+  // ordering is not optional: without this the collision guard would see the directory in whichever
+  // state the task graph happened to leave it.
+  dependsOn(bundleTrailRunnerDaemon)
+  sources.from(
+    project.fileTree(trailRunnerWebDir) {
+      include("app/**/*.tsx", "app/**/*.js")
+      exclude("**/*.test.ts")
+    },
+  )
+  indexHtml.set(trailRunnerWebDir.file("index.html"))
+  transpileScript.set(trailRunnerWebDir.file("build-tools/transpile-app.ts"))
+  outputDir.set(
+    layout.buildDirectory.dir("generated-resources/trailrunner-web/xyz/block/trailblaze/trailrunner/web"),
+  )
+  webDir.set(trailRunnerWebDir)
+  logFile.set(layout.buildDirectory.file("tmp/transpile-trailrunner-app.log"))
+}
+
+sourceSets {
+  main {
+    resources.srcDir(
+      transpileTrailRunnerApp.map { layout.buildDirectory.dir("generated-resources/trailrunner-web").get() },
+    )
+  }
+}
+
+// TbNamespaceCoverageTest reads the .tsx screens to check the `window.TB` namespace contract. They
+// used to reach it as a classpath resource; now that only the transpiled .js is packaged, point the
+// test at the source tree — and declare that tree as a test input, or an edit to a screen would
+// leave `test` UP-TO-DATE and the contract unchecked.
+tasks.test {
+  systemProperty("trailblaze.trailrunner.webAppDir", trailRunnerWebDir.dir("app").asFile.absolutePath)
+  inputs.files(project.fileTree(trailRunnerWebDir) { include("app/**/*.tsx") })
+    .withPropertyName("trailRunnerScreenSources")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // daemon.bundle.js lives under src/main/resources AND is a declared task output, so Gradle 8
 // hard-fails any consumer of that resource dir that lacks a dependency edge ("uses this output of
 // task ... without declaring ... a dependency"). The consumers here are `processResources` and the
@@ -724,11 +845,12 @@ tasks.matching { t ->
     t.name.endsWith("ProcessResources") || t.name.endsWith("SourcesJar")
 }.configureEach {
   dependsOn(bundleDaemonTask)
+  dependsOn(transpileTrailRunnerApp)
   // The web dir is a classpath resource tree served by the daemon, but it also carries a dev-only
   // type-check toolchain (node_modules with @types, package.json, lockfile, tsconfigs, .d.ts, tests,
   // playwright e2e). None of that is served or needed at runtime, and node_modules would bloat the
   // jar by 100s of MB — exclude it from both the runtime resources and the sources jar. The served
-  // UI itself (index.html, *.jsx/*.tsx, *.css, *.js, daemon.bundle.js) is untouched.
+  // UI itself (index.html, *.css, *.js, daemon.bundle.js) is untouched.
   if (this is AbstractCopyTask) {
     exclude(
       "**/trailrunner/web/node_modules/**",
@@ -746,8 +868,22 @@ tasks.matching { t ->
   }
 }
 
+// The screens' authoring format, and the transpiler that consumes it. Dropped from the RUNTIME
+// resources only: `transpileTrailRunnerApp` emits the .js index.html actually loads into a generated
+// resource root at this same classpath path, so shipping the .tsx too would be ~1.3 MB of jar that
+// nothing reads. Deliberately NOT excluded from `sourcesJar` — the .tsx is the source, and a sources
+// jar carrying the transpiled output in its place is backwards.
+tasks.matching { t -> t.name == "processResources" || t.name.endsWith("ProcessResources") }.configureEach {
+  if (this is AbstractCopyTask) {
+    exclude(
+      "**/trailrunner/web/**/*.tsx",
+      "**/trailrunner/web/build-tools/**",
+    )
+  }
+}
+
 // Type-check gate for the Trail Runner web UI (`tsc --noEmit`). Wired into `check` so CI fails on a
-// type error in the migrated .tsx source — the in-browser Babel path only strips types, so this is
+// type error in the migrated .tsx source — the build-time transpile only strips types, so this is
 // where errors are actually caught.
 val checkTrailRunnerTypes by tasks.registering(CheckTrailRunnerTypesTask::class) {
   group = "verification"

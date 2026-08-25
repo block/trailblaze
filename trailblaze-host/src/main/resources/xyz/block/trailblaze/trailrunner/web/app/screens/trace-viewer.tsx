@@ -1,50 +1,58 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
+
+// The run's report, rendered by the same viewer the exported .html and the CLI's `trailblaze report`
+// use, in a same-origin frame. One implementation of the timeline, the screenshots, the LLM calls and
+// the metadata instead of two, so what a reader sees here and what they see in a file they were sent
+// cannot drift. The document links its frames to /static/ rather than embedding them, and follows a
+// still-running run itself; `chrome=none` drops its own run header, which this screen supplies.
+//
+// Keyed by session id so switching runs loads that run rather than mutating this one's document.
+function EmbeddedReport({ sessionId }) {
+  return (
+    <iframe
+      key={sessionId}
+      data-testid="embedded-report"
+      title="Run report"
+      src={`/trailrunner/report-live.html?session=${encodeURIComponent(sessionId)}&chrome=none`}
+      style={{ display: 'block', width: '100%', height: '100%', border: 0, background: 'transparent' }}
+    />
+  );
+}
 
 function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, backLabel, onStop, stopping }) {
   const trailsIndex = TB.useTrails();
   const sourceTrail = s.trailId ? ((trailsIndex.data || []).find((t) => t.id === s.trailId) || null) : null;
-  const [mode, setMode] = React.useState('timeline');
+  const [mode, setMode] = React.useState('report');
   const [retrying, setRetrying] = React.useState(false);
   const [retryErr, setRetryErr] = React.useState(null);
-  const detail = TB.useSessionDetail(s.id, s.status === 'running');
-  const analytics = TB.useSessionAnalytics(s.id, s.status === 'running');
-  const sessionEvents = TB.useSessionEvents(s.id, s.status === 'running');
-  // Flatten the per-stream response into one event list interlaced into the timeline,
-  // carrying each stream's friendly label onto its events. Captured events have no tab of
-  // their own — they only show up woven into the Timeline when a run captured them.
-  const streamEvents = React.useMemo(
-    () => (sessionEvents.data?.streams || []).flatMap((p) => (p.events || []).map((e) => ({ ...e, label: p.label }))),
-    [sessionEvents.data],
-  );
+  // Followed live only while Raw logs is the visible tab. Report is the default now and that frame
+  // follows the run over its own stream, so polling here would re-fetch the whole session detail —
+  // trace, LLM calls and every raw record — once a second to keep a hidden tab warm.
+  const detail = TB.useSessionDetail(s.id, s.status === 'running' && mode === 'logs');
   const trace = detail.data?.trace || [];
   const llmLogs = detail.data?.llmLogs || [];
   const sessionId = detail.data?.id || s.id;
-  const [step, setStep] = React.useState(0);
   const [deleting, setDeleting] = React.useState(false);
   useLucide();
 
-  React.useEffect(() => {
-    if (trace.length > 0) {
-      const failedIdx = trace.findIndex((t) => !t.ok);
-      setStep(failedIdx >= 0 ? failedIdx + 1 : 1);
-    }
-  }, [detail.data?.id]);
-
-  React.useEffect(() => {
-    if (s.status !== 'running') return;
-    const t = setInterval(() => detail.reload(), 1500);
-    return () => clearInterval(t);
-  }, [s.status, s.id]);
-
-  React.useEffect(() => {
-    if (s.status === 'running' && trace.length > 0) setStep(trace.length);
-  }, [s.status, trace.length]);
-
   const detailReady = !!detail.data && detail.data.id === s.id;
   const showSkeleton = detail.loading && !detailReady;
+
+  // One catch-up read when the run ends. The poll above only runs on the Raw logs tab, so a reader
+  // who watched the run in the report would otherwise be left holding the trace as it stood when
+  // they opened the page — including the step count in the header beside it.
+  // Holds the run's id, not a flag: this screen is reused across runs (no `key` on it), so a plain
+  // flag set while watching one run would fire a redundant catch-up read for the next run selected.
+  const followedLive = React.useRef(s.status === 'running' ? s.id : null);
+  React.useEffect(() => {
+    if (s.status === 'running') { followedLive.current = s.id; return; }
+    if (followedLive.current !== s.id) return;
+    followedLive.current = null;
+    detail.reload();
+  }, [s.status, s.id]);
 
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [saveOpen, setSaveOpen] = React.useState(false);
@@ -54,10 +62,15 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
     if (retrying) return;
     setRetryErr(null);
     setRetrying(true);
-    const r = await TB.retrySession(s);
+    const prepared = await TB.prepareRetry(s);
     setRetrying(false);
-    if (!r.ok) { setRetryErr(r.error || 'Retry failed.'); return; }
-    if (go) { TB.recordPendingRun({ title: s.title || s.id, target: s.target, device: s.device }); go('active', { followLive: Date.now() }); }
+    // A session with nothing to replay is refused right here: the user is looking at that session,
+    // and there is no run to go and follow. Everything past this point is on the Active screen's
+    // card, so the connect and the dispatch are not awaited - see the note on `launchRetry`.
+    if (!prepared.ok) { setRetryErr(prepared.error || 'Retry failed.'); return; }
+    const marker = TB.recordPendingRun({ title: s.title || s.id, target: s.target, device: s.device, awaitsDispatch: true });
+    if (go) go('runs', { followLive: Date.now() });
+    TB.launchRetry(prepared, marker);
   };
   const doDelete = async () => {
     if (deleting) return;
@@ -91,14 +104,14 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
 
   const files = TB.useSessionFiles(sessionId);
   const fileCount = (files.data || []).length;
+  // The run's timeline, screenshots, LLM calls, YAML, captured event streams and metadata all live
+  // in the report now, under its own tabs. What stays out here is what the report has no notion of:
+  // the raw log records on disk, and the run's artifact files.
   const tabs = [
-    ['timeline', 'Timeline'],
-    ['info', 'Info'],
+    ['report', 'Report'],
     ['logs', 'Raw logs'],
-    ['yaml', 'YAML'],
     ['artifacts', fileCount ? `Artifacts (${fileCount})` : 'Artifacts'],
   ];
-  if (llmLogs.length > 0) tabs.splice(2, 0, ['llm', `LLM (${llmLogs.length})`]);
 
   return (
     <div className="tb-in" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, width: '100%' }}>
@@ -147,7 +160,10 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
                 ['Target', s.target],
                 ['Device', s.device],
                 ['Duration', s.dur],
-                ['Steps', trace.length > 0 ? String(trace.length) : null],
+                // Only once the run has stopped: while it executes this trace is as fresh as the
+                // last read, and a number frozen at 3 beside a report showing 25 rows reads as a
+                // bug in the report.
+                ['Steps', s.status !== 'running' && trace.length > 0 ? String(trace.length) : null],
                 ['Ran', s.ago],
               ].filter(([, v]) => v).map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: 260 }}>
@@ -201,24 +217,31 @@ function TraceViewer({ s, onDeleted, go, listCollapsed, onToggleList, onBack, ba
           ))}
         </div>
       </div>
-      <div style={{ padding: mode === 'timeline' ? '14px 26px 18px' : '18px 26px', flex: 1, minHeight: 0, ...(mode === 'timeline' || mode === 'llm' ? { display: 'flex', overflow: 'hidden' } : (mode === 'logs' || mode === 'yaml') ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { overflowY: 'auto' }) }}>
-        {showSkeleton && mode !== 'yaml' && <Skeleton rows={3} />}
-        {!showSkeleton && mode === 'timeline' && (
-          <Timeline
-            trace={trace} step={step} setStep={setStep} sessionId={sessionId}
-            analytics={analytics.data?.events || []}
-            streamEvents={streamEvents}
-          />
+      {/* The report and the other tabs are stacked rather than swapped, and the inactive one is
+          hidden with `visibility` instead of being unmounted. The report frame follows a live run
+          over its own connection and holds the reader's selected step, scroll offset and expanded
+          groups; unmounting it — or collapsing its box with `display: none` — would throw that away
+          every time someone glanced at Raw logs. */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        {/* 8px of inset is what lines the report's own tab row up with the Report/Raw logs/Artifacts
+            row above it — the report supplies the rest of its page padding itself. */}
+        <div style={{ position: 'absolute', inset: 0, padding: '4px 8px 0', visibility: mode === 'report' ? 'visible' : 'hidden' }}>
+          {/* `s.id` rather than the shared `sessionId`, which prefers the fetched detail and so still
+              names the PREVIOUS run for as long as this one's detail is in flight. The frame keys on
+              the id it is given, so that lag would show the wrong run's report. */}
+          <EmbeddedReport sessionId={s.id} />
+        </div>
+        {mode !== 'report' && (
+          <div style={{ position: 'absolute', inset: 0, padding: '18px 26px', ...(mode === 'logs' ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' } : { overflowY: 'auto' }) }}>
+            {showSkeleton && <Skeleton rows={3} />}
+            {!showSkeleton && mode === 'logs' && <RawLogs logs={detail.data?.logs || []} sessionId={sessionId} />}
+            {mode === 'artifacts' && <ArtifactsPanel sessionId={sessionId} />}
+          </div>
         )}
-        {mode === 'info' && <InfoPanel s={s} sessionId={sessionId} sourceTrail={sourceTrail} trace={trace} go={go} />}
-        {!showSkeleton && mode === 'llm' && <LlmPanel llmLogs={llmLogs} />}
-        {!showSkeleton && mode === 'logs' && <RawLogs logs={detail.data?.logs || []} sessionId={sessionId} />}
-        {mode === 'yaml' && <SessionYaml sessionId={sessionId} s={s} sourceTrail={sourceTrail} go={go} />}
-        {mode === 'artifacts' && <ArtifactsPanel sessionId={sessionId} />}
       </div>
       {menuOpen && <ActionsPopover anchor={menuBtnRef.current} items={actionItems} onClose={() => setMenuOpen(false)} />}
       {saveOpen && <SaveAsTrailModal session={s} go={go} onClose={() => setSaveOpen(false)} />}
-      {shareOpen && <ShareRunModal s={s} trace={trace} llmLogs={llmLogs} cmd={cliRerunCommand(s, sourceTrail)} sessionId={sessionId} onClose={() => setShareOpen(false)} />}
+      {shareOpen && <ShareRunModal s={s} trace={trace} llmLogs={llmLogs} cmd={TbRunPayload.cliRerunCommand(s, sourceTrail)} sessionId={sessionId} onClose={() => setShareOpen(false)} />}
     </div>
   );
 }
@@ -290,134 +313,6 @@ function ActionsPopover({ anchor, items, onClose }) {
           ))}
       </div>
     </>
-  );
-}
-
-// Best-effort CLI command to reproduce this run. Replays of an existing trail map to
-// `trailblaze run <file>`; ad-hoc objectives (Blaze) map to `trailblaze step "<objective>"`.
-// Device is platform-only (the per-device id isn't persisted on the session record).
-function cliRerunCommand(s, sourceTrail) {
-  const dev = s.platform ? ` --device ${s.platform}` : '';
-  if (s.trailId) {
-    // `run` reads the target from the trail file's own config.target — it has no
-    // --target flag (that lives on `step`/`tool`), so we don't pass one here.
-    const path = (sourceTrail && sourceTrail.path) || s.trailId;
-    return `trailblaze run ${path}${dev}`;
-  }
-  // Ad-hoc objective (Blaze): `step` takes the target explicitly. Escape backslashes
-  // before quotes so the double-quoted shell argument can't be broken out of.
-  const tgt = s.target ? ` --target ${s.target}` : '';
-  const objective = (s.title || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `trailblaze step "${objective}"${dev}${tgt}`;
-}
-
-function CopyableCommand({ text }) {
-  const [copied, setCopied] = React.useState(false);
-  const copy = () => {
-    try { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (_) {}
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
-      <pre className="tb-mono" data-selectable style={{ flex: 1, minWidth: 0, margin: 0, fontSize: 12.5, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 8, padding: '10px 12px', color: 'var(--text-standard)' }}>{text}</pre>
-      <Btn sm ico={copied ? 'check' : 'copy'} onClick={copy} style={{ flexShrink: 0, alignSelf: 'flex-start' }}>{copied ? 'Copied' : 'Copy'}</Btn>
-    </div>
-  );
-}
-
-function InfoPanel({ s, sessionId, sourceTrail, trace = [], go }) {
-  useLucide();
-  const cmd = cliRerunCommand(s, sourceTrail);
-  // "5.58.0.0 (67500009)" — user-visible version first, internal build/version code in parens.
-  const appVersion = s.appVersionName
-    ? s.appVersionName + ((s.appBuildNumber || s.appVersionCode) ? ` (${s.appBuildNumber || s.appVersionCode})` : '')
-    : (s.appBuildNumber || s.appVersionCode);
-  const rows = [
-    ['Session', sessionId],
-    ['Target', s.target],
-    ['App', s.appId],
-    ['App version', appVersion],
-    ['Device', s.device],
-    ['Platform', s.platform],
-    ['Trail', s.trailId ? (sourceTrail ? sourceTrail.path || sourceTrail.title : s.trailId) : 'ad-hoc objective (no saved trail)'],
-    ['Steps', trace.length > 0 ? String(trace.length) : null],
-    ['Ran', s.ago],
-    ['Duration', s.dur],
-  ].filter(([, v]) => v);
-  return (
-    <div style={{ maxWidth: 760, display: 'flex', flexDirection: 'column', gap: 22 }}>
-      <div>
-        <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Rerun this in the CLI</div>
-        <div className="tb-sub" style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
-          {s.trailId
-            ? 'Replays the same trail file on a device of this platform. Pass a specific device id (e.g. --device ' + (s.platform || 'android') + '/emulator-5554) to target one device.'
-            : 'Reconstructed from this run’s objective. Pass a specific device id to --device to target one device.'}
-        </div>
-        <CopyableCommand text={cmd} />
-      </div>
-      <div>
-        <div className="tb-eyebrow" style={{ marginBottom: 8 }}>Run details</div>
-        <div style={{ border: '1px solid var(--tb-hairline)', borderRadius: 10, overflow: 'hidden' }}>
-          {rows.map(([k, v], i) => (
-            <div key={k} style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '9px 13px', background: 'var(--bg-subtle)', borderBottom: i < rows.length - 1 ? '1px solid var(--tb-hairline)' : 'none' }}>
-              <span className="tb-sub" style={{ flex: '0 0 90px', fontSize: 11.5 }}>{k}</span>
-              {k === 'Trail' && s.trailId
-                ? <span role="button" tabIndex={0} title={'Open this run’s trail'} onClick={() => go && go('trails', { sel: s.trailId })} onKeyDown={(e) => { if (e.key === 'Enter') go && go('trails', { sel: s.trailId }); }}
-                    className="tb-mono" style={{ fontSize: 12.5, color: 'var(--tb-running)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(94,155,255,.4)', textUnderlineOffset: 3, wordBreak: 'break-all' }}>{v}</span>
-                : <span className={k === 'Session' || k === 'App' ? 'tb-mono' : ''} data-selectable style={{ fontSize: 12.5, color: 'var(--text-standard)', wordBreak: 'break-all' }}>{v}</span>}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// The YAML tab. When the run replayed an existing trail, show the original trail YAML
-// on the left (linking to the trail) and the recorded run YAML on the right so it's
-// obvious which is which. Otherwise just the recorded YAML.
-function SessionYaml({ sessionId, s, sourceTrail, go }) {
-  const y = TB.useSessionYaml(sessionId);
-  const original = TB.useTrailDetail(s && s.trailId ? s.trailId : null);
-  const recorded = y.data;
-  const hasOriginal = !!(s && s.trailId);
-
-  if (!hasOriginal) {
-    if (y.loading) return <div className="tb-skel" style={{ height: 220 }} />;
-    if (!recorded) return <EmptyState ico="code" title="No recorded YAML" sub="This session didn't capture replayable steps to render as a trail." />;
-    return <SearchableText text={recorded} language="yaml" fontSize={12.5} />;
-  }
-
-  const col = (heading, sub, child) => (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flex: '0 0 auto' }}>
-        <span className="tb-eyebrow">{heading}</span>
-        {sub}
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{child}</div>
-    </div>
-  );
-  return (
-    <div style={{ display: 'flex', gap: 18, flex: 1, minHeight: 0 }}>
-      {col(
-        'Original trail',
-        <span role="button" tabIndex={0} title={'Open this trail: ' + s.trailId}
-          onClick={() => go && go('trails', { sel: s.trailId })}
-          onKeyDown={(e) => { if (e.key === 'Enter') go && go('trails', { sel: s.trailId }); }}
-          style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--tb-running)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(94,155,255,.4)', textUnderlineOffset: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-          {sourceTrail ? sourceTrail.title : s.trailId} ↗
-        </span>,
-        original.loading ? <div className="tb-skel" style={{ height: 220 }} />
-          : original.data && original.data.yaml ? <SearchableText text={original.data.yaml} language="yaml" fontSize={12} minHeight={200} />
-            : <EmptyState ico="code" title="No trail YAML" sub="Couldn't load the original trail file." />,
-      )}
-      {col(
-        'Recorded run',
-        <span className="tb-sub" style={{ fontSize: 11 }}>what actually ran</span>,
-        y.loading ? <div className="tb-skel" style={{ height: 220 }} />
-          : recorded ? <SearchableText text={recorded} language="yaml" fontSize={12} minHeight={200} />
-            : <EmptyState ico="code" title="No recorded YAML" sub="This session didn't capture replayable steps." />,
-      )}
-    </div>
   );
 }
 
@@ -523,4 +418,4 @@ function ArtifactsPanel({ sessionId }) {
   );
 }
 
-Object.assign(window, { TraceViewer, ActionsPopover, SaveAsTrailModal, SessionYaml, InfoPanel, CopyableCommand, cliRerunCommand, RawLogs, ArtifactsPanel, fmtBytes, artifactIcon });
+Object.assign(window, { TraceViewer, EmbeddedReport, ActionsPopover, SaveAsTrailModal, RawLogs, ArtifactsPanel, fmtBytes, artifactIcon });

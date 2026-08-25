@@ -67,8 +67,30 @@ sealed interface AccessibilityAction {
 
   // --- Text input ---
 
-  data class InputText(val text: String) : AccessibilityAction {
-    override val description get() = "Input text \"$text\""
+  /**
+   * Types [text] into an editable field.
+   *
+   * With [nodeSelector] null — the default, and what every Maestro `inputText:` lowering
+   * produces — the text goes to whatever editable node already holds input focus. That is the
+   * historical behavior and requires a preceding step to have established focus.
+   *
+   * With [nodeSelector] set, the field is resolved from the accessibility tree and given input
+   * focus via `ACTION_FOCUS` before the text is dispatched, so a trail can name the field it
+   * means. This driver needs that escape hatch because it cannot reliably focus an editable node
+   * by tapping: `planActionClickRoute` sends editables to the coordinate gesture path, and a
+   * synthetic touch does not always turn into input focus.
+   */
+  data class InputText(
+    val text: String,
+    val nodeSelector: TrailblazeNodeSelector? = null,
+    val timeoutMs: Long = DEFAULT_ELEMENT_TIMEOUT_MS,
+  ) : AccessibilityAction {
+    override val description
+      get() = if (nodeSelector == null) {
+        "Input text \"$text\""
+      } else {
+        "Input text \"$text\" into ${nodeSelector.description()}"
+      }
   }
 
   data class EraseText(val characters: Int) : AccessibilityAction {

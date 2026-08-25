@@ -4,7 +4,7 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.executor.clients.LLMClient
 import kotlinx.datetime.Clock
-import xyz.block.trailblaze.BaseTrailblazeAgent
+import xyz.block.trailblaze.KoogRunnableAgent
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -46,7 +46,8 @@ import xyz.block.trailblaze.yaml.VerificationStep
  * exception (LLM error, max-iterations stall, tool failure) propagates to the caller's existing
  * try/catch, which maps it to a failed session.
  *
- * @param agent the driver agent (any [BaseTrailblazeAgent]) that executes tools against its device.
+ * @param agent the driver agent (any [KoogRunnableAgent]) that executes tools against its device —
+ *   in a multi-device session, the routing agent that resolves the active device per call.
  * @param screenStateProvider returns the live screen state (its `viewHierarchyTextRepresentation` is
  *   what the agent perceives; its device fields render the `{{device_description}}` placeholder).
  * @param systemPromptTemplate the platform's system prompt template (with `{{device_description}}`).
@@ -55,7 +56,7 @@ import xyz.block.trailblaze.yaml.VerificationStep
  */
 suspend fun runPromptsWithKoogStrategyGraph(
   promptSteps: List<PromptStep>,
-  agent: BaseTrailblazeAgent,
+  agent: KoogRunnableAgent,
   toolRepo: TrailblazeToolRepo,
   screenStateProvider: () -> ScreenState,
   elementComparator: ElementComparator,

@@ -32,24 +32,90 @@ internal object HostIosDriverFactory {
   private val defaultXctestHost = "127.0.0.1"
   private val defaultXcTestPort = 22087
 
-  // Singleton driver reuse within the same JVM session
-  private var cachedMaestro: Maestro? = null
-  private var cachedDeviceId: String? = null
-  private var cachedDriverHostPort: Int? = null
+  /**
+   * The one iOS driver this JVM keeps open, everything that identifies it, and the owners currently
+   * holding it.
+   *
+   * Owners are counted because they genuinely coexist: an agent session driving the device through
+   * the MCP bridge and a Trail Runner viewer streaming its screen are handed this same driver
+   * whenever their target wrappers agree, and each tears down on its own schedule. Every caller gets a
+   * [SharedLease.acquire] handle wrapped as a [Driver], so closing what it was given releases only
+   * its own hold, and the XCUITest connection goes away when the last owner lets go rather than the
+   * first.
+   *
+   * Every hold has to be released by somebody, or the count never returns to zero and the driver
+   * outlives the last owner - which would cost a cancel its whole point, killing the XCUITest child
+   * processes. A run takes two, because the device its classifiers need can't come from `hostRunner`
+   * without a cycle; `BaseHostTrailblazeTest.releaseConnectedDeviceIfOpened` releases that one and
+   * `TrailblazeDeviceManager.setActiveDriverForDevice` releases the driver it displaces.
+   */
+  private class Cached(
+    val driver: Driver,
+    val deviceId: String,
+    val port: Int,
+    val wrapperKey: String?,
+  ) {
+    val lease = SharedLease {
+      try {
+        driver.close()
+      } catch (e: Exception) {
+        Console.log("Failed to close the iOS driver for device $deviceId (already closed?): ${e.message}")
+      }
+    }
+
+    /**
+     * This driver as one owner's handle on it - see [LeasedIosDriver] - or null once the last owner
+     * has let go and closed it, which callers read as a cache miss.
+     */
+    fun leased(): Driver? = lease.acquire()?.let { LeasedIosDriver(driver, it) }
+  }
+
+  /**
+   * One owner's handle on the shared cached driver. Everything delegates; [close] releases this
+   * owner's hold rather than tearing down a connection the other owners are still using.
+   */
+  private class LeasedIosDriver(
+    delegate: Driver,
+    private val hold: AutoCloseable,
+  ) : Driver by delegate {
+    override fun close() = hold.close()
+  }
+
+  private var cached: Cached? = null
 
   @Volatile
   private var hasPerformedInitialCleanup = false
 
   /**
-   * Clears the cached driver so the next [createIOS] call creates a fresh one.
-   * Call this when the persistent driver is closed externally (e.g., force-reconnect).
+   * Closes the cached driver, however many owners still hold it, and forgets it so the next
+   * [createIOS] call builds a fresh one. Call this when the driver has been superseded (e.g., a
+   * force-reconnect, or a target whose iOS driver wrapper changed).
+   *
+   * Force-closing rather than waiting for the last owner to let go is the same trade the
+   * mismatched-wrapper discard in [createIOS] makes, for the same reason: the replacement needs the
+   * very port this driver is holding. Leaving it open and merely forgetting it would be the worse
+   * end - nothing points at the old driver any more, so nothing can supersede it, and the
+   * replacement binds against a runner built for the wrong wrapper.
    */
   @Synchronized
   fun clearCachedDriver() {
-    cachedMaestro = null
-    cachedDeviceId = null
-    cachedDriverHostPort = null
+    cached?.lease?.closeNow()
+    cached = null
   }
+
+  /**
+   * Identifies the driver a given target would produce, so a cached one is only reused for a target
+   * that would have built the same thing. A target with a custom iOS driver wraps the base
+   * [IOSDriver] in its own subclass, and that wrapper is a property of the target, not of the
+   * device - so device + port alone doesn't identify what is cached.
+   *
+   * Targets WITHOUT a custom driver all collapse to null, because they all produce the identical
+   * base driver: switching between two of them is not a driver change and must not throw away a
+   * live XCUITest connection. Same rule `TrailblazeMcpBridgeImpl.selectAppTarget` already applies
+   * when it decides whether a target switch has to release the iOS connection.
+   */
+  fun driverWrapperKey(appTarget: TrailblazeHostAppTarget?): String? =
+    appTarget?.takeIf { it.hasCustomIosDriver }?.id
 
   @Synchronized
   fun createIOS(
@@ -60,27 +126,62 @@ internal object HostIosDriverFactory {
     platformConfiguration: WorkspaceConfig.PlatformConfiguration?,
     deviceType: Device.DeviceType,
     appTarget: TrailblazeHostAppTarget? = null,
-  ): Maestro {
+  ): Driver {
     val targetPort = driverHostPort ?: defaultXcTestPort
+    val wrapperKey = driverWrapperKey(appTarget)
+
+    // A driver built for another target's wrapper is the wrong driver, however healthy it is.
+    // Without this the FIRST caller to connect a device won its wrapper for the whole JVM: a
+    // recording connect (which passes no target at all) caches the plain base driver, and a later
+    // run for a custom-driver target is handed it and drives the app unwrapped.
+    //
+    // Closed here rather than left for the reuse check to skip past, because ports are per-device:
+    // a device or port mismatch builds its replacement somewhere else, but this rebuild lands on
+    // the very port the superseded driver is still holding.
+    //
+    // Anything still holding the superseded driver (an MCP persistent device, say) fails on its
+    // next call, and a lease can't prevent that: the replacement needs the very port the old driver
+    // is holding, so waiting for its owners to let go would mean never building it. That is the
+    // right end of the trade - the old driver is built for another target and reusing it silently
+    // drives the app through the wrong wrapper, which is the bug this exists to stop - and it's what
+    // `selectAppTarget` already does deliberately when the daemon-wide selection changes. It is also
+    // what `HostDeviceSessionManager` refuses a conflicting connect to keep anyone from reaching.
+    cached?.let { current ->
+      if (current.deviceId == deviceId && current.port == targetPort && current.wrapperKey != wrapperKey) {
+        Console.log(
+          "Discarding cached iOS driver for device $deviceId - it was built for target wrapper " +
+            "'${current.wrapperKey ?: "<none>"}' and this connect needs " +
+            "'${wrapperKey ?: "<none>"}'; closing it so the replacement can take port $targetPort",
+        )
+        clearCachedDriver()
+      }
+    }
 
     // Check if we can reuse existing driver
-    if (cachedMaestro != null &&
-      cachedDeviceId == deviceId &&
-      cachedDriverHostPort == targetPort &&
-      !cachedMaestro!!.driver.isShutdown()
-    ) {
-      // isShutdown() is an in-process flag and stays false when the XCTest runner is
-      // reaped externally (SIGKILL, OS reap, crash). Confirm the port is still
-      // accepting connections before handing the cached driver back.
-      if (HostDriverPortUtils.isPortReachable(defaultXctestHost, targetPort, timeoutMs = 500)) {
-        Console.log("Reusing existing iOS driver for device $deviceId on port $targetPort")
-        return cachedMaestro!!
+    cached?.let { current ->
+      if (current.deviceId == deviceId && current.port == targetPort && !current.driver.isShutdown()) {
+        // isShutdown() is an in-process flag and stays false when the XCTest runner is
+        // reaped externally (SIGKILL, OS reap, crash). Confirm the port is still
+        // accepting connections before handing the cached driver back.
+        if (HostDriverPortUtils.isPortReachable(defaultXctestHost, targetPort, timeoutMs = 500)) {
+          // A refused lease is a cache miss like any other: the last owner let go and closed this
+          // driver, so a healthy-looking port says nothing about it.
+          current.leased()?.let { leased ->
+            Console.log("Reusing existing iOS driver for device $deviceId on port $targetPort")
+            return leased
+          }
+          Console.log(
+            "Discarding cached iOS driver for device $deviceId - its last owner let go and closed " +
+              "it; will create a fresh driver",
+          )
+        } else {
+          Console.log(
+            "Discarding cached iOS driver for device $deviceId — port $targetPort is unreachable " +
+              "(subprocess likely reaped externally); will create a fresh driver",
+          )
+        }
+        cached = null
       }
-      Console.log(
-        "Discarding cached iOS driver for device $deviceId — port $targetPort is unreachable " +
-          "(subprocess likely reaped externally); will create a fresh driver",
-      )
-      clearCachedDriver()
     }
 
     // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)
@@ -235,12 +336,17 @@ internal object HostIosDriverFactory {
     }
 
     // Cache the driver for reuse
-    cachedMaestro = maestro
-    cachedDeviceId = deviceId
-    cachedDriverHostPort = targetPort
+    val entry = Cached(
+      driver = maestro.driver,
+      deviceId = deviceId,
+      port = targetPort,
+      wrapperKey = wrapperKey,
+    )
+    cached = entry
 
     Console.log("Created new iOS driver for device $deviceId on port $targetPort")
-    return maestro
+    // A lease built a line ago has had no owner to let go of it, so it cannot refuse this one.
+    return checkNotNull(entry.leased()) { "A freshly cached iOS driver refused its first lease" }
   }
 
   private fun waitForDriverReady(

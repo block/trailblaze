@@ -84,6 +84,17 @@ data class TrailblazeToolMeta(
     return true
   }
 
+  /**
+   * Multi-device overload: the tool registers when it applies to ANY of the session's drivers.
+   * A heterogeneous session (e.g. an Android launch device with a web browser companion)
+   * advertises one merged tool surface; each registered tool still executes only on a device
+   * whose driver accepted it.
+   */
+  fun shouldRegister(
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+  ): Boolean = drivers.any { shouldRegister(it, preferHostAgent) }
+
   companion object {
 
     /** Vendor prefix the MCP spec reserves for Trailblaze-owned `_meta` keys. */

@@ -146,6 +146,12 @@ class RecordedTrailsRepoJvm(
       is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail -> Result.failure(
         IllegalStateException(UnifiedRecordingWriter.STEPLESS_INTO_EXISTING_MESSAGE),
       )
+
+      is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail -> Result.failure(
+        IllegalStateException(
+          UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames),
+        ),
+      )
     }
   }
 

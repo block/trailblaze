@@ -7,6 +7,15 @@
 # Usage:
 #   ./scripts/build-viewer-shell.sh <out-dir>     # writes <out-dir>/index.html
 #
+# You usually don't need this. The viewer is baked into the CLI JAR at build time (the
+# `bakeViewerShell` task in trailblaze-report), so anything that just wants a copy should ask the
+# binary for one — no bun, no Gradle, no checkout:
+#
+#   trailblaze viewer --output <out-dir>/index.html
+#
+# This script is the BUILDER behind that resource: use it when working on the viewer itself, or
+# when generating one from a source tree whose CLI hasn't been built (the docs site does this).
+#
 # Serve that directory from any static host — there is nothing else to deploy. The generated file
 # inlines the report's own stylesheet, the report viewer bundle, and the ZIP pipeline, so a hosted
 # copy can't drift from the renderer: it IS the report's code with no run baked in.

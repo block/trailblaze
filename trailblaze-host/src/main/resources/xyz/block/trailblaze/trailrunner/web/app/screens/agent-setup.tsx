@@ -1,5 +1,5 @@
-// @ts-nocheck -- migrated-file convention; Babel strips types at load time and the typecheck gate
-// covers regressions separately.
+// @ts-nocheck -- migrated-file convention; the build-time transpile strips types and the typecheck
+// gate covers regressions separately.
 
 // Agents → Setup. Renders the external-agent provider registry served by the daemon: which coding
 // agent CLIs Trail Runner can drive, whether each is installed, and how to install one and grant

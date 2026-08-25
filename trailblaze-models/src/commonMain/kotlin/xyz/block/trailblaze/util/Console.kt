@@ -106,15 +106,47 @@ expect object Console {
   fun isQuietMode(): Boolean
 
   /**
-   * Redirect [info] output to stderr, keeping stdout clean for JSON.
+   * Redirect [log] and [info] output to stderr, keeping stdout clean for JSON.
    *
-   * Call this from CLI commands that use `--json` so that progress messages
-   * from [info] don't pollute the machine-readable JSON output on stdout.
-   * After this call, only explicit [println] writes to stdout.
+   * Call this from CLI commands that use `--json` so that progress messages don't
+   * pollute the machine-readable JSON document on stdout. After this call, only
+   * explicit [println] writes to stdout.
    *
-   * No-op on Android and wasmJs.
+   * Unlike [useStdErr] this does not touch `System.out`, so the command can still
+   * `println` its report. Unlike [enableQuietMode] the messages are not dropped —
+   * they stay visible on stderr, where a `| jq` consumer never sees them.
+   *
+   * Pair with [disableJsonMode], or use [runJsonOutput]. A CLI process exits soon
+   * after printing, but the daemon runs commands in-process on a long-lived JVM,
+   * where leaving json mode on would silently move all later output to stderr.
+   *
+   * JVM only — a no-op on Android, iOS and wasmJs, none of which have a stdout a
+   * caller could pipe.
    */
   fun enableJsonMode()
+
+  /**
+   * Restore the output streams [enableJsonMode] redirected. No-op if json mode is
+   * not active, and a no-op on Android, iOS and wasmJs.
+   */
+  fun disableJsonMode()
+}
+
+/**
+ * Runs [block] with [Console.enableJsonMode] active and restores the prior streams in a
+ * `finally`, so a throw inside [block] cannot leave a long-lived JVM (the daemon) writing
+ * every subsequent [Console.log] to stderr.
+ *
+ * Not re-entrant: an inner scope's exit restores the outer scope's streams too. Json mode
+ * belongs at the top of a single command, so there is nothing to nest.
+ */
+inline fun <T> Console.runJsonOutput(block: () -> T): T {
+  enableJsonMode()
+  try {
+    return block()
+  } finally {
+    disableJsonMode()
+  }
 }
 
 /**

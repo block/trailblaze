@@ -743,6 +743,49 @@ tool typically sets both:
   the tool on-device. On its own it does **not** select a Node runtime, so it alone won't
   give a tool Node APIs.
 
+#### A subprocess tool needs `// @ts-nocheck`
+
+The framework-emitted `tools/tsconfig.json` describes the **on-device** program: `lib: ["ES2022"]`,
+no `@types/node`. That's deliberate — a stray `node:fs` in an in-process tool has to fail the
+typecheck, because it would fail on the device. But the tsconfig covers every non-test file under
+`tools/`, and it excludes only `**/*.test.ts`, so your subprocess tool lands in that same program and
+its Node imports have nowhere to resolve:
+
+```
+myapp_writeArtifact.ts(3,21): error TS2307: Cannot find module 'node:fs' or its corresponding type declarations.
+myapp_writeArtifact.ts(9,5): error TS2591: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.
+```
+
+Opt that one file out with a `// @ts-nocheck` **line comment**, anywhere in the comments above your
+first statement. A block comment doesn't work — `/* @ts-nocheck */` suppresses nothing:
+
+```ts
+// @ts-nocheck
+// Host-only: runs in a Bun subprocess (`runtime: subprocess`), so it uses Node built-ins.
+// The framework-emitted tsconfig describes the Node-free on-device program, which this file
+// is not part of. Bun executes it; nothing typechecks it.
+import * as fs from "node:fs";
+```
+
+It's per file, not per directory, so **each** host tool you add needs its own. That's the trade for
+keeping the guarantee that matters: an in-process tool that reaches for `node:*` still fails, because
+only the files you marked are exempt.
+
+**Be clear about what you gave up.** `@ts-nocheck` suppresses *every* diagnostic in the file, not
+just the unresolvable Node imports, and nothing downstream makes up the difference — `bun run` and
+`bun test` execute TypeScript, they don't typecheck it. There is no second pass that catches a bad
+handler return type or a misused `ctx`; an exempt file's type errors surface when the code path runs.
+So keep host tools thin, and cover them with unit tests, which at least *execute* the code. Tests
+aren't typechecked either — `**/*.test.ts` is excluded from the emitted program — so the exemption
+costs you the same thing on both sides of the file.
+
+If you want a real typecheck for host tools, run a **separate** `tsc` pass over them with `"types":
+["node"]`, as your own script outside the emitted program. Don't get there by dropping a
+`tsconfig.json` into `host/`: a nested config does silence the errors, but it creates a second
+program that nothing else knows about — and tooling that discovers tool directories by the presence
+of `tools/tsconfig.json` can read a nested one as "this directory manages its own TypeScript" and
+skip the parent, quietly dropping your on-device tools from the check they're there for.
+
 Composition with other tools still works (the proxy routes through the same daemon), so a
 host-only tool can call into in-process tools and vice versa. See
 [`sampleapp_writeArtifact`](https://github.com/block/trailblaze/blob/main/examples/android-sample-app/trails/config/trailmaps/sampleapp/tools/sampleapp_writeArtifact.yaml)

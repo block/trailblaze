@@ -7,7 +7,8 @@
 Navigate the browser to a URL, or go back/forward in browser history.
 Use action GOTO (default) with a url to navigate to a new page.
 Use action BACK or FORWARD to move through browser history.
-Relative file paths (e.g., 'sample-app/index.html') are resolved from the working directory.
+A relative file path (e.g., 'fixtures/index.html') resolves against the trail file's own
+directory first, and only falls back to the process working directory when nothing is there.
 
 ## Source
 
@@ -29,7 +30,7 @@ Relative file paths (e.g., 'sample-app/index.html') are resolved from the workin
 )`
   GOTO navigates to a URL, BACK/FORWARD moves through browser history.
 - `url` — `String`
-  The URL to navigate to. Required when action is GOTO. Supports full URLs (https://..., file://...) or relative file paths.
+  The URL to navigate to. Required when action is GOTO. Supports full URLs (https://..., file://...) or a relative file path, which is resolved against the trail file's own directory before the process working directory.
 - `reasoning` — `String`
 
 ## Output

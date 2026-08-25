@@ -130,4 +130,30 @@ class UnifiedTrailTargetsTest {
     )
     assertEquals(emptySet(), UnifiedTrailTargets.platformsOf(emptyList()))
   }
+
+  @Test
+  fun `a configuration contributes its members' classifiers, never its own name`() {
+    // A multi-device configuration's NAME is not a classifier — its cast is what the trail
+    // actually runs on. Legs keyed by the configuration name are excluded the same way.
+    val yaml = """
+      config:
+        target: myapp
+        devices:
+          pair:
+            devices:
+              seller: { classifier: kiosk-a }
+              buyer: { classifier: kiosk-b }
+          android:
+            driver: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: do the thing
+          recording:
+            pair:
+              - pressBack: {}
+    """.trimIndent()
+    assertEquals(
+      setOf("kiosk-a", "kiosk-b", "android"),
+      UnifiedTrailTargets.declaredClassifiers(decode(yaml)),
+    )
+  }
 }

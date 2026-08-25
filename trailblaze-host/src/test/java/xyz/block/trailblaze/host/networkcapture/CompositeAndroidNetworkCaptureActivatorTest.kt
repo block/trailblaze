@@ -22,15 +22,19 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     private val optedInSessions: Set<String> = emptySet(),
   ) : AndroidNetworkCaptureActivator {
     val started = mutableListOf<String>()
+    /** Every (device, label) pair this delegate was asked to capture, in call order. */
+    val startedDevices = mutableListOf<Pair<String, String?>>()
     val stopped = mutableListOf<String>()
 
     override fun start(
       sessionId: String,
       sessionDir: File,
       deviceId: TrailblazeDeviceId,
-      targetAppId: String?,
+      targetAppIds: List<String>,
+      deviceLabel: String?,
     ) {
       started += sessionId
+      startedDevices += deviceId.instanceId to deviceLabel
     }
 
     override fun stop(sessionId: String) {
@@ -50,7 +54,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
 
-    composite.start("s1", dir, deviceId, null)
+    composite.start("s1", dir, deviceId, emptyList())
 
     assertEquals(listOf("s1"), proxy.started)
     assertTrue(fallback.started.isEmpty())
@@ -62,7 +66,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { false }
 
-    composite.start("s1", dir, deviceId, null)
+    composite.start("s1", dir, deviceId, emptyList())
 
     assertEquals(listOf("s1"), fallback.started)
     assertTrue(proxy.started.isEmpty())
@@ -73,7 +77,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val proxy = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback = null) { false }
 
-    composite.start("s1", dir, deviceId, null)
+    composite.start("s1", dir, deviceId, emptyList())
     composite.stop("s1")
 
     assertTrue(proxy.started.isEmpty())
@@ -86,11 +90,33 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     val fallback = RecordingActivator()
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
 
-    composite.start("s1", dir, deviceId, null)
+    composite.start("s1", dir, deviceId, emptyList())
     composite.stop("s1")
 
     assertEquals(listOf("s1"), proxy.stopped)
     assertTrue(fallback.stopped.isEmpty())
+  }
+
+  @Test
+  fun `both devices of one session route to the same delegate and keep their labels`() {
+    // Routing is keyed by session alone on purpose: a session's two displays must not end up on
+    // different capture mechanisms, one of which would be recording nothing.
+    val proxy = RecordingActivator()
+    val fallback = RecordingActivator()
+    val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { true }
+    val buyer = TrailblazeDeviceId("emulator-5556", TrailblazeDevicePlatform.ANDROID)
+
+    composite.start("s1", dir, deviceId, emptyList(), deviceLabel = "seller")
+    composite.start("s1", dir, buyer, emptyList(), deviceLabel = "buyer")
+    composite.stop("s1")
+
+    assertEquals(
+      listOf<Pair<String, String?>>("emulator-5554" to "seller", "emulator-5556" to "buyer"),
+      proxy.startedDevices.toList(),
+    )
+    assertTrue(fallback.startedDevices.isEmpty())
+    // One session-scoped stop — the delegate fans out over its own devices.
+    assertEquals(listOf("s1"), proxy.stopped)
   }
 
   @Test
@@ -122,7 +148,7 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     var optIn = false
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { optIn }
 
-    composite.start("s1", dir, deviceId, null) // routes to fallback and is recorded
+    composite.start("s1", dir, deviceId, emptyList()) // routes to fallback and is recorded
     optIn = true // a later flip must not re-route the opt-in question to proxy
 
     assertTrue(composite.isSessionCaptureOptedIn("s1"))
@@ -143,9 +169,9 @@ class CompositeAndroidNetworkCaptureActivatorTest {
     var optIn = false
     val composite = CompositeAndroidNetworkCaptureActivator(proxy, fallback) { optIn }
 
-    composite.start("off", dir, deviceId, null) // routes to fallback
+    composite.start("off", dir, deviceId, emptyList()) // routes to fallback
     optIn = true
-    composite.start("on", dir, deviceId, null) // routes to proxy
+    composite.start("on", dir, deviceId, emptyList()) // routes to proxy
 
     composite.stop("off")
     composite.stop("on")

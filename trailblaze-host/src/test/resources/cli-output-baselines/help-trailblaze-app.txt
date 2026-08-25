@@ -6,9 +6,10 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze app [-hV] [--foreground] [--headless] [--status] [--stop]
-                      [COMMAND]
-Open Trail Runner for viewing sessions and managing trails (use --headless for
-a daemon-only background service)
+                      [--v2] [COMMAND]
+Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or
+--headless for a daemon-only background service).
+`trailblaze app start` is an accepted synonym for this command.
       --foreground   Run in foreground (blocks terminal). Use for debugging
                        with an attached IDE.
   -h, --help         Show this help message and exit.
@@ -16,5 +17,4 @@ a daemon-only background service)
       --status       Check if the daemon is running
       --stop         Stop the running daemon
   -V, --version      Print version information and exit.
-Commands:
-  start  Open Trail Runner (same as `trailblaze app`)
+      --v2           Open Trail Runner in its native desktop window

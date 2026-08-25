@@ -1062,7 +1062,7 @@ internal class TrailmapTargetGenerator(
    * multi-tool descriptors). Duplicate names across files in the same trailmap fail loudly
    * with both contributing file names.
    *
-   * SISTER IMPLEMENTATIONS — same algorithm lives in three other places, keep all four in
+   * SISTER IMPLEMENTATIONS — same algorithm lives in four other places, keep all five in
    * lockstep:
    *   - `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailblazeProjectConfigLoader.kt`
    *     `discoverTrailmapScriptedTools` — runtime trailmap loader.
@@ -1070,11 +1070,17 @@ internal class TrailmapTargetGenerator(
    *     `buildScriptedToolRegistry` — build-time `.d.ts` augmentation generator.
    *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/scripting/DaemonScriptedToolBundler.kt`
    *     `discoverScriptedToolDescriptors` — daemon-time esbuild bundler.
+   *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/usages/ScriptedToolSourceSnapshotScanner.kt`
+   *     `snapshot` — the `usages --changed-since` inventory. ANALYSIS-ONLY, and deliberately
+   *     divergent in two ways: it never throws (it runs against historical refs that may predate
+   *     an author fix, so every anomaly is a warning), and it is dir-parameterized rather than
+   *     workspace-singleton-resolved so it can scan a ref checkout and the working tree in one
+   *     process. It DOES mirror the loader's meta-only + bare-`.ts` passes.
    * Build-logic stays free of `:trailblaze-models` (Gradle plugin classpath concern); we
    * use kaml's raw `YamlMap`/`YamlList` here rather than the typed `TrailmapScriptedToolFile`
    * serializer. Keep the parse shape in sync with the typed sister implementations.
    *
-   * Search tag for grepping all four sister implementations at once (resilient against
+   * Search tag for grepping all five sister implementations at once (resilient against
    * future file moves): `SISTER-IMPL-TAG: trailmap-scripted-tool-discovery`.
    */
   private fun buildTrailmapScriptedToolRegistry(

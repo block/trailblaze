@@ -35,6 +35,17 @@ tasks.register<JavaExec>("generateTestResultsArtifacts") {
   mainClass.set("xyz.block.trailblaze.report.GenerateTestResultsCliCommandKt")
 }
 
+// Task to generate the run index — the report's device matrix over one or more test_report.json
+// files, with each cell linking out to that run's own report. See RunIndexGenerator for why CI
+// needs this alongside the embedded report.
+// Usage: ./gradlew :trailblaze-report:generateRunIndex --args="a/test_report.json b/test_report.json --viewer-base-url <url> --output index.html"
+tasks.register<JavaExec>("generateRunIndex") {
+  group = "application"
+  description = "Generate the run index HTML from one or more Trailblaze test_report.json files"
+  classpath = sourceSets["main"].runtimeClasspath
+  mainClass.set("xyz.block.trailblaze.report.GenerateRunIndexCliCommandKt")
+}
+
 abstract class PrepareReportTemplateDirTask : DefaultTask() {
   @get:Input abstract val wasmEnabled: org.gradle.api.provider.Property<Boolean>
 
@@ -168,6 +179,67 @@ val bundlePerfReportCore by tasks.registering(Exec::class) {
   )
 }
 
+// Bake the standalone report viewer (the data-less shell `build-viewer-shell.sh` produces) into
+// this module's JAR resources. The shell can only be BUILT here — bun macros over this source tree
+// plus the Gradle-built selector engine — but it is NEEDED wherever the CLI runs: publishing it to
+// a CDN, self-hosting it, opening a `?zip=` link. Building it into the JAR at build time means a
+// distributed `trailblaze` binary emits it as a plain resource copy — no bun, no Gradle, no source
+// checkout at the consumption site — and the emitted viewer always matches the renderer that
+// binary generates reports with, because they shipped together.
+val bakeViewerShell by tasks.registering(Exec::class) {
+  group = "trailblaze"
+  description = "Builds the standalone report viewer shell into this module's JAR resources (bun run viewer-shell-cli.ts)."
+  val srcDir = layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/trailrunner/web/app")
+  val out = layout.buildDirectory.file(
+    "generated-resources/viewer-shell/xyz/block/trailblaze/report/report-viewer.html",
+  )
+  // Same input surface as bundleRunReportCore above (the shell embeds the same viewer bundle via
+  // the run-report-html macros), plus the selector engine bundle the shell's own macro packs.
+  inputs.files(fileTree(srcDir) { include("*.ts", "*.js") }.filter { !it.name.endsWith(".test.ts") })
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("../trailblaze-selector-engine-js/src/typescript")) { include("**/*.ts") },
+    fileTree(layout.projectDirectory.dir("../sdks/typescript/src/generated")) { include("**/*.ts") },
+  ).withPropertyName("selectorEngineWrapperSources")
+  // The report CLI source, which the shell reaches OUT of srcDir for: run-report-shell-html.ts
+  // pulls in selector-engine-bundle.macro.ts, and that macro imports `packSelectorEngine` from
+  // ../../../report/run-report-cli.ts. Undeclared, an edit to how the engine is packed leaves this
+  // task UP-TO-DATE and the JAR keeps a viewer built against the old packing — the exact drift
+  // baking the shell in is meant to make impossible. A tree, not the named file, for the reason
+  // spelled out on bundleRunReportCore's wrapper sources: `inputs.files` contributes nothing for a
+  // path that doesn't exist, so naming it would silently stop covering anything the day it moves.
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/report")) {
+      include("**/*.ts")
+      exclude("**/*.test.ts")
+    },
+  ).withPropertyName("reportCliSources")
+  // The built engine bundle, as a FileCollection off the producing task so this carries the task
+  // dependency without hardcoding that module's output path (the copySelectorEngineResource
+  // precedent below). Passed to the macro explicitly rather than relying on its repo-relative
+  // default, which is exactly the kind of implicit path a module relocation would silently break.
+  val engineBundle = files(project(":trailblaze-selector-engine-js").tasks.named("bundleSelectorEngine"))
+  inputs.files(engineBundle).withPropertyName("selectorEngineBundle")
+  outputs.file(out)
+  workingDir(srcDir)
+  commandLine("bun", "run", "./viewer-shell-cli.ts", out.get().asFile.absolutePath)
+  doFirst {
+    out.get().asFile.parentFile.mkdirs()
+    environment("TRAILBLAZE_SELECTOR_ENGINE_BUNDLE", engineBundle.singleFile.absolutePath)
+  }
+  // The guards build-viewer-shell.sh applies, because every failure they catch is silent in a
+  // browser: a truncated document, quirks mode from a stray pre-doctype write, or — the one only a
+  // packager can cause — a shell missing the selector engine, whose Inspector then never shows a
+  // suggestion. The engine is a task dependency here so its absence is a wiring bug, not an
+  // environment limitation, and a JAR must never carry the degraded shell.
+  doLast {
+    val html = out.get().asFile.readText()
+    check(html.startsWith("<!doctype html>")) { "viewer shell does not begin with the doctype" }
+    check(html.contains("data-tb-shell")) { "generated file is not a viewer shell (no data-tb-shell marker)" }
+    check(html.contains("id=\"tb-selector-engine\"")) { "viewer shell is missing the selector engine bundle" }
+    check(html.trimEnd().endsWith("</html>")) { "viewer shell is truncated (no closing </html>)" }
+  }
+}
+
 // Stage the Kotlin/JS selector engine bundle (the daemon's selector generator/resolver compiled to
 // JS by :trailblaze-selector-engine-js — see that module's build file) into this module's JAR
 // resources, where RunReportGenerator stages it beside the bun driver so the report can embed it
@@ -198,6 +270,9 @@ sourceSets {
     resources.srcDir(
       copySelectorEngineResource.map { layout.buildDirectory.dir("generated-resources/selector-engine").get() },
     )
+    resources.srcDir(
+      bakeViewerShell.map { layout.buildDirectory.dir("generated-resources/viewer-shell").get() },
+    )
   }
 }
 
@@ -205,6 +280,7 @@ tasks.named<org.gradle.language.jvm.tasks.ProcessResources>("processResources") 
   dependsOn(bundleRunReportCore)
   dependsOn(bundlePerfReportCore)
   dependsOn(copySelectorEngineResource)
+  dependsOn(bakeViewerShell)
   // The bun test co-located with the run-report modules (run-report-core.test.ts) lives under
   // resources so it can import them directly; keep it out of the packaged JAR.
   // Same for the cross-language parity fixture the tests share with the Kotlin suite.

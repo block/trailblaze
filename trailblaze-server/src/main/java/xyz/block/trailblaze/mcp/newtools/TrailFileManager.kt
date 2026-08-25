@@ -282,6 +282,12 @@ class TrailFileManager(
 
     is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail ->
       SaveResult(success = false, error = UnifiedRecordingWriter.STEPLESS_INTO_EXISTING_MESSAGE)
+
+    is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail ->
+      SaveResult(
+        success = false,
+        error = UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames),
+      )
   }
 
   /**

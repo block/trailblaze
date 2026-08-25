@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.recordings
 
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -53,6 +55,14 @@ object UnifiedRecordingWriter {
   const val BLANK_CLASSIFIER_MESSAGE: String =
     "Can't save this recording: no device classifier for this session, so there is no unified " +
       "recording slot to write it to. Re-record with a connected device."
+
+  /** Refusal message for merging into a trail that declares a multi-device configuration. */
+  fun multiDeviceMergeSkippedMessage(target: File, configurationNames: Set<String>): String =
+    "Recording not merged into ${target.absolutePath}: that trail declares multi-device " +
+      "configuration(s) ${configurationNames.joinToString(", ") { "`$it`" }}, whose recording legs " +
+      "are keyed by configuration name rather than device classifier. Merging a single-device " +
+      "classifier leg would duplicate the configuration's steps. The trail on disk is unchanged; " +
+      "edit it directly to update a multi-device recording."
 
   /** Refusal message for a recorded trailhead the unified one-tool-per-classifier slot can't hold. */
   fun multiToolTrailheadMessage(toolCount: Int): String =
@@ -176,6 +186,16 @@ object UnifiedRecordingWriter {
      * holds [existingStepCount] steps. Nothing written — see [STEPLESS_INTO_EXISTING_MESSAGE].
      */
     data class SteplessIntoExistingTrail(val target: File, val existingStepCount: Int) : MergeOutcome
+
+    /**
+     * The existing [target] declares a multi-device configuration ([configurationNames]), whose
+     * recording legs are keyed by the configuration NAME — and this merge's classifier is neither
+     * one of those names nor a slot the trail declares for a single device, so writing would
+     * duplicate the configuration's legs under a classifier key (and add a driver pin that is
+     * illegal on a configuration entry). Nothing written. A configuration session's own save-back
+     * passes the configuration name as its classifier and merges normally.
+     */
+    data class SkippedMultiDeviceTrail(val target: File, val configurationNames: Set<String>) : MergeOutcome
   }
 
   /**
@@ -200,6 +220,11 @@ object UnifiedRecordingWriter {
    * target is refused untouched, a multi-tool trailhead is reported so the caller can fall back to a
    * legacy sibling, and an empty merge is skipped (an empty `trail:` is unparseable).
    *
+   * Pass [selectedDeviceConfiguration] when [classifier] is the multi-device configuration the run
+   * bound (they are the same string): a configuration's legs are keyed by its name, and the merge
+   * primitive needs to know that from the caller rather than inferring it from the target file,
+   * which a first write doesn't have.
+   *
    * No user-facing logging — the caller maps the returned [MergeOutcome] to its own output/return so
    * each surface keeps its own UX (CLI console lines, MCP/desktop result objects).
    */
@@ -207,6 +232,7 @@ object UnifiedRecordingWriter {
     trailFileOrDir: File,
     recordedItems: List<TrailYamlItem>,
     classifier: String,
+    selectedDeviceConfiguration: String? = null,
   ): MergeOutcome {
     // The unified trailhead is one tool per classifier (the emitter enforces it). A v1 recording can
     // carry a multi-tool trailhead the unified format simply can't represent; merging anyway would
@@ -240,6 +266,42 @@ object UnifiedRecordingWriter {
         null
       }
 
+      // A multi-device configuration's legs are keyed by its configuration NAME. A classifier-keyed
+      // merge of a configuration-selected replay would duplicate those legs under a second key and
+      // pin a driver on a key the parser reserves for the configuration — refuse rather than
+      // corrupt. Two merges pass through: one keyed by the configuration name itself (the
+      // legitimate multi-device save-back), and one whose classifier resolves — through the same
+      // lineage every other classifier lookup uses — to a single-device slot the trail ALSO
+      // declares. The parser explicitly allows a configuration and ordinary single-device entries
+      // to coexist in one document, and re-recording such a trail's single-device leg is an
+      // ordinary classifier merge, not a configuration replay. See SkippedMultiDeviceTrail.
+      val configurationNames = existing?.config?.multiDeviceConfigurationNames.orEmpty()
+      if (configurationNames.isNotEmpty() && classifier !in configurationNames) {
+        // A trail declares a single-device slot two ways: a `config.devices` entry that isn't a
+        // configuration, or an existing `recording:` leg keyed by the classifier. Both must stay
+        // re-recordable — keying off `config.devices` alone made a leg on a trail that declares
+        // ONLY its configuration permanently un-re-recordable, since the gate refused and the CLI
+        // only logged the skip.
+        //
+        // A configuration's MEMBER classifiers are deliberately absent: a member's steps live under
+        // the configuration's leg, so merging one under its own classifier duplicates that leg —
+        // the corruption this gate exists to refuse.
+        val singleDeviceKeys = buildSet {
+          existing?.config?.devices.orEmpty().filterValues { !it.isConfiguration }.keys.let(::addAll)
+          existing?.trailhead?.recordings?.keys?.let { addAll(it - configurationNames) }
+          existing?.trail?.forEach { step -> addAll(step.recordings.keys - configurationNames) }
+        }
+        val resolvesToDeclaredSingleDevice = TrailblazeClassifierLineage
+          .chainFor(TrailblazeDeviceClassifier(classifier))
+          // `all` ends every chain, so honoring it here would open the gate to every classifier on
+          // any trail that carries an `all:` leg — the wildcard says which leg a device READS, not
+          // that the trail declares a slot for this device.
+          .any { it.classifier != TrailblazeClassifierLineage.UNIVERSAL_ROOT && it.classifier in singleDeviceKeys }
+        if (!resolvesToDeclaredSingleDevice) {
+          return@synchronized MergeOutcome.SkippedMultiDeviceTrail(unifiedFile, configurationNames)
+        }
+      }
+
       // A capture with no objectives is one placeholder step. Aligning that against an existing
       // multi-step trail binds the whole capture to step 1 and strips this classifier from every
       // step after it — silent data loss, so refuse before writing anything.
@@ -249,7 +311,12 @@ object UnifiedRecordingWriter {
         return@synchronized MergeOutcome.SteplessIntoExistingTrail(unifiedFile, existing.trail.size)
       }
 
-      val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recordedItems, classifier)
+      val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+        existing = existing,
+        recordedItems = recordedItems,
+        classifier = classifier,
+        selectedDeviceConfiguration = selectedDeviceConfiguration,
+      )
       // A merge with no steps would emit an empty `trail:`, which the unified parser rejects — skip
       // rather than write an unreadable file (only reachable from a degenerate recording with no
       // prompt steps and no existing trail to preserve).

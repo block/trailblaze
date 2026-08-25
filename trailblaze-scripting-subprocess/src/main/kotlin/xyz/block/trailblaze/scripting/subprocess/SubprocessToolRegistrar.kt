@@ -49,9 +49,21 @@ object SubprocessToolRegistrar {
     tools: List<Tool>,
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean,
+  ): List<RegisteredSubprocessTool> = filterAdvertisedTools(tools, listOf(driver), preferHostAgent)
+
+  /**
+   * Multi-device overload: keeps a tool when it applies to ANY of the session's drivers —
+   * see [TrailblazeToolMeta.shouldRegister]'s collection overload. A heterogeneous session
+   * (Android launch device + web companion) passes every bound driver so web-only scripted
+   * tools register alongside the Android surface.
+   */
+  fun filterAdvertisedTools(
+    tools: List<Tool>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
   ): List<RegisteredSubprocessTool> = tools.mapNotNull { tool ->
     val meta = TrailblazeToolMeta.fromTool(tool)
-    if (!meta.shouldRegister(driver, preferHostAgent)) {
+    if (!meta.shouldRegister(drivers, preferHostAgent)) {
       null
     } else {
       RegisteredSubprocessTool(
@@ -86,15 +98,24 @@ object SubprocessToolRegistrar {
     driver: TrailblazeDriverType,
     preferHostAgent: Boolean,
     logPrefix: String = "[subprocess-tools]",
+  ): List<InlineScriptToolConfig> = applicableInlineTools(tools, listOf(driver), preferHostAgent, logPrefix)
+
+  /** Multi-device overload — same any-driver semantics as [filterAdvertisedTools]'s. */
+  fun applicableInlineTools(
+    tools: List<InlineScriptToolConfig>,
+    drivers: Collection<TrailblazeDriverType>,
+    preferHostAgent: Boolean,
+    logPrefix: String = "[subprocess-tools]",
   ): List<InlineScriptToolConfig> {
     val (applicable, skipped) = tools.partition {
       val meta = advertisedMeta(it)?.let(TrailblazeToolMeta::fromJsonObject) ?: TrailblazeToolMeta()
-      meta.shouldRegister(driver, preferHostAgent)
+      meta.shouldRegister(drivers, preferHostAgent)
     }
     if (skipped.isNotEmpty()) {
+      val sessionDescription = drivers.joinToString(" + ") { "${it.platform.name} / ${it.yamlKey}" }
       Console.log(
         "$logPrefix Not spawning ${skipped.size} subprocess scripted tool(s) that don't apply to a " +
-          "${driver.platform.name} / ${driver.yamlKey} session: ${skipped.joinToString(", ") { it.name }}",
+          "$sessionDescription session: ${skipped.joinToString(", ") { it.name }}",
       )
     }
     return applicable
@@ -130,7 +151,13 @@ object SubprocessToolRegistrar {
 suspend fun McpSubprocessSession.fetchAndFilterTools(
   driver: TrailblazeDriverType,
   preferHostAgent: Boolean,
+): List<RegisteredSubprocessTool> = fetchAndFilterTools(listOf(driver), preferHostAgent)
+
+/** Multi-device overload — same any-driver semantics as [SubprocessToolRegistrar.filterAdvertisedTools]. */
+suspend fun McpSubprocessSession.fetchAndFilterTools(
+  drivers: Collection<TrailblazeDriverType>,
+  preferHostAgent: Boolean,
 ): List<RegisteredSubprocessTool> {
   val result = client.listTools(ListToolsRequest())
-  return SubprocessToolRegistrar.filterAdvertisedTools(result.tools, driver, preferHostAgent)
+  return SubprocessToolRegistrar.filterAdvertisedTools(result.tools, drivers, preferHostAgent)
 }

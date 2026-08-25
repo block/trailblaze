@@ -171,7 +171,8 @@ trailmap template with typed custom tools you can copy:
 ## Desktop app
 
 ```bash
-trailblaze app    # visual trail authoring, session browsing, report viewing
+trailblaze app         # legacy visual trail authoring and session browsing
+trailblaze app --v2    # Trail Runner workspace and trace viewer
 ```
 
 ## Active prototype: Waypoints

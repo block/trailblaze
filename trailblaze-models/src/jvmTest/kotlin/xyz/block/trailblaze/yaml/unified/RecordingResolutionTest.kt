@@ -318,6 +318,140 @@ class RecordingResolutionTest {
     assertTrue(iphone.lostGuardsVersus(listOf(tablet)).isEmpty())
   }
 
+  /**
+   * A multi-device trail: one configuration, legs keyed by its NAME rather than by any device
+   * classifier — the shape `MultiDeviceConfigurationResolver` binds and the executor replays.
+   */
+  private val configurationKeyed = UnifiedTrail(
+    config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = mapOf(
+        "pos-pair" to TrailblazeDeviceDefinition(
+          devices = mapOf(
+            "seller" to TrailblazeDeviceDefinition(classifier = "lab-a"),
+            "buyer" to TrailblazeDeviceDefinition(classifier = "lab-b"),
+          ),
+        ),
+      ),
+    ),
+    trail = listOf(
+      UnifiedTrailStep(step = "sign in", recordings = mapOf("pos-pair" to listOf(tool("a")))),
+      UnifiedTrailStep(step = "ring up", recordings = mapOf("pos-pair" to listOf(tool("b")))),
+    ),
+  )
+
+  @Test
+  fun `a configuration-keyed replay counts as exact once the session's configuration is named`() {
+    val resolution = UnifiedTrailAdapter.describeRecordingResolution(
+      configurationKeyed,
+      androidPhone,
+      selectedDeviceConfiguration = "pos-pair",
+    )
+
+    // Both identities are carried: the device is still the device, and the configuration is what
+    // the legs are keyed by. Collapsing them into one field is what mislabels a mixed-key trail
+    // (below).
+    assertEquals("android-phone", resolution.deviceClassifier)
+    assertEquals("pos-pair", resolution.selectedConfiguration)
+    assertEquals(setOf("android-phone", "pos-pair"), resolution.exactIdentities)
+    assertEquals(emptyList(), resolution.unresolvedDeclared)
+    // Not a family alias: the configuration name is what the legs are keyed by, so matching it IS
+    // the exact match. Counting it as an alias would report every multi-device replay as inherited.
+    assertEquals(emptyList(), resolution.familyAliased)
+    assertEquals("2 step(s), 2 exact", resolution.summarize())
+  }
+
+  @Test
+  fun `a leg keyed by the device's own classifier is exact in a configuration session too`() {
+    // A trail first recorded single-device and later re-recorded as a configuration keys some legs
+    // by the configuration name and others by the device that recorded them. Both were captured for
+    // this session; neither is a broader ancestor, so neither is a family alias — and
+    // `android-phone` is MORE specific than a configuration name, so calling it an alias inverts
+    // the meaning of the label.
+    val mixed = UnifiedTrail(
+      config = configurationKeyed.config,
+      trail = listOf(
+        UnifiedTrailStep(step = "shared setup", recordings = mapOf("android-phone" to listOf(tool("a")))),
+        UnifiedTrailStep(step = "handover", recordings = mapOf("pos-pair" to listOf(tool("b")))),
+        UnifiedTrailStep(step = "family", recordings = mapOf("android" to listOf(tool("c")))),
+      ),
+    )
+
+    val resolution =
+      UnifiedTrailAdapter.describeRecordingResolution(mixed, androidPhone, "pos-pair")
+
+    assertEquals(
+      listOf("android"),
+      resolution.familyAliased.map { it.resolvedClassifier },
+      "only the broader ancestor is an alias",
+    )
+    assertEquals("3 step(s), 2 exact, 1 via family alias 'android'", resolution.summarize())
+  }
+
+  @Test
+  fun `a selected configuration the trail does not declare is rejected`() {
+    // Rejected rather than prepended to the chain: an undeclared name matches nothing, so every
+    // configuration leg would report as unmatched and a fully deterministic replay would read as an
+    // all-LLM run — the same defect the parameter exists to fix, reintroduced by a typo. This is
+    // also exactly what lowerToTrailItems requires, so the report cannot disagree with the executor
+    // about which inputs are valid.
+    val error = runCatching {
+      UnifiedTrailAdapter.describeRecordingResolution(configurationKeyed, androidPhone, "pos-pair-typo")
+    }.exceptionOrNull()
+
+    assertTrue(error is IllegalArgumentException, "expected a require failure, got $error")
+    assertTrue(
+      error.message!!.contains("pos-pair-typo") && error.message!!.contains("pos-pair"),
+      "the message must name both the bad selection and the declared set: ${error.message}",
+    )
+  }
+
+  @Test
+  fun `siblings are told apart by configuration, not by their shared device classifier`() {
+    // Every member of a pair runs on the same device family, so sibling resolutions share a
+    // deviceClassifier. Filtering siblings on that would drop them all and silently report no lost
+    // guards for any multi-device trail.
+    val guarded = UnifiedTrail(
+      config = configurationKeyed.config,
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "conditional",
+          recordings = mapOf(
+            "pos-pair" to listOf(tool("tapOnElement")),
+            "solo-pair" to listOf(tool("block_runIf")),
+          ),
+        ),
+      ),
+    )
+    val withBothConfigurations = guarded.copy(
+      config = guarded.config.copy(
+        devices = guarded.config.devices.orEmpty() + ("solo-pair" to TrailblazeDeviceDefinition(
+          devices = mapOf("only" to TrailblazeDeviceDefinition(classifier = "lab-a")),
+        )),
+      ),
+    )
+
+    val pair =
+      UnifiedTrailAdapter.describeRecordingResolution(withBothConfigurations, androidPhone, "pos-pair")
+    val solo =
+      UnifiedTrailAdapter.describeRecordingResolution(withBothConfigurations, androidPhone, "solo-pair")
+
+    assertEquals(1, pair.lostGuardsVersus(listOf(solo)).size, "the sibling's guard must be visible")
+  }
+
+  @Test
+  fun `without the session's configuration the same replay reads as an all-LLM run`() {
+    // The defect this parameter exists for. A configuration name is excluded from every classifier
+    // walk unless it is the selected one, so omitting it reports a fully deterministic replay as
+    // unmatched — and the census line is the artifact a CI triage reads first.
+    val resolution =
+      UnifiedTrailAdapter.describeRecordingResolution(configurationKeyed, androidPhone)
+
+    assertEquals(2, resolution.unresolvedDeclared.size)
+    assertEquals("2 step(s), 2 unmatched -> LLM", resolution.summarize())
+  }
+
   private val androidPhone = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("phone"))
   private val androidTablet = listOf(TrailblazeDeviceClassifier("android"), TrailblazeDeviceClassifier("tablet"))
   private val iosIphone = listOf(TrailblazeDeviceClassifier("ios"), TrailblazeDeviceClassifier("iphone"))

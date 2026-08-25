@@ -115,6 +115,74 @@ class SubprocessToolRegistrarTest {
     assertThat(record.meta.isRecordable).isEqualTo(false)
   }
 
+  @Test fun `a multi-device session keeps every bound driver's tools`() {
+    // A web-companion session binds an Android launch device AND a browser. Filtering on the
+    // launch driver alone drops the web tools the trail's dashboard leg replays; filtering on
+    // the companion's alone drops the phone's. Both must survive, and a tool for neither
+    // driver must still be rejected — the merged surface is a union, not a free-for-all.
+    val tools = listOf(
+      tool(
+        "shopapp_webSignIn",
+        meta = buildJsonObject {
+          put("trailblaze/supportedDrivers", buildJsonArray { add("playwright-native") })
+        },
+      ),
+      tool(
+        "shopapp_launchApp",
+        meta = buildJsonObject {
+          put("trailblaze/supportedDrivers", buildJsonArray { add("android-ondevice-accessibility") })
+        },
+      ),
+      tool(
+        "ios_openKeychain",
+        meta = buildJsonObject {
+          put("trailblaze/supportedDrivers", buildJsonArray { add("ios-host") })
+        },
+      ),
+    )
+
+    val registered = SubprocessToolRegistrar.filterAdvertisedTools(
+      tools,
+      drivers = listOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      ),
+      preferHostAgent = true,
+    )
+    assertThat(registered.map { it.advertisedName.toolName })
+      .containsExactly("shopapp_webSignIn", "shopapp_launchApp")
+  }
+
+  @Test fun `a platform-scoped tool registers when any bound device is on that platform`() {
+    val webOnly = listOf(
+      tool(
+        "dashboard_readTransactions",
+        meta = buildJsonObject {
+          put("trailblaze/supportedPlatforms", buildJsonArray { add("web") })
+        },
+      ),
+    )
+
+    assertThat(
+      SubprocessToolRegistrar.filterAdvertisedTools(
+        webOnly,
+        driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        preferHostAgent = true,
+      ),
+    ).hasSize(0)
+
+    assertThat(
+      SubprocessToolRegistrar.filterAdvertisedTools(
+        webOnly,
+        drivers = listOf(
+          TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        ),
+        preferHostAgent = true,
+      ).map { it.advertisedName.toolName },
+    ).containsExactly("dashboard_readTransactions")
+  }
+
   @Test fun `order of output mirrors order of input`() {
     val tools = listOf(tool("a"), tool("b"), tool("c"))
     val registered = SubprocessToolRegistrar.filterAdvertisedTools(

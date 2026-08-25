@@ -1,18 +1,7 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
-
-function summarizeAnalyticsProps(props) {
-  if (!props || typeof props !== 'object') return '';
-  const entity = props.cdf_entity;
-  const action = props.cdf_action;
-  const skip = new Set(['cdf_entity', 'cdf_action']);
-  const rest = Object.keys(props).filter((k) => !skip.has(k));
-  const tag = (entity || action) ? [entity, action].filter(Boolean).join(' · ') : '';
-  const extra = rest.slice(0, 2).map((k) => `${k}=${truncate(String(props[k]), 24)}`).join('  ');
-  return [tag, extra].filter(Boolean).join('  ·  ');
-}
 
 function derivePlatformFromTrail(trail) {
   const name = ((trail.path || trail.id || '').toLowerCase().replace(/\.trail\.yaml$/, '').split('/').pop()) || '';
@@ -352,21 +341,21 @@ function flattenObject(obj, { joinArray = (a) => a.join(', '), skip, prefix } = 
 
 Object.assign(window, {
   flattenObject,
-  summarizeAnalyticsProps, derivePlatformFromTrail, buildPromptTrailYaml,
+  derivePlatformFromTrail, buildPromptTrailYaml,
   formatDuration, formatAgo, buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, humanizeTarget, targetLabel, scopeTrailmaps,
 });
 
 window.TB = {
-  useStatus, useTrails, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, useTrailDetail, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionAnalytics, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
+  useStatus, useTrails, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useSessions, useSessionDetail, readSessionDetail, useTrailDetail, useTrailFolderFile, useRunTools, useDevices, useTrailRoots, useFavorites, useSettings, useIntegrations, useSessionEvents, useSessionYaml, useSessionFiles, useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,
   addTrailRoot, removeTrailRoot, pickDirectoryViaShell, updateSetting, switchWorkspace, WORKSPACE_BLURB, WORKSPACE_EMPTY_NOTICE, workspaceRestartNotice, setTargetsRestartNeeded, getTargetsRestartNeeded, deleteSession, clearSessions, cancelSession, revealSession, revealLogsRoot, revealToolSource, openTrailInEditor, revealTrail, exportSessionUrl, sessionArchiveUrl, importSessionArchive, runIntegrationAction, fetchComponentSource, createTrailmapComponent, saveTargetConfig,
   // Screens reach these through the TB namespace - a name defined in data-core but missing here
   // throws "not a function" at click time (this is what broke every Run click once before),
   // so any new data-core function a screen uses MUST be listed in this object too.
   // TbNamespaceCoverageTest enforces this.
-  resolveRunDevice, connectDevice, connectDeviceDetailed, fetchTrailYaml, dispatchRun, retrySession, withTimeout, setPendingRunSession, createTrailDir, extractTrace,
-  getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
-  buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, fileUrl, summarizeAnalyticsProps, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
-  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun,
+  resolveRunDevice, connectDevice, connectDeviceDetailed, disconnectDevice, fetchTrailYaml, dispatchRun, prepareRetry, launchRetry, withTimeout, setPendingRunSession, createTrailDir, extractTrace,
+  getTargetApps, setTargetApp, useDeviceApps, buildPromptTrailYaml, updateTrail, createTrail, fetchEditedTrails, fetchTrailGitBaseline, runToolQuick, updateToolSource, fetchDeviceApps, fetchInstalledApps, fetchInstalledAppBadge, installedAppIconUrl, validateTrail, rebuildDaemon, openSessionFile, revealTrailsRoot,
+  buildTrailTree, buildTrailBundleRows, countTrailBundles, trailFormatMap, fileUrl, humanizeTarget, targetLabel, scopeTrailmaps, useTargetAppMap, trailheadsForPlatform,
+  recordPendingRun, getPendingRun, clearPendingRun, failPendingRun, requestPendingRunStop, PENDING_TTL_MS,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
   buildBlazeYaml, mergeBlazeYaml, proposeSteps, createBundle, fetchBundleDetail, deleteTrailFolder, revealTrailFolder,
   fetchTrailFolderFile, saveTrailFolderFile, deleteTrailFolderFile, recordTrailFolder,

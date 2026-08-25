@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // Platform buckets for grouping the variant list. Known platforms render via the shared
@@ -107,22 +107,29 @@ function fmtArgValue(v) {
 // (the caller falls back to the legacy "No steps" state).
 function unifiedTableFromMatrix(m) {
   if (!m) return null;
+  const legModel = window.TM.logicalLegs(m);
+  // Hidden legs still consume the recordings the visible ones share, so cell merging has to know
+  // about them (see TM.legCells).
+  const allLegs = legModel.columns.concat(legModel.overflow);
   const rows = [];
   let stepNo = 0;
   const addRow = (s, isTrailhead) => {
+    // The recording keys the step actually authored, for readers that want the whole step rather than
+    // the per-leg view (the Companion tab flattens these into one glance).
     const byPlatform = {};
     let recorded = 0;
     Object.keys(s.recording || {}).forEach((p) => {
-      const tools = (s.recording[p] || []).map((t) => ({ [t.name]: t.body }));
-      byPlatform[p] = tools;
-      recorded += tools.length;
+      byPlatform[p] = (s.recording[p] || []).map((t) => ({ [t.name]: t.body }));
+      recorded += byPlatform[p].length;
     });
-    rows.push({ kind: s.kind, idx: isTrailhead ? null : stepNo++, text: s.text, byPlatform, recorded });
+    // The grid draws one cell per GROUP of legs sharing a recording, not one per leg — see TM.legCells.
+    const cells = window.TM.legCells(s.recording, legModel.columns, allLegs);
+    rows.push({ kind: s.kind, idx: isTrailhead ? null : stepNo++, text: s.text, byPlatform, cells, recorded });
   };
   if (m.trailhead) addRow(m.trailhead, true);
   (m.steps || []).forEach((s) => addRow(s, false));
   if (!rows.length) return null;
-  return { platforms: m.platforms, rows, skip: (m.config && m.config.skip) || {} };
+  return { platforms: legModel.columns, warnings: legModel.warnings, rows, skip: (m.config && m.config.skip) || {} };
 }
 
 // yaml -> table data, or null when the YAML isn't the unified shape / has no rows.
@@ -171,7 +178,7 @@ const STEP_KIND = { trailhead: ['green', 'TRAILHEAD'], verify: ['blue', 'VERIFY'
 // bundle matrix exactly.
 function UnifiedStepsTable({ data }) {
   useLucide();
-  const { platforms, rows, skip } = data;
+  const { platforms, warnings = [], rows, skip } = data;
   const cols = platforms.length ? platforms : ['—'];
   const gridColumns = `minmax(240px, 1.5fr) ${cols.map(() => 'minmax(240px, 1fr)').join(' ')}`;
   const skipKeys = Object.keys(skip || {});
@@ -209,11 +216,11 @@ function UnifiedStepsTable({ data }) {
                     </div>
                     <div data-selectable style={{ fontSize: 13, lineHeight: 1.5 }}>{r.text}</div>
                   </div>
-                  {cols.map((p) => {
-                    const tools = r.byPlatform[p] || [];
+                  {(r.cells.length ? r.cells : [{ legs: cols, tools: [] }]).map((cell) => {
+                    const tools = (cell.tools || []).map((t) => ({ [t.name]: t.body }));
                     return (
-                      <div key={p} style={{ padding: '12px 14px', borderBottom: border, borderLeft: '1px solid var(--tb-hairline)', background: 'var(--bg-standard)' }}>
-                        {tools.length ? <RecordingCell recording={{ tools }} /> : <span className="tb-sub" style={{ fontSize: 12, opacity: 0.5 }}>—</span>}
+                      <div key={cell.legs.join('+')} style={{ gridColumn: 'span ' + cell.legs.length, padding: '12px 14px', borderBottom: border, borderLeft: '1px solid var(--tb-hairline)', background: 'var(--bg-standard)' }}>
+                        {tools.length ? <React.Fragment><RecordingCell recording={{ tools }} />{cell.sourceKey && !cell.exact && <div className="tb-sub tb-mono" style={{ fontSize: 10.5, marginTop: 5 }}>from {cell.sourceKey}</div>}</React.Fragment> : cell.explicitNoop ? <span className="tb-sub" style={{ fontSize: 12 }}><Ico n="ban" s={12} /> no-op</span> : <span className="tb-sub" style={{ fontSize: 12, opacity: 0.5 }}>—</span>}
                       </div>
                     );
                   })}
@@ -223,6 +230,7 @@ function UnifiedStepsTable({ data }) {
           </div>
         </div>
       </div>
+      {warnings.map((w) => <div key={w} role="status" style={{ marginTop: 8, color: 'var(--tb-warning-text)', fontSize: 12 }}><Ico n="triangle-alert" s={13} /> {w}</div>)}
       {skipKeys.length > 0 && (
         <div className="tb-sub" style={{ marginTop: 10, fontSize: 11.5, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {skipKeys.map((k) => (
@@ -248,7 +256,7 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
   useLucide();
   const devices = TB.useDevices();
   const [model, setModel] = React.useState(() => parseUnifiedModel(yaml));
-  const [editCell, setEditCell] = React.useState(null); // { rowKey, platform, tools, anchor }
+  const [editCell, setEditCell] = React.useState(null); // { rowKey, writeKey, legs, tools, anchor }
   const [saving, setSaving] = React.useState(false);
   const [err, setErr] = React.useState(null);
   const [hoveredRow, setHoveredRow] = React.useState(null);
@@ -265,7 +273,11 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
 
   if (!model) return <EmptyState ico="list" title="No steps" sub="This trail has no parsed steps, or couldn't be loaded." />;
 
-  const platforms = model.platforms.length ? model.platforms : ['—'];
+  const legModel = window.TM.logicalLegs(model);
+  const platforms = legModel.columns.length ? legModel.columns : ['—'];
+  // Includes the legs past the visible cap: an edit here writes the file, so a cell may only merge
+  // legs when it covers every consumer of the entry it writes (see TM.legCells).
+  const allLegs = legModel.columns.concat(legModel.overflow);
   const gridColumns = `minmax(260px, 1.5fr) ${platforms.map(() => 'minmax(240px, 1fr)').join(' ')}`;
 
   // ── mutations (immutable) ──
@@ -284,7 +296,10 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
       ? { ...m, trailhead: { ...m.trailhead, recording: upd(m.trailhead.recording) } }
       : { ...m, steps: m.steps.map((s, j) => (j === rowKey ? { ...s, recording: upd(s.recording) } : s)) };
   };
-  const openCell = (rowKey, platform, tools, ev) => setEditCell({ rowKey, platform, tools: (tools || []).slice(), anchor: ev.currentTarget.getBoundingClientRect() });
+  // `writeKey` is the recording key the edit lands on (a shared source for a merged cell, the leg
+  // itself otherwise); `legs` are the concrete device legs the cell covers, which is what scopes the
+  // popover's tool catalog and its Run devices — a shared key like `all` names no device itself.
+  const openCell = (rowKey, writeKey, legs, tools, ev) => setEditCell({ rowKey, writeKey, legs, tools: (tools || []).slice(), anchor: ev.currentTarget.getBoundingClientRect() });
   // Add a platform column: register its device (key + default driver) in config.devices. Cells start
   // empty; recording per step happens by editing each cell.
   const addPlatform = (base) => setModel((m) => {
@@ -293,19 +308,9 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
     if (!key || !driver || m.platforms.some((p) => platformBase(p) === base)) return m;
     return { ...m, platforms: [...m.platforms, key], config: { ...m.config, devices: { ...(m.config.devices || {}), [key]: driver } } };
   });
-  // Remove a platform column: drop it from config.devices AND strip its recording from the trailhead
-  // and every step. Reversible until Save (reload re-reads the file).
-  const removePlatform = (key) => setModel((m) => {
-    const devices = { ...(m.config.devices || {}) }; delete devices[key];
-    const strip = (rec) => { const r = { ...rec }; delete r[key]; return r; };
-    return {
-      ...m,
-      platforms: m.platforms.filter((p) => p !== key),
-      config: { ...m.config, devices },
-      trailhead: m.trailhead ? { ...m.trailhead, recording: strip(m.trailhead.recording) } : null,
-      steps: m.steps.map((s) => ({ ...s, recording: strip(s.recording) })),
-    };
-  });
+  // Remove a platform column and its exclusive recordings. A broader fallback stays when another
+  // visible device leg still consumes it, preventing one column deletion from erasing its sibling.
+  const removePlatform = (key) => setModel((m) => window.TM.removeLogicalLeg(m, key));
   const availBases = ['android', 'ios', 'web'].filter((b) => !model.platforms.some((p) => platformBase(p) === b));
   const runCount = runRange ? runRange.end - runRange.start + 1 : 0;
   const selectForRun = (i) => setRunRange((r) => {
@@ -332,30 +337,39 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
   const save = () => persist(model);
   // Dispatch a cell's tool calls to a connected device of that platform (like Test YAML) — resolve +
   // connect the device, then runToolQuick. Returns { ok, text } for the popover to display.
-  async function runTools(toolsArray, platform, deviceId) {
+  async function runTools(toolsArray, legs, deviceId) {
     try {
-      const resolved = await TB.resolveRunDevice({ platform: platformBase(platform) }, deviceId || null);
+      // Key the run by the platform of the device it runs on, not by the cell's first leg — a cell
+      // covering several platforms would otherwise replay under the wrong classifier.
+      const picked = (devices.data || []).find((d) => d.id === deviceId);
+      const base = platformBase(picked ? picked.platform : legs[0]);
+      const resolved = await TB.resolveRunDevice({ platform: base }, deviceId || null);
       if (resolved.error) return { ok: false, text: resolved.error };
       const connected = await TB.connectDevice(resolved.trailblazeDeviceId);
       if (!connected) return { ok: false, text: 'Could not connect to the device.' };
-      const r = await TB.runToolQuick(buildToolRunYaml(toolsArray, platform), resolved.trailblazeDeviceId);
+      const r = await TB.runToolQuick(buildToolRunYaml(toolsArray, base), resolved.trailblazeDeviceId);
       return { ok: r && r.success === true, text: (r && r.success === true) ? (r.result || 'Ran OK') : ((r && r.error) || 'Run failed') };
     } catch (e) { return { ok: false, text: String((e && e.message) || e) }; }
   }
 
-  // one platform cell — click to edit that platform's tool calls for this row (trailhead or step)
-  const renderCell = (rowKey, platform) => {
-    if (platform === '—') return <span className="tb-sub" style={{ fontSize: 12, opacity: 0.5 }}>—</span>;
-    const src = rowKey === 'trailhead' ? model.trailhead : model.steps[rowKey];
-    const cell = src ? src.recording[platform] : undefined;
-    const tools = cell || [];
+  // One cell — click to edit the tool calls it shows for this row (trailhead or step). A cell can
+  // cover several legs, because the recording they share is ONE entry in the file (see TM.legCells);
+  // editing it writes that shared entry, so every leg the cell spans changes together - and only
+  // those, because a cell merges only when it spans every leg that entry reaches. A single-leg cell
+  // writes that leg's own key instead, which is how a family recording gets overridden.
+  const renderCell = (rowKey, cell) => {
+    const merged = cell.legs.length > 1;
+    if (cell.legs[0] === '—') return <span className="tb-sub" style={{ fontSize: 12, opacity: 0.5 }}>—</span>;
+    const writeKey = merged ? cell.sourceKey : cell.legs[0];
+    const tools = cell.tools || [];
+    const what = merged ? 'these device legs' : 'this device leg';
     // A key present with an empty list is the explicit `classifier: []` no-op — render it as such,
     // not as "add tools", so the deliberate skip is visible in the matrix.
     return (
-      <div role="button" onClick={(ev) => openCell(rowKey, platform, tools, ev)} title={tools.length ? 'Edit tool calls for this step' : 'Add tool calls for this step'} style={{ cursor: 'pointer' }}>
+      <div role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openCell(rowKey, writeKey, cell.legs, tools, e); }} onClick={(ev) => openCell(rowKey, writeKey, cell.legs, tools, ev)} title={(tools.length ? 'Edit tool calls for ' : 'Add tool calls for ') + what} style={{ cursor: 'pointer' }}>
         {tools.length
-          ? <RecordingCell recording={{ tools: tools.map((t) => ({ [t.name]: t.body })) }} />
-          : cell
+          ? <React.Fragment><RecordingCell recording={{ tools: tools.map((t) => ({ [t.name]: t.body })) }} />{cell.sourceKey && !cell.exact && <div className="tb-sub tb-mono" style={{ fontSize: 10.5, marginTop: 5 }}>from {cell.sourceKey}{merged ? '' : ' · edit to override'}</div>}</React.Fragment>
+          : cell.explicitNoop
             ? <span className="tb-sub" style={{ fontSize: 12, opacity: 0.75, display: 'inline-flex', alignItems: 'center', gap: 5 }} title="Explicit no-op — this device class deliberately runs no tools for this step"><Ico n="ban" s={12} /> no-op</span>
             : <span className="tb-sub" style={{ fontSize: 12, opacity: 0.55, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Ico n="plus" s={12} /> add tools</span>}
       </div>
@@ -409,9 +423,9 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
             </span>
           )}
         </div>
-        {platforms.map((p) => (
-          <div key={p} {...dragProps} style={{ borderTop: dropBorder, borderLeft: '1px solid var(--tb-hairline)', padding: '10px 12px', background: 'var(--bg-standard)', opacity: dragStep === rowKey ? 0.4 : 1 }}>
-            {renderCell(rowKey, p)}
+        {window.TM.legCells(s.recording, platforms, allLegs).map((cell) => (
+          <div key={cell.legs.join('+')} {...dragProps} style={{ gridColumn: 'span ' + cell.legs.length, borderTop: dropBorder, borderLeft: '1px solid var(--tb-hairline)', padding: '10px 12px', background: 'var(--bg-standard)', opacity: dragStep === rowKey ? 0.4 : 1 }}>
+            {renderCell(rowKey, cell)}
           </div>
         ))}
       </React.Fragment>
@@ -468,7 +482,7 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
                   {p !== '—' && <div className="tb-mono tb-sub" style={{ fontSize: 10.5, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</div>}
                 </div>
                 {p !== '—' && (
-                  <span {...clickable(() => { if (window.confirm(`Remove the ${platformLabel(p)} column? This deletes its recordings from every step in this file. It's reversible until you Save (reload to undo).`)) removePlatform(p); })}
+                  <span {...clickable(() => { if (window.confirm(`Remove the ${platformLabel(p)} column? Exclusive recordings are deleted; shared fallback recordings stay available to other device legs. It's reversible until you Save (reload to undo).`)) removePlatform(p); })}
                     aria-label={`Remove ${p} column`} title={`Remove ${platformLabel(p)} column`}
                     style={{ cursor: 'pointer', color: 'var(--text-subtle)', flex: '0 0 auto', display: 'inline-flex', opacity: hoveredCol === p ? 0.85 : 0, transition: 'opacity .12s ease' }}><Ico n="trash-2" s={13} /></span>
                 )}
@@ -479,17 +493,23 @@ function UnifiedStepsBoard({ yaml, target, onSaveYaml, onRunFragment, catalog = 
           </div>
         </div>
       </div>
+      {legModel.warnings.map((w) => <div key={w} role="status" style={{ marginTop: 8, color: 'var(--tb-warning-text)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}><Ico n="triangle-alert" s={13} /> {w}</div>)}
       {editCell && (() => {
-        const scoped = editorToolsFor(catalog, target, platformBase(editCell.platform));
-        const runDevices = (devices.data || []).filter((d) => platformBase(d.platform) === platformBase(editCell.platform));
+        // A cell can cover legs on different platforms (a universal `all:` recording), so the palette
+        // and the Run list are the union over the platforms it covers. Scoping to one leg would hide
+        // devices the shared recording actually replays on.
+        const bases = [...new Set(editCell.legs.map(platformBase))];
+        const scoped = [...new Map(bases.flatMap((b) => editorToolsFor(catalog, target, b)).map((t) => [t.id, t])).values()]
+          .sort((a, b) => a.id.localeCompare(b.id));
+        const runDevices = (devices.data || []).filter((d) => bases.includes(platformBase(d.platform)));
         return (
           <ToolCallsPopover calls={editCell.tools} tools={scoped} allTools={catalog} anchor={editCell.anchor} busy={saving}
             runDevices={runDevices}
             singleTool={editCell.rowKey === 'trailhead'}
-            onRunTools={(out, deviceId) => runTools(out, editCell.platform, deviceId)}
+            onRunTools={(out, deviceId) => runTools(out, editCell.legs, deviceId)}
             onSave={(out) => {
               const norm = (out || []).map((o) => { const n = Object.keys(o)[0]; return { name: n, body: o[n] == null ? {} : o[n] }; });
-              const next = applyCellTools(model, editCell.rowKey, editCell.platform, norm);
+              const next = applyCellTools(model, editCell.rowKey, editCell.writeKey, norm);
               setModel(next);
               setEditCell(null);
               persist(next);
@@ -720,7 +740,7 @@ function RunsMode({ trail, go, runs }) {
   return (
     <div style={{ maxWidth: 720 }}>
       {matches.map((s) => (
-        <div className="tb-row" key={s.id} {...clickable(() => go('completed', { sel: s.id }))} style={{ marginBottom: 8, cursor: 'pointer' }}>
+        <div className="tb-row" key={s.id} {...clickable(() => go('runs', { sel: s.id }))} style={{ marginBottom: 8, cursor: 'pointer' }}>
           <Dot c={STATUS[s.status][1]} s={9} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>{[s.device, s.dur].filter(Boolean).join(' · ') || 'Run'}</div>
@@ -878,7 +898,7 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
           const entry = variantEntries.find((v) => fileOf(v.path) === col.name);
           openRun(entry || { id: folderId, path: home, target }, { deviceId: col.device && col.device.id, replay: true });
         } : null}
-        onDeleteFile={deleteFile} onViewRun={(s) => go('completed', { sel: s.id })} onError={setErr}
+        onDeleteFile={deleteFile} onViewRun={(s) => go('runs', { sel: s.id })} onError={setErr}
         onSaveVariantTools={saveVariantTools}
         onSaveVariantYaml={saveVariantYaml}
         onFetchVariantYaml={(name) => TB.fetchTrailFolderFile(folderId, name)}
@@ -887,7 +907,7 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
   );
 }
 
-// Shared tabbed detail view for a SINGLE trail OR a folder file: Steps · Edit · Runs (+ Variants when
+// Shared tabbed detail view for a SINGLE trail OR a folder file: Edit · Grid View · Runs (+ Variants when
 // given a sibling list). Edit is the YAML+tools editor. Used inline on the Trails screen (for one
 // selected trail) and for bundle folder files. Tab can be controlled (tab + onTab) or internal
 // (defaultTab). Data comes in via props (yaml, runs, tools, onSave) so it works for both a workspace
@@ -896,14 +916,14 @@ function TrailImplementationsBoard({ folderId, home, blazeEntry, variantEntries,
 function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onSave, onSaved, runs, go, openRun, variants, currentId, onSelectVariant, tab: tabProp, onTab, defaultTab, dirtyRef, highlight }) {
   useLucide();
   const hasVariants = variants && variants.length > 1;
-  const [tabState, setTabState] = React.useState(defaultTab || 'steps');
+  const [tabState, setTabState] = React.useState(defaultTab || 'edit');
   const allowed = ['steps', 'edit', 'runs', 'variants'];
   const rawTab = tabProp != null ? tabProp : tabState;
-  const tab = allowed.includes(rawTab) && (rawTab !== 'variants' || hasVariants) ? rawTab : 'steps';
+  const tab = allowed.includes(rawTab) && (rawTab !== 'variants' || hasVariants) ? rawTab : 'edit';
   const setTab = onTab || setTabState;
   const tabs = [
-    ['steps', 'Steps', 'list'],
     ['edit', 'Edit', 'pencil'],
+    ['steps', 'Grid View', 'list'],
     ['runs', 'Runs', 'history'],
     ...(hasVariants ? [['variants', `Variants · ${variants.length}`, 'layers']] : []),
   ];
@@ -939,7 +959,7 @@ function TrailDetailView({ trail, configTrail, yaml, editable = true, tools, onS
         {/* Editor stays mounted once opened; toggled via `display` so Monaco + the LSP socket survive switches. */}
         {editEverOpened && (
           <div style={{ flex: 1, minHeight: 0, display: isEdit ? 'flex' : 'none', flexDirection: 'column' }}>
-            <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} resetKey={resetKey} />
+            <TrailYamlEditor content={yaml} editable={editable} tools={tools} onSave={onSave} onSaved={onSaved} dirtyRef={dirtyRef} highlight={highlight} resetKey={resetKey} trailId={resetKey} enableToolRun />
           </div>
         )}
       </div>

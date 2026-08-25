@@ -523,6 +523,24 @@ class AndroidHostAdbUtilsTest {
   }
 
   @Test
+  fun mismatchedPackageParsedFromAlternatePackagePhrasing() {
+    // Some Android builds (observed on API 28/29) use "Package" instead of "Existing package".
+    val message =
+      "Install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: " +
+        "Package com.example.app signatures do not match previously installed version; ignoring!]"
+    assertThat(AndroidHostAdbUtils.mismatchedPackageFromInstallError(message))
+      .isEqualTo("com.example.app")
+  }
+
+  @Test
+  fun mismatchedPackageParsedFromAlternatePhrasingWithoutFailureCode() {
+    // The "Package" variant without the INSTALL_FAILED_UPDATE_INCOMPATIBLE wrapper.
+    val message = "Package com.example.app signatures do not match previously installed version; ignoring!"
+    assertThat(AndroidHostAdbUtils.mismatchedPackageFromInstallError(message))
+      .isEqualTo("com.example.app")
+  }
+
+  @Test
   fun nonSignatureInstallFailureReturnsNull() {
     // A non-recoverable install failure must NOT trigger an uninstall-then-reinstall.
     assertThat(

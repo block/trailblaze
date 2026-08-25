@@ -90,13 +90,82 @@ data class RecordingResolution(
  */
 @Serializable
 data class TrailRecordingResolution(
-  /** The device's compound identity (`android-phone`), or `null` for an empty classifier list. */
+  /**
+   * The device's own compound classifier (`android-phone`), or `null` when the resolution was run
+   * with no classifiers at all.
+   */
   val deviceClassifier: String?,
   /** Most-specific-first chain the resolution walked, e.g. `[android-phone, android]`. */
   val resolutionChain: List<String>,
   /** Trailhead first (when present), then `trail:` steps in order. */
   val steps: List<RecordingResolution>,
+  /**
+   * The multi-device configuration this session bound, or `null` for a single-device run.
+   *
+   * Carried alongside [deviceClassifier] rather than replacing it because a configuration session
+   * has TWO exact identities and needs both (see [exactIdentities]). A trail part-recorded
+   * single-device and later re-recorded as a configuration keys some legs by the configuration name
+   * and others by the device's own classifier; measuring "exact" against either one alone reports
+   * the other's legs as family aliases, which is the opposite of the truth for the device-keyed ones
+   * — `android-phone` is more specific than a configuration name, not a broader ancestor of it.
+   *
+   * Defaulted so an already-serialized resolution still decodes.
+   */
+  val selectedConfiguration: String? = null,
 ) {
+  /**
+   * The pre-[selectedConfiguration] constructor and `copy` descriptors, kept so this module's
+   * published artifact stays binary-compatible.
+   *
+   * A defaulted parameter does NOT preserve the old JVM signature: it REPLACES
+   * `<init>(String,List,List)V` and the three-argument `copy`/`copy$default` with four-argument
+   * forms, so an already-compiled consumer of `trailblaze-models` links against methods that no
+   * longer exist and throws `NoSuchMethodError` on upgrade. The default keeps SERIALIZED resolutions
+   * decodable; these keep COMPILED callers linking.
+   *
+   * [DeprecationLevel.HIDDEN] rather than a plain overload: it emits the bytecode while removing the
+   * members from source resolution, so no new code can reach them. As plain overloads they were a
+   * trap — `copy(steps = updated)` is applicable to both, and Kotlin picks the SHORTER one, so
+   * ordinary source that never mentions the configuration would silently drop it and configuration-
+   * keyed recordings would stop reporting as exact. That is the very defect [selectedConfiguration]
+   * exists to fix.
+   *
+   * Nothing in this repo can call them, so nothing tests them. The guard is the committed API
+   * baseline: deleting either one removes a line from `trailblaze-models.api` and fails `apiCheck`,
+   * which is what surfaced the break in the first place.
+   */
+  @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+  constructor(
+    deviceClassifier: String?,
+    resolutionChain: List<String>,
+    steps: List<RecordingResolution>,
+  ) : this(deviceClassifier, resolutionChain, steps, null)
+
+  /** Carries [selectedConfiguration] through: a caller compiled against the old signature had no
+   *  way to name it, so it cannot have meant to clear it. See the constructor above. */
+  @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+  fun copy(
+    deviceClassifier: String? = this.deviceClassifier,
+    resolutionChain: List<String> = this.resolutionChain,
+    steps: List<RecordingResolution> = this.steps,
+  ): TrailRecordingResolution =
+    TrailRecordingResolution(deviceClassifier, resolutionChain, steps, selectedConfiguration)
+
+  /**
+   * Keys that mean "captured for this session": the device's own identity and, when the session
+   * bound one, the configuration name. Neither is a broader ancestor, so neither is a family alias.
+   */
+  val exactIdentities: Set<String>
+    get() = setOfNotNull(deviceClassifier, selectedConfiguration)
+
+  /**
+   * How this resolution is identified against its siblings — the configuration when one was bound,
+   * else the device. A configuration session's siblings are the other members' resolutions, and they
+   * share [deviceClassifier] values, so [lostGuardsVersus] has to compare on this.
+   */
+  val sessionIdentity: String?
+    get() = selectedConfiguration ?: deviceClassifier
+
   /** Steps whose device chain matched nothing, so they run via the LLM. Excludes never-recorded
    *  steps, which are authored intent rather than a resolution failure. */
   val unresolvedDeclared: List<RecordingResolution>
@@ -107,9 +176,12 @@ data class TrailRecordingResolution(
   val deterministicNoOps: List<RecordingResolution>
     get() = steps.filter { it.toolCount == 0 }
 
-  /** Matched steps whose tools came from a broader ancestor rather than this exact device. */
+  /** Matched steps whose tools came from a broader ancestor rather than one of this session's own
+   *  [exactIdentities]. */
   val familyAliased: List<RecordingResolution>
-    get() = steps.filter { it.resolvedClassifier != null && it.resolvedClassifier != deviceClassifier }
+    get() = steps.filter {
+      it.resolvedClassifier != null && it.resolvedClassifier !in exactIdentities
+    }
 
   /** Matched steps replaying a conditional wrapper, so they re-evaluate rather than fire blind. */
   val conditionallyGuarded: List<RecordingResolution>
@@ -139,7 +211,7 @@ data class TrailRecordingResolution(
    */
   fun lostGuardsVersus(siblings: List<TrailRecordingResolution>): List<RecordingResolution> {
     val guardedElsewhere = siblings
-      .filter { it.deviceClassifier != deviceClassifier }
+      .filter { it.sessionIdentity != sessionIdentity }
       .flatMap { sibling -> sibling.conditionallyGuarded.map { it.stepIndex } }
       .toSet()
     return steps.filter {
@@ -170,10 +242,10 @@ data class TrailRecordingResolution(
     if (steps.any { it.stepIndex == null }) append(" + trailhead")
     val exact =
       steps.count {
-        // The null guard matters for an empty classifier list, where deviceClassifier is also null
-        // and an unmatched step would otherwise read as an exact match.
+        // The null guard matters for an empty classifier list with no configuration selected, where
+        // exactIdentities is empty and an unmatched step would otherwise read as an exact match.
         it.resolvedClassifier != null &&
-          it.resolvedClassifier == deviceClassifier &&
+          it.resolvedClassifier in exactIdentities &&
           it.toolCount != 0
       }
     if (exact > 0) append(", $exact exact")

@@ -52,8 +52,23 @@ object SessionEvents {
   /** Fallback ordering field for rich schemas that predate the envelope (e.g. `NetworkEvent`). */
   const val LEGACY_TIME_FIELD: String = "timestampMs"
 
-  /** The style token every legacy `<name>.<style>.ndjson` producer actually wrote. */
-  private const val LEGACY_STYLE_SUFFIX = ".json"
+  /**
+   * The style token every legacy `<name>.<style>.ndjson` producer actually wrote, and therefore a
+   * RESERVED trailing segment: [parseFileName] strips it, so a stream name that ends in `.json`
+   * round-trips back to the name WITHOUT it. A producer composing a stream name out of parts it
+   * does not control (a device label, a plugin id) must refuse this segment rather than emit a file
+   * that silently reads back as a different stream. See [isReservedTrailingSegment].
+   */
+  const val LEGACY_STYLE_SEGMENT: String = "json"
+
+  private const val LEGACY_STYLE_SUFFIX = ".$LEGACY_STYLE_SEGMENT"
+
+  /**
+   * True if appending `.[segment]` to a stream name would not survive [parseFileName] — i.e. the
+   * segment is the reserved legacy style token. Producers that build a stream name from a
+   * caller-supplied part should reject the part rather than write an ambiguous file.
+   */
+  fun isReservedTrailingSegment(segment: String): Boolean = segment == LEGACY_STYLE_SEGMENT
 
   // Names keep `.` (so a dotted plugin id like `com.x.plugin.network` survives round-trip); only
   // truly path-unsafe characters are replaced.

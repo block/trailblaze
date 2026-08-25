@@ -61,6 +61,24 @@ class SessionEventsTest {
   }
 
   @Test
+  fun `two sinks on one session dir both create the events dir successfully`() {
+    // A multi-device run holds one sink per bound device against the same session dir. The loser of
+    // the mkdirs race gets `false` back because the dir now exists — which must not be reported as
+    // a write failure, or one display's evidence is lost with a "could not create" error.
+    val sessionDir = createTempDir()
+    val first = FileEventSink(sessionDir, logLabel = "seller")
+    val second = FileEventSink(sessionDir, logLabel = "buyer")
+
+    first.appendChecked("network.seller", 1000L, buildJsonObject { put("s", JsonPrimitive(1)) })
+    second.appendChecked("network.buyer", 2000L, buildJsonObject { put("b", JsonPrimitive(1)) })
+    first.closeChecked()
+    second.closeChecked()
+
+    assertTrue(File(sessionDir, "${SessionEvents.DIR_NAME}/network.seller.ndjson").isFile)
+    assertTrue(File(sessionDir, "${SessionEvents.DIR_NAME}/network.buyer.ndjson").isFile)
+  }
+
+  @Test
   fun `appendRaw writes the line verbatim for rich schemas`() {
     val sessionDir = createTempDir()
     val sink = FileEventSink(sessionDir)

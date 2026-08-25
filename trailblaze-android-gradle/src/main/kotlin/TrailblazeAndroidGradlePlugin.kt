@@ -246,7 +246,10 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
  *    keep shipping whatever stale `.bundle.js` files happen to still be sitting in that build
  *    directory from a prior build — an empty `dependsOn` wouldn't stop AGP from picking up
  *    leftover files already on disk.
- *  - The AGP asset-merge / lint task families to `dependsOn` the trailmap staging tasks.
+ *  - The AGP asset-merge / lint task families to `dependsOn` the trailmap staging tasks, AND to
+ *    declare each staged tree as an explicit `inputs.files(...)` — `dependsOn` is ordering only and
+ *    a late `srcDirs()` call gets the dir merged but not watched. See the comment on that
+ *    declaration for the measured diagnosis.
  *
  * [android] is accessed entirely by REFLECTION, not a typed `com.android.build.gradle.
  * BaseExtension` — matches `gradle/merged-trails.gradle.kts`'s pattern for the same problem: many
@@ -266,6 +269,8 @@ private fun wireAgpSourceSets(
     }
   sourceSets.named("androidTest").configure { androidTest ->
     reflectSrcDir(androidTest, "getJava", extension.generatedSourceDir)
+    // These two registrations make AGP MERGE the staging roots. They do NOT make AGP WATCH them —
+    // see the input declarations below, which are gated on the same conditions.
     if (extension.allStagingTasks.isNotEmpty()) {
       reflectSrcDir(androidTest, "getAssets", extension.stagingRoot)
     }
@@ -286,7 +291,54 @@ private fun wireAgpSourceSets(
           (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
           (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
       }
-      .configureEach { it.dependsOn(assetProducingTasks) }
+      .configureEach { task ->
+        task.dependsOn(assetProducingTasks)
+        // `dependsOn` is ordering only, and a `srcDir` added to an already-finalized source set
+        // gets the tree MERGED but not necessarily WATCHED — so declare both trees as explicit
+        // inputs. AGP routes such a call through `LayeredSourceDirectoriesImpl.checkAndAdd`, which
+        // appends to the existing `DirectoryEntries` for the source set and returns, skipping the
+        // `directories` ListProperty behind `assets.all` that `MergeSourceSetFolders` declares as
+        // its `@InputFiles sourceFolderInputs`. The merge's execution path walks `variantSources`,
+        // which did get the entry, so the copied output looks right whenever the task runs — it
+        // just may never re-run on a content-only change.
+        //
+        // In every module measured, only the FIRST assets srcDir added this late reached the input
+        // snapshot. Measured on a module declaring both a `trailmap { }` and an `inProcessIdle { }`
+        // block: with these declarations removed, a content-only edit under
+        // `trailmap-tool-bundle-assets` re-ran `mergeDebugAndroidTestAssets`, while the same edit
+        // under `inprocess-idle-apk-assets` left it UP-TO-DATE and the merged assets kept the
+        // previous bytes. So `inProcessIdleStagingRoot` was live-broken — rebuild an idle detector
+        // APK, rebuild the test APK incrementally, and the APK keeps the OLD one until
+        // `build/intermediates/assets` is deleted. Clean builds (CI) are unaffected, which is why
+        // this only bit local iteration, and bit it silently.
+        //
+        // Treat that ordering as observed behavior, not an AGP contract: it explains what both
+        // roots do here and on every module the in-repo staging scripts cover, but it is not
+        // something to build on. These declarations are what make the result ordering-independent.
+        // `stagingRoot` gets one too even though it is watched today — it is watched only by virtue
+        // of being added first, and any consumer plugin or script that registers an assets srcDir
+        // ahead of this one would silently take the trailmap bundles' change detection away.
+        //
+        // Gated the same way the `srcDir` registrations are, so a module with no `trailmap { }` /
+        // `inProcessIdle { }` block gets no declaration for a dir AGP was never told to merge.
+        //
+        // Do NOT diagnose this class of bug by printing the merge task's `inputs.files.files` — that
+        // listing omits directories that don't exist on disk yet, so a watched-but-not-yet-built
+        // staging tree reads as absent. Two real builds either side of a content-only edit are the
+        // only reliable probe.
+        if (extension.allStagingTasks.isNotEmpty()) {
+          task.inputs
+            .files(extension.stagingRoot)
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName("trailblazeTrailmapToolBundleStaging")
+        }
+        if (extension.inProcessIdleApkTasks.isNotEmpty()) {
+          task.inputs
+            .files(extension.inProcessIdleStagingRoot)
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName("trailblazeInProcessIdleApkStaging")
+        }
+      }
   }
 }
 

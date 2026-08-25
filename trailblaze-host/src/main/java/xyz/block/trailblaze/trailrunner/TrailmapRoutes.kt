@@ -428,7 +428,7 @@ internal suspend fun buildSaveTargetConfigResponse(
   // (tests, a daemon with no target discovery), where a create falls back to the restart flow.
   // Note: invoking it re-runs full app-target discovery, so it's only called on createIfMissing
   // saves (create / retry — user-initiated and rare), never on the ordinary edit path.
-  registerLiveTarget: ((String) -> Boolean)? = null,
+  registerLiveTarget: (suspend (String) -> Boolean)? = null,
 ): SaveTargetConfigResponse =
   withContext(Dispatchers.IO) {
     val trailmapId = request.trailmapId.trim()

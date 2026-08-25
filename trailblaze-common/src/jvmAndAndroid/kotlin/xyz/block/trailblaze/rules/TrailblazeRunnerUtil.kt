@@ -122,7 +122,7 @@ class TrailblazeRunnerUtil(
       // without the reader cross-referencing the trail file.
       val stepLabel = "step ${index + 1} of ${prompts.size}"
       if (useRecordedSteps && prompt.canPromptStepUseRecording()) {
-        runRecordedPrompt(prompt, selfHeal, stepLabel)
+        runRecordedPrompt(prompt, selfHeal, stepLabel, index)
       } else {
         runAiPrompt(prompt, stepLabel)
       }
@@ -130,7 +130,12 @@ class TrailblazeRunnerUtil(
     return TrailblazeToolResult.Success()
   }
 
-  private suspend fun runRecordedPrompt(prompt: PromptStep, selfHeal: Boolean, stepLabel: String) {
+  private suspend fun runRecordedPrompt(
+    prompt: PromptStep,
+    selfHeal: Boolean,
+    stepLabel: String,
+    stepIndex: Int,
+  ) {
     val stepStartTime = Clock.System.now()
     val stepTaskId = TaskId.generate()
     emitObjectiveStart(prompt)
@@ -186,7 +191,7 @@ class TrailblazeRunnerUtil(
             },
           )
         }
-        markSelfHealUsed(prompt, recordingResult)
+        markSelfHealUsed(prompt, recordingResult, stepIndex)
         val status = trailblazeRunner.recover(prompt, recordingResult)
         throwIfTerminalFailure(prompt, status, stepLabel)
       }
@@ -234,10 +239,11 @@ class TrailblazeRunnerUtil(
   private fun markSelfHealUsed(
     prompt: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
+    stepIndex: Int,
   ) {
     val logger = trailblazeLogger ?: return
     val session = try { sessionProvider?.invoke() } catch (_: Exception) { null } ?: return
-    val updated = logger.logSelfHealInvoked(session, prompt, recordingResult)
+    val updated = logger.logSelfHealInvoked(session, prompt, recordingResult, stepIndex)
     sessionUpdater?.invoke(updated)
   }
 

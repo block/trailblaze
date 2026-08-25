@@ -20,9 +20,10 @@ import kotlinx.serialization.Serializable
  *
  * [devices] is an **optional, per-classifier** map: keys are the device
  * classifiers this trail targets (`android`, `android-tablet`, `ios-iphone`, …)
- * and each value is the driver to run that classifier on. It folds together
- * what used to be two overlapping fields — the `devices:` support list and a
- * separate `drivers:` map — since both were keyed by the same classifiers.
+ * and each value is that device's [TrailblazeDeviceDefinition] (today just the
+ * driver to run that classifier on). It folds together what used to be two
+ * overlapping fields — the `devices:` support list and a separate `drivers:`
+ * map — since both were keyed by the same classifiers.
  *
  * The driver for the device under test is resolved closest-wins with the same
  * [xyz.block.trailblaze.devices.TrailblazeClassifierLineage] the recordings use
@@ -55,17 +56,26 @@ data class UnifiedTrailConfig(
    */
   val priority: String? = null,
   /**
-   * Per-classifier device → driver map (e.g. `{android: ANDROID_ONDEVICE_ACCESSIBILITY}`).
-   * See the class kdoc: keys declare the targeted classifiers, values pin each
-   * one's driver, resolved closest-wins for the device under test. Optional —
-   * omit it when no driver needs pinning.
+   * Per-classifier device map (e.g. `{android: {driver: ANDROID_ONDEVICE_ACCESSIBILITY}}`).
+   * See the class kdoc: keys declare the targeted classifiers, values are each
+   * one's [TrailblazeDeviceDefinition] (driver pins resolve closest-wins for
+   * the device under test). Optional — omit it when no device needs declaring.
    *
-   * The value stays a **bare driver string** by design. If a second
-   * per-classifier trail-config field is ever needed, do NOT widen this value
-   * to an object in place (that silently breaks every checked-in trail's YAML);
-   * introduce a new object-valued map instead. See the unified-syntax devlog.
+   * An entry whose value carries an inner `devices:` map is a named **multi-device
+   * configuration** instead — a cast of named devices for one session (its key names the
+   * configuration, not a classifier). Configuration names are invisible to classifier
+   * lineage: their recording legs, pins, and skips apply only by exact configuration
+   * selection (see [UnifiedTrailAdapter.lowerToTrailItems]'s
+   * `selectedDeviceConfiguration`), never through a device's chain.
+   *
+   * The value is the shared device model object from the multi-device trails
+   * design (see [TrailblazeDeviceDefinition]); the pre-object bare-string form
+   * (`android: ANDROID_ONDEVICE_ACCESSIBILITY`) is DEPRECATED decode-only
+   * compatibility handled by [TrailblazeDeviceDefinitionMapSerializer]
+   * — encoding always writes the object form.
    */
-  val devices: Map<String, String>? = null,
+  @Serializable(with = TrailblazeDeviceDefinitionMapSerializer::class)
+  val devices: Map<String, TrailblazeDeviceDefinition>? = null,
   /**
    * Per-classifier skip map (e.g. `{android: "blocked on #123"}`). When the entry that resolves
    * closest-wins for the device under test is non-blank, the trail is parsed and validated but not
@@ -108,6 +118,18 @@ data class UnifiedTrailConfig(
   @kotlinx.serialization.Serializable(with = xyz.block.trailblaze.yaml.TrailArgMapSerializer::class)
   val args: Map<String, xyz.block.trailblaze.yaml.TrailArgConfig>? = null,
 ) {
+  /**
+   * Names of the multi-device CONFIGURATION entries in [devices] (entries carrying an inner
+   * `devices:` map, e.g. `pos-pair`). These names are **invisible to classifier lineage**: a
+   * configuration name is matched only by exact configuration selection (the session that runs
+   * it), never by a device's classifier resolution chain — otherwise a device whose chain
+   * happens to contain the name (e.g. a configuration named `pair` sits on a `pair-a` device's
+   * chain) would resolve a configuration's recordings/pins as if they were its own
+   * single-device entries.
+   */
+  val multiDeviceConfigurationNames: Set<String>
+    get() = devices?.filterValues { it.isConfiguration }?.keys ?: emptySet()
+
   companion object {
     /**
      * Reserved [metadata] key bridging v1 `source.type` (a `TrailSourceType` name; empty string

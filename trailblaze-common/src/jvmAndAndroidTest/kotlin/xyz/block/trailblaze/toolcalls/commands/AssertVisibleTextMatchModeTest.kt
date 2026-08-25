@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -148,18 +149,67 @@ class AssertVisibleTextMatchModeTest {
   // region legacy Maestro textRegex lowering (toMaestroCommands)
 
   @Test
-  fun `EXACT lowers the full expectedText into the Maestro textRegex unchanged`() {
+  fun `EXACT lowers the full expectedText and matches it verbatim`() {
     val regex = lowerMaestroTextRegex(expectedText = "Review sale\n3 items", mode = TextMatchMode.EXACT)
-    assertEquals("Review sale\n3 items", regex)
+    assertTrue(asOrchestraWould(regex).matches("Review sale\n3 items"), "must match the text it was captured from")
+    assertFalse(asOrchestraWould(regex).matches("Review sale\n2 items"), "EXACT must still pin the whole value")
+  }
+
+  @Test
+  fun `EXACT matches UI copy containing regex metacharacters`() {
+    // Real UI copy is full of `?`, `.` and `$`. Lowered unescaped, `receipt?` makes the trailing `t`
+    // optional and `$` anchors mid-string, so the pattern can never match the very string it was
+    // captured from — an assertion that fails forever, which the runtime agent then retries until
+    // the test times out.
+    listOf(
+      "How would you like your receipt?",
+      "Out of \$2.00",
+      "Charge \$2.00",
+      "Delete item (1)",
+    ).forEach { text ->
+      val regex = lowerMaestroTextRegex(expectedText = text, mode = TextMatchMode.EXACT)
+      assertTrue(asOrchestraWould(regex).matches(text), "EXACT must match its own captured text: $text")
+    }
+  }
+
+  @Test
+  fun `EXACT stays case-sensitive despite Orchestra compiling with IGNORE_CASE`() {
+    // EXACT is case-sensitive equality on the modern path (verifyTextEquality), so the lowered
+    // pattern has to opt out of Orchestra's IGNORE_CASE or the two paths disagree on casing.
+    val regex = lowerMaestroTextRegex(expectedText = "Charge \$2.00", mode = TextMatchMode.EXACT)
+    assertTrue(asOrchestraWould(regex).matches("Charge \$2.00"), "same case must match")
+    assertFalse(asOrchestraWould(regex).matches("charge \$2.00"), "different case must not match")
+  }
+
+  @Test
+  fun `EXACT tolerates surrounding whitespace on either side, like the modern path`() {
+    // verifyTextEquality compares expectedText.trim() against the trimmed element text, so a
+    // captured value or a live element with padding must land the same way here.
+    val padded = lowerMaestroTextRegex(expectedText = "  Review sale  ", mode = TextMatchMode.EXACT)
+    assertTrue(asOrchestraWould(padded).matches("Review sale"), "padded capture must match clean text")
+
+    val clean = lowerMaestroTextRegex(expectedText = "Review sale", mode = TextMatchMode.EXACT)
+    assertTrue(asOrchestraWould(clean).matches("  Review sale  "), "clean capture must match padded text")
+    assertFalse(asOrchestraWould(clean).matches("Review sales"), "trimming must not loosen the value itself")
   }
 
   @Test
   fun `PREFIX lowers only the escaped stable head with a tolerant tail`() {
     val regex = lowerMaestroTextRegex(expectedText = "Review sale", mode = TextMatchMode.PREFIX)
-    // The volatile tail must not be pinned; the head is escaped and any tail (incl. newline) is allowed.
-    assertTrue(Regex(regex).containsMatchIn("Review sale\n3 items"), "should match a 3-item tail")
-    assertTrue(Regex(regex).containsMatchIn("Review sale\n2 items"), "should match a 2-item tail")
-    assertTrue(regex.startsWith(Regex.escape("Review sale")), "head should be escaped verbatim")
+    // The volatile tail must not be pinned; the head is escaped and any tail (incl. newline) is
+    // allowed. Compiled the way Orchestra will and full-matched — `containsMatchIn` would pass even
+    // if the head were not anchored at the start, which is not the contract the legacy path uses.
+    assertTrue(asOrchestraWould(regex).matches("Review sale\n3 items"), "should match a 3-item tail")
+    assertTrue(asOrchestraWould(regex).matches("Review sale\n2 items"), "should match a 2-item tail")
+    assertFalse(
+      asOrchestraWould(regex).matches("Completed Review sale\n3 items"),
+      "the head must be anchored at the start, not found anywhere in the value",
+    )
+    // The head itself stays a literal requirement — metacharacters in it are escaped, and a
+    // different head must not match.
+    val metaHead = lowerMaestroTextRegex(expectedText = "Out of \$2.00", mode = TextMatchMode.PREFIX)
+    assertTrue(asOrchestraWould(metaHead).matches("Out of \$2.00 — restock?"), "head must match its own text")
+    assertFalse(asOrchestraWould(metaHead).matches("Out of 12000 — restock?"), "head must not match as a regex")
   }
 
   @Test
@@ -175,6 +225,332 @@ class AssertVisibleTextMatchModeTest {
     val regex = lowerMaestroTextRegex(expectedText = "Review [sale", mode = TextMatchMode.REGEX)
     assertTrue(runCatching { Regex(regex) }.isSuccess, "lowered pattern must compile")
     assertTrue(Regex(regex).containsMatchIn("Review [sale"), "literal must match its own text")
+  }
+
+  // endregion
+
+  // region NO-BREAK SPACE equivalence for literal text modes
+
+  /**
+   * A receipt-prompt assertion that could never pass, driven through both paths.
+   *
+   * The receipt prompt renders with a NO-BREAK SPACE. The agent read the tree and put that
+   * character in the selector verbatim, then normalized it to a plain space in `expectedText` —
+   * the string a human would type. Every comparison then read as "expected X, got X" while
+   * failing, so the agent re-issued the identical call until the test timed out with NO_VERDICT.
+   */
+  private val nbspReceiptOnScreen = "How would you like your\u00A0receipt?"
+  private val plainReceiptAsTyped = "How would you like your receipt?"
+
+  @Test
+  fun `EXACT matches NO-BREAK SPACE screen text from a plain-space assertion`() = runBlocking {
+    val result = runReplay(
+      liveText = nbspReceiptOnScreen,
+      expectedText = plainReceiptAsTyped,
+      mode = TextMatchMode.EXACT,
+    )
+    assertTrue(result is TrailblazeToolResult.Success, "a plain space must match a NO-BREAK SPACE on screen")
+  }
+
+  @Test
+  fun `EXACT lowers a plain-space assertion to a pattern that matches NO-BREAK SPACE text`() {
+    val regex = lowerMaestroTextRegex(expectedText = plainReceiptAsTyped, mode = TextMatchMode.EXACT)
+    assertTrue(
+      asOrchestraWould(regex).matches(nbspReceiptOnScreen),
+      "the legacy Maestro path must match the NO-BREAK SPACE text the assertion was written for",
+    )
+  }
+
+  @Test
+  fun `EXACT matches in the other direction too - NO-BREAK SPACE assertion against plain-space text`() = runBlocking {
+    // Symmetric: an assertion captured off a NO-BREAK SPACE screen must not start failing when the
+    // app ships a build that uses a plain space.
+    val result = runReplay(
+      liveText = plainReceiptAsTyped,
+      expectedText = nbspReceiptOnScreen,
+      mode = TextMatchMode.EXACT,
+    )
+    assertTrue(result is TrailblazeToolResult.Success)
+    val regex = lowerMaestroTextRegex(expectedText = nbspReceiptOnScreen, mode = TextMatchMode.EXACT)
+    assertTrue(asOrchestraWould(regex).matches(plainReceiptAsTyped), "legacy path must be symmetric too")
+  }
+
+  @Test
+  fun `space folding covers every Zs separator, not just the non-breaking ones`() = runBlocking {
+    // Two mechanisms were supposed to absorb these and each misses a different part of Zs, so no
+    // subset is safe to special-case:
+    //   - U+00A0 / U+2007 / U+202F are not `Char.isWhitespace`, so `trim()` leaves them.
+    //   - the other 13 are not matched by Java's ASCII-only `\s`.
+    // EN SPACE and THIN SPACE are in the second group \u2014 as invisible as NBSP and as common in
+    // typeset UI copy \u2014 and were the gap in the first version of this fix.
+    // All 17 Zs members, spelled as code points — these characters are invisible in source.
+    val separators = listOf(
+      0x0020, 0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005,
+      0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000,
+    ).map { it.toChar() }
+    for (sep in separators) {
+      val label = "U+%04X".format(sep.code)
+      val replay = runReplay(
+        liveText = "Total${sep}due",
+        expectedText = "Total due",
+        mode = TextMatchMode.EXACT,
+      )
+      assertTrue(replay is TrailblazeToolResult.Success, "$label should fold on the modern path")
+
+      val regex = lowerMaestroTextRegex(expectedText = "Total due", mode = TextMatchMode.EXACT)
+      assertTrue(
+        asOrchestraWould(regex).matches("Total${sep}due"),
+        "$label should fold on the legacy path",
+      )
+    }
+  }
+
+  @Test
+  fun `edge padding tolerates a Zs separator the modern path trims away`() {
+    // `trim()` strips the 13 Zs separators that ARE `Char.isWhitespace`, so the modern path absorbs
+    // a leading EN SPACE silently. A plain `\s*` on the pattern cannot match one, which would make
+    // the same screen pass on one driver and fail on the other.
+    val exact = lowerMaestroTextRegex(expectedText = "Review sale", mode = TextMatchMode.EXACT)
+    assertTrue(asOrchestraWould(exact).matches("\u2002Review sale\u2002"), "EXACT must tolerate Zs padding")
+    assertTrue(asOrchestraWould(exact).matches("\u00A0Review sale"), "including the non-breaking ones")
+
+    val prefix = lowerMaestroTextRegex(expectedText = "Review sale", mode = TextMatchMode.PREFIX)
+    assertTrue(
+      asOrchestraWould(prefix).matches("\u2002Review sale\n3 items"),
+      "PREFIX must tolerate leading Zs padding the modern path trims",
+    )
+  }
+
+  @Test
+  fun `space folding does not widen to newlines or tabs`() = runBlocking {
+    // Folding is strictly about characters that look like a space. A newline carries real layout
+    // meaning in these assertions (the "Review sale\n3 items" family), so it must stay distinct.
+    val newline = runReplay(
+      liveText = "Review sale\n3 items",
+      expectedText = "Review sale 3 items",
+      mode = TextMatchMode.EXACT,
+    )
+    assertTrue(newline is TrailblazeToolResult.Error, "a newline must not fold into a space")
+
+    val regex = lowerMaestroTextRegex(expectedText = "Review sale 3 items", mode = TextMatchMode.EXACT)
+    assertFalse(asOrchestraWould(regex).matches("Review sale\n3 items"), "legacy path must not fold newlines")
+    assertFalse(asOrchestraWould(regex).matches("Review sale\t3 items"), "legacy path must not fold tabs")
+  }
+
+  @Test
+  fun `space folding keeps distinct text distinct`() = runBlocking {
+    // Guard the widening: folding must not make unrelated strings equal.
+    val result = runReplay(
+      liveText = "How would you like your\u00A0receipt?",
+      expectedText = "How would you like your refund?",
+      mode = TextMatchMode.EXACT,
+    )
+    assertTrue(result is TrailblazeToolResult.Error, "folding spaces must not loosen the rest of the value")
+  }
+
+  @Test
+  fun `PREFIX folds space variants in the stable head`() = runBlocking {
+    val result = runReplay(
+      liveText = "How would you like your\u00A0receipt?\nEmail or text",
+      expectedText = plainReceiptAsTyped,
+      mode = TextMatchMode.PREFIX,
+    )
+    assertTrue(result is TrailblazeToolResult.Success)
+  }
+
+  @Test
+  fun `REGEX does not fold - the author's pattern means exactly what it spells`() = runBlocking {
+    // A hand-written pattern is not a literal, so a space in it stays a space. Authors who want
+    // tolerance spell the class themselves; silently rewriting their pattern would be worse.
+    val plainPattern = runReplay(
+      liveText = nbspReceiptOnScreen,
+      expectedText = "How would you like your receipt\\?",
+      mode = TextMatchMode.REGEX,
+    )
+    assertTrue(plainPattern is TrailblazeToolResult.Error, "a plain space in a REGEX pattern stays literal")
+
+    val explicitClass = runReplay(
+      liveText = nbspReceiptOnScreen,
+      expectedText = "How would you like your[ \\u00A0]receipt\\?",
+      mode = TextMatchMode.REGEX,
+    )
+    assertTrue(explicitClass is TrailblazeToolResult.Success, "the author-spelled class is the REGEX escape hatch")
+  }
+
+  // endregion
+
+  // region selector textRegex + expectedText precedence (both must hold)
+
+  @Test
+  fun `a selector textRegex is not discarded when expectedText is also set`() {
+    // Pre-fix, expectedText overwrote the selector's own textRegex outright — so the selector's
+    // constraint silently stopped being enforced on the legacy path. Both must survive into the
+    // single Maestro text slot.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Charge \$2.00",
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = "Charge .*",
+    )
+    assertTrue(asOrchestraWould(regex).matches("Charge \$2.00"), "text satisfying both must match")
+    assertFalse(
+      asOrchestraWould(regex).matches("Refund \$2.00"),
+      "text failing the selector's textRegex must not match, even though it isn't what expectedText pins",
+    )
+  }
+
+  @Test
+  fun `expectedText still narrows a permissive selector textRegex`() {
+    // The other direction: the selector is broad, expectedText is the precise pin. This is why the
+    // fold exists at all — on a driver with no node tree, this pattern is the only thing enforcing
+    // expectedText.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Charge \$2.00",
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = "Charge .*",
+    )
+    assertFalse(asOrchestraWould(regex).matches("Charge \$5.00"), "expectedText must still pin the value")
+  }
+
+  @Test
+  fun `a selector textRegex narrower than expectedText is still enforced`() {
+    // The isolating case for the clobber: PREFIX admits any tail, so "Charge $5.00" satisfies
+    // expectedText outright. Only the selector's own textRegex rules it out — if that gets
+    // overwritten, this passes when it should not. An EXACT expectedText cannot show this, because
+    // pinning the value exactly leaves nothing that satisfies it while violating the selector.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Charge",
+      mode = TextMatchMode.PREFIX,
+      selectorTextRegex = "Charge \\\$2\\.00",
+    )
+    assertTrue(asOrchestraWould(regex).matches("Charge \$2.00"), "text satisfying both must match")
+    assertFalse(
+      asOrchestraWould(regex).matches("Charge \$5.00"),
+      "expectedText's tail tolerance must not override the selector's narrower text constraint",
+    )
+  }
+
+  @Test
+  fun `conjunction preserves EXACT case-sensitivity on the expectedText side only`() {
+    // EXACT's `(?-i)` has to stay scoped to its own side of the join: the selector was authored
+    // under Maestro, where IGNORE_CASE applies, and must keep that meaning.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Charge \$2.00",
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = "charge .*",
+    )
+    assertTrue(asOrchestraWould(regex).matches("Charge \$2.00"), "selector keeps Maestro's IGNORE_CASE")
+    assertFalse(asOrchestraWould(regex).matches("charge \$2.00"), "expectedText stays case-sensitive")
+  }
+
+  @Test
+  fun `conjunction does not let the selector match only up to a line break`() {
+    // Orchestra compiles with MULTILINE, so anchoring the selector side with `$` would let it stop
+    // at a newline and pass on text it does not actually cover.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Review sale\n3 items",
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = "Review sale",
+    )
+    assertFalse(
+      asOrchestraWould(regex).matches("Review sale\n3 items"),
+      "the selector's textRegex must have to cover the whole value, not just its first line",
+    )
+  }
+
+  @Test
+  fun `conjunction leaves a top-level alternation in either side intact`() {
+    // Overlapping-but-different alternations on each side: only their intersection may match, and a
+    // top-level `|` must not span the join. "Offline" satisfies expectedText alone, so it also
+    // catches the selector's constraint being dropped.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Ready|Offline",
+      mode = TextMatchMode.REGEX,
+      selectorTextRegex = "Ready|Busy",
+    )
+    assertTrue(asOrchestraWould(regex).matches("Ready"), "the value both sides admit must match")
+    assertFalse(asOrchestraWould(regex).matches("Busy"), "expectedText must still apply")
+    assertFalse(asOrchestraWould(regex).matches("Offline"), "the selector's textRegex must still apply")
+  }
+
+  @Test
+  fun `an uncompilable selector textRegex degrades to a literal without swallowing expectedText`() {
+    // Maestro's own `toRegexSafe` treats an invalid pattern as a literal. Inlining it raw would
+    // make the *combined* pattern invalid, so Orchestra would degrade the whole thing — dropping
+    // the expectedText constraint along with it. PREFIX here so "Review sale" satisfies
+    // expectedText and only the degraded selector literal excludes it.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "Review",
+      mode = TextMatchMode.PREFIX,
+      selectorTextRegex = "Review [sale",
+    )
+    assertTrue(runCatching { asOrchestraWould(regex) }.isSuccess, "combined pattern must compile")
+    assertTrue(asOrchestraWould(regex).matches("Review [sale"), "literal must match its own text")
+    assertFalse(
+      asOrchestraWould(regex).matches("Review sale"),
+      "the invalid selector pattern must still constrain, as Maestro's own toRegexSafe literal would",
+    )
+  }
+
+  @Test
+  fun `a selector textRegex that cannot match as a regex still matches as an exact literal`() {
+    // Selectors are regex-OR-exact-literal everywhere else: the resolver's `matchesPattern` falls
+    // back to `text == pattern`, mirroring Maestro's own `Filters.textMatches`. A recorded
+    // `textRegex` of "$5.00" compiles fine but can never match — a bare `$` anchors the end, so
+    // nothing can follow it — and is accepted only by that literal leg. Conjoining the regex alone
+    // would fail every recorded price assertion on the fallback drivers.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "\$5.00",
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = "\$5.00",
+    )
+    assertFalse(
+      asOrchestraWould("\$5.00").matches("\$5.00"),
+      "premise: the selector pattern genuinely cannot match its own text as a regex",
+    )
+    assertTrue(asOrchestraWould(regex).matches("\$5.00"), "the exact-literal leg must accept it")
+    assertFalse(asOrchestraWould(regex).matches("\$9.00"), "and must not accept a different price")
+  }
+
+  @Test
+  fun `a numbered backreference in expectedText survives the join`() {
+    // Group numbers run left to right across the whole pattern, lookaheads included, so whichever
+    // side is second gets its groups renumbered and its `\1` silently retargeted. expectedText is
+    // the hand-authored side, so it goes first and keeps its numbering.
+    val regex = lowerMaestroTextRegex(
+      expectedText = "(foo)\\1",
+      mode = TextMatchMode.REGEX,
+      selectorTextRegex = "(f).*",
+    )
+    assertTrue(
+      asOrchestraWould("(foo)\\1").matches("foofoo"),
+      "premise: the expected pattern matches this on its own",
+    )
+    assertTrue(asOrchestraWould(regex).matches("foofoo"), "and must still match after the join")
+    assertFalse(asOrchestraWould(regex).matches("foobar"), "the backreference must still bind")
+  }
+
+  @Test
+  fun `a selector without a textRegex lowers to the expectedText pattern alone`() {
+    // The overwhelmingly common shape (no selector text constraint) gets no conjunction wrapper —
+    // just the escaped literal, with each space widened to the space-separator class. Pinned
+    // exactly because this string is the contract with a third-party regex engine.
+    val regex = lowerMaestroTextRegex(expectedText = "Charge \$2.00", mode = TextMatchMode.EXACT)
+    assertEquals("""(?-i)[\s\p{Zs}]*\QCharge\E\p{Zs}\Q${'$'}2.00\E[\s\p{Zs}]*""", regex)
+  }
+
+  @Test
+  fun `a NO-BREAK SPACE selector and a plain-space expectedText both match the screen`() {
+    // The full original shape: selector carries the NO-BREAK SPACE it read out of the tree,
+    // expectedText carries the normalized plain space, and both must hold against the real text.
+    val regex = lowerMaestroTextRegex(
+      expectedText = plainReceiptAsTyped,
+      mode = TextMatchMode.EXACT,
+      selectorTextRegex = Regex.escape(nbspReceiptOnScreen),
+    )
+    assertTrue(
+      asOrchestraWould(regex).matches(nbspReceiptOnScreen),
+      "selector + expectedText must both hold against the text they were captured from",
+    )
   }
 
   // endregion
@@ -376,10 +752,24 @@ class AssertVisibleTextMatchModeTest {
     return tool.execute(replayContext(tree))
   }
 
-  private fun lowerMaestroTextRegex(expectedText: String, mode: TextMatchMode): String {
+  /**
+   * Lowers to the Maestro `textRegex` the legacy fallback path would send to Orchestra.
+   *
+   * The selector anchors on a resourceId by default so the lowered pattern under test comes purely
+   * from [expectedText]. Pass [selectorTextRegex] to exercise the case where the selector carries
+   * its own text constraint too — those must both survive into the single Maestro text slot.
+   */
+  private fun lowerMaestroTextRegex(
+    expectedText: String,
+    mode: TextMatchMode,
+    selectorTextRegex: String? = null,
+  ): String {
     val tool = AssertVisibleBySelectorTrailblazeTool(
       nodeSelector = TrailblazeNodeSelector.withMatch(
-        DriverNodeMatch.AndroidAccessibility(textRegex = "Review sale"),
+        DriverNodeMatch.AndroidAccessibility(
+          textRegex = selectorTextRegex,
+          resourceIdRegex = "review_sale_row",
+        ),
       ),
       expectedText = expectedText,
       textMatchMode = mode,
@@ -389,6 +779,16 @@ class AssertVisibleTextMatchModeTest {
     return assertCommand.condition.visible?.textRegex
       ?: error("expected a visible textRegex on the lowered Maestro selector")
   }
+
+  /**
+   * Compiles a lowered `textRegex` the way Maestro will at replay: Orchestra's `REGEX_OPTIONS`.
+   * Compiling with Kotlin's defaults instead would hide whether the pattern survives IGNORE_CASE,
+   * which is the whole question for [TextMatchMode.EXACT].
+   */
+  private fun asOrchestraWould(textRegex: String): Regex = Regex(
+    textRegex,
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE),
+  )
 
   private fun captureDelegate(expectedText: String): AssertVisibleBySelectorTrailblazeTool {
     val tree = TrailblazeNode(

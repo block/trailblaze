@@ -698,6 +698,37 @@ data class CreateTrailDirRequest(val path: String) : RpcRequest<SaveTrailRespons
 @Serializable
 data class EditedTrailsResponse(val paths: List<String>)
 
+/**
+ * How one trail file stands against the version committed in git, plus that committed text — the
+ * baseline an editor diffs the working file against.
+ */
+@Serializable
+data class TrailGitBaselineResponse(
+  val state: TrailGitState,
+  /** The committed text, present for [TrailGitState.CLEAN] and [TrailGitState.MODIFIED]. */
+  val committed: String? = null,
+)
+
+/**
+ * The four answers git can give about a trail file. `UNTRACKED` means nothing is committed under
+ * this name yet (so there is no baseline to diff against, only additions), and `UNAVAILABLE` means
+ * git couldn't answer — no git, no checkout, or a call that timed out.
+ */
+@Serializable
+enum class TrailGitState {
+  @SerialName("clean")
+  CLEAN,
+
+  @SerialName("modified")
+  MODIFIED,
+
+  @SerialName("untracked")
+  UNTRACKED,
+
+  @SerialName("unavailable")
+  UNAVAILABLE,
+}
+
 // The RPC request carries both the session id (RPC has no path segment) and the file name, both
 // required — so the generated TypeScript client can't compile a request missing the id the handler
 // resolves files with.

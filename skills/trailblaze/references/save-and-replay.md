@@ -208,24 +208,24 @@ scrubbing, view-hierarchy editing), launch the Trailblaze desktop
 application:
 
 ```bash
-trailblaze app                  # launch the desktop app (boots the daemon if needed)
+trailblaze app                  # launch the legacy desktop app
+trailblaze app --v2             # launch Trail Runner (boots the daemon if needed)
 trailblaze app --headless       # daemon-only, no GUI
 trailblaze app --status         # is the daemon running?
 trailblaze app --stop           # stop the running daemon
 ```
 
-The default invocation (`trailblaze app`, no flags) opens the desktop
-GUI. The daemon comes along for the ride — it's the background
-service that drives devices and serves the GUI's session data, and
-every CLI call boots it on demand anyway. Use `--headless` only when
-running on a machine with no display (CI agent, remote shell) and you
-want the daemon up so subsequent CLI calls reuse it.
+The default invocation (`trailblaze app`, no flags) opens the legacy desktop
+GUI. Use `--v2` to open Trail Runner. Both headed apps start the daemon, which
+drives devices and serves session data; every CLI call can boot it on demand too.
+Use `--headless` only on a machine with no display (CI agent, remote shell) when
+you want subsequent CLI calls to reuse the daemon.
 
 The HTML report is still the right artifact for sharing or for
 attaching to a bug report — it's self-contained and portable. The
 desktop app is the right surface for live local inspection.
 
-If a daemon is already running on the bound port, `trailblaze app`
+If a daemon is already running on the bound port, `trailblaze app --v2`
 reuses it (no second daemon spawns). If startup fails — port already
 held by an unrelated process, no display available on the host, missing
 JVM dependency — the error surfaces via the standard structured envelope

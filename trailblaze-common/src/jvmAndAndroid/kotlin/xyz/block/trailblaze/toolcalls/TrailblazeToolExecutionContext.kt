@@ -149,6 +149,19 @@ class TrailblazeToolExecutionContext(
    * that runs, not a silent miss.
    */
   val toolRepo: TrailblazeToolRepo? = null,
+  /**
+   * Multi-device session bindings — the devices this session holds and which one is
+   * active. Wired by host runners only when the session binds a multi-device
+   * configuration; null for single-device sessions (the overwhelming
+   * default). Read by `SwitchDeviceTrailblazeTool` to hand the session over to another
+   * bound device.
+   *
+   * Note the asymmetry with [trailblazeDeviceInfo]/[screenStateProvider]: those describe
+   * the device this context was BUILT for and do not follow a mid-batch switch — after a
+   * switch, the dispatcher rebuilds the context (see `ToolBatchScope.invalidateContext`)
+   * so subsequent tools bind the newly-active device.
+   */
+  val deviceBindings: SessionDeviceBindings? = null,
 ) {
   /**
    * The screen state tools act against. Reading this always yields a *current* state:

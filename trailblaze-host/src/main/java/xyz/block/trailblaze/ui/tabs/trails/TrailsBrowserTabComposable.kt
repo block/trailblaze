@@ -72,6 +72,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.ui.model.LocalRunYamlRequestFactory
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
@@ -1023,6 +1024,9 @@ fun TrailsBrowserTabComposable(
                   },
                   targetTestApp = targetTestApp,
                   additionalInstrumentationArgs = additionalInstrumentationArgs(),
+                  // Without this, a multi-device trail whose devices declare their own `target:`
+                  // is rejected here even though the device manager has the loaded targets.
+                  findTargetById = { deviceManager.availableAppTargets.findById(it) },
                   onComplete = { result ->
                     // Stay in the current session view - don't navigate away
                     // The session detail view will show the completed state

@@ -34,6 +34,8 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.recording.RecordedInteraction
 import xyz.block.trailblaze.recording.RecordingYamlCodec
+import xyz.block.trailblaze.host.recording.DeviceConnectionService
+import xyz.block.trailblaze.host.recording.rpc.HostDeviceSessionManager
 import xyz.block.trailblaze.host.recording.streamAndroidLiveJpegFrames
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
@@ -722,6 +724,13 @@ internal class TrailRunnerRecordingService(
   private val connections = ConcurrentHashMap<TrailblazeDeviceId, RecordingDeviceConnection>()
   private val connectMutexes = ConcurrentHashMap<TrailblazeDeviceId, Mutex>()
 
+  /**
+   * What each live recorder connection was opened for, so a re-publish records the same binding the
+   * original connect did. Re-reading the daemon's current selection instead would label the
+   * connection with whatever is selected now, which is a different app as often as not.
+   */
+  private val connectionBindings = ConcurrentHashMap<TrailblazeDeviceId, HostDeviceSessionManager.Binding>()
+
   fun connection(deviceId: TrailblazeDeviceId): RecordingDeviceConnection? = connections[deviceId]
 
   suspend fun connect(deviceId: TrailblazeDeviceId): RecordConnectResponse {
@@ -729,7 +738,11 @@ internal class TrailRunnerRecordingService(
       // Re-publish into the shared registry (no-op while an entry exists) — a `/devices` viewer
       // disconnect may have dropped the entry while this recorder connection stayed live, and the
       // mirror's "not connected" self-heal lands back here to restore it.
-      deviceManager.hostDeviceSessionManager.attach(deviceId, it.stream)
+      deviceManager.hostDeviceSessionManager.attach(
+        deviceId,
+        it.stream,
+        connectionBindings[deviceId] ?: HostDeviceSessionManager.Binding(),
+      )
       return RecordConnectResponse(ok = true, deviceWidth = it.stream.deviceWidth, deviceHeight = it.stream.deviceHeight)
     }
     val device = resolveDevice(deviceId)
@@ -740,14 +753,40 @@ internal class TrailRunnerRecordingService(
       connections[deviceId]?.let {
         return@withLock RecordConnectResponse(ok = true, deviceWidth = it.stream.deviceWidth, deviceHeight = it.stream.deviceHeight)
       }
-      when (val state = deviceManager.connectionService.connectToDevice(device)) {
+      // Resolved once up front and handed to the connect, so the binding recorded on the attach is
+      // the target this connection actually opened against - not whatever gets selected later, and
+      // not a second resolution that could land on a different app. Recorded only for a device whose
+      // connect really binds the target; see `bindsTargetApp`.
+      val bound = DeviceConnectionService.BoundTarget.Resolved(deviceManager.getCurrentSelectedTargetApp())
+      val binding = DeviceConnectionService.connectionBinding(
+        platform = device.platform,
+        driverType = device.trailblazeDriverType,
+        target = bound.target,
+      )
+      // This service opens the device itself rather than through `connectIfAbsent`, so the
+      // registry's refusal never runs for it - it has to ask. A `/devices` viewer already streaming
+      // this device for another target is the case that bites: connecting anyway can rebuild the
+      // driver its stream is running on, and the `attach` below is a no-op while its entry exists,
+      // so the registry would keep serving that now-dead stream while Record reported success.
+      deviceManager.hostDeviceSessionManager.refusalFor(deviceId, binding)?.let { refusal ->
+        return@withLock RecordConnectResponse(
+          ok = false,
+          error = refusal.explain(deviceId, binding, action = "recording"),
+        )
+      }
+      when (val state = deviceManager.connectionService.connectToDevice(device, bound)) {
         is ConnectionState.Connected -> {
+          // Binding first, connection second. The fast path at the top of this method reads both
+          // maps outside the mutex, so a concurrent recorder connect landing between the two writes
+          // would re-attach with an empty binding, and the session would silently lose the target
+          // protection this connect earned.
+          connectionBindings[deviceId] = binding
           connections[deviceId] = state.connection
           // Publish the SAME live stream into the shared session registry so the `/devices/api/stream`
           // H.264/CDP live-video socket (and its `/rpc` SubscribeFrames + screen-poll fallbacks) can
           // serve this recorder-owned connection — no second physical connection. This service stays
           // the lifecycle owner and detaches (without closing) on disconnect.
-          deviceManager.hostDeviceSessionManager.attach(deviceId, state.connection.stream)
+          deviceManager.hostDeviceSessionManager.attach(deviceId, state.connection.stream, binding)
           RecordConnectResponse(ok = true, deviceWidth = state.connection.stream.deviceWidth, deviceHeight = state.connection.stream.deviceHeight)
         }
         is ConnectionState.Error -> RecordConnectResponse(ok = false, error = state.message)
@@ -1092,6 +1131,7 @@ internal class TrailRunnerRecordingService(
 
   fun disconnect(deviceId: TrailblazeDeviceId) {
     val conn = connections.remove(deviceId) ?: return
+    connectionBindings.remove(deviceId)
     // Detach (without closing) before we close it ourselves — this service owns the stream's
     // lifecycle; the shared registry only held a published view of it (see [connect]).
     deviceManager.hostDeviceSessionManager.detach(deviceId)

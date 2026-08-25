@@ -180,6 +180,13 @@ data class SessionResult(
   /** Reason recording wasn't used (if applicable) */
   val recording_skip_reason: RecordingSkipReason? = null,
 
+  /** Whether the self-heal path actually ran for this session. */
+  val self_heal_ran: Boolean = false,
+
+  /** Present only when this successful baseline produced a persisted non-empty heal diff. */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val category2_evidence: Category2EvidenceRecord? = null,
+
   /** ISO 8601 timestamp when test started */
   val started_at: String? = null,
 
@@ -198,6 +205,14 @@ data class SessionResult(
 
   /** Total number of attempts for this test (including retries) */
   val total_attempts: Int = 1,
+
+  /**
+   * Session ID of the attempt that this one lost to, when retries are emitted as individual
+   * records. Null means this attempt was not superseded, including for reports from before
+   * per-attempt emission.
+   */
+  @EncodeDefault(EncodeDefault.Mode.NEVER)
+  val superseded_by: SessionId? = null,
 
   /** Session IDs of previous attempts that were replaced by this result */
   val replaced_session_ids: List<SessionId> = emptyList(),

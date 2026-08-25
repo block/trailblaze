@@ -75,7 +75,10 @@ class FileEventSink(
       }
 
   private fun openWriterOrThrow(fileName: String): BufferedWriter {
-    if (!eventsDir.exists() && !eventsDir.mkdirs()) {
+    // Re-check after a failed mkdirs: two sinks writing one session's events (a multi-device run
+    // has one per bound device, each on its own writer thread) both see a missing dir, and the
+    // loser's mkdirs returns false because the winner already made it — not a real failure.
+    if (!eventsDir.isDirectory && !eventsDir.mkdirs() && !eventsDir.isDirectory) {
       error("Could not create events directory: ${eventsDir.absolutePath}")
     }
     return BufferedWriter(

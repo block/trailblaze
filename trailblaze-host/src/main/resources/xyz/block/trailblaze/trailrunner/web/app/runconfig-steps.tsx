@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 function RcInput({ value, onChange, placeholder, type, mono, style, onKeyDown }) {
@@ -91,17 +91,42 @@ function Section({ id, title, ico, children, registerRef }) {
   );
 }
 
-function TargetSection({ devices, deviceId, setDeviceId, connectedId, installedTargets = [], targetApp, setTargetApp, appsLoading, declaredTarget }) {
-  const sel = devices.find((d) => d.id === deviceId) || null;
+// The device picker is a multi-select: a trail runs once on each checked device (one run, one
+// session per device), and the FIRST checked device is the primary one whose installed apps drive
+// the target-app picker below.
+// `launching` locks the checkboxes: the launch has already captured which devices it went out to, so
+// a check landing mid-flight would neither join the run nor survive the outcome (a partial launch
+// narrows the selection to what didn't start).
+function TargetSection({ devices, deviceIds = [], toggleDevice, connectedIds = [], appsDevice = null, installedTargets = [], targetApp, setTargetApp, appsLoading, declaredTarget, launching }) {
+  const sel = devices.find((d) => d.id === deviceIds[0]) || null;
   return (
     <div>
-      <Field flag="Device" ico={sel ? <PlatformGlyph platform={sel.platform} s={15} c="var(--text-subtle)" /> : 'smartphone'} full>
+      <Field flag="Devices" ico={sel ? <PlatformGlyph platform={sel.platform} s={15} c="var(--text-subtle)" /> : 'smartphone'} full>
         {devices.length === 0
           ? <span className="tb-sub" style={{ fontSize: 12.5 }}>No connected devices.</span>
-          : <RcSelect value={deviceId || ''} onChange={setDeviceId}
-              options={devices.map((d) => [d.id, d.name + (connectedId === d.id ? '  ✓ connected' : '')])} />}
+          : <div data-testid="run-device-picker" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {devices.map((d) => (
+                <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '3px 0', cursor: launching ? 'default' : 'pointer', opacity: launching ? 0.6 : 1 }}>
+                  <input type="checkbox" checked={deviceIds.includes(d.id)} onChange={() => toggleDevice(d.id)} disabled={!!launching} aria-label={`Run on ${d.name}`} />
+                  <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
+                  {connectedIds.includes(d.id) && <span className="tb-sub" style={{ fontSize: 11, flex: '0 0 auto' }}>✓ connected</span>}
+                </label>
+              ))}
+              <span className="tb-sub" style={{ fontSize: 11.5, marginTop: 4 }}>
+                {deviceIds.length > 1
+                  ? `Runs this trail on all ${deviceIds.length} checked devices - one run each.`
+                  : 'Check more devices to run this trail on each of them.'}
+              </span>
+            </div>}
       </Field>
-      {sel && sel.platform !== 'web' && <Field flag="Target app" ico="package" full>
+      {/* Shown for the checked device the apps were listed FROM, which is not always the primary
+          one: a mixed-platform run can start with a web device, which hosts no app to pick. */}
+      {appsDevice && <Field flag="Target app" ico="package" full>
+        {deviceIds.length > 1 && (
+          <div className="tb-sub" style={{ fontSize: 11.5, marginBottom: 6 }}>
+            Listed from {appsDevice.name}; every run uses the app picked here.
+          </div>
+        )}
         {declaredTarget && !appsLoading && !targetApp && !installedTargets.some((a) => a.id === declaredTarget) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, color: 'var(--tb-warn, #e0a800)', fontSize: 12.5 }}>
             <Ico n="triangle-alert" s={13} c="var(--tb-warn, #e0a800)" />

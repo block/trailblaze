@@ -132,6 +132,13 @@ data class CliRunResponse(
   /** Device classifiers from the session (e.g., ["android"], ["ios", "iphone"]) for recording filename. */
   val deviceClassifiers: List<String> = emptyList(),
   /**
+   * The multi-device configuration the session selected (a `config.devices:` configuration
+   * entry's name, e.g. `x2`), or null for a single-device run. When set, the CLI keys the
+   * recording save-back by this name instead of [deviceClassifiers]. Null from older daemons —
+   * absent degrades to classifier keying.
+   */
+  val selectedDeviceConfiguration: String? = null,
+  /**
    * Machine-readable failure class, so callers that surface exit codes can distinguish a
    * request the daemon REJECTED as invalid ([ERROR_KIND_MISUSE], e.g. an unrecognized driver
    * name) from a run that was attempted and failed. Null for ordinary run failures — and for

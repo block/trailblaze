@@ -87,6 +87,7 @@ class TrailblazeRecordingGeneratorTest {
   private fun startedLog(
     rawYaml: String? = null,
     classifiers: List<String> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
   ) = TrailblazeLog.TrailblazeSessionStatusChangeLog(
     sessionStatus = SessionStatus.Started(
       trailConfig = null,
@@ -105,6 +106,7 @@ class TrailblazeRecordingGeneratorTest {
         classifiers = classifiers.map { xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(it) },
       ),
       rawYaml = rawYaml,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
     ),
     session = testSession,
     timestamp = now,
@@ -2037,6 +2039,116 @@ class TrailblazeRecordingGeneratorTest {
 
     assertThat(unified.trail.single().recordings.getValue("android-phone").map { it.name })
       .isEqualTo(listOf("inputText"))
+  }
+
+  /** A unified trail whose only `config.devices` entry is a multi-device configuration. */
+  private val configurationTrailYaml = """
+    config:
+      devices:
+        pos-pair:
+          description: Two paired displays
+          devices:
+            primary:
+              classifier: lab-a
+            secondary:
+              classifier: lab-b
+    trail:
+      - step: Enter search text
+        recording:
+          pos-pair:
+            - waitForIdleSync: {}
+  """.trimIndent()
+
+  @Test
+  fun multiDeviceSessionPreviewKeysItsLegByTheConfigurationFromTheStartedLog() {
+    // Logs-only preview callers (reports, review routes, the sessions tab) pass no configuration
+    // parameter — the session's Started log carries it, and the preview must key this run's leg by
+    // it. A classifier-keyed fallback merges a duplicate leg into a document whose authored legs
+    // are configuration-keyed, and pins the launch device's driver into the authored cast.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(
+        rawYaml = configurationTrailYaml,
+        classifiers = listOf("lab-a"),
+        selectedDeviceConfiguration = "pos-pair",
+      ),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(logs.generateUnifiedRecordedYaml(trailblazeYaml))
+
+    // One leg, keyed by the configuration — the run's tools replaced the authored leg in place.
+    val recordings = unified.trail.single().recordings
+    assertThat(recordings.keys).isEqualTo(setOf("pos-pair"))
+    assertThat(recordings.getValue("pos-pair").map { it.name }).isEqualTo(listOf("inputText"))
+    // The authored cast is untouched — no driver pin under the launch device's classifier.
+    assertThat(unified.config.devices!!.keys).isEqualTo(setOf("pos-pair"))
+  }
+
+  @Test
+  fun sessionConfigurationOutranksAClassifierOverrideInThePreview() {
+    // Callers that key single-device previews by a variant pass it as classifierOverride; for a
+    // configuration session that override addresses a device and must lose to the configuration.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(
+        rawYaml = configurationTrailYaml,
+        classifiers = listOf("lab-a"),
+        selectedDeviceConfiguration = "pos-pair",
+      ),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(
+      logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "some-variant"),
+    )
+
+    assertThat(unified.trail.single().recordings.keys).isEqualTo(setOf("pos-pair"))
+  }
+
+  @Test
+  fun aBlankSelectedConfigurationFallsBackToTheDeviceClassifierRatherThanKeyingOnNothing() {
+    // A blank slot — user-authored YAML, a truncated log — must count as absent. Taken as present
+    // it wins the precedence chain and keys the whole document under "", so the preview renders
+    // nothing at all instead of degrading to the device it actually ran on.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(classifiers = listOf("android"), selectedDeviceConfiguration = "   "),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(logs.generateUnifiedRecordedYaml(trailblazeYaml))
+
+    assertThat(unified.trail.single().recordings.keys).isEqualTo(setOf("android"))
+  }
+
+  @Test
+  fun aBlankConfigurationArgumentLosesToTheOneOnTheStartedLog() {
+    // Same rule one level up: a caller passing a blank string must not shadow the configuration
+    // the session actually recorded.
+    val step = DirectionStep(step = "Enter search text")
+    val logs = listOf(
+      startedLog(
+        rawYaml = configurationTrailYaml,
+        classifiers = listOf("lab-a"),
+        selectedDeviceConfiguration = "pos-pair",
+      ),
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val unified = trailblazeYaml.decodeUnifiedTrail(
+      logs.generateUnifiedRecordedYaml(trailblazeYaml, selectedDeviceConfiguration = ""),
+    )
+
+    assertThat(unified.trail.single().recordings.keys).isEqualTo(setOf("pos-pair"))
   }
 
   @Test

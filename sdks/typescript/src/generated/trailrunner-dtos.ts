@@ -565,6 +565,10 @@ export interface GetTrailDetailRequest {
   id: string;
 }
 
+export interface GetTrailGitBaselineRequest {
+  id: string;
+}
+
 export interface GetTrailRootsRequest {
 }
 
@@ -727,6 +731,7 @@ export interface LongPressPoint {
   class: "xyz.block.trailblaze.api.AgentDriverAction.LongPressPoint";
   x: number;
   y: number;
+  dispatchRoute?: TapDispatchRoute | null;
   type?: AgentActionType;
 }
 
@@ -1116,6 +1121,7 @@ export interface SelfHealInvokedLog {
   session: string;
   timestamp: string;
   recordingResult: Failure;
+  stepIndex?: number | null;
 }
 
 export interface SessionFileDto {
@@ -1141,6 +1147,7 @@ export interface SessionInfo {
   testClass?: string | null;
   trailConfig?: TrailConfig | null;
   llmUsageSummary?: LlmSessionUsageAndCost | null;
+  selectedDeviceConfiguration?: string | null;
 }
 
 export type SessionStatus = Cancelled | Failed | FailedWithSelfHeal | SessionStatusEndedMaxCallsLimitReached | Started | Succeeded | SucceededWithSelfHeal | TimeoutReached | Unknown;
@@ -1260,6 +1267,7 @@ export interface Started {
   resolvedInitialMemory?: Record<string, string>;
   sensitiveMemoryKeys?: string[];
   targetAppInfo?: TrailblazeTargetAppInfo | null;
+  selectedDeviceConfiguration?: string | null;
 }
 
 export interface StopApp {
@@ -1296,7 +1304,7 @@ export interface Swipe {
   type?: AgentActionType;
 }
 
-export type TapDispatchRoute = "ACTION_CLICK" | "GESTURE" | "GESTURE_AFTER_ACTION_CLICK_MISS" | "TEXT_LINK_SPAN" | "GESTURE_AFTER_TEXT_LINK_SPAN_MISS";
+export type TapDispatchRoute = "ACTION_CLICK" | "GESTURE" | "GESTURE_AFTER_ACTION_CLICK_MISS" | "TEXT_LINK_SPAN" | "GESTURE_AFTER_TEXT_LINK_SPAN_MISS" | "RECORDED_COORDINATES_AFTER_SELECTOR_MISS";
 
 export interface TapPoint {
   class: "xyz.block.trailblaze.api.AgentDriverAction.TapPoint";
@@ -1432,6 +1440,13 @@ export interface TrailDetailResponse {
   yaml: string;
   steps: TrailStepEntry[];
 }
+
+export interface TrailGitBaselineResponse {
+  state: TrailGitState;
+  committed?: string | null;
+}
+
+export type TrailGitState = "clean" | "modified" | "untracked" | "unavailable";
 
 export interface TrailIndexEntry {
   id: string;
@@ -1977,6 +1992,8 @@ export function createTrailRunnerRpcClient(options: RpcCallOptions = {}) {
       rpcCall<GetToolsRequest, ToolCatalogResponse>("GetToolsRequest", request, options),
     getTrailDetail: (request: GetTrailDetailRequest): Promise<RpcResult<TrailDetailResponse>> =>
       rpcCall<GetTrailDetailRequest, TrailDetailResponse>("GetTrailDetailRequest", request, options),
+    getTrailGitBaseline: (request: GetTrailGitBaselineRequest): Promise<RpcResult<TrailGitBaselineResponse>> =>
+      rpcCall<GetTrailGitBaselineRequest, TrailGitBaselineResponse>("GetTrailGitBaselineRequest", request, options),
     getTrailRoots: (request: GetTrailRootsRequest = {}): Promise<RpcResult<TrailRootsResponse>> =>
       rpcCall<GetTrailRootsRequest, TrailRootsResponse>("GetTrailRootsRequest", request, options),
     getTrailmaps: (request: GetTrailmapsRequest = {}): Promise<RpcResult<TrailmapsResponse>> =>

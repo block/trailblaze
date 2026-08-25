@@ -17,6 +17,8 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 
@@ -65,12 +67,23 @@ class SelectorDialectLintTest {
     putJsonObject("iosMaestro") { put("textRegex", text) }
   }
 
+  private fun webSelector(name: String) = buildJsonObject {
+    putJsonObject("web") { put("ariaNameRegex", name) }
+  }
+
   private fun trail(
     devices: Map<String, String>?,
     steps: List<UnifiedTrailStep>,
     trailhead: UnifiedTrailStep? = null,
   ) = UnifiedTrail(
-    config = UnifiedTrailConfig(id = "test/dialect", devices = devices),
+    config = UnifiedTrailConfig(
+      id = "test/dialect",
+      // Fixtures declare pins as driver-name strings; lift them into the typed device model here
+      // so every case reads as the classifier→driver table it is testing.
+      devices = devices?.mapValues { (_, driverName) ->
+        TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)
+      },
+    ),
     trailhead = trailhead,
     trail = steps,
   )
@@ -102,6 +115,10 @@ class SelectorDialectLintTest {
     assertEquals("android", occurrence.resolvedClassifier)
     assertEquals("android-tablet", occurrence.deviceClassifier)
     assertEquals(0, occurrence.stepIndex)
+    // The unmatchable-selector render is the gate's primary output, so its label is what an
+    // operator actually reads: 1-based, though the field above stays 0-based.
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("step 1 resolves leg 'android'"), rendered)
   }
 
   @Test
@@ -496,5 +513,304 @@ class SelectorDialectLintTest {
   @Test
   fun `check phase returns OK when the workspace has no trails directory`() {
     assertEquals(CheckCommand.EXIT_OK, CheckCommand().runSelectorDialectLintPhase(tmp.newFolder("empty")))
+  }
+
+  // ---- Multi-device configuration legs ----
+  // A leg keyed by a configuration NAME is not a device identity, but its tools dispatch for
+  // real — against whichever member is active at that point in the replay. The lint replays the
+  // leg statically, flipping on recorded switchDevice calls.
+
+  private fun switchDevice(name: String) = TrailblazeToolYamlWrapper(
+    name = "switchDevice",
+    trailblazeTool = OtherTrailblazeTool(
+      toolName = "switchDevice",
+      raw = buildJsonObject { put("name", name) },
+    ),
+  )
+
+  /** seller (start device) is accessibility, buyer is instrumentation. */
+  private fun configurationTrail(
+    steps: List<UnifiedTrailStep>,
+    extraDevices: Map<String, TrailblazeDeviceDefinition> = emptyMap(),
+    buyerDefinition: TrailblazeDeviceDefinition =
+      TrailblazeDeviceDefinition(driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION),
+    sellerDefinition: TrailblazeDeviceDefinition =
+      TrailblazeDeviceDefinition(driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+  ) = UnifiedTrail(
+    config = UnifiedTrailConfig(
+      id = "test/dialect",
+      devices = mapOf(
+        "pos-pair" to TrailblazeDeviceDefinition(
+          devices = linkedMapOf("seller" to sellerDefinition, "buyer" to buyerDefinition),
+        ),
+      ) + extraDevices,
+    ),
+    trail = steps,
+  )
+
+  @Test
+  fun `a configuration leg is linted against the start member's driver`() {
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(step("pos-pair" to listOf(tapBySelector(androidMaestroSelector("Checkout"))))),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("pos-pair/seller", occurrence.deviceClassifier)
+    assertEquals("pos-pair", occurrence.resolvedClassifier)
+    assertEquals("androidMaestro", occurrence.dialectKey)
+  }
+
+  @Test
+  fun `a recorded switchDevice flips which member's driver judges the rest of the leg`() {
+    // First tap runs on seller (accessibility → finding); the mid-leg switch hands the session
+    // to buyer (instrumentation), so the second tap — and the NEXT step's tap, because the
+    // active device persists across steps — are clean.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              tapBySelector(androidMaestroSelector("Before switch")),
+              switchDevice("buyer"),
+              tapBySelector(androidMaestroSelector("After switch")),
+            ),
+          ),
+          step("pos-pair" to listOf(tapBySelector(androidMaestroSelector("Next step")))),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("pos-pair/seller", occurrence.deviceClassifier)
+    assertEquals(0, occurrence.stepIndex)
+  }
+
+  @Test
+  fun `a handover to an undeclared member is reported and abandons the rest of the configuration`() {
+    // Keeping the stale active member would judge everything after the handover against a device
+    // the replay has already left — reporting one driver's findings under another's name, or
+    // missing real ones. But abandoning silently would leave the gate green on a trail whose every
+    // later selector went unchecked, so the handover itself is the finding. Both taps below would
+    // otherwise be findings on seller.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              switchDevice("kitchen"),
+              tapBySelector(androidMaestroSelector("After the unknown handover")),
+            ),
+          ),
+          step("pos-pair" to listOf(tapBySelector(androidMaestroSelector("Next step")))),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    assertTrue(result.occurrences.isEmpty())
+    val handover = result.undeclaredHandovers.single()
+    assertEquals("pos-pair", handover.configurationName)
+    assertEquals("kitchen", handover.target)
+    assertEquals(0, handover.stepIndex)
+    assertEquals(listOf("seller", "buyer"), handover.declaredMembers)
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("undeclared handover"), rendered)
+    // 1-based in the render, matching what a reader counts under `trail:` and the label
+    // MultiDeviceHandoverGuard puts on the same handover. The field itself stays 0-based.
+    assertTrue(rendered.contains("step 1 in configuration 'pos-pair'"), rendered)
+  }
+
+  @Test
+  fun `a handover to a memory-interpolated name is not a finding`() {
+    // `switchDevice: {{buyerDevice}}` resolves at the tool-dispatch boundary, from memory this
+    // gate never sees. Failing the build on it would reject a legitimate trail; the lint can only
+    // stop tracking the active device, which is why the tap below goes unreported.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              switchDevice("{{buyerDevice}}"),
+              tapBySelector(androidMaestroSelector("After the templated handover")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertNull(result)
+  }
+
+  @Test
+  fun `findings before an undeclared handover are still reported`() {
+    // Abandoning the rest of the configuration must not discard what was already judged against a
+    // known-active device.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              tapBySelector(androidMaestroSelector("Before the handover")),
+              switchDevice("kitchen"),
+              tapBySelector(androidMaestroSelector("After the handover")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("pos-pair/seller", occurrence.deviceClassifier)
+    assertEquals(0, occurrence.stepIndex)
+    assertEquals("kitchen", result.undeclaredHandovers.single().target)
+  }
+
+  /** phone (start device, accessibility) + dashboard (a host browser). */
+  private fun webPhoneTrail(steps: List<UnifiedTrailStep>) = UnifiedTrail(
+    config = UnifiedTrailConfig(
+      id = "test/web-phone",
+      devices = mapOf(
+        "web-phone" to TrailblazeDeviceDefinition(
+          devices = linkedMapOf(
+            "phone" to TrailblazeDeviceDefinition(
+              driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            ),
+            "dashboard" to TrailblazeDeviceDefinition(driver = TrailblazeDriverType.PLAYWRIGHT_NATIVE),
+          ),
+        ),
+      ),
+    ),
+    trail = steps,
+  )
+
+  @Test
+  fun `a web selector while the phone is active is a finding`() {
+    // The web+phone mistake: a dashboard step recorded (or re-ordered) before its handover. The
+    // resolver has no cross-platform bridge, so this tap resolves NoMatch on every run — the same
+    // silent every-run failure the same-platform pair produces, which is why it's fatal too.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      webPhoneTrail(
+        steps = listOf(step("web-phone" to listOf(tapBySelector(webSelector("Transactions"))))),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("web-phone/phone", occurrence.deviceClassifier)
+    assertEquals("web", occurrence.dialectKey)
+    assertTrue(occurrence.crossPlatform)
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("different platform"), rendered)
+  }
+
+  @Test
+  fun `a native selector while the browser is active is a finding`() {
+    // The inverse, and the reason the rule is symmetric rather than a web-selector blocklist: the
+    // browser can't read an Android accessibility tree either.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      webPhoneTrail(
+        steps = listOf(
+          step(
+            "web-phone" to listOf(
+              switchDevice("dashboard"),
+              tapBySelector(androidAccessibilitySelector("Charge")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("web-phone/dashboard", occurrence.deviceClassifier)
+    assertEquals("androidAccessibility", occurrence.dialectKey)
+    assertTrue(occurrence.crossPlatform)
+  }
+
+  @Test
+  fun `each surface selecting in its own dialect is clean`() {
+    // The trail this gate must NOT flag: the phone leg in androidAccessibility, the dashboard leg
+    // in web, split by the handover between them.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      webPhoneTrail(
+        steps = listOf(
+          step("web-phone" to listOf(tapBySelector(androidAccessibilitySelector("Charge")))),
+          step(
+            "web-phone" to listOf(
+              switchDevice("dashboard"),
+              tapBySelector(webSelector("Transactions")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertNull(result)
+  }
+
+  @Test
+  fun `a single-device web trail is not judged against the launch platform`() {
+    // Cross-platform detection is scoped to configuration legs on purpose. A single-device leg
+    // reaches its device through the classifier chain, where a foreign dialect is authoring
+    // nonsense no recording produces — and gating it there would fire on legs kept for a device
+    // this run doesn't schedule.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      trail(
+        devices = mapOf("android-phone" to "ANDROID_ONDEVICE_ACCESSIBILITY"),
+        steps = listOf(step("android-phone" to listOf(tapBySelector(webSelector("Transactions"))))),
+      ),
+    )
+    assertNull(result)
+  }
+
+  @Test
+  fun `members carrying only a classifier are still judged across platforms`() {
+    // The usual authored shape: a cast declares `classifier:` per member and pins no drivers, so
+    // no driver resolves from config.devices: at all. The cross-platform rule needs only the
+    // platform the classifier folds to, and skipping these would leave the common case unlinted.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      UnifiedTrail(
+        config = UnifiedTrailConfig(
+          id = "test/web-phone",
+          devices = mapOf(
+            "web-phone" to TrailblazeDeviceDefinition(
+              devices = linkedMapOf(
+                "phone" to TrailblazeDeviceDefinition(classifier = "android-phone"),
+                "dashboard" to TrailblazeDeviceDefinition(classifier = "web"),
+              ),
+            ),
+          ),
+        ),
+        trail = listOf(step("web-phone" to listOf(tapBySelector(webSelector("Transactions"))))),
+      ),
+    )
+    assertNotNull(result)
+    val occurrence = result.occurrences.single()
+    assertEquals("web-phone/phone", occurrence.deviceClassifier)
+    assertTrue(occurrence.crossPlatform)
+  }
+
+  @Test
+  fun `a member without its own driver pin resolves it from config devices via its classifier`() {
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(step("pos-pair" to listOf(tapBySelector(androidMaestroSelector("Checkout"))))),
+        sellerDefinition = TrailblazeDeviceDefinition(classifier = "android-tablet"),
+        extraDevices = mapOf(
+          "android-tablet" to
+            TrailblazeDeviceDefinition(driver = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    assertEquals("pos-pair/seller", result.occurrences.single().deviceClassifier)
   }
 }

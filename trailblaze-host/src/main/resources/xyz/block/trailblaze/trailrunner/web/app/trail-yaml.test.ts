@@ -254,6 +254,120 @@ describe("buildRecordedTrailYaml", () => {
   });
 });
 
+describe("runnableToolCalls", () => {
+  test("finds every unified recording tool with its line and device classifier", () => {
+    const source = [
+      "config:",
+      "  title: Demo",
+      "trail:",
+      "  - step: Open settings",
+      "    recording:",
+      "      ios-iphone:",
+      "        - tapOn:",
+      "            text: Settings",
+      "        - pressBack: {}",
+      "  - verify: Done",
+    ].join("\n");
+    expect(TY.runnableToolCalls(source)).toEqual([
+      { line0: 6, endLine0: 7, name: "tapOn", tool: { tapOn: { text: "Settings" } }, platform: "ios-iphone" },
+      { line0: 8, endLine0: 8, name: "pressBack", tool: { pressBack: {} }, platform: "ios-iphone" },
+    ]);
+  });
+
+  test("keeps finding sibling tools after nested argument maps", () => {
+    const source = [
+      "trail:",
+      "  - step: Open settings",
+      "    recording:",
+      "      android:",
+      "        - tapOn:",
+      "            selector:",
+      "              text: Settings",
+      "        - pressBack: {}",
+    ].join("\n");
+    expect(TY.runnableToolCalls(source).map(({ name, platform }) => ({ name, platform }))).toEqual([
+      { name: "tapOn", platform: "android" },
+      { name: "pressBack", platform: "android" },
+    ]);
+  });
+
+  test("recognizes indentless tool sequences under a device classifier", () => {
+    const source = `trail:
+  - step: Open settings
+    recording:
+      android:
+      - tapOn:
+          selector:
+            text: Settings
+      - pressBack: {}`;
+
+    expect(TY.runnableToolCalls(source).map(({ name, platform }) => ({ name, platform }))).toEqual([
+      { name: "tapOn", platform: "android" },
+      { name: "pressBack", platform: "android" },
+    ]);
+  });
+
+  test("recognizes a trailhead's single-tool recording map", () => {
+    const source = `trailhead:
+  step: Launch the app
+  recording:
+    android:
+      launchApp:
+        clearState: true
+trail: []`;
+
+    expect(TY.runnableToolCalls(source)).toEqual([
+      { line0: 4, endLine0: 5, name: "launchApp", tool: { launchApp: { clearState: true } }, platform: "android" },
+    ]);
+  });
+
+  test("recognizes a compact trailhead classifier and tool map", () => {
+    const source = `trailhead:
+  step: Sign in
+  recording:
+    android-phone: { signInViaUI: { email: "person@example.com" } }
+trail: []`;
+
+    expect(TY.runnableToolCalls(source)).toEqual([
+      { line0: 3, endLine0: 3, name: "signInViaUI", tool: { signInViaUI: { email: "person@example.com" } }, platform: "android-phone" },
+    ]);
+  });
+
+  test("recognizes a compact tool inside a block trailhead classifier", () => {
+    const source = `trailhead:
+  step: Open the app
+  recording:
+    android:
+      launchApp: {}`;
+
+    expect(TY.runnableToolCalls(source)).toEqual([
+      { line0: 4, endLine0: 4, name: "launchApp", tool: { launchApp: {} }, platform: "android" },
+    ]);
+  });
+
+  test("supports legacy recording.tools and root tools lists", () => {
+    const source = [
+      "- prompts:",
+      "    - step: Enter email",
+      "      recording:",
+      "        tools:",
+      "          - inputText:",
+      "              text: person@example.com",
+      "- tools:",
+      "    - pressBack: {}",
+    ].join("\n");
+    expect(TY.runnableToolCalls(source)).toEqual([
+      { line0: 4, endLine0: 5, name: "inputText", tool: { inputText: { text: "person@example.com" } }, platform: null },
+      { line0: 7, endLine0: 7, name: "pressBack", tool: { pressBack: {} }, platform: null },
+    ]);
+  });
+
+  test("does not mark natural-language steps or incomplete tool YAML", () => {
+    const source = "trail:\n  - step: Open settings\n    recording:\n      android:\n        - tapOn: [";
+    expect(TY.runnableToolCalls(source)).toEqual([]);
+  });
+});
+
 describe("buildPromptTrailYaml", () => {
   test("prepend steps are recording-keyed by classifier; objective is a plain step", () => {
     const yaml = TY.buildPromptTrailYaml("t", "sample", "ANDROID", "Buy a coffee", [

@@ -31,11 +31,24 @@ object UnifiedTrailTargets {
    * classifier keying a `recording:` block on the trailhead or any step. Insertion order is
    * config-devices-first, then trailhead, then steps in order — de-duplicated. Callers that need a
    * stable display order should sort.
+   *
+   * Multi-device configuration names are NOT classifiers, so they're excluded everywhere they can
+   * appear (a `config.devices` configuration entry, or a recording leg keyed by the configuration
+   * name); the configuration's member devices contribute their `classifier:` values instead — the
+   * cast is what the trail actually runs on.
    */
   fun declaredClassifiers(trail: UnifiedTrail): Set<String> = buildSet {
-    trail.config.devices?.keys?.let { addAll(it) }
-    trail.trailhead?.recordings?.keys?.let { addAll(it) }
-    trail.trail.forEach { step -> addAll(step.recordings.keys) }
+    val configurationNames = trail.config.multiDeviceConfigurationNames
+    trail.config.devices?.forEach { (key, definition) ->
+      val members = definition.devices
+      if (members == null) {
+        add(key)
+      } else {
+        members.values.forEach { member -> member.classifier?.let { add(it) } }
+      }
+    }
+    trail.trailhead?.recordings?.keys?.let { keys -> addAll(keys - configurationNames) }
+    trail.trail.forEach { step -> addAll(step.recordings.keys - configurationNames) }
   }
 
   /**

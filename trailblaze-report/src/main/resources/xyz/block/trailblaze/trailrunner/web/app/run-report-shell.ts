@@ -23,12 +23,15 @@
 // isolation while costing the viewer its URL — no deep links, no Copy link. Real isolation would
 // mean a sandboxed frame with an opaque origin, which is a deliberate trade, not a default.
 
-import { extractLlmLogs, extractTrace, originalYamlFromLogs, toSessionPayloads } from './run-report-extract';
+import { extractLlmLogs, extractTrace, originalYamlFromLogs, toSessionPayloads, traceScreenshotFiles } from './run-report-extract';
 
 const ZIP_PARAM = 'zip';
 
 // The collaborator zip-report-core's resolveRenderer expects; field names match what it looks for.
-const REPORT_DERIVE = { extractTrace, extractLlmLogs, originalYamlFromLogs };
+// This shell embeds the viewer bundle alone, so a function the zip pipeline consults and this object
+// omits has no window fallback to land on — it would surface only as a broken archive load. Exported
+// so the pipeline's own tests derive through THIS object rather than a stub that can't go stale.
+export const REPORT_DERIVE = { extractTrace, extractLlmLogs, originalYamlFromLogs, traceScreenshotFiles };
 
 type LoadSource = { url: string } | { fileName: string };
 

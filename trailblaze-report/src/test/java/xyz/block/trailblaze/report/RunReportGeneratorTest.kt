@@ -154,6 +154,37 @@ class RunReportGeneratorTest {
     assertEquals("android", meta["platform"]!!.jsonPrimitive.content)
     assertEquals("emulator-5554", meta["device"]!!.jsonPrimitive.content)
     assertEquals("phone", meta["deviceType"]!!.jsonPrimitive.content)
+    assertEquals("android-phone", meta["deviceClassifier"]!!.jsonPrimitive.content)
+  }
+
+  @Test
+  fun sessionMetaJson_deviceClassifierIsTheSpecificCompoundClassifierRecordingsAreFiledUnder() {
+    val passed = SessionStatus.Ended.Succeeded(1)
+    fun classifierFor(vararg classifiers: String): String? = RunReportGenerator.sessionMetaJson(
+      info(
+        passed,
+        deviceInfo = TrailblazeDeviceInfo(
+          trailblazeDeviceId = TrailblazeDeviceId("emulator-5554", TrailblazeDevicePlatform.ANDROID),
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          widthPixels = 1080,
+          heightPixels = 2400,
+          classifiers = classifiers.map { xyz.block.trailblaze.devices.TrailblazeDeviceClassifier(it) },
+        ),
+      ),
+      passed,
+      noSelfHeal,
+    )["deviceClassifier"]?.jsonPrimitive?.content
+
+    // Two devices from one hardware family, whose platform-stripped classifier tails would BOTH
+    // read "tablet", keep distinct classifiers — this is what lets the report give them a column each.
+    assertEquals("kiosk-v2", classifierFor("kiosk", "v2"))
+    assertEquals("kiosk-v3", classifierFor("kiosk", "v3"))
+    assertEquals("ios-ipad", classifierFor("ios", "ipad"))
+    // The SPECIFIC classifier, never a broader one from its lineage: a three-segment device stays
+    // whole instead of reporting the `android-phone` family it would fall back to for recordings.
+    assertEquals("android-phone-api36", classifierFor("android", "phone", "api36"))
+    // No classifiers → no classifier at all, rather than an empty one a consumer would treat as present.
+    assertNull(classifierFor())
   }
 
   @Test

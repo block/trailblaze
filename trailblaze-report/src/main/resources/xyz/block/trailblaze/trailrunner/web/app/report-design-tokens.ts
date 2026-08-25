@@ -50,6 +50,7 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --pass: var(--status-passed-mark); --fail: var(--status-failed-mark); --amber: var(--status-self-healed-mark);
   --run: var(--accent-11); --purple: var(--violet-11); --ai: var(--violet-9); --ai-surface: var(--violet-3);
   --trail-mark: var(--forest-9); --trail-text: var(--forest-11); --trail-surface: var(--forest-3);
+  --timeline-objective-mark: var(--neutral-8);
   --event: var(--cyan-11); --focus: var(--accent-9); --player-line: var(--neutral-6);
   --danger-surface: var(--status-failed-surface); --danger-border: var(--status-failed-border); --danger-text: var(--status-failed-text);
   --warning-surface: var(--status-self-healed-surface); --warning-border: var(--status-self-healed-border); --warning-text: var(--status-self-healed-text);
@@ -101,6 +102,7 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --pass: var(--status-passed-mark); --fail: var(--status-failed-mark); --amber: var(--status-self-healed-mark);
   --run: #6aa6ff; --purple: #b08cff; --ai: #c29aff; --ai-surface: var(--violet-3);
   --trail-mark: var(--forest-9); --trail-text: var(--forest-11); --trail-surface: var(--forest-3);
+  --timeline-objective-mark: var(--neutral-8);
   --event: #5ed3ff; --focus: #91bdff; --player-line: var(--neutral-6);
   --danger-surface: var(--status-failed-surface); --danger-border: var(--status-failed-border); --danger-text: var(--status-failed-text);
   --warning-surface: var(--status-self-healed-surface); --warning-border: var(--status-self-healed-border); --warning-text: var(--status-self-healed-text);

@@ -4,7 +4,7 @@
 // math the detail pane recomputes over a selected range.
 import { describe, expect, test } from 'bun:test';
 import { buildPerfReportHtml } from './perf-html';
-import { clipLen, diffRows, fmtDelta, fmtMs, fmtTick, niceTickStep, rangeSelf, sessionDisplay } from './perf-viewer';
+import { clipLen, diffRows, fmtDelta, fmtMs, fmtTick, fmtUsd, niceTickStep, rangeSelf, sessionDisplay } from './perf-viewer';
 import { extractPerfSession } from './perf-extract';
 
 const T0 = Date.parse('2026-07-27T10:00:00.000Z');
@@ -103,6 +103,14 @@ describe('format helpers', () => {
     expect(fmtDelta(2_410)).toBe('+2.41s');
     expect(fmtDelta(-450)).toBe('-450ms');
     expect(fmtDelta(0)).toBe('0ms');
+  });
+
+  test('fmtUsd keeps sub-cent usage distinguishable without over-formatting totals', () => {
+    expect(fmtUsd(0)).toBe('$0.00');
+    expect(fmtUsd(0.0000004)).toBe('<$0.000001');
+    expect(fmtUsd(0.001)).toBe('$0.001000');
+    expect(fmtUsd(0.01)).toBe('$0.01');
+    expect(fmtUsd(0.28349)).toBe('$0.28');
   });
 
   test('niceTickStep picks 1/2/5 decades at or below the raw spacing', () => {

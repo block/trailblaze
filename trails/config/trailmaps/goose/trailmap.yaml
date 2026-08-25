@@ -5,7 +5,7 @@
 # `target.electron:` block below is that launch config's home — it is what a v1 trail used to carry
 # per-trail under `config.electron`. Because an Electron launch is a property of the app under test
 # (not of an individual test), it belongs on the target: a unified trail just selects
-# `config.target: goose` + `devices: {web: PLAYWRIGHT_ELECTRON}` and needs no per-trail launch block.
+# `config.target: goose` + `devices: {web: {driver: PLAYWRIGHT_ELECTRON}}` and needs no per-trail launch block.
 #
 # Web tool sets and the playwright-electron driver are inherited from the bundled `trailblaze`
 # framework trailmap via `dependencies: [trailblaze]`; `platforms.web: {}` opts the web platform in

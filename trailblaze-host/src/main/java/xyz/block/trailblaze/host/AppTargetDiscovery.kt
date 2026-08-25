@@ -60,6 +60,20 @@ object AppTargetDiscovery {
    * NOTE: results are computed eagerly on call and not cached inside this object — caching
    * is the caller's responsibility (typically via `by lazy`). Callers that want to react
    * to settings changes can wrap this in a `StateFlow` and recompute on signal.
+   *
+   * [failFast] picks which of two incompatible callers is being served. The daemon-startup seed
+   * needs a set no matter what (the app has to boot), so it takes the default and gets
+   * [defaultFallback] on error. A caller that REPLACES an existing set needs to tell "this
+   * workspace declares nothing" apart from "discovery blew up", because those want opposite
+   * outcomes — install the fallback vs. keep what's already there. Passing true rethrows instead
+   * of masking the failure as a one-target result. An empty-but-successful discovery still
+   * returns [defaultFallback] either way; only the error path differs.
+   *
+   * It also turns off the internal leniency that lets a pass continue past a malformed
+   * `trailblaze.yaml` or unreadable `*.tool.yaml`. Those produce a PARTIAL set rather than the
+   * fallback, which is the more dangerous shape for a replacing caller: it looks like a clean
+   * discovery, so it installs silently and then matches itself on the follow-up drift check,
+   * clearing the restart nudge that was the last warning the user would have gotten.
    */
   fun discover(
     companions: Map<String, AppTargetCompanion> = emptyMap(),
@@ -68,11 +82,12 @@ object AppTargetDiscovery {
     },
     defaultFallback: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
     logPrefix: String = "[AppTargetDiscovery]",
+    failFast: Boolean = false,
   ): Set<TrailblazeHostAppTarget> {
     return try {
       val workspaceConfig = workspaceConfigProvider()
       val source = workspaceLayeredConfigResourceSource(workspaceConfig.configDir, logPrefix)
-      val resolvedConfig = loadResolvedConfigLeniently(workspaceConfig, logPrefix)
+      val resolvedConfig = loadResolvedWorkspaceConfig(workspaceConfig, logPrefix, failFast)
       val projectConfig = resolvedConfig?.projectConfig
       val customToolClasses = loadCustomToolClasses(
         resourceSource = source,
@@ -89,7 +104,7 @@ object AppTargetDiscovery {
       // (the composite resource source layers them); the serialization initializer dedupes
       // against its own classpath cache so re-registering the same classpath tools is a
       // no-op. See `registerWorkspaceYamlTools` for the overlay semantics.
-      registerWorkspaceYamlTools(source, logPrefix)
+      registerWorkspaceYamlTools(source, logPrefix, failFast)
       val resolver = ToolNameResolver.fromBuiltInAndCustomTools(customToolClasses)
 
       val discoveredToolSets = ToolSetYamlLoader.discoverAndLoadAll(
@@ -140,6 +155,10 @@ object AppTargetDiscovery {
 
       targets.ifEmpty { setOf(defaultFallback) }
     } catch (e: Exception) {
+      // A failFast caller rethrows to ITS caller, which logs the same exception with the context
+      // that matters there (which reload, and what happened to the live set). Logging here too
+      // would put the same stack trace in the daemon log twice.
+      if (failFast) throw e
       // Route through Console.error so the daemon's logger sees it. `printStackTrace()`
       // goes to stderr, which the launcher discards — the trace would be invisible.
       Console.error("$logPrefix Error loading app targets from YAML: ${e.message}\n${e.stackTraceToString()}")
@@ -176,15 +195,22 @@ object AppTargetDiscovery {
     }
   }
 
-  private fun loadResolvedConfigLeniently(
+  private fun loadResolvedWorkspaceConfig(
     workspaceConfig: ResolvedTrailblazeWorkspaceConfig,
     logPrefix: String,
+    failFast: Boolean,
   ): TrailblazeResolvedConfig? {
     return try {
       workspaceConfig.loadResolvedRuntime(
         scriptedToolEnrichment = resolveScriptedToolEnrichment(),
       )
     } catch (e: Exception) {
+      // Leniency is wrong for a [failFast] caller. Ignoring the workspace's own config leaves a
+      // classpath-only set that is indistinguishable from a successful discovery, which a caller
+      // that REPLACES a live set would then install over the previous workspace's real targets —
+      // and the follow-up drift check would compare that set against itself and clear the restart
+      // nudge, so the user would be left with neither their targets nor a warning.
+      if (failFast) throw e
       // Console.error (not Console.log) so this warning survives callers that wrap
       // discovery in `Console.runQuiet` to suppress informational chatter (e.g. CLI
       // `config show` / `config target`). Without this, a workspace with a malformed
@@ -253,10 +279,14 @@ object AppTargetDiscovery {
   private fun registerWorkspaceYamlTools(
     resourceSource: ConfigResourceSource,
     logPrefix: String,
+    failFast: Boolean = false,
   ) {
     val allDiscovered = try {
       ToolYamlLoader.discoverYamlDefinedTools(resourceSource)
     } catch (e: Exception) {
+      // Same reason as [loadResolvedWorkspaceConfig]: continuing here hands a [failFast] caller a
+      // target set whose workspace tools are silently absent, dressed up as a clean discovery.
+      if (failFast) throw e
       Console.error(
         "$logPrefix Workspace YAML-defined tool discovery failed: ${e.message}. " +
           "Workspace `*.tool.yaml` files will not be registered.\n${e.stackTraceToString()}",

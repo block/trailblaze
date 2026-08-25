@@ -19,6 +19,15 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 @Serializable
 data class ConnectToDeviceRequest(
   val trailblazeDeviceId: TrailblazeDeviceId,
+  /**
+   * The app target this connection is for, when the caller knows it. The Android connect
+   * installs that target's instrumentation runner and the web connect loads its custom tools,
+   * so a caller running a trail against a declared target has to be able to say which one -
+   * omitting it binds whatever target the daemon has selected, which is the wrong app whenever
+   * the two disagree. An id this daemon doesn't have registered is a connect failure, never a
+   * silent fall back to the selected target.
+   */
+  val targetAppId: String? = null,
 ) : RpcRequest<ConnectToDeviceResponse>
 
 @Serializable

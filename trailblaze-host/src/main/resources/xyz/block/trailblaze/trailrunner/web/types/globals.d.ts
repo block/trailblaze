@@ -116,7 +116,7 @@ declare global {
   const EmptyState: any;
 
   // ─── run-report-core.js (plain classic <script>, also require()'d by the bun CLI) ──────────────
-  // Referenced bare by timeline.tsx / share-export.tsx. Loose signatures for now.
+  // Referenced bare by run-payload.js / share-export.tsx. Loose signatures for now.
   function extractTrace(logs: unknown): any[];
   function extractLlmLogs(logs: unknown): any[];
   function buildRunReportHtml(input: any): string;

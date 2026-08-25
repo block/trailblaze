@@ -19,6 +19,7 @@
 // All span times are ms offsets from each session's t0; driver spans are device-clock and render
 // on their own lane, never against the host-clock ruler's truth.
 import { bottomUpAggregate } from './perf-extract';
+import { formatUsd } from './report-format';
 
 /** Clipped overlap length of [s, e] with [lo, hi]. */
 function clipLen(s: number, e: number, lo: number, hi: number): number {
@@ -43,6 +44,8 @@ function fmtMs(ms: number): string {
   const s = Math.abs(ms - m * 60_000) / 1000;
   return `${m}m ${s.toFixed(0)}s`;
 }
+
+export const fmtUsd = formatUsd;
 
 /** Signed duration for diff columns: "+2.41s" / "-450ms" / "0ms". */
 function fmtDelta(ms: number): string {
@@ -524,7 +527,7 @@ function PERF_VIEWER(): void {
     chips.push(statChip('Idle gaps', fmtMs(a.gapTotal), false, deltaOf((d) => d.gapTotal)));
     chips.push(statChip('Timeout tax', fmtMs(a.taxFullBurn), a.taxFullBurn > 5000, deltaOf((d) => d.taxFullBurn)));
     if (a.trailheadMs > 0 || (st.cmp != null && dataOf('b').trailheadMs > 0)) chips.push(statChip('Trailhead', fmtMs(a.trailheadMs), false, deltaOf((d) => d.trailheadMs)));
-    chips.push(statChip('LLM', a.llmCount ? `${a.llmCount} calls · ${fmtMs(a.llmTotalMs)}${a.llmCostUsd != null ? ` · $${a.llmCostUsd.toFixed(2)}` : ''}` : 'none', false, deltaOf((d) => d.llmTotalMs)));
+    chips.push(statChip('LLM', a.llmCount ? `${a.llmCount} calls · ${fmtMs(a.llmTotalMs)}${a.llmCostUsd != null ? ` · ${fmtUsd(a.llmCostUsd)}` : ''}` : 'none', false, deltaOf((d) => d.llmTotalMs)));
     chips.push(statChip('Steps', String(a.steps.length)));
     if (a.selfHealed) chips.push(statChip('Self-heal', 'invoked', true));
     if (st.cmp != null) chips.push(statChip('Compare', `B = ${labelOf(st.cmp)}`));
@@ -700,7 +703,7 @@ function PERF_VIEWER(): void {
       ['Self', fmtMs(sp.self)],
     ];
     if (sp.budget != null) dl.push(['Timeout budget', `${fmtMs(sp.budget)} (${pct(sp.dur, sp.budget)} burned)`]);
-    if (sp.cost != null) dl.push(['LLM cost', `$${sp.cost.toFixed(4)}`]);
+    if (sp.cost != null) dl.push(['LLM cost', fmtUsd(sp.cost)]);
     if (sp.tokens) dl.push(['Tokens', sp.tokens]);
     if (step) dl.push(['Step', `${(sp.step as number) + 1}. ${step.label}${step.trailhead ? ' (trailhead)' : ''}`]);
     if (sp.shot) dl.push(['Screenshot', sp.shot]);

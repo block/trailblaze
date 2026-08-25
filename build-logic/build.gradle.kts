@@ -34,14 +34,6 @@ gradlePlugin {
       id = "trailblaze.author-tool-bundle"
       implementationClass = "TrailblazeAuthorToolBundlePlugin"
     }
-    // Stages QuickJS author-tool bundles into an asset tree consumers wire into AGP's
-    // `assets.srcDirs(...)`. Centralizes the per-bundle Copy / staging-dir / dependsOn
-    // boilerplate so consumers like `:examples:android-sample-app-uitests` and future
-    // downstream test modules don't each re-implement the same scaffolding.
-    create("quickjs-bundle-assets") {
-      id = "trailblaze.quickjs-bundle-assets"
-      implementationClass = "TrailblazeQuickjsBundleAssetsPlugin"
-    }
     // The shared scripted-tool bundler primitives now live at `trailblaze-android-gradle/src/
     // main/kotlin/bundler/` (folded in from the retired `xyz.block.trailblaze.trailmap-tool-
     // bundles` plugin) and are composed back into this build via the `srcDir(...)` below — see

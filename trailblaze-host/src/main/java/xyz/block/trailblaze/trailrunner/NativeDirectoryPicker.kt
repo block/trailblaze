@@ -24,7 +24,7 @@ internal fun pickDirectoryWithNativeDialog(initialDirectory: File?): File? {
   if (GraphicsEnvironment.isHeadless()) {
     error(
       "A desktop folder picker is not available in this environment. " +
-        "Run `trailblaze app` from the repository you want to use."
+        "Run `trailblaze app --v2` from the repository you want to use."
     )
   }
   val result = CompletableFuture<File?>()

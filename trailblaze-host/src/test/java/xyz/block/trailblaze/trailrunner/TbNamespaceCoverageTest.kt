@@ -7,7 +7,7 @@ import org.junit.Test
 /**
  * Guards the `window.TB` namespace contract: every `TB.<name>` a web screen calls must be a key
  * published in the `window.TB = { … }` literal in `app/data-extract.tsx`. The screens are plain
- * babel scripts and `TB` is typed `any`, so a missing member compiles fine and only fails at
+ * classic scripts and `TB` is typed `any`, so a missing member compiles fine and only fails at
  * click time with "TB.x is not a function" — which is exactly how every Run click broke once
  * before (`withTimeout` was added to `Object.assign(window, …)` in data-core.tsx but never to
  * the TB literal).
@@ -16,10 +16,20 @@ class TbNamespaceCoverageTest {
 
   private val tbMember = Regex("""\bTB\.([A-Za-z0-9_]+)""")
 
+  // The screens are transpiled to .js at build time and only that .js is packaged, so this reads the
+  // .tsx from the source tree rather than the classpath. The `test` task supplies the path (and
+  // declares the tree as an input); see :trailblaze-host's build.gradle.kts.
   private fun webAppDir(): File {
-    val marker = javaClass.getResource("/xyz/block/trailblaze/trailrunner/web/app/data-extract.tsx")
-      ?: error("data-extract.tsx not found on the test classpath — did the web resources move?")
-    return File(marker.toURI()).parentFile
+    val configured = System.getProperty("trailblaze.trailrunner.webAppDir")
+      ?: error(
+        "trailblaze.trailrunner.webAppDir system property is not set. Run this through Gradle " +
+          "(./gradlew :trailblaze-host:test) — the `test` task wires it to the Trail Runner web app dir.",
+      )
+    return File(configured).also {
+      require(File(it, "data-extract.tsx").isFile) {
+        "no data-extract.tsx under $it — did the Trail Runner web sources move?"
+      }
+    }
   }
 
   private fun publishedTbKeys(dataExtract: File): Set<String> {

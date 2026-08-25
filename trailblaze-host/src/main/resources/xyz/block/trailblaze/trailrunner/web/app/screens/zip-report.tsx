@@ -1,4 +1,4 @@
-// @ts-nocheck -- matches the other screens (global-scope babel script; see tsconfig.check.json).
+// @ts-nocheck -- matches the other screens (global-scope classic script; see tsconfig.check.json).
 //
 // Report-from-zip: renders the full interactive run report from a session archive URL — the
 // per-session zips CI publishes to the results CDN, or any `trailblaze report`-shaped archive —

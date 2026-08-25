@@ -17,6 +17,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Test
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.CaptureCoverage
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -33,6 +34,7 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailblazeTargetAppInfo
 import xyz.block.trailblaze.report.models.CiSummaryReport
+import xyz.block.trailblaze.report.models.CATEGORY2_HEAL_DIFF_FILENAME
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.CombinedVerdict
 import xyz.block.trailblaze.report.models.Outcome
@@ -40,6 +42,10 @@ import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.models.TriageReport
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.toOtherTrailblazeToolPayload
 
 /**
  * Exercises the orphan-MCP / MCP-helper session filtering in [GenerateTestResultsCliCommand].
@@ -52,6 +58,10 @@ import xyz.block.trailblaze.yaml.TrailConfig
  */
 class GenerateTestResultsCliCommandTest {
   private val json = Json { ignoreUnknownKeys = true }
+
+  private class InspectingGenerateTestResultsCliCommand : GenerateTestResultsCliCommand() {
+    fun attemptReport(): CiSummaryReport? = generatedAttemptReport
+  }
 
   @Test
   fun `run ignores orphan mcp-only session directories`() {
@@ -129,6 +139,7 @@ class GenerateTestResultsCliCommandTest {
       }
 
       val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertFalse(report.metadata.self_heal_enabled)
       assertEquals(1, report.results.size)
       assertEquals(realSessionId, report.results.single().session_id)
       assertFalse(outputBuffer.contains("PROCESSING ERRORS"))
@@ -186,6 +197,181 @@ class GenerateTestResultsCliCommandTest {
       val result = report.results.single()
       assertEquals(selfHealSessionId, result.session_id)
       assertEquals(Outcome.PASSED, result.outcome)
+    } finally {
+      logsDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `successful configured self-heal emits ran state diff artifact and category 2 evidence`() {
+    val logsDir = Files.createTempDirectory("trailblaze-report-test").toFile()
+    val outputFile = File(logsDir, "results.json")
+    try {
+      val sessionId = SessionId("2026_08_24_category2_session")
+      val deviceInfo = webDeviceInfo()
+      val prompt = DirectionStep(step = "Enter search text", recordable = true)
+      val oldTool =
+        TrailblazeToolYamlWrapper(
+          name = "inputText",
+          trailblazeTool = InputTextTrailblazeTool(text = "old selector"),
+        )
+      val newTool = InputTextTrailblazeTool(text = "new selector")
+      val rawYaml =
+        """
+          config: {}
+          trail:
+            - step: Enter search text
+              recording:
+                web:
+                  - inputText:
+                      text: old selector
+        """.trimIndent()
+
+      writeLog(
+        logsDir,
+        sessionId,
+        "001_TrailblazeSessionStatusChangeLog.json",
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus =
+            SessionStatus.Started(
+              trailConfig =
+                TrailConfig(
+                  id = "suite_71172/section_838946/case_4837740",
+                ),
+              trailFilePath = "trails/sample-app/self-heal.trail.yaml",
+              hasRecordedSteps = true,
+              testMethodName = "selfHealTest",
+              testClassName = "WebSelfHealTest",
+              trailblazeDeviceInfo = deviceInfo,
+              trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+              rawYaml = rawYaml,
+            ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:00Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "002_ObjectiveStartLog.json",
+        TrailblazeLog.ObjectiveStartLog(
+          promptStep = prompt,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:01Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "003_SelfHealInvokedLog.json",
+        TrailblazeLog.SelfHealInvokedLog(
+          promptStep = prompt,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:02Z"),
+          recordingResult =
+            PromptRecordingResult.Failure(
+              successfulTools = emptyList(),
+              failedTool = oldTool,
+              failureResult = TrailblazeToolResult.Error.ExceptionThrown("recording missed"),
+            ),
+          stepIndex = 0,
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "004_TrailblazeToolLog.json",
+        TrailblazeLog.TrailblazeToolLog(
+          trailblazeTool = newTool.toOtherTrailblazeToolPayload(),
+          toolName = "inputText",
+          successful = true,
+          traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM),
+          durationMs = 10,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:03Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "005_ObjectiveCompleteLog.json",
+        TrailblazeLog.ObjectiveCompleteLog(
+          promptStep = prompt,
+          objectiveResult =
+            AgentTaskStatus.Success.ObjectiveComplete(
+              statusData =
+                AgentTaskStatusData(
+                  taskId = TaskId.generate(),
+                  prompt = prompt.step,
+                  callCount = 1,
+                  taskStartTime = Instant.parse("2026-08-24T18:10:01Z"),
+                  totalDurationMs = 3_000,
+                ),
+              llmExplanation = "completed",
+            ),
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:04Z"),
+        ),
+      )
+      writeLog(
+        logsDir,
+        sessionId,
+        "006_TrailblazeSessionStatusChangeLog.json",
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Ended.SucceededWithSelfHeal(durationMs = 5_000),
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:05Z"),
+        ),
+      )
+
+      captureStdout {
+        GenerateTestResultsCliCommand(
+            environment = mapOf("TRAILBLAZE_SELF_HEAL_ENABLED" to "true")
+          )
+          .main(arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"))
+      }
+
+      val report = json.decodeFromString<CiSummaryReport>(outputFile.readText())
+      assertTrue(report.metadata.self_heal_enabled)
+      val result = report.results.single()
+      assertTrue(result.self_heal_ran)
+      val evidence = assertNotNull(result.category2_evidence)
+      assertEquals("4837740", evidence.case_id)
+      assertEquals(CATEGORY2_HEAL_DIFF_FILENAME, evidence.heal_diff_artifact)
+      assertTrue(File(logsDir, "${sessionId.value}/$CATEGORY2_HEAL_DIFF_FILENAME").isFile)
+
+      val cliConfiguredOutput = File(logsDir, "cli-configured-results.json")
+      captureStdout {
+        GenerateTestResultsCliCommand(environment = emptyMap())
+          .main(
+            arrayOf(logsDir.absolutePath, cliConfiguredOutput.absolutePath, "--output-format", "JSON")
+          )
+      }
+      val cliConfiguredReport = json.decodeFromString<CiSummaryReport>(cliConfiguredOutput.readText())
+      assertFalse(cliConfiguredReport.metadata.self_heal_enabled)
+      assertNotNull(cliConfiguredReport.results.single().category2_evidence)
+
+      writeLog(
+        logsDir,
+        sessionId,
+        "003_SelfHealInvokedLog.json",
+        TrailblazeLog.SelfHealInvokedLog(
+          promptStep = prompt,
+          session = sessionId,
+          timestamp = Instant.parse("2026-08-24T18:10:02Z"),
+          recordingResult =
+            PromptRecordingResult.Failure(
+              successfulTools = emptyList(),
+              failedTool = oldTool,
+              failureResult = TrailblazeToolResult.Error.ExceptionThrown("recording missed"),
+            ),
+        ),
+      )
+      val legacyOutput = File(logsDir, "legacy-results.json")
+      GenerateTestResultsCliCommand(environment = emptyMap())
+        .main(arrayOf(logsDir.absolutePath, legacyOutput.absolutePath, "--output-format", "JSON"))
+      val legacyReport = json.decodeFromString<CiSummaryReport>(legacyOutput.readText())
+      assertNull(legacyReport.results.single().category2_evidence)
     } finally {
       logsDir.deleteRecursively()
     }
@@ -1879,8 +2065,9 @@ class GenerateTestResultsCliCommandTest {
         ),
       )
 
+      val command = InspectingGenerateTestResultsCliCommand()
       captureStdout {
-        GenerateTestResultsCliCommand().main(
+        command.main(
           arrayOf(logsDir.absolutePath, outputFile.absolutePath, "--output-format", "JSON"),
         )
       }
@@ -1890,6 +2077,14 @@ class GenerateTestResultsCliCommandTest {
       assertEquals(passedSessionId, winner.session_id)
       assertEquals(2, winner.total_attempts)
       assertEquals(listOf(failedSessionId), winner.replaced_session_ids)
+
+      val attempts = command.attemptReport()!!.results.associateBy { it.session_id }
+      assertEquals(2, attempts.size)
+      assertEquals(1, attempts.getValue(failedSessionId).attempt)
+      assertEquals(2, attempts.getValue(failedSessionId).total_attempts)
+      assertEquals(passedSessionId, attempts.getValue(failedSessionId).superseded_by)
+      assertEquals(2, attempts.getValue(passedSessionId).attempt)
+      assertNull(attempts.getValue(passedSessionId).superseded_by)
 
       val winnerSidecar = json.decodeFromString<SessionResult>(
         File(logsDir, passedSessionId.value)

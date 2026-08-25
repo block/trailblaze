@@ -129,6 +129,27 @@ class ToolBatchScopeTest {
   }
 
   @Test
+  fun `invalidateContext forces a rebuild without stacking SnapshotCache frames`() {
+    // The switchDevice path: invalidate drops the context (so the next dispatch rebuilds against
+    // the new device) but keeps the scope's ONE frame — a rebuild that pushed a second frame
+    // would leak it on exit, and popping on invalidate would drop snapshots an outer caller owns.
+    val initialFrameDepth = SnapshotCache.frameDepth()
+    ToolBatchScope.enter()
+    val before = ToolBatchScope.contextOrBuild { buildContext() }
+    assertEquals(initialFrameDepth + 1, SnapshotCache.frameDepth())
+
+    ToolBatchScope.invalidateContext()
+    assertNull(ToolExecutionContextThreadLocal.get())
+
+    val after = ToolBatchScope.contextOrBuild { buildContext() }
+    assertFalse(before === after, "invalidate must force the next dispatch to rebuild")
+    assertEquals(initialFrameDepth + 1, SnapshotCache.frameDepth())
+
+    ToolBatchScope.exit()
+    assertEquals(initialFrameDepth, SnapshotCache.frameDepth())
+  }
+
+  @Test
   fun `exit without ever building a context does not pop a frame or clear the ThreadLocal`() {
     // A scope opened but never dispatched into (empty recording) established neither the frame
     // nor the ThreadLocal install, so exit() must leave both untouched — popping here would

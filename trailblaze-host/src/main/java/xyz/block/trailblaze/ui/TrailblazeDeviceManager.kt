@@ -9,11 +9,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -94,11 +96,17 @@ class TrailblazeDeviceManager(
   initialAppTargets: Set<TrailblazeHostAppTarget>,
   /**
    * Re-runs full app-target discovery against the current workspace on disk — the same pass
-   * that produced [initialAppTargets] at startup. Consumed only by [registerNewTarget];
-   * when null (tests, embedders that don't support live registration), live registration is
-   * unavailable and callers fall back to the restart-required flow.
+   * that produced [initialAppTargets] at startup. Consumed by [registerNewTarget] and
+   * [reloadAppTargets]; when null (tests, embedders that don't support live registration),
+   * both are unavailable and callers fall back to the restart-required flow.
+   *
+   * The `failFast` argument is forwarded to `AppTargetDiscovery.discover`. [registerNewTarget]
+   * passes false because it only ever ADDS, so a masked failure just means the new id isn't found
+   * and the caller is told registration failed. [reloadAppTargets] passes true because it
+   * REPLACES, and installing discovery's one-target error fallback over a real set would silently
+   * empty the picker.
    */
-  private val freshAppTargetsProvider: (() -> Set<TrailblazeHostAppTarget>)? = null,
+  private val freshAppTargetsProvider: ((failFast: Boolean) -> Set<TrailblazeHostAppTarget>)? = null,
   val appIconProvider: AppIconProvider,
   val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
@@ -130,17 +138,31 @@ class TrailblazeDeviceManager(
   /**
    * Live view of the app-target set. Seeded from startup discovery; [registerNewTarget] appends
    * net-new targets and swaps in the freshly-discovered instance for an edited id (Create/Edit
-   * Target saves). Individual target objects are immutable - a run that captured its resolved
-   * target at run start keeps that reference and stays consistent even if the set entry is later
-   * swapped. Every read sees a complete immutable snapshot (old or new, never partial); renames
-   * and removals of existing targets still require a daemon restart (flagged by the
-   * `target-drift` endpoint).
+   * Target saves), and [reloadAppTargets] replaces the whole set on a workspace switch (the one
+   * path that can also drop targets). Individual target objects are immutable - a run that
+   * captured its resolved target at run start keeps that reference and stays consistent even if
+   * the set entry is later swapped. Every read sees a complete immutable snapshot (old or new,
+   * never partial). The `target-drift` endpoint stays as the backstop for the cases neither path
+   * covers — an in-place edit of the current workspace's trailmaps, or a reload that failed.
    *
    * This is a point-in-time snapshot getter — desktop composables that must recompose on a
    * live append should collect [availableAppTargetsFlow] instead.
    */
   val availableAppTargets: Set<TrailblazeHostAppTarget>
     get() = _availableAppTargetsFlow.value
+
+  /**
+   * Serializes every call into [freshAppTargetsProvider]. A discovery pass doesn't just return a
+   * set — it also REPLACES the process-global workspace tool and toolset overlays (see
+   * `AppTargetDiscovery`), and those overlays only make sense paired with the target set from the
+   * same pass. Two overlapping passes would otherwise interleave, leaving one workspace's overlays
+   * installed alongside another's targets, so a tool the live target declares resolves as missing.
+   *
+   * Serializing also removes the need to detect a superseded reload: [freshAppTargetsProvider]
+   * reads the workspace directory at call time (not one captured when the switch was requested),
+   * so whichever pass runs last necessarily discovers the workspace the user actually settled on.
+   */
+  private val appTargetDiscoveryLock = Mutex()
 
   init {
     // The settings repo predates this manager (it feeds the config's startup discovery), so its
@@ -170,7 +192,7 @@ class TrailblazeDeviceManager(
    * outcome logs why, so a "target didn't appear" report is diagnosable from the daemon log
    * without a restart — the whole point of the flow.
    */
-  fun registerNewTarget(targetId: String): TrailblazeHostAppTarget? {
+  suspend fun registerNewTarget(targetId: String): TrailblazeHostAppTarget? {
     val provider = freshAppTargetsProvider ?: run {
       Console.log(
         "[TrailblazeDeviceManager] Live target registration for '$targetId' skipped: " +
@@ -178,20 +200,53 @@ class TrailblazeDeviceManager(
       )
       return null
     }
-    val fresh = try {
-      provider()
-    } catch (e: Exception) {
-      Console.error(
-        "[TrailblazeDeviceManager] Live target registration for '$targetId' failed during discovery: " +
-          "${e::class.simpleName}: ${e.message}\n${e.stackTraceToString()}",
-      )
-      return null
+    return appTargetDiscoveryLock.withLock {
+      val fresh = try {
+        provider(false)
+      } catch (e: Exception) {
+        Console.error(
+          "[TrailblazeDeviceManager] Live target registration for '$targetId' failed during discovery: " +
+            "${e::class.simpleName}: ${e.message}\n${e.stackTraceToString()}",
+        )
+        return@withLock null
+      }
+      // The live set IS the StateFlow's value, so the CAS append emits to every desktop
+      // composable collecting [availableAppTargetsFlow] — that's what makes the new target
+      // appear in the picker without a restart.
+      casAppendNewTarget(_availableAppTargetsFlow, fresh, targetId)
     }
-    // The live set IS the StateFlow's value, so the CAS append emits to every desktop
-    // composable collecting [availableAppTargetsFlow] — that's what makes the new target
-    // appear in the picker without a restart.
-    return casAppendNewTarget(_availableAppTargetsFlow, fresh, targetId)
   }
+
+  /**
+   * Replaces the live app-target set with a full re-discovery against the CURRENT workspace, so
+   * switching workspaces changes the target picker without a daemon restart. Called from the
+   * settings patch that moves the trails directory.
+   *
+   * Unlike [registerNewTarget] this is deliberately NOT additive: a target the new workspace
+   * doesn't declare is dropped. Keeping the previous workspace's targets in the picker is the
+   * bug, not the safety net — a switch is a statement about which workspace is in play. Target
+   * objects are immutable and a run captures its resolved target at run start, so an in-flight
+   * run keeps working against the reference it already holds.
+   *
+   * Discovery runs with `failFast = true` so a broken workspace surfaces as a thrown exception
+   * rather than as discovery's one-target fallback set, which this method would otherwise install
+   * over a perfectly good set.
+   *
+   * Discovery takes long enough (disk plus the scripted-tool analyzer) that two quick switches can
+   * overlap, so the pass runs under [appTargetDiscoveryLock]. Serialized passes each read the
+   * workspace directory saved at the moment they run, so the last one to finish is the last one to
+   * start and the picker settles on the workspace the user actually chose.
+   *
+   * Returns the new set, or null when the reload couldn't run (no provider wired, or discovery
+   * threw). In both null cases the live set is left exactly as it was, so the `target-drift`
+   * endpoint still sees a difference and the UI's restart nudge remains the fallback.
+   */
+  suspend fun reloadAppTargets(): Set<TrailblazeHostAppTarget>? =
+    swapAppTargets(
+      holder = _availableAppTargetsFlow,
+      provider = freshAppTargetsProvider?.let { discover -> { discover(true) } },
+      lock = appTargetDiscoveryLock,
+    )
 
   /**
    * Single point of ownership for per-`SessionId` capture across CLI, MCP, and desktop-UI
@@ -501,6 +556,9 @@ class TrailblazeDeviceManager(
       additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),
       captureVideo = captureVideoOverride,
       onComplete = onComplete,
+      // Same registry the session target resolves against above, so a multi-device configuration's
+      // per-device `target:` override resolves by the same rules as `config.target`.
+      findTargetById = { id -> availableAppTargets.find { it.id == id } },
     )
 
     runYamlLambda(params)
@@ -695,6 +753,11 @@ class TrailblazeDeviceManager(
       sessionTargetRegistry.clear(current)
       current
     }
+    // The device's registered driver goes with the session, gracefully rather than forcefully.
+    // Usually a run's own cleanup already closed it and there is nothing here, but an MCP-referrer
+    // run deliberately leaves its driver registered between tool calls, and this is where an MCP
+    // session ending finally lets go of it - the only other release is a later run displacing it.
+    closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
     closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
     closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
     // Web browser intentionally NOT closed here. The browser is the "device" — durable
@@ -1331,6 +1394,37 @@ class TrailblazeDeviceManager(
     return scopeCancelled || cancelledSessionId != null
   }
 
+  /**
+   * Hands a device back when the run that reserved it never opened a session.
+   *
+   * Compare-and-clear under [sessionCreationLock]: the reservation is dropped only while
+   * [sessionId] is still the device's registered holder, so a newer run that has already claimed
+   * the device is left alone. Doing the compare inside the lock is the point - a caller that reads
+   * the mapping first and then cancels can be overtaken between the two, and would kill the run
+   * that overtook it.
+   *
+   * Deliberately NOT [cancelSessionForDevice]: a run that never started has no driver and no
+   * coroutine scope to tear down, and forcing those closed would disconnect a device the UI had
+   * already connected for a run that is still perfectly healthy.
+   *
+   * @return true if this session's reservation was the one released.
+   */
+  fun releaseUnstartedSession(trailblazeDeviceId: TrailblazeDeviceId, sessionId: SessionId): Boolean {
+    synchronized(sessionCreationLock) {
+      if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] != sessionId) return false
+      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+      sessionTargetRegistry.clear(sessionId)
+    }
+    // Best-effort, outside the lock for the same reason cancelSessionForDevice finalizes outside
+    // it: a slow capture teardown must not block concurrent device management.
+    runCatching {
+      finalizeHostSessionResources(listOf(sessionId), sessionCaptureCoordinator::stopForSession)
+    }.onFailure {
+      Console.log("Capture cleanup after releasing unstarted session $sessionId failed: ${it.message}")
+    }
+    return true
+  }
+
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
     // Get the running test and KILL its driver (kills child processes)
     maestroDriverByDeviceMap[trailblazeDeviceId]?.let { maestroDriver ->
@@ -1434,8 +1528,23 @@ class TrailblazeDeviceManager(
       }
   }
 
+  /**
+   * Registers the driver a run is executing with, closing whatever this device was holding before.
+   *
+   * The displaced driver always belongs to a run that is already over. Usually its own cleanup
+   * closed it and there is nothing here to displace, but an MCP-referrer run deliberately skips
+   * [cancelSessionForDevice] to keep its driver alive between tool calls, so its driver is still
+   * registered when the next run arrives. Dropping that one from the map without closing it is what
+   * would leave a hold on the shared iOS driver with nothing left pointing at it to release.
+   */
   fun setActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId, maestroDriver: Driver) {
-    maestroDriverByDeviceMap[trailblazeDeviceId] = maestroDriver
+    val displaced = maestroDriverByDeviceMap.put(trailblazeDeviceId, maestroDriver)
+    if (displaced == null || displaced === maestroDriver) return
+    try {
+      displaced.close()
+    } catch (e: Exception) {
+      Console.log("Error closing the driver replaced on device ${trailblazeDeviceId.instanceId} (continuing anyway): ${e.message}")
+    }
   }
 
   /**
@@ -1636,6 +1745,53 @@ class TrailblazeDeviceManager(
             }
           // CAS lost to a concurrent mutation — loop and re-decide against the new current set.
         }
+      }
+    }
+
+    /**
+     * Runs the whole-set reload against [holder] (the manager's live-target [MutableStateFlow]):
+     * re-discovers via [provider] and swaps the result in, replacing the previous set rather than
+     * merging with it. Backs [reloadAppTargets]; extracted for the same reason
+     * [casAppendNewTarget] is — the manager's ~14 constructor dependencies make constructing one
+     * in a test impractical.
+     *
+     * [lock] serializes the pass: [provider] mutates process-global tool overlays as well as
+     * returning a set, so an overlapping pass must not interleave with this one.
+     *
+     * Returns the new set, or null when [provider] is absent or throws — and in both null cases
+     * [holder] is left untouched, so a failed reload degrades to the previous workspace's targets
+     * plus the drift nudge rather than to an empty picker.
+     */
+    internal suspend fun swapAppTargets(
+      holder: MutableStateFlow<Set<TrailblazeHostAppTarget>>,
+      provider: (() -> Set<TrailblazeHostAppTarget>)?,
+      lock: Mutex,
+    ): Set<TrailblazeHostAppTarget>? {
+      if (provider == null) {
+        Console.log(
+          "[TrailblazeDeviceManager] App-target reload skipped: no fresh-discovery provider wired " +
+            "(falling back to restart-required flow)",
+        )
+        return null
+      }
+      return lock.withLock {
+        val fresh = try {
+          provider()
+        } catch (e: Exception) {
+          Console.error(
+            "[TrailblazeDeviceManager] App-target reload failed during discovery: " +
+              "${e::class.simpleName}: ${e.message}\n${e.stackTraceToString()}",
+          )
+          return@withLock null
+        }
+        val previousIds = holder.getAndUpdate { fresh }.map { it.id }.toSet()
+        val freshIds = fresh.map { it.id }.toSet()
+        Console.log(
+          "[TrailblazeDeviceManager] Reloaded app targets for the current workspace: " +
+            "${fresh.size} available (added: ${(freshIds - previousIds).sorted()}, " +
+            "removed: ${(previousIds - freshIds).sorted()})",
+        )
+        fresh
       }
     }
 

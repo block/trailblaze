@@ -15,6 +15,7 @@ import xyz.block.trailblaze.trailrunner.DeleteSessionRequest
 import xyz.block.trailblaze.trailrunner.DeleteSessionResponse
 import xyz.block.trailblaze.trailrunner.DeviceAppsResponse
 import xyz.block.trailblaze.trailrunner.EditedTrailsResponse
+import xyz.block.trailblaze.trailrunner.TrailGitBaselineResponse
 import xyz.block.trailblaze.trailrunner.ExternalAgentEventsResponse
 import xyz.block.trailblaze.trailrunner.ExternalAgentReplyRequest
 import xyz.block.trailblaze.trailrunner.ExternalAgentRunRequest
@@ -26,6 +27,7 @@ import xyz.block.trailblaze.trailrunner.GetDeviceAppsRequest
 import xyz.block.trailblaze.trailrunner.GetInstalledAppsRequest
 import xyz.block.trailblaze.trailrunner.InstalledAppsResponse
 import xyz.block.trailblaze.trailrunner.GetEditedTrailsRequest
+import xyz.block.trailblaze.trailrunner.GetTrailGitBaselineRequest
 import xyz.block.trailblaze.trailrunner.GetFavoritesRequest
 import xyz.block.trailblaze.trailrunner.GetIntegrationsRequest
 import xyz.block.trailblaze.trailrunner.GetRunToolsRequest
@@ -147,6 +149,7 @@ internal object TrailRunnerDtoTsBindings {
     ToolSourceSaveRequest.serializer().descriptor,
     ToolUsageCountsResponse.serializer().descriptor,
     TrailDetailResponse.serializer().descriptor,
+    TrailGitBaselineResponse.serializer().descriptor,
     TrailIndexResponse.serializer().descriptor,
     TrailOpenRequest.serializer().descriptor,
     TrailRootsResponse.serializer().descriptor,
@@ -167,6 +170,7 @@ internal object TrailRunnerDtoTsBindings {
     GetTrailRootsRequest::class,
     GetEditedTrailsRequest::class,
     GetTrailDetailRequest::class,
+    GetTrailGitBaselineRequest::class,
     ValidateTrailRequest::class,
     GetFavoritesRequest::class,
     GetIntegrationsRequest::class,

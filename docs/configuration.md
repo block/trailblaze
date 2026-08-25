@@ -171,7 +171,7 @@ Two things worth knowing:
 
 - **Only an explicit declaration takes effect.** Omit the key and nothing changes.
   Workspaces already using `<workspace-root>/trails` need no entry.
-- **An already-running daemon does not re-anchor.** `trailblaze app` hands off to the existing
+- **An already-running daemon does not re-anchor.** `trailblaze app --v2` hands off to the existing
   window, so the workspace is the one the daemon *started* in. Run `trailblaze app --stop` and
   relaunch from the workspace you want.
 
@@ -239,6 +239,7 @@ Development-checkout launcher knobs (the `./trailblaze` wrapper script; installe
 | `TRAILBLAZE_OLLAMA_NUM_CTX` | `65536` | session | Positive host-side Ollama `num_ctx` request override. Malformed or non-positive values fall back to 64K. See [Ollama (Local Models)](llm_configuration.md#ollama-local-models). |
 | `TRAILBLAZE_DEFERRED_VARIABLES` | empty | command | Comma-separated `{{var}}` names excluded from environment expansion in trail templates (left for runtime memory instead). |
 | `TRAILBLAZE_AUTO_TERMINATE_VERIFY_STEPS` | `false` | session | Auto-terminate verify steps once their assertion passes. |
+| `TRAILBLAZE_DEVICE_BINDINGS` | unset | session | Binds the non-start named devices of a multi-device trail's `config.devices:` configuration entry to connected devices, as comma-separated `name=deviceInstanceId` pairs (e.g. `buyer=emulator-5556`). The configuration's first declared device is the start device and binds to the launch device automatically; every other declared name needs an entry here — the declared classifier is the trail's portable contract, but classifier-based auto-binding is not implemented yet. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. |
 | `TRAILBLAZE_TRAILS_DIR` | configured trails root | launch | Overrides the Trail Runner web UI's primary trails root. Unset, the UI uses the effective trails directory — the launch workspace's [`trails:`](#declaring-a-trails-directory) declaration if it has one, else the directory configured in the app (the app-data `trails/` dir unless you picked a workspace) — falling back to `<cwd>/trails` only when that path doesn't exist. |
 
 ### Android devices
@@ -292,6 +293,7 @@ The stream and proxy capture switches are experimental and off by default; each 
 | `TRAILBLAZE_DISABLE_ANIMATIONS` | unset | session | Disable OS animations for the duration of each session, restoring previous values at session end (config twin: `disable-animations`). Android: zeroes the three global animation scales; iOS simulators: near-zero `UIAnimationDragCoefficient` (deliberately *not* Reduce Motion, which apps branch on). |
 | `TRAILBLAZE_ANDROID_PROXY_CAPTURE` | unset | session | **Single switch** for Android network capture via a host-side mitmproxy (emulator-only, API 34+, needs mitmproxy installed): routes the emulator through `mitmdump`, installs the CA, writes `network.ndjson` into the session. |
 | `TRAILBLAZE_MITMDUMP` | `mitmdump` on `PATH` | session | Explicit path to the `mitmdump` binary. |
+| `TRAILBLAZE_NETWORK_CAPTURE_DEVICES` | unset (= every bound device) | session | Comma-separated `config.devices:` names to arm Android network capture on in a multi-device session. A multi-device session captures each device separately and suffixes its artifacts with the device name (`network.<device>.ndjson`, `events/<stream>.<device>.ndjson`), so both displays' evidence lands in one session. Narrow it when only some of a pair's displays run a capture-capable app: capture is load-bearing evidence, so a device whose app never dials in fails the session after the discovery timeout. A name no bound device matches is logged, not ignored. Read by the daemon, so restart it (`trailblaze --stop`) if it was started without the variable. |
 | `TRAILBLAZE_SPRITE_FPS` | `2` | session | Host-session timeline sprite frame rate (`1..60`); invalid values fall back and log the chosen default. |
 | `TRAILBLAZE_SPRITE_FRAME_HEIGHT` | `720` | session | Host-session timeline sprite frame height in pixels (`16..16383`). |
 | `TRAILBLAZE_SPRITE_QUALITY` | `80` | session | Host-session timeline sprite WebP quality (`1..100`). |

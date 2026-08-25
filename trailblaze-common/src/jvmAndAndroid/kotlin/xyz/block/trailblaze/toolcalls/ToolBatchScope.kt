@@ -85,9 +85,37 @@ object ToolBatchScope {
     scope.context = ctx
     ToolExecutionContextThreadLocal.install(ctx)
     scope.installedThreadLocal = true
-    SnapshotCache.pushFrame()
-    scope.pushedFrame = true
+    // Guarded so a rebuild after [invalidateContext] doesn't push a SECOND frame the single
+    // [exit] pop would leak — the frame belongs to the batch, not to any one context.
+    if (!scope.pushedFrame) {
+      SnapshotCache.pushFrame()
+      scope.pushedFrame = true
+    }
     return ctx
+  }
+
+  /**
+   * Drop the scope's cached context so the NEXT dispatch into this batch rebuilds it via
+   * [contextOrBuild]'s build lambda, without tearing down the scope itself. No-op when no
+   * scope is active or no context has been built yet.
+   *
+   * Motivating caller: `switchDevice` mid-recording — the shared context binds the device
+   * it was built for (its `AndroidDeviceCommandExecutor`, `trailblazeDeviceInfo`), so after
+   * a device handover the rest of the batch must not keep dispatching against the old
+   * device's context. The installed ThreadLocal is cleared here (and re-installed by the
+   * rebuild) so the rebuild doesn't trip the CONTEXT_CLOBBER warning; the [SnapshotCache]
+   * frame is kept — it belongs to the batch, and the dispatch loop's default-invalidate
+   * after the mutating tool that triggered this has already dropped the captured tree.
+   */
+  fun invalidateContext() {
+    val scope = current.get() ?: return
+    warnIfThreadHopped(scope, "invalidateContext")
+    if (scope.context == null) return
+    scope.context = null
+    if (scope.installedThreadLocal) {
+      ToolExecutionContextThreadLocal.clear()
+      scope.installedThreadLocal = false
+    }
   }
 
   /** Close the scope, undoing exactly what [contextOrBuild] established. Idempotent. */

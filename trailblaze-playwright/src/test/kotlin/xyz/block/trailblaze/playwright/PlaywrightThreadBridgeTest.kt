@@ -95,6 +95,31 @@ class PlaywrightThreadBridgeTest {
   }
 
   @Test
+  fun `the block's value is returned through both branches`() {
+    // Callers that read state through the bridge — a multi-device session capturing screen
+    // state from the routing thread, or executing a tool and needing its result — depend on
+    // the value coming back. A bridge that ran the block for effect only would silently hand
+    // those callers a default instead of what the browser actually reported.
+    val offThread: Pair<Thread, String> = PlaywrightThreadBridge.runOnPlaywrightThread(
+      currentThread = Thread.currentThread(),
+      playwrightThread = playwrightThread,
+      dispatcher = dispatcher,
+    ) { Thread.currentThread() to "captured" }
+    assertSame(playwrightThread, offThread.first)
+    assertEquals("captured", offThread.second)
+
+    val onThread = executor.submit<Pair<Thread, String>> {
+      PlaywrightThreadBridge.runOnPlaywrightThread(
+        currentThread = Thread.currentThread(),
+        playwrightThread = playwrightThread,
+        dispatcher = dispatcher,
+      ) { Thread.currentThread() to "captured" }
+    }.get(2, TimeUnit.SECONDS)
+    assertSame(playwrightThread, onThread.first)
+    assertEquals("captured", onThread.second)
+  }
+
+  @Test
   fun `null playwright thread falls through to dispatcher (pre-init safety)`() {
     // During `PlaywrightBrowserManager` construction the `playwrightThread` lateinit
     // is only assigned inside the executor's first task, so very-early calls may pass

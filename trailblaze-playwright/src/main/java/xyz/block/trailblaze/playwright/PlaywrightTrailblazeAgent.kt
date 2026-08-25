@@ -2,6 +2,7 @@ package xyz.block.trailblaze.playwright
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
@@ -84,7 +85,13 @@ class PlaywrightTrailblazeAgent(
    * is set — the wiring lives host-side because the stream-screenshot core does.
    */
   screenStateProviderOverride: (() -> ScreenState)? = null,
-) : BaseTrailblazeAgent() {
+  /**
+   * Optional shared [AgentMemory] — see [BaseTrailblazeAgent.memory]. Defaults to a fresh
+   * instance for single-device runs; a multi-device session passes the primary agent's
+   * instance so `remember*` writes are visible when the trail switches devices.
+   */
+  memory: AgentMemory = AgentMemory(),
+) : BaseTrailblazeAgent(memory) {
 
   /**
    * Working directory for resolving relative file paths in tools.
@@ -92,8 +99,11 @@ class PlaywrightTrailblazeAgent(
    */
   var workingDirectory: java.io.File? = null
 
+  // The default capture self-bridges onto the Playwright thread: multi-device sessions invoke
+  // the provider from the session's routing thread, where a raw getScreenState() would violate
+  // Playwright Java's single-thread contract. On-thread callers run inline (no dispatch cost).
   val screenStateProvider: () -> ScreenState =
-    screenStateProviderOverride ?: { browserManager.getScreenState() }
+    screenStateProviderOverride ?: { browserManager.onPlaywrightThread { browserManager.getScreenState() } }
 
   // buildKoogToolExecutionContext now lives on BaseTrailblazeAgent (shared by every driver agent),
   // delegating to this agent's buildExecutionContext override.
@@ -120,6 +130,9 @@ class PlaywrightTrailblazeAgent(
       workingDirectory = workingDirectory,
       sessionDirProvider = sessionDirProvider,
       inflightRequestTracker = inflightRequestTracker,
+      // Multi-device sessions set BaseTrailblazeAgent.deviceBindings after construction so the
+      // recorded `switchDevice` tool can flip the active device; null for single-device runs.
+      deviceBindings = deviceBindings,
       // Threads the agent's tool repo through so Kotlin tools composing framework
       // tools via `ctx.invokeFrameworkTool(...)` resolve them by name. See the same
       // wiring on `MaestroTrailblazeAgent.buildExecutionContext` — without it, the
@@ -174,7 +187,17 @@ class PlaywrightTrailblazeAgent(
     }
   }
 
+  // Bridged onto the Playwright thread because everything inside touches Page objects
+  // (capture, ref resolution, executeWithPlaywright). Single-device runs are already
+  // on-thread and run inline; multi-device tool dispatch arrives on the routing thread.
   private fun executePlaywrightToolBlocking(
+    tool: PlaywrightExecutableTool,
+    context: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult = browserManager.onPlaywrightThread {
+    executePlaywrightToolOnThread(tool, context)
+  }
+
+  private fun executePlaywrightToolOnThread(
     tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult = runBlocking {

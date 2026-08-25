@@ -163,9 +163,6 @@ html[data-theme="light"] .tb-btn.primary:disabled:hover { color: var(--text-subt
 .tb-h1 { font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
 .tb-h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 .tb-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--text-subtle); }
-/* Timeline section labels: the trailhead's purple must deepen on light (same reason as the chips below). */
-.tb-eyebrow.trailhead { color: #b58cff; }
-html[data-theme="light"] .tb-eyebrow.trailhead { color: #5b21b6; }
 .tb-sub { font-size: 13px; color: var(--text-subtle); }
 .tb-mono { font-family: var(--font-mono); }
 
@@ -544,6 +541,24 @@ html[data-theme="light"] .tb-run-mark {
 .cm-s-tb.CodeMirror { height: 100%; background: var(--bg-standard); color: var(--text-standard); font-family: var(--font-mono), ui-monospace, monospace; font-size: 12.5px; line-height: 1.55; }
 .cm-s-tb .CodeMirror-gutters { background: var(--bg-standard); border-right: 1px solid var(--tb-hairline); }
 .cm-s-tb .CodeMirror-linenumber { color: var(--text-subtle); }
+.tb-tool-run-gutter { width: 22px; }
+.tb-tool-run-button {
+  appearance: none; width: 20px; height: 20px; margin: 0; padding: 0; border: 0; border-radius: 6px;
+  display: grid; place-items: center; color: var(--text-subtle); background: transparent; cursor: pointer;
+}
+.tb-tool-run-button::before { content: '▶'; font-size: 10px; line-height: 1; transform: translateX(1px); }
+.tb-tool-run-button:hover, .tb-tool-run-button:focus-visible { color: var(--tb-running); background: rgba(94,155,255,.14); outline: none; }
+.tb-tool-run-button:focus-visible { box-shadow: inset 0 0 0 1.5px var(--tb-selection); }
+.tb-tool-run-button.is-running { cursor: wait; color: var(--tb-running); }
+.tb-tool-run-button.is-running::before { content: '◌'; animation: tbSpin .8s linear infinite; transform: none; }
+.tb-tool-run-button:disabled:not(.is-running), .tb-tool-run-glyph.is-disabled { cursor: not-allowed; color: var(--text-subtle); opacity: .35; background: transparent; }
+/* Monaco renders glyph-margin decorations as aligned divs rather than buttons. Keep the control
+   visually identical to the keyboard-focusable CodeMirror fallback and make the hit target obvious. */
+.tb-tool-run-glyph { cursor: pointer; color: var(--text-subtle); border-radius: 6px; }
+.tb-tool-run-glyph::before { content: '▶'; display: grid; place-items: center; width: 100%; height: 100%; font-size: 10px; transform: translateX(1px); }
+.tb-tool-run-glyph:hover { color: var(--tb-running); background: rgba(94,155,255,.14); }
+.tb-tool-run-glyph.is-running { cursor: wait; color: var(--tb-running); }
+.tb-tool-run-glyph.is-running::before { content: '◌'; animation: tbSpin .8s linear infinite; transform: none; }
 .cm-s-tb .CodeMirror-cursor { border-left: 1.5px solid var(--text-standard); }
 .cm-s-tb .CodeMirror-selected { background: rgba(110, 168, 254, .22); }
 .cm-s-tb .CodeMirror-activeline-background { background: transparent; }
@@ -555,6 +570,27 @@ html[data-theme="light"] .tb-run-mark {
 .cm-s-tb .cm-variable-2 { color: #6ea8fe; }
 .cm-s-tb .cm-tag { color: #f0883e; }
 .CodeMirror-lint-tooltip { background: var(--bg-standard); color: var(--text-standard); border: 1px solid var(--tb-hairline); border-radius: 8px; font-size: 12px; }
+/* Monaco's hover widget - the run-button and diagnostic tooltips. Left unstyled it inherits the
+   editor ROOT's 16px rather than the 12.5px the code lines actually render at, so a two-word label
+   came out larger than the code it was covering and spanned most of the pane. Sized to sit just
+   under the code and capped narrow enough to stay beside the gutter instead of over the text. */
+.monaco-editor .monaco-hover {
+  background: var(--bg-standard);
+  color: var(--text-standard);
+  border: 1px solid var(--tb-hairline);
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  /* Wide enough for `Test <tool name>` to stay on one line; a tool name is one unbreakable token. */
+  max-width: 420px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+}
+/* Tight horizontally on purpose: Monaco caps the hover at the editor pane's width, and the pane is
+   narrow with the Tools panel open, so every pixel here is a pixel a tool name doesn't have to wrap. */
+.monaco-editor .monaco-hover .monaco-hover-content { padding: 5px 6px; }
+.monaco-editor .monaco-hover .hover-row { padding: 0; border: 0; }
+/* The tool name arrives as markdown inline code; the default rendering adds another box inside a box. */
+.monaco-editor .monaco-hover code { background: transparent; padding: 0; font-size: inherit; color: var(--text-standard); }
 /* Light mode: the syntax tokens above are pastels tuned for a dark bg; on the white editor
    surface they drop to ~1.8:1 (strings/numbers unreadable). Deepen to the same hues the light
    chips use (ch08 contrast + cross-component consistency). */

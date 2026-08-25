@@ -98,11 +98,28 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
     check(awaitBindable(port)) {
       "Port $port was still held by another socket ${PORT_STATE_TIMEOUT_MS}ms into start()"
     }
+    // Set BEFORE the start call, not after it: a bind that lands and then throws on its way out
+    // still leaves a live listener, and a flag set afterwards would be false for it — [stop] would
+    // skip it and leak the port for the rest of the JVM, which is the exact failure this flag
+    // exists to contain.
+    engineStarted = true
     server.start(wait = false)
     check(awaitListening(port, isListening = true)) {
       "MockRpcServer never started listening on port $port within ${PORT_STATE_TIMEOUT_MS}ms"
     }
   }
+
+  /**
+   * Whether [start] reached the engine, so [stop] knows there is anything to stop.
+   *
+   * Without it, a [stop] in an `@After` that runs after a failed [start] asks a port this server
+   * never bound to go quiet. Measured, on a port held by another socket: Ktor's own shutdown returns
+   * promptly and [awaitListening] then sees the squatter still listening, so the teardown fails with
+   * its own "still listening" error — reporting the squatter instead of the real failure and burying
+   * whichever test failed first. It does NOT cost a second [PORT_STATE_TIMEOUT_MS]; the wasted 60s
+   * in build 15969 was all [awaitBindable] in [start].
+   */
+  @Volatile private var engineStarted = false
 
   /** The address the engine actually bound, so a test can assert the bind is loopback-only. */
   internal fun boundHosts(): List<String> = runBlocking {
@@ -116,8 +133,15 @@ class MockRpcServer(deviceId: TrailblazeDeviceId) {
    * Ktor's own 500ms shutdown bound elapsed, so the next test's [start] could race a listener that
    * was still up and take a `BindException` — which surfaces on a server thread, so the test failed
    * later and unrecognizably (an `UninitializedPropertyAccessException` in `tearDown`).
+   *
+   * A no-op when [start] never reached the engine. An `@After` runs whether or not `@Before`
+   * succeeded, so this is the normal path after a failed [start] — and asking a port this server
+   * never bound to go quiet reports the squatter's presence as this server's teardown failure,
+   * burying the real error (see [engineStarted]).
    */
   fun stop() {
+    if (!engineStarted) return
+    engineStarted = false
     server.stop(gracePeriodMillis = 0, timeoutMillis = STOP_GRACE_TIMEOUT_MS)
     check(awaitListening(port, isListening = false)) {
       "MockRpcServer was still listening on port $port ${PORT_STATE_TIMEOUT_MS}ms after stop()"

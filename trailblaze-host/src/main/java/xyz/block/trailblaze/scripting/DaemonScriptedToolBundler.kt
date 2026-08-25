@@ -7,8 +7,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
+import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeTrailmapManifest
+import xyz.block.trailblaze.config.project.TrailmapScriptedToolFile
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.util.Console
 import java.io.ByteArrayOutputStream
@@ -198,7 +199,7 @@ class DaemonScriptedToolBundler(
    *
    * Duplicate names across files in the same trailmap throw with both contributing file names.
    *
-   * SISTER IMPLEMENTATIONS — same algorithm lives in three other places, keep all four in
+   * SISTER IMPLEMENTATIONS — same algorithm lives in four other places, keep all five in
    * lockstep:
    *   - `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailblazeProjectConfigLoader.kt`
    *     `discoverTrailmapScriptedTools` — runtime trailmap loader.
@@ -206,8 +207,14 @@ class DaemonScriptedToolBundler(
    *     `buildScriptedToolRegistry` — build-time `.d.ts` augmentation generator.
    *   - `build-logic/src/main/kotlin/TrailblazeBundledConfigTasks.kt`
    *     `buildTrailmapScriptedToolRegistry` — Gradle bundled-config generator.
+   *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/usages/ScriptedToolSourceSnapshotScanner.kt`
+   *     `snapshot` — the `usages --changed-since` inventory. ANALYSIS-ONLY, and deliberately
+   *     divergent in two ways: it never throws (it runs against historical refs that may predate
+   *     an author fix, so every anomaly is a warning), and it is dir-parameterized rather than
+   *     workspace-singleton-resolved so it can scan a ref checkout and the working tree in one
+   *     process. It DOES mirror the loader's meta-only + bare-`.ts` passes.
    *
-   * Search tag for grepping all four sister implementations at once (resilient against
+   * Search tag for grepping all five sister implementations at once (resilient against
    * future file moves): `SISTER-IMPL-TAG: trailmap-scripted-tool-discovery`.
    */
   /**
@@ -1035,15 +1042,11 @@ class DaemonScriptedToolBundler(
 
     /**
      * Filename suffixes that mark an operational tool YAML rather than a scripted-tool
-     * descriptor. Mirrored from `TrailblazeProjectConfigLoader` so the daemon and loader
-     * agree on which files in `<trailmap>/tools/` are scripted-tool descriptors.
+     * descriptor — the loader's list, referenced directly so the daemon and loader can't
+     * disagree on which files in `<trailmap>/tools/` are scripted-tool descriptors.
      */
-    private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
-      ".tool.yaml",
-      ".shortcut.yaml",
-      ".trailhead.yaml",
-      ".waypoint.yaml",
-    )
+    private val OPERATIONAL_TOOL_YAML_SUFFIXES =
+      TrailblazeProjectConfigLoader.OPERATIONAL_TOOL_YAML_SUFFIXES
 
     /**
      * Filename prefix for synthesized wrapper `.ts` files we drop next to the user's script.

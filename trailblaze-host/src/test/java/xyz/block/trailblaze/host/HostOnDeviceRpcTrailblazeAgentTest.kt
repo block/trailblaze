@@ -53,6 +53,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
@@ -103,10 +104,28 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     rpcClient = OnDeviceRpcClient(testDeviceId)
   }
 
+  /**
+   * Stops the server even when the client teardown fails, and even when [setUp] never got as far as
+   * creating a client.
+   *
+   * Not defensive tidiness — it is the difference between one red test and a cancelled build. The
+   * server's port is derived from [testDeviceId], so it is the same port for all 42 tests in this
+   * class. Skipping [MockRpcServer.stop] once leaves that port bound for the rest of the JVM, and
+   * every later test then pays the full 60s bindability wait in [MockRpcServer.start] before
+   * failing. On build 15969 that turned one failure into 27, spent 27 minutes doing it, and the
+   * build was killed at its time limit before it could report anything.
+   *
+   * The `isInitialized` guard covers the other half: when [setUp] fails at [MockRpcServer.start],
+   * `rpcClient` was never assigned, so touching it here threw
+   * `UninitializedPropertyAccessException` and buried the real failure under a second one.
+   */
   @After
   fun tearDown() {
-    rpcClient.close()
-    mockServer.stop()
+    try {
+      if (::rpcClient.isInitialized) rpcClient.close()
+    } finally {
+      mockServer.stop()
+    }
   }
 
   private fun createAgent(
@@ -640,6 +659,62 @@ class HostOnDeviceRpcTrailblazeAgentTest {
 
     assertThat(agent.memory.variables["explicitlyDeleted"]).isNull()
     assertThat(agent.memory.variables["omittedButKept"]).isEqualTo("survives")
+  }
+
+  /**
+   * The per-device half of multi-device targets: a session binds one agent per device, and each
+   * one's execution context must carry ITS device's target — that context is what
+   * `_meta.trailblaze.target` (and so a scripted tool's `ctx.target.resolveAppId()`) is built from.
+   * Sharing one target across agents is what made a paired-display session resolve the launch
+   * device's app id on both displays.
+   */
+  @Test
+  fun `each agent's execution context carries its own device's target and app id`() {
+    val sellerDevice = TrailblazeDeviceId(
+      instanceId = "emulator-5560",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val buyerDevice = TrailblazeDeviceId(
+      instanceId = "emulator-5562",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val sellerAgent = createAgent(
+      resolvedTarget = ResolvedTarget(
+        target = FakeTrailblazeHostAppTarget("seller-app", listOf("com.example.seller")),
+        deviceId = sellerDevice,
+      ),
+      appId = "com.example.seller",
+    )
+    val buyerAgent = createAgent(
+      resolvedTarget = ResolvedTarget(
+        target = FakeTrailblazeHostAppTarget("buyer-app", listOf("com.example.buyer")),
+        deviceId = buyerDevice,
+      ),
+      appId = "com.example.buyer",
+    )
+
+    val sellerCtx = java.util.concurrent.atomic.AtomicReference<TrailblazeToolExecutionContext?>()
+    val buyerCtx = java.util.concurrent.atomic.AtomicReference<TrailblazeToolExecutionContext?>()
+    runBlocking {
+      sellerAgent.runTrailblazeTools(
+        tools = listOf(CapturingHostLocalTool(sellerCtx)),
+        elementComparator = NoopElementComparator,
+      )
+      buyerAgent.runTrailblazeTools(
+        tools = listOf(CapturingHostLocalTool(buyerCtx)),
+        elementComparator = NoopElementComparator,
+      )
+    }
+
+    val seller = checkNotNull(sellerCtx.get()) { "seller tool did not receive a context" }
+    assertThat(seller.resolvedTarget?.id).isEqualTo("seller-app")
+    assertThat(seller.resolvedTarget?.deviceId).isEqualTo(sellerDevice)
+    assertThat(seller.appId).isEqualTo("com.example.seller")
+
+    val buyer = checkNotNull(buyerCtx.get()) { "buyer tool did not receive a context" }
+    assertThat(buyer.resolvedTarget?.id).isEqualTo("buyer-app")
+    assertThat(buyer.resolvedTarget?.deviceId).isEqualTo(buyerDevice)
+    assertThat(buyer.appId).isEqualTo("com.example.buyer")
   }
 
   @Test

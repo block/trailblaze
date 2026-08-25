@@ -44,4 +44,8 @@ actual object Console {
   actual fun enableJsonMode() {
     // No-op — see the class KDoc.
   }
+
+  actual fun disableJsonMode() {
+    // No-op — see the class KDoc.
+  }
 }

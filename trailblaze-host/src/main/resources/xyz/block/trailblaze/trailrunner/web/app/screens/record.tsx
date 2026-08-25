@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // Blaze → Record. Drive a live device: each interaction is captured as a deterministic tool step,
@@ -1433,7 +1433,7 @@ function RecordScreen({ go, active, yamlSeed }) {
         ? <span role="alert" style={{ color: 'var(--tb-danger-text)' }}>{adhocErr}</span>
         : adhocRuns.length ? `${adhocRuns.filter((r) => r.ok).length} run${adhocRuns.filter((r) => r.ok).length === 1 ? '' : 's'} started.`
         : 'Each device starts a normal run.'}</span>
-      {adhocRuns.some((r) => r.ok) && <Btn kind="ghost" ico="radio" onClick={() => go('active', { followLive: Date.now() })}>View active runs</Btn>}
+      {adhocRuns.some((r) => r.ok) && <Btn kind="ghost" ico="radio" onClick={() => go('runs', { followLive: Date.now() })}>View active runs</Btn>}
       <Btn kind="primary" ico={adhocRunning ? 'loader-2' : 'play'} spin={adhocRunning} onClick={runAdhocYaml} disabled={!adhocYaml.trim() || adhocRunning || adhocDeviceIds.length === 0}>
         {adhocRunning ? 'Starting…' : `Run on ${adhocDeviceIds.length || 0}`}
       </Btn>

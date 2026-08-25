@@ -58,23 +58,52 @@ internal suspend fun buildTrailRootsResponse(deps: TrailRunnerDeps): TrailRootsR
  */
 private fun gitWorktreeInfo(dir: File): Pair<String?, Boolean> {
   if (!dir.isDirectory) return null to false
-  val topLevel = runGit(dir, "rev-parse", "--show-toplevel")?.takeIf { it.isNotBlank() } ?: return null to false
-  val branch = runGit(dir, "rev-parse", "--abbrev-ref", "HEAD")?.takeIf { it.isNotBlank() && it != "HEAD" }
+  val topLevel = runGit(dir, "rev-parse", "--show-toplevel", timeoutSeconds = 3)?.trim()?.takeIf { it.isNotBlank() }
+    ?: return null to false
+  val branch = runGit(dir, "rev-parse", "--abbrev-ref", "HEAD", timeoutSeconds = 3)
+    ?.trim()?.takeIf { it.isNotBlank() && it != "HEAD" }
   val isWorktree = File(topLevel, ".git").isFile
   return branch to isWorktree
 }
 
-private fun runGit(dir: File, vararg args: String): String? = runCatching {
+/**
+ * Runs `git` in [dir] and returns its stdout verbatim on exit 0, or null on every failure — no git,
+ * not a checkout, non-zero exit, a timeout, or a stdout drain that never reached EOF. The one git
+ * runner for this file: the branch probe, the edited-trails scan and the diff baseline all bound the
+ * same way.
+ *
+ * Stdout is drained on a daemon thread so [timeoutSeconds] actually governs: reading it inline
+ * blocks until the pipe hits EOF, so a wedged git (an index lock, a networked working tree) would
+ * hang the caller's dispatcher long past the timeout. Stderr is discarded at the OS level, because
+ * an undrained stderr pipe can fill on git's warnings and block the process the same way. Daemon +
+ * named so a timed-out drain can't hold up JVM shutdown or leak a thread per call.
+ *
+ * Verbatim, not trimmed: blank stdout is a real answer for `status --porcelain` (nothing changed),
+ * and `show` output has to reproduce the committed file byte for byte or a diff against it invents
+ * whitespace changes the user never made.
+ */
+private fun runGit(dir: File, vararg args: String, timeoutSeconds: Long = 10): String? = runCatching {
   val process = ProcessBuilder(listOf("git", *args))
     .directory(dir)
-    .redirectErrorStream(false)
+    .redirectError(ProcessBuilder.Redirect.DISCARD)
     .start()
-  val output = process.inputStream.bufferedReader().use { it.readText().trim() }
-  if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+  // Null until the drain reads all the way to EOF, so a drain that didn't finish reads as no answer
+  // rather than as empty output. Blank stdout on exit 0 is a real answer that has to survive this,
+  // which is why the completed read sets its own value instead of the caller testing for emptiness.
+  val out = java.util.concurrent.atomic.AtomicReference<String?>(null)
+  val reader = kotlin.concurrent.thread(isDaemon = true, name = "trailrunner-git-stdout") {
+    runCatching { out.set(process.inputStream.bufferedReader().readText()) }
+  }
+  if (!process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
     process.destroyForcibly()
+    reader.join(500)
     return@runCatching null
   }
-  if (process.exitValue() != 0) null else output.ifBlank { null }
+  // The process has exited, so its pipe is at EOF and the drain finishes as fast as the reader is
+  // scheduled. Still bounded rather than joined outright: a child that inherited the pipe and
+  // outlived git would hold it open forever, and this runs on a shared dispatcher.
+  reader.join(1000)
+  if (process.exitValue() != 0) null else out.get()
 }.getOrNull()
 
 /**
@@ -86,28 +115,9 @@ internal suspend fun buildEditedTrailsResponse(deps: TrailRunnerDeps): EditedTra
   withContext(Dispatchers.IO) {
     val paths = runCatching {
       val primary = resolvePrimaryRoot(deps.trailsRootProvider)
-      // Bound both git calls: a wedged index lock or a huge/networked working
-      // tree must not hang the IO dispatcher indefinitely.
-      fun runGit(vararg args: String): String? {
-        // Discard stderr at the OS level: an undrained stderr pipe could fill (git warnings, pager
-        // or config notices) and block the process past the waitFor timeout, wedging Dispatchers.IO.
-        val p = ProcessBuilder(listOf("git", "-C", primary.absolutePath) + args)
-          .redirectError(ProcessBuilder.Redirect.DISCARD)
-          .start()
-        // Drain stdout on a daemon thread so the waitFor timeout actually governs: readText() would
-        // block until the pipe hits EOF, so a wedged git holding its pipe open would hang the IO
-        // dispatcher and never time out. Daemon + named so a timed-out drain can't block JVM shutdown
-        // or leak a non-daemon thread per call.
-        val buf = StringBuilder()
-        val reader = kotlin.concurrent.thread(isDaemon = true, name = "trailrunner-git-stdout") {
-          p.inputStream.bufferedReader().forEachLine { synchronized(buf) { buf.appendLine(it) } }
-        }
-        if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) { p.destroyForcibly(); reader.join(500); return null }
-        reader.join(1000)
-        return if (p.exitValue() == 0) synchronized(buf) { buf.toString() } else null
-      }
-      val top = runGit("rev-parse", "--show-toplevel")?.trim()?.takeIf { it.isNotEmpty() } ?: return@runCatching emptyList()
-      val out = runGit("status", "--porcelain", "--", ".") ?: return@runCatching emptyList()
+      val top = runGit(primary, "rev-parse", "--show-toplevel")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: return@runCatching emptyList()
+      val out = runGit(primary, "status", "--porcelain", "--", ".") ?: return@runCatching emptyList()
       val primaryCanon = primary.canonicalFile
       out.lineSequence().mapNotNull { line ->
         if (line.length < 4) return@mapNotNull null
@@ -123,6 +133,53 @@ internal suspend fun buildEditedTrailsResponse(deps: TrailRunnerDeps): EditedTra
       }.toList()
     }.getOrDefault(emptyList())
     EditedTrailsResponse(paths)
+  }
+
+/**
+ * The committed version of one trail file, plus how the file on disk compares to it — what an
+ * editor diff view reads. `null` when the id doesn't resolve to a trail file, matching
+ * [buildTrailDetailResponse].
+ *
+ * The state is derived from the committed bytes themselves rather than from `git status`, so the
+ * verdict and the diff can't disagree: [TrailGitState.MODIFIED] means exactly "these two texts
+ * differ". A file git has nothing committed for is [TrailGitState.UNTRACKED] whether it is
+ * genuinely untracked or merely staged-but-never-committed — from a diff's point of view those are
+ * the same thing, every line is new. [TrailGitState.UNAVAILABLE] covers every case where git can't
+ * answer at all (not installed, not a checkout, a wedged index), so a caller can hide the
+ * affordance instead of showing an empty baseline that reads as "you deleted the whole file".
+ */
+internal suspend fun buildTrailGitBaselineResponse(
+  deps: TrailRunnerDeps,
+  idSegments: List<String>,
+): TrailGitBaselineResponse? =
+  withContext(Dispatchers.IO) {
+    val (primary, extras) = resolveRoots(deps.trailsRootProvider)
+    val (_, file) = resolveTrailFile(idSegments, primary, extras) ?: return@withContext null
+    val dir = file.parentFile ?: return@withContext TrailGitBaselineResponse(TrailGitState.UNAVAILABLE)
+    // `HEAD:./name` resolves against git's own working directory, so running in the file's directory
+    // is all this needs — no repo-root-relative path to compute, and it works the same in a linked
+    // worktree or a submodule.
+    val committed = runGit(dir, "show", "HEAD:./${file.name}")
+      ?: return@withContext TrailGitBaselineResponse(
+        // `show` reports that nothing came back, not why, and the two reasons need opposite answers:
+        // a genuinely new trail has no baseline BY DESIGN, while a wedged index or a killed git has
+        // one we merely failed to read. `ls-tree` separates them, because it answers about HEAD's
+        // contents instead of trying to produce bytes: exit 0 with empty stdout is "git looked, and
+        // HEAD has no such file", so the trail is new. Anything else — a null (git couldn't answer,
+        // including a repo with no commits yet) or a listed entry (it IS committed, so `show` itself
+        // failed) — is a baseline this daemon can't produce, and calling that UNTRACKED would render
+        // the whole file as added.
+        if (runGit(dir, "ls-tree", "HEAD", "--", "./${file.name}", timeoutSeconds = 3)?.isBlank() == true) {
+          TrailGitState.UNTRACKED
+        } else {
+          TrailGitState.UNAVAILABLE
+        },
+      )
+    val current = runCatching { file.readText() }.getOrNull()
+    TrailGitBaselineResponse(
+      state = if (current == committed) TrailGitState.CLEAN else TrailGitState.MODIFIED,
+      committed = committed,
+    )
   }
 
 /**

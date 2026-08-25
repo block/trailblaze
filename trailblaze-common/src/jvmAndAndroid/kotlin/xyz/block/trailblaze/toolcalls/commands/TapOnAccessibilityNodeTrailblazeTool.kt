@@ -36,10 +36,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * / `resourceIdRegex` tiebreakers when the on-screen text could plausibly appear on more
  * than one node.
  *
- * **No coordinate fallback on miss.** Unlike the LLM `tap` tool, this primitive never sets
- * `fallbackX/Y`, so a selector that doesn't resolve errors with "Element not found" instead
- * of tapping a stale coordinate. Authors don't have to defensive-check against off-target
- * taps from a flaky a11y tree.
+ * **No coordinate fallback on miss.** This primitive never sets `fallbackX/Y`, so a selector
+ * that doesn't resolve errors with "Element not found" instead of tapping a stale coordinate.
+ * Authors don't have to defensive-check against off-target taps from a flaky a11y tree. No other
+ * Android caller sets them either — the LLM `tap` tool lowers to `TapOnByElementSelector`, which
+ * dispatches through `executeNodeSelectorTap` with no coordinates — so the same holds for every
+ * tap on this driver.
  */
 @Serializable
 @TrailblazeToolClass(

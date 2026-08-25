@@ -77,15 +77,17 @@ It does not reap device-scoped per-device sessions; use `app --stop` for those.
 | `tool` | Run a Trailblaze tool by name (e.g., tap, inputText) |
 | `toolbox` | Browse available tools by target app and platform |
 | `run` | Run a trail file (.trail.yaml) — execute a scripted test on a device. |
+| `usages` | Find every trail that directly invokes a tool (IDE "Find Usages" for tools). |
 | `session` | Manage the current device session — save it as a replayable trail, inspect steps, end it |
 | `report` | Generate an HTML report for session recordings, plus a best-effort JSON summary, and optionally MP4/GIF/WebP exports for a single session. JSON-only failures log a warning and still exit 0 — HTML is the primary artifact and is what gates the exit code. Animated exports collapse long idle gaps between steps so their length tracks the number of steps, not the session's real wall-clock. The capture window for all three (--gif/--webp/--video) is bounded by the MAX_PLAYBACK_WAIT_MS environment variable (milliseconds, default 600000); if playback overruns it, a best-effort truncated artifact is still written with a warning. |
+| `viewer` | Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates. |
 | `profile` | Generate the performance-analysis report (an Instruments-style time profiler over each session's tools, LLM calls, timeouts, and idle gaps) for a logs directory. Defaults to the configured logs directory when <logs-dir> is omitted. Writes <logs-dir>/trailblaze_performance_analysis.html. Requires `bun` on PATH. |
 | `waypoint` | Match named app locations (waypoints) against captured screen state. |
 | `results` | Query the persisted test-result index for a test case. Passing a positional `<case-id>` (e.g. `trailblaze results C12345 --device android-phone`) is equivalent to the explicit `trailblaze results show <case-id>` form — picocli routes the bare case-id straight to the `show` subcommand. |
 | `config` | View and set configuration (target app, device defaults, AI provider) |
 | `device` | List and connect devices (Android, iOS, Web) |
 | `show` | Open the multi-device live grid (/devices/all) in your default browser |
-| `app` | Open Trail Runner for viewing sessions and managing trails (use --headless for a daemon-only background service) |
+| `app` | Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). |
 | `mcp` | Start a Model Context Protocol (MCP) server for AI agent integration |
 | `check` | Validate a trailmap: materialize manifests, type-check TypeScript/JavaScript sources, and run `*.test.ts` unit tests via `bun test`. On first run, scaffolds a minimal package.json at the workspace root if absent so `bun install` can be used as the canonical bootstrap (its `postinstall` hook re-runs `trailblaze check`). |
 | `skill` | Print or install the bundled agent skill that teaches a coding agent this CLI |
@@ -325,6 +327,34 @@ trailblaze run [OPTIONS] [<<trailFile>>]
 | `--capture-network` | Auto-capture network requests/responses to <session-dir>/network.ndjson on supported devices (web today; mobile devices added as engines land). Mirrors the desktop-app "Capture Network Traffic" toggle. On by default; use --no-capture-network to disable. When neither flag is passed, inherits the desktop app's saved setting. | - |
 | `--capture-all` | Enable all capture streams: video, logcat, iOS logs, network (local dev mode) | - |
 | `--test-name` | Override the test name used as the session ID seed. When set, replaces the default name derived from the trail filename. Useful in CI environments where the caller can supply a richer identifier (e.g. including suite/section/case context). | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze usages`
+
+Find every trail that directly invokes a tool (IDE "Find Usages" for tools). Scans the trails directory's recordings via the parsed trail model, so each usage reports WHICH device classifiers invoke the tool — not just which trails. Typical uses: before editing a tool, list the trails (and platforms) that would exercise the change; before deleting one, confirm nothing invokes it.
+
+**Synopsis:**
+
+```
+trailblaze usages [OPTIONS] [<<tool>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<tool>>` | Tool name(s) to find trail usages for (e.g. myapp_launchSignedIn). | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--changed-since` | Instead of naming tools, derive them: compare the workspace's scripted tools against git <ref> and report usages for every tool that was added, removed, or modified. Detection hashes each tool's source together with its resolved import closure, so editing a shared helper flags every tool that imports it. | - |
+| `--json` | Emit the machine-readable JSON report (schemaVersion 1) to stdout instead of the human-readable summary. | - |
+| `--trails` | Trails directory to scan. Repeatable — a repo whose trails live under more than one root scans them all in one pass, and every reported usage names the root it was found under. Order matters: the FIRST one is the primary root, which is what the report names and what --changed-since walks up from to find the workspace's trailmaps. Passing any --trails replaces the configured roots rather than adding to them. Default: the workspace's effective trails directory (TRAILBLAZE_TRAILS_DIR, the workspace `trails:` declaration, or the configured default) plus any extra roots configured in Trail Runner. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -611,6 +641,26 @@ trailblaze report [OPTIONS] [<<session-id>>]
 | `--max-size` | Cap each exported artifact (--gif / --video / --webp / --storyboard) at the given byte size. Defaults to 10MB — GitHub's inline-attachment limit — so an export you paste into a PR fits without having to think about it. Accepts plain bytes (1024000) or human-readable suffixes (10MB, 5M, 1.5G); pass `none` (or `0`) for a genuinely uncapped export. After the initial encode, the exporter iteratively re-encodes at smaller viewport widths (1280→1024→720→640→480) until the artifact fits, then stops. If even the readability floor (480px) is still over the cap: an explicitly-passed --max-size fails the export with an actionable error, while the 10MB default keeps the oversized artifact and warns instead — a default you didn't ask for never turns a working export into a failure. Either way the remedies are the same: drop GIF for --webp or --video (both compress dramatically better), or shorten the recorded session (fewer trail steps, or split into multiple sessions). The cap is applied per artifact, so `--gif --webp --max-size=10MB` caps each one independently. | - |
 | `--full-report-payloads` | Embed full event payloads in the interactive report even for sessions that passed, instead of applying the report size budgets (which truncate large successful network bodies and elide repeated intermediate snapshots to keep the report small). Failed sessions always embed full payloads regardless. The on-disk events/ artifacts are never budgeted, so any session can be regenerated in full with this flag at any time. | - |
 | `--share-url` | Bake a canonical hosted URL (http/https) into the interactive report. Its Copy link button then produces deep links against that URL — with the current view, sort, run, and step grafted on as query parameters — no matter where the file is opened from (including file://). Use this when the report is published to a known location, e.g. a CI artifact URL or an internal report server. Without this flag, Copy link uses the browser's own address and only appears on http(s) pages. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze viewer`
+
+Write out the standalone report viewer (one self-contained HTML page) bundled into this binary. Serve it anywhere, or just open it: drop a session archive on the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI, so it always matches the reports this binary generates.
+
+**Synopsis:**
+
+```
+trailblaze viewer [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--output`, `-o` | Where to write the viewer. A path ending in .html is used as-is; anything else is treated as a directory and index.html is written inside it. Defaults to ./index.html. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -1424,13 +1474,12 @@ trailblaze show [OPTIONS]
 
 ### `trailblaze app`
 
-Open Trail Runner for viewing sessions and managing trails (use --headless for a daemon-only background service)
+Launch the legacy Trailblaze desktop app (use --v2 for Trail Runner or --headless for a daemon-only background service). `trailblaze app start` is an accepted synonym for this command.
 
 **Synopsis:**
 
 ```
 trailblaze app [OPTIONS]
-trailblaze app start
 ```
 
 **Options:**
@@ -1441,27 +1490,7 @@ trailblaze app start
 | `--stop` | Stop the running daemon | - |
 | `--status` | Check if the daemon is running | - |
 | `--foreground` | Run in foreground (blocks terminal). Use for debugging with an attached IDE. | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze app start`
-
-Open Trail Runner (same as `trailblaze app`)
-
-**Synopsis:**
-
-```
-trailblaze app start [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--headless` | Start in headless mode (daemon only, no GUI) | - |
-| `--foreground` | Run in foreground (blocks terminal). Use for debugging with an attached IDE. | - |
+| `--v2` | Open Trail Runner in its native desktop window | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

@@ -1069,7 +1069,9 @@ object AndroidHostAdbUtils {
    * Parses the conflicting package name out of an `adb install` failure caused by a signing-key
    * change. Android rejects a same-package upgrade across signing identities with
    * `INSTALL_FAILED_UPDATE_INCOMPATIBLE` and a message like
-   * `Existing package <pkg> signatures do not match newer version; ignoring!`.
+   * `Existing package <pkg> signatures do not match newer version; ignoring!`
+   * or (on some Android builds):
+   * `Package <pkg> signatures do not match previously installed version; ignoring!`.
    *
    * Returns the package to uninstall-then-reinstall, or null when the failure is NOT a signature
    * mismatch (or the message doesn't name a package) — so genuine install failures still surface
@@ -1080,7 +1082,9 @@ object AndroidHostAdbUtils {
     val isSignatureMismatch = message.contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") ||
       message.contains("signatures do not match")
     if (!isSignatureMismatch) return null
-    return Regex("""Existing package (\S+) signatures do not match""")
+    // Match both "Existing package <pkg> signatures ..." (most Android builds) and
+    // "Package <pkg> signatures ..." (some older/variant builds, e.g. API 28/29).
+    return Regex("""(?:Existing )?[Pp]ackage (\S+) signatures do not match""")
       .find(message)?.groupValues?.getOrNull(1)
   }
 

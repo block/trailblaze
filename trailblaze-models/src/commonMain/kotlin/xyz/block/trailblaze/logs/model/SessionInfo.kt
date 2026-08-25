@@ -44,6 +44,8 @@ data class SessionInfo(
   val testClass: String? = null,
   val trailConfig: TrailConfig? = null,
   val llmUsageSummary: LlmSessionUsageAndCost? = null,
+  /** See [SessionStatus.Started.selectedDeviceConfiguration]. Null for single-device sessions. */
+  val selectedDeviceConfiguration: String? = null,
 ) {
   // Title resolution priority:
   //  1. trailConfig.title  — explicit human-readable title in YAML
@@ -143,5 +145,6 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     trailFilePath = sessionStartedInfo?.trailFilePath,
     hasRecordedSteps = sessionStartedInfo?.hasRecordedSteps ?: false,
     llmUsageSummary = this.computeUsageSummary(),
+    selectedDeviceConfiguration = sessionStartedInfo?.selectedDeviceConfiguration,
   )
 }

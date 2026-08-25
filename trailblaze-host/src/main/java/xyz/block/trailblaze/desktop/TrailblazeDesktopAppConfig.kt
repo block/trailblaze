@@ -220,8 +220,10 @@ abstract class TrailblazeDesktopAppConfig(
 
   /**
    * The app-target set as of daemon startup — the once-per-JVM `by lazy` seed of
-   * [rediscoverAppTargets]. Frozen for the process lifetime; the live-registration path
-   * ([xyz.block.trailblaze.ui.TrailblazeDeviceManager.registerNewTarget]) grows it additively.
+   * [rediscoverAppTargets]. This value itself is frozen for the process lifetime; the live set the
+   * UI and run dispatch read is the device manager's, which grows additively via
+   * [xyz.block.trailblaze.ui.TrailblazeDeviceManager.registerNewTarget] and is replaced wholesale
+   * on a workspace switch via [xyz.block.trailblaze.ui.TrailblazeDeviceManager.reloadAppTargets].
    */
   abstract val availableAppTargets: Set<TrailblazeHostAppTarget>
 
@@ -230,8 +232,13 @@ abstract class TrailblazeDesktopAppConfig(
    * single source of truth for discovery: [availableAppTargets] is a `by lazy` over it, and the
    * device manager's live-registration path re-invokes it to pick up a newly-created target — so
    * the startup set and the live-discovered set are computed by identical code and can't drift.
+   *
+   * [failFast] is forwarded to `AppTargetDiscovery.discover`: false (the default, and what the
+   * startup seed uses) masks a discovery failure as the one-target fallback set so the daemon
+   * still boots, true rethrows so a caller replacing an existing set can tell failure apart from
+   * an empty workspace. See that method's kdoc.
    */
-  abstract fun rediscoverAppTargets(): Set<TrailblazeHostAppTarget>
+  abstract fun rediscoverAppTargets(failFast: Boolean = false): Set<TrailblazeHostAppTarget>
 
   abstract fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String>
 
@@ -554,18 +561,30 @@ internal fun resolveSavedModelWithinProvider(
 
 /**
  * Resolves the workspace config directory for a picked trails directory, honoring both
- * workspace layouts. Resolution order:
+ * workspace layouts. Each ancestor is probed against
+ * [TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES] — standalone `trailblaze-config/`
+ * first, then legacy `trails/config/` — so the closest ancestor wins and the standalone layout
+ * only breaks ties at the same ancestor. Resolution order:
  *
- *  1. A standalone `trailblaze-config/` inside [trailsDir] or as its sibling, existence alone
- *     sufficing — the picked dir is the workspace root or one level under it, and a
- *     freshly-scaffolded standalone workspace may not have authored `trailblaze.yaml` yet.
- *  2. A standalone `trailblaze-config/` at any higher ancestor, but only when it carries the
- *     `trailblaze.yaml` workspace anchor — the picked dir may be a trail library nested deep in
- *     a standalone workspace (that's the layout's point), and requiring the anchor keeps a
- *     stray same-named directory further up from hijacking the workspace.
+ *  1. A candidate inside [trailsDir] or as its sibling, existence alone sufficing — the picked
+ *     dir is the workspace root or one level under it, and a freshly-scaffolded workspace may
+ *     not have authored `trailblaze.yaml` yet.
+ *  2. A candidate at any higher ancestor, but only when it carries the `trailblaze.yaml`
+ *     workspace anchor — the picked dir may be a trail library nested deep in the workspace
+ *     (that's the standalone layout's point), and requiring the anchor keeps a stray
+ *     same-named directory further up from hijacking the workspace.
  *  3. The legacy `<trailsDir>/config` — NOT required to exist: a brand-new workspace has
  *     nothing authored yet, and Trail Runner's Create Target flow must be able to scaffold
  *     `trails/config/trailmaps/<id>/` inside it (`ToolSourceFiles.newTrailmapBaseDir`).
+ *
+ * Probing the legacy candidate at each ancestor (not just as the rung-3 fallback under
+ * [trailsDir]) is what lets a person pick the REPO ROOT of a legacy-layout workspace. That is the
+ * only pick that works for a repo which keeps its config at `trails/config/` but its trails
+ * elsewhere (co-located with the features they test, say `jobs/<job>/trails/`): picking the root
+ * used to derive `<root>/config`, a directory that doesn't exist, so the workspace contributed no
+ * trailmaps and none of its app targets appeared — while picking `<root>/trails` fixed the config
+ * dir but emptied the trails list. This mirrors what `findWorkspaceRoot` and `CliPathUtils`
+ * already do, which is why the CLI resolved such a workspace from the same directory all along.
  *
  * Pure over the filesystem (no settings/env reads) so it's unit-testable with temp dirs.
  */
@@ -573,10 +592,15 @@ internal fun resolveWorkspaceConfigDir(trailsDir: File): File {
   var ancestor: File? = trailsDir
   var depth = 0
   while (ancestor != null) {
-    val standalone = File(ancestor, TrailblazeConfigPaths.WORKSPACE_STANDALONE_CONFIG_DIR)
-    val anchored = File(standalone, TrailblazeConfigPaths.CONFIG_FILENAME).isFile
-    if (standalone.isDirectory && (depth <= 1 || anchored)) return standalone
-    ancestor = ancestor.parentFile
+    val current = ancestor
+    val match = TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES
+      .map { File(current, it) }
+      .firstOrNull { candidate ->
+        candidate.isDirectory &&
+          (depth <= 1 || File(candidate, TrailblazeConfigPaths.CONFIG_FILENAME).isFile)
+      }
+    if (match != null) return match
+    ancestor = current.parentFile
     depth++
   }
   return File(trailsDir, TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR)

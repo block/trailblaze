@@ -15,12 +15,35 @@ import kotlinx.serialization.Serializable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+import xyz.block.trailblaze.usages.TrailToolUsageScanner
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.TrailDocument
 
 // Upper bound for a single on-device tool execution before we give up and report
 // a timeout, so a wedged device can't hang the request thread indefinitely.
 private const val TOOL_RUN_TIMEOUT_MS = 5L * 60 * 1000
+
+// Text-probe fallback for files the unified decoder can't parse: each "- <key>:" list-mapping
+// key is a candidate tool id. This was the routes' only mechanism before the parsed-model scan.
+private val FALLBACK_TOOL_KEY_RX = Regex("(?m)^\\s*-\\s*([A-Za-z0-9_]+)\\s*:")
+
+/**
+ * The tool ids one trail file's recordings invoke, backed by the same parsed-model scan as
+ * `trailblaze usages` ([TrailToolUsageScanner]) — so a tool name mentioned in step prose is not a
+ * usage, and a tool nested inside a recorded conditional (`condition.tool`, `then:`/`else:`) is.
+ * Framework keys (tapOn, maestro, …) come back too; count consumers simply never look them up.
+ * A file the unified decoder can't parse — or one that trips the scanner — falls back to the old
+ * text probe rather than silently reporting "unused".
+ */
+internal fun recordedToolIdsIn(text: String, yaml: TrailblazeYaml): Set<String> =
+  runCatching { (yaml.decodeTrailDocument(text) as TrailDocument.Unified).trail }
+    // `mapCatching` is the per-file exception boundary these routes have always had: any failure
+    // on one trail (decode OR scan) degrades that file to the text probe instead of failing the
+    // whole aggregated response. One pathological trail must not take down the tool-usage UI.
+    .mapCatching { TrailToolUsageScanner.toolUsages(it).keys }
+    .getOrElse { FALLBACK_TOOL_KEY_RX.findAll(text).map { m -> m.groupValues[1] }.toSet() }
 
 /**
  * Per-tool usage counts (distinct trails per tool id) — the shared source for both the REST
@@ -29,15 +52,12 @@ private const val TOOL_RUN_TIMEOUT_MS = 5L * 60 * 1000
 internal suspend fun buildToolUsageCountsResponse(deps: TrailRunnerDeps): ToolUsageCountsResponse =
   withContext(Dispatchers.IO) {
     val (primary, extras) = resolveRoots(deps.trailsRootProvider)
-    // One pass over every trail file: each "- <key>:" recording entry is a
-    // candidate tool id; count distinct trails per key. Framework keys
-    // (tapOn, maestro, …) are counted too but simply never looked up.
-    val rx = Regex("(?m)^\\s*-\\s*([A-Za-z0-9_]+)\\s*:")
+    val yaml = createTrailblazeYaml()
     val map = mutableMapOf<String, Int>()
     TrailIndexBuilder.scanAll(primary = primary, extras = extras).forEach { entry ->
       val file = resolveTrailFile(entry.id.split("/"), primary, extras)?.second ?: return@forEach
-      val ids = runCatching { rx.findAll(file.readText()).map { it.groupValues[1] }.toSet() }.getOrDefault(emptySet())
-      ids.forEach { map[it] = (map[it] ?: 0) + 1 }
+      val text = runCatching { file.readText() }.getOrNull() ?: return@forEach
+      recordedToolIdsIn(text, yaml).forEach { map[it] = (map[it] ?: 0) + 1 }
     }
     ToolUsageCountsResponse(map)
   }
@@ -51,12 +71,11 @@ internal suspend fun buildToolUsagesResponse(deps: TrailRunnerDeps, toolId: Stri
   if (toolId.isBlank()) return TrailIndexResponse(emptyList())
   return withContext(Dispatchers.IO) {
     val (primary, extras) = resolveRoots(deps.trailsRootProvider)
-    // A trail uses a tool when the tool id appears as a yaml list-mapping key in
-    // a recording's tools block ("- <id>:" / "- <id>: {}").
-    val rx = Regex("(?m)^\\s*-\\s*${Regex.escape(toolId)}\\s*:")
+    val yaml = createTrailblazeYaml()
     val trails = TrailIndexBuilder.scanAll(primary = primary, extras = extras).filter { entry ->
       val resolved = resolveTrailFile(entry.id.split("/"), primary, extras)
-      resolved != null && runCatching { rx.containsMatchIn(resolved.second.readText()) }.getOrDefault(false)
+      val text = resolved?.let { runCatching { it.second.readText() }.getOrNull() }
+      text != null && toolId in recordedToolIdsIn(text, yaml)
     }
     TrailIndexResponse(trails)
   }

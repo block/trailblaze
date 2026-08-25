@@ -74,4 +74,14 @@ class DesktopAppRunYamlParams(
    * surviving artifact is the session JSON has no record of them. Ignored when [noLogging] is true.
    */
   val sessionStartAdvisories: List<String> = emptyList(),
+  /**
+   * Looks up a loaded target by id, for a multi-device configuration whose named devices declare
+   * per-device `target:` overrides. [targetTestApp] is the session target every device inherits;
+   * this resolves the exceptions to it.
+   *
+   * Null (the default) means this caller can't reach the target registry — a trail that declares
+   * a per-device target is then rejected rather than run against the session target, because
+   * silently ignoring the override would run the wrong app on that device.
+   */
+  val findTargetById: ((String) -> TrailblazeHostAppTarget?)? = null,
 )

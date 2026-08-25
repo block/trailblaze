@@ -272,10 +272,7 @@ class AccessibilityDeviceManager(
         scroll(forward = false)
         ExecutionResult()
       }
-      is AccessibilityAction.InputText -> {
-        inputText(action.text)
-        ExecutionResult()
-      }
+      is AccessibilityAction.InputText -> executeInputText(action)
       is AccessibilityAction.EraseText -> {
         eraseText(action.characters)
         ExecutionResult()
@@ -455,6 +452,99 @@ class AccessibilityDeviceManager(
   /** Sets text on the focused editable node and waits for the UI to settle. */
   fun inputText(text: String) = dispatchAndAwaitSettleBlocking {
     TrailblazeAccessibilityService.inputText(text)
+  }
+
+  /**
+   * Types text into an editable field, optionally naming the field first.
+   *
+   * With no selector this is [inputText] on whatever already holds input focus — the historical
+   * path, unchanged. With a selector, the field is resolved and focused before the same
+   * [inputText] runs, so every downstream behavior (the `ACTION_SET_TEXT` fast path, the WebView
+   * readback recovery, the keystroke-synthesis retry) is shared between the two shapes.
+   *
+   * The two shapes differ in what they do with [inputText]'s result. A selector-bearing action
+   * throws when the text never landed: it named the field, so "focused it and typed nothing"
+   * cannot be reported as success. The no-selector path keeps discarding the result — that is
+   * long-standing replay behavior across every trail on this driver, and flipping it here would
+   * turn a silent no-op into a failure for trails this change is supposed to leave alone.
+   */
+  private fun executeInputText(action: AccessibilityAction.InputText): ExecutionResult {
+    val nodeSelector = action.nodeSelector ?: run {
+      inputText(action.text)
+      return ExecutionResult()
+    }
+    val focused = focusOnElement(nodeSelector, action.timeoutMs)
+    if (!inputText(action.text)) {
+      error(
+        "Focused ${nodeSelector.description()} but the text never landed in it. The field took " +
+          "input focus and then rejected both ACTION_SET_TEXT and keystroke synthesis — see the " +
+          "preceding inputText log line for which recovery path gave up.",
+      )
+    }
+    return focused
+  }
+
+  /**
+   * Polls for an element matching [nodeSelector] and gives it input focus, returning the
+   * resolved element's center for the action log.
+   *
+   * Every obstacle — no match, a match that can't take input focus, a focus dispatch the live
+   * tree didn't answer — keeps polling until [timeoutMs] and then throws with the last one
+   * observed. Both halves of that matter: a field can resolve while a transition still has it
+   * disabled or its identity mid-shift, and *not* throwing at the end would type into whichever
+   * field happened to already be focused while reporting success, which is exactly the failure
+   * naming the field exists to prevent.
+   */
+  private fun focusOnElement(
+    nodeSelector: TrailblazeNodeSelector,
+    timeoutMs: Long,
+  ): ExecutionResult {
+    val startTime = Clock.System.now().toEpochMilliseconds()
+    var lastObstacle = "no element matched the selector"
+    while (Clock.System.now().toEpochMilliseconds() - startTime < timeoutMs) {
+      val tree = getAccessibilityTree()
+      val resolved = tree?.let {
+        when (val result = resolveSelectorWithFallback(it.toTrailblazeNode(), nodeSelector)) {
+          is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> result.node
+          is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches ->
+            pickPreferredMatch(result.nodes)
+          is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> null
+        }
+      }
+      if (resolved != null) {
+        val center = resolved.centerPoint()
+        when (val plan = planActionFocusRoute(resolved)) {
+          is FocusPlan.AlreadyFocused -> {
+            Console.log("[input-focus] ${nodeSelector.description()} already holds input focus")
+            return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+          }
+          is FocusPlan.DispatchActionFocus -> {
+            val dispatched = dispatchAndAwaitSettleBlocking {
+              TrailblazeAccessibilityService.focusByActionFocusOnBounds(
+                plan.bounds.toAndroidRect(),
+                plan.className,
+                plan.resourceId,
+              )
+            }
+            if (dispatched) {
+              Console.log("[input-focus] ACTION_FOCUS dispatched on ${nodeSelector.description()}")
+              return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+            }
+            lastObstacle =
+              "no live editable node answered ACTION_FOCUS at the resolved identity " +
+              "(bounds=${plan.bounds} className=${plan.className} resourceId=${plan.resourceId})"
+          }
+          is FocusPlan.NotFocusable -> lastObstacle = plan.reason
+        }
+      } else {
+        lastObstacle = "no element matched the selector"
+      }
+      Thread.sleep(POLL_INTERVAL_MS)
+    }
+    error(
+      "Cannot type into ${nodeSelector.description()}: $lastObstacle (gave up after " +
+        "${timeoutMs}ms). The selector must name the editable field itself.",
+    )
   }
 
   /** Erases characters from the focused editable node and waits for the UI to settle. */
@@ -921,32 +1011,42 @@ class AccessibilityDeviceManager(
       "TrailblazeNode selector found no match after ${action.timeoutMs}ms: ${action.nodeSelector.description()}"
     )
 
-    // --- Fallback to coordinates ---
-    if (action.fallbackX != null && action.fallbackY != null) {
-      Console.log(
-        "Using fallback coordinates (${action.fallbackX}, ${action.fallbackY})"
-      )
-      // Apply the same pre-tap occlusion check on the coordinate-fallback path that the
-      // selector-resolved branches use. Without it, a recorded-coordinate tap on a
-      // BackHandler-modal screen would silently land on the still-visible IME.
-      failIfTapPointOccludedByIme(
-        action.fallbackX,
-        action.fallbackY,
-        "fallback coordinates for ${action.nodeSelector.description()}",
-      )
-      tapOrLongPress(action.fallbackX, action.fallbackY, action.longPress)
-      return ExecutionResult(resolvedX = action.fallbackX, resolvedY = action.fallbackY)
-    } else if (action.optional) {
-      // Maestro `optional: true` — selector wasn't found within the timeout and that's
-      // expected for best-effort steps (e.g. dismissing a runtime permission dialog that
-      // may or may not be present). Skip rather than fail.
-      Console.log("Optional tap: skipping (no match within timeout)")
-      return ExecutionResult(resolvedX = null, resolvedY = null)
-    } else {
-      error(
+    return when (val outcome = planUnresolvedTapOutcome(action)) {
+      is UnresolvedTapOutcome.TapRecordedCoordinates -> {
+        // `[tap-route]`-prefixed for parity with the routing branches below, which is the
+        // prefix the runtime docs tell a reader to grep to follow per-tap dispatch.
+        Console.log(
+          "[tap-route] ${outcome.route} — using recorded coordinates " +
+            "(${outcome.x}, ${outcome.y}) for ${action.nodeSelector.description()}",
+        )
+        // Apply the same pre-tap occlusion check on the coordinate-fallback path that the
+        // selector-resolved branches use. Without it, a recorded-coordinate tap on a
+        // BackHandler-modal screen would silently land on the still-visible IME.
+        failIfTapPointOccludedByIme(
+          outcome.x,
+          outcome.y,
+          "fallback coordinates for ${action.nodeSelector.description()}",
+        )
+        tapOrLongPress(outcome.x, outcome.y, action.longPress)
+        ExecutionResult(
+          resolvedX = outcome.x,
+          resolvedY = outcome.y,
+          dispatchRoute = outcome.route,
+        )
+      }
+
+      UnresolvedTapOutcome.SkipOptional -> {
+        // Maestro `optional: true` — selector wasn't found within the timeout and that's
+        // expected for best-effort steps (e.g. dismissing a runtime permission dialog that
+        // may or may not be present). Skip rather than fail.
+        Console.log("Optional tap: skipping (no match within timeout)")
+        ExecutionResult(resolvedX = null, resolvedY = null)
+      }
+
+      UnresolvedTapOutcome.Fail -> error(
         "Element not found for selector: ${action.nodeSelector.description()}. " +
           "No fallback coordinates available. " +
-          "The element may not be visible on screen or the selector may need adjustment."
+          "The element may not be visible on screen or the selector may need adjustment.",
       )
     }
   }
@@ -1130,6 +1230,52 @@ class AccessibilityDeviceManager(
 }
 
 /**
+ * What to do with an [AccessibilityAction.TapOnElement] whose selector never matched before its
+ * timeout expired. Pure and `internal` so all three exits are testable without a device, mirroring
+ * [planActionClickRoute]'s rationale — the dispatch itself is what needs instrumentation.
+ */
+internal sealed interface UnresolvedTapOutcome {
+  /**
+   * Dispatch at the point captured when the trail was recorded, and record [route] so the step
+   * reporting success does not read as "the selector resolved".
+   *
+   * Nothing in production sets [AccessibilityAction.TapOnElement.fallbackX]/`fallbackY` today, so
+   * an Android accessibility selector miss takes [Fail] and the trail goes red. Keep this arm
+   * wired anyway: it is the arm that would otherwise pass silently, and the marker is what makes a
+   * future producer visible on the day it appears.
+   */
+  data class TapRecordedCoordinates(
+    val x: Int,
+    val y: Int,
+    val route: TapDispatchRoute,
+  ) : UnresolvedTapOutcome
+
+  /** Declared `optional: true`: report success having dispatched nothing at all. */
+  data object SkipOptional : UnresolvedTapOutcome
+
+  /** No recorded point and not optional: fail the step loudly. */
+  data object Fail : UnresolvedTapOutcome
+}
+
+/** Decides which [UnresolvedTapOutcome] applies. Recorded coordinates win over `optional`. */
+internal fun planUnresolvedTapOutcome(
+  action: AccessibilityAction.TapOnElement,
+): UnresolvedTapOutcome {
+  val fallbackX = action.fallbackX
+  val fallbackY = action.fallbackY
+  return when {
+    fallbackX != null && fallbackY != null -> UnresolvedTapOutcome.TapRecordedCoordinates(
+      x = fallbackX,
+      y = fallbackY,
+      route = TapDispatchRoute.RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
+    )
+
+    action.optional -> UnresolvedTapOutcome.SkipOptional
+    else -> UnresolvedTapOutcome.Fail
+  }
+}
+
+/**
  * Identity a [tapOrLongPressOnResolvedNode] caller will look up in the live a11y tree when
  * routing via `ACTION_CLICK`. Kept on the cross-platform [TrailblazeNode.Bounds] type rather
  * than an `android.graphics.Rect` so [planActionClickRoute] stays unit-testable on the JVM —
@@ -1141,6 +1287,74 @@ internal data class ActionClickPlan(
   val className: String?,
   val resourceId: String?,
 )
+
+/**
+ * What [planActionFocusRoute] decided about giving a selector-resolved node input focus, ahead
+ * of a selector-bearing [AccessibilityAction.InputText].
+ */
+internal sealed interface FocusPlan {
+  /**
+   * The node already holds input focus, so no dispatch is needed — the existing focused-node
+   * input path will find it.
+   */
+  data object AlreadyFocused : FocusPlan
+
+  /** Dispatch `ACTION_FOCUS` on the live node carrying this identity. */
+  data class DispatchActionFocus(
+    val bounds: TrailblazeNode.Bounds,
+    val className: String?,
+    val resourceId: String?,
+  ) : FocusPlan
+
+  /**
+   * The node cannot be given input focus. [reason] is surfaced in the failure message — the
+   * caller must fail rather than type into whatever else is focused.
+   */
+  data class NotFocusable(val reason: String) : FocusPlan
+}
+
+/**
+ * Decides how to give [node] input focus so a selector-bearing `inputText` types into it.
+ * Pure function — exposed `internal` so the decision is unit-testable without an
+ * instrumentation context, mirroring [planActionClickRoute].
+ *
+ * This gate is deliberately separate from [planActionClickRoute] and does not relax it: an
+ * editable node still routes taps to the coordinate gesture path exactly as before. Focusing is
+ * a different dispatch (`ACTION_FOCUS`, not `ACTION_CLICK`) reached only from an `inputText`
+ * that named a field.
+ *
+ * Declines when:
+ * - the node has no bounds — the live-tree lookup is bounds-keyed;
+ * - it carries no [DriverNodeDetail.AndroidAccessibility] detail;
+ * - it isn't editable. A selector that names a label, a container, or the row around the field
+ *   must fail loudly: `ACTION_FOCUS` on a non-editable node reports success while the text lands
+ *   in whichever field was already focused;
+ * - it isn't enabled — a disabled field's `requestFocus()` returns false and nothing would be
+ *   typed;
+ * - it advertises neither `ACTION_FOCUS` nor an already-focused state. A view that can't take
+ *   input focus offers neither, so there is no dispatch that would make it receive the text.
+ *
+ * The already-focused check runs before the `ACTION_FOCUS` check because the platform swaps that
+ * action for `ACTION_CLEAR_FOCUS` once a view holds focus — a field the previous step focused
+ * would otherwise be judged un-focusable.
+ */
+internal fun planActionFocusRoute(node: TrailblazeNode): FocusPlan {
+  val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
+    ?: return FocusPlan.NotFocusable("resolved node carries no Android accessibility detail")
+  if (!detail.isEditable) {
+    return FocusPlan.NotFocusable(
+      "resolved node is not an editable field (className=${detail.className ?: "<unknown>"})",
+    )
+  }
+  if (!detail.isEnabled) return FocusPlan.NotFocusable("resolved field is disabled")
+  if (detail.isFocused) return FocusPlan.AlreadyFocused
+  val bounds = node.bounds
+    ?: return FocusPlan.NotFocusable("resolved field has no bounds to look up in the live tree")
+  if (ACTION_FOCUS_NAME !in detail.actions) {
+    return FocusPlan.NotFocusable("resolved field does not advertise ACTION_FOCUS")
+  }
+  return FocusPlan.DispatchActionFocus(bounds, detail.className, detail.resourceId)
+}
 
 /**
  * Maps a *scroll* direction to the *finger-swipe* direction that produces it, mirroring Maestro's

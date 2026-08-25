@@ -1,0 +1,18 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze viewer [-hV] [-o=<file-or-dir>]
+Write out the standalone report viewer (one self-contained HTML page) bundled
+into this binary. Serve it anywhere, or just open it: drop a session archive on
+the page, or point it at one with ?zip=<archive-url>. Versioned with this CLI,
+so it always matches the reports this binary generates.
+  -h, --help      Show this help message and exit.
+  -o, --output=<file-or-dir>
+                  Where to write the viewer. A path ending in .html is used
+                    as-is; anything else is treated as a directory and index.
+                    html is written inside it. Defaults to ./index.html.
+  -V, --version   Print version information and exit.

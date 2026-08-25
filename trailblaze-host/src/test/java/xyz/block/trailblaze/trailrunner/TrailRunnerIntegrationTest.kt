@@ -90,6 +90,21 @@ class TrailRunnerIntegrationTest {
     return file
   }
 
+  private fun git(vararg args: String) {
+    val p = ProcessBuilder(listOf("git", "-C", trailsDir.absolutePath) + args)
+      .redirectErrorStream(true)
+      .start()
+    val output = p.inputStream.bufferedReader().readText()
+    check(p.waitFor() == 0) { "git ${args.joinToString(" ")} failed: $output" }
+  }
+
+  /** Makes the workspace a git checkout with everything currently on disk committed. */
+  private fun commitWorkspace() {
+    git("init", "-q")
+    git("add", "-A")
+    git("-c", "user.email=t@t.t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed")
+  }
+
   private fun zipBytes(entries: Map<String, String>): ByteArray =
     ByteArrayOutputStream().use { baos ->
       ZipOutputStream(baos).use { zip ->
@@ -541,16 +556,7 @@ class TrailRunnerIntegrationTest {
     val bare = File(caseDir, "trail.yaml")
     bare.writeText("config:\n  id: regression/case_5374124\ntrail:\n  - step: Open the app\n")
 
-    fun git(vararg args: String) {
-      val p = ProcessBuilder(listOf("git", "-C", trailsDir.absolutePath) + args)
-        .redirectErrorStream(true)
-        .start()
-      val output = p.inputStream.bufferedReader().readText()
-      check(p.waitFor() == 0) { "git ${args.joinToString(" ")} failed: $output" }
-    }
-    git("init", "-q")
-    git("add", "-A")
-    git("-c", "user.email=t@t.t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed")
+    commitWorkspace()
     // Modify the now-committed bare trail so `git status --porcelain` reports it as ` M`.
     bare.appendText("  - step: And another\n")
 
@@ -957,6 +963,132 @@ class TrailRunnerIntegrationTest {
     assertEquals(HttpStatusCode.OK, response.status)
     assertTrue(response.bodyAsText().replace(Regex("\\s"), "").contains("\"success\":false"))
     assertEquals(original, existing.readText())
+  }
+
+  // ─── GetTrailGitBaselineRequest ─────────────────────────────────────────────
+  // The four states an editor diffs against. Each one is driven through a real `git` in a temp
+  // checkout, because the whole point of the endpoint is what git says — a fake would only pin our
+  // own assumptions about porcelain output.
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest returns the committed text for a modified trail`() = withTrailRunner {
+    val trail = writeTrail("myapp/case.trail.yaml", title = "Committed title")
+    commitWorkspace()
+    trail.writeText(trail.readText().replace("Committed title", "Working-tree title"))
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/case"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val body = response.bodyAsText()
+    assertTrue(body.replace(Regex("\\s"), "").contains("\"state\":\"modified\""), "expected modified: ${body.take(200)}")
+    // The baseline has to be what git holds, not what is on disk — it is the diff's left-hand side.
+    assertTrue(body.contains("Committed title"), "committed text should carry the committed title: ${body.take(400)}")
+    assertTrue(!body.contains("Working-tree title"), "committed text must not carry the working-tree edit")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest reports clean for an unedited trail`() = withTrailRunner {
+    writeTrail("myapp/case.trail.yaml")
+    commitWorkspace()
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/case"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val flat = response.bodyAsText().replace(Regex("\\s"), "")
+    assertTrue(flat.contains("\"state\":\"clean\""), "expected clean: ${response.bodyAsText().take(200)}")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest reports untracked for a trail git has never committed`() = withTrailRunner {
+    writeTrail("anchor/anchor.trail.yaml")
+    commitWorkspace()
+    // Born after the commit: git has no version of this file, so there is no baseline to diff.
+    writeTrail("myapp/brand-new.trail.yaml")
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/brand-new"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val flat = response.bodyAsText().replace(Regex("\\s"), "")
+    assertTrue(flat.contains("\"state\":\"untracked\""), "expected untracked: ${response.bodyAsText().take(200)}")
+    assertTrue(!flat.contains("\"committed\""), "untracked has no committed text to send: ${response.bodyAsText().take(200)}")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest reports unavailable outside a git checkout`() = withTrailRunner {
+    // No commitWorkspace(): the workspace is a plain directory, so git can't answer at all. That is
+    // deliberately NOT reported as clean — a caller has to be able to hide the diff affordance.
+    writeTrail("myapp/case.trail.yaml")
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/case"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val flat = response.bodyAsText().replace(Regex("\\s"), "")
+    assertTrue(flat.contains("\"state\":\"unavailable\""), "expected unavailable: ${response.bodyAsText().take(200)}")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest reports unavailable when git has no commits to read`() = withTrailRunner {
+    writeTrail("myapp/case.trail.yaml")
+    // A checkout, but nothing committed yet, so git cannot produce a baseline for ANY file here.
+    // That is a git-can't-answer, not a new trail: reporting untracked would tell the editor there
+    // is a definitive "this file is new" verdict behind it.
+    git("init", "-q")
+    git("add", "-A")
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/case"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val flat = response.bodyAsText().replace(Regex("\\s"), "")
+    assertTrue(flat.contains("\"state\":\"unavailable\""), "expected unavailable: ${response.bodyAsText().take(200)}")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest reports untracked for a staged but never committed trail`() = withTrailRunner {
+    writeTrail("anchor/anchor.trail.yaml")
+    commitWorkspace()
+    writeTrail("myapp/staged.trail.yaml")
+    // Staged is still nothing in HEAD, so every line of it is new — the same answer as untracked,
+    // and the discriminator has to say so rather than confusing "not in HEAD" with "git failed".
+    git("add", "-A")
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/staged"}""")
+    }
+
+    assertEquals(HttpStatusCode.OK, response.status)
+    val flat = response.bodyAsText().replace(Regex("\\s"), "")
+    assertTrue(flat.contains("\"state\":\"untracked\""), "expected untracked: ${response.bodyAsText().take(200)}")
+  }
+
+  @Test
+  fun `POST rpc GetTrailGitBaselineRequest with an unresolvable id is an HTTP_ERROR failure envelope`() = withTrailRunner {
+    writeTrail("anchor/anchor.trail.yaml")
+
+    val response = client.post("/rpc/GetTrailGitBaselineRequest") {
+      contentType(ContentType.Application.Json)
+      setBody("""{"id":"0/myapp/nope"}""")
+    }
+
+    assertEquals(HttpStatusCode.InternalServerError, response.status)
+    val body = response.bodyAsText()
+    assertTrue(body.replace(Regex("\\s"), "").contains("\"errorType\":\"HTTP_ERROR\""), "expected HTTP_ERROR: $body")
+    assertTrue(body.contains("No trail found for id"), "expected the lookup-miss message: $body")
   }
 
   @Test

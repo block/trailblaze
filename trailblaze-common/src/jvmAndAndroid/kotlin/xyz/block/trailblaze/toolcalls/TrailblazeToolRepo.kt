@@ -308,6 +308,7 @@ class TrailblazeToolRepo(
     toolContent = toolCall.args,
   )
 
+  @OptIn(InternalSerializationApi::class)
   fun toolCallToTrailblazeTool(
     toolName: String,
     /** The JSON string of the tool arguments. */
@@ -354,13 +355,101 @@ class TrailblazeToolRepo(
     error(
       buildString {
         appendLine("Could not find Trailblaze tool for name: $toolName.")
+        unknownToolSuggestions(toolName, snapshot).forEach { suggestion ->
+          append("Did you mean `${suggestion.name}`?")
+          if (suggestion.argumentKeys.isNotEmpty()) {
+            append(" Accepted arguments: ${suggestion.argumentKeys.joinToString { "`$it`" }}.")
+          }
+          appendLine()
+        }
         appendLine("Registered class-backed tools: ${snapshot.toolClasses.map { it.simpleName }}")
-        appendLine("Registered YAML-defined tools: ${snapshot.yamlToolNames.map { it.toolName }}")
-        if (snapshot.dynamic.isNotEmpty()) {
-          appendLine("Registered dynamic tools: ${snapshot.dynamic.keys.map { it.toolName }}")
+        val advertisedYamlNames = KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames)
+          .map { it.name }
+        appendLine("LLM-advertised YAML-defined tools: $advertisedYamlNames")
+        val advertisedDynamicNames = snapshot.advertisedDynamic().map { it.name.toolName }
+        if (advertisedDynamicNames.isNotEmpty()) {
+          appendLine("LLM-advertised dynamic tools: $advertisedDynamicNames")
         }
       },
     )
+  }
+
+  /**
+   * Finds a small set of high-confidence repairs for a misspelled tool call. Candidates are
+   * limited to tools registered in this repo, so every suggestion is dispatchable in the current
+   * session and respects the active target and driver surface.
+   *
+   * Suggestions are advisory only: correcting a malformed recording automatically would hide the
+   * source error and could route a future similarly named tool incorrectly.
+   */
+  @OptIn(InternalSerializationApi::class)
+  private fun unknownToolSuggestions(
+    requestedName: String,
+    snapshot: RegisteredToolsSnapshot,
+  ): List<UnknownToolSuggestion> {
+    // Suggestions cross the MCP boundary, so expose only the same LLM-advertised surface as
+    // getCurrentToolDescriptors(): hidden class tools and non-advertised dynamic registrations
+    // remain directly dispatchable for replay/composition but must never be taught to a model.
+    val candidateNames = buildSet {
+      snapshot.toolClasses
+        .filter { it.toKoogToolDescriptor() != null }
+        .forEach { add(it.toolName().toolName) }
+      // Use the same descriptor builder as getCurrentToolDescriptors(), rather than raw registered
+      // names. It excludes missing configs and YAML tools marked surface_to_llm: false, both of
+      // which remain dispatchable composition details but must not appear in an MCP suggestion.
+      KoogToolExt.buildDescriptorsForYamlDefined(snapshot.yamlToolNames).forEach { add(it.name) }
+      snapshot.advertisedDynamic().forEach { add(it.name.toolName) }
+    }
+
+    return candidateNames
+      .asSequence()
+      .filter { candidate -> isHighConfidenceToolNameMatch(requestedName, candidate) }
+      .sortedWith(compareBy({ toolNameMatchRank(requestedName, it) }, { it }))
+      .take(3)
+      .map { name ->
+        // Keep the suggestion's argument list on the resolver's canonical five-tier lookup.
+        // Unknown-tool candidates are advertised names, so this should always resolve; use an
+        // empty set defensively if a concurrent registration removal wins the race.
+        UnknownToolSuggestion(name, expectedArgumentKeysFor(name).orEmpty())
+      }
+      .toList()
+  }
+
+  private data class UnknownToolSuggestion(
+    val name: String,
+    val argumentKeys: Set<String>,
+  )
+
+  private fun isHighConfidenceToolNameMatch(requestedName: String, candidateName: String): Boolean {
+    val requested = requestedName.lowercase()
+    val candidate = candidateName.lowercase()
+    return candidate.startsWith(requested) ||
+      requested.startsWith(candidate) ||
+      toolNameEditDistance(requested, candidate) <= minOf(3, maxOf(1, requested.length / 3))
+  }
+
+  private fun toolNameMatchRank(requestedName: String, candidateName: String): Int {
+    val requested = requestedName.lowercase()
+    val candidate = candidateName.lowercase()
+    return if (candidate.startsWith(requested) || requested.startsWith(candidate)) 0
+    else toolNameEditDistance(requested, candidate)
+  }
+
+  private fun toolNameEditDistance(left: String, right: String): Int {
+    var previous = IntArray(right.length + 1) { it }
+    for (leftIndex in left.indices) {
+      val current = IntArray(right.length + 1)
+      current[0] = leftIndex + 1
+      for (rightIndex in right.indices) {
+        current[rightIndex + 1] = minOf(
+          previous[rightIndex + 1] + 1,
+          current[rightIndex] + 1,
+          previous[rightIndex] + if (left[leftIndex] == right[rightIndex]) 0 else 1,
+        )
+      }
+      previous = current
+    }
+    return previous[right.length]
   }
 
   /**
