@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.yaml.unified
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -185,7 +186,7 @@ class UnifiedTrailAdapterTest {
       title = "Checkout with a saved card",
       description = "Open the checkout flow and pay.",
       priority = "P1",
-      devices = mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
+      devices = mapOf("android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")),
       context = "Test context",
       memory = mapOf("email" to "tb+test@example.com"),
       metadata = mapOf(
@@ -283,7 +284,7 @@ class UnifiedTrailAdapterTest {
     // scalars via the shared helper, the two per-platform v1 scalars keyed under the recording
     // device's classifier, tags verbatim.
     val unified = UnifiedTrailAdapter.v1ConfigToUnifiedConfig(v1).copy(
-      devices = mapOf("android" to v1.driver!!),
+      devices = mapOf("android" to devicePin(v1.driver!!)),
       skip = mapOf("android" to v1.skip!!),
       tags = v1.tags,
     )
@@ -358,8 +359,8 @@ class UnifiedTrailAdapterTest {
         id = "x",
         target = "y",
         devices = linkedMapOf(
-          "android" to "ANDROID_ONDEVICE_ACCESSIBILITY",
-          "ios" to "IOS_HOST",
+          "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+          "ios" to devicePin("IOS_HOST"),
         ),
       ),
       trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
@@ -378,7 +379,7 @@ class UnifiedTrailAdapterTest {
   @Test
   fun `driver is null when the config pins none for the device's classifier chain`() {
     val unified = UnifiedTrail(
-      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to "IOS_HOST")),
+      config = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to devicePin("IOS_HOST"))),
       trail = listOf(UnifiedTrailStep(step = "s", recordable = false)),
     )
     val v1 = UnifiedTrailAdapter.lowerToTrailItems(unified, listOf(classifier("android"), classifier("phone")))
@@ -498,9 +499,9 @@ class UnifiedTrailAdapterTest {
       id = "x",
       target = "y",
       devices = linkedMapOf(
-        "android" to "ANDROID_ONDEVICE_ACCESSIBILITY",
-        "android-tablet" to "ANDROID_ONDEVICE_INSTRUMENTATION",
-        "ios" to "IOS_HOST",
+        "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+        "android-tablet" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        "ios" to devicePin("IOS_HOST"),
       ),
     )
     // Phone → chain [android-phone, android, phone] → family `android` pin.
@@ -522,7 +523,7 @@ class UnifiedTrailAdapterTest {
 
   @Test
   fun `resolveDriver returns null when nothing matches or no pins exist`() {
-    val pinned = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to "IOS_HOST"))
+    val pinned = UnifiedTrailConfig(id = "x", target = "y", devices = mapOf("ios" to devicePin("IOS_HOST")))
     // Android device, only an ios pin → no match → null (driver resolves at run time).
     assertNull(UnifiedTrailAdapter.resolveDriver(pinned, listOf(classifier("android"), classifier("phone"))))
     // Empty classifier list (e.g. no --device spec) → null, never throws.
@@ -769,6 +770,176 @@ class UnifiedTrailAdapterTest {
     )
   }
 
+  // ---- Multi-device configuration names are invisible to classifier lineage ----
+  // Lineage re-probes bare segments, so a configuration named `kiosk` sits on a `kiosk-a`
+  // device's resolution chain — without the invisibility rule the device would resolve the
+  // configuration's legs/pins/skips as if they were its own single-device entries.
+
+  private fun kioskConfiguration() = TrailblazeDeviceDefinition(
+    devices = linkedMapOf(
+      "seller" to TrailblazeDeviceDefinition(classifier = "lab-a"),
+      "buyer" to TrailblazeDeviceDefinition(classifier = "lab-b"),
+    ),
+  )
+
+  @Test
+  fun `a recording leg keyed by a configuration name is invisible to a device's classifier chain`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t")))),
+      ),
+    )
+    // `kiosk` is on this device's chain ([kiosk-a, kiosk, a, all]) but names a configuration —
+    // the leg belongs to the multi-device session, not to this single device.
+    assertFalse(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        unified,
+        listOf(classifier("kiosk"), classifier("a")),
+      ),
+    )
+    // A real single-device leg on the same chain still resolves.
+    val withDeviceLeg = unified.copy(
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "Tap",
+          recordings = mapOf(
+            "kiosk" to listOf(toolNamed("configuration-leg")),
+            "kiosk-a" to listOf(toolNamed("device-leg")),
+          ),
+        ),
+      ),
+    )
+    assertTrue(
+      UnifiedTrailAdapter.hasRecordingForDevice(
+        withDeviceLeg,
+        listOf(classifier("kiosk"), classifier("a")),
+      ),
+    )
+  }
+
+  @Test
+  fun `lowering skips a configuration-name leg and runs the step in LLM mode`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(step = "Tap", recordings = mapOf("kiosk" to listOf(toolNamed("t")))),
+      ),
+    )
+    val items = UnifiedTrailAdapter.lowerToTrailItems(
+      unified,
+      listOf(classifier("kiosk"), classifier("a")),
+    )
+    val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single().promptSteps.single()
+    assertNull(
+      (step as DirectionStep).recording,
+      "a configuration-name leg must not replay on a device whose chain contains the name",
+    )
+  }
+
+  @Test
+  fun `a device pin still resolves past a configuration entry earlier on the chain`() {
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf(
+        "kiosk" to kioskConfiguration(),
+        "kiosk-a" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+      ),
+    )
+    assertEquals(
+      "ANDROID_ONDEVICE_ACCESSIBILITY",
+      UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("kiosk"), classifier("a"))),
+    )
+    // A device whose chain reaches ONLY the configuration name resolves nothing.
+    assertNull(UnifiedTrailAdapter.resolveDriver(config, listOf(classifier("kiosk"))))
+  }
+
+  @Test
+  fun `a skip keyed by a configuration name never skips a device via its chain`() {
+    val config = UnifiedTrailConfig(
+      id = "x",
+      target = "y",
+      devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      skip = mapOf("kiosk" to "multi-device session parked — see #123"),
+    )
+    assertNull(
+      UnifiedTrailAdapter.resolveSkip(config, listOf(classifier("kiosk"), classifier("a"))),
+      "the skip belongs to the configuration, not to a device whose chain contains its name",
+    )
+    // Selecting the configuration is the ONE way its skip applies.
+    assertEquals(
+      "multi-device session parked — see #123",
+      UnifiedTrailAdapter.resolveSkip(
+        config,
+        listOf(classifier("kiosk"), classifier("a")),
+        selectedDeviceConfiguration = "kiosk",
+      ),
+    )
+  }
+
+  @Test
+  fun `selecting a configuration resolves its recording leg exactly, ahead of the device chain`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(
+        UnifiedTrailStep(
+          step = "Tap",
+          recordings = linkedMapOf(
+            // The start device's own leg would win by chain order — selection must beat it.
+            "kiosk-a" to listOf(toolNamed("device-leg")),
+            "kiosk" to listOf(toolNamed("configuration-leg")),
+          ),
+        ),
+      ),
+    )
+    val items = UnifiedTrailAdapter.lowerToTrailItems(
+      unified,
+      listOf(classifier("kiosk"), classifier("a")),
+      selectedDeviceConfiguration = "kiosk",
+    )
+    val step = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single() as DirectionStep
+    assertEquals(
+      listOf("configuration-leg"),
+      step.recording?.tools.orEmpty().map { it.name },
+      "the selected configuration's leg must resolve exactly and first",
+    )
+  }
+
+  @Test
+  fun `selecting an undeclared configuration fails loud`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(
+        id = "x",
+        target = "y",
+        devices = linkedMapOf("kiosk" to kioskConfiguration()),
+      ),
+      trail = listOf(UnifiedTrailStep(step = "Tap")),
+    )
+    val failure = runCatching {
+      UnifiedTrailAdapter.lowerToTrailItems(
+        unified,
+        listOf(classifier("kiosk"), classifier("a")),
+        selectedDeviceConfiguration = "register",
+      )
+    }.exceptionOrNull()
+    assertNotNull(failure, "an undeclared selection must not silently lower as single-device")
+    assertTrue("register" in failure.message.orEmpty() && "kiosk" in failure.message.orEmpty())
+  }
+
   private fun classifier(value: String) = TrailblazeDeviceClassifier(value)
 
   private fun toolNamed(name: String) = TrailblazeToolYamlWrapper(
@@ -779,3 +950,7 @@ class UnifiedTrailAdapterTest {
     ),
   )
 }
+
+/** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
+private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)

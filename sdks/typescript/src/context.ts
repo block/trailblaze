@@ -71,9 +71,12 @@ export interface TrailblazeDevice {
 }
 
 /**
- * The session's resolved target — the trailmap manifest's `target.platforms.<platform>`
- * data after the framework has consulted the connected device for which candidate
- * to actually use.
+ * The ACTIVE device's resolved target — the trailmap manifest's `target.platforms.<platform>`
+ * data after the framework has consulted that device for which candidate to actually use.
+ *
+ * In a multi-device session each device can declare its own `target:`, so this (and everything
+ * [resolveAppId] returns) is the target of the device the tool is dispatched against, and flips
+ * with each `switchDevice` handover. Single-device sessions have exactly one, the session target.
  *
  * Populated on both the in-process QuickJS scripting path (`:trailblaze-scripting-bundle`,
  * via `QuickJsToolEnvelopes`) and the MCP-subprocess path (via `TrailblazeContextEnvelope`'s
@@ -104,8 +107,9 @@ export interface TrailblazeTarget {
 
   /**
    * Framework-resolved app id — picked at session start by intersecting [appIds]
-   * against the set of apps actually installed on the connected device. Undefined
-   * when no candidate was installed at session start (or when [appIds] is empty).
+   * against the set of apps actually installed on the device this target is bound to
+   * (each device in a multi-device session probes its own). Undefined when no
+   * candidate was installed at session start (or when [appIds] is empty).
    * Most well-configured trailmaps running on a populated device will have this set
    * and authors should usually consume via [resolveAppId].
    */

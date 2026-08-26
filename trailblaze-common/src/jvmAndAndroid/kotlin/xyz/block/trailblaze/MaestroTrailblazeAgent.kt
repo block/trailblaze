@@ -266,6 +266,7 @@ abstract class MaestroTrailblazeAgent(
       resolvedTarget = resolvedTarget,
       appId = appId,
       sessionDirProvider = sessionDirProvider,
+      deviceBindings = deviceBindings,
     )
     return context
   }

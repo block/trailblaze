@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.yaml.unified
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -37,7 +40,7 @@ class UnifiedTrailParserTest {
 
     assertEquals("myapp/login", parsed.config.id)
     assertEquals("myapp", parsed.config.target)
-    assertEquals(mapOf("android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION"), parsed.config.devices)
+    assertEquals(mapOf("android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")), parsed.config.devices)
     assertEquals(1, parsed.trail.size)
     assertEquals("Open the app", parsed.trail[0].step)
     assertTrue(parsed.trail[0].recordable)
@@ -124,9 +127,9 @@ class UnifiedTrailParserTest {
     assertEquals("myapp/checkout", parsed.config.id)
     assertEquals(
       mapOf(
-        "android-phone" to "ANDROID_ONDEVICE_INSTRUMENTATION",
-        "android-tablet" to "ANDROID_ONDEVICE_INSTRUMENTATION",
-        "ios" to "IOS_HOST",
+        "android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        "android-tablet" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        "ios" to devicePin("IOS_HOST"),
       ),
       parsed.config.devices,
     )
@@ -502,4 +505,439 @@ class UnifiedTrailParserTest {
       parsed.config.memory,
     )
   }
+
+  @Test
+  fun `devices entries decode from the canonical object form`() {
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        id: myapp/login
+        target: myapp
+        devices:
+          android-phone:
+            driver: ANDROID_ONDEVICE_INSTRUMENTATION
+          web: { driver: PLAYWRIGHT_NATIVE }
+          lab-a: {}
+      trail:
+        - step: Open the app
+          recordable: false
+      """.trimIndent(),
+    )
+
+    assertEquals(
+      mapOf(
+        "android-phone" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION"),
+        "web" to devicePin("PLAYWRIGHT_NATIVE"),
+        // `{}` declares the classifier without pinning a driver — inexpressible in the old
+        // string form, and the reason the object form is canonical.
+        "lab-a" to TrailblazeDeviceDefinition(driver = null),
+      ),
+      parsed.config.devices,
+    )
+  }
+
+  @Test
+  fun `a devices entry with no value declares the classifier and pins no driver`() {
+    // `web:` with nothing after it is the shape a writer reaches for to declare a classifier
+    // without a pin, and it must mean exactly what `{}` means rather than failing the parse.
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        target: myapp
+        devices:
+          web:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+
+    assertEquals(
+      mapOf(
+        "web" to TrailblazeDeviceDefinition(driver = null),
+        "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+      ),
+      parsed.config.devices,
+    )
+  }
+
+  @Test
+  fun `a JSON devices entry with a null value pins no driver rather than a driver named null`() {
+    // JsonNull is itself a JsonPrimitive, so the JSON branch has to rule it out before treating a
+    // primitive value as a driver name — otherwise a driverless entry reports `unknown driver 'null'`.
+    val config = TrailblazeJson.defaultWithoutToolsInstance.decodeFromString(
+      UnifiedTrailConfig.serializer(),
+      """{"target":"myapp","devices":{"web":null,"android":"ANDROID_ONDEVICE_ACCESSIBILITY"}}""",
+    )
+
+    assertEquals(
+      mapOf(
+        "web" to TrailblazeDeviceDefinition(driver = null),
+        "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+      ),
+      config.devices,
+    )
+  }
+
+  @Test
+  fun `devices map mixing the legacy string form and the object form parses`() {
+    // The bare-string value is DEPRECATED decode-only compatibility; during the
+    // migration window a trail may carry both forms at once and must parse to the same model.
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        target: myapp
+        devices:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+          ios:
+            driver: IOS_HOST
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+
+    assertEquals(
+      mapOf(
+        "android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"),
+        "ios" to devicePin("IOS_HOST"),
+      ),
+      parsed.config.devices,
+    )
+  }
+
+  @Test
+  fun `a legacy string devices entry naming an unknown driver fails loud`() {
+    // Same fail-loud contract as the CLI's driver-string validation: a typo'd pin must never
+    // silently run on the default driver.
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          target: myapp
+          devices:
+            android: ANDROID_ONDEVICE_ACESSIBILITY
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    val messages = generateSequence(failure as Throwable?) { it.cause }.mapNotNull { it.message }.joinToString("\n")
+    assertTrue(
+      "unknown driver" in messages && "ANDROID_ONDEVICE_ACCESSIBILITY" in messages,
+      "expected an unknown-driver error listing the valid driver types, got:\n$messages",
+    )
+  }
+
+  @Test
+  fun `an object-form devices entry naming an unknown driver fails loud with its classifier`() {
+    // The typed exception must carry which devices: entry is bad, so per-device callers
+    // (DesktopYamlRunner.trailPinnedDriverResolution) can leave another platform's typo to that
+    // platform instead of failing this device's run.
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          target: myapp
+          devices:
+            android:
+              driver: ANDROID_ONDEVICE_ACESSIBILITY
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    val unknownDriver = assertNotNull(
+      generateSequence(failure as Throwable?) { it.cause }
+        .filterIsInstance<UnknownDriverException>()
+        .firstOrNull(),
+      "expected an UnknownDriverException in the cause chain, got: $failure",
+    )
+    assertEquals("ANDROID_ONDEVICE_ACESSIBILITY", unknownDriver.driverName)
+    assertEquals("android", unknownDriver.classifier)
+  }
+
+  @Test
+  fun `an unknown driver failure still reports every cleanly-decoded devices entry`() {
+    // The exception must describe the WHOLE devices map — every valid entry plus every bad one —
+    // so a per-device caller can run its own closest-wins decision: a valid pin for the running
+    // device must survive another platform's typo, regardless of entry order.
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          target: myapp
+          devices:
+            ios: IOS_TYPO_DRIVER
+            android:
+              driver: ANDROID_ONDEVICE_INSTRUMENTATION
+            web: PLAYWRIGHT_TYPO
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    val unknownDriver = assertNotNull(
+      generateSequence(failure as Throwable?) { it.cause }
+        .filterIsInstance<UnknownDriverException>()
+        .firstOrNull(),
+      "expected an UnknownDriverException in the cause chain, got: $failure",
+    )
+    assertEquals(mapOf("ios" to "IOS_TYPO_DRIVER", "web" to "PLAYWRIGHT_TYPO"), unknownDriver.unknownDrivers)
+    assertEquals(mapOf("android" to devicePin("ANDROID_ONDEVICE_INSTRUMENTATION")), unknownDriver.decodedDevices)
+  }
+
+  @Test
+  fun `a multi-device configuration entry parses with its named devices in declaration order`() {
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        target: myapp
+        devices:
+          pos-pair:
+            description: Dual-display pair
+            devices:
+              seller:
+                classifier: lab-a
+                description: merchant-facing display
+              buyer:
+                classifier: lab-b
+          android:
+            driver: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+
+    val configuration = assertNotNull(parsed.config.devices?.get("pos-pair"))
+    assertTrue(configuration.isConfiguration)
+    assertEquals("Dual-display pair", configuration.description)
+    // Declaration order is the contract: the FIRST named device is where the trail starts.
+    assertEquals(listOf("seller", "buyer"), configuration.devices?.keys?.toList())
+    assertEquals("lab-a", configuration.devices?.get("seller")?.classifier)
+    assertEquals("merchant-facing display", configuration.devices?.get("seller")?.description)
+    assertEquals("lab-b", configuration.devices?.get("buyer")?.classifier)
+    // Single-device entries coexist with a configuration in the same map.
+    assertEquals(devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"), parsed.config.devices?.get("android"))
+    assertEquals(setOf("pos-pair"), parsed.config.multiDeviceConfigurationNames)
+  }
+
+  @Test
+  fun `a multi-device configuration entry round-trips through encode`() {
+    val source = yaml.decodeUnifiedTrail(
+      """
+      config:
+        target: myapp
+        devices:
+          pos-pair:
+            description: Dual-display pair
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+          android:
+            driver: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+    val reDecoded = yaml.decodeUnifiedTrail(yaml.encodeUnifiedTrailToString(source))
+    assertEquals(source.config.devices, reDecoded.config.devices)
+    // Declaration order (the start-device contract) survives the round-trip.
+    assertEquals(
+      listOf("seller", "buyer"),
+      reDecoded.config.devices?.get("pos-pair")?.devices?.keys?.toList(),
+    )
+  }
+
+  @Test
+  fun `a configuration entry declaring its own driver is rejected`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          devices:
+            pos-pair:
+              driver: ANDROID_ONDEVICE_ACCESSIBILITY
+              devices:
+                seller: { classifier: lab-a }
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      messageChain(failure).contains("cannot also declare"),
+      "expected the configuration/driver contradiction message, got: $failure",
+    )
+  }
+
+  @Test
+  fun `a configuration with an empty devices map is rejected`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          devices:
+            pos-pair:
+              devices: {}
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      messageChain(failure).contains("empty `devices:` map"),
+      "expected the empty-configuration message, got: $failure",
+    )
+  }
+
+  @Test
+  fun `a configuration nested inside a configuration is rejected`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          devices:
+            pos-pair:
+              devices:
+                seller:
+                  devices:
+                    inner: { classifier: lab-a }
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      messageChain(failure).contains("configurations don't nest"),
+      "expected the nesting message, got: $failure",
+    )
+  }
+
+  @Test
+  fun `a single-device entry whose classifier field contradicts its key is rejected`() {
+    val failure = assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrail(
+        """
+        config:
+          devices:
+            android-phone:
+              classifier: android-tablet
+        trail:
+          - step: Do the thing
+            recordable: false
+        """.trimIndent(),
+      )
+    }
+    assertTrue(
+      messageChain(failure).contains("map key IS its classifier"),
+      "expected the key-is-classifier message, got: $failure",
+    )
+  }
+
+  @Test
+  fun `a single-device entry whose classifier field restates its key parses`() {
+    // The key IS the classifier; restating it is redundant but not a contradiction.
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        devices:
+          android-phone:
+            classifier: android-phone
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+    assertEquals("android-phone", parsed.config.devices?.get("android-phone")?.classifier)
+  }
+
+  @Test
+  fun `a per-device target parses as data`() {
+    // `target:` is legal trail data from day one; the session runner (not the parser) rejects
+    // it until per-device target plumbing lands.
+    val parsed = yaml.decodeUnifiedTrail(
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller: { classifier: lab-a, target: myapp }
+      trail:
+        - step: Do the thing
+          recordable: false
+      """.trimIndent(),
+    )
+    assertEquals("myapp", parsed.config.devices?.get("pos-pair")?.devices?.get("seller")?.target)
+  }
+
+  @Test
+  fun `decodeUnifiedTrailConfig reads config from a trail whose steps would not decode`() {
+    // The steps are malformed (a step must be a mapping): a full decodeUnifiedTrail throws, but
+    // pre-run resolvers only need `config:` — the config-only decode must succeed so a
+    // multi-device trail is never silently treated as single-device just because its steps have
+    // a problem the run itself will report with full context.
+    val doc =
+      """
+      config:
+        target: myapp
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+      trail:
+        - 42
+      """.trimIndent()
+    assertFailsWith<Exception>("precondition: the full decode must reject the malformed step") {
+      yaml.decodeUnifiedTrail(doc)
+    }
+    val config = yaml.decodeUnifiedTrailConfig(doc)
+    assertEquals(setOf("pos-pair"), config.multiDeviceConfigurationNames)
+  }
+
+  @Test
+  fun `decodeUnifiedTrailConfig fails loud on a malformed config block`() {
+    assertFailsWith<Exception> {
+      yaml.decodeUnifiedTrailConfig(
+        """
+        config:
+          devices: "not a map"
+        trail:
+          - step: do the thing
+        """.trimIndent(),
+      )
+    }
+  }
+
+  @Test
+  fun `decodeUnifiedTrailConfig returns an empty config when the document declares none`() {
+    val config = yaml.decodeUnifiedTrailConfig(
+      """
+      trail:
+        - step: do the thing
+      """.trimIndent(),
+    )
+    assertEquals(UnifiedTrailConfig(), config)
+  }
+
+  private fun messageChain(e: Throwable): String =
+    generateSequence(e) { it.cause }.mapNotNull { it.message }.joinToString("\n")
 }
+
+/** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
+private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)

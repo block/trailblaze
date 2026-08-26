@@ -1,0 +1,39 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze usages [-hV] [--json] [--changed-since=<ref>]
+                         [--trails=<dir>]... [<tool>...]
+Find every trail that directly invokes a tool (IDE "Find Usages" for tools).
+Scans the trails directory's recordings via the parsed trail model, so each
+usage reports WHICH device classifiers invoke the tool — not just which trails.
+Typical uses: before editing a tool, list the trails (and platforms) that would
+exercise the change; before deleting one, confirm nothing invokes it.
+      [<tool>...]      Tool name(s) to find trail usages for (e.g.
+                         myapp_launchSignedIn).
+      --changed-since=<ref>
+                       Instead of naming tools, derive them: compare the
+                         workspace's scripted tools against git <ref> and
+                         report usages for every tool that was added, removed,
+                         or modified. Detection hashes each tool's source
+                         together with its resolved import closure, so editing
+                         a shared helper flags every tool that imports it.
+  -h, --help           Show this help message and exit.
+      --json           Emit the machine-readable JSON report (schemaVersion 1)
+                         to stdout instead of the human-readable summary.
+      --trails=<dir>   Trails directory to scan. Repeatable — a repo whose
+                         trails live under more than one root scans them all in
+                         one pass, and every reported usage names the root it
+                         was found under. Order matters: the FIRST one is the
+                         primary root, which is what the report names and what
+                         --changed-since walks up from to find the workspace's
+                         trailmaps. Passing any --trails replaces the
+                         configured roots rather than adding to them. Default:
+                         the workspace's effective trails directory
+                         (TRAILBLAZE_TRAILS_DIR, the workspace `trails:`
+                         declaration, or the configured default) plus any extra
+                         roots configured in Trail Runner.
+  -V, --version        Print version information and exit.

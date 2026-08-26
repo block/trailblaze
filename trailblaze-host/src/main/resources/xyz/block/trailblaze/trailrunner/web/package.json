@@ -1,7 +1,7 @@
 {
   "name": "@trailblaze/trailrunner-web",
   "private": true,
-  "description": "Type-check toolchain for the Trail Runner web UI. The UI itself has NO bundler and NO npm deps at runtime — it loads React/CodeMirror/etc. as UMD globals from a CDN and is transpiled in-browser by Babel-standalone. These devDependencies exist ONLY so `tsc --noEmit` can type-check the .tsx source (see tsconfig.check.json + types/globals.d.ts). node_modules is gitignored and excluded from the packaged jar.",
+  "description": "Type-check toolchain for the Trail Runner web UI. The UI itself has NO bundler and NO npm deps at runtime — it loads React/CodeMirror/etc. as UMD globals from a CDN, and its .tsx screens are transpiled per-file (never bundled) at build time by :trailblaze-host:transpileTrailRunnerApp. These devDependencies exist ONLY so `tsc --noEmit` can type-check the .tsx source (see tsconfig.check.json + types/globals.d.ts). node_modules is gitignored and excluded from the packaged jar.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.check.json --noEmit"
   },

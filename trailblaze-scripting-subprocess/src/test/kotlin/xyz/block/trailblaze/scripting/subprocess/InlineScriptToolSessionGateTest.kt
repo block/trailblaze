@@ -69,6 +69,22 @@ class InlineScriptToolSessionGateTest {
     assertThat(spawnable.map { it.name }).containsExactly("shopapp_writeNote")
   }
 
+  @Test fun `web-only tool IS spawnable in an android session that binds a web companion`() {
+    // The same descriptor the gate rejects above must spawn when the session actually has a
+    // browser to run it against — otherwise a web+phone trail's dashboard sign-in step reaches
+    // dispatch as an unknown tool, and the gate that exists to save a wasted fork instead
+    // silently removes the tool the trail needs.
+    val spawnable = SubprocessToolRegistrar.applicableInlineTools(
+      tools = listOf(webOnlySignIn, unrestricted),
+      drivers = listOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      ),
+      preferHostAgent = true,
+    )
+    assertThat(spawnable.map { it.name }).containsExactly("shopapp_webSignIn", "shopapp_writeNote")
+  }
+
   @Test fun `web-only tool is spawnable in a web session`() {
     val spawnable = SubprocessToolRegistrar.applicableInlineTools(
       tools = listOf(webOnlySignIn, unrestricted),

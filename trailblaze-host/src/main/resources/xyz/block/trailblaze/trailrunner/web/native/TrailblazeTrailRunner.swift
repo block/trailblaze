@@ -277,7 +277,7 @@ let shellController = ShellController(target: url)
 
 let webConfig = WKWebViewConfiguration()
 // Persistent store so the browser keeps unpkg's immutable, versioned CDN libs
-// (React, Babel, CodeMirror, …) on disk across launches instead of re-fetching
+// (React, CodeMirror, …) on disk across launches instead of re-fetching
 // ~4MB every open. Our own app assets are served `Cache-Control: no-store` by
 // the daemon, so a rebuild is never served stale despite the persistent cache.
 webConfig.websiteDataStore = WKWebsiteDataStore.default()

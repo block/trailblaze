@@ -25,6 +25,7 @@ object TrailblazeYamlSessionRecording {
     sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null,
     customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
     classifierOverride: String? = null,
+    selectedDeviceConfiguration: String? = null,
   ): String {
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -33,6 +34,7 @@ object TrailblazeYamlSessionRecording {
       trailblazeYaml = trailblazeYaml,
       sessionTrailConfig = sessionTrailConfig,
       classifierOverride = classifierOverride,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
     )
   }
 

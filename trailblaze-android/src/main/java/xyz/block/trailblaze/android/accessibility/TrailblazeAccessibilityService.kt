@@ -1175,15 +1175,86 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       targetBounds: Rect,
       targetClassName: String?,
       targetResourceId: String?,
+    ): AccessibilityNodeInfo? = findUniqueNodeWithBounds(
+      node = node,
+      targetBounds = targetBounds,
+      targetClassName = targetClassName,
+      targetResourceId = targetResourceId,
+      logTag = "tapByActionClickOnBounds",
+      ambiguityConsequence = "caller will gesture-fall-back",
+      qualifies = { it.actionList?.any { action -> action.id == AccessibilityNodeInfo.ACTION_CLICK } == true },
+    )
+
+    /**
+     * Dispatches `ACTION_FOCUS` on the live editable node whose identity matches
+     * [targetBounds]/[targetClassName]/[targetResourceId], so a subsequent [inputText] finds it
+     * as the focused editable. Returns `true` only when such a node was uniquely located AND
+     * `performAction` returned true.
+     *
+     * Same identity-lookup contract as [tapByActionClickOnBounds] (see
+     * [findUniqueNodeWithBounds]), with two differences that follow from what focus is:
+     * - the node must be `isEditable`, because typing is the only reason we focus. A focus
+     *   dispatched at a non-editable node would return true while leaving the previously focused
+     *   field to receive the text.
+     * - it must advertise `ACTION_FOCUS`. The platform swaps that action for `ACTION_CLEAR_FOCUS`
+     *   once a view holds focus, so an already-focused field is handled by the caller
+     *   ([planActionFocusRoute] short-circuits it) and never reaches this walk.
+     *
+     * Unlike the tap route there is no coordinate fallback: a caller that cannot focus the named
+     * field must fail rather than type into whichever field happened to be focused.
+     */
+    fun focusByActionFocusOnBounds(
+      targetBounds: Rect,
+      targetClassName: String? = null,
+      targetResourceId: String? = null,
+    ): Boolean {
+      val root = getRootNodeInfo()
+      if (root == null) {
+        Console.log("[focusByActionFocusOnBounds] no live root, cannot focus target field")
+        return false
+      }
+      return root.useRecycling { rootNode ->
+        findUniqueNodeWithBounds(
+          node = rootNode,
+          targetBounds = targetBounds,
+          targetClassName = targetClassName,
+          targetResourceId = targetResourceId,
+          logTag = "focusByActionFocusOnBounds",
+          ambiguityConsequence = "caller will fail the step",
+          qualifies = { candidate ->
+            candidate.isEditable &&
+              candidate.actionList?.any { it.id == AccessibilityNodeInfo.ACTION_FOCUS } == true
+          },
+        )?.useRecycling { it.performAction(AccessibilityNodeInfo.ACTION_FOCUS) } ?: false
+      }
+    }
+
+    /**
+     * Finds the **unique** node in the subtree rooted at [node] whose identity matches and for
+     * which [qualifies] holds. Returns null when no such node exists — or when more than one
+     * does, logging the ambiguity under [logTag] with [ambiguityConsequence] naming what the
+     * caller will do about it.
+     *
+     * Returns an independent [AccessibilityNodeInfo.obtain] copy on success so the caller owns a
+     * handle that's lifecycle-independent from [node] and its descendants.
+     */
+    private fun findUniqueNodeWithBounds(
+      node: AccessibilityNodeInfo,
+      targetBounds: Rect,
+      targetClassName: String?,
+      targetResourceId: String?,
+      logTag: String,
+      ambiguityConsequence: String,
+      qualifies: (AccessibilityNodeInfo) -> Boolean,
     ): AccessibilityNodeInfo? {
       val matches = mutableListOf<AccessibilityNodeInfo>()
-      collectClickableNodesWithBounds(node, targetBounds, targetClassName, targetResourceId, matches)
+      collectNodesWithBounds(node, targetBounds, targetClassName, targetResourceId, qualifies, matches)
       if (matches.size == 1) return matches.single()
       if (matches.size > 1) {
         Console.log(
-          "[tapByActionClickOnBounds] ambiguous identity: ${matches.size} live nodes match " +
+          "[$logTag] ambiguous identity: ${matches.size} live nodes match " +
             "bounds=$targetBounds className=$targetClassName resourceId=$targetResourceId, " +
-            "caller will gesture-fall-back",
+            "$ambiguityConsequence",
         )
       }
       matches.forEach { it.recycle() }
@@ -1192,33 +1263,33 @@ class TrailblazeAccessibilityService : AccessibilityService() {
 
     /**
      * Appends an [AccessibilityNodeInfo.obtain] copy of every node in the subtree rooted at
-     * [node] whose identity matches, to [into]. Descends past a match on purpose — an
-     * identical-bounds ancestor and descendant both matching is exactly the ambiguity
-     * [findClickableNodeWithBounds] needs to see. Ownership of each appended copy passes to
-     * the caller.
+     * [node] whose identity matches and for which [qualifies] holds, to [into]. Descends past a
+     * match on purpose — an identical-bounds ancestor and descendant both matching is exactly
+     * the ambiguity [findUniqueNodeWithBounds] needs to see. Ownership of each appended copy
+     * passes to the caller.
      */
-    private fun collectClickableNodesWithBounds(
+    private fun collectNodesWithBounds(
       node: AccessibilityNodeInfo,
       targetBounds: Rect,
       targetClassName: String?,
       targetResourceId: String?,
+      qualifies: (AccessibilityNodeInfo) -> Boolean,
       into: MutableList<AccessibilityNodeInfo>,
     ) {
       val nodeBounds = Rect().also(node::getBoundsInScreen)
       val classMatches = targetClassName == null || node.className?.toString() == targetClassName
       val resourceMatches = targetResourceId == null || node.viewIdResourceName == targetResourceId
-      val advertisesClick =
-        node.actionList?.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } == true
-      if (nodeBounds == targetBounds && classMatches && resourceMatches && advertisesClick) {
+      if (nodeBounds == targetBounds && classMatches && resourceMatches && qualifies(node)) {
         into += AccessibilityNodeInfo.obtain(node)
       }
       for (i in 0 until node.childCount) {
         node.getChild(i)?.useRecycling { child ->
-          collectClickableNodesWithBounds(
+          collectNodesWithBounds(
             child,
             targetBounds,
             targetClassName,
             targetResourceId,
+            qualifies,
             into,
           )
         }

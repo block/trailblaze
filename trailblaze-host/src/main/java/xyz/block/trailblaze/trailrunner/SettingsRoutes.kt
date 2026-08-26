@@ -88,9 +88,24 @@ internal fun buildIntegrationsResponse(deps: TrailRunnerDeps): IntegrationsRespo
  * `SettingsPatchRequest` RPC handler (null → failure → the UI shows "settings unavailable"). Each
  * field is applied only when present (non-null); the clearable-field sentinels match the old untyped
  * patch (blank directory clears it; non-positive cap clears it).
+ *
+ * A patch that actually MOVES the trails directory also reloads the app targets, because that is a
+ * workspace switch: the trailmap/tool catalogs already follow the new workspace live (the config
+ * resolver reads `WorkspaceConfigDirHolder` on every resolution), but the target set was seeded once
+ * at daemon startup, so without this the picker kept showing the previous workspace's targets and
+ * the only way out was restarting the daemon. Every switch surface funnels through here — the
+ * Trail Runner chip and Settings picker via `PUT /api/settings`, the CLI via `PUT /api/workspace`.
  */
-internal fun buildSettingsPatchResponse(deps: TrailRunnerDeps, request: SettingsPatchRequest): SettingsDto? {
+internal suspend fun buildSettingsPatchResponse(
+  deps: TrailRunnerDeps,
+  request: SettingsPatchRequest,
+  // Injected rather than read off `deps` at the call site, mirroring `registerLiveTarget` on
+  // `buildSaveTargetConfigResponse`: it keeps the workspace-switch trigger testable with plain
+  // inputs, since the real device manager takes ~14 constructor dependencies.
+  reloadAppTargets: (suspend () -> Unit)? = deps.deviceManager?.let { dm -> { dm.reloadAppTargets() } },
+): SettingsDto? {
   val settingsRepo = deps.settingsRepo ?: return null
+  val trailsDirectoryBefore = settingsRepo.serverStateFlow.value.appConfig.trailsDirectory
   settingsRepo.updateAppConfig { config ->
     var updated = config
     request.themeMode?.let { v ->
@@ -160,7 +175,20 @@ internal fun buildSettingsPatchResponse(deps: TrailRunnerDeps, request: Settings
     request.screenshotCompressionQuality?.let { updated = updated.copy(screenshotCompressionQuality = it.coerceIn(0f, 1f)) }
     updated
   }
-  return settingsDtoFromConfig(deps, settingsRepo.serverStateFlow.value.appConfig)
+  val config = settingsRepo.serverStateFlow.value.appConfig
+  if (config.trailsDirectory != trailsDirectoryBefore) {
+    // Discovery touches disk and may spawn the scripted-tool analyzer, so keep it off the request
+    // thread. Only fires on an actual move (a patch that re-sends the same directory, or one that
+    // never mentions it, costs nothing), which makes this a per-user-action cost.
+    //
+    // Ktor serves these concurrently, so two quick switches can overlap; the device manager
+    // serializes the discovery passes and each one reads whatever directory is saved when it runs,
+    // so the picker settles on the last workspace the user picked rather than the slower switch.
+    withContext(Dispatchers.IO) {
+      reloadAppTargets?.invoke()
+    }
+  }
+  return settingsDtoFromConfig(deps, config)
 }
 
 private fun isValidTcpPort(port: Int): Boolean = port in 1..65535
@@ -189,12 +217,15 @@ internal suspend fun buildIntegrationActionResponse(
 
 /**
  * Compares the app-target set the CURRENT workspace would resolve (fresh discovery via
- * [TrailRunnerDeps.appTargetIdsProvider]) against the set the daemon loaded at startup
- * (`TrailblazeDeviceManager.availableAppTargets`). The startup set is what the device manager and
- * target picker actually use, and it isn't rebuilt on a workspace switch — so a difference here is
- * exactly the "restart to pick up this workspace's app targets" case. Returns a no-drift result when
- * either side is unavailable (no provider / no device manager / discovery failure) so the UI degrades
- * to "no nudge" rather than a false alarm.
+ * [TrailRunnerDeps.appTargetIdsProvider]) against the live set the device manager and target picker
+ * actually use (`TrailblazeDeviceManager.availableAppTargets`).
+ *
+ * A workspace switch now reloads that live set itself (see [buildSettingsPatchResponse]), so the
+ * common case reports no drift and the UI shows no nudge. What survives here is the backstop: a
+ * workspace edited in place after the daemon loaded it, and a reload that couldn't run (no
+ * discovery provider wired, or discovery threw and left the previous set standing). Returns a
+ * no-drift result when either side is unavailable, so the UI degrades to "no nudge" rather than a
+ * false alarm.
  */
 internal fun buildWorkspaceTargetDriftResponse(deps: TrailRunnerDeps): WorkspaceTargetDriftDto {
   val provider = deps.appTargetIdsProvider

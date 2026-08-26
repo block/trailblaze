@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // The Steps × recordings board — a folder's blaze steps on the left (editable), one column per
@@ -1137,7 +1137,7 @@ function StepsBoard({
                 {onSaveVariantYaml
                   ? <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '12px 16px' }}>
                       <TrailYamlEditor content={expYaml} editable dirtyRef={rawDirtyRef} tools={editorToolsFor(toolCatalog.data, target, expCol.platform)}
-                        onSave={(t) => onSaveVariantYaml(expCol.name, t)} />
+                        onSave={(t) => onSaveVariantYaml(expCol.name, t)} resetKey={expCol.name} />
                     </div>
                   : <div className="tb-sub" style={{ padding: 16, fontSize: 12.5 }}>Raw editing isn’t available here.</div>}
               </div>

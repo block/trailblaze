@@ -15,28 +15,55 @@ import java.io.File
  *
  * The activator is responsible for everything from reading `/proc/net/unix` to setting up
  * `adb forward` to writing `<sessionDir>/network.ndjson` in the canonical [NetworkEvent] schema.
- * One sink per session; [start] is idempotent for the same `sessionId`.
+ * One sink per (session, device); [start] is idempotent for the same `sessionId` + `deviceId`.
  */
 interface AndroidNetworkCaptureActivator {
 
   /**
-   * Spin up capture for the given session. Idempotent — calling [start] twice for the same
-   * `sessionId` should be a no-op (the bridge dispatches per-tool, so we'll see this on every
-   * call until the session ends).
+   * Spin up capture for the given session's [deviceId]. Idempotent — calling [start] twice for the
+   * same `sessionId` AND `deviceId` should be a no-op (the bridge dispatches per-tool, so we'll see
+   * this on every call until the session ends). A multi-device session calls [start] once per bound
+   * device, so implementations must key their per-run state on BOTH, not on `sessionId` alone.
    *
    * Implementations should not block — kick off the bridge thread and return. Failure to
    * connect is logged, not thrown, so a misbehaving target app can't take down the dispatch loop.
+   *
+   * [targetAppIds] carries EVERY application id the resolved target may run under on this
+   * platform (a target can declare several build flavors — `com.example.app.dev`,
+   * `com.example.app`, … — and which one is installed varies by lane). An activator that
+   * validates the capture peer's identity must accept any of them.
+   *
+   * An empty list means the caller could not resolve a target, NOT "skip validation". An
+   * activator that validates identity must refuse to start rather than attach to an unverified
+   * peer — attaching would capture another instrumented app's traffic and report it as this
+   * session's. Because callers log arming failures instead of propagating them (above), that
+   * refusal surfaces when the session is torn down, not here. An activator that does not check
+   * peer identity at all (e.g. a proxy) can ignore the list.
+   *
+   * [deviceLabel] is the name a multi-device session's configuration declares for this device
+   * (`seller`, `buyer`, …) and is what makes a session's captured artifacts attributable to the
+   * screen they came from. **`null` means single-device**: the session binds exactly one device, so
+   * there is nothing to disambiguate and artifacts keep their unsuffixed names. A multi-device
+   * session passes a label for EVERY bound device including the start device — in a session with
+   * two displays there is no "the" network stream, and an unsuffixed file would silently mean
+   * "whichever display happened to arm first", which is precisely the unattributed evidence a
+   * label exists to remove.
    */
   fun start(
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppId: String?,
+    targetAppIds: List<String>,
+    deviceLabel: String? = null,
   )
 
   /**
-   * Tear down capture for the given session. Closes the NDJSON sink, removes any `adb forward`
-   * mapping, joins the worker thread. Idempotent.
+   * Tear down capture for EVERY device of the given session. Closes the NDJSON sinks, removes any
+   * `adb forward` mappings, joins the worker threads. Idempotent.
+   *
+   * Session-scoped rather than per-device on purpose: teardown is driven by the session finalizer,
+   * which knows a session ended but does not enumerate the devices capture armed for it. An
+   * implementation that keys per-run state on (session, device) must therefore fan out here.
    */
   fun stop(sessionId: String)
 

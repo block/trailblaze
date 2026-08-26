@@ -11,6 +11,7 @@ import xyz.block.trailblaze.config.ScriptedToolNameDiscoverer
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -84,6 +85,13 @@ object HostScriptedToolLauncher {
     classLoader: ClassLoader,
     logPrefix: String,
     includeSubprocess: Boolean = true,
+    /**
+     * Extra drivers the session binds beyond [deviceInfo]'s — a multi-device session with a web
+     * browser companion passes `PLAYWRIGHT_NATIVE` here so web-only subprocess tools spawn and
+     * register instead of being gated out by the launch device's driver. Empty for
+     * single-device sessions.
+     */
+    additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
     onProgressMessage: (String) -> Unit,
   ): LaunchedScriptingRuntime? {
     val sessionDir = logsRepo.getSessionDir(sessionId)
@@ -173,7 +181,7 @@ object HostScriptedToolLauncher {
     val spawnableInlineTools = if (includeSubprocess) {
       SubprocessToolRegistrar.applicableInlineTools(
         tools = nodeApiInlineTools,
-        driver = deviceInfo.trailblazeDriverType,
+        drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
         preferHostAgent = config.preferHostAgent,
         logPrefix = logPrefix,
       )
@@ -201,6 +209,7 @@ object HostScriptedToolLauncher {
           toolRepo = toolRepo,
           // Null when no HTTP server was registered for this process (unit-tested runner paths).
           baseUrl = JsScriptingCallbackBaseUrl.get(),
+          additionalDriverTypes = additionalDriverTypes,
         )
       } catch (e: Throwable) {
         Console.log(

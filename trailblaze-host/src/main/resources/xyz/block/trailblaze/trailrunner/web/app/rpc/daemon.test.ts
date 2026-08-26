@@ -50,7 +50,19 @@ describe("createDaemonRpc", () => {
     expect(calls[0].url).toBe("http://daemon/rpc/ConnectToDeviceRequest");
     expect(JSON.parse(calls[0].init!.body as string)).toEqual({
       trailblazeDeviceId: { instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" },
+      targetAppId: null,
     });
+  });
+
+  test("connectToDevice sends the target app the caller asked to bind", async () => {
+    // The daemon installs that target's instrumentation runner, so a connect for a specific app has
+    // to name it - no id means "whatever target the daemon has selected", which is a different app.
+    const { impl, calls } = fakeFetch(200, { deviceWidth: 1080, deviceHeight: 2400 });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    await rpc.connectToDevice({ instanceId: "emulator-5554", trailblazeDevicePlatform: "ANDROID" }, "alpha-app");
+
+    expect(JSON.parse(calls[0].init!.body as string).targetAppId).toBe("alpha-app");
   });
 
   test("connectToDevice returns false on a non-2xx", async () => {
@@ -194,6 +206,18 @@ describe("createDaemonRpc", () => {
     const { impl } = fakeFetch(500, { message: "No trail found" });
     const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
     expect(await rpc.getTrailDetail("missing")).toBeNull();
+  });
+
+  test("getTrailGitBaseline sends the id and returns the committed text with its state", async () => {
+    const { impl, calls } = fakeFetch(200, { state: "modified", committed: "steps: []" });
+    const rpc = createDaemonRpc({ baseUrl: "http://daemon", fetchImpl: impl });
+
+    const resp = await rpc.getTrailGitBaseline("sub/login.trail.yaml");
+
+    expect(calls[0].url).toBe("http://daemon/rpc/GetTrailGitBaselineRequest");
+    expect(JSON.parse(calls[0].init!.body as string)).toEqual({ id: "sub/login.trail.yaml" });
+    expect(resp?.state).toBe("modified");
+    expect(resp?.committed).toBe("steps: []");
   });
 
   test("validateTrail posts the yaml and returns the typed validation result", async () => {

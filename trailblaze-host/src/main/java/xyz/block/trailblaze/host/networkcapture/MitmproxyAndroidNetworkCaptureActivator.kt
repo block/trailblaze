@@ -64,11 +64,27 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppId: String?,
+    targetAppIds: List<String>,
+    deviceLabel: String?,
   ) {
     installShutdownHookOnce()
     sessions.compute(sessionId) { id, existing ->
-      if (existing != null) return@compute existing
+      if (existing != null) {
+        // Multi-device is not wired on this path: a Session owns one device's wifi-proxy + CA
+        // mutation and writes the session's single `network.ndjson`, so a second device would need
+        // its own mitmdump AND a device-scoped artifact name. Say so instead of returning the first
+        // device's session — a silent no-op would report a two-display session as fully captured
+        // while only one display was ever proxied.
+        if (deviceLabel != null && existing.deviceId != deviceId) {
+          Console.error(
+            "[mitm-capture] $id: proxy capture is armed for ${existing.deviceId.instanceId} and " +
+              "does NOT support additional devices — '$deviceLabel' " +
+              "(${deviceId.instanceId}) will not be captured. Use the in-app capture path for " +
+              "multi-device sessions.",
+          )
+        }
+        return@compute existing
+      }
       val session = Session(id, sessionDir, deviceId)
       runCatching { session.start() }
         .onFailure { Console.error("[mitm-capture] $id: start failed: ${it.message}") }
@@ -123,7 +139,8 @@ object MitmproxyAndroidNetworkCaptureActivator : AndroidNetworkCaptureActivator 
   private class Session(
     private val sessionId: String,
     private val sessionDir: File,
-    private val deviceId: TrailblazeDeviceId,
+    /** Read by [start]'s multi-device rejection, so it cannot be private to this class. */
+    val deviceId: TrailblazeDeviceId,
   ) {
     @Volatile private var process: Process? = null
     @Volatile private var port: Int = 0

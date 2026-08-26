@@ -1,16 +1,16 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
-function TrailsScreen({ go, openRun, initSel, initMode }) {
+function TrailsScreen({ go, openRun, initSel, initMode, initRequest }) {
   const trails = TB.useTrails();
   const roots = TB.useTrailRoots();
   const favorites = TB.useFavorites();
   const [gt] = TB.useGlobalTarget();
   const devices = TB.useDevices();
   const toolsCatalog = TB.useTools();
-  const [mode, setMode] = React.useState(initMode || 'steps');
+  const [mode, setMode] = React.useState(initMode || 'edit');
   const [selected, setSelected] = React.useState(null);
   // When a bundle FOLDER row is selected, this holds its acc and the right pane shows the
   // Implementations matrix (folder overview). null = a single trail (`selected`) is in focus and its
@@ -22,10 +22,16 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   const [editHighlight, setEditHighlight] = React.useState(null);
   React.useEffect(() => {
     // An explicit selection handoff (e.g. a just-saved trail) also dismisses any lingering
-    // folder overview - otherwise the previous visit's pane wins over the requested trail.
-    if (initSel) { setSelected(initSel); setFolderView(null); }
-    if (initMode) setMode(initMode);
-  }, [initSel, initMode]);
+    // folder overview and resets to Edit unless the caller explicitly chose another view.
+    // initRequest changes for every navigation, including reopening the same trail.
+    if (initSel) {
+      setSelected(initSel);
+      setFolderView(null);
+      setMode(initMode || 'edit');
+    } else if (initMode) {
+      setMode(initMode);
+    }
+  }, [initRequest, initSel, initMode]);
   const [query, setQuery] = React.useState('');
   const [filterPlatform, setFilterPlatform] = useStickyState('tb-trails-platform', 'all');
   const [filterTarget, setFilterTarget] = useStickyState('tb-trails-target', 'all');
@@ -50,7 +56,10 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     // Reset to 'all' when the selection has no single platform (mixed devices or none),
     // so a previously-forced platform doesn't keep hiding the other variants.
     setFilterPlatform(gtPlatform || 'all');
-  }, [gt && gt.target, gtPlatform, trails.data]);
+    // Keyed on WHETHER the list has loaded, not on its contents: the index re-polls itself now, and
+    // keying on `trails.data` would re-scope the filters every time anything in the workspace changed
+    // on disk, silently undoing the manual tweak this comment promises will stick.
+  }, [gt && gt.target, gtPlatform, !!trails.data]);
   const [addBusy, setAddBusy] = React.useState(false);
   const [addError, setAddError] = React.useState(null);
   const [editedOnly, setEditedOnly] = React.useState(false);
@@ -63,7 +72,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   const [treeDir, setTreeDir] = React.useState(null); // tree-cursor directory (acc, includes root label)
   // Pushed YAML editor: a file from the bundle matrix slides in from the right over the board (mac
   // NavigationStack feel), instead of navigating away to the trail's detail page. Just the editor.
-  const [viewFile, setViewFile] = React.useState(null); // { name, content, highlight, platform }
+  const [viewFile, setViewFile] = React.useState(null); // { name, highlight, platform, folderId }
   const [pushShown, setPushShown] = React.useState(false); // false while parked off-screen right
   const [boardReloadKey, setBoardReloadKey] = React.useState(0); // bump to remount the folder board after a pushed-editor save
   const editorDirty = React.useRef(false); // set by the editor; guards close-on-discard
@@ -171,9 +180,17 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
   // No arbitrary default: `selected` is plain React state so a reload clears it while the sticky
   // filters survive - falling back to allTrails[0] put a trail the user never opened (often
   // filtered out of the visible tree) in the detail pane, and Run launched it.
-  const current = allTrails.find((t) => t.id === selected)
+  const resolvedCurrent = allTrails.find((t) => t.id === selected)
     || (selected ? allTrails.find((t) => (t.id || '').startsWith(selected + '/')) : null)
     || null;
+  // The index polls, so the selected trail can leave it mid-session - a rename, a branch switch, an
+  // agent rewriting the tree. Keep the last one that resolved instead of unmounting the detail pane
+  // underneath the user, which would take any unsaved edits in its editor with it. Closing the
+  // detail clears `selected`, so this only holds a trail the user is still looking at.
+  const lastResolved = React.useRef(null);
+  if (resolvedCurrent) lastResolved.current = { selected, trail: resolvedCurrent };
+  const current = resolvedCurrent
+    || (selected && lastResolved.current && lastResolved.current.selected === selected ? lastResolved.current.trail : null);
   const [treeW, startTreeDrag] = useResizableWidth('tb-trails-tree-w', 280, 200, 600);
 
   // The list is "scoped by target" when the target filter still matches the active target —
@@ -186,7 +203,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     const cf = folderOf(current.path);
     return allTrails.filter((t) => folderOf(t.path) === cf).sort((a, b) => (a.path || '').localeCompare(b.path || ''));
   }, [allTrails, current]);
-  const detailTab = ['steps', 'edit', 'runs', 'variants'].includes(mode) ? mode : 'steps';
+  const detailTab = ['steps', 'edit', 'runs', 'variants'].includes(mode) ? mode : 'edit';
 
   // ── folder (bundle) matrix view ──
   // The Implementations matrix is a FOLDER-level overview, shown only when a bundle folder row is
@@ -227,13 +244,36 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
     try { await trails.reload(); } catch (e) { /* index refetches on next navigation */ }
   };
 
+  // A pinned folder id is `<rootIdx>/<relative-path>`, and the daemon resolves that rootIdx against
+  // whatever workspace is active when the request arrives. So the pin is only good for as long as the
+  // workspace is: switching under a mounted editor would point the same id at a different checkout,
+  // and two checkouts of one repo share their relative paths, so a read would start answering with
+  // the other tree's file and a write would land in it silently. Count the switches instead - an
+  // editor opened before one stops reading and refuses to save, keeping its buffer on screen.
+  const [wsGen, setWsGen] = React.useState(0);
+  React.useEffect(() => {
+    const bump = () => setWsGen((g) => g + 1);
+    window.addEventListener('tb:workspace-changed', bump);
+    return () => window.removeEventListener('tb:workspace-changed', bump);
+  }, []);
+
   const openFolderTrail = React.useCallback((name, highlight = null) => {
     const plat = (name.match(/^(android|ios|web)\./) || [])[1] || null;
-    setViewFile({ name, content: null, highlight, platform: plat });
+    // `folderId` is PINNED here rather than read from `fvFolderId` at save time. That id is derived
+    // from the polled index, so a branch switch or a folder delete can empty it under this mounted
+    // editor - and then Save posts to folder id "" and the buffer has nowhere to go. Pinning it means
+    // the editor keeps writing to the folder it was opened against for as long as it is open.
+    // The target is pinned for the same reason: the tree behind this editor stays clickable, so
+    // `fvTarget` follows the selected folder while the buffer keeps saving to `folderId`. Reading it
+    // live would scope the tool palette to one bundle and write the calls into another one's file.
+    setViewFile({ name, highlight, platform: plat, folderId: fvFolderId, target: fvTarget, wsGen });
     requestAnimationFrame(() => setPushShown(true));
-    TB.fetchTrailFolderFile(fvFolderId, name).then((content) =>
-      setViewFile((vf) => (vf && vf.name === name ? { name, content: content || '(could not read file)', highlight, platform: plat } : vf)));
-  }, [fvFolderId]);
+  }, [fvFolderId, fvTarget, wsGen]);
+  // Null once the workspace has moved on, which stops the poll (see `wsGen` above).
+  const liveFile = viewFile && viewFile.wsGen === wsGen ? viewFile : null;
+  // The open file, polled like the Edit tab's trail. TrailYamlEditor already reconciles a `content`
+  // that moves under unsaved edits; it just never had a parent that told it the file had changed.
+  const openFileText = TB.useTrailFolderFile(liveFile && liveFile.folderId, liveFile && liveFile.name);
   // Pop the pushed editor: guard unsaved edits, slide back out, unmount after the transition. Gate the
   // delayed unmount on the file name we're closing, so quickly opening another file before the 320ms
   // timeout fires doesn't clear the newly-opened one.
@@ -497,21 +537,19 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 )}
               />
             </div>
-            {/* Single-trail detail (Steps · Edit · Runs · Variants). NOT keyed by id: switching trails keeps
+            {/* Single-trail detail (Edit · Grid View · Runs · Variants). NOT keyed by id: switching trails keeps
                 the view mounted so the Edit tab's Monaco editor + language-server socket are reused instead of
                 rebuilt on every switch. TrailDetailView resets the editor to the new trail's content on switch
-                (via its `resetKey`); the Steps/Runs panes are prop-driven and re-render on their own. */}
+                (via its `resetKey`); the Grid View/Runs panes are prop-driven and re-render on their own. */}
             <div className="tb-trail-detail-body" style={{ flex: 1, minHeight: 0, padding: '16px 28px 18px', display: 'flex', flexDirection: 'column' }}>
               <TrailDetailView
                 trail={current}
                 configTrail={current}
-                // While switching trails, useTrailDetail keeps the PREVIOUS trail's data during the
-                // reload — surfacing it here would show the old trail's steps/YAML under the new
-                // trail's header until the fetch lands (reads as "stuck, nothing happened"). Gate on
-                // `!loading` so a trail switch yields null → the detail view shows its loading state
-                // and re-derives for the new trail. (A same-trail refresh keeps loading=false, so no
-                // flicker there.)
-                yaml={(detail.data && !detail.loading) ? (detail.data.yaml || '') : null}
+                // `detail.data` is null for as long as the read is not about THIS trail, including
+                // the render where the selection changes (useTrailDetail stamps and narrows it), so
+                // a switch yields null here and the detail view shows its loading state rather than
+                // the trail you just left. A same-trail refresh keeps its data, so no flicker.
+                yaml={detail.data ? (detail.data.yaml || '') : null}
                 editable
                 tools={trailTools}
                 onSave={(t) => TB.updateTrail(current.id, t)}
@@ -534,7 +572,19 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
             the YAML editor (no Steps/Runs tabs); blaze.yaml is prose-only so it gets no tool palette. */}
         {viewFile && (() => {
           const isBlaze = viewFile.name === 'blaze.yaml';
-          const scopedTools = editorToolsFor(toolsCatalog.data, fvTarget, viewFile.platform);
+          const scopedTools = editorToolsFor(toolsCatalog.data, viewFile.target, viewFile.platform);
+          // Read through `window` and guarded, like the other classic-script globals here: a missing
+          // or reordered editor-sync.js must not turn this into a ReferenceError that blanks the
+          // screen. Without it, fall back to showing whatever has been read.
+          const sync = window.TbEditorSync;
+          // One string is both the editor's reset key and the identity the polled read has to match,
+          // which is the point: the frame that resets the editor for a new file is exactly the frame
+          // whose content still belongs to the old one.
+          const fileKey = viewFile.folderId + '/' + viewFile.name;
+          const fileContent = sync ? sync.polledFileContent(openFileText, fileKey) : openFileText.data;
+          // The placeholder is a message about the file, not the file. Save has no dirty check, so
+          // leaving it editable is all it takes to write "(could not read file)" over the trail.
+          const unreadable = !!sync && fileContent === sync.UNREADABLE;
           return (
             <div style={{ position: 'absolute', inset: 0, zIndex: 10, display: 'flex', flexDirection: 'column', background: 'var(--bg-window)', borderLeft: '1px solid var(--tb-hairline)', boxShadow: pushShown ? '-18px 0 50px rgba(0,0,0,.30)' : 'none', transform: reduce ? 'none' : (pushShown ? 'translateX(0)' : 'translateX(100%)'), transition: reduce ? 'none' : 'transform 320ms cubic-bezier(.32,.72,0,1), box-shadow 320ms cubic-bezier(.32,.72,0,1)', willChange: 'transform' }}>
               <div style={{ padding: '20px 28px 0', flex: '0 0 auto' }}>
@@ -543,7 +593,7 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                   leading={<span role="button" onClick={closeFile} title="Back (Esc)" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, marginLeft: -6, borderRadius: 8, cursor: 'pointer', color: 'var(--text-subtle-variant)', flex: '0 0 auto' }}><Ico n="arrow-left" s={18} /></span>}
                   meta={(
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                      {fvTarget && <Chip tone="blue">{fvTarget}</Chip>}
+                      {viewFile.target && <Chip tone="blue">{viewFile.target}</Chip>}
                       {viewFile.platform && <Chip>{viewFile.platform}</Chip>}
                       <Chip tone={isBlaze ? 'amber' : ''}>{isBlaze ? 'source' : 'recording'}</Chip>
                     </div>
@@ -551,10 +601,13 @@ function TrailsScreen({ go, openRun, initSel, initMode }) {
                 />
               </div>
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '14px 28px 20px' }}>
-                <TrailYamlEditor content={viewFile.content} editable tools={isBlaze ? null : scopedTools}
-                  onSave={(t) => TB.saveTrailFolderFile(fvFolderId, viewFile.name, t, 'update')}
-                  onSaved={() => { trails.reload(); setBoardReloadKey((k) => k + 1); }}
-                  dirtyRef={editorDirty} highlight={viewFile.highlight} />
+                <TrailYamlEditor content={fileContent} editable={!unreadable} tools={isBlaze ? null : scopedTools}
+                  onSave={(t) => (viewFile.wsGen !== wsGen
+                    ? Promise.resolve({ success: false, error: 'The workspace changed while this file was open. Reopen it to save.' })
+                    : TB.saveTrailFolderFile(viewFile.folderId, viewFile.name, t, 'update'))}
+                  onSaved={() => { trails.reload(); openFileText.reload(); setBoardReloadKey((k) => k + 1); }}
+                  dirtyRef={editorDirty} highlight={viewFile.highlight}
+                  resetKey={fileKey} />
               </div>
             </div>
           );

@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.host.yaml
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.cli.CliRunDriverResolution
 import xyz.block.trailblaze.cli.CliRunDriverResolver
 import xyz.block.trailblaze.cli.DeviceClassifierResolver
@@ -44,8 +47,13 @@ import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.unified.UnknownDriverException
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -56,6 +64,12 @@ class DesktopYamlRunner(
   private val dynamicLlmClientProvider: (TrailblazeLlmModel) -> DynamicLlmClient,
 ) {
   companion object {
+    /**
+     * How long a WEB companion's browser gets to come up. Generous because a first run on a
+     * fresh machine downloads and installs Chromium before the browser can launch.
+     */
+    private const val WEB_COMPANION_LAUNCH_TIMEOUT_MS = 180_000L
+
     // Force early class loading of nested DeviceConnectionStatus classes
     // This prevents ClassNotFoundException in catch blocks which reference these types
     @Suppress("unused")
@@ -125,11 +139,35 @@ class DesktopYamlRunner(
     internal fun trailPinnedDriverResolution(
       trailYaml: String,
       deviceClassifiers: List<TrailblazeDeviceClassifier>,
-    ): CliRunDriverResolution = CliRunDriverResolver.resolve(
-      runCatching {
+    ): CliRunDriverResolution {
+      val pinnedDriver = try {
         createTrailblazeYaml().extractTrailConfig(trailYaml, deviceClassifiers)?.driver
-      }.getOrNull(),
-    )
+      } catch (e: Exception) {
+        // A typo'd devices: pin throws UnknownDriverException inside the trail decode (kaml wraps
+        // it, so walk the cause chain). The exception carries the WHOLE devices map — every entry
+        // that decoded cleanly plus every bad one — so the same closest-wins walk the adapter
+        // uses can decide what this device sees: its winning entry is valid → that pin; its
+        // winning entry is the typo → Unrecognized (never silently the default driver); nothing
+        // reachable → no pin, another platform's typo stays that platform's problem.
+        val unknownDriver = generateSequence<Throwable>(e) { it.cause }
+          .filterIsInstance<UnknownDriverException>()
+          .firstOrNull()
+          ?: return CliRunDriverResolution.Resolved(null)
+        if (unknownDriver.classifier == null) {
+          // No entry context — fail loud rather than guess it is someone else's pin.
+          return CliRunDriverResolver.resolve(unknownDriver.driverName)
+        }
+        val winner = TrailblazeClassifierLineage.resolutionChain(deviceClassifiers)
+          .map { it.classifier }
+          .firstOrNull { it in unknownDriver.decodedDevices || it in unknownDriver.unknownDrivers }
+          ?: return CliRunDriverResolution.Resolved(null)
+        unknownDriver.decodedDevices[winner]?.let {
+          return CliRunDriverResolution.Resolved(it.driver)
+        }
+        return CliRunDriverResolver.resolve(unknownDriver.unknownDrivers.getValue(winner))
+      }
+      return CliRunDriverResolver.resolve(pinnedDriver)
+    }
 
     /**
      * True when [sessionInfo]'s session-start record names [deviceInstanceId] — the cancellation
@@ -256,9 +294,20 @@ class DesktopYamlRunner(
       }
 
       if (forceStopTargetApp) {
+        // The app to stop is the one this device will actually run. On a multi-device trail whose
+        // START device overrides `target:`, that is the override, not the session default —
+        // stopping the session default would leave the app under test running and kill an
+        // unrelated one, defeating the whole point of the clean-start option.
+        //
+        // Lookup failures are ignored here: `resolveMemberTargets` runs the same lookup a moment
+        // later and fails the run loud with a message about the trail's `target:`.
+        val startDeviceTarget = MultiDeviceConfigurationResolver
+          .startDeviceTargetId(runYamlRequest.yaml)
+          ?.let { desktopAppRunYamlParams.findTargetById?.invoke(it) }
+          ?: targetTestApp
         // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
         // membership-style Set<String>.
-        val possibleAppIds = targetTestApp
+        val possibleAppIds = startDeviceTarget
           ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
           ?.toSet()
           ?: emptySet()
@@ -304,6 +353,43 @@ class DesktopYamlRunner(
       // platform-scoped), so instanceId / platform / deviceId are unchanged.
       val hostRunDevice = connectedTrailblazeDevice.copy(trailblazeDriverType = trailblazeDriverType)
 
+      // Multi-device configurations are wired into exactly one dispatch branch below: the host
+      // agent driving Android on-device drivers over RPC. Every other branch (V3, the on-device
+      // agent, iOS/web/Compose host runs) has no companion connect, no device bindings, and no
+      // per-device routing — it would run a multi-device trail against the launch device alone and
+      // report success, with the configuration-keyed steps quietly falling through to the LLM.
+      // Reject up front, naming the toggle that would make this run dispatchable.
+      val multiDeviceDispatchSupported = trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES &&
+        runYamlRequest.agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
+        runYamlRequest.config.preferHostAgent
+      if (!multiDeviceDispatchSupported) {
+        val declaredConfigurations = try {
+          MultiDeviceConfigurationResolver.declaredConfigurationNames(runYamlRequest.yaml)
+        } catch (e: TrailblazeException) {
+          prefixedProgressMessage(e.message ?: "Failed to read this trail's device configuration")
+          executionResult = TrailExecutionResult.Failed(
+            e.message ?: "Failed to read this trail's device configuration",
+            misuse = true,
+          )
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
+        if (declaredConfigurations.isNotEmpty()) {
+          val message = "This trail declares the multi-device configuration(s) " +
+            "$declaredConfigurations, which only run on the host agent over the Android " +
+            "on-device RPC path. This run resolved driver $trailblazeDriverType, agent " +
+            "${runYamlRequest.agentImplementation}, preferHostAgent=" +
+            "${runYamlRequest.config.preferHostAgent} — running it here would silently use the " +
+            "launch device only. Run it on an Android device with an on-device driver and " +
+            "`preferHostAgent` enabled."
+          prefixedProgressMessage(message)
+          Console.log("❌ COROUTINE ENDING (multi-device trail on an unsupported dispatch path)")
+          executionResult = TrailExecutionResult.Failed(message, misuse = true)
+          onComplete?.invoke(executionResult)
+          return@launch
+        }
+      }
+
       // Per-session video / sprite / logcat capture used to be started here against a
       // temp dir and moved into the session log dir in the finally block. That worked
       // for the CLI/daemon path but bypassed every MCP-driven session — the `step`,
@@ -313,9 +399,14 @@ class DesktopYamlRunner(
       // paths route through (CLI's `onSessionStarted` callback below starts it; MCP
       // starts it at session-resolution time). The coordinator writes artifacts
       // directly into the session log dir — no temp-dir + move dance.
-      val appIdForCapture = targetTestApp
+      // ALL app ids the target may run under on this platform — capture-peer identity checks
+      // must accept any of them (which declared flavor is installed varies by lane, and it is
+      // not always the first-declared one). The single-app-id consumers below keep the first
+      // entry as before.
+      val appIdsForCapture = targetTestApp
         ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
-        ?.firstOrNull()
+        .orEmpty()
+      val appIdForCapture = appIdsForCapture.firstOrNull()
       // Resolve per-run capture toggles in the same order the pre-coordinator flow did:
       // request-level overrides (CLI `--no-capture-video` / `--capture-logcat`) > daemon
       // appConfig toggles > built-in defaults. Passed to `coordinator.startForSession`
@@ -328,6 +419,10 @@ class DesktopYamlRunner(
       )
 
       var sessionId: SessionId? = null
+      // Every device a multi-device configuration bound, populated by the multi-device branch
+      // BEFORE the runner starts the session so `captureSessionStarted` can arm one capture bridge
+      // per device instead of only the launch device's. Empty for a single-device run.
+      var captureDeviceBindings: List<CaptureDeviceBinding> = emptyList()
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
 
@@ -380,8 +475,9 @@ class DesktopYamlRunner(
             runYamlRequest = runYamlRequest,
             deviceId = trailblazeDeviceId,
             sessionIdOverride = sid,
-            targetAppId = appIdForCapture,
+            targetAppIds = appIdsForCapture,
             onProgressMessage = prefixedProgressMessage,
+            deviceBindings = captureDeviceBindings,
           )
         }
 
@@ -521,6 +617,8 @@ class DesktopYamlRunner(
               additionalInstrumentationArgs = additionalInstrumentationArgs,
               targetTestApp = targetTestApp,
               onSessionStarted = captureSessionStarted,
+              findTargetById = desktopAppRunYamlParams.findTargetById,
+              onCaptureDeviceBindingsResolved = { captureDeviceBindings = it },
             )
           }
 
@@ -881,7 +979,7 @@ class DesktopYamlRunner(
             },
           )
         } finally {
-          armIfWedged(v3SessionId, connectedTrailblazeDevice.trailblazeDeviceId, onProgressMessage)
+          armIfWedged(v3SessionId, listOf(connectedTrailblazeDevice.trailblazeDeviceId), onProgressMessage)
         }
       }
     }
@@ -902,6 +1000,16 @@ class DesktopYamlRunner(
     additionalInstrumentationArgs: Map<String, String>,
     targetTestApp: TrailblazeHostAppTarget?,
     onSessionStarted: (SessionId) -> Unit = {},
+    /**
+     * Resolves a per-device `target:` declared by a multi-device configuration member — see
+     * [DesktopAppRunYamlParams.findTargetById]. Only consulted when a member declares one.
+     */
+    findTargetById: ((String) -> TrailblazeHostAppTarget?)? = null,
+    /**
+     * Reports every device a multi-device configuration bound, called before the session starts so
+     * per-session capture can arm one bridge per device. Not called for a single-device run.
+     */
+    onCaptureDeviceBindingsResolved: (List<CaptureDeviceBinding>) -> Unit = {},
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
@@ -916,57 +1024,270 @@ class DesktopYamlRunner(
         requireAndroidAccessibilityService = needsAccessibility,
       )
 
-      withContext(Dispatchers.Default) {
-        onConnectionStatus(status)
-
-        // A mid-trail wedge on this path is re-thrown by `executeTrailSession`, so the runner
-        // never returns the wedged session's id — but the terminal `Ended.Failed` status (with
-        // the non-recoverable signature) is written to disk before the re-throw. Capture the live
-        // session id from `onSessionStarted` and arm the relaunch in a finally so detection fires
-        // whether the runner returns normally or propagates the wedge as an exception.
-        var hostAgentSessionId: SessionId? = null
-        try {
-          TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
-            dynamicLlmClient = dynamicLlmClient,
-            onDeviceRpc = onDeviceRpc,
-            runYamlRequest = runYamlRequest,
-            trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-            onProgressMessage = onProgressMessage,
-            targetTestApp = targetTestApp,
-            onSessionStarted = { sessionId ->
-              hostAgentSessionId = sessionId
-              onSessionStarted(sessionId)
-            },
-          )
-        } finally {
-          armIfWedged(
-            hostAgentSessionId,
-            connectedTrailblazeDevice.trailblazeDeviceId,
-            onProgressMessage,
+      // Multi-device: a unified trail may declare a `config.devices:` configuration entry (an
+      // entry with an inner `devices:` map of named devices). Resolve it to concrete devices —
+      // the launch device IS the first declared name — and run the same connect/readiness flow
+      // the launch device just got, so the runner receives already-warmed RPC clients for every
+      // remaining named device.
+      val resolvedConfiguration = resolveMultiDeviceConfiguration(
+        runYamlRequest = runYamlRequest,
+        primaryDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+      )
+      // Companion clients are closed in this method's own finally (and immediately if a later
+      // companion fails to connect) — one leaked RPC connection per multi-device run would
+      // otherwise accumulate for the daemon's lifetime.
+      val companionRpcClients = mutableListOf<OnDeviceRpcClient>()
+      val multiDeviceSession = resolvedConfiguration?.let { resolved ->
+        onProgressMessage(
+          "Multi-device configuration '${resolved.configurationName}': start device " +
+            "'${resolved.startDeviceName}' is ${connectedTrailblazeDevice.trailblazeDeviceId.instanceId}",
+        )
+        // Each device runs its own `target:` when the configuration declares one, else the session
+        // target. Resolved BEFORE any companion connects so an unknown target id fails the run
+        // before it boots devices for a session that could never have been correct.
+        val memberTargets = MultiDeviceConfigurationResolver.resolveMemberTargets(
+          configurationName = resolved.configurationName,
+          memberTargetIds = resolved.memberTargetIds,
+          sessionTarget = targetTestApp,
+          findTargetById = findTargetById,
+        )
+        // Android companions connect over the on-device RPC transport; WEB companions are
+        // host-owned Playwright browsers with no device and no RPC. Any other platform (an iOS
+        // simulator) has no companion transport yet — reject it by name here rather than
+        // surfacing an inscrutable adb failure.
+        val unsupportedCompanions = resolved.companionDeviceIds.filterValues {
+          it.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID &&
+            it.trailblazeDevicePlatform != TrailblazeDevicePlatform.WEB
+        }
+        if (unsupportedCompanions.isNotEmpty()) {
+          throw TrailblazeException(
+            "Configuration '${resolved.configurationName}' casts companion devices on platforms " +
+              "with no companion transport: " +
+              unsupportedCompanions.entries.joinToString { (name, id) ->
+                "'$name' (${id.trailblazeDevicePlatform})"
+              } +
+              ". Companions run either over the Android on-device RPC transport or as a host-owned " +
+              "web browser, so only ANDROID and WEB companions are supported yet.",
           )
         }
+        try {
+          TrailblazeHostYamlRunner.MultiDeviceSessionRpc(
+            configurationName = resolved.configurationName,
+            startDeviceName = resolved.startDeviceName,
+            startDeviceTarget = memberTargets[resolved.startDeviceName],
+            companions = resolved.companionDeviceIds.mapValues { (name, companionDeviceId) ->
+              val companionTarget = memberTargets[name]
+              onProgressMessage(
+                "Binding device '$name' to ${companionDeviceId.instanceId}" +
+                  (companionTarget?.id?.let { " (target '$it')" } ?: ""),
+              )
+              if (companionDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+                TrailblazeHostYamlRunner.CompanionDeviceConnection.WebBrowser(
+                  trailblazeDeviceId = companionDeviceId,
+                  pageManager = bindWebCompanionBrowser(companionDeviceId, name, onProgressMessage),
+                  // A browser installs no app, so this only scopes the tools its agent resolves.
+                  targetTestApp = companionTarget,
+                )
+              } else {
+                val companionRpc = OnDeviceRpcClient(
+                  trailblazeDeviceId = companionDeviceId,
+                  sendProgressMessage = onProgressMessage,
+                  onNonRecoverableWedge = { armWedgedDevice(companionDeviceId) },
+                )
+                companionRpcClients += companionRpc
+                connectAndEnsureReady(
+                  onDeviceRpc = companionRpc,
+                  trailblazeDeviceId = companionDeviceId,
+                  // This device's own target decides which instrumentation runner warms up on it —
+                  // a companion running a different app than the launch device needs that app's
+                  // runner, not the launch device's.
+                  trailblazeOnDeviceInstrumentationTarget =
+                    companionTarget?.getTrailblazeOnDeviceInstrumentationTarget()
+                      ?: trailblazeOnDeviceInstrumentationTarget,
+                  additionalInstrumentationArgs = additionalInstrumentationArgs,
+                  onProgressMessage = onProgressMessage,
+                  enableAccessibility = needsAccessibility,
+                  requireAndroidAccessibilityService = needsAccessibility,
+                )
+                TrailblazeHostYamlRunner.CompanionDeviceConnection.AndroidRpc(
+                  trailblazeDeviceId = companionDeviceId,
+                  rpcClient = companionRpc,
+                  targetTestApp = companionTarget,
+                )
+              }
+            },
+          )
+        } catch (t: Throwable) {
+          closeCompanionRpcClients(companionRpcClients)
+          throw t
+        }
+      }
+
+      // Announced before the runner starts the session (which is what fires `onSessionStarted`), so
+      // capture arms every display's bridge rather than only the launch device's. The launch device
+      // is named too: in a session with two displays there is no unlabeled "the" network stream.
+      multiDeviceSession?.let { session ->
+        onCaptureDeviceBindingsResolved(
+          listOf(
+            CaptureDeviceBinding(
+              name = session.startDeviceName,
+              deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+              targetAppIds = (session.startDeviceTarget ?: targetTestApp)
+                ?.getPossibleAppIdsForPlatform(
+                  connectedTrailblazeDevice.trailblazeDeviceId.trailblazeDevicePlatform,
+                )
+                .orEmpty(),
+            ),
+          ) +
+            session.companions.map { (name, companion) ->
+              CaptureDeviceBinding(
+                name = name,
+                deviceId = companion.trailblazeDeviceId,
+                // This device's OWN target: capture verifies the app identity of the client that
+                // dials in, so the launch device's app ids would make it reject the right client.
+                targetAppIds = (companion.targetTestApp ?: targetTestApp)
+                  ?.getPossibleAppIdsForPlatform(
+                    companion.trailblazeDeviceId.trailblazeDevicePlatform,
+                  )
+                  .orEmpty(),
+              )
+            },
+        )
+      }
+
+      try {
+        withContext(Dispatchers.Default) {
+          onConnectionStatus(status)
+
+          // A mid-trail wedge on this path is re-thrown by `executeTrailSession`, so the runner
+          // never returns the wedged session's id — but the terminal `Ended.Failed` status (with
+          // the non-recoverable signature) is written to disk before the re-throw. Capture the live
+          // session id from `onSessionStarted` and arm the relaunch in a finally so detection fires
+          // whether the runner returns normally or propagates the wedge as an exception.
+          var hostAgentSessionId: SessionId? = null
+          try {
+            TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
+              dynamicLlmClient = dynamicLlmClient,
+              onDeviceRpc = onDeviceRpc,
+              runYamlRequest = runYamlRequest,
+              trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+              onProgressMessage = onProgressMessage,
+              targetTestApp = targetTestApp,
+              onSessionStarted = { sessionId ->
+                hostAgentSessionId = sessionId
+                onSessionStarted(sessionId)
+              },
+              multiDeviceSession = multiDeviceSession,
+            )
+          } finally {
+            armIfWedged(
+              hostAgentSessionId,
+              // Android companions only — arming relaunches an on-device server, which a
+              // host-owned web browser doesn't have.
+              listOf(connectedTrailblazeDevice.trailblazeDeviceId) +
+                multiDeviceSession?.companions?.values.orEmpty()
+                  .filterIsInstance<TrailblazeHostYamlRunner.CompanionDeviceConnection.AndroidRpc>()
+                  .map { it.trailblazeDeviceId },
+              onProgressMessage,
+            )
+          }
+        }
+      } finally {
+        closeCompanionRpcClients(companionRpcClients)
       }
     }
   }
 
   /**
+   * Binds a WEB companion to a host-owned Playwright browser, reusing the daemon slot named by
+   * [companionDeviceId] when one is already running (the desktop "Launch Browser" button, a
+   * `device create web`, or a previous trail in the same daemon) and launching it otherwise.
+   *
+   * A web device is virtual: unlike an Android companion there is nothing to boot, connect, or
+   * warm up, so a CI lane binds one with `dashboard=playwright-native` and no boot step.
+   *
+   * Deliberately does NOT reset the browser session — same rule the single-device web runner
+   * follows when it adopts a running slot. A reset would navigate an already-signed-in browser
+   * to `about:blank`, discarding exactly the state an operator provisioned it for.
+   */
+  private suspend fun bindWebCompanionBrowser(
+    companionDeviceId: TrailblazeDeviceId,
+    deviceName: String,
+    onProgressMessage: (String) -> Unit,
+  ): PlaywrightPageManager {
+    val webBrowserManager = trailblazeDeviceManager.webBrowserManager
+    val instanceId = companionDeviceId.instanceId
+    webBrowserManager.getPageManager(instanceId)?.let { running ->
+      onProgressMessage("Device '$deviceName' bound to the running browser '$instanceId'")
+      return running
+    }
+    onProgressMessage("Launching browser '$instanceId' for device '$deviceName'...")
+    val launched = CompletableDeferred<Unit>()
+    webBrowserManager.launchBrowser(instanceId = instanceId) { launched.complete(Unit) }
+    withTimeoutOrNull(WEB_COMPANION_LAUNCH_TIMEOUT_MS) { launched.await() }
+    // `launchBrowser` reports failures through the slot's state rather than throwing, and its
+    // completion callback doesn't fire on the error path — so the manager, not the callback, is
+    // what says whether this companion actually has a browser to drive.
+    return webBrowserManager.getPageManager(instanceId)
+      ?: throw TrailblazeException(
+        "Device '$deviceName' is bound to web browser '$instanceId', but the browser did not " +
+          "come up within ${WEB_COMPANION_LAUNCH_TIMEOUT_MS / 1000}s. Check the daemon log for a " +
+          "Playwright/Chromium launch failure (a first run installs Chromium, which can take " +
+          "longer), then re-run.",
+      )
+  }
+
+  /**
+   * Closes each companion's RPC client, tolerating individual failures so one unresponsive
+   * companion can't strand the others' connections. No-op for single-device runs.
+   */
+  private fun closeCompanionRpcClients(clients: List<OnDeviceRpcClient>) {
+    clients.forEach { client ->
+      runCatching { client.close() }.onFailure { t ->
+        Console.log("[DesktopYamlRunner] Failed to close a companion RPC client: ${t.message}")
+      }
+    }
+  }
+
+  /**
+   * Resolves a unified trail's `config.devices:` CONFIGURATION entry against the
+   * `TRAILBLAZE_DEVICE_BINDINGS` env var. Thin env-reading wrapper over the pure
+   * [MultiDeviceConfigurationResolver.resolve] so the resolution rules stay unit-testable.
+   */
+  private fun resolveMultiDeviceConfiguration(
+    runYamlRequest: RunYamlRequest,
+    primaryDeviceId: TrailblazeDeviceId,
+  ): MultiDeviceConfigurationResolver.ResolvedMultiDeviceConfiguration? =
+    MultiDeviceConfigurationResolver.resolve(
+      yaml = runYamlRequest.yaml,
+      primaryDeviceId = primaryDeviceId,
+      rawDeviceBindings = System.getenv(MultiDeviceConfigurationResolver.DEVICE_BINDINGS_ENV_VAR),
+    )
+
+  /**
    * Reads [sessionId]'s logs from disk and, when the terminal status OR any failed tool log
    * carries the non-recoverable UiAutomation wedge (see [shouldRelaunchOnDeviceServer]), arms
-   * [trailblazeDeviceId] in [wedgedDeviceIds] so that device's next trail force-restarts its
-   * shared on-device server. Shared by the V1 on-device path (which polls completion in
-   * [awaitOnDeviceSessionCompletion]) and the host-agent / V3 paths (detection runs in their
-   * `finally` against the on-disk logs). No-op when [sessionId] is null or nothing in the
-   * session matches the wedge signature.
+   * every device in [boundDeviceIds] in [wedgedDeviceIds] so each one's next trail
+   * force-restarts its shared on-device server. Shared by the V1 on-device path (which polls
+   * completion in [awaitOnDeviceSessionCompletion]) and the host-agent / V3 paths (detection
+   * runs in their `finally` against the on-disk logs). No-op when [sessionId] is null or
+   * nothing in the session matches the wedge signature.
+   *
+   * Multi-device sessions pass ALL bound devices (launch device + companions): the session's
+   * logs are shared with no per-device attribution yet, so a companion-side wedge is
+   * indistinguishable from a launch-device wedge here. Arming every bound device over-arms the
+   * healthy ones — each pays one cheap force-restart before its next trail — but scoping to the
+   * launch device alone left a wedged companion poisoned for every subsequent run.
    */
   private fun armIfWedged(
     sessionId: SessionId?,
-    trailblazeDeviceId: TrailblazeDeviceId,
+    boundDeviceIds: List<TrailblazeDeviceId>,
     onProgressMessage: (String) -> Unit,
   ) {
     if (sessionId == null) return
     val logs = trailblazeDeviceManager.logsRepo.getLogsForSession(sessionId)
     if (shouldRelaunchOnDeviceServer(logs)) {
-      armWedgedDevice(trailblazeDeviceId)
+      boundDeviceIds.forEach { armWedgedDevice(it) }
       onProgressMessage(
         "On-device UiAutomation wedged (non-recoverable); the on-device server will be " +
           "force-restarted before the next trail.",
@@ -1072,7 +1393,7 @@ class DesktopYamlRunner(
       if (status is SessionStatus.Ended) {
         // Gate: ONLY the non-recoverable UiAutomation wedge arms a relaunch — never an ordinary
         // failure, so a clean server is provisioned for the NEXT trail without re-running this one.
-        armIfWedged(sessionId, trailblazeDeviceId, onProgressMessage)
+        armIfWedged(sessionId, listOf(trailblazeDeviceId), onProgressMessage)
         return
       }
       delay(pollIntervalMs)
@@ -1098,9 +1419,18 @@ class DesktopYamlRunner(
     runYamlRequest: RunYamlRequest,
     deviceId: TrailblazeDeviceId,
     sessionIdOverride: SessionId,
-    targetAppId: String?,
+    targetAppIds: List<String>,
     onProgressMessage: (String) -> Unit,
+    deviceBindings: List<CaptureDeviceBinding> = emptyList(),
   ): String? {
+    if (deviceBindings.isNotEmpty()) {
+      return startMultiDeviceAndroidNetworkCapture(
+        runYamlRequest = runYamlRequest,
+        sessionIdOverride = sessionIdOverride,
+        deviceBindings = deviceBindings,
+        onProgressMessage = onProgressMessage,
+      )
+    }
     if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
     val activator = AndroidNetworkCaptureRegistry.activator ?: return null
     // Two SELF-CONTAINED opt-ins can turn capture on for this Android run without also needing
@@ -1120,7 +1450,7 @@ class DesktopYamlRunner(
           sessionId = sessionIdOverride.value,
           sessionDir = sessionDir,
           deviceId = deviceId,
-          targetAppId = targetAppId,
+          targetAppIds = targetAppIds,
         )
         onProgressMessage(
           "Android network capture bridge started for session ${sessionIdOverride.value}",
@@ -1134,6 +1464,100 @@ class DesktopYamlRunner(
       }
       .getOrNull()
   }
+
+  /**
+   * Arms one capture bridge per Android device a multi-device configuration bound, each labelled
+   * with the device's configuration name so its evidence lands in its own stream.
+   *
+   * One device failing to arm does NOT abort the others: a pair session where only one display's
+   * app carries a capture client should still capture that display. Web bindings are skipped — a
+   * host-owned browser has no adb device to attach to.
+   *
+   * [MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR] narrows this to named devices.
+   */
+  private fun startMultiDeviceAndroidNetworkCapture(
+    runYamlRequest: RunYamlRequest,
+    sessionIdOverride: SessionId,
+    deviceBindings: List<CaptureDeviceBinding>,
+    onProgressMessage: (String) -> Unit,
+  ): String? {
+    val activator = AndroidNetworkCaptureRegistry.activator ?: return null
+    // Opt-in first: everything below either logs or attaches, and a log line saying which devices
+    // are being armed reads as capture having been armed even when this gate then refuses.
+    val androidProxyOptIn = CompositeAndroidNetworkCaptureActivator.proxyCaptureEnabledFromEnv()
+    val activatorOptIn = activator.isSessionCaptureOptedIn(sessionIdOverride.value)
+    if (!runYamlRequest.config.captureNetworkTraffic && !androidProxyOptIn && !activatorOptIn) {
+      return null
+    }
+    val allowedDeviceNames =
+      MultiDeviceCaptureSelection.parseDeviceNames(
+        System.getenv(MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR),
+      )
+    val selection =
+      MultiDeviceCaptureSelection.select(
+        candidates = deviceBindings.filter {
+          it.deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID
+        },
+        allowedNames = allowedDeviceNames,
+        nameOf = { it.name },
+      )
+    val androidBindings = selection.armed
+    if (allowedDeviceNames.isNotEmpty()) {
+      // Both directions are logged because both are silent otherwise: a skipped device just has no
+      // stream in the report, and a misspelled name disarms capture for the whole session.
+      Console.log(
+        "${MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR} limits network capture to " +
+          "${allowedDeviceNames.sorted()}; arming ${androidBindings.map { it.name }} of bound " +
+          "devices ${deviceBindings.map { it.name }}",
+      )
+      if (selection.unknownNames.isNotEmpty()) {
+        Console.log(
+          "${MultiDeviceCaptureSelection.CAPTURE_DEVICES_ENV_VAR} names " +
+            "${selection.unknownNames}, which this session has no capturable device for. " +
+            "Check the names against the trail's `config.devices` entry.",
+        )
+      }
+    }
+    if (androidBindings.isEmpty()) return null
+    val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionIdOverride)
+    var anyStarted = false
+    androidBindings.forEach { binding ->
+      runCatching {
+        activator.start(
+          sessionId = sessionIdOverride.value,
+          sessionDir = sessionDir,
+          deviceId = binding.deviceId,
+          targetAppIds = binding.targetAppIds,
+          deviceLabel = binding.name,
+        )
+        anyStarted = true
+        onProgressMessage(
+          "Android network capture bridge started for device '${binding.name}' " +
+            "(${binding.deviceId.instanceId}) in session ${sessionIdOverride.value}",
+        )
+      }
+        .onFailure {
+          // Named, not swallowed: a missing device stream in the report must be traceable to the
+          // device that could not be attached.
+          Console.log(
+            "Auto-start of Android network capture failed for device '${binding.name}' " +
+              "(${binding.deviceId.instanceId}) in ${sessionIdOverride.value}: ${it.message}"
+          )
+        }
+    }
+    return sessionIdOverride.value.takeIf { anyStarted }
+  }
+
+  /**
+   * One device of a multi-device session, as capture needs to see it: the configuration's [name] for
+   * the device (what its evidence streams are suffixed with), the device itself, and the app ids
+   * capture must accept when it verifies the identity of the client that dials in on that device.
+   */
+  private data class CaptureDeviceBinding(
+    val name: String,
+    val deviceId: TrailblazeDeviceId,
+    val targetAppIds: List<String>,
+  )
 
   // `stopCaptureAndMoveArtifacts` lived here. Removed in favor of
   // [SessionCaptureCoordinator.stopForSession], which writes artifacts directly into

@@ -1,127 +1,23 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // The in-app "Share" button for a Run details page. It produces the SAME self-contained interactive
 // HTML the CLI emits after a run — the renderer + log→timeline extraction live in run-report-core.js
-// (loaded before this file), so this file is just the browser glue: collect screenshots from /static,
-// build the run `meta` from the in-hand session summary, call core's buildRunReportHtml, then POST the
-// result to the daemon to save it (the desktop WKWebView shell has no download handler, so a client
-// blob can't be saved — the daemon writes the file and we open/reveal it via the host bridges).
+// and the payload assembly in run-payload.js (both loaded before this file), so this file is just
+// the browser glue: ask TbRunPayload for an embed-mode session input (screenshots inlined as data
+// URIs, hierarchies packed), call core's buildRunReportHtml, then POST the result to the daemon to
+// save it (the desktop WKWebView shell has no download handler, so a client blob can't be saved —
+// the daemon writes the file and we open/reveal it via the host bridges).
 
-async function fetchAsDataUrl(url) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = () => resolve(null);
-      fr.readAsDataURL(blob);
-    });
-  } catch (e) { return null; }
-}
-
-// Fetch every screenshot the trace references (deduped by filename) and return a
-// { filename -> dataURI } map. `onProgress(done, total)` drives the modal's progress text.
-// Folded child dispatches carry their own frames (the viewer's per-interaction preview and the
-// Lightbox "Show all" read them), so gather those too — same walk as run-report-cli.ts and
-// zip-report-core.js, keeping all three report producers in agreement.
-async function collectScreenshots(trace, sessionId, onProgress) {
-  const files = [...new Set((trace || []).flatMap((t) => [t.screenshotFile, ...(t.children || []).map((c) => c.screenshotFile)]).filter(Boolean))];
-  const shots = {};
-  let done = 0;
-  if (onProgress) onProgress(0, files.length);
-  for (const f of files) {
-    const url = `/static/${encodeURIComponent(sessionId)}/${encodeURIComponent(f)}`;
-    const data = await fetchAsDataUrl(url);
-    if (data) shots[f] = data;
-    done++;
-    if (onProgress) onProgress(done, files.length);
-  }
-  return shots;
-}
-
-// Build the full self-contained HTML document for a run. Async because it inlines screenshots.
-// The trace/llmLogs are already derived (the Run details page holds them); we just gather the
-// screenshot bytes and hand everything to the shared core renderer.
-// Best-effort fetch of the session's recorded .trail.yaml so the exported report's Recording tab
-// matches the headless `trailblaze report` output. Failure is non-fatal — the tab just won't show.
-async function fetchRecordingYaml(sessionId) {
-  try {
-    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/export`);
-    if (!res.ok) return null;
-    const text = await res.text();
-    return text && text.trim() ? text : null;
-  } catch (e) { return null; }
-}
-
-async function fetchOriginalYaml(sessionId) {
-  try {
-    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/logs`);
-    if (!res.ok) return null;
-    return originalYamlFromLogs(await res.json());
-  } catch (e) { return null; }
-}
-
-// Normalize the live route's generic event-stream DTO into the compact standalone-report shape.
-// This carries generic plugin event streams from any producer into Share-as-HTML exports.
-async function fetchReportEvents(sessionId) {
-  try {
-    const res = await fetch(`/trailrunner/api/session/${encodeURIComponent(sessionId)}/events`);
-    if (!res.ok) return null;
-    const raw = await res.json();
-    const streams = (raw.streams || []).map((s) => ({
-      name: s.label || s.streamId,
-      total: s.count || (s.events || []).length,
-      truncated: !!s.truncated,
-      events: (s.events || []).map((e) => ({
-        t: e.timeMs == null ? null : e.timeMs,
-        d: JSON.stringify(e.data == null ? e : e.data),
-      })),
-    }));
-    return streams.length ? streams : null;
-  } catch (e) { return null; }
-}
-
+// Build the full self-contained HTML document for a run. Async because it inlines every screenshot
+// the trace references; `onProgress(done, total)` drives the modal's progress text. The trace/llmLogs
+// are already derived (the Run details page holds them).
 async function buildRunShareHtml({ s, trace, llmLogs, cmd, sessionId, onProgress }) {
-  const shots = await collectScreenshots(trace, sessionId, onProgress);
-  const [recordingYaml, originalYaml, events] = await Promise.all([
-    fetchRecordingYaml(sessionId),
-    fetchOriginalYaml(sessionId),
-    fetchReportEvents(sessionId),
-  ]);
-  const meta = {
-    title: s.title || s.id || 'Trailblaze run',
-    status: s.status || 'unknown',
-    target: s.target || null,
-    appId: s.appId || null,
-    // "5.58.0.0 (67500009)" — same display rule as the Info tab and RunReportGenerator.
-    appVersion: s.appVersionName
-      ? s.appVersionName + ((s.appBuildNumber || s.appVersionCode) ? ` (${s.appBuildNumber || s.appVersionCode})` : '')
-      : (s.appBuildNumber || s.appVersionCode || null),
-    device: s.device || null,
-    platform: s.platform || null,
-    duration: s.dur || null,
-    ranAt: s.timestampMs ? new Date(s.timestampMs).toLocaleString() : (s.ago || null),
-    steps: (trace || []).length,
-    trailId: s.trailId || null,
-    ...(s.metadata && Object.keys(s.metadata).length ? { metadata: s.metadata } : {}),
-    cmd: cmd || null,
-    error: s.err || null,
-    recordingYaml,
-    originalYaml,
-    generatedAt: new Date().toLocaleString(),
-  };
-  // Compress the per-step view hierarchies before they're serialized into the document (same gz
-  // side-channel the CLI-built report carries; run-report-core's packSessionInputsHierarchies) —
-  // inline hierarchies would otherwise dominate the export's size AND be JSON.parse'd every time
-  // the exported file's session opens.
-  const input = { meta, trace, llmLogs, shots, events };
-  if (typeof packSessionInputsHierarchies === 'function') await packSessionInputsHierarchies([input]);
-  return buildRunReportHtml(input);
+  return buildRunReportHtml(await TbRunPayload.buildSessionInput({
+    s, trace, llmLogs, cmd, sessionId, onProgress, mode: 'embed',
+  }));
 }
 
 // POST the built HTML to the daemon, which writes it into the run's folder and returns the filename.
@@ -156,8 +52,19 @@ function ShareRunModal({ s, trace, llmLogs, cmd, sessionId, onClose }) {
     let cancelled = false;
     (async () => {
       try {
+        // A run still executing keeps writing records, and Run details only polls them while its
+        // Raw logs tab is showing — the report frame follows the run over its own stream instead. So
+        // the trace this was handed can be older than the report the reader is looking at. Read the
+        // run once here rather than trusting the props: this file is the artifact people send on,
+        // and one request beats an export that silently stops a few steps short.
+        const fresh = s.status === 'running' ? await TB.readSessionDetail(sessionId) : null;
+        if (cancelled) return;
         const html = await buildRunShareHtml({
-          s, trace, llmLogs, cmd, sessionId,
+          s,
+          trace: fresh ? fresh.trace : trace,
+          llmLogs: fresh ? fresh.llmLogs : llmLogs,
+          cmd,
+          sessionId,
           onProgress: (done, total) => { if (!cancelled) setProgress({ done, total }); },
         });
         if (cancelled) return;

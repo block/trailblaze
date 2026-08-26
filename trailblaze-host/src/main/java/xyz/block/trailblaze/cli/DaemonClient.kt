@@ -471,12 +471,19 @@ class DaemonClient(
    *
    * @param maxWaitMs Maximum time to wait in milliseconds
    * @param pollIntervalMs Time between polls
+   * @param isSpawnAlive Liveness probe for the process this caller just spawned to *become*
+   *   the daemon. A caller that spawned nothing (it's waiting on a daemon someone else owns)
+   *   leaves the default, which always reports alive. When supplied and the spawn has already
+   *   exited without the port coming up, the wait ends immediately rather than polling out the
+   *   full [maxWaitMs] — a dead child can never bind, and two minutes of progress dots is the
+   *   worst possible way to report "the process died on startup".
    * @param onPoll Called on each poll attempt (e.g., to print progress dots)
-   * @return true if daemon became available, false if timed out
+   * @return true if daemon became available, false if it timed out or the spawn died
    */
   fun waitForDaemon(
     maxWaitMs: Long = MAX_WAIT_FOR_DAEMON_MS,
     pollIntervalMs: Long = POLL_INTERVAL_MS,
+    isSpawnAlive: () -> Boolean = { true },
     onPoll: () -> Unit = {},
   ): Boolean {
     val startTime = System.currentTimeMillis()
@@ -484,6 +491,9 @@ class DaemonClient(
       if (isRunningBlocking()) {
         return true
       }
+      // Ordered after the readiness check so a spawn that binds the port and exits in the
+      // same poll gap is still reported as started.
+      if (!isSpawnAlive()) return false
       onPoll()
       Thread.sleep(pollIntervalMs)
     }

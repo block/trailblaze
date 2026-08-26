@@ -48,17 +48,23 @@ object TrailblazeDevicePort {
   /** Default RPC port for the Compose Desktop driver */
   const val COMPOSE_DEFAULT_RPC_PORT = 52600
 
-  private const val PORT_RANGE_START = 52530
-  private const val PORT_RANGE_SIZE = 7000
+  internal const val PORT_RANGE_START = 52530
+  internal const val PORT_RANGE_SIZE = 7000
 
   /**
    * Ports that are reserved for other purposes and should not be used
    * for device-specific port allocation.
+   *
+   * Only entries inside `[PORT_RANGE_START, PORT_RANGE_START + PORT_RANGE_SIZE)` can ever be
+   * hashed onto, so only those make the skip loop in [portForHash] do work. The out-of-range
+   * entries earn their place by documenting which ports are spoken for, and by staying correct
+   * if the range moves.
    */
-  private val RESERVED_PORTS = setOf(
+  internal val RESERVED_PORTS = setOf(
     TRAILBLAZE_DEFAULT_HTTP_PORT, // host-side HTTP server
     TRAILBLAZE_DEFAULT_HTTPS_PORT, // host-side HTTPS server (adb-reverse target)
     TRAILBLAZE_DEFAULT_ON_DEVICE_RPC_PORT, // on-device RPC server (adb-forward target)
+    COMPOSE_DEFAULT_RPC_PORT, // Compose Desktop driver RPC server — in range, so a real collision
     7001, // Used by default by Maestro
   )
 
@@ -86,11 +92,24 @@ object TrailblazeDevicePort {
     val instanceId = trailblazeDeviceId.instanceId +
       trailblazeDeviceId.trailblazeDevicePlatform.name + suffix + namespace
 
-    // Use the absolute value of hashCode to ensure positive number
-    val hash = instanceId.hashCode().let { if (it < 0) -it else it }
+    return portForHash(instanceId.hashCode())
+  }
+
+  /**
+   * Maps an arbitrary hash into the allocatable range, skipping [RESERVED_PORTS].
+   *
+   * Split out from the [String.hashCode] call in [getPortForDevice] so the arithmetic can be
+   * exercised with a chosen hash — a hash that lands on a reserved port, or one whose negation
+   * overflows — without reverse-engineering a device id that happens to produce it.
+   */
+  internal fun portForHash(hash: Int): Int {
+    // Widen before negating: as an Int, -Int.MIN_VALUE overflows back to Int.MIN_VALUE, leaving
+    // a negative offset and a port below PORT_RANGE_START. The wraparound below cannot recover
+    // one either, since a negative offset stays negative under `% PORT_RANGE_SIZE`.
+    val positiveHash = hash.toLong().let { if (it < 0) -it else it }
 
     // Start with hash-based port and find the next non-reserved port
-    var offset = hash % PORT_RANGE_SIZE
+    var offset = (positiveHash % PORT_RANGE_SIZE).toInt()
     var attempts = 0
 
     while (attempts < PORT_RANGE_SIZE) {
@@ -104,7 +123,7 @@ object TrailblazeDevicePort {
     }
 
     // This should never happen unless all ports are reserved
-    error("Unable to find available port for device $instanceId")
+    error("Unable to find an unreserved port for hash $hash")
   }
 
   /**

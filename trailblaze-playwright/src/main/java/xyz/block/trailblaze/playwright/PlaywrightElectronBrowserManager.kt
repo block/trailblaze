@@ -68,6 +68,13 @@ class PlaywrightElectronBrowserManager(
   }
   override val playwrightDispatcher: CoroutineDispatcher = playwrightExecutor.asCoroutineDispatcher()
 
+  override fun <T> onPlaywrightThread(block: () -> T): T = PlaywrightThreadBridge.runOnPlaywrightThread(
+    currentThread = Thread.currentThread(),
+    playwrightThread = if (::playwrightThread.isInitialized) playwrightThread else null,
+    dispatcher = playwrightDispatcher,
+    block = block,
+  )
+
   private val inFlightRequests = java.util.concurrent.ConcurrentHashMap<Request, Long>()
 
   private fun isAnalyticsUrl(url: String): Boolean =

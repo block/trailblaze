@@ -412,9 +412,18 @@ class McpProxy(
       return
     }
 
-    val command = mutableListOf(launcher.absolutePath, "app", "--headless")
+    // `--foreground` makes the spawned child BE the daemon rather than spawn one and exit.
+    // The child is already detached from any terminal with its output redirected below, so
+    // this costs nothing — and it's what makes the `existing.isAlive` guard above mean
+    // "the daemon is still coming up" instead of "the process that launched it hasn't
+    // returned yet", which was true for a few milliseconds and then never again.
+    val command = daemonSpawnArgv(launcher, foreground = true, headless = true)
 
-    log("Starting daemon: ${launcher.name} app --headless")
+    // Log the argv whole, launcher path included. Which launcher resolved is the field that
+    // localizes a broken installed spawn — and the bare filename can't answer it, since a PATH
+    // `trailblaze` wrapper and a source checkout's `trailblaze` wrapper share a name and behave
+    // nothing alike. `command[0]` is already the absolute path.
+    log("Starting daemon: ${command.joinToString(" ")}")
 
     try {
       val pb = ProcessBuilder(command)
@@ -1512,7 +1521,7 @@ internal fun approvalDecisionResultText(
  *
  * Wired into every Gradle `Test` task so unit tests can never launch the machine-global
  * `trailblaze` from PATH — the launcher walk in [findTrailblazeLauncher] otherwise resolves a
- * Homebrew/installed CLI from a test worker and leaves orphaned daemon JVMs on the default port.
+ * packaged install from a test worker and leaves orphaned daemon JVMs on the default port.
  * Read per call. `1`/`true` (case-insensitive) disables; anything else — including the `"0"` that
  * `:trailblaze-server:integrationTest` uses to opt back out — leaves auto-start on.
  *
@@ -1522,6 +1531,28 @@ internal fun approvalDecisionResultText(
 internal fun isDaemonAutoStartDisabled(
   flag: String? = System.getenv("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART"),
 ): Boolean = flag != null && (flag == "1" || flag.equals("true", ignoreCase = true))
+
+/**
+ * Launcher script filenames probed next to the running JAR, in preference order.
+ *
+ * `trailblaze-launcher` is the name the uber JAR carries the script under, and the name a
+ * packaged install extracts it to beside `trailblaze.jar` in its private lib directory.
+ * Probing it is what keeps [findTrailblazeLauncher] from falling through to a PATH
+ * `trailblaze` on an installed CLI, where that entry may be a wrapper script rather than the
+ * launcher itself: resolving the wrapper means every daemon spawn has to satisfy the wrapper's
+ * own dispatch rules, and inherits whichever version the wrapper decides to install. The
+ * sibling script is the same launcher from the same build, invoked directly.
+ */
+internal val LAUNCHER_SIBLING_NAMES = listOf("trailblaze", "trailblaze-launcher")
+
+/**
+ * First executable launcher script sitting beside the running JAR, or null when [jarDir] holds
+ * none. Split out from [findTrailblazeLauncher] so the probe order is testable without a real
+ * JAR on the classpath.
+ */
+internal fun resolveLauncherBesideJar(jarDir: File): File? = LAUNCHER_SIBLING_NAMES
+  .map { File(jarDir, it) }
+  .firstOrNull { it.isFile && it.canExecute() }
 
 /**
  * Find the trailblaze launcher executable.
@@ -1537,9 +1568,33 @@ internal fun findTrailblazeLauncher(): File? {
   val jarDir = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
     ?.let { File(it).parentFile }
   if (jarDir != null) {
-    val launcher = File(jarDir, "trailblaze")
-    if (launcher.exists() && launcher.canExecute()) return launcher
+    resolveLauncherBesideJar(jarDir)?.let { return it }
   }
 
   return findOnPath("trailblaze")
+}
+
+/**
+ * Argv for spawning a background daemon through [launcher].
+ *
+ * **`start` is spelled explicitly, not left implicit.** Bare `app` and `app start` are the
+ * same command to picocli, but not to every layer a launcher can sit behind: an installed CLI
+ * may resolve to a wrapper that dispatches on its own command tree, and a wrapper that sees
+ * `app` as a group — which it is, since `app` owns a `start` subcommand — answers a flags-only
+ * `app --foreground --headless` with its own usage text and exit 0. The daemon then never
+ * boots, and the parent spends its full [DaemonClient.MAX_WAIT_FOR_DAEMON_MS] budget polling
+ * for a process that was never created. Naming the subcommand gives any such dispatcher a
+ * token to route on; `AppStartCommand` re-declares both flags, so the form is equivalent
+ * everywhere.
+ */
+internal fun daemonSpawnArgv(
+  launcher: File,
+  foreground: Boolean,
+  headless: Boolean,
+): List<String> = buildList {
+  add(launcher.absolutePath)
+  add("app")
+  add("start")
+  if (foreground) add("--foreground")
+  if (headless) add("--headless")
 }

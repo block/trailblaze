@@ -189,6 +189,13 @@ class PlaywrightBrowserManager(
   }
   override val playwrightDispatcher: CoroutineDispatcher = playwrightExecutor.asCoroutineDispatcher()
 
+  override fun <T> onPlaywrightThread(block: () -> T): T = PlaywrightThreadBridge.runOnPlaywrightThread(
+    currentThread = Thread.currentThread(),
+    playwrightThread = if (::playwrightThread.isInitialized) playwrightThread else null,
+    dispatcher = playwrightDispatcher,
+    block = block,
+  )
+
   /**
    * Tracks in-flight HTTP requests for trace logging. Each request is recorded as a
    * span in [TrailblazeTracer] with its URL, resource type, and duration — giving

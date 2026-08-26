@@ -14,6 +14,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.SnapshotCache
 import xyz.block.trailblaze.toolcalls.ToolBatchScope
 import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
@@ -46,7 +47,7 @@ abstract class BaseTrailblazeAgent(
    * their own instance so writes are visible across the boundary.
    */
   open override val memory: AgentMemory = AgentMemory(),
-) : TrailblazeAgent, TrailblazeAgentContext {
+) : KoogRunnableAgent {
 
   fun clearMemory() {
     memory.clear()
@@ -66,6 +67,16 @@ abstract class BaseTrailblazeAgent(
    */
   protected open val trailblazeToolRepo: TrailblazeToolRepo? = null
 
+  /**
+   * Multi-device session bindings, shared by every agent the session constructed (one per bound
+   * device). Set by the host runner after construction when the session binds a multi-device
+   * configuration; stays null for single-device sessions. Subclass
+   * [buildExecutionContext] implementations thread this into
+   * [TrailblazeToolExecutionContext.deviceBindings] so the `switchDevice` tool can flip the
+   * active device — the runner reads the SAME shared instance to route capture and dispatch.
+   */
+  var deviceBindings: SessionDeviceBindings? = null
+
   /** Build the agent-specific [TrailblazeToolExecutionContext]. Called once per run. */
   protected abstract fun buildExecutionContext(
     traceId: TraceId,
@@ -82,7 +93,7 @@ abstract class BaseTrailblazeAgent(
    * a single driver) so every driver agent — web, Revyl, on-device — can be driven by the Koog
    * strategy graph through the same seam.
    */
-  fun buildKoogToolExecutionContext(
+  override fun buildKoogToolExecutionContext(
     traceId: TraceId?,
     screenStateProvider: () -> ScreenState,
   ): TrailblazeToolExecutionContext = buildExecutionContext(

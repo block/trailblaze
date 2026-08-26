@@ -288,6 +288,12 @@ class TrailblazeYaml internal constructor(
   fun decodeTrail(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    /**
+     * The multi-device configuration this session selected (a `config.devices:` configuration
+     * entry's name), or null for single-device runs — see
+     * [UnifiedTrailAdapter.lowerToTrailItems]'s parameter of the same name.
+     */
+    selectedDeviceConfiguration: String? = null,
   ): List<TrailYamlItem> = when (val doc = decodeTrailDocument(yaml)) {
     is TrailDocument.Unified -> {
       if (deviceClassifiers.isEmpty()) {
@@ -306,7 +312,7 @@ class TrailblazeYaml internal constructor(
             "config; or call decodeTrailDocument(yaml) for format-native access."
         }
       }
-      UnifiedTrailAdapter.lowerToTrailItems(doc.trail, deviceClassifiers)
+      UnifiedTrailAdapter.lowerToTrailItems(doc.trail, deviceClassifiers, selectedDeviceConfiguration)
     }
   }
 
@@ -336,11 +342,12 @@ class TrailblazeYaml internal constructor(
   fun decodeTrailOrToolEnvelope(
     yaml: String,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    selectedDeviceConfiguration: String? = null,
   ): List<TrailYamlItem> =
     if (isBareToolEnvelope(yaml)) {
       listOf(TrailYamlItem.ToolTrailItem(decodeTools(yaml)))
     } else {
-      decodeTrail(yaml, deviceClassifiers)
+      decodeTrail(yaml, deviceClassifiers, selectedDeviceConfiguration)
     }
 
   /**
@@ -548,6 +555,32 @@ class TrailblazeYaml internal constructor(
       trailhead = trailhead,
       trail = resolvedTrail,
     )
+  }
+
+  /**
+   * Decode ONLY the `config:` block of a unified trail document, ignoring `trailhead:` and
+   * `trail:` entirely. An absent `config:` decodes as an empty config, same as
+   * [decodeUnifiedTrail].
+   *
+   * Exists for pre-run resolvers that need config facts (e.g. whether the trail declares a
+   * multi-device configuration) before the session's custom-tool YAML instance is constructed:
+   * a full [decodeUnifiedTrail] on the default instance throws on any recorded custom tool in
+   * the steps, so callers were forced to swallow the decode error — and a swallowed error is
+   * indistinguishable from "no config". Config never contains tool recordings, so this decode
+   * succeeds or fails on the config block alone.
+   *
+   * Throws on malformed YAML or a malformed `config:` block. Unknown or malformed sibling keys
+   * are NOT validated here — document-shape validation stays with [decodeUnifiedTrail].
+   */
+  fun decodeUnifiedTrailConfig(yaml: String): UnifiedTrailConfig {
+    val rootNode = yamlInstance.parseToYamlNode(yaml)
+    require(rootNode is YamlMap) {
+      "Unified Trail YAML root must be a mapping with a `trail:` key (and optional `config:` / " +
+        "`trailhead:`); got a ${rootNode::class.simpleName} at the root."
+    }
+    val configNode = rootNode.entries.entries.firstOrNull { it.key.content == "config" }?.value
+      ?: return UnifiedTrailConfig()
+    return yamlInstance.decodeFromYamlNode(UnifiedTrailConfig.serializer(), configNode)
   }
 
   /**

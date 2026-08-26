@@ -3,7 +3,7 @@ package xyz.block.trailblaze.mcp.agent
 import ai.koog.prompt.executor.clients.LLMClient
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
-import xyz.block.trailblaze.BaseTrailblazeAgent
+import xyz.block.trailblaze.KoogRunnableAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
@@ -40,7 +40,8 @@ import xyz.block.trailblaze.yaml.PromptStep
  * minimal-context pruning (latest-screen-only) means there's negligible loss versus running a whole block
  * as one conversation, and it matches how the legacy/V3 runners are driven per-step.
  *
- * @param agent the driver agent (any [BaseTrailblazeAgent]) that executes tools against its device.
+ * @param agent the driver agent that executes tools — any [KoogRunnableAgent]; in a multi-device
+ *   session this is the host runner's routing agent, so dispatch follows a `switchDevice` handover.
  * @param toolRepo the session tool repo the Koog graph builds its registry from.
  * @param screenStateProvider live screen state (the agent's perception + `{{device_description}}`).
  * @param elementComparator selector/element matching used by the driver dispatch.
@@ -53,7 +54,7 @@ import xyz.block.trailblaze.yaml.PromptStep
  *   [appendToSystemPrompt] appends trail `config.context` to it, matching the legacy runner.
  */
 class KoogTestAgentRunner(
-  private val agent: BaseTrailblazeAgent,
+  private val agent: KoogRunnableAgent,
   private val toolRepo: TrailblazeToolRepo,
   override val screenStateProvider: () -> ScreenState,
   private val elementComparator: ElementComparator,

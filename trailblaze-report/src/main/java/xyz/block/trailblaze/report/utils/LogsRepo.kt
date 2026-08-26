@@ -719,6 +719,7 @@ class LogsRepo(
               durationMs = durationMs,
               trailFilePath = startedStatus?.trailFilePath,
               hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
+              selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
             )
           }
         }
@@ -749,6 +750,7 @@ class LogsRepo(
       durationMs = durationMs,
       trailFilePath = startedStatus?.trailFilePath,
       hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
+      selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
     )
   }
 

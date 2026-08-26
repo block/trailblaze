@@ -1823,8 +1823,8 @@ private fun cliTryStartDaemon(port: Int): Boolean {
   }
 
   Console.log("Starting Trailblaze daemon...")
-  try {
-    val pb = ProcessBuilder(launcher.absolutePath, "app", "--foreground", "--headless")
+  val child = try {
+    val pb = ProcessBuilder(daemonSpawnArgv(launcher, foreground = true, headless = true))
     if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
       pb.environment()["TRAILBLAZE_PORT"] = port.toString()
     }
@@ -1838,24 +1838,33 @@ private fun cliTryStartDaemon(port: Int): Boolean {
     reportCliError(
       verb = "Daemon start",
       reason = describeThrowableForUser(e),
-      hint = "try `trailblaze app --foreground --headless` to see startup output directly",
+      hint = "try `trailblaze app start --foreground --headless` to see startup output directly",
     )
     return false
   }
 
   Console.appendInfo("Waiting for Trailblaze daemon to be ready")
   val started = DaemonClient(port = port).use {
-    it.waitForDaemon { Console.appendInfo(".") }
+    it.waitForDaemon(isSpawnAlive = { child.isAlive }) { Console.appendInfo(".") }
   }
   Console.info("") // newline after dots
   if (started) {
     Console.log("Trailblaze daemon started.")
+  } else if (!child.isAlive) {
+    // A child that's already gone can't still be starting, so "needs more time" would send the
+    // user to wait on a process that gave up. The exit code plus the daemon log is what actually
+    // localizes a broken spawn.
+    Console.error(
+      "Trailblaze exited before the daemon became ready on port $port " +
+        "(exit code ${child.exitValue()}).",
+    )
+    Console.error("Run `trailblaze app start --foreground --headless` to see startup output directly.")
   } else {
     Console.error(
       "Daemon did not start within ${DaemonClient.MAX_WAIT_FOR_DAEMON_MS / 1000}s. " +
         "If a source build is in progress it may need more time.",
     )
-    Console.error("Run with --foreground to see startup output directly.")
+    Console.error("Run `trailblaze app start --foreground --headless` to see startup output directly.")
   }
   return started
 }

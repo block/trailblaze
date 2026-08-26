@@ -108,7 +108,18 @@ report: the daemon's own generator and resolver compiled to JavaScript, not a re
 So it can't drift from the reports it renders, and you can host or keep your own copy:
 
 ```
-./scripts/build-viewer-shell.sh out    # writes out/index.html — serve it anywhere, or just open it
+trailblaze viewer --output out/index.html    # serve it anywhere, or just open it
+```
+
+The viewer is **bundled into the CLI**, so that command is a file copy — no build, no `bun`, no
+source checkout. The copy you get is the one that binary was built with, which is the point: a
+viewer built separately drifts from the renderer, and then a report link renders a run with
+different report code than generated it.
+
+Building it from source is only for working *on* the viewer, from a checkout of this repo:
+
+```
+./scripts/build-viewer-shell.sh out    # writes out/index.html
 ```
 
 ### Loading by URL (`?zip=`), and when it works
@@ -131,6 +142,45 @@ Whether this works depends on where the archive is served from:
   header permitting the viewer's page. Plenty of artifact stores don't, and that's not
   something the viewer can work around — the browser blocks the read before the page sees
   any bytes. When it happens, the viewer says so and you can still drop the file.
+
+### A build's worth of runs: the run index
+
+An exported report carries its runs' evidence inside itself, which stops scaling somewhere
+around a few dozen screenshot-dense runs. A CI build that runs hundreds of trails across
+several devices is well past that: embedding them produces a file measured in hundreds of
+megabytes, too big for most artifact stores to keep and too big for a browser to open. The
+result is a build with no viewable report at all.
+
+The `generateRunIndex` task produces the other half of that report instead — the **index**,
+with no evidence in it. It reads the `test_report.json` files a run already writes and emits
+one stub per result row, so what you get is the familiar matrix: a row per trail, a column
+per device classifier, each cell showing outcome and duration. Every cell links out to that
+run's own session archive, opened through the viewer with `?zip=`:
+
+```
+./gradlew :trailblaze-report:generateRunIndex --args="\
+  reports/summary-android/test_report.json reports/summary-ios/test_report.json \
+  --viewer-base-url https://reports.example/viewer/index.html \
+  --output trailblaze_report_index.html"
+```
+
+It's a build task rather than a `trailblaze` subcommand because its input is a CI artifact:
+it runs where the results files land, beside `generateTestResultsArtifacts`, not on the
+machine that drove the device.
+
+Rows from every file passed share one matrix, so a build's per-device shards and a nightly's
+several configs collapse into a single index. Its size tracks the number of tests, not the
+number of screenshots — a few hundred runs come out around half a megabyte, most of which is
+the viewer script.
+
+- **`--viewer-base-url`** is where you host the viewer shell (`build-viewer-shell.sh` above).
+  Each cell appends `?zip=<the run's archive URL>` to it. Host the shell on the same origin
+  as the archives and no CORS configuration is involved.
+- Omit it, or omit an archive URL from a row, and that cell still renders its outcome — it
+  just isn't clickable. Nothing links to a viewer with no archive to load.
+- Numbers the index can't know are shown as unknown rather than zero. A stub has no calls to
+  count, so LLM cost and call count come from the results file when it carries them, and tool
+  counts and token totals read `—`.
 
 ## How screenshots travel with a report
 

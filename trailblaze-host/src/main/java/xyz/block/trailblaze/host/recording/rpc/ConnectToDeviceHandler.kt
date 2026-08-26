@@ -17,11 +17,17 @@ import xyz.block.trailblaze.ui.recording.ConnectionState
  * the resulting [xyz.block.trailblaze.recording.DeviceScreenStream] in
  * [HostDeviceSessionManager] for subsequent screen-poll and interaction calls.
  *
- * Idempotent: if the device is already connected, returns the existing dimensions
- * without re-running the bootstrap sequence.
+ * Idempotent for the target it is already bound to: if the device is connected for the same target,
+ * returns the existing dimensions without re-running the bootstrap sequence.
  *
  * Failure modes (returned as [RpcResult.Failure] → HTTP 5xx):
  *  - Device id not found in any source.
+ *  - The named target app isn't registered in this daemon. Checked before the live connection is
+ *    reused, so an unregistered target fails whether or not the device is already connected.
+ *  - The device is connected for a DIFFERENT target. A connect installs and launches the bound
+ *    app, so handing that connection back for another target would run one app while reporting
+ *    the other; the caller has to release the device first, or stop the recording that owns it.
+ *    Only for a device whose connect really binds the target - see `bindsTargetApp`.
  *  - Underlying [DeviceConnectionService.connectToDevice] errored (e.g. instrumentation
  *    install failed, target app not selected).
  */
@@ -55,9 +61,29 @@ class ConnectToDeviceHandler(
         message = "Device not found: ${deviceId.toFullyQualifiedDeviceId()}",
       )
 
+    // Resolved here rather than inside the connect so the check runs on the reuse path too, and so
+    // the session is recorded against a concrete target instead of the caller's request. The
+    // resolution itself is then handed to the connect, not re-derived from an id: re-resolving
+    // "nothing selected" would ask the daemon again and could bind an app selected in between.
+    val bound = when (val resolved = connectionService.resolveBoundTarget(request.targetAppId)) {
+      is DeviceConnectionService.BoundTarget.Unavailable -> return RpcResult.Failure(
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        message = resolved.message,
+      )
+      is DeviceConnectionService.BoundTarget.Resolved -> resolved
+    }
+    // Only a connect that actually installs or launches the target can be bound to it; the Electron
+    // and host-native iOS paths record nothing, so they'd otherwise refuse a second connect over a
+    // difference that makes no difference to the stream they hand back. See `connectionBinding`.
+    val binding = DeviceConnectionService.connectionBinding(
+      platform = device.platform,
+      driverType = device.trailblazeDriverType,
+      target = bound.target,
+    )
+
     var connectErrorMessage: String? = null
-    val stream = sessionManager.connectIfAbsent(deviceId) {
-      when (val state = connectionService.connectToDevice(device)) {
+    val result = sessionManager.connectIfAbsent(deviceId, binding) {
+      when (val state = connectionService.connectToDevice(device, bound)) {
         is ConnectionState.Connected -> state.connection.stream
         is ConnectionState.Error -> {
           connectErrorMessage = state.message
@@ -65,16 +91,26 @@ class ConnectToDeviceHandler(
         }
         else -> null
       }
-    } ?: return RpcResult.Failure(
-      errorType = RpcResult.ErrorType.HTTP_ERROR,
-      message = connectErrorMessage ?: "Failed to connect to ${deviceId.toFullyQualifiedDeviceId()}",
-    )
+    }
 
-    return RpcResult.Success(
-      ConnectToDeviceResponse(
-        deviceWidth = stream.deviceWidth,
-        deviceHeight = stream.deviceHeight,
-      ),
-    )
+    return when (result) {
+      is HostDeviceSessionManager.ConnectResult.Ready -> RpcResult.Success(
+        ConnectToDeviceResponse(
+          deviceWidth = result.stream.deviceWidth,
+          deviceHeight = result.stream.deviceHeight,
+        ),
+      )
+      is HostDeviceSessionManager.ConnectResult.BoundToOtherTarget -> RpcResult.Failure(
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        // The whole message comes from the refusal, never assembled here: "disconnect it" only frees
+        // a connection this registry owns, and a caller can be held by two owners at once, so both
+        // the remedy and the number of holders are the registry's to state.
+        message = result.explain(deviceId, binding, action = "connecting"),
+      )
+      HostDeviceSessionManager.ConnectResult.Unavailable -> RpcResult.Failure(
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        message = connectErrorMessage ?: "Failed to connect to ${deviceId.toFullyQualifiedDeviceId()}",
+      )
+    }
   }
 }

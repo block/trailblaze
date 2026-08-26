@@ -5,11 +5,13 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import io.ktor.http.HttpStatusCode
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import org.junit.Rule
 import org.junit.rules.Timeout
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -143,6 +145,53 @@ class MockRpcServerTest {
     ServerSocket(server.port, 0, InetAddress.getByName("127.0.0.1")).close()
   }
 
+  /**
+   * The half that took out build 15969: a [MockRpcServer.stop] on a server that never started must
+   * not report the squatting socket as its own teardown failure.
+   *
+   * An `@After` runs whether or not `@Before` succeeded, so a failed [MockRpcServer.start] is
+   * routinely followed by a [MockRpcServer.stop]. Pre-fix, that stop asked the port to go quiet,
+   * saw the squatter still listening, and threw "still listening on port N" — so the test reported
+   * its teardown's complaint about an unrelated socket instead of the real failure, and whichever
+   * test failed first was buried. The port is held here for exactly the reason it is held in
+   * production: something else has it, which is why start would have failed in the first place.
+   *
+   * Asserts the thrown/not-thrown outcome and that the squatter is untouched, NOT elapsed time. A
+   * wall-clock bound is the only thing that would distinguish "returned immediately" from "waited
+   * and then succeeded", and on a loaded CI agent that is a coin flip — the flake class this whole
+   * fixture exists to remove.
+   *
+   * The squatter has to *answer* connections, which is why it gets a thread rather than just a bind.
+   * A `ServerSocket` that never accepts reads as listening only until its backlog fills, and the
+   * fixture's own probe is what fills it: measured, a passive squatter stopped accepting connections
+   * after roughly 50 probes, so the port read as quiet ~1.2s in and the unguarded `stop` returned
+   * successfully. This test passed with the guard reverted until the squatter started accepting.
+   */
+  @Test fun `stop on a never-started server leaves a squatted port alone instead of failing`() {
+    val server = MockRpcServer(deviceId("mock-rpc-stop-unstarted"))
+    val squatter = ServerSocket(server.port, SQUATTER_BACKLOG, InetAddress.getByName("127.0.0.1"))
+    val accepting =
+      thread(isDaemon = true, name = "mock-rpc-squatter-accept") {
+        while (true) {
+          try {
+            squatter.accept().close()
+          } catch (_: IOException) {
+            break // The close() below is the only way out.
+          }
+        }
+      }
+    try {
+      assertThat(awaitListeningWithin(server.port, isListening = true)).isTrue()
+      server.stop()
+      // Still bound and still ours: stop() neither waited for it to go quiet nor closed it.
+      assertThat(squatter.isClosed).isFalse()
+      assertThat(squatter.localPort).isEqualTo(server.port)
+    } finally {
+      squatter.close()
+      accepting.join(SHORT_BOUND_MS)
+    }
+  }
+
   /** Rebinds one port the way a whole test class does, so the start/stop contract holds in sequence. */
   @Test fun `repeated start and stop cycles rebind the same port`() {
     val deviceId = deviceId("mock-rpc-rebind")
@@ -216,6 +265,9 @@ class MockRpcServerTest {
     const val NEVER_LISTENING_PORT = 1
 
     const val REBIND_CYCLES = 10
+
+    /** Deep enough that the squatter's liveness never depends on how fast its thread accepts. */
+    const val SQUATTER_BACKLOG = 50
 
     const val REQUEST_TIMEOUT_MS = 10_000
   }

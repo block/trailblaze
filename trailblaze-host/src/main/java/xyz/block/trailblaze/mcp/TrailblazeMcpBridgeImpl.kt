@@ -76,6 +76,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.host.OnDeviceRpcClientPool
 import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.networkcapture.CompositeAndroidNetworkCaptureActivator
+import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
@@ -505,6 +506,8 @@ class TrailblazeMcpBridgeImpl(
                       driverCreationFailures[key] = "Driver initialization failed: ${result.reason}. " +
                         "Try reconnecting with device(action=${trailblazeDeviceId.trailblazeDevicePlatform.name})."
                     }
+                    // Verbatim, with no retry suffix: see [PersistentDeviceResult.Refused].
+                    is PersistentDeviceResult.Refused -> driverCreationFailures[key] = result.message
                   }
                 }
               }
@@ -986,20 +989,67 @@ class TrailblazeMcpBridgeImpl(
   private sealed class PersistentDeviceResult {
     data class Success(val device: TrailblazeConnectedDevice) : PersistentDeviceResult()
     data class Failure(val reason: String) : PersistentDeviceResult()
+
+    /**
+     * Another owner holds the device, so nothing was attempted. Distinct from [Failure] because
+     * [message] is already the whole answer - it names who has the device and what to do about it -
+     * and the retry advice a failure gets appended would send the user straight back into the same
+     * refusal.
+     */
+    data class Refused(val message: String) : PersistentDeviceResult()
   }
 
   private fun createPersistentDevice(trailblazeDeviceId: TrailblazeDeviceId): PersistentDeviceResult {
     return try {
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
         ?: error("No configured driver type for ${trailblazeDeviceId.trailblazeDevicePlatform}")
-      val connectedDevice = TrailblazeDeviceService.getConnectedDevice(
-        trailblazeDeviceId = trailblazeDeviceId,
+      // Resolved once and passed to the connect rather than read again inside it, so the binding we
+      // check and claim is the target this connection actually gets - the same trap
+      // `ConnectToDeviceHandler` documents.
+      val appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp()
+      val binding = DeviceConnectionService.connectionBinding(
+        platform = trailblazeDeviceId.trailblazeDevicePlatform,
         driverType = driverType,
-        appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp(),
+        target = appTarget,
       )
+      val sessionManager = trailblazeDeviceManager.hostDeviceSessionManager
+      // Ask before connecting. `TrailblazeDeviceService.getConnectedDevice` is what closes and
+      // rebuilds a cached iOS driver whose target wrapper doesn't match, so by the time it returns,
+      // a Trail Runner session's driver would already be gone - and it would be the viewer that
+      // failed, not this call.
+      sessionManager.refusalForClaim(trailblazeDeviceId, binding)?.let { refusal ->
+        return PersistentDeviceResult.Refused(
+          refusal.explain(trailblazeDeviceId, binding, action = "driving"),
+        )
+      }
+      // Claimed BEFORE the connect, not after it. `HostIosDriverFactory.createIOS` is
+      // `@Synchronized`, so a viewer connect that has already passed its own refusal check queues on
+      // that monitor for however long this build takes - tens of seconds for a fresh XCUITest driver
+      // - and then closes and rebuilds the driver this call just made, without ever rechecking. A
+      // claim published after the connect leaves that whole build unprotected; reserving first cuts
+      // the window back to the gap between the two checks.
+      //
+      // Claimed rather than attached: this driver is driven straight from `persistentDevices` with
+      // no mutex, so publishing a `MaestroDeviceScreenStream` over it would put a frame loop in a
+      // race that `MaestroDeviceScreenStream`'s own contract says crashes XCUITest. The claim records
+      // the binding without offering a stream to serve.
+      sessionManager.claim(trailblazeDeviceId, binding)
+      val connectedDevice = try {
+        TrailblazeDeviceService.getConnectedDevice(
+          trailblazeDeviceId = trailblazeDeviceId,
+          driverType = driverType,
+          appTarget = appTarget,
+        )
+      } catch (e: Exception) {
+        // A reservation for a driver that was never built refuses connects on behalf of nothing, and
+        // `closePersistentDevice` won't run for a device that never made it into `persistentDevices`.
+        sessionManager.releaseClaim(trailblazeDeviceId)
+        throw e
+      }
       if (connectedDevice != null) {
         PersistentDeviceResult.Success(connectedDevice)
       } else {
+        sessionManager.releaseClaim(trailblazeDeviceId)
         PersistentDeviceResult.Failure("Device service returned null for $trailblazeDeviceId")
       }
     } catch (e: Exception) {
@@ -1030,12 +1080,22 @@ class TrailblazeMcpBridgeImpl(
     // bypassing mutual exclusion.
     val lock = persistentDeviceLocks.computeIfAbsent(key) { Any() }
     synchronized(lock) {
-      persistentDevices.remove(key)?.let { device ->
-        try {
-          (device as? MaestroConnectedDevice)?.getMaestroDriver()?.close()
-        } catch (e: Exception) {
-          Console.log("[MCP Bridge] Exception closing persistent device $key (already closed?): ${e.message}")
+      // Released under the same lock that publishes the claim, and only once the driver it stands
+      // for is actually gone. Under the lock, because a driver initialization already inside it
+      // claims the device on its way out, so a release taken before the lock would be overtaken and
+      // strand a claim for a driver this method then closes. After the close, because a claim is
+      // meant to hold for exactly as long as its driver might still be alive; in a `finally` so a
+      // throwing close doesn't strand it either.
+      try {
+        persistentDevices.remove(key)?.let { device ->
+          try {
+            (device as? MaestroConnectedDevice)?.getMaestroDriver()?.close()
+          } catch (e: Exception) {
+            Console.log("[MCP Bridge] Exception closing persistent device $key (already closed?): ${e.message}")
+          }
         }
+      } finally {
+        trailblazeDeviceManager.hostDeviceSessionManager.releaseClaim(deviceId)
       }
     }
   }
@@ -2231,6 +2291,15 @@ class TrailblazeMcpBridgeImpl(
       // race window where a parallel setSessionTargetForBoundDevice could land
       // between the two reads and the two callers would see different targets.
       val resolvedTargetAppId = getSessionTargetAppIdForDevice(trailblazeDeviceId)
+      // The value above is a TARGET id (e.g. "square"), not an application id — the capture
+      // activator validates its peer against APPLICATION ids, so resolve the target's full
+      // platform app-id list for it. An unknown target yields an empty list, which an
+      // identity-validating activator refuses to start on rather than attaching to an
+      // unverified peer; see the contract on AndroidNetworkCaptureActivator.start.
+      val captureTargetAppIds = resolvedTargetAppId
+        ?.let { trailblazeDeviceManager.availableAppTargets.findById(it) }
+        ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+        .orEmpty()
       // TRAILBLAZE_ANDROID_PROXY_CAPTURE and the activator's own per-session opt-in are
       // self-contained — each enables Android capture on its own, without also needing the
       // daemon's captureNetworkTraffic toggle. See the twin gate in
@@ -2254,7 +2323,7 @@ class TrailblazeMcpBridgeImpl(
               sessionId = sessionResolution.sessionId.value,
               sessionDir = resolvedLogsRepoForAndroid.getSessionDir(sessionResolution.sessionId),
               deviceId = trailblazeDeviceId,
-              targetAppId = resolvedTargetAppId,
+              targetAppIds = captureTargetAppIds,
             )
           }
             .onFailure {

@@ -174,12 +174,30 @@ abstract class BaseHostTrailblazeTest(
    * The connected device, fetched independently to avoid circular dependency with hostRunner.
    * This must be lazy to avoid initialization during test class construction.
    */
-  private val connectedDevice: TrailblazeConnectedDevice by lazy {
+  private val connectedDeviceLazy: Lazy<TrailblazeConnectedDevice> = lazy {
     TrailblazeDeviceService.getConnectedDevice(
       trailblazeDeviceId = trailblazeDeviceId,
       driverType = trailblazeDriverType,
       appTarget = appTarget,
     ) ?: error("No connected device matching $trailblazeDeviceId found.")
+  }
+  private val connectedDevice: TrailblazeConnectedDevice by connectedDeviceLazy
+
+  /**
+   * Let go of this device connection, but only if [connectedDevice] was ever fetched — the same
+   * if-started rule as [closeStreamScreenshotSourceIfStarted], and for the same reason: cleanup
+   * must not be the thing that opens a connection.
+   *
+   * Because the classifiers need a device of their own, an iOS run takes two holds on the one
+   * driver `HostIosDriverFactory` caches — this one and [hostRunner]'s — and this releases the
+   * one no other teardown path can reach. Closing a Maestro-backed device's driver releases only
+   * this owner's hold, so the run's other hold, and anything a viewer or agent session is holding,
+   * are left alone.
+   */
+  fun releaseConnectedDeviceIfOpened() {
+    if (!connectedDeviceLazy.isInitialized()) return
+    runCatching { (connectedDevice as? MaestroConnectedDevice)?.getMaestroDriver()?.close() }
+      .onFailure { Console.log("Releasing the device connection failed — continuing: ${it.message}") }
   }
 
   val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {

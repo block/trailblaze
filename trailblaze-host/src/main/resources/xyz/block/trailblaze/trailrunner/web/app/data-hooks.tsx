@@ -1,12 +1,48 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 // How often the run-detail hooks (trace, analytics, events) re-poll while a session is RUNNING. Kept
 // tight so a live run's taps/assertions/events stream into the timeline within ~a second of happening
 // on the device, rather than the old 2.5s lag (and the trace, which didn't poll at all).
 const LIVE_POLL_MS = 1000;
+
+// How often the trail index and the open trail's YAML re-poll. Trail files are edited outside this
+// app all the time - another IDE, a git checkout, an agent writing a whole suite - and until this
+// existed the only way to see any of it was to reload the app. Both round trips are cheap: the
+// daemon memoizes each file's parse by mtime and keeps its last walk, revalidating it by stat'ing
+// the directories it visited, so an unchanged tree costs a stat sweep rather than a traversal.
+const FILE_POLL_MS = 2500;
+
+// Re-fetch a useFetched hook every `ms`, or not at all when `ms` is falsy (the callers that only
+// poll a live run pass null once it finishes). The hook is read through a ref so a new interval
+// isn't torn down and rebuilt on every render.
+function usePolled(hook, ms) {
+  const latest = React.useRef(hook);
+  latest.current = hook;
+  React.useEffect(() => {
+    if (!ms) return;
+    // A tick with the previous load still out is skipped, not queued: on a big workspace the trail
+    // scan can take longer than this interval, and reloading on a fixed clock anyway would pile
+    // overlapping scans onto the daemon faster than it can answer them.
+    const id = setInterval(() => {
+      // Nobody is looking at a hidden window, and a tick is not free: the trail-index scan walks the
+      // workspace on the daemon. Several hooks poll at once, so a backgrounded app was still asking
+      // for the world about once a second. The tick right after it comes back does the catching up.
+      if (document.hidden) return;
+      if (!latest.current.inFlight?.current) latest.current.reload();
+    }, ms);
+    // Coming back to the window shouldn't mean waiting out the rest of an interval to see the state
+    // of the workspace, so catch up immediately instead.
+    const onVisible = () => {
+      if (!document.hidden && !latest.current.inFlight?.current) latest.current.reload();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
+  }, [ms]);
+  return hook;
+}
 
 function useStatus() {
   return useFetched(async () => {
@@ -133,13 +169,23 @@ function useScriptedToolParams(trailmap, toolId) {
 }
 
 function useTrails() {
-  return useFetched(async () => {
+  // Polled: a trail written, renamed or deleted outside this app (a git checkout, an agent
+  // generating a suite) has to show up in the tree on its own. Several components hold the index at
+  // once (the shell, the open screen, the run dialog), so several unsynchronized tickers each ask
+  // for it. Sharing one scan between them is deliberately NOT done here: every caller must be able
+  // to get an answer about the workspace and the moment IT asked about, and a shared in-flight scan
+  // would hand a post-switch or post-save reader a snapshot taken before that switch or write.
+  return usePolled(useFetched(async () => {
     // Trail index comes from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
     const raw = await window.TbRpc.getTrails();
+    // A failed RPC resolves to null rather than throwing (see dataOrNull), and null is NOT an empty
+    // workspace: read as `[]` it would blank the whole tree on any poll that catches the daemon
+    // mid-hiccup. Throwing routes it to useFetched's keep-the-last-good-data path.
+    if (!raw) throw new Error('The trail index could not be read');
     const trails = raw?.trails ?? [];
     // `folders` carries empty directories (no trail files yet) so the tree can still show them.
     return { data: trails, extra: { folders: raw?.folders ?? [] }, mock: false };
-  });
+  }), FILE_POLL_MS);
 }
 
 function useSessions() {
@@ -173,48 +219,39 @@ function useSessions() {
     return { data: sessions, mock: false };
   });
 
-  const reloadRef = React.useRef(hook.reload);
-  reloadRef.current = hook.reload;
   // Poll steadily (faster while something runs). A just-started run isn't in the cached data yet,
   // so a "poll only while running" gate would never notice it begin — the steady base interval is
   // what makes freshly-kicked-off recordings (and their variants) show up on their own.
   const hasRunning = (hook.data || []).some((s) => s.status === 'running');
-  React.useEffect(() => {
-    const id = setInterval(() => reloadRef.current(), hasRunning ? 2500 : 5000);
-    return () => clearInterval(id);
-  }, [hasRunning]);
-
-  return hook;
+  return usePolled(hook, hasRunning ? 2500 : 5000);
 }
 
-// `isRunning`: while true, re-fetch the session logs on a fast interval so the step timeline (taps,
-// assertions, screenshots) streams in live instead of only loading once when the run is opened. This is
-// the trace the run-detail Timeline renders, so without polling it looked frozen mid-run.
+// One read of a session's records, derived one way. The hook below polls it for the screen; the
+// Share modal awaits it directly, because a run still executing writes records after the screen's
+// last read and the file Share produces is the one people send on.
+//
+// Derived in timestamp order, not the filename order the daemon serves, so this screen's step count
+// and the Share export read a run exactly as the report embedded beside them does — a tool/driver
+// pair whose filenames run opposite their timestamps folds into one row for both. `logs` itself
+// stays as served: Raw logs is meant to show the daemon's own listing.
+async function readSessionDetail(sessionId) {
+  const logs = await safeJson(API.sessionLogs(sessionId));
+  if (!logs) return null;
+  const records = TbRunPayload.orderLogsForExtraction(logs.filter(Boolean));
+  return { id: sessionId, logs, trace: extractTrace(records), llmLogs: extractLlmLogs(records) };
+}
+
+// `isRunning`: while true, re-fetch the session logs on a fast interval so the run's derived trace
+// keeps up with the device instead of only loading once when the run is opened. Run details passes
+// true only while its Raw logs tab is showing — the report frame beside it follows the run over its
+// own stream, and Share reads the run itself rather than trusting what this holds.
 function useSessionDetail(sessionId, isRunning) {
   const hook = useFetched(async () => {
     if (!sessionId) return { data: null, mock: false };
-    const logs = await safeJson(API.sessionLogs(sessionId));
-    if (!logs) return { data: null, mock: false };
-    return {
-      data: {
-        id: sessionId,
-        logs,
-        trace: extractTrace(logs),
-        llmLogs: extractLlmLogs(logs),
-      },
-      mock: false,
-    };
+    return { data: await readSessionDetail(sessionId), mock: false };
   }, [sessionId]);
 
-  const reloadRef = React.useRef(hook.reload);
-  reloadRef.current = hook.reload;
-  React.useEffect(() => {
-    if (!isRunning) return;
-    const id = setInterval(() => reloadRef.current(), LIVE_POLL_MS);
-    return () => clearInterval(id);
-  }, [isRunning]);
-
-  return hook;
+  return usePolled(hook, isRunning ? LIVE_POLL_MS : null);
 }
 
 function useDevices() {
@@ -253,38 +290,63 @@ function useRunTools(targetId, driver, platform) {
 }
 
 function useTrailDetail(id) {
-  return useFetched(async () => {
-    if (!id) return { data: null, mock: false };
+  // Polled for the same reason as the index: the open trail's YAML is edited outside this app, and
+  // its readers (the editor, the steps board, the run dialog's preview) were all stuck on whatever
+  // the file said when it was opened.
+  const read = usePolled(useFetched(async () => {
+    if (!id) return { data: null, mock: false, extra: '' };
     // Trail detail comes from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
     const raw = await window.TbRpc.getTrailDetail(id);
-    if (!raw) return { data: null, mock: false };
-    return { data: raw, mock: false };
-  }, [id]);
+    // Same reason as the index: a null here is a failed call, not an empty trail. Throwing keeps the
+    // YAML the editor is holding instead of handing it a blank file to reconcile against.
+    if (!raw) throw new Error('The trail could not be read');
+    // Stamp which trail this detail is, the same way [useTrailFolderFile] stamps its file. This hook
+    // reports its last settled state on the render where `id` changes, so without a stamp no reader
+    // can tell the new trail's first frame from one still carrying the previous trail's YAML - and
+    // the editor seeds its buffer from that frame. See TbEditorSync.polledTrailDetail.
+    return { data: raw, mock: false, extra: id };
+  }, [id]), id ? FILE_POLL_MS : null);
+  // Narrowed centrally rather than at each call site: every reader (the Edit tab, the steps board,
+  // the run dialog's device hints) wants the trail it asked for, and all of them read the detail
+  // before the effect that would have flipped `loading`. Guarded like the other TbEditorSync call
+  // sites - a missing or reordered editor-sync.js must not blank every screen that opens a trail -
+  // and falls back to the unnarrowed read, which is what this hook returned before the stamp.
+  const sync = window.TbEditorSync;
+  return sync ? sync.polledTrailDetail(read, id || '') : read;
 }
 
-function useSessionAnalytics(sessionId, isRunning) {
-  const hook = useFetched(async () => {
-    if (!sessionId) return { data: { available: false, events: [] }, mock: false };
-    // Session analytics come from the typed RPC client (window.TbRpc, from app/rpc/daemon.ts).
-    const raw = await window.TbRpc.getSessionAnalytics(sessionId);
-    if (!raw) return { data: { available: false, events: [] }, mock: false };
-    return { data: { available: !!raw.available, events: raw.events || [] }, mock: false };
-  }, [sessionId]);
-
-  const reloadRef = React.useRef(hook.reload);
-  reloadRef.current = hook.reload;
-  React.useEffect(() => {
-    if (!isRunning) return;
-    const id = setInterval(() => reloadRef.current(), LIVE_POLL_MS);
-    return () => clearInterval(id);
-  }, [isRunning]);
-
-  return hook;
+// One file inside a trail bundle folder, polled while it is open. The Implementations matrix opens a
+// variant or `blaze.yaml` in a pushed editor, and that editor was fed by a one-shot read — so unlike
+// the Edit tab (which reads [useTrailDetail]) it never saw an edit made in another IDE or by an
+// agent, and never entered the editor's conflict handling. `folderId` is pinned by the caller for as
+// long as the editor is mounted, so a workspace hiccup can't repoint a live buffer at another folder.
+function useTrailFolderFile(folderId, name) {
+  const ready = !!(folderId && name);
+  const key = ready ? folderId + '/' + name : '';
+  return usePolled(useFetched(async () => {
+    if (!ready) return { data: null, mock: false, extra: '' };
+    const text = await fetchTrailFolderFile(folderId, name);
+    // Same reason as the index and the trail detail: a null is a failed read, not an empty file.
+    // Throwing routes it to useFetched's keep-the-last-good-data path, so a poll that catches the
+    // daemon mid-hiccup leaves the buffer alone instead of asking the editor to reconcile against
+    // a blank document (or against the "(could not read file)" placeholder the first read uses).
+    if (text == null) {
+      // Stamped like the success below, because useFetched drops `extra` when a deps change fails:
+      // the failure has to name its own file or it would be read as the NEXT file's failure.
+      const failed = new Error('The file could not be read');
+      failed.fileKey = key;
+      throw failed;
+    }
+    // Stamp which file this text is. This hook reports its last settled state on the render where
+    // its deps change, so without a stamp the caller can't tell the new file's first frame from one
+    // still carrying the previous file's text - and the editor seeds its buffer from that frame.
+    return { data: text, mock: false, extra: key };
+  }, [folderId || '', name || '']), ready ? FILE_POLL_MS : null);
 }
 
 // Per-stream event capture for a run (logs/<id>/events/<name>.ndjson). Same
-// poll-while-running shape as analytics so a live run's events stream into the timeline as
-// they land. Any downstream event tap that writes this generic events format shows up here.
+// poll-while-running shape as the rest of a live run's data, so its events stream in as they
+// land. Any downstream event tap that writes this generic events format shows up here.
 function useSessionEvents(sessionId, isRunning) {
   const hook = useFetched(async () => {
     if (!sessionId) return { data: { available: false, streams: [] }, mock: false };
@@ -293,15 +355,7 @@ function useSessionEvents(sessionId, isRunning) {
     return { data: { available: !!raw.available, streams: raw.streams || [] }, mock: false };
   }, [sessionId]);
 
-  const reloadRef = React.useRef(hook.reload);
-  reloadRef.current = hook.reload;
-  React.useEffect(() => {
-    if (!isRunning) return;
-    const id = setInterval(() => reloadRef.current(), LIVE_POLL_MS);
-    return () => clearInterval(id);
-  }, [isRunning]);
-
-  return hook;
+  return usePolled(hook, isRunning ? LIVE_POLL_MS : null);
 }
 
 function useSessionFiles(id) {
@@ -445,15 +499,8 @@ function useExternalAgents() {
       mock: false,
     };
   });
-  const reloadRef = React.useRef(hook.reload);
-  reloadRef.current = hook.reload;
   const hasRunning = ((hook.data && hook.data.runs) || []).some((r) => r.status === 'running');
-  React.useEffect(() => {
-    if (!hasRunning) return;
-    const id = setInterval(() => reloadRef.current(), 1500);
-    return () => clearInterval(id);
-  }, [hasRunning]);
-  return hook;
+  return usePolled(hook, hasRunning ? 1500 : null);
 }
 
 function useExternalAgentEvents(runId, isRunning, onLiveEvent, follow) {
@@ -513,7 +560,7 @@ function useExternalAgentEvents(runId, isRunning, onLiveEvent, follow) {
 
 Object.assign(window, {
   useStatus, useFavorites, setFavorite, useTools, useToolCatalog, invalidateToolCatalog, useTrailmaps, useToolSource, useScriptedToolParams, useTrails, useSessions,
-  useSessionDetail, useDevices, useTrailDetail, useRunTools, useSessionAnalytics, useSessionEvents, useSessionFiles,
+  useSessionDetail, readSessionDetail, useDevices, useTrailDetail, useTrailFolderFile, useRunTools, useSessionEvents, useSessionFiles,
   useDeviceApps, useTrailRoots, useSettings, useIntegrations, useSessionYaml, useTargetAppMap,
   useGlobalTarget, getGlobalTarget, setGlobalTarget,
   useToolUsages, useToolUsageCounts, useToolToolUsages, useToolToolUsageCounts,

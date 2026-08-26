@@ -31,19 +31,25 @@ class CompositeAndroidNetworkCaptureActivator(
     sessionId: String,
     sessionDir: File,
     deviceId: TrailblazeDeviceId,
-    targetAppId: String?,
+    targetAppIds: List<String>,
+    deviceLabel: String?,
   ) {
     // Idempotent per the SPI (the MCP bridge calls start() per-tool until the session ends): the
     // FIRST call for a sessionId picks the delegate and records it; later calls route to that SAME
     // delegate. Re-evaluating useProxy() each call would let a mid-session opt-in flip switch
     // delegates and leave the first one running (stop() only tears down the recorded one).
+    //
+    // Routing stays keyed by sessionId alone even though the delegates key their own per-run state
+    // by (session, device): every device of one session must route to the SAME delegate, or a
+    // mid-session opt-in flip would split one session's capture across two engines and `stop`
+    // would tear down only one of them.
     val delegate = routed[sessionId] ?: run {
       val chosen = (if (useProxy()) proxy else fallback)
         ?: return // OSS with the opt-in off → no Android capture (no-op).
       routed[sessionId] = chosen
       chosen
     }
-    delegate.start(sessionId, sessionDir, deviceId, targetAppId)
+    delegate.start(sessionId, sessionDir, deviceId, targetAppIds, deviceLabel)
   }
 
   override fun stop(sessionId: String) {

@@ -17,6 +17,13 @@ actual object Console {
 
   @Volatile private var quietMode: Boolean = false
 
+  @Volatile private var jsonMode: Boolean = false
+
+  /** Streams saved by [enableJsonMode] so [disableJsonMode] can put them back. */
+  @Volatile private var preJsonOut: PrintStream = System.out
+
+  @Volatile private var preJsonUserOut: PrintStream = System.out
+
   actual fun log(message: String) {
     if (!quietMode) out.println(message)
   }
@@ -67,7 +74,21 @@ actual object Console {
   actual fun isQuietMode(): Boolean = quietMode
 
   actual fun enableJsonMode() {
-    // Redirect info() to stderr so stdout is reserved for JSON output.
+    if (jsonMode) return
+    preJsonOut = out
+    preJsonUserOut = userOut
+    // Both channels move to stderr so stdout carries nothing but the JSON document.
+    // System.out is deliberately left alone (unlike useStdErr) — the command still
+    // needs a working stdout to println the report onto.
+    out = System.err
     userOut = System.err
+    jsonMode = true
+  }
+
+  actual fun disableJsonMode() {
+    if (!jsonMode) return
+    out = preJsonOut
+    userOut = preJsonUserOut
+    jsonMode = false
   }
 }

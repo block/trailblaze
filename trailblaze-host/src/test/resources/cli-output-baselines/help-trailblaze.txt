@@ -22,6 +22,8 @@ Trailblaze - AI-powered device automation
   toolbox      Browse available tools by target app and platform
   run, trail   Run a trail file (.trail.yaml) — execute a scripted test on a
                  device.
+  usages       Find every trail that directly invokes a tool (IDE "Find Usages"
+                 for tools).
   session      Manage the current device session — save it as a replayable
                  trail, inspect steps, end it
   report       Generate an HTML report for session recordings, plus a
@@ -35,6 +37,11 @@ Trailblaze - AI-powered device automation
                  MAX_PLAYBACK_WAIT_MS environment variable (milliseconds,
                  default 600000); if playback overruns it, a best-effort
                  truncated artifact is still written with a warning.
+  viewer       Write out the standalone report viewer (one self-contained HTML
+                 page) bundled into this binary. Serve it anywhere, or just
+                 open it: drop a session archive on the page, or point it at
+                 one with ?zip=<archive-url>. Versioned with this CLI, so it
+                 always matches the reports this binary generates.
   profile      Generate the performance-analysis report (an Instruments-style
                  time profiler over each session's tools, LLM calls, timeouts,
                  and idle gaps) for a logs directory. Defaults to the
@@ -53,8 +60,8 @@ Trailblaze - AI-powered device automation
   device       List and connect devices (Android, iOS, Web)
   show         Open the multi-device live grid (/devices/all) in your default
                  browser
-  app          Open Trail Runner for viewing sessions and managing trails (use
-                 --headless for a daemon-only background service)
+  app          Launch the legacy Trailblaze desktop app (use --v2 for Trail
+                 Runner or --headless for a daemon-only background service).
   mcp          Start a Model Context Protocol (MCP) server for AI agent
                  integration
   check        Validate a trailmap: materialize manifests, type-check

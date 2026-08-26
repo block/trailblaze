@@ -102,7 +102,13 @@ class CoverageFixtureActivity : Activity() {
      */
     const val LATE_FILL_DELAY_MS = 600L
 
-    private val RIGHT_LABELS = listOf("Alpha", "Bravo", "Charlie", "Delta", "Foxtrot", "Golf")
+    /**
+     * First label rendered by every layout. Exposed so a test can build a selector that genuinely
+     * resolves against this screen — see [RecordedCoordinateFallbackOnDeviceTest].
+     */
+    const val FIRST_LABEL = "Alpha"
+
+    private val RIGHT_LABELS = listOf(FIRST_LABEL, "Bravo", "Charlie", "Delta", "Foxtrot", "Golf")
     private val LATE_LABELS = listOf("Hotel", "India", "Juliet", "Kilo", "Lima", "Mike")
   }
 }

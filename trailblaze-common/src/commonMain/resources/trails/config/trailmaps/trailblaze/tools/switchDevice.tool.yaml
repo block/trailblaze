@@ -1,0 +1,2 @@
+id: switchDevice
+class: xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool

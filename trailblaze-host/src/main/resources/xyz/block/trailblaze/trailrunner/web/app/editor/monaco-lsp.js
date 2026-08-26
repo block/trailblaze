@@ -9,7 +9,7 @@
 //
 // WHY PLAIN JS + CDN, NOT A BUNDLED monaco-languageclient.  The Trail Runner web app deliberately has
 // no JS bundler for its own code — React, CodeMirror, highlight.js, etc. all load from the unpkg CDN
-// via classic <script> tags, and the app's .jsx is compiled in-browser by Babel-standalone. Monaco
+// via classic <script> tags, and its own .tsx is transpiled per-file at build time, not bundled. Monaco
 // ships an AMD distribution designed for exactly this CDN-load pattern, so we load it the same way
 // instead of dragging in a bundler + `@codingame/monaco-vscode-api`'s worker/service machinery. And
 // because the daemon bridge already frames messages with `Content-Length`, the wire protocol over the
@@ -423,6 +423,7 @@
   // LspClient owns the requested model, so opening/closing tool editors over a session just works.
   var clientsByUri = new Map();   // model URI string -> LspClient
   var providersRegistered = false;
+  var trailMountSeq = 0;          // distinguishes concurrently-mounted trail editors (see mountTrailYaml)
 
   function ensureProviders(monaco) {
     if (providersRegistered) return;
@@ -533,6 +534,7 @@
         minimap: { enabled: false },
         fontSize: 12.5,
         lineNumbers: 'on',
+        glyphMargin: !!opts.onRunTool,
         scrollBeyondLastLine: false,
         tabSize: 2,
         insertSpaces: true,
@@ -569,6 +571,30 @@
         if (client && client.isReady()) client.changeDocument(uriStr, text);
       });
       var focusSub = editor.onDidFocusEditorText(function () { if (client) activeClient = client; });
+      var toolRunMarkers = [];
+      var toolRunDecorations = [];
+      var toolAtLine = function (line0) {
+        return toolRunMarkers.find(function (m) { return line0 >= m.line0 && line0 <= m.endLine0; });
+      };
+      var gutterSub = editor.onMouseDown(function (event) {
+        if (!opts.onRunTool || !event || !event.target
+            || event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+        var line0 = event.target.position ? event.target.position.lineNumber - 1 : -1;
+        var marker = toolRunMarkers.find(function (m) { return m.line0 === line0; });
+        if (marker && !marker.disabled) opts.onRunTool(marker);
+      });
+      var toolAction = opts.onRunTool ? editor.addAction({
+        id: 'trailrunner.test-tool-at-cursor',
+        label: 'Test tool call at cursor',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 1,
+        run: function () {
+          var position = editor.getPosition();
+          var marker = position ? toolAtLine(position.lineNumber - 1) : null;
+          if (marker && !marker.disabled) opts.onRunTool(marker);
+        },
+      }) : null;
 
       if (opts.onSave) {
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { opts.onSave(); });
@@ -584,6 +610,27 @@
         getCursorLine: function () { var p = editor.getPosition(); return p ? p.lineNumber - 1 : 0; },
         // Toggle soft-wrap — carries over the trail editor's wrap toggle to the Monaco path.
         setWrap: function (on) { editor.updateOptions({ wordWrap: on ? 'on' : 'off' }); },
+        // Executable-tool controls live in Monaco's native glyph margin so they stay aligned while
+        // scrolling/wrapping. The React caller reparses the current YAML after every edit and hands
+        // us the exact tool object represented by each line.
+        setToolRunMarkers: function (list) {
+          toolRunMarkers = list || [];
+          toolRunDecorations = editor.deltaDecorations(toolRunDecorations, toolRunMarkers.map(function (m) {
+            return {
+              range: new monaco.Range((m.line0 || 0) + 1, 1, (m.line0 || 0) + 1, 1),
+              options: {
+                isWholeLine: false,
+                glyphMarginClassName: 'tb-tool-run-glyph' + (m.running ? ' is-running' : (m.disabled ? ' is-disabled' : '')),
+                // Just the verb and the tool. The verb stays `Test`, matching the aria-label and the
+                // Tools tab this button belongs to (`Run` is what a whole trail does). A tool name is
+                // an unbreakable token long enough on its own that any trailing phrase ("… on the
+                // connected device") wrapped the widget over most of the step it points at: measured
+                // at 504x61px in a 557px-wide pane, against 246x37px for this wording.
+                glyphMarginHoverMessage: { value: m.running ? ('Running `' + m.name + '`…') : (m.disabled ? 'Wait for the running tool to finish' : ('Test `' + m.name + '`')) },
+              },
+            };
+          }));
+        },
         focus: function () { editor.focus(); },
         // Plain insert at the caret (fallback when there's no step to attach a tool to).
         insertAtCursor: function (text) {
@@ -626,6 +673,9 @@
           disposed = true;
           changeSub.dispose();
           focusSub.dispose();
+          gutterSub.dispose();
+          if (toolAction) toolAction.dispose();
+          if (toolRunDecorations.length) editor.deltaDecorations(toolRunDecorations, []);
           if (client) {
             if (uriStr) { client.closeDocument(uriStr); clientsByUri.delete(uriStr); }
             if (activeClient === client) activeClient = null;
@@ -697,8 +747,12 @@
     o.languageId = 'yaml';
     o.forceIncompleteCompletions = true;
     // Synthetic file URI: matches the `**/*.trail.yaml` glob so the schema binds; the text comes from
-    // the editor via didOpen, not disk.
-    o.explicitFileUri = 'file:///virtual-trail/preview.trail.yaml';
+    // the editor via didOpen, not disk. One directory per mount, because a Monaco model URI is a
+    // global key: mounting a second trail editor at the same URI disposes the first one's model out
+    // from under it, and disposing either one then drops the shared `clientsByUri` entry, taking the
+    // language server with it. Two trail editors are live together in normal use - the inline Edit
+    // tab plus a pushed folder-file editor, or the steps board's expanded Raw view.
+    o.explicitFileUri = 'file:///virtual-trail/' + (++trailMountSeq) + '/preview.trail.yaml';
     o.connectOptionsFor = function (info) {
       var q = [];
       if (opts.target) q.push('target=' + encodeURIComponent(opts.target));
@@ -722,10 +776,53 @@
     return mountLsp(o);
   }
 
+  // Mount a read-only side-by-side diff — used to show an editor buffer against the version git has
+  // committed. Deliberately no language server and no file URI: nothing here is edited, so schema
+  // diagnostics on a historical text would be noise, and a real file URI would collide with the live
+  // editor's own model (a Monaco model URI is a global key). `ignoreTrimWhitespace: false` because
+  // indentation is meaning in YAML — a re-indented step is a change worth seeing.
+  function mountDiff(opts) {
+    return loadMonaco().then(function (monaco) {
+      var language = opts.languageId || 'yaml';
+      var original = monaco.editor.createModel(opts.original != null ? opts.original : '', language);
+      var modified = monaco.editor.createModel(opts.modified != null ? opts.modified : '', language);
+      var editor = monaco.editor.createDiffEditor(opts.host, {
+        theme: currentMonacoTheme(),
+        readOnly: true,
+        originalEditable: false,
+        automaticLayout: true,
+        renderSideBySide: opts.sideBySide !== false,
+        ignoreTrimWhitespace: false,
+        minimap: { enabled: false },
+        fontSize: 12.5,
+        scrollBeyondLastLine: false,
+        renderOverviewRuler: false,
+        wordWrap: opts.wrap ? 'on' : 'off',
+      });
+      editor.setModel({ original: original, modified: modified });
+      var disposed = false;
+      return {
+        // Only the right-hand side moves while the diff is open: the committed text is fixed, the
+        // buffer is whatever the user is typing.
+        setModified: function (v) { if (modified.getValue() !== v) modified.setValue(v != null ? v : ''); },
+        setWrap: function (on) { editor.updateOptions({ wordWrap: on ? 'on' : 'off' }); },
+        layout: function () { editor.layout(); },
+        dispose: function () {
+          if (disposed) return;
+          disposed = true;
+          editor.dispose();
+          original.dispose();
+          modified.dispose();
+        },
+      };
+    });
+  }
+
   window.TBMonaco = {
     mountTypescript: mountTypescript,
     mountYaml: mountYaml,
     mountTrailYaml: mountTrailYaml,
+    mountDiff: mountDiff,
     loadMonaco: loadMonaco,
     MONACO_VERSION: MONACO_VERSION,
   };

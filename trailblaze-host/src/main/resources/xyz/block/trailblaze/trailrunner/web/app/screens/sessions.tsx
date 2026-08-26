@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 function conciseError(text) {
@@ -68,14 +68,14 @@ function ErrorModal({ text, onClose }) {
   );
 }
 
-function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 'all', active = true }) {
+function SessionsScreen({ initSel, followLive, go, target = 'all', active = true }) {
   const [sel, setSel] = React.useState(initSel || null);
   const [filter, setFilter] = React.useState('');
   const [menu, setMenu] = React.useState(null);
   const sessions = TB.useSessions();
   const lockedRef = React.useRef(false);
   const attemptsRef = React.useRef(0);
-  const handedOffRef = React.useRef(false);
+  const followedRef = React.useRef(null); // the session id `attemptsRef` is currently counting for
   const [listCollapsed, setListCollapsed] = React.useState(false);
   const [listW, startListDrag] = useResizableWidth('tb-runs-list-w', 340, 240, 600);
   const archiveInputRef = React.useRef(null);
@@ -88,47 +88,50 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
 
   const all = sessions.data || [];
   const running = all.filter((s) => s.status === 'running');
-  const completed = all.filter((s) => s.status !== 'running');
-  const baseList = view === 'active' ? running : view === 'all' ? all : completed;
   const byTarget = target === '__none__'
-    ? baseList.filter((s) => !s.target)
+    ? all.filter((s) => !s.target)
     : target && target !== 'all'
-    ? baseList.filter((s) => String(s.target || '').toLowerCase() === String(target).toLowerCase())
-    : baseList;
+    ? all.filter((s) => String(s.target || '').toLowerCase() === String(target).toLowerCase())
+    : all;
   const pool = byTarget;
   const filtered = !filter ? pool : pool.filter((s) => (s.title + ' ' + (s.target || '') + ' ' + (s.device || '')).toLowerCase().includes(filter.toLowerCase()));
+  // Running runs head their own "Active" section, so the day groups only ever see finished runs.
+  const activeRows = filtered.filter((s) => s.status === 'running');
+  const completedRows = filtered.filter((s) => s.status !== 'running');
+  const historyGroups = React.useMemo(() => window.SessionHistoryModel.groupSessions(completedRows), [filtered]);
   const cur = all.find((s) => s.id === sel);
 
-  const pending = (view === 'active' || view === 'all') ? TB.getPendingRun() : null;
+  const pending = TB.getPendingRun();
   // Errored markers are exempt from the TTL: a "couldn't start" card that silently evaporates
   // after 90s reads as "the run never happened" - it stays until dismissed or a new run starts.
-  const showPending = !!pending && running.length === 0 && (pending.error || (Date.now() - pending.at) < 90000);
+  const showPending = !!pending && running.length === 0 && (pending.error || (Date.now() - pending.at) < TB.PENDING_TTL_MS);
   // The detail pane gets its own gate: keep the placeholder up until a CONCRETE run
   // is selected (`!cur`), not just until one is running. followLive locks `sel` onto
   // the new session one render AFTER it lands in `running`, so gating on
   // `running.length === 0` (like the list card) would blink "Select a run" for that
   // one frame. Keying on `!cur` holds the placeholder right through the hand-off to
   // the live TraceViewer.
-  const showPendingDetail = !!pending && !cur && (pending.error || (Date.now() - pending.at) < 90000);
+  const showPendingDetail = !!pending && !cur && (pending.error || (Date.now() - pending.at) < TB.PENDING_TTL_MS);
   // Clear the optimistic marker once a concrete run is locked onto (`cur` set) — the
   // SAME condition the detail pane hands off on. Clearing on `running.length > 0`
   // instead would drop the marker one render before `sel`/`cur` catches up, blinking
   // the empty "Select a run" state during the hand-off (the flicker this stack kills).
-  React.useEffect(() => { if (cur) TB.clearPendingRun(); }, [!!cur]);
+  // Keyed on WHICH run is selected, not merely whether one is: retrying from a run open in
+  // this now-always-mounted screen leaves `cur` truthy throughout, so a `!!cur` key never
+  // re-fires and the marker outlives the retried run.
+  React.useEffect(() => { if (cur) TB.clearPendingRun(); }, [cur && cur.id]);
 
   // Re-apply the routed selection whenever it changes — screens stay mounted, so a
-  // deep-link to a different run (Home → recent run, or the Active → Completed hand-off
-  // below) must move the selection, not just on first mount.
+  // deep-link to a different run (e.g. Home → recent run) must move the selection, not
+  // just on first mount.
   React.useEffect(() => {
     if (initSel) setSel(initSel);
   }, [initSel]);
 
-  // Refetch the list each time this tab becomes visible again. Each SessionsScreen
-  // keeps its own useSessions instance and stays mounted (display:none), and the poll
-  // only runs while its own data has a running row — so a sibling tab can hold data
-  // that predates a run which just finished elsewhere. The clearest hit: a run followed
-  // in Active hands off to Completed (`go('completed', {sel})`), but Completed's stale
-  // list has no row for it, so `cur` is undefined and the run looks like it vanished.
+  // Refetch the list each time this tab becomes visible again. This screen stays mounted
+  // (display:none) and its poll only runs while its own data has a running row — so a run
+  // dispatched or finished while another screen was up can be missing from the stale list,
+  // and a deep-linked `sel` would find no row (`cur` undefined) and look like it vanished.
   // Reloading on show is the cheap, self-healing fix (one fetch per tab activation).
   const wasActiveRef = React.useRef(active);
   React.useEffect(() => {
@@ -138,56 +141,38 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
 
   React.useEffect(() => {
     if (!sel && pool.length > 0) setSel(pool[0].id);
-  }, [sessions.data, view]);
+  }, [sessions.data]);
 
   React.useEffect(() => {
-    if (followLive) { lockedRef.current = false; attemptsRef.current = 0; handedOffRef.current = false; }
+    if (followLive) { lockedRef.current = false; attemptsRef.current = 0; followedRef.current = null; }
   }, [followLive]);
-
-  // Hand off to Completed once a live-followed run finishes. Without this, a run we
-  // locked onto in Active drops out of the `running` list when it ends (failed/passed)
-  // — the Active list goes empty but the detail stays pinned to it, stranding you in
-  // Active. Especially visible for "fail to run" cases that finish almost immediately.
-  React.useEffect(() => {
-    if (view !== 'active' || handedOffRef.current || !lockedRef.current) return;
-    if (cur && cur.status && cur.status !== 'running') {
-      handedOffRef.current = true;
-      TB.clearPendingRun();
-      const id = cur.id;
-      setSel(null);
-      if (go) go('completed', { sel: id });
-    }
-  }, [view, cur && cur.id, cur && cur.status]);
 
   React.useEffect(() => {
     if (!followLive || lockedRef.current) return;
     const tick = () => {
       if (lockedRef.current) return;
-      const data = sessions.data || [];
-      // Authoritative path: dispatch reported the real session id (patched onto the pending
-      // marker as soon as the RPC answers). Lock straight onto it — no guessing — and consider
-      // it locked once the row actually exists so the Completed hand-off can fire even when the
-      // run finished before we ever saw it as `running`.
-      const p = TB.getPendingRun();
-      if (p && p.sessionId) {
-        setSel(p.sessionId);
-        if (data.some((s) => s.id === p.sessionId)) { lockedRef.current = true; return; }
-        // Watchdog: the daemon accepted the run (it minted a session id) but the session never
-        // materialized - the run died before writing its first log. Without this, the card just
-        // sits on "Initializing run…" until the TTL erases it without a word.
-        if (attemptsRef.current > 20) {
-          if (!p.error) TB.failPendingRun('The daemon accepted the run (session ' + p.sessionId + ') but it never appeared. It likely died before starting - check the daemon log (~/.trailblaze/desktop-logs/).');
-          lockedRef.current = true;
-          return;
-        }
-        attemptsRef.current += 1;
-        sessions.reload();
+      const pending = TB.getPendingRun();
+      const d = window.FollowRunModel.decide({
+        pending,
+        rows: sessions.data || [],
+        attempts: attemptsRef.current,
+        followed: followedRef.current,
+        now: Date.now(),
+        ttlMs: TB.PENDING_TTL_MS,
+      });
+      if (d.kind === 'follow') {
+        if (d.restartWatchdog) { followedRef.current = d.sessionId; attemptsRef.current = 0; }
+        setSel(d.sessionId);
+        if (d.locked) { lockedRef.current = true; return; }
+      } else if (d.kind === 'abandon') {
+        if (!pending.error) TB.failPendingRun('The daemon accepted the run (session ' + d.sessionId + ') but it never appeared. It likely died before starting - check the daemon log (~/.trailblaze/desktop-logs/).');
+        lockedRef.current = true;
+        return;
+      } else if (d.kind === 'guess' || d.kind === 'giveUp') {
+        if (d.sessionId) setSel(d.sessionId);
+        lockedRef.current = true;
         return;
       }
-      // Legacy heuristic (dispatch paths that don't report a session id yet): newest running row.
-      const newest = data[0];
-      if (newest && newest.status === 'running') { setSel(newest.id); lockedRef.current = true; return; }
-      if (attemptsRef.current > 16) { if (newest) setSel(newest.id); lockedRef.current = true; return; }
       attemptsRef.current += 1;
       sessions.reload();
     };
@@ -205,12 +190,13 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
   // (run locked on, or TTL) we stop. This avoids both a perpetual idle-tab poll and a
   // double-poll racing useSessions' interval while a run is in flight.
   React.useEffect(() => {
-    if (view !== 'active' || !pending || running.length > 0) return;
+    if (!pending || running.length > 0) return;
     const id = setInterval(() => sessions.reload(), 3000);
     return () => clearInterval(id);
-  }, [view, !!pending, running.length]);
+  }, [!!pending, running.length]);
 
-  const title = view === 'active' ? 'Active' : view === 'all' ? 'Runs' : 'History';
+  const railIco = 'gallery-vertical-end';
+  const live = running.length > 0;
 
   const onAfterDelete = (deletedId) => {
     if (deletedId === sel) { setSel(null); setListCollapsed(false); }
@@ -283,7 +269,7 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
     setStopOutcome(r.ok
       ? r.reason === 'released_device'
         ? { ok: true, text: 'This run had already ended but was still holding its device - the device has been released for the next run.' }
-        : { ok: true, text: 'Run stopped. It will show as Cancelled under History.' }
+        : { ok: true, text: 'Run stopped. It will show as Cancelled under Completed.' }
       : r.reason === 'already_ended'
         ? { ok: true, text: 'This run had already finished before the stop landed - its recorded result is unchanged.' }
         : { ok: false, text: 'Nothing was stopped: no live execution was found for this run. It may have just finished; the list has been refreshed.' });
@@ -321,10 +307,10 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
       )}
       <div className="tb-sessions-index" style={{ position: 'relative', width: listCollapsed ? 0 : listW, flex: listCollapsed ? '0 0 0px' : '0 0 ' + listW + 'px', borderRight: listCollapsed ? 'none' : '1px solid var(--tb-hairline)', background: 'var(--bg-subtle)', display: 'flex', flexDirection: 'column', overflow: 'hidden', transition: 'width .2s var(--ease-out-soft), flex-basis .2s var(--ease-out-soft)' }}>
         <RailHeader
-          ico={view === 'active' ? 'radio' : 'history'}
-          iconColor={view === 'active' ? 'var(--tb-running)' : 'var(--text-subtle-variant)'}
-          title={<React.Fragment>{view === 'active' && running.length > 0 ? <Dot c="var(--tb-pass)" s={7} cls="tb-pulse" /> : null}<span style={{ marginLeft: view === 'active' && running.length > 0 ? 6 : 0 }}>{title}</span></React.Fragment>}
-          help={<HelpButton title={view === 'active' ? 'How runs work' : 'Reading a trace'} onClick={() => setShowHelp(true)} />} />
+          ico={railIco}
+          iconColor="var(--text-subtle-variant)"
+          title={<React.Fragment>{live ? <Dot c="var(--tb-pass)" s={7} cls="tb-pulse" /> : null}<span style={{ marginLeft: live ? 6 : 0 }}>Runs</span></React.Fragment>}
+          help={<HelpButton title="How runs work" onClick={() => setShowHelp(true)} />} />
         <div style={{ padding: '0 12px 10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="tb-input" style={{ flex: 1, minWidth: 0 }}>
@@ -389,43 +375,48 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           )}
           {filtered.length > 0 && (
             <>
-              <div className="tb-eyebrow" style={{ padding: '8px 4px 4px' }}>{title} · {filtered.length}</div>
-              {filtered.map((s) => (
-                <SessionRow key={s.id} s={s} sel={sel} setSel={setSel} onMenu={(e) => setMenu({ x: e.clientX, y: e.clientY, run: s })} onStop={onStop} stopping={stopping} />
+              {activeRows.length > 0 && (
+                <React.Fragment>
+                  <div className="tb-eyebrow" style={{ padding: '8px 4px 4px' }}>Active · {activeRows.length}</div>
+                  {activeRows.map((s) => <SessionRow key={s.id} s={s} sel={sel} setSel={setSel} onMenu={(e) => setMenu({ x: e.clientX, y: e.clientY, run: s })} onStop={onStop} stopping={stopping} />)}
+                </React.Fragment>
+              )}
+              {historyGroups.length > 0 && (
+                <div className="tb-eyebrow" style={{ padding: '8px 4px 4px' }}>Completed · {completedRows.length}</div>
+              )}
+              {historyGroups.map((day) => (
+                <section key={day.key} aria-label={`${day.label}, ${day.counts.total} runs`} style={{ marginBottom: 12 }}>
+                  <HistoryGroupHeader label={day.label} counts={day.counts} day />
+                  {day.legs.map((leg) => (
+                    <div key={leg.key} style={{ marginTop: 5 }}>
+                      <HistoryGroupHeader label={leg.label} counts={leg.counts} />
+                      {leg.rows.map((s) => <SessionRow key={s.id} s={s} sel={sel} setSel={setSel} onMenu={(e) => setMenu({ x: e.clientX, y: e.clientY, run: s })} onStop={onStop} stopping={stopping} />)}
+                    </div>
+                  ))}
+                </section>
               ))}
             </>
           )}
         </div>
         {(sessions.data || !sessions.loading) && filtered.length === 0 && !showPending && (
           <div className="tb-sessions-index-empty">
-            <Ico n={filter && pool.length > 0 ? 'search-x' : (view === 'active' ? 'radio' : 'history')} s={14} />
+            <Ico n={filter && pool.length > 0 ? 'search-x' : railIco} s={14} />
             <span>{filter && pool.length > 0 ? 'No matching runs' : 'No runs'}</span>
           </div>
         )}
       </div>
-      {showHelp && view === 'active' && (
+      {showHelp && (
         <HelpOverlay
           title="How runs work"
-          sub="A run (a 'session') is one trail dispatched to one device. The daemon executes it step by step; this screen follows it live."
+          sub="A run (a 'session') is one trail dispatched to one device. Active runs are listed first and update live; finished ones keep a full trace below, enough to understand what happened without re-running it."
           onClose={() => setShowHelp(false)}
         >
           <HelpCard ico="send" color="var(--tb-running)" title="Dispatch">
             Runs start from the Prompt screen, a trail's Run button, or a tool's Test tab. The daemon connects to the device, launches the target app, and works through the steps - recorded steps replay exactly; AI steps go through the agent loop.
           </HelpCard>
-          <HelpCard ico="radio" color="var(--tb-pass)" title="Follow it live">
-            Each step appears here as it executes, with status and screenshots arriving in real time. You don't have to keep watching - the run continues on the daemon either way.
+          <HelpCard ico="radio" color="var(--tb-pass)" title="Follow it live, or stop">
+            An in-flight run appears under Active, each step arriving as it executes. You don't have to keep watching - it continues on the daemon either way. Stop cancels it on the device, and whatever already executed keeps its trace.
           </HelpCard>
-          <HelpCard ico="octagon-x" color="var(--tb-fail)" title="Stop">
-            Stop cancels the run on the device; whatever was already executed keeps its trace, so a stopped run is still inspectable under History.
-          </HelpCard>
-        </HelpOverlay>
-      )}
-      {showHelp && view !== 'active' && (
-        <HelpOverlay
-          title="Reading a trace"
-          sub="Every run keeps a full trace - enough to understand what happened without re-running it. Pick a run and work through the tabs."
-          onClose={() => setShowHelp(false)}
-        >
           <HelpCard ico="gallery-vertical-end" color="var(--tb-running)" title="Timeline">
             The run step by step: screenshot, the tool calls performed, and whether each step was replayed from a recording or decided by the agent. This is where you diagnose what the device actually did.
           </HelpCard>
@@ -447,9 +438,9 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           : showPendingDetail
           ? <PendingRunDetail pending={pending} onDismiss={() => sessions.reload()} />
           : (sel && sessions.loading)
-          // A run is selected but not yet in the list (e.g. the Active → Completed
-          // hand-off, where this tab is still reloading its stale list). Hold a skeleton
-          // rather than blinking "Select a run" until the refetched row lands as `cur`.
+          // A run is selected but not yet in the list (e.g. a deep-link that arrived while
+          // this tab was still reloading its stale list). Hold a skeleton rather than
+          // blinking "Select a run" until the refetched row lands as `cur`.
           ? (
             <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ width: 'min(420px, 70%)' }}><Skeleton rows={5} /></div>
@@ -459,14 +450,14 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
           ? (
             <div className="tb-sessions-empty-workspace">
               <EmptyState
-                ico={view === 'active' ? 'radio' : 'history'}
-                icoColor={view === 'active' ? 'var(--tb-running)' : 'var(--text-subtle-variant)'}
-                title={view === 'active' ? 'No active runs' : 'No run history yet'}
-                sub={view === 'active' ? 'A run appears here as soon as it starts.' : 'Finished, cancelled, and failed runs appear here.'}
+                ico={railIco}
+                icoColor="var(--text-subtle-variant)"
+                title="No runs yet"
+                sub="A run appears here as soon as it starts."
               />
               <div className="tb-sessions-empty-actions">
                 <Btn kind="primary" sm ico="route" onClick={() => go('trails')}>Browse trails</Btn>
-                {view !== 'active' && <Btn sm ico="archive-restore" onClick={() => archiveInputRef.current?.click()}>Import archive</Btn>}
+                <Btn sm ico="archive-restore" onClick={() => archiveInputRef.current?.click()}>Import archive</Btn>
               </div>
             </div>
           )
@@ -489,6 +480,10 @@ function SessionsScreen({ initSel, followLive, go, view = 'completed', target = 
 async function stopPendingRun() {
   const p = TB.getPendingRun();
   if (!p) return;
+  // Recorded first, and unconditionally: when the run hasn't reported a session yet there is nothing
+  // to cancel here, and the dispatch that will report one may answer at any moment - including while
+  // the cancel below is in flight. That patch is where a stop pressed this early gets applied.
+  TB.requestPendingRunStop();
   if (p.sessionId) await TB.cancelSession(p.sessionId).catch(() => null);
   TB.failPendingRun('Stopped by you while initializing. Anything the run already logged stays in its session.');
 }
@@ -552,6 +547,22 @@ function runKindOf(s) {
 }
 function cleanRunTitle(s) {
   return decodeEntities((s.title || s.id || '').replace(/^(Blaze|OnDeviceRpc|Run):\s*/, '') || s.id);
+}
+
+function HistoryGroupHeader({ label, counts, day = false }) {
+  const summary = [
+    counts.passed ? `${counts.passed} passed` : null,
+    counts.failed ? `${counts.failed} failed` : null,
+    counts.cancelled ? `${counts.cancelled} cancelled` : null,
+    counts.imported ? `${counts.imported} imported` : null,
+  ].filter(Boolean).join(', ');
+  return (
+    <div style={{ position: day ? 'sticky' : 'static', top: day ? 0 : undefined, zIndex: day ? 2 : undefined, display: 'flex', alignItems: 'center', gap: 7, padding: day ? '8px 4px 5px' : '5px 5px 4px 10px', background: day ? 'var(--bg-subtle)' : 'transparent' }}>
+      {!day && <Ico n="smartphone" s={11} c="var(--text-subtle)" />}
+      <span className={day ? 'tb-eyebrow' : 'tb-mono'} style={{ fontSize: day ? 11 : 10.5, fontWeight: day ? undefined : 650, color: day ? undefined : 'var(--text-subtle-variant)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span aria-label={`${counts.total} runs${summary ? `, ${summary}` : ''}`} title={summary || `${counts.total} runs`} className="tb-mono" style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-subtle)', whiteSpace: 'nowrap' }}>{counts.total}{counts.passed ? ` · ${counts.passed}✓` : ''}{counts.failed ? ` · ${counts.failed}×` : ''}{counts.cancelled ? ` · ${counts.cancelled}■` : ''}{counts.imported ? ` · ${counts.imported}↥` : ''}</span>
+    </div>
+  );
 }
 
 function SessionRow({ s, sel, setSel, onMenu, onStop, stopping }) {
@@ -634,8 +645,13 @@ function RunContextMenu({ menu, onClose, go, onAfterDelete }) {
   const doReveal = async () => { onClose(); await TB.revealSession(run.id); };
   const doRetry = async () => {
     onClose();
-    const r = await TB.retrySession(run);
-    if (r.ok && go) { TB.recordPendingRun({ title: run.title || run.id, target: run.target, device: run.device }); go('active', { followLive: Date.now() }); }
+    // Card first, then the slow part. This menu has nowhere to show a spinner - it closes on click -
+    // so waiting here for the connect and the dispatch is a click that does nothing for up to a
+    // minute. The Active screen owns the retry from now on, including a refusal.
+    const prepared = await TB.prepareRetry(run);
+    const marker = TB.recordPendingRun({ title: run.title || run.id, target: run.target, device: run.device, awaitsDispatch: true });
+    if (go) go('runs', { followLive: Date.now() });
+    TB.launchRetry(prepared, marker);
   };
   const doDelete = async () => {
     onClose();

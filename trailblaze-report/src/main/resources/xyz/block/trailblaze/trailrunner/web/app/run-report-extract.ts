@@ -50,6 +50,95 @@ function yamlRootSection(yaml: string | null | undefined, key: string): string |
   return lines.slice(start, end).join('\n').trimEnd();
 }
 
+// Read one YAML scalar written after `key:` on `lines[at]`, whose `- ` marker sits at `indent`.
+// Handles the four forms the trail authoring surface actually emits: plain, single-quoted,
+// double-quoted, and block (`|`/`>` with any chomping indicator).
+function yamlScalarAt(lines: string[], at: number, indent: number, inline: string): string {
+  const value = inline.trim();
+  if (/^[|>][+-]?\d*$/.test(value)) {
+    const body: string[] = [];
+    let bodyIndent = -1;
+    for (let j = at + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (!line.trim()) { body.push(''); continue; }
+      const lead = line.length - line.replace(/^\s*/, '').length;
+      if (lead <= indent) break;
+      // The block ends where indentation falls below its own first line, which is what separates it
+      // from a sibling key of the same item: `recording:` under a `- step: |-` sits deeper than the
+      // list marker but shallower than the block body, and absorbing it would garble the label.
+      if (bodyIndent < 0) bodyIndent = lead;
+      else if (lead < bodyIndent) break;
+      body.push(line.slice(bodyIndent));
+    }
+    return body.join(value[0] === '>' ? ' ' : '\n').trim();
+  }
+  // Take only the quoted literal, so a trailing `# comment` after the closing quote stays out of the
+  // label. A quoted scalar may also wrap across physical lines, which YAML folds into one
+  // space-joined string, so keep reading until the quote closes. An unterminated one falls through
+  // to the plain-scalar reader below.
+  if (value[0] === '"' || value[0] === "'") {
+    const pattern = value[0] === '"' ? /^"(?:[^"\\]|\\.)*"/ : /^'(?:[^']|'')*'/;
+    let text = value;
+    for (let j = at + 1; !pattern.test(text) && j < lines.length && lines[j].trim(); j++) text += ' ' + lines[j].trim();
+    const quoted = pattern.exec(text);
+    if (quoted) {
+      if (value[0] === "'") return quoted[0].slice(1, -1).replace(/''/g, "'");
+      try { return JSON.parse(quoted[0]); } catch (_) { return quoted[0].slice(1, -1); }
+    }
+  }
+  // A plain scalar folds its continuation lines into one line, so a step prompt wrapped across
+  // several indented lines has to be read whole. It ends at the first line that is a sibling key,
+  // a new list item, blank, or dedented back to the item.
+  const strip = (s: string) => s.replace(/\s+#.*$/, '').trim();
+  const folded = [strip(value)];
+  for (let j = at + 1; j < lines.length; j++) {
+    const line = lines[j];
+    if (!line.trim()) break;
+    const lead = line.length - line.replace(/^\s*/, '').length;
+    if (lead <= indent || /^\s*-\s/.test(line) || /^\s*[\w-]+\s*:/.test(line)) break;
+    folded.push(strip(line));
+  }
+  return folded.join(' ').trim();
+}
+
+/**
+ * The trail steps the run DECLARED, in authored order, read straight from the trail YAML.
+ *
+ * An objective row exists only for a step that actually started, so after a failure the timeline
+ * simply ends — and the remaining steps, which are what tell a triager WHICH STAGE the run died in,
+ * are nowhere in the logs. This is the only record of them.
+ *
+ * Both authored shapes collapse to the same list: unified is a root `trail:` block of `- step:` /
+ * `- verify:` items, v1 is root `- prompts:` blocks holding those same two keys. `tools:` items are
+ * excluded because they never produce an objective, and so is the trailhead — it is its own
+ * timeline phase, already numbered separately. Labels are truncated exactly as `extractTrace`
+ * truncates an objective's prompt, so a declared step and its executed row read identically.
+ */
+function declaredTrailSteps(yaml: string | null | undefined): string[] {
+  if (!yaml || !yaml.trim()) return [];
+  const lines = yaml.replace(/\r\n/g, '\n').split('\n');
+  const root = /^(?:-\s+)?[A-Za-z_][\w-]*\s*:/;
+  const item = /^(\s*)-\s+(?:step|verify)\s*:(.*)$/;
+  const steps: string[] = [];
+  lines.forEach((line, start) => {
+    if (!/^(?:-\s+)?(?:trail|prompts)\s*:/.test(line)) return;
+    let end = start + 1;
+    while (end < lines.length && !root.test(lines[end])) end++;
+    const region = lines.slice(start + 1, end);
+    // Anchor on the shallowest `- step:` in the block so a `step`-named argument nested under a
+    // step's `recording:` can never be mistaken for a step of its own.
+    const indents = region.map((l) => item.exec(l)).filter(Boolean).map((m) => m![1].length);
+    if (!indents.length) return;
+    const depth = Math.min(...indents);
+    region.forEach((l, offset) => {
+      const match = item.exec(l);
+      if (!match || match[1].length !== depth) return;
+      steps.push(truncate(yamlScalarAt(region, offset, depth, match[2]), 120));
+    });
+  });
+  return steps;
+}
+
 function localRunAgentPrompt(meta: RunMeta | null | undefined): string | null {
   if (!meta || !meta.cmd) return null;
   const context = [
@@ -59,7 +148,7 @@ function localRunAgentPrompt(meta: RunMeta | null | undefined): string | null {
     meta.platform ? `Platform: ${meta.platform}` : null,
   ].filter(Boolean).join('\n');
   const trail = meta.trailId ? `the ${meta.trailId} trail` : 'the same trail';
-  return `Run this Trailblaze test locally and report the result.\n\n${context ? `${context}\n\n` : ''}From the repository root, use either:\n- Trailblaze CLI: \`${meta.cmd}\`\n- Trail Runner: run \`./trailblaze app\`, select ${trail}, and run it.\n\nUse the same target and platform as the original run. If local setup blocks execution, diagnose it, fix it when safe, and retry the test.`;
+  return `Run this Trailblaze test locally and report the result.\n\n${context ? `${context}\n\n` : ''}From the repository root, use either:\n- Trailblaze CLI: \`${meta.cmd}\`\n- Trail Runner: run \`./trailblaze app --v2\`, select ${trail}, and run it.\n\nUse the same target and platform as the original run. If local setup blocks execution, diagnose it, fix it when safe, and retry the test.`;
 }
 
 // A web capture logs the SAME ARIA snapshot as two parallel trees, whose bounds come from two
@@ -125,6 +214,11 @@ function mergeWebHierarchyBounds(nodeTree: unknown, legacyTree: unknown): unknow
   return graft(tree, legacy);
 }
 
+// Extraction-only presentation metadata must not be stamped onto the caller's raw log records:
+// the report daemon shares those objects with the Raw logs tab. A WeakMap preserves the compact
+// timeline quote without making a field appear that the runtime never emitted.
+const timelineReasoningByLog = new WeakMap<TrailblazeLogRecord, string>();
+
 function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
   // Trailblaze writes several log records per logical step; the timeline collapses
   // them so each user-meaningful step shows once:
@@ -139,6 +233,61 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
   let objective: string | null = null; // text of the active objective, to suppress per-turn echoes of it
   let objRow: any = null; // the open objective row, so a failing ObjectiveCompleteLog can mark it failed
   const closeGroup = () => { if (group) { out.push(group); group = null; } };
+
+  // The agent response and tool execution are separate records. Correlate them within one response
+  // boundary: Koog can reuse a trace id for later graph iterations, so a session-wide trace queue
+  // can leak an abandoned response's reasoning into a later same-named tool. Most captures write
+  // the response before its tools. Older captures can write the first tools before their response
+  // summary, so retain those only until that trace's first response arrives.
+  type ResponseCall = { tool: string; reasoning: string | null };
+  const reasoningByToolLog = new Map<TrailblazeLogRecord, string | null>();
+  const activeResponse = new Map<string, ResponseCall[]>();
+  const beforeFirstResponse = new Map<string, Array<{ log: TrailblazeLogRecord; tool: string }>>();
+  const seenResponse = new Set<string>();
+  const takeCall = (calls: ResponseCall[], toolName: string): string | null | undefined => {
+    const at = calls.findIndex((call) => call.tool === toolName);
+    if (at < 0) return undefined;
+    return calls.splice(at, 1)[0].reasoning;
+  };
+  for (const log of logs) {
+    const traceId = typeof log.traceId === 'string' && log.traceId ? log.traceId : null;
+    if (!traceId) continue;
+    if (log.llmResponse !== undefined) {
+      const calls = parseLlmResponse(log.llmResponse)
+        .filter((part): part is LlmResponsePart & { kind: 'tool'; tool: string } =>
+          part.kind === 'tool' && typeof part.tool === 'string')
+        .map((part) => ({
+          tool: part.tool,
+          reasoning: typeof part.reasoning === 'string' && part.reasoning.trim() ? part.reasoning.trim() : null,
+        }));
+      activeResponse.set(traceId, calls);
+      seenResponse.add(traceId);
+      for (const pending of beforeFirstResponse.get(traceId) || []) {
+        const reasoning = takeCall(calls, pending.tool);
+        if (reasoning !== undefined) reasoningByToolLog.set(pending.log, reasoning);
+      }
+      beforeFirstResponse.delete(traceId);
+      continue;
+    }
+    if (typeof log.toolName !== 'string' || !log.toolName) continue;
+    if (!seenResponse.has(traceId)) {
+      const pending = beforeFirstResponse.get(traceId) || [];
+      pending.push({ log, tool: log.toolName });
+      beforeFirstResponse.set(traceId, pending);
+      continue;
+    }
+    const calls = activeResponse.get(traceId) || [];
+    const reasoning = takeCall(calls, log.toolName);
+    if (reasoning !== undefined) reasoningByToolLog.set(log, reasoning);
+  }
+  const correlateToolReasoning = (log: TrailblazeLogRecord) => {
+    const detail = toolDetail(log);
+    const responseNote = reasoningByToolLog.get(log) || null;
+    const note = detail.note || responseNote;
+    const compactNote = note ? truncate(note, 180) : null;
+    if (compactNote) timelineReasoningByLog.set(log, compactNote);
+    return { detail, note: compactNote };
+  };
 
   // Index every LLM-call-producing log into the session's llm list, mirroring extractLlmLogs'
   // selection EXACTLY (request logs + unpaired MCP sampling logs, in log order) so a trace row's
@@ -215,6 +364,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     if (toolName) {
       asserts = new Map();
       if (group && traceId && group._trace === traceId) {
+        correlateToolReasoning(log);
         if (!group.screenshotFile && screenshotFile) group.screenshotFile = screenshotFile;
         if (!group.viewHierarchy && viewHierarchy) group.viewHierarchy = viewHierarchy;
         if (!group.viewport && viewport) group.viewport = viewport;
@@ -224,13 +374,15 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       }
       closeGroup();
       const ok = log.successful !== false && !err;
-      const detail = toolDetail(log);
-      group = { _trace: traceId, _logs: [log], label: toolName, tool: detail.summary, note: detail.note, args: toolArgsYaml(toolName, log.trailblazeTool && log.trailblazeTool.raw), ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts };
+      const correlated = correlateToolReasoning(log);
+      group = { _trace: traceId, _logs: [log], label: toolName, tool: correlated.detail.summary, note: correlated.note, args: toolArgsYaml(toolName, log.trailblazeTool && log.trailblazeTool.raw), ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts };
       if (!traceId) closeGroup();
       continue;
     }
 
-    if (action && group) {
+    // A driver action belongs to an open tool only when it came from the same agent turn. Older
+    // logs omitted one or both trace ids, so retain the legacy adjacency fallback for those rows.
+    if (action && group && (!traceId || !group._trace || group._trace === traceId)) {
       if (!group.screenshotFile && screenshotFile) group.screenshotFile = screenshotFile;
       if (!group.viewHierarchy && viewHierarchy) group.viewHierarchy = viewHierarchy;
       if (!group.viewport && viewport) group.viewport = viewport;
@@ -240,6 +392,10 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       group._logs.push(log);
       continue;
     }
+
+    // A traced action from a different turn must not be folded into the preceding tool merely
+    // because the records are adjacent.
+    if (action && group) closeGroup();
 
     if (action) {
       const actionType = (action.class || '').split('.').pop() || 'Device action';
@@ -251,15 +407,16 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
         const aok = action.succeeded !== false;
         const aerr = aok ? null : (err || `Assertion failed: ${cond}`);
         const open = asserts.get(cond);
-        if (open) { open.count++; open.ms += log.durationMs || 0; open.ok = aok; open.err = aerr; if (screenshotFile) open.screenshotFile = screenshotFile; if (viewHierarchy) open.viewHierarchy = viewHierarchy; if (viewport) open.viewport = viewport; open._logs.push(log); continue; }
-        const row = { label: actionType, _logs: [log], tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: aok, err: aerr, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) };
+        const canFold = open && (!traceId || !open._trace || open._trace === traceId);
+        if (canFold) { open.count++; open.ms += log.durationMs || 0; open.ok = aok; open.err = aerr; if (screenshotFile) open.screenshotFile = screenshotFile; if (viewHierarchy) open.viewHierarchy = viewHierarchy; if (viewport) open.viewport = viewport; open._logs.push(log); continue; }
+        const row = { _trace: traceId, label: actionType, _logs: [log], tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: aok, err: aerr, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) };
         out.push(row); asserts.set(cond, row); continue;
       }
       asserts = new Map();
       const sig = actionType + ':' + describeAction(action);
       const prev = out[out.length - 1];
-      if (prev && prev._sig === sig) { prev.count = (prev.count || 1) + 1; prev.ms += log.durationMs || 0; if (screenshotFile) prev.screenshotFile = screenshotFile; if (viewHierarchy) prev.viewHierarchy = viewHierarchy; if (viewport) prev.viewport = viewport; prev._logs.push(log); continue; }
-      out.push({ _sig: sig, _logs: [log], label: actionType, tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: true, err: null, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) });
+      if (prev && prev._sig === sig && (!traceId || !prev._trace || prev._trace === traceId)) { prev.count = (prev.count || 1) + 1; prev.ms += log.durationMs || 0; if (screenshotFile) prev.screenshotFile = screenshotFile; if (viewHierarchy) prev.viewHierarchy = viewHierarchy; if (viewport) prev.viewport = viewport; prev._logs.push(log); continue; }
+      out.push({ _sig: sig, _trace: traceId, _logs: [log], label: actionType, tool: describeAction(action), args: actionArgsYaml(action), ms: log.durationMs || 0, ok: true, err: null, screenshotFile, viewHierarchy, viewport, ts, count: 1, mark: actionMark(action, log) });
       continue;
     }
 
@@ -279,7 +436,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       // screenshot-less row, it previews the next captured frame (the outcome of the tool this
       // call chose), and the call's own detail lives in the transcript the row opens.
       else if (promptText === objective && !err && llmAt != null) {
-        out.push({ label: log.llmRequestLabel || 'LLM Request', _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: true, err: null, screenshotFile: null, viewHierarchy, viewport, ts, llm: llmAt });
+        out.push({ _trace: traceId, label: log.llmRequestLabel || 'LLM Request', _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: true, err: null, screenshotFile: null, viewHierarchy, viewport, ts, llm: llmAt });
         continue;
       }
       else if (promptText === objective && !err) continue;
@@ -287,7 +444,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       // can nest the tool calls / assertions that follow under their step. `trailhead` marks the
       // objective lowered from the trail's `trailhead:` (its step 0) — the DirectionStep.isTrailhead
       // flag rides through the ObjectiveStartLog's promptStep.
-      const prow = { label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(llmAt != null ? { llm: llmAt } : {}) };
+      const prow = { _trace: traceId, label: truncate(promptText, 120), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile, viewHierarchy, viewport, ts, objective: isObjective, trailhead: isObjective && log.promptStep?.isTrailhead === true, ...(llmAt != null ? { llm: llmAt } : {}) };
       out.push(prow);
       if (isObjective) objRow = prow;
       continue;
@@ -298,7 +455,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     // screenshot-less, for the embedded-bytes reason above.
     if (llmAt != null) {
       asserts = new Map(); closeGroup();
-      out.push({ label: log.llmRequestLabel || (log.systemPrompt !== undefined ? 'MCP sampling' : 'LLM Request'), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile: null, viewHierarchy, ts, llm: llmAt });
+      out.push({ _trace: traceId, label: log.llmRequestLabel || (log.systemPrompt !== undefined ? 'MCP sampling' : 'LLM Request'), _logs: [log], tool: log.modelName ? `llm · ${log.modelName}` : 'agent step', ms: log.durationMs || 0, ok: !err, err, screenshotFile: null, viewHierarchy, ts, llm: llmAt });
       continue;
     }
 
@@ -325,11 +482,12 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
 
   return out.map((r, idx) => {
     const { _sig, _trace, count, note, ...rest } = r;
-    const merged = count > 1 ? (note ? note + ' · ×' + count : '×' + count) : note;
     const children = toolChildren(r);
     const params = children ? toolParams(r) : null;
     const withChildren = children ? { ...rest, children, ...(params ? { params } : {}) } : rest;
-    return merged != null ? { ...withChildren, note: merged, i: idx + 1 } : { ...withChildren, i: idx + 1 };
+    const withTrace = _trace ? { ...withChildren, traceId: _trace } : withChildren;
+    const withCount = count > 1 ? { ...withTrace, count } : withTrace;
+    return note != null ? { ...withCount, note, i: idx + 1 } : { ...withCount, i: idx + 1 };
   });
 }
 
@@ -393,7 +551,7 @@ function toolChildren(r: any): TraceChild[] | null {
   const executed = logs
     .map((l, i) => ({ l, i }))
     .filter(({ l, i }) => i > 0 && l && isExecuted(l))
-    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null, args: toolArgsYaml(l.toolName, l.trailblazeTool && l.trailblazeTool.raw), ...spanCapture(i) }));
+    .map(({ l, i }) => ({ i, label: String(l.toolName), tool: toolDetail(l).summary, note: timelineReasoningByLog.get(l) || null, sig: JSON.stringify((l.trailblazeTool && l.trailblazeTool.raw) ?? null), ms: l.durationMs || 0, ts: l.timestamp ? Date.parse(l.timestamp) : null, ok: l.successful !== false, err: l.successful === false ? (typeof l.errorMessage === 'string' && l.errorMessage) || (typeof l.exceptionMessage === 'string' && l.exceptionMessage) || null : null, code: l.successful === false ? errorCodeOf(l.errorPayload) : null, result: l.resultSummary == null ? null : String(l.resultSummary), args: toolArgsYaml(l.toolName, l.trailblazeTool && l.trailblazeTool.raw), _logs: [l], ...spanCapture(i) }));
   // A delegating log is a dispatch wrapper, not a step: it declares executors the device then logs
   // itself under the same traceId. Keep executed records; surface a declaration only to fill in an
   // executor that never logged — matched to its executor by name AND raw args (`sig`, not the
@@ -406,13 +564,13 @@ function toolChildren(r: any): TraceChild[] | null {
   const rootIdentity = { label: String((logs[0] && logs[0].toolName) || r.label || ''), sig: JSON.stringify((logs[0] && logs[0].trailblazeTool && logs[0].trailblazeTool.raw) ?? null) };
   unmatched.set(key(rootIdentity), (unmatched.get(key(rootIdentity)) || 0) + 1);
   for (const c of executed) unmatched.set(key(c), (unmatched.get(key(c)) || 0) + 1);
-  const declared: Array<{ i: number; label: string; tool: string; sig: string; ms: number | null; ok: boolean; err: string | null; code: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null }> = [];
+  const declared: Array<{ i: number; label: string; tool: string; note: string | null; sig: string; ms: number | null; ts: number | null; ok: boolean; err: string | null; code: string | null; result: string | null; args: string | null; screenshotFile: string | null; mark: ActionMark | null; _logs: TrailblazeLogRecord[] }> = [];
   logs.forEach((l, i) => {
     if (!isDelegating(l)) return;
     for (const e of (Array.isArray(l.executableTools) ? l.executableTools : [])) {
       // Declared-but-never-logged dispatches carry their declared args but no capture (a null ms
       // already means "never logged"; a frame from the wrapper's span would be a guess).
-      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}), sig: JSON.stringify((e && e.raw) ?? null), ms: null, ok: true, err: null, code: null, args: toolArgsYaml(e && e.toolName, e && e.raw), screenshotFile: null, mark: null };
+      const c = { i, label: (e && e.toolName) || '', tool: summarizeToolArgs((e && e.raw) || {}, {}), note: null, sig: JSON.stringify((e && e.raw) ?? null), ms: null, ts: null, ok: true, err: null, code: null, result: null, args: toolArgsYaml(e && e.toolName, e && e.raw), screenshotFile: null, mark: null, _logs: [] };
       if (!c.label) continue;
       const n = unmatched.get(key(c)) || 0;
       if (n > 0) { unmatched.set(key(c), n - 1); continue; }
@@ -432,12 +590,16 @@ function toolChildren(r: any): TraceChild[] | null {
   let prevSig = '';
   for (const c of ordered) {
     const prev = kids[kids.length - 1];
-    if (prev && prev.label === c.label && prev.tool === c.tool && prev.ok === c.ok && prevSig === c.sig && (prev.ms == null) === (c.ms == null)) {
+    if (prev && prev.label === c.label && prev.tool === c.tool && prev.note === c.note && prev.ok === c.ok && prevSig === c.sig && (prev.ms == null) === (c.ms == null)) {
       prev.count = (prev.count || 1) + 1;
       if (c.ms != null) prev.ms = (prev.ms || 0) + c.ms;
+      if (prev.result !== c.result) { prev.result = null; prev.resultVaries = true; }
+      if (c._logs && c._logs.length) prev._logs = [...(prev._logs || []), ...c._logs];
       continue;
     }
-    kids.push({ label: c.label, tool: c.tool, ms: c.ms, ok: c.ok, err: c.err ?? null, code: c.code ?? null, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, mark: c.mark ?? null });
+    // A ×N fold keeps the FIRST member's ts (set here, never advanced above) — the instant the
+    // folded sequence began, which is what playback schedules its one entry on.
+    kids.push({ label: c.label, tool: c.tool, note: c.note ?? null, ms: c.ms, ts: c.ts ?? null, ok: c.ok, err: c.err ?? null, code: c.code ?? null, result: c.result ?? null, resultVaries: false, count: 1, args: c.args ?? null, screenshotFile: c.screenshotFile ?? null, mark: c.mark ?? null, _logs: c._logs || [] });
     prevSig = c.sig;
   }
   return kids.length ? kids : null;
@@ -655,6 +817,7 @@ function extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[] {
         || '?';
       rows.push({
         model,
+        traceId: typeof log.traceId === 'string' ? log.traceId : null,
         provider: providerOf(u?.trailblazeLlmModel, log.trailblazeLlmModel),
         inputTokens: u?.inputTokens ?? null,
         outputTokens: u?.outputTokens ?? null,
@@ -690,6 +853,7 @@ function extractLlmLogs(logs: TrailblazeLogRecord[]): RawLlmRow[] {
       ];
       rows.push({
         model,
+        traceId: typeof log.traceId === 'string' ? log.traceId : null,
         provider,
         inputTokens: u?.inputTokens ?? null,
         outputTokens: u?.outputTokens ?? null,
@@ -806,9 +970,27 @@ function describeSelector(sel: any): string {
 // Share-payload slimming (the assembly itself lives in run-report-html.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Every screenshot a report has to carry, deduplicated and in first-seen order. Folded child
+// dispatches hold their own frames (the timeline's per-interaction preview and the Lightbox's
+// "Show all" read them), so they count too.
+//
+// Every report producer needs this exact set — the bun driver, the in-app Share button, the zip
+// pipeline, the live report — and they used to each spell it out, with a comment in one of them
+// asking the next editor to keep all the copies in agreement. They resolve a file to a *value*
+// differently (embedded bytes, a linked URL, a zip entry), but they agree on the file list, so
+// that part lives here.
+function traceScreenshotFiles(trace: RawTraceRow[] | null | undefined): string[] {
+  return [...new Set((trace || [])
+    .flatMap((t) => [t.screenshotFile, ...(t.children || []).map((c) => c.screenshotFile)])
+    .filter(Boolean) as string[])];
+}
+
 // Strip the heavy, viewer-irrelevant fields off each trace step before embedding: `_logs` (the
-// raw log records), `_sig`/`_trace` (extraction bookkeeping), and `viewHierarchy` (can be
-// hundreds of KB per step). Children collapse to just their label + arg summary.
+// raw log records), `_sig` (extraction bookkeeping), and `viewHierarchy` (can be hundreds of KB
+// per step). Trace ids remain extraction-only correlation keys: the compact public payload stamps
+// each LLM row with its exact `llm` list index instead. Children retain only the compact interaction
+// details needed by the timeline: identity, args/result/outcome, timing, and an optional frame
+// annotation.
 function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[] {
   return (trace || []).map((t) => ({
     i: t.i,
@@ -840,7 +1022,7 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     // Per-child fields ride only when they carry signal (an executed ms, a failure, a real fold,
     // full args, its own capture) — the common green declared-or-single dispatch slims to just
     // label+tool.
-    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
+    ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
   }));
@@ -898,9 +1080,15 @@ function traceStepCount(trace: TraceStep[]): number {
 // out; a traceId fold merges one turn's extra tool calls into the row's children — each is a real
 // dispatched call the timeline exposes, so they count too. These two counters feed the report's
 // index entries (buildMultiReportHtml) AND the viewer's per-run stats, so both always agree.
+// The per-row half is exported because the timeline's step cards and phase headers count the same
+// thing for one group of rows: sharing this function is what makes a card and the run's headline
+// count arithmetically incapable of disagreeing.
+function rowToolCallCount(t: TraceStep): number {
+  if (t.objective || t.terminal || isLlmTurnRow(t)) return 0;
+  return 1 + (t.children || []).reduce((m, c) => m + (c.count || 1), 0);
+}
 function traceToolCallCount(trace: TraceStep[]): number {
-  return trace.filter((t) => !t.objective && !t.terminal && !isLlmTurnRow(t))
-    .reduce((n, t) => n + 1 + (t.children || []).reduce((m, c) => m + (c.count || 1), 0), 0);
+  return trace.reduce((n, t) => n + rowToolCallCount(t), 0);
 }
 
 // Keep what makes the LLM view skimmable — the model, token/cost accounting, the step it ran
@@ -913,6 +1101,10 @@ function traceToolCallCount(trace: TraceStep[]): number {
 function slimLlmForShare(llmLogs: RawLlmRow[] | null | undefined): LlmCall[] {
   return (llmLogs || []).map((r) => ({
     model: r.model,
+    // Live reports can receive an older call after the transcript is already open. Keep the
+    // request's stable id so the viewer can re-anchor that same call after timestamp sorting moves
+    // its positional index. Timeline rows keep using compact positional links.
+    ...(r.traceId ? { traceId: r.traceId } : {}),
     // Omitted when unknown, so an older payload (no provider recorded) is indistinguishable from a
     // new one that genuinely has none — both render the bare model id.
     ...(r.provider ? { provider: r.provider } : {}),
@@ -1052,9 +1244,9 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
 }
 
 export {
-  truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
+  truncate, logClass, originalYamlFromLogs, yamlRootSection, declaredTrailSteps, localRunAgentPrompt, extractTrace, mergeWebHierarchyBounds,
   toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp, stepText, toolDetail,
-  summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads,
-  isLlmTurnRow, traceStepCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,
+  summarizeToolArgs, describeSelector, slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles,
+  isLlmTurnRow, traceStepCount, rowToolCallCount, traceToolCallCount, extractLlmTranscripts, transcriptCallMessages,
   traceHierarchies, packSessionInputsHierarchies,
 };

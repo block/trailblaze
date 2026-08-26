@@ -110,7 +110,7 @@ class UnifiedRecordingWriterTest {
 
     assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged)
     val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
-    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android"))
+    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android")?.driver?.name)
     assertEquals(listOf("tapCart"), unified.trail.single().recordings["android"]?.map { it.name })
   }
 
@@ -141,7 +141,7 @@ class UnifiedRecordingWriterTest {
   fun `mergeIntoUnified refuses to overwrite an unreadable existing trail file`() {
     val dir = tempFolder.newFolder()
     val corrupt = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
-    val items = recordingItems(driver = "D", toolName = "tapCart")
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
 
@@ -150,6 +150,208 @@ class UnifiedRecordingWriterTest {
       "foo: not a unified trail\n",
       corrupt.readText(),
       "an unreadable trail.yaml must be left untouched, not clobbered by the merge",
+    )
+  }
+
+  @Test
+  fun `mergeIntoUnified refuses to merge a classifier leg into a multi-device trail`() {
+    val dir = tempFolder.newFolder()
+    val multiDeviceYaml =
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: android
+              buyer:
+                classifier: android
+      trail:
+        - step: do the thing
+          recording:
+            pos-pair:
+              - tapCart: {}
+      """.trimIndent() + "\n"
+    val existing = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(multiDeviceYaml) }
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android")
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail)
+    assertEquals(setOf("pos-pair"), outcome.configurationNames)
+    assertEquals(
+      multiDeviceYaml,
+      existing.readText(),
+      "a multi-device trail's legs are keyed by configuration name; a classifier merge must not touch it",
+    )
+  }
+
+  @Test
+  fun `mergeIntoUnified merges a declared single-device leg on a trail that also declares a configuration`() {
+    val dir = tempFolder.newFolder()
+    val mixedYaml =
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: android
+              buyer:
+                classifier: android
+          android: {}
+      trail:
+        - step: do the thing
+          recording:
+            pos-pair:
+              - tapCart: {}
+      """.trimIndent() + "\n"
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(mixedYaml)
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
+
+    // `android-tablet` is not a literal declared key, but it resolves to the declared `android:`
+    // single-device entry through the same lineage every classifier lookup uses — this is an
+    // ordinary single-device re-record of a mixed trail, not a configuration replay.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android-tablet")
+
+    assertTrue(
+      outcome is UnifiedRecordingWriter.MergeOutcome.Merged,
+      "a mixed trail (configuration + single-device entries) must still accept single-device " +
+        "classifier merges; got $outcome",
+    )
+    val yaml = createTrailblazeYaml()
+    val unified = yaml.decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    val step = unified.trail.single()
+    assertEquals(listOf("tapCart"), step.recordings["pos-pair"]?.map { it.name }, "configuration leg preserved")
+    assertEquals(listOf("tapCart"), step.recordings["android-tablet"]?.map { it.name }, "classifier leg merged")
+  }
+
+  @Test
+  fun `mergeIntoUnified still refuses a classifier that resolves to no declared single-device entry`() {
+    val dir = tempFolder.newFolder()
+    val mixedYaml =
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: android
+              buyer:
+                classifier: android
+          android: {}
+      trail:
+        - step: do the thing
+          recording:
+            pos-pair:
+              - tapCart: {}
+      """.trimIndent() + "\n"
+    val existing = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(mixedYaml) }
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
+
+    // `ios` resolves to neither the configuration name nor a declared single-device entry, so the
+    // configuration gate still refuses it rather than writing a leg the trail never declared.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "ios")
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail)
+    assertEquals(mixedYaml, existing.readText(), "a refused merge must leave the trail untouched")
+  }
+
+  @Test
+  fun `mergeIntoUnified re-records an existing classifier leg on a configuration-only trail`() {
+    val dir = tempFolder.newFolder()
+    // Declares the configuration and nothing else in `config.devices`, but carries a classifier leg
+    // from before the cast was added — the shape a trail lands in when a single-device trail grows a
+    // configuration.
+    val configurationOnlyYaml =
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+      trail:
+        - step: do the thing
+          recording:
+            pos-pair:
+              - tapCart: {}
+            android-tablet:
+              - tapCart: {}
+      """.trimIndent() + "\n"
+    val existing = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText(configurationOnlyYaml) }
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapTip")
+
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "android-tablet")
+
+    assertTrue(
+      outcome is UnifiedRecordingWriter.MergeOutcome.Merged,
+      "a leg the trail already declares must stay re-recordable even when no single-device " +
+        "`config.devices` entry backs it; got $outcome",
+    )
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(existing.readText())
+    val step = unified.trail.single()
+    assertEquals(listOf("tapTip"), step.recordings["android-tablet"]?.map { it.name }, "declared leg re-recorded")
+    assertEquals(listOf("tapCart"), step.recordings["pos-pair"]?.map { it.name }, "configuration leg preserved")
+
+    // A cast MEMBER classifier is still refused: its steps live under the configuration's leg, so
+    // merging one under its own classifier would duplicate that leg.
+    val memberOutcome = UnifiedRecordingWriter.mergeIntoUnified(dir, items, "lab-a")
+    assertTrue(
+      memberOutcome is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail,
+      "a configuration member's classifier is not a declared single-device slot; got $memberOutcome",
+    )
+  }
+
+  @Test
+  fun `a configuration-name-keyed merge keeps the configuration entry it is keyed by`() {
+    val dir = tempFolder.newFolder()
+    val multiDeviceYaml =
+      """
+      config:
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: android
+              buyer:
+                classifier: android
+      trail:
+        - step: do the thing
+          recording:
+            pos-pair:
+              - tapCart: {}
+      """.trimIndent() + "\n"
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(multiDeviceYaml)
+
+    // The multi-device save-back keys its legs by the CONFIGURATION name. Merging under that key
+    // must not delete the cast of devices the trail is built around — without that, one save-back
+    // would leave a trail whose steps reference a configuration the config no longer declares.
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      dir,
+      recordingItems(driver = null, toolName = "tapCheckout"),
+      "pos-pair",
+    )
+
+    assertTrue(outcome is UnifiedRecordingWriter.MergeOutcome.Merged, "got $outcome")
+    val unified = createTrailblazeYaml()
+      .decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
+    assertEquals(
+      setOf("pos-pair"),
+      unified.config.multiDeviceConfigurationNames,
+      "the configuration entry must survive a merge keyed by its own name",
+    )
+    assertEquals(
+      listOf("seller", "buyer"),
+      unified.config.devices?.getValue("pos-pair")?.devices?.keys?.toList(),
+      "the configuration's member devices must survive too",
+    )
+    assertEquals(
+      listOf("tapCheckout"),
+      unified.trail.single().recordings["pos-pair"]?.map { it.name },
+      "the merge still replaces the configuration's recorded leg",
     )
   }
 
@@ -197,7 +399,7 @@ class UnifiedRecordingWriterTest {
   fun `mergeIntoUnified returns NoTarget for a parentless orphan path`() {
     // An orphan file with no parent directory resolves to no unified target. Routers never send
     // such a path to UNIFIED, so this is defensive — assert it neither writes nor throws.
-    val items = recordingItems(driver = "D", toolName = "tapCart")
+    val items = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart")
 
     val outcome = UnifiedRecordingWriter.mergeIntoUnified(File("orphan.trail.yaml"), items, "android")
 
@@ -248,7 +450,7 @@ class UnifiedRecordingWriterTest {
   @Test
   fun `renderStandalone keys the recording under the classifier`() {
     val yaml = UnifiedRecordingWriter
-      .renderStandalone(recordingItems(driver = "D", toolName = "tapCart"), "ios")
+      .renderStandalone(recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"), "ios")
       .getOrThrow()
 
     val decoded = createTrailblazeYaml().decodeUnifiedTrail(yaml)
@@ -259,7 +461,7 @@ class UnifiedRecordingWriterTest {
   fun `renderStandalone refuses a blank classifier`() {
     // Without a classifier there is no slot to key the tools under, so nothing could replay them.
     val failure = UnifiedRecordingWriter
-      .renderStandalone(recordingItems(driver = "D", toolName = "tapCart"), "")
+      .renderStandalone(recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"), "")
       .exceptionOrNull()
 
     assertEquals(UnifiedRecordingWriter.BLANK_CLASSIFIER_MESSAGE, failure?.message)
@@ -289,7 +491,7 @@ class UnifiedRecordingWriterTest {
   // --- fixtures ---
 
   /** The lowered v1 items of a minimal one-config + one-recorded-step recording — the merge input. */
-  private fun recordingItems(driver: String, toolName: String): List<TrailYamlItem> = listOf(
+  private fun recordingItems(driver: String?, toolName: String): List<TrailYamlItem> = listOf(
     TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = driver)),
     TrailYamlItem.PromptsTrailItem(
       listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
@@ -298,7 +500,7 @@ class UnifiedRecordingWriterTest {
 
   /** A two-step recording — the "existing trail already has steps" side of the stepless refusal. */
   private fun twoStepRecordingItems(): List<TrailYamlItem> = listOf(
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
     TrailYamlItem.PromptsTrailItem(
       listOf(
         DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart")))),
@@ -309,7 +511,7 @@ class UnifiedRecordingWriterTest {
 
   /** The interactive recorder's shape: tools captured with no objective window around them. */
   private fun steplessRecordingItems(): List<TrailYamlItem> = listOf(
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
     TrailYamlItem.ToolTrailItem(listOf(tool("capturedTap"))),
   )
 
@@ -318,7 +520,7 @@ class UnifiedRecordingWriterTest {
     createTrailblazeYaml().encodeUnifiedTrailToString(
       UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = null,
-        recordedItems = recordingItems(driver = "D", toolName = "tapCart"),
+        recordedItems = recordingItems(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart"),
         classifier = "ios",
       ),
     )
@@ -328,7 +530,7 @@ class UnifiedRecordingWriterTest {
    * ordinary recorded step. A trailhead with more than one tool has no unified representation.
    */
   private fun multiToolTrailheadItems(toolNames: List<String>): List<TrailYamlItem> = listOf(
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
     TrailYamlItem.TrailheadTrailItem(
       TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) }),
     ),

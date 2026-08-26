@@ -104,6 +104,176 @@ describe("sliceSteps", () => {
   });
 });
 
+describe("logical device legs", () => {
+  test("collapses family recordings into concrete configured legs", () => {
+    const model = TM.unifiedDocToMatrix({
+      config: { devices: { "android-phone": "D", "android-tablet": "D", "ios-phone": "D", "ios-tablet": "D" } },
+      trail: [{ step: "x", recording: { android: [{ tapOn: { text: "go" } }], ios: [{ tapOn: { text: "next" } }] } }],
+    });
+    const legs = TM.logicalLegs(model);
+    expect(legs.columns).toEqual(["android-phone", "android-tablet", "ios-phone", "ios-tablet"]);
+    expect(legs.columns).not.toContain("android");
+    expect(TM.recordingForLeg(model.steps[0].recording, "android-tablet")).toMatchObject({ sourceKey: "android", exact: false });
+  });
+
+  test("keeps both a configured family leg and its configured concrete leg", () => {
+    const model = TM.unifiedDocToMatrix({
+      config: { devices: { ios: "IOS_HOST", "ios-iphone": "IOS_HOST" } },
+      trail: [{ step: "x", recording: { ios: [{ tapOn: { text: "family" } }], "ios-iphone": [{ tapOn: { text: "phone" } }] } }],
+    });
+    expect(TM.logicalLegs(model).columns).toEqual(["ios", "ios-iphone"]);
+  });
+
+  test("a specific recording overrides its family without overwriting the source", () => {
+    const recording = {
+      android: [{ name: "tapOn", body: { text: "family" } }],
+      "android-tablet": [{ name: "tapOn", body: { text: "tablet" } }],
+    };
+    expect(TM.recordingForLeg(recording, "android-phone").tools[0].body.text).toBe("family");
+    expect(TM.recordingForLeg(recording, "android-tablet")).toMatchObject({ sourceKey: "android-tablet", exact: true });
+    expect(recording.android[0].body.text).toBe("family");
+  });
+
+  test("an explicit concrete no-op wins over a populated family recording", () => {
+    const resolved = TM.recordingForLeg({ android: [{ name: "tapOn", body: {} }], "android-tablet": [] }, "android-tablet");
+    expect(resolved).toMatchObject({ sourceKey: "android-tablet", exact: true, explicitNoop: true, tools: [] });
+  });
+
+  test("matches the runtime lineage through intermediate and bare classifiers", () => {
+    expect(TM.classifierLineage("android-phone-37")).toEqual([
+      "android-phone-37",
+      "android-phone",
+      "android",
+      "37",
+      "phone",
+      "all",
+    ]);
+    expect(TM.recordingForLeg({ "android-phone": [{ name: "tapOn", body: {} }] }, "android-phone-37"))
+      .toMatchObject({ sourceKey: "android-phone", exact: false });
+    expect(TM.recordingForLeg({ phone: [{ name: "tapOn", body: {} }] }, "android-phone"))
+      .toMatchObject({ sourceKey: "phone", exact: false });
+    expect(TM.recordingForLeg({ phone: [{ name: "tapOn", body: { text: "form factor" } }], "37": [{ name: "tapOn", body: { text: "variant" } }] }, "android-phone-37"))
+      .toMatchObject({ sourceKey: "37", tools: [{ name: "tapOn", body: { text: "variant" } }] });
+  });
+
+  test("uses the universal recording last and preserves a universal no-op", () => {
+    const populated = TM.recordingForLeg({ all: [{ name: "tapOn", body: {} }] }, "ios-iphone");
+    expect(populated).toMatchObject({ sourceKey: "all", exact: false });
+    const noop = TM.recordingForLeg({ all: [] }, "android-tablet");
+    expect(noop).toMatchObject({ sourceKey: "all", exact: false, explicitNoop: true, tools: [] });
+  });
+
+  test("groups the legs one family recording covers into a single cell", () => {
+    const cells = TM.legCells(
+      { android: [{ name: "tapOn", body: { text: "go" } }], ios: [{ name: "tapOn", body: { text: "next" } }] },
+      ["android-phone", "android-tablet", "ios-phone", "ios-tablet"],
+    );
+    expect(cells.map((c: any) => c.legs)).toEqual([["android-phone", "android-tablet"], ["ios-phone", "ios-tablet"]]);
+    expect(cells.map((c: any) => c.sourceKey)).toEqual(["android", "ios"]);
+    expect(cells[1].tools).toEqual([{ name: "tapOn", body: { text: "next" } }]);
+  });
+
+  test("keeps separately authored legs apart even when the calls are identical", () => {
+    const same = [{ name: "tapOn", body: { text: "Sign in" } }];
+    const cells = TM.legCells({ "android-phone": same, "android-tablet": same }, ["android-phone", "android-tablet"]);
+    expect(cells.map((c: any) => c.legs)).toEqual([["android-phone"], ["android-tablet"]]);
+  });
+
+  test("splits a family cell where one leg overrides it", () => {
+    const cells = TM.legCells(
+      { android: [{ name: "tapOn", body: { text: "family" } }], "android-tablet": [{ name: "tapOn", body: { text: "tablet" } }] },
+      ["android-phone", "android-tablet", "android-tv"],
+    );
+    expect(cells.map((c: any) => c.legs)).toEqual([["android-phone"], ["android-tablet"], ["android-tv"]]);
+    expect(cells.map((c: any) => c.sourceKey)).toEqual(["android", "android-tablet", "android"]);
+  });
+
+  test("reports a merged cell as inexact when any leg it covers is a fallback", () => {
+    const cells = TM.legCells({ android: [{ name: "tapOn", body: { text: "go" } }] }, ["android", "android-phone"]);
+    expect(cells.map((c: any) => c.legs)).toEqual([["android", "android-phone"]]);
+    expect(cells[0].exact).toBe(false);
+  });
+
+  test("does not merge when the declared column order separates the legs sharing a recording", () => {
+    const cells = TM.legCells(
+      { android: [{ name: "tapOn", body: { text: "go" } }], "ios-iphone": [{ name: "tapOn", body: { text: "next" } }] },
+      ["android-phone", "ios-iphone", "android-tablet"],
+    );
+    expect(cells.map((c: any) => c.legs)).toEqual([["android-phone"], ["ios-iphone"], ["android-tablet"]]);
+    expect(cells.map((c: any) => c.sourceKey)).toEqual(["android", "ios-iphone", "android"]);
+  });
+
+  test("does not merge when a leg outside the visible columns shares the recording", () => {
+    const recording = { android: [{ name: "tapOn", body: { text: "go" } }] };
+    const visible = ["android-phone", "android-tablet"];
+    expect(TM.legCells(recording, visible, visible.concat(["android-tv"])).map((c: any) => c.legs))
+      .toEqual([["android-phone"], ["android-tablet"]]);
+    expect(TM.legCells(recording, visible, visible).map((c: any) => c.legs)).toEqual([visible]);
+  });
+
+  test("never merges legs with nothing recorded", () => {
+    const cells = TM.legCells({}, ["android-phone", "android-tablet"]);
+    expect(cells.map((c: any) => c.legs)).toEqual([["android-phone"], ["android-tablet"]]);
+    expect(cells.every((c: any) => c.sourceKey === null)).toBe(true);
+  });
+
+  test("groups every leg a universal recording covers, no-op included", () => {
+    expect(TM.legCells({ all: [{ name: "tapOn", body: {} }] }, ["android-phone", "ios-iphone"])[0].legs)
+      .toEqual(["android-phone", "ios-iphone"]);
+    const noop = TM.legCells({ all: [] }, ["android-phone", "ios-iphone"]);
+    expect(noop.length).toBe(1);
+    expect(noop[0]).toMatchObject({ sourceKey: "all", explicitNoop: true, tools: [] });
+  });
+
+  test("keeps a recording-only family when there is no concrete leg", () => {
+    const model = TM.unifiedDocToMatrix({ config: {}, trail: [{ step: "x", recording: { web: [{ tapOn: {} }] } }] });
+    expect(TM.logicalLegs(model).columns).toEqual(["web"]);
+  });
+
+  test("removes an unshared fallback recording with its final concrete leg", () => {
+    const model = TM.unifiedDocToMatrix({
+      config: { devices: { "android-phone": "D" } },
+      trail: [{ step: "x", recording: { android: [{ tapOn: { text: "go" } }] } }],
+    });
+    const removed = TM.removeLogicalLeg(model, "android-phone");
+    expect(TM.logicalLegs(removed).columns).toEqual([]);
+    expect(removed.steps[0].recording).toEqual({});
+  });
+
+  test("keeps a shared fallback recording for a remaining concrete leg", () => {
+    const model = TM.unifiedDocToMatrix({
+      config: { devices: { "android-phone": "D", "android-tablet": "D" } },
+      trail: [{ step: "x", recording: { android: [{ tapOn: { text: "go" } }] } }],
+    });
+    const removed = TM.removeLogicalLeg(model, "android-phone");
+    expect(TM.logicalLegs(removed).columns).toEqual(["android-tablet"]);
+    expect(removed.steps[0].recording.android).toHaveLength(1);
+    expect(TM.recordingForLeg(removed.steps[0].recording, "android-tablet")).toMatchObject({ sourceKey: "android" });
+  });
+
+  test("keeps a configured family recording when a concrete sibling still uses it", () => {
+    const model = TM.unifiedDocToMatrix({
+      config: { devices: { ios: "D", "ios-iphone": "D" } },
+      trail: [{ step: "x", recording: { ios: [{ tapOn: { text: "go" } }] } }],
+    });
+    const removed = TM.removeLogicalLeg(model, "ios");
+    expect(TM.logicalLegs(removed).columns).toEqual(["ios-iphone"]);
+    expect(TM.recordingForLeg(removed.steps[0].recording, "ios-iphone")).toMatchObject({ sourceKey: "ios" });
+  });
+
+  test("caps the visible matrix at six and reports every omitted or invalid classifier", () => {
+    const devices: Record<string, string> = {};
+    for (let i = 1; i <= 8; i++) devices[`device-${i}`] = "D";
+    devices["bad classifier"] = "D";
+    const model = TM.unifiedDocToMatrix({ config: { devices }, trail: [{ step: "x" }] });
+    const legs = TM.logicalLegs(model);
+    expect(legs.columns).toHaveLength(6);
+    expect(legs.overflow).toEqual(["device-7", "device-8"]);
+    expect(legs.warnings.join(" ")).toContain("Unsupported device classifier");
+    expect(legs.warnings.join(" ")).toContain("2 device legs");
+  });
+});
+
 describe("round-trip: matrixToUnifiedDoc(unifiedDocToMatrix(doc)) is semantically identity", () => {
   const cases: Record<string, any> = {
     "trailhead + steps + multi-platform": {

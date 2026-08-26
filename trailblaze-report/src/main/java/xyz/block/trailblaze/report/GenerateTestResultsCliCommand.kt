@@ -27,12 +27,14 @@ import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.AffectedFailure
 import xyz.block.trailblaze.report.models.AttemptSignal
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
+import xyz.block.trailblaze.report.models.Category2EvidenceContext
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.combinedVerdictOf
 import xyz.block.trailblaze.report.models.failureCodeOf
@@ -41,6 +43,8 @@ import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
+import xyz.block.trailblaze.report.models.selfHealConfigured
+import xyz.block.trailblaze.report.models.writeCategory2Evidence
 import xyz.block.trailblaze.report.models.AxisBucket
 import xyz.block.trailblaze.report.models.CrossPlatformMismatch
 import xyz.block.trailblaze.report.models.FailureAxes
@@ -51,6 +55,8 @@ import xyz.block.trailblaze.report.models.TriageSummary
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 import java.io.File
 import kotlin.io.path.Path
 
@@ -99,6 +105,7 @@ open class GenerateTestResultsCliCommand(
    * The provider owns the repo's lifecycle; this command only closes repos it built itself.
    */
   private val logsRepoProvider: ((File) -> LogsRepo)? = null,
+  private val environment: Map<String, String> = System.getenv(),
 ) : CliktCommand(name = "generate-test-results") {
 
   private val logsDirArg by argument(
@@ -173,6 +180,13 @@ open class GenerateTestResultsCliCommand(
   protected var generatedReport: CiSummaryReport? = null
     private set
 
+  /**
+   * The generated report with one result per attempt. The normal report remains deduplicated;
+   * alternate sinks can use this projection when they must retain each attempt's evidence.
+   */
+  protected var generatedAttemptReport: CiSummaryReport? = null
+    private set
+
   override fun run() {
     val ownsLogsRepo = logsRepoProvider == null
     val logsRepo = logsRepoProvider?.invoke(logsDir) ?: run {
@@ -220,6 +234,16 @@ open class GenerateTestResultsCliCommand(
         // Stable key used to group retries — see [SessionInfo.stableTestKey].
         val testKey = sessionInfo.stableTestKey
         val sessionRecordingInfo = SessionRecordingInfo.fromLogs(logs)
+        val selfHealRan = sessionRecordingInfo.usedSelfHeal
+        val selfHealInvocationLogs = logs.filterIsInstance<TrailblazeLog.SelfHealInvokedLog>()
+        val healedStepIndexes =
+          selfHealInvocationLogs.mapNotNullTo(mutableSetOf()) { it.stepIndex }
+        if (selfHealInvocationLogs.any { it.stepIndex == null }) {
+          Console.log(
+            "⚠️  Category 2 evidence is unavailable for ${sessionId.value}: " +
+              "self-heal log predates step-index recording"
+          )
+        }
         // Get timestamps
         val firstLog = logs.firstOrNull()
         val lastLog = logs.lastOrNull()
@@ -233,6 +257,38 @@ open class GenerateTestResultsCliCommand(
         } else null
 
         val hostCiContext = readHostCiContext(logsRepo, sessionId)
+        val healedYaml =
+          if (selfHealRan && outcome == Outcome.PASSED) {
+            runCatching { logs.generateUnifiedRecordedYaml(createTrailblazeYaml()) }
+              .getOrNull()
+              ?.takeIf { it.isNotBlank() }
+          } else {
+            null
+          }
+        val category2Evidence =
+          writeCategory2Evidence(
+            sessionDir = logsRepo.getSessionDir(sessionId),
+            context =
+              Category2EvidenceContext(
+                sessionId = sessionId,
+                caseId = CASE_ID_IN_TEST_KEY.find(testKey)?.groupValues?.get(1),
+                testKey = testKey,
+                deviceClassifier =
+                  sessionInfo.trailblazeDeviceInfo?.classifiers
+                    ?.joinToString("-") { it.classifier },
+                appVersionName = sessionInfo.targetAppInfo?.versionName,
+                appVersionCode = sessionInfo.targetAppInfo?.versionCode,
+                appBuildNumber = sessionInfo.targetAppInfo?.buildNumber,
+                trailSourceRepo = metadata.trail_source_repo,
+                trailSourceRef = metadata.trail_source_ref,
+                ciBuildNumber = metadata.ci_build_number,
+                baselineOutcome = outcome,
+                selfHealRan = selfHealRan,
+              ),
+            originalYaml = logs.getSessionStartedInfo()?.rawYaml,
+            healedYaml = healedYaml,
+            healedStepIndexes = healedStepIndexes,
+          )
 
         sessionResults.add(
           SessionResult(
@@ -264,6 +320,8 @@ open class GenerateTestResultsCliCommand(
             device_log_excerpt = deviceLogExcerpt,
             has_recorded_steps = sessionInfo.hasRecordedSteps,
             recording_skip_reason = sessionRecordingInfo.skipReason,
+            self_heal_ran = selfHealRan,
+            category2_evidence = category2Evidence,
             duration_ms = sessionInfo.durationMs,
             llm_call_count = countLlmCalls(logs),
             llm_cost_usd = logs.computeUsageSummary()?.totalCostInUsDollars,
@@ -288,7 +346,8 @@ open class GenerateTestResultsCliCommand(
     // counting raw attempts double-counts retries. The kept result carries the retry metadata
     // (attempt, total_attempts, replaced_session_ids, replaced_failure_reasons,
     // replaced_failure_kinds, replaced_outcomes) so nothing is lost.
-    val finalResults = deduplicateRetries(sessionResults)
+    val deduplicated = deduplicateRetries(sessionResults)
+    val finalResults = deduplicated.finalResults
 
     // Print summary to console
     printSummary(finalResults, errors)
@@ -339,6 +398,7 @@ open class GenerateTestResultsCliCommand(
 
     // Store the generated report for subclasses to access
     generatedReport = summaryReport
+    generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults)
 
     // Clean up file watchers to allow JVM to exit
     if (ownsLogsRepo) logsRepo.close()
@@ -421,7 +481,7 @@ open class GenerateTestResultsCliCommand(
   }
 
   private fun buildMetadataFromEnvironment(): CiRunMetadata {
-    fun getEnv(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+    fun getEnv(name: String): String? = environment[name]?.takeIf { it.isNotBlank() }
     fun getEnvList(name: String): List<String> = getEnv(name)?.split(",")?.map {
       it.trim()
     }?.filter {
@@ -457,9 +517,7 @@ open class GenerateTestResultsCliCommand(
       trail_source_ref = trailSourceRef,
       retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
       ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
-      // Source of truth is the `TRAILBLAZE_SELF_HEAL_ENABLED` env var that a CI pipeline runner
-      // may emit on runner steps.
-      self_heal_enabled = getEnv("TRAILBLAZE_SELF_HEAL_ENABLED")?.toBoolean() ?: true,
+      self_heal_enabled = selfHealConfigured(getEnv("TRAILBLAZE_SELF_HEAL_ENABLED")),
       parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
       ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
       ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
@@ -565,7 +623,7 @@ open class GenerateTestResultsCliCommand(
         Console.log("⚠️  Could not parse ${sidecar.absolutePath}: ${e.message}. Falling back to env vars.")
       }
     }
-    fun getEnv(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+    fun getEnv(name: String): String? = environment[name]?.takeIf { it.isNotBlank() }
     return HostCiContext(
       ci_job_id = getEnv("BUILDKITE_JOB_ID") ?: getEnv("CI_JOB_ID"),
       ci_agent_name = getEnv("BUILDKITE_AGENT_NAME") ?: getEnv("CI_AGENT_NAME"),
@@ -646,11 +704,18 @@ open class GenerateTestResultsCliCommand(
    * verdicts are the ones that most need saying, since that is the only population that can
    * produce [CombinedVerdict.FAILED_UNRETRIED].
    */
-  private fun deduplicateRetries(results: List<SessionResult>): List<SessionResult> {
-    return results
+  private data class DeduplicatedResults(
+    val finalResults: List<SessionResult>,
+    val attemptResults: List<SessionResult>,
+  )
+
+  private fun deduplicateRetries(results: List<SessionResult>): DeduplicatedResults {
+    val finalResults = mutableListOf<SessionResult>()
+    val attemptResults = mutableListOf<SessionResult>()
+    results
       .groupBy { listOf(it.test_key ?: it.title, it.device_classifier.orEmpty()) }
       .values
-      .map { attempts ->
+      .forEach { attempts ->
         // Sort by start time so attempt numbering is chronological
         val sorted = attempts.sortedBy { it.started_at_epoch_ms ?: 0L }
 
@@ -665,7 +730,12 @@ open class GenerateTestResultsCliCommand(
         // not acquire the retry metadata below: `total_attempts` and the `replaced_*` lists
         // describe a group with more than one attempt, and setting them here would report a
         // retry that never happened.
-        if (attempts.size == 1) return@map attempts.single().copy(combined_verdict = verdict)
+        if (attempts.size == 1) {
+          val result = attempts.single().copy(combined_verdict = verdict)
+          finalResults += result
+          attemptResults += result
+          return@forEach
+        }
 
         // A pass anywhere in the sequence is the verdict, whatever order the attempts came in.
         //
@@ -686,7 +756,7 @@ open class GenerateTestResultsCliCommand(
         val bestIndex = sorted.indexOf(best)
         val replaced = sorted.filter { it.session_id != best.session_id }
 
-        best.copy(
+        val keptResult = best.copy(
           attempt = bestIndex + 1,
           total_attempts = sorted.size,
           replaced_session_ids = replaced.map { it.session_id },
@@ -696,7 +766,21 @@ open class GenerateTestResultsCliCommand(
           replaced_agent_names = replaced.mapNotNull { it.ci_agent_name },
           combined_verdict = verdict,
         )
+        finalResults += keptResult
+        attemptResults += sorted.mapIndexed { index, attempt ->
+          if (attempt.session_id == keptResult.session_id) {
+            keptResult
+          } else {
+            attempt.copy(
+              attempt = index + 1,
+              total_attempts = sorted.size,
+              superseded_by = keptResult.session_id,
+              combined_verdict = verdict,
+            )
+          }
+        }
       }
+    return DeduplicatedResults(finalResults, attemptResults)
   }
 
   /**

@@ -444,6 +444,13 @@ internal fun isTextAcceptingNode(
 internal const val ACTION_CLICK_NAME = "ACTION_CLICK"
 
 /**
+ * Canonical name [standardActionName] emits for [AccessibilityNodeInfo.ACTION_FOCUS]. Shared for
+ * the same reason as [ACTION_CLICK_NAME] — see [planActionFocusRoute], which tests for it against
+ * a captured action-name list.
+ */
+internal const val ACTION_FOCUS_NAME = "ACTION_FOCUS"
+
+/**
  * Maps standard [AccessibilityNodeInfo] action IDs to their constant names.
  * Returns null when the ID is not a known standard action — callers decide
  * whether to fall back to a custom label or a generic `ACTION_<id>` form.
@@ -451,7 +458,7 @@ internal const val ACTION_CLICK_NAME = "ACTION_CLICK"
 internal fun standardActionName(actionId: Int): String? = when (actionId) {
   AccessibilityNodeInfo.ACTION_CLICK -> ACTION_CLICK_NAME
   AccessibilityNodeInfo.ACTION_LONG_CLICK -> "ACTION_LONG_CLICK"
-  AccessibilityNodeInfo.ACTION_FOCUS -> "ACTION_FOCUS"
+  AccessibilityNodeInfo.ACTION_FOCUS -> ACTION_FOCUS_NAME
   AccessibilityNodeInfo.ACTION_CLEAR_FOCUS -> "ACTION_CLEAR_FOCUS"
   AccessibilityNodeInfo.ACTION_SELECT -> "ACTION_SELECT"
   AccessibilityNodeInfo.ACTION_CLEAR_SELECTION -> "ACTION_CLEAR_SELECTION"

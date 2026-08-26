@@ -97,6 +97,13 @@ dependencies {
   // to the foreground and capture a real accessibility tree; the runner hosts the instrumentation.
   androidTestImplementation(libs.androidx.test.core)
   androidTestImplementation(libs.androidx.test.runner)
+  // `OkHttpFetchExtension`, for OnDeviceFetchBindingTest. Declared explicitly rather than leaning
+  // on the `implementation` above: that one is not on the androidTest compile classpath.
+  androidTestImplementation(project(":trailblaze-scripting-fetch"))
+  // `HeldCertificate` / `HandshakeCertificates`, so OnDeviceFetchBindingTest can stand up a real
+  // self-signed HTTPS server on the device — the shape of every Trailblaze endpoint an on-device
+  // `fetch` reaches.
+  androidTestImplementation(libs.okhttp.tls)
 }
 
 dependencyGuard {

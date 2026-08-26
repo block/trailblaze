@@ -1,5 +1,5 @@
 // @ts-nocheck -- migrated from .jsx; this file follows the existing Trail Runner browser-runtime
-// pattern: Babel strips types at load time, and the typecheck gate covers regressions separately.
+// pattern: the build-time transpile strips types, and the typecheck gate covers regressions separately.
 
 // Agents: three panes. Left is just the conversation list; the middle is the chat (the composer —
 // including the agent/access/model choice for a NEW conversation — lives inside it, at the
@@ -70,6 +70,42 @@ const EXTERNAL_AGENT_COMPOSE_RECIPE = [
   'device screen and the event log), and ask before you guess. Use the "trailblaze" skill (in this',
   'workspace\'s .claude/skills) for trail syntax, selector rules, and the authoring workflow.',
 ].join('\n');
+
+// A caret + label that reveals its content. Every transcript item below is one: the agent's
+// output, its thinking, its collapsed internal steps. Lived next to the run-details LLM panel
+// until that panel went away with the duplicate timeline; this screen is the only consumer.
+function Collapsible({ label, tone, mono = true, children, text, startOpen = false, bare = false }) {
+  const [open, setOpen] = React.useState(startOpen);
+  const chars = text != null ? text.length : null;
+  // `bare`: no box. For the lowest-priority process/thinking content — a border there is redundant
+  // ornamentation on content the eye should skip (Tufte 1+1=3). Just a muted caret + label.
+  const containerStyle = bare
+    ? { }
+    : { borderRadius: 10, border: '1px solid ' + (tone === 'user' ? 'rgba(94,155,255,.25)' : tone === 'assistant' ? 'rgba(0,224,19,.25)' : 'var(--tb-hairline)'), background: tone === 'user' ? 'rgba(94,155,255,.07)' : tone === 'assistant' ? 'rgba(0,224,19,.05)' : 'var(--bg-prominent)', overflow: 'hidden' };
+  const labelColor = tone === 'user' ? (bare ? 'var(--text-subtle)' : 'var(--tb-running)') : tone === 'assistant' ? (bare ? 'var(--text-subtle)' : 'var(--tb-pass)') : 'var(--text-subtle)';
+  return (
+    <div style={containerStyle}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
+        style={{ display: 'flex', alignItems: 'center', gap: bare ? 5 : 8, padding: bare ? '3px 2px' : '7px 11px', cursor: 'pointer', userSelect: 'none' }}
+      >
+        <Ico n={open ? 'chevron-down' : 'chevron-right'} s={bare ? 12 : 13} c="var(--text-subtle)" />
+        <span style={{ fontSize: bare ? 11 : 10.5, fontWeight: bare ? 500 : 700, letterSpacing: bare ? 0 : '.06em', textTransform: bare ? 'none' : 'uppercase', color: labelColor }}>{label}</span>
+        {!open && chars != null && <span className="tb-sub" style={{ fontSize: 10.5 }}>{(chars / 1000).toFixed(1)}k chars</span>}
+      </div>
+      {open && (
+        <div style={{ padding: bare ? '2px 0 8px 17px' : '0 12px 10px' }}>
+          {text != null
+            ? <pre className={mono ? 'tb-mono' : ''} data-selectable style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-subtle-variant)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 420, overflow: 'auto' }}>{text}</pre>
+            : children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // The compose preamble armed by the compose chip / a trailhead pick: the recipe, the pre-chosen
 // trailhead if any (with its configured parameters as ready-to-use step YAML), ending with the
@@ -1652,7 +1688,8 @@ function AgentYamlPanel({ events, go, save, pickedTrailhead }) {
                 content={state.text}
                 editable
                 tools={null}
-                onSave={(txt) => TB.saveTrailFolderFile(detected.trailId, detected.file, txt, 'update')} />
+                onSave={(txt) => TB.saveTrailFolderFile(detected.trailId, detected.file, txt, 'update')}
+                resetKey={detected.trailId + '/' + detected.file} />
             </div>
           )}
         </>

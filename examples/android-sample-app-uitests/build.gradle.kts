@@ -1,11 +1,26 @@
+// The worked example for the published `xyz.block.trailblaze.android-gradle` plugin: a staging
+// `Sync` that normalizes a source-of-truth trail layout into the plugin's contract, plus the
+// `trailblazeAndroid { }` block that points the codegen at it.
+// `trailblaze-android-gradle/README.md` sends readers here, and this is the only consumer of that
+// plugin in this repo.
+//
+// WHAT RUNS THIS: CI's mandatory check does a repo-wide `assembleDebugAndroidTest`, so the staging
+// Sync, the plugin's codegen, and the compile of every generated `GeneratedSampleAppTests` shell
+// are exercised on every PR. A broken example is a red required check.
+//
+// WHAT DOESN'T: no CI step installs this APK and executes those generated tests. That is deliberate
+// rather than a gap — the trails it stages are the sample app's own
+// `android-ondevice-instrumentation` tree, which a device-farm step already replays on every PR.
+// Running them here too would pay a second emulator per trail for identical coverage. The module's
+// job is to prove the PLUGIN works end to end, which compiling the generated source does.
+//
+// It carries no hand-written tests, deliberately. It used to carry three; they ran on no CI step,
+// and now live in `:trailblaze-android`'s androidTest, which is executed on a device. Keep it that
+// way: a framework assertion belongs with the framework, not in an example.
 plugins {
   alias(libs.plugins.android.library)
   alias(libs.plugins.kotlin.android)
   id("trailblaze.spotless")
-  // Reusable scaffolding for staging QuickJS author-tool bundles into the test APK
-  // assets. Replaces what used to be a hand-rolled Copy + dependsOn block here so future
-  // downstream test modules only register the bundle and asset path.
-  id("trailblaze.quickjs-bundle-assets")
   // Auto-generates a JUnit shell per `<methodName>.trail.yaml` file or `<methodName>/trail.yaml`
   // recording directory under the configured trails directory, replacing the hand-rolled
   // `GenerateSampleAppTestsTask` this module used to carry.
@@ -55,7 +70,6 @@ val installSampleAppMcpTools =
 val stagedSampleAppTrailsRoot = layout.buildDirectory.dir("intermediates/staged-sample-app-trails")
 val stagedSampleAppTrailsForPlugin =
   layout.buildDirectory.dir("intermediates/staged-sample-app-trails/trails")
-val evalTrailsDir = file("../../../trails/eval/android/sample-app")
 
 // Sync, not Copy: the destination must mirror the current source tree exactly. A plain Copy
 // leaves stale files behind when a source trail is deleted or renamed — a removed scenario's
@@ -151,28 +165,10 @@ val stageSampleAppTrails =
       eachFile { stageTrailFile(this) }
       includeEmptyDirs = false
     }
-    // Eval trails: `trails/eval/android/sample-app/<basename>.trail.yaml` →
-    // `trails/GeneratedSampleAppTests/<basenameCamel>.trail.yaml`. Repo-root layout per
-    // `trails/eval/README.md`; the eval set deliberately lives outside the sample-app dir so
-    // the Square-POS-targeted agent-eval lane's single-segment trail glob doesn't scoop
-    // them up.
-    // That path resolves outside this tree and is not published with it, so the directory is
-    // absent in the public repo. Stage the eval trails only where they actually exist.
-    if (evalTrailsDir.isDirectory) {
-      from(evalTrailsDir) {
-        eachFile { stageTrailFile(this) }
-        includeEmptyDirs = false
-      }
-    }
     // Copy the trailmap `config/` subtree VERBATIM (no path rewriting). This ships the sample-app
-    // trailmap definition and its scripted-tool sources — most importantly
-    // `config/trailmaps/sampleapp/tools/quickjs-tools/pure.js`, which
-    // `QuickJsToolBundleOnDeviceTest`
-    // loads via `AndroidAssetBundleSource(assetPath =
-    // "config/trailmaps/sampleapp/tools/quickjs-tools/pure.js")`.
-    // The pre-conversion `stageTrailAssets` Copy copied all of `trails/` (including `config/`)
-    // wholesale; the trail-YAML flattening in the two `from(...)` blocks above only handles the
-    // executable trails, so this block preserves everything else that used to ride along.
+    // trailmap definition and its scripted-tool sources, which the generated tests resolve their
+    // `target:` against. The trail-YAML flattening in the `from(...)` block above only handles the
+    // executable trails, so this block preserves everything else that has to ride along.
     from("../android-sample-app/trails/config") {
       into("config")
       exclude("**/node_modules/**", "**/install/**")
@@ -209,21 +205,6 @@ trailblazeAndroid {
   onlyClassNames = setOf("GeneratedSampleAppTests")
 }
 
-// Stage the typed `@trailblaze/scripting` bundle at a stable test-APK asset path so
-// `QuickJsToolBundleOnDeviceTest` can load it via `AndroidAssetBundleSource`. Sourced
-// from the bundling plugin's output so the build is the single source of truth — no
-// checked-in pre-built bundle to drift. The `trailblaze.quickjs-bundle-assets` plugin
-// (above) owns the per-bundle Copy task and the aggregating `stagingRoot` directory;
-// this block just declares which bundle to stage and where it lands inside that root.
-trailblazeQuickjsBundleAssets {
-  register("sampleAppTyped") {
-    bundleTask.set(
-      project(":trailblaze-quickjs-tools").tasks.named("bundleSampleAppTypedAuthorTool")
-    )
-    assetPath.set("fixtures/quickjs/typed.bundle.js")
-  }
-}
-
 android {
   namespace = "xyz.block.trailblaze.examples.sampleapp.uitests"
   compileSdk = 36
@@ -238,11 +219,7 @@ android {
       // typed QuickJS bundle in the test APK so runFromAsset() can read them. The trails dir
       // is sourced from the staged copy rather than the live tree so AGP asset consumers don't
       // walk into the install tasks' npm output.
-      assets.srcDirs(
-        stagedSampleAppTrailsRoot,
-        trailblazeQuickjsBundleAssets.stagingRoot,
-        "src/androidTest/assets",
-      )
+      assets.srcDirs(stagedSampleAppTrailsRoot, "src/androidTest/assets")
       // The plugin's generated source dir (GeneratedSampleAppTests.kt) and its dependency on
       // `generateAndroidTrailJUnitShells` are now auto-wired by `apply()` — no srcDir needed here.
     }
@@ -280,27 +257,15 @@ tasks
       (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
       (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
   }
-  .configureEach {
-    dependsOn(stageSampleAppTrails)
-    // Each registered QuickJS bundle has its own `stage<Name>QuickjsBundleAsset` task;
-    // the plugin exposes them as a list so this AGP-task wiring stays a single line as
-    // bundles get added.
-    dependsOn(trailblazeQuickjsBundleAssets.allStagingTasks)
-  }
+  .configureEach { dependsOn(stageSampleAppTrails) }
 
+// Exactly what the plugin's generated `GeneratedSampleAppTests` needs to compile and, for anyone
+// running it locally, to execute: the rule, its transitive runtime, and the JUnit surface. The
+// module carries no hand-written tests, so nothing here exists for a test's own dependencies.
 dependencies {
   androidTestImplementation(project(":trailblaze-common"))
   androidTestImplementation(project(":trailblaze-android"))
-  // The MCP-free QuickJS-tool runtime. Tests here exercise `QuickJsToolHost` and the
-  // launcher path on-device through the new `AndroidAssetBundleSource` resolver.
-  androidTestImplementation(project(":trailblaze-quickjs-tools"))
-  // The OkHttp-backed `fetch` binding the on-device launchers install — this module's androidTest
-  // APK is where "OkHttp inside QuickJS on ART" gets proven on a real device.
-  androidTestImplementation(project(":trailblaze-scripting-fetch"))
   androidTestImplementation(libs.junit)
-  // `HeldCertificate`, so OnDeviceFetchBindingTest can stand up a real self-signed HTTPS server on
-  // the device — the shape of every Trailblaze endpoint an on-device `fetch` reaches.
-  androidTestImplementation(libs.okhttp.tls)
   androidTestImplementation(libs.koog.prompt.executor.ollama)
   androidTestImplementation(libs.koog.prompt.executor.openai)
   androidTestImplementation(libs.koog.prompt.executor.openrouter)

@@ -40,4 +40,8 @@ actual object Console {
   actual fun enableJsonMode() {
     // No-op in browser — console.log is always the output.
   }
+
+  actual fun disableJsonMode() {
+    // No-op in browser — see [enableJsonMode].
+  }
 }

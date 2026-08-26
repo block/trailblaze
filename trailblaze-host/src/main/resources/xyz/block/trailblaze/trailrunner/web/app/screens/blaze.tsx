@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 const BLAZE_EXAMPLES = [
@@ -98,8 +98,8 @@ function BlazeScreen({ pinnedId, go }) {
     // background. Connecting can stall if the device's Trailblaze server isn't up
     // (the daemon probes the forwarded port), so we time it out and surface any
     // failure on the pending marker there instead of blocking this screen.
-    TB.recordPendingRun({ title, target, device: device.name });
-    go('active', { followLive: Date.now() });
+    TB.recordPendingRun({ title, target, device: device.name, awaitsDispatch: true });
+    go('runs', { followLive: Date.now() });
     const connected = await Promise.race([
       TB.connectDevice(tbDeviceId),
       new Promise((res) => setTimeout(() => res('__timeout__'), 45000)),

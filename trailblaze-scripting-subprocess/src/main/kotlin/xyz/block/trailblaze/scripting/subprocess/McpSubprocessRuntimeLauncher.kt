@@ -2,6 +2,7 @@ package xyz.block.trailblaze.scripting.subprocess
 
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -129,6 +130,13 @@ object McpSubprocessRuntimeLauncher {
      * a deliberately-hanging server without waiting the full default.
      */
     handshakeTimeoutMillis: Long = McpSubprocessSession.DEFAULT_HANDSHAKE_TIMEOUT_MS,
+    /**
+     * Extra drivers the session binds beyond [deviceInfo]'s — a multi-device session with a
+     * web browser companion passes its driver here so web-only advertised tools register too
+     * (any-driver semantics; see [SubprocessToolRegistrar.filterAdvertisedTools]). Empty for
+     * single-device sessions. Spawn context still reflects the launch device only.
+     */
+    additionalDriverTypes: Set<TrailblazeDriverType> = emptySet(),
   ): LaunchedSubprocessRuntime {
     val scriptEntries = mcpServers.filter { it.script != null }
     if (scriptEntries.isEmpty()) {
@@ -187,7 +195,7 @@ object McpSubprocessRuntimeLauncher {
         started += session
 
         val registered = session.fetchAndFilterTools(
-          driver = deviceInfo.trailblazeDriverType,
+          drivers = listOf(deviceInfo.trailblazeDriverType) + additionalDriverTypes,
           preferHostAgent = config.preferHostAgent,
         )
         registered.forEach { reg ->

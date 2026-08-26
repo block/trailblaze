@@ -128,6 +128,29 @@ class DesktopYamlRunnerDriverPinTest {
   }
 
   @Test
+  fun `unrecognized pin in the object form is rejected loud too`() {
+    val yaml = """
+      config:
+        devices:
+          android:
+            driver: ANDROID_TYPO_DRIVER
+      trail:
+        - step: "Open the Lists tab"
+    """.trimIndent()
+
+    val resolution = DesktopYamlRunner.trailPinnedDriverResolution(yaml, androidPhone)
+    assertTrue(
+      "expected Unrecognized but was $resolution",
+      resolution is CliRunDriverResolution.Unrecognized,
+    )
+    val message = (resolution as CliRunDriverResolution.Unrecognized).message
+    assertTrue(
+      "message should name the bad value: $message",
+      message.contains("'ANDROID_TYPO_DRIVER'"),
+    )
+  }
+
+  @Test
   fun `unrecognized pin for another platform resolves to null for this device`() {
     // The pin is bad, but it is not reachable from this device's classifier chain — the trail
     // never runs on this driver decision, so it must not fail this device's run.
@@ -135,6 +158,40 @@ class DesktopYamlRunnerDriverPinTest {
       config:
         devices:
           ios: IOS_TYPO_DRIVER
+      trail:
+        - step: "Open the Lists tab"
+    """.trimIndent()
+
+    assertNull(resolvedDriverType(yaml))
+  }
+
+  @Test
+  fun `a valid pin for this device survives another platform's typo`() {
+    // The bad ios entry comes FIRST so this also guards against aborting the devices-map decode
+    // at the first bad entry — the android pin after it must still be seen and win.
+    val yaml = """
+      config:
+        devices:
+          ios: IOS_TYPO_DRIVER
+          android:
+            driver: ANDROID_ONDEVICE_INSTRUMENTATION
+      trail:
+        - step: "Open the Lists tab"
+    """.trimIndent()
+
+    assertEquals(
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      resolvedDriverType(yaml),
+    )
+  }
+
+  @Test
+  fun `unrecognized object-form pin for another platform resolves to null for this device`() {
+    val yaml = """
+      config:
+        devices:
+          ios:
+            driver: IOS_TYPO_DRIVER
       trail:
         - step: "Open the Lists tab"
     """.trimIndent()

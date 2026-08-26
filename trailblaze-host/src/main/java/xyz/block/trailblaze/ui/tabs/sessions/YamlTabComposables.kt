@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailDeviceSelector
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -238,7 +239,10 @@ fun YamlTabComposable(
                     onProgressMessage = onProgressMessage,
                     onConnectionStatus = onConnectionStatus,
                     targetTestApp = targetTestApp,
-                    additionalInstrumentationArgs = additionalInstrumentationArgs()
+                    additionalInstrumentationArgs = additionalInstrumentationArgs(),
+                    // Without this, a multi-device trail whose devices declare their own `target:`
+                    // is rejected here even though the device manager has the loaded targets.
+                    findTargetById = { deviceManager.availableAppTargets.findById(it) },
                   )
                 )
               } catch (e: Exception) {

@@ -438,7 +438,7 @@ class TrailblazeTrailmapBundler(
    * register each entry's `name:`). Duplicate names across files throw with both
    * contributing file paths.
    *
-   * SISTER IMPLEMENTATIONS — same algorithm lives in three other places, keep all four in
+   * SISTER IMPLEMENTATIONS — same algorithm lives in four other places, keep all five in
    * lockstep:
    *   - `trailblaze-common/src/jvmAndAndroid/kotlin/xyz/block/trailblaze/config/project/TrailblazeProjectConfigLoader.kt`
    *     `discoverTrailmapScriptedTools` — runtime trailmap loader.
@@ -446,8 +446,14 @@ class TrailblazeTrailmapBundler(
    *     `discoverScriptedToolDescriptors` — daemon-time esbuild bundler.
    *   - `build-logic/src/main/kotlin/TrailblazeBundledConfigTasks.kt`
    *     `buildTrailmapScriptedToolRegistry` — Gradle bundled-config generator.
+   *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/usages/ScriptedToolSourceSnapshotScanner.kt`
+   *     `snapshot` — the `usages --changed-since` inventory. ANALYSIS-ONLY, and deliberately
+   *     divergent in two ways: it never throws (it runs against historical refs that may predate
+   *     an author fix, so every anomaly is a warning), and it is dir-parameterized rather than
+   *     workspace-singleton-resolved so it can scan a ref checkout and the working tree in one
+   *     process. It DOES mirror the loader's meta-only + bare-`.ts` passes.
    *
-   * Search tag for grepping all four sister implementations at once (resilient against
+   * Search tag for grepping all five sister implementations at once (resilient against
    * future file moves): `SISTER-IMPL-TAG: trailmap-scripted-tool-discovery`.
    */
   /**

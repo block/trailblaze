@@ -171,7 +171,7 @@ object AccessibilityTrailRunner {
    * Maps an [AccessibilityAction] and its [AccessibilityDeviceManager.ExecutionResult] to an
    * [AgentDriverAction] for unified logging and screenshot overlay visualization.
    */
-  private fun mapToAgentDriverAction(
+  internal fun mapToAgentDriverAction(
     action: AccessibilityAction,
     executionResult: AccessibilityDeviceManager.ExecutionResult,
     toolResult: TrailblazeToolResult,
@@ -233,7 +233,11 @@ object AccessibilityTrailRunner {
         val x = executionResult.resolvedX ?: 0
         val y = executionResult.resolvedY ?: 0
         if (action.longPress) {
-          AgentDriverAction.LongPressPoint(x = x, y = y)
+          AgentDriverAction.LongPressPoint(
+            x = x,
+            y = y,
+            dispatchRoute = executionResult.dispatchRoute,
+          )
         } else {
           AgentDriverAction.TapPoint(x = x, y = y, dispatchRoute = executionResult.dispatchRoute)
         }

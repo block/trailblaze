@@ -124,7 +124,7 @@ class HealedRunUnifiedSaveBackTest {
 
   /** The v1 items of a healthy earlier recording, used to seed the on-disk unified trail. */
   private fun seedItems(): List<TrailYamlItem> = listOf(
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/checkout", target = "app", driver = "D")),
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/checkout", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
     TrailYamlItem.TrailheadTrailItem(
       TrailheadDefinition(step = "Launch the app signed in", tools = listOf(wrapper("myapp_launchSignedIn"))),
     ),

@@ -188,6 +188,9 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
   // host bridge as network capture, so the run path forces network capture on when requested.
   val captureEventsOn = body.captureEvents == true
   var eventCapture: AutoCloseable? = null
+  // The reservation this dispatch made (see releaseUnstartedRun) - tracked outside the runCatching
+  // so the failure path below can hand the device back even when runYaml threw.
+  var reservedSessionId: SessionId? = null
   val result = runCatching {
     val resolution = deviceManager.getOrCreateSessionResolution(
       trailblazeDeviceId = id,
@@ -197,6 +200,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
       captureLogcatOverride = body.captureLogcat,
       captureIosLogsOverride = body.captureIosLogs,
     )
+    reservedSessionId = resolution.sessionId
     val sessionId = resolution.sessionId.value
     eventCapture = runCatching { deps.eventCaptureController?.invoke(sessionId, captureEventsOn) }
       .onFailure { Console.log("[TrailRunnerEndpoint] event capture setup failed: ${it.message}") }
@@ -242,6 +246,7 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
             status = runFinishedStatus(result),
           )
         }
+        releaseUnstartedRun(deps, id, resolution.sessionId)
       },
     )
     // Companion sessions watching this trail's folder hear the dispatch. Only after runYaml
@@ -255,10 +260,35 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
   }.getOrElse { e ->
     analyticsCapture?.let { runCatching { it.close() } }
     eventCapture?.let { runCatching { it.close() } }
+    reservedSessionId?.let { releaseUnstartedRun(deps, id, it) }
     Console.log("[TrailRunnerEndpoint] POST /api/run error: ${e.message}")
     RunResponse(success = false, sessionId = null, error = e.message ?: "internal error")
   }
   return RunDispatchResult.Ok(result)
+}
+
+/**
+ * Hands the device back when a dispatch never became a run.
+ *
+ * [buildRunDispatchResult] registers the device as busy (via `getOrCreateSessionResolution`) BEFORE
+ * the run starts, and the busy-device gate above only clears a registration once the session it
+ * names has ended. A run that never starts writes no session log at all - a trail short-circuited by
+ * `config.skip`, a device that went away, a rejected driver pin, or a dispatch that threw - so that
+ * gate has nothing to read and treats the device as busy forever: every later run on it 409s until
+ * the daemon restarts. Releasing it here is what keeps a failed dispatch a failed dispatch instead
+ * of a lost device.
+ *
+ * Only releases a run that never opened a session: a session with logs did start, so its own
+ * teardown owns the device. Whether the registration is still THIS dispatch's is decided inside
+ * [TrailblazeDeviceManager.releaseUnstartedSession], which compares and clears under one lock so a
+ * newer run that has taken the device cannot be released by a late callback from an older one.
+ */
+private fun releaseUnstartedRun(deps: TrailRunnerDeps, deviceId: TrailblazeDeviceId, sessionId: SessionId) {
+  val deviceManager = deps.deviceManager ?: return
+  if (deps.logsRepo.getSessionInfoSummary(sessionId) != null) return
+  if (runCatching { deviceManager.releaseUnstartedSession(deviceId, sessionId) }.getOrDefault(false)) {
+    Console.log("[TrailRunnerEndpoint] released ${deviceId.instanceId}: run ${sessionId.value} never started")
+  }
 }
 
 internal fun Route.runRoutes(deps: TrailRunnerDeps) {

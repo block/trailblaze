@@ -88,7 +88,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       // Re-run the config's own discovery against current disk state — powers additive-only live
       // target registration (TrailblazeDeviceManager.registerNewTarget). Single source of truth
       // with the startup `availableAppTargets` seed, so the two can't drift.
-      freshAppTargetsProvider = { desktopAppConfig.rediscoverAppTargets() },
+      freshAppTargetsProvider = { failFast -> desktopAppConfig.rediscoverAppTargets(failFast) },
       appIconProvider = desktopAppConfig.appIconProvider,
       deviceClassifierIconProvider = desktopAppConfig.deviceClassifierIconProvider,
       defaultHostAppTarget = desktopAppConfig.defaultAppTarget,

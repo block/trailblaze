@@ -8,9 +8,12 @@ import xyz.block.trailblaze.agent.trail.toJsonArgs
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 
 /**
  * `trailblaze check` gate: fails a trail whose **resolved** recording leg for a device carries
@@ -59,9 +62,12 @@ import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
  * broadly. If it ever becomes noise, downgrading leg-only findings to advisory is the smaller
  * change; deleting the dead leg is usually the right fix.
  *
- * ## Scope: one direction, one pair
+ * ## Scope: one same-platform pair, plus any cross-platform one
  *
- * This gate is specifically `androidMaestro:` reached by `ANDROID_ONDEVICE_ACCESSIBILITY`. The
+ * Within a platform this gate is specifically `androidMaestro:` reached by
+ * `ANDROID_ONDEVICE_ACCESSIBILITY`. Across platforms — only in a multi-device configuration leg,
+ * where a `switchDevice` decides which surface a step drives — ANY dialect belonging to a platform
+ * other than the active device's is flagged; see [DIALECT_KEY_PLATFORM]. The
  * inverse — an `androidAccessibility:` selector on `ANDROID_ONDEVICE_INSTRUMENTATION` — is NOT
  * the same failure and is deliberately not gated here: the instrumentation agent doesn't resolve
  * nodeSelectors natively at all (every `executeNodeSelector*` on the base `MaestroTrailblazeAgent`
@@ -116,6 +122,32 @@ object SelectorDialectLint {
   )
 
   /**
+   * Every selector dialect slot key → the platform whose driver produces that tree shape.
+   *
+   * Used only by the multi-device pass, to catch a dialect belonging to a DIFFERENT platform than
+   * the active member's driver — a `web:` selector while the phone is active, or an
+   * `androidAccessibility:` one while the browser is. No cross-platform bridge exists in the
+   * resolver (the only bridge at all is iOS Maestro → AXe, within one platform), so such a selector
+   * resolves to `NoMatch` on every run, exactly like the same-platform Maestro pair above.
+   *
+   * A single-device leg can't produce this pairing — the trail would have to declare a selector for
+   * a platform it never runs on — so the gate spends the check where the mistake is reachable:
+   * getting a `switchDevice` wrong, or recording a step against the surface that was active a
+   * moment ago.
+   *
+   * `compose:` is deliberately absent. It describes a Compose semantics tree, which is not a
+   * platform claim (the same dialect serves Android and Compose Multiplatform hosts), so mapping it
+   * to one platform would mint false positives.
+   */
+  private val DIALECT_KEY_PLATFORM: Map<String, TrailblazeDevicePlatform> = mapOf(
+    "androidAccessibility" to TrailblazeDevicePlatform.ANDROID,
+    "androidMaestro" to TrailblazeDevicePlatform.ANDROID,
+    "iosMaestro" to TrailblazeDevicePlatform.IOS,
+    "iosAxe" to TrailblazeDevicePlatform.IOS,
+    "web" to TrailblazeDevicePlatform.WEB,
+  )
+
+  /**
    * Tools whose dispatch survives a dialect it can't resolve natively, so a wrong-dialect selector
    * there is NOT a runtime failure and must not fail the build.
    *
@@ -145,12 +177,37 @@ object SelectorDialectLint {
     val dialectKey: String,
     /** Compact rendering of the selector's own fields (e.g. `textRegex: Checkout`). */
     val selectorSummary: String,
+    /**
+     * True when the dialect belongs to a different PLATFORM than the device driving this step —
+     * the multi-device mistake (a `web:` selector while the phone is active). False for the
+     * same-platform Maestro-vs-accessibility pairing.
+     */
+    val crossPlatform: Boolean = false,
+  )
+
+  /**
+   * One recorded `switchDevice` naming a device its own configuration doesn't declare.
+   *
+   * Reported rather than logged because it is breakage in its own right — the run fails on that
+   * step at the session-start guard — AND because it blinds the rest of this pass: the static
+   * replay can no longer say which device is active, so every selector after it goes unlinted.
+   * Silently dropping that coverage while the gate reports green is the worse of the two failures.
+   */
+  data class UndeclaredHandover(
+    val configurationName: String,
+    /** 0-based index into `trail:`, or `null` for the trailhead. */
+    val stepIndex: Int?,
+    /** The name the recorded `switchDevice` targets. */
+    val target: String,
+    /** The member names the configuration actually declares. */
+    val declaredMembers: List<String>,
   )
 
   /** One finding per offending trail. */
   data class Finding(
     val trailRelPath: String,
     val occurrences: List<Occurrence>,
+    val undeclaredHandovers: List<UndeclaredHandover> = emptyList(),
   ) {
     val selectorCount: Int get() = occurrences.size
 
@@ -163,10 +220,12 @@ object SelectorDialectLint {
 
   /**
    * PURE. Lint one parsed unified trail. Returns a [Finding] when some device resolves a recording
-   * leg carrying a dialect its resolved driver cannot match; null otherwise.
+   * leg carrying a dialect its resolved driver cannot match, or when a configuration leg hands off
+   * to a device that configuration doesn't declare; null otherwise.
    */
   fun lint(trailRelPath: String, trail: UnifiedTrail): Finding? {
     val occurrences = mutableListOf<Occurrence>()
+    val undeclaredHandovers = mutableListOf<UndeclaredHandover>()
     for (device in candidateDeviceIdentities(trail)) {
       val classifiers = device.split("-").filter { it.isNotBlank() }.map { TrailblazeDeviceClassifier(it) }
       if (classifiers.isEmpty()) continue
@@ -195,7 +254,121 @@ object SelectorDialectLint {
         }
       }
     }
-    return if (occurrences.isEmpty()) null else Finding(trailRelPath, occurrences)
+    lintConfigurationLegs(trailRelPath, trail, occurrences, undeclaredHandovers)
+    return if (occurrences.isEmpty() && undeclaredHandovers.isEmpty()) {
+      null
+    } else {
+      Finding(trailRelPath, occurrences, undeclaredHandovers)
+    }
+  }
+
+  /**
+   * The multi-device counterpart of the per-device loop above: a leg keyed by a configuration
+   * NAME is excluded from [candidateDeviceIdentities] (splitting the name on `-` would mint a
+   * nonexistent device), but its tools still dispatch for real — against whichever member device
+   * is ACTIVE at that point in the replay. So this pass replays each configuration leg
+   * statically: it starts on the first declared member (the start device), flips on every
+   * recorded `switchDevice` (the tool's `name:` arg), and lints each other tool against the
+   * active member's driver — the member's own `driver:` pin, else the driver its `classifier:`
+   * chain resolves from `config.devices:`. A member with neither is skipped, same as a candidate
+   * whose driver doesn't resolve.
+   */
+  private fun lintConfigurationLegs(
+    trailRelPath: String,
+    trail: UnifiedTrail,
+    occurrences: MutableList<Occurrence>,
+    undeclaredHandovers: MutableList<UndeclaredHandover>,
+  ) {
+    val configurations = trail.config.devices.orEmpty().filterValues { it.devices != null }
+    for ((configurationName, configuration) in configurations) {
+      val members = configuration.devices.orEmpty()
+      if (members.isEmpty()) continue
+      val driverByMember: Map<String, String?> = members.mapValues { (_, member) ->
+        member.driver?.name ?: member.classifier
+          ?.split("-")?.filter { it.isNotBlank() }?.map { TrailblazeDeviceClassifier(it) }
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { UnifiedTrailAdapter.resolveDriver(trail.config, it) }
+      }
+      // The cross-platform rule needs only the member's PLATFORM, which a bare `classifier:` gives
+      // even when no driver is pinned anywhere — the same fold MultiDeviceConfigurationResolver
+      // uses to stamp each companion. Without it a cast whose members carry classifiers and no
+      // driver pins (the usual shape) would go entirely unlinted, since no driver resolves for
+      // them from `config.devices:`.
+      val platformByMember: Map<String, TrailblazeDevicePlatform?> = members.mapValues { (_, member) ->
+        member.driver?.platform ?: member.classifier?.let { UnifiedTrailTargets.platformFor(it) }
+      }
+      var activeMember = members.keys.first()
+      val legs: List<Pair<Int?, List<TrailblazeToolYamlWrapper>>> = buildList {
+        trail.trailhead?.recordings?.get(configurationName)?.let { add(null to it) }
+        trail.trail.forEachIndexed { index, step ->
+          step.recordings[configurationName]?.let { add(index to it) }
+        }
+      }
+      legLoop@ for ((stepIndex, tools) in legs) {
+        for (tool in tools) {
+          if (tool.name == SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME) {
+            val target = MultiDeviceHandoverGuard.readTargetName(tool)
+            if (target != null && target in members.keys) {
+              activeMember = target
+              continue
+            }
+            // Either way the static replay no longer knows which device is active, so linting on
+            // past this point would report the stale member's findings or miss real ones.
+            if (target != null) {
+              // A literal name the configuration doesn't declare: real breakage, reported as a
+              // finding so the gate fails rather than quietly dropping the rest of the leg.
+              undeclaredHandovers.add(
+                UndeclaredHandover(
+                  configurationName = configurationName,
+                  stepIndex = stepIndex,
+                  target = target,
+                  declaredMembers = members.keys.toList(),
+                ),
+              )
+            } else {
+              // Unreadable or memory-interpolated: not statically knowable, so not a finding.
+              Console.log(
+                "[selector-dialect-lint] $trailRelPath: configuration `$configurationName` hands " +
+                  "off at ${stepLabel(stepIndex)} to a name this gate can't resolve statically — " +
+                  "abandoning the rest of this leg, the active device is no longer determinable.",
+              )
+            }
+            break@legLoop
+          }
+          if (tool.name in SAFE_FALLBACK_TOOL_NAMES) continue
+          val driverName = driverByMember[activeMember]
+          val driver = driverName?.let { TrailblazeDriverType.fromString(it) }
+          val platform = driver?.platform ?: platformByMember[activeMember]
+          val args = tool.toJsonArgs()
+          // Two disjoint unmatchable pairings: any dialect belonging to another platform entirely
+          // (the one a misplaced `switchDevice` produces in a heterogeneous cast), and a Maestro
+          // dialect the member's own-platform driver can't read.
+          val unmatchable =
+            platform?.let { collectForeignPlatformSelectors(args, it).map { hit -> hit to true } }
+              .orEmpty() +
+              if (driver != null && driver in NATIVE_DIALECT_DRIVERS) {
+                collectMaestroDialectSelectors(args, driver.platform).map { it to false }
+              } else {
+                emptyList()
+              }
+          unmatchable.forEach { (hit, crossPlatform) ->
+            val (key, selector) = hit
+            occurrences.add(
+              Occurrence(
+                deviceClassifier = "$configurationName/$activeMember",
+                driverName = driverName ?: "$platform (no driver pin)",
+                stepIndex = stepIndex,
+                resolvedClassifier = configurationName,
+                toolName = tool.name,
+                dialectKey = key,
+                selectorSummary = summarize(selector),
+                crossPlatform = crossPlatform,
+              ),
+            )
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -203,11 +376,25 @@ object SelectorDialectLint {
    * leg key declared anywhere in the trail. The union matters in both directions — a trail can pin
    * `android:` while keying legs `android-phone:`, or pin `android-phone:` while sharing an
    * `android:` leg. Sorted for deterministic finding order.
+   *
+   * Multi-device configuration NAMES are not device identities — splitting one on `-` would mint a
+   * nonexistent device — so they're excluded wherever they appear (a configuration entry's key, or
+   * a leg keyed by the configuration name). The configuration's member devices contribute their
+   * `classifier:` values here for member-keyed legs, and the configuration-name legs themselves
+   * are covered by the switch-aware [lintConfigurationLegs] pass.
    */
   private fun candidateDeviceIdentities(trail: UnifiedTrail): List<String> = buildSet {
-    trail.config.devices?.keys?.let { addAll(it) }
-    trail.trailhead?.recordings?.keys?.let { addAll(it) }
-    trail.trail.forEach { addAll(it.recordings.keys) }
+    val configurationNames = trail.config.multiDeviceConfigurationNames
+    trail.config.devices?.forEach { (key, definition) ->
+      val members = definition.devices
+      if (members == null) {
+        add(key)
+      } else {
+        members.values.forEach { member -> member.classifier?.let { add(it) } }
+      }
+    }
+    trail.trailhead?.recordings?.keys?.let { keys -> addAll(keys - configurationNames) }
+    trail.trail.forEach { addAll(it.recordings.keys - configurationNames) }
   }.sorted()
 
   /** The recorded tools of the winning leg — trailhead when [stepIndex] is null, else `trail:[i]`. */
@@ -224,31 +411,72 @@ object SelectorDialectLint {
   /** Render the findings as a human-readable failure block — one block per trail. */
   fun renderFailures(findings: List<Finding>): String = buildString {
     appendLine("── selector-dialect gate (FATAL) ───────────────────────────────")
-    appendLine(
-      "${findings.size} trail(s) resolve a recording leg whose selector dialect the device's " +
-        "driver cannot match. An androidMaestro: selector under ANDROID_ONDEVICE_ACCESSIBILITY " +
-        "never matches — the resolver dispatches on the tree shape the driver produced, and " +
-        "Android has no cross-dialect bridge — so these steps fail on every run. Fix: give the " +
-        "device its own recording leg carrying androidAccessibility: selectors, instead of " +
-        "sharing a leg whose dialect belongs to the other driver.",
-    )
-    findings.sortedBy { it.trailRelPath }.forEach { f ->
+    val crossPlatformTrails = findings.count { f -> f.occurrences.any { it.crossPlatform } }
+    if (crossPlatformTrails > 0) {
       appendLine(
-        "  FAIL ${f.trailRelPath}: ${f.selectorCount} unmatchable selector(s); " +
-          "device→driver ${f.affectedDevices}",
+        "$crossPlatformTrails trail(s) select in a dialect belonging to a different platform than " +
+          "the device driving that step — e.g. a web: selector while the phone is active. No " +
+          "cross-platform bridge exists in the resolver, so those selectors never match. Fix: " +
+          "check the step's `switchDevice` handover, or re-record the step against the surface it " +
+          "is meant to drive.",
       )
-      f.examples.forEach {
-        val where = it.stepIndex?.let { i -> "step $i" } ?: "trailhead"
+    }
+    val dialectTrails = findings.count { f -> f.occurrences.any { !it.crossPlatform } }
+    if (dialectTrails > 0) {
+      appendLine(
+        "$dialectTrails trail(s) resolve a recording leg whose selector dialect the device's " +
+          "driver cannot match. An androidMaestro: selector under ANDROID_ONDEVICE_ACCESSIBILITY " +
+          "never matches — the resolver dispatches on the tree shape the driver produced, and " +
+          "Android has no cross-dialect bridge — so these steps fail on every run. Fix: give the " +
+          "device its own recording leg carrying androidAccessibility: selectors, instead of " +
+          "sharing a leg whose dialect belongs to the other driver.",
+      )
+    }
+    val handoverTrails = findings.count { it.undeclaredHandovers.isNotEmpty() }
+    if (handoverTrails > 0) {
+      appendLine(
+        "$handoverTrails trail(s) hand a multi-device configuration off to a device it does not " +
+          "declare. That step fails the run at the session-start guard, and it also stops this " +
+          "gate from tracking which device is active — so every selector after it goes unchecked. " +
+          "Fix: use a member name the configuration declares, or re-record the step.",
+      )
+    }
+    findings.sortedBy { it.trailRelPath }.forEach { f ->
+      if (f.selectorCount > 0) {
         appendLine(
-          "        $where resolves leg '${it.resolvedClassifier}' for '${it.deviceClassifier}' — " +
-            "${it.toolName} ${it.dialectKey}{${it.selectorSummary}}",
+          "  FAIL ${f.trailRelPath}: ${f.selectorCount} unmatchable selector(s); " +
+            "device→driver ${f.affectedDevices}",
         )
+        f.examples.forEach {
+          appendLine(
+            "        ${stepLabel(it.stepIndex)} resolves leg '${it.resolvedClassifier}' for '${it.deviceClassifier}' — " +
+              "${it.toolName} ${it.dialectKey}{${it.selectorSummary}}",
+          )
+        }
+        if (f.selectorCount > f.examples.size) {
+          appendLine("        … and ${f.selectorCount - f.examples.size} more")
+        }
       }
-      if (f.selectorCount > f.examples.size) {
-        appendLine("        … and ${f.selectorCount - f.examples.size} more")
+      if (f.undeclaredHandovers.isNotEmpty()) {
+        appendLine(
+          "  FAIL ${f.trailRelPath}: ${f.undeclaredHandovers.size} undeclared handover(s)",
+        )
+        f.undeclaredHandovers.forEach {
+          appendLine(
+            "        ${stepLabel(it.stepIndex)} in configuration '${it.configurationName}' switches to " +
+              "'${it.target}' (declared members: ${it.declaredMembers.joinToString()})",
+          )
+        }
       }
     }
   }
+
+  /**
+   * Human-facing step label. 1-based: the stored index is 0-based, but a reader counting entries
+   * under `trail:` starts at one, and [MultiDeviceHandoverGuard] already labels the same handover
+   * `step 3`. Rendering the raw index would make the two gates name different steps for one defect.
+   */
+  private fun stepLabel(stepIndex: Int?): String = stepIndex?.let { "step ${it + 1}" } ?: "trailhead"
 
   /**
    * Walk the recorded call's args JSON and collect every nested object keyed by a Maestro-dialect
@@ -273,13 +501,29 @@ object SelectorDialectLint {
   private fun collectMaestroDialectSelectors(
     args: JsonElement,
     platform: TrailblazeDevicePlatform,
+  ): List<Pair<String, JsonObject>> =
+    collectDialectSelectors(args) { key -> MAESTRO_DIALECT_KEY_PLATFORM[key] == platform }
+
+  /** As [collectMaestroDialectSelectors], for dialect slots belonging to any platform but [platform]. */
+  private fun collectForeignPlatformSelectors(
+    args: JsonElement,
+    platform: TrailblazeDevicePlatform,
+  ): List<Pair<String, JsonObject>> =
+    collectDialectSelectors(args) { key ->
+      DIALECT_KEY_PLATFORM[key]?.let { it != platform } == true
+    }
+
+  /** The shared walk; [matchesDialectKey] decides which slot keys count as hits. */
+  private fun collectDialectSelectors(
+    args: JsonElement,
+    matchesDialectKey: (String) -> Boolean,
   ): List<Pair<String, JsonObject>> {
     val hits = mutableListOf<Pair<String, JsonObject>>()
     fun walk(element: JsonElement) {
       when (element) {
         is JsonObject -> element.forEach { (key, value) ->
           if (key in SAFE_FALLBACK_TOOL_NAMES) return@forEach
-          if (value is JsonObject && MAESTRO_DIALECT_KEY_PLATFORM[key] == platform) hits.add(key to value)
+          if (value is JsonObject && matchesDialectKey(key)) hits.add(key to value)
           walk(value)
         }
         is JsonArray -> element.forEach { walk(it) }

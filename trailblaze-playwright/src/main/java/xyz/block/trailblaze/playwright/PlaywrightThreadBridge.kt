@@ -40,16 +40,14 @@ internal object PlaywrightThreadBridge {
    *   dispatcher hasn't been initialized yet (early in manager construction) — the
    *   bridge will fall through to the dispatch path.
    */
-  fun runOnPlaywrightThread(
+  fun <T> runOnPlaywrightThread(
     currentThread: Thread,
     playwrightThread: Thread?,
     dispatcher: CoroutineDispatcher,
-    block: () -> Unit,
-  ) {
-    if (playwrightThread != null && currentThread === playwrightThread) {
-      block()
-    } else {
-      runBlocking(dispatcher) { block() }
-    }
+    block: () -> T,
+  ): T = if (playwrightThread != null && currentThread === playwrightThread) {
+    block()
+  } else {
+    runBlocking(dispatcher) { block() }
   }
 }

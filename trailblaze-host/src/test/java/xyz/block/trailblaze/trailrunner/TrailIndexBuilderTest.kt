@@ -7,6 +7,7 @@ import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 
 class TrailIndexBuilderTest {
@@ -378,6 +379,145 @@ class TrailIndexBuilderTest {
     assertEquals("web", TrailIndexBuilder.platformFromFileName("web.trail.yaml"))
     assertNull(TrailIndexBuilder.platformFromFileName("my-trail.trail.yaml"))
     assertNull(TrailIndexBuilder.platformFromFileName("blaze.yaml"))
+  }
+
+  // The scan memoizes its traversal and revalidates it by mtime, so every way a trail can appear or
+  // change on disk needs to survive a second scan of the same root. This is what the trail tree and
+  // the editor's live refresh stand on: a trail edited outside the app has to show up on its own.
+
+  @Test
+  fun `an edit to a trail is reflected on the next scan of the same root`() {
+    val dir = tmp.newFolder("trails")
+    val file = File(dir, "login.trail.yaml")
+    file.writeText(unifiedTrail(title = "Before"))
+    assertEquals("Before", TrailIndexBuilder.scan(dir).single().title)
+
+    file.writeText(unifiedTrail(title = "After"))
+    touchLater(file)
+
+    assertEquals("After", TrailIndexBuilder.scan(dir).single().title)
+  }
+
+  @Test
+  fun `a trail that failed to parse is picked up once it is fixed`() {
+    val dir = tmp.newFolder("trails")
+    val file = File(dir, "login.trail.yaml")
+    file.writeText("this: is: not: a: trail")
+    // Nothing to read a title out of, so the entry falls back to the filename stem.
+    assertEquals("login", TrailIndexBuilder.scan(dir).single().title)
+
+    file.writeText(unifiedTrail(title = "Fixed"))
+    touchLater(file)
+
+    assertEquals("Fixed", TrailIndexBuilder.scan(dir).single().title)
+  }
+
+  @Test
+  fun `a trail added to an already-scanned folder is reflected on the next scan`() {
+    val dir = tmp.newFolder("trails")
+    File(dir, "first.trail.yaml").writeText(unifiedTrail(title = "First"))
+    assertEquals(1, TrailIndexBuilder.scan(dir).size)
+
+    File(dir, "second.trail.yaml").writeText(unifiedTrail(title = "Second"))
+    touchLater(dir)
+
+    assertEquals(setOf("First", "Second"), TrailIndexBuilder.scan(dir).map { it.title }.toSet())
+  }
+
+  @Test
+  fun `the first trail in a previously-empty folder is reflected on the next scan`() {
+    val root = tmp.newFolder("root")
+    val empty = File(root, "new-folder").apply { mkdirs() }
+    assertTrue(TrailIndexBuilder.scan(root).isEmpty())
+
+    File(empty, "late.trail.yaml").writeText(unifiedTrail(title = "Late"))
+    touchLater(empty)
+
+    assertEquals("Late", TrailIndexBuilder.scan(root).single().title)
+  }
+
+  @Test
+  fun `a deleted trail is gone on the next scan`() {
+    val dir = tmp.newFolder("trails")
+    val file = File(dir, "login.trail.yaml")
+    file.writeText(unifiedTrail())
+    assertEquals(1, TrailIndexBuilder.scan(dir).size)
+
+    file.delete()
+    touchLater(dir)
+
+    assertTrue(TrailIndexBuilder.scan(dir).isEmpty())
+  }
+
+  @Test
+  fun `build output directories are not scanned for trails`() {
+    val root = tmp.newFolder("root")
+    File(root, "kept.trail.yaml").writeText(unifiedTrail(title = "Kept"))
+    for (skipped in TrailDiscovery.DEFAULT_EXCLUDED_DIRS) {
+      val dir = File(root, "$skipped/nested").apply { mkdirs() }
+      File(dir, "copy.trail.yaml").writeText(unifiedTrail(title = "Copy in $skipped"))
+    }
+
+    assertEquals(listOf("Kept"), TrailIndexBuilder.scan(root).map { it.title })
+  }
+
+  @Test
+  fun `a folder the CLI walks into is indexed, however build-flavored its name`() {
+    // The index and `TrailDiscovery` survey the same tree, so pruning a name only one of them
+    // prunes is a trail that runs from the CLI and is missing from the UI - which reads as a lost
+    // file, not as an exclude. These names look like build output and are not on the shared list.
+    val root = tmp.newFolder("root")
+    for (kept in listOf("out", "dist", "target")) {
+      val dir = File(root, kept).apply { mkdirs() }
+      File(dir, "checkout.trail.yaml").writeText(unifiedTrail(title = "Trail in $kept"))
+    }
+
+    assertEquals(
+      listOf("Trail in dist", "Trail in out", "Trail in target"),
+      TrailIndexBuilder.scan(root).map { it.title }.sorted(),
+    )
+  }
+
+  @Test
+  fun `a trails root scanned before it exists is picked up once it appears`() {
+    val root = File(tmp.root, "not-yet")
+    // `scanEmptyDirs` doesn't gate on the root existing, so it is what reaches an absent root first.
+    // Its walk records no directories, and a validity check with nothing to check reads as valid -
+    // so caching that answer would pin an empty trail list for the life of the process, and a
+    // workspace whose folder is cloned after startup would never show a trail.
+    assertTrue(TrailIndexBuilder.scanEmptyDirs(root, emptyList()).isEmpty())
+
+    root.mkdirs()
+    File(root, "login.trail.yaml").writeText(unifiedTrail(title = "Appeared later"))
+
+    assertEquals("Appeared later", TrailIndexBuilder.scan(root).single().title)
+  }
+
+  @Test
+  fun `an empty folder is labeled for the root slot it is being served under`() {
+    // Switching workspaces turns the same directory from the primary trails root into an extra one,
+    // and nothing on disk moves when it happens. A folder row carrying the label from the previous
+    // slot files itself under the wrong root in the tree.
+    val alpha = tmp.newFolder("alpha")
+    File(alpha, "new-folder").mkdirs()
+    val other = tmp.newFolder("other")
+    assertEquals(listOf("alpha/new-folder"), TrailIndexBuilder.scanEmptyDirs(alpha, emptyList()))
+
+    assertEquals(
+      listOf("alpha (${alpha.parent})/new-folder"),
+      TrailIndexBuilder.scanEmptyDirs(other, listOf(alpha)),
+    )
+  }
+
+  /**
+   * A same-millisecond write leaves the mtime the scan already recorded, which would make the change
+   * legitimately invisible. Real edits are seconds apart; the tests are not, so push the timestamp
+   * forward rather than sleeping.
+   */
+  private fun touchLater(file: File) {
+    // Checked, because a filesystem that refuses the write would leave the test asserting that a
+    // change the scan never saw was picked up anyway - passing for the wrong reason.
+    assertTrue(file.setLastModified(file.lastModified() + 2_000), "could not move mtime of $file")
   }
 
   @Test

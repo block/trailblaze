@@ -32,15 +32,16 @@ interface HasClickCoordinates {
 }
 
 /**
- * Which dispatch mechanism actually delivered a selector-resolved tap. `ACTION_CLICK` invokes the
- * node's accessibility click action and never enters pointer routing; both gesture values inject a
- * MotionEvent that goes through the window hit-test. A tap that reports success but leaves the UI
- * unchanged looks identical either way in the session log, so without this the two are
- * indistinguishable after the fact — and the silent `ACTION_CLICK` lookup miss is invisible.
+ * How a tap or long press was actually delivered. `ACTION_CLICK` invokes the node's accessibility
+ * click action and never enters pointer routing; both gesture values inject a MotionEvent that
+ * goes through the window hit-test. A tap that reports success but leaves the UI unchanged looks
+ * identical either way in the session log, so without this the two are indistinguishable after
+ * the fact — and the silent `ACTION_CLICK` lookup miss is invisible.
  *
- * `null` on a tap that never reached the routing gate: a raw coordinate primitive
- * (`AccessibilityAction.Tap` / `TapRelative`), a recorded-coordinate fallback, or a non-Android
- * driver.
+ * Only the Android accessibility driver sets this. `null` therefore means "not recorded", not
+ * "delivered normally", and covers: a raw coordinate primitive (`AccessibilityAction.Tap` /
+ * `TapRelative`), any other driver, an `optional: true` step that matched nothing and dispatched
+ * nothing, and a dispatch that threw before it could report a route.
  */
 @Serializable
 enum class TapDispatchRoute {
@@ -58,6 +59,19 @@ enum class TapDispatchRoute {
 
   /** The live tree carried no span matching the resolved link; gesture fallback was used. */
   GESTURE_AFTER_TEXT_LINK_SPAN_MISS,
+
+  /**
+   * The selector matched nothing before its timeout expired, so the tap was delivered at the
+   * coordinates captured when the trail was recorded. The step still reports success, which makes
+   * this the only durable record that its selector resolved nothing: a replay that is green on
+   * steps carrying this route is no evidence that its selectors work.
+   *
+   * Unlike its siblings this names the *coordinate source* rather than the transport (the
+   * transport is a gesture), because the coordinate source is the load-bearing fact. No Android
+   * caller populates the recorded coordinates today, so a selector miss fails the step instead —
+   * this exists so the day one does, the silent pass is visible.
+   */
+  RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
 }
 
 /**
@@ -139,10 +153,16 @@ sealed interface AgentDriverAction {
   }
 
   @Serializable
-  data class LongPressPoint(override val x: Int, override val y: Int) :
-    AgentDriverAction,
+  data class LongPressPoint(
+    override val x: Int,
+    override val y: Int,
+    val dispatchRoute: TapDispatchRoute? = null,
+  ) : AgentDriverAction,
     HasClickCoordinates {
     override val type = AgentActionType.LONG_PRESS_POINT
+
+    /** Preserves the pre-`dispatchRoute` `LongPressPoint(x, y)` constructor; see [TapPoint]. */
+    constructor(x: Int, y: Int) : this(x, y, dispatchRoute = null)
   }
 
   @Serializable

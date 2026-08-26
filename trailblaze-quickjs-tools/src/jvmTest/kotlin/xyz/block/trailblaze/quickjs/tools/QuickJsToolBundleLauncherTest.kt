@@ -34,10 +34,19 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 
 /**
  * Direct coverage for [QuickJsToolBundleLauncher] using inline JS bundle fixtures via
- * [InlineBundleSource]. Exercises the launch → register → shutdown round-trip without
- * touching disk or the Android instrumentation runtime — the on-device counterpart in
- * `:examples:android-sample-app-uitests` proves the asset-loader and instrumentation
- * runtime side.
+ * [InlineBundleSource]. Exercises the launch → register → shutdown round-trip without touching disk
+ * or the Android instrumentation runtime.
+ *
+ * Other tests drive `launchAll`/`shutdownAll` incidentally on the way to their own subject —
+ * `OkHttpFetchExtensionBundleLauncherTest` for extension wiring, `LaunchedScriptingRuntimeTest` and
+ * `McpSubprocessRuntimeLauncherTest` for the runtime above it. This is the one that owns the
+ * launcher itself, so a launcher-shaped regression should get its case added here.
+ *
+ * JVM-only is deliberate and sufficient: registration and shutdown are platform-independent. What
+ * genuinely needs a device is covered elsewhere — that `quickjs-kt`'s native library loads and
+ * dispatches under ART is proven on every PR by agent-evaluation trail runs, which route a real
+ * TypeScript tool through on-device QuickJS, and `AndroidAssetBundleSource`'s path validation by
+ * `AndroidAssetBundleSourceTest` in `:trailblaze-android`'s androidTest.
  */
 class QuickJsToolBundleLauncherTest {
 

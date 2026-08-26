@@ -312,6 +312,8 @@ sealed interface TrailblazeLog {
     override val session: SessionId,
     override val timestamp: Instant,
     val recordingResult: PromptRecordingResult.Failure,
+    /** Zero-based position in the executed prompt list. Null only for legacy logs. */
+    val stepIndex: Int? = null,
   ) : TrailblazeLog,
     HasPromptStep
 

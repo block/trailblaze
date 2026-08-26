@@ -44,6 +44,7 @@ import {
   type ToolSourceResponse,
   type ToolUsageCountsResponse,
   type TrailDetailResponse,
+  type TrailGitBaselineResponse,
   type TrailIndexResponse,
   type TrailmapsResponse,
   type TrailRootsResponse,
@@ -110,9 +111,15 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
     /** SetCurrentTargetAppRequest → response (or null). Used by setTargetApp. */
     setCurrentTargetApp: (targetAppId: string): Promise<SetCurrentTargetAppResponse | null> =>
       dataOrNull(rpc.setCurrentTargetApp({ targetAppId })),
-    /** ConnectToDeviceRequest → success boolean (mirrors connectDevice's old `r.ok`). */
-    connectToDevice: async (trailblazeDeviceId: TrailblazeDeviceId): Promise<boolean> => {
-      const result = await rpc.connectToDevice({ trailblazeDeviceId });
+    /**
+     * ConnectToDeviceRequest → success boolean (mirrors connectDevice's old `r.ok`).
+     *
+     * `targetAppId` is the app target the connection is for. The Android connect installs that
+     * target's instrumentation runner, so a caller that knows which app this device is being
+     * connected for passes it; omitting it binds whatever target the daemon has selected.
+     */
+    connectToDevice: async (trailblazeDeviceId: TrailblazeDeviceId, targetAppId?: string | null): Promise<boolean> => {
+      const result = await rpc.connectToDevice({ trailblazeDeviceId, targetAppId: targetAppId || null });
       if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
       return result.ok;
     },
@@ -123,10 +130,20 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
      */
     connectToDeviceDetailed: async (
       trailblazeDeviceId: TrailblazeDeviceId,
+      targetAppId?: string | null,
     ): Promise<{ ok: boolean; error: string | null }> => {
-      const result = await rpc.connectToDevice({ trailblazeDeviceId });
+      const result = await rpc.connectToDevice({ trailblazeDeviceId, targetAppId: targetAppId || null });
       if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
       return { ok: result.ok, error: result.ok ? null : (result.error && result.error.message) || null };
+    },
+    /**
+     * DisconnectDeviceRequest → success boolean. Releases the daemon's live connection so the next
+     * connect re-runs the bootstrap - the only way to bind a device to a different target app.
+     */
+    disconnectDevice: async (trailblazeDeviceId: TrailblazeDeviceId): Promise<boolean> => {
+      const result = await rpc.disconnectDevice({ trailblazeDeviceId });
+      if (!result.ok) console.warn("[TbRpc] RPC call failed:", result.error);
+      return result.ok;
     },
     /** GetSessionsRequest → response (or null). Used by useSessions. */
     getSessions: (): Promise<SessionsResponse | null> => dataOrNull(trailRunner.getSessions()),
@@ -143,6 +160,13 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
     /** GetTrailDetailRequest → response (or null). Used by useTrailDetail + fetchTrailYaml. */
     getTrailDetail: (id: string): Promise<TrailDetailResponse | null> =>
       dataOrNull(trailRunner.getTrailDetail({ id })),
+    /**
+     * GetTrailGitBaselineRequest → the committed text of a trail plus how the working file compares
+     * to it. Null on an unresolvable id, same as getTrailDetail; an `unavailable` state means git
+     * itself couldn't answer, which is not the same as "no changes".
+     */
+    getTrailGitBaseline: (id: string): Promise<TrailGitBaselineResponse | null> =>
+      dataOrNull(trailRunner.getTrailGitBaseline({ id })),
     /** ValidateTrailRequest → response (or null). Used by validateTrail. */
     validateTrail: (yaml: string): Promise<ValidateTrailResponse | null> =>
       dataOrNull(trailRunner.validateTrail({ yaml })),
@@ -171,7 +195,7 @@ export function createDaemonRpc(options: RpcCallOptions = {}) {
       platform?: string | null,
     ): Promise<RunToolsResponse | null> =>
       dataOrNull(trailRunner.getRunTools({ target, driver, platform })),
-    /** GetSessionAnalyticsRequest → response (or null). Used by useSessionAnalytics. */
+    /** GetSessionAnalyticsRequest → response (or null). Read by run-payload.js for the report's Analytics stream. */
     getSessionAnalytics: (sessionId: string): Promise<AnalyticsResponse | null> =>
       dataOrNull(trailRunner.getSessionAnalytics({ sessionId })),
     /** GetSessionFilesRequest → response (or null). Used by useSessionFiles. */

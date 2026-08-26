@@ -1154,8 +1154,12 @@ object TrailblazeProjectConfigLoader {
    * does NOT end with any of these reserved operational suffixes. Keeping the exclude list
    * explicit (rather than just `*.tool.yaml`) leaves room for any future operational class
    * that lands under `tools/` without re-litigating the discovery rule.
+   *
+   * Public because it is the single source of truth for this rule: every sister implementation
+   * of scripted-tool discovery (SISTER-IMPL-TAG: trailmap-scripted-tool-discovery) must exclude
+   * the same suffixes, or files drift between "descriptor" and "operational" across surfaces.
    */
-  private val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
+  val OPERATIONAL_TOOL_YAML_SUFFIXES = listOf(
     ".tool.yaml",
     ".shortcut.yaml",
     ".trailhead.yaml",
@@ -1201,6 +1205,12 @@ object TrailblazeProjectConfigLoader {
    *   - `build-logic/src/main/kotlin/TrailblazeBundledConfigTasks.kt`
    *     `buildTrailmapScriptedToolRegistry` — generates the bundled per-target YAMLs under
    *     `dist/targets/`.
+   *   - `trailblaze-host/src/main/java/xyz/block/trailblaze/usages/ScriptedToolSourceSnapshotScanner.kt`
+   *     `snapshot` — the `usages --changed-since` inventory. ANALYSIS-ONLY, and the one site that
+   *     deliberately diverges: it never throws (it scans historical refs that may predate an
+   *     author fix, so every anomaly is a warning) and it is dir-parameterized rather than
+   *     workspace-singleton-resolved, so one process can scan a ref checkout and the working
+   *     tree. It DOES mirror this loader's meta-only + bare-`.ts` passes, unlike the three above.
    * Build-logic stays independent of `:trailblaze-models` (the Gradle plugin classpath
    * concern documented on `TrailblazeTrailmapBundler`'s class kdoc) so the duplication can't be
    * collapsed into one shared util today; cross-referenced comments are the second-best fix.
@@ -1210,8 +1220,9 @@ object TrailblazeProjectConfigLoader {
    * no `tools:`, just `script:` + `_meta:`) are collected into a `deferred` bucket and
    * resolved via the optional [ScriptedToolEnrichment] hook to recover the typed surface
    * from the sibling `.ts`. PR #3501 widened the same asymmetry to bare `.ts` files — see
-   * the second-pass walk below. The three other sister sites still walk `*.yaml` only and
-   * hard-fail (or skip-and-log) on meta-only / bare-`.ts` shapes.
+   * the second-pass walk below. The three BUILD/DAEMON sister sites still walk `*.yaml` only and
+   * hard-fail (or skip-and-log) on meta-only / bare-`.ts` shapes; the analysis-only snapshot
+   * scanner mirrors both passes, so it is not part of this asymmetry.
    *
    * **Why the asymmetry is safe today.** The auto-discovery + analyzer-enrichment combo is
    * a strict superset of the three sister walks: the loader produces fully-resolved
@@ -1234,13 +1245,13 @@ object TrailblazeProjectConfigLoader {
    *     to closed-source consumer trailmaps that deliberately keep full-YAML descriptors
    *     (no analyzer in that path).
    *
-   * If you're maintaining ANY of the four sites and meta-only / bare-`.ts` support has
+   * If you're maintaining ANY of the five sites and meta-only / bare-`.ts` support has
    * matured into a use case those three sites need to honor (e.g. `bundleEnabled = true`
    * with bare `.ts` tools, or `TrailblazeBundledConfigPlugin` consumers adopting the
    * typed authoring shape), mirror the loader's enrichment branching + `.ts` walk across
    * the rest so the runtime/build-time parity holds end-to-end.
    *
-   * Search tag for grepping all four sister implementations at once (resilient against
+   * Search tag for grepping all five sister implementations at once (resilient against
    * future file moves): `SISTER-IMPL-TAG: trailmap-scripted-tool-discovery`.
    */
   /**

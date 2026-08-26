@@ -354,7 +354,10 @@ abstract class TrailblazeDesktopApp(
       targetTestApp = resolveDaemonRunTargetApp(
         configTarget = trailConfig?.target,
         callerWorkspaceDir = request.callerWorkspaceDir,
-        findTargetById = { desktopAppConfig.availableAppTargets.findById(it) },
+        // The device manager's LIVE set, not `desktopAppConfig.availableAppTargets` (the frozen
+        // startup seed) — a workspace switch reloads the former, so reading the seed here would
+        // reject a target the picker is already offering.
+        findTargetById = { deviceManager.availableAppTargets.findById(it) },
         resolveForCallerCwd = { deviceManager.getCurrentSelectedTargetAppForCallerCwd(it) },
         onDeclaredTargetUnresolved = { declared, fallback ->
           val message = unresolvedDeclaredTargetWarning(declared, fallback)
@@ -363,6 +366,10 @@ abstract class TrailblazeDesktopApp(
           sessionStartAdvisories += message
         },
       ),
+      // A multi-device configuration's per-device `target:` override resolves against the same
+      // LIVE registry as the session target above. Unlike `config.target`, an unresolved id here
+      // is a hard error rather than a fallback — see [DesktopAppRunYamlParams.findTargetById].
+      findTargetById = { deviceManager.availableAppTargets.findById(it) },
       sessionStartAdvisories = sessionStartAdvisories,
       noLogging = request.noLogging,
       captureVideo = request.captureVideo,
@@ -456,6 +463,7 @@ abstract class TrailblazeDesktopApp(
       sessionId = pinnedSessionId.value,
       error = errorMessage,
       deviceClassifiers = classifiers,
+      selectedDeviceConfiguration = pinnedSessionInfo?.selectedDeviceConfiguration,
     )
   }
 

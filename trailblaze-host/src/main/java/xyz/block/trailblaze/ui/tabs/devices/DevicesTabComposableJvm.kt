@@ -26,9 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import maestro.Driver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -166,11 +164,13 @@ private fun MobileDevicePreviewPanel(
   var previewState by remember(deviceId) { mutableStateOf<MobilePreviewState>(MobilePreviewState.Disconnected) }
   val scope = rememberCoroutineScope()
 
-  // Clean up driver when composable leaves composition or device changes
+  // Let go of the driver when the composable leaves composition or the device changes.
+  // The driver is shared and singleton-cached, so this releases only the preview's own hold
+  // (see HostIosDriverFactory) — it used to be left held for the life of the daemon because
+  // closing it would have disconnected whoever else was driving the device.
   DisposableEffect(deviceId) {
     onDispose {
-      // Don't close the driver — it uses singleton caching and closing it would
-      // break subsequent connections. Just let the stream stop collecting.
+      (previewState as? MobilePreviewState.Connected)?.stream?.close()
       previewState = MobilePreviewState.Disconnected
     }
   }
@@ -198,9 +198,7 @@ private fun MobileDevicePreviewPanel(
             previewState = MobilePreviewState.Connecting
             scope.launch {
               try {
-                val connectedDevice = withContext(Dispatchers.IO) {
-                  TrailblazeDeviceService.getConnectedDevice(deviceId, driverType)
-                }
+                val connectedDevice = TrailblazeDeviceService.connectDevice(deviceId, driverType)
                 when (connectedDevice) {
                   is MaestroConnectedDevice -> {
                     val driver = connectedDevice.getMaestroDriver()
@@ -261,6 +259,7 @@ private fun MobileDevicePreviewPanel(
 
         OutlinedButton(
           onClick = {
+            state.stream.close()
             previewState = MobilePreviewState.Disconnected
           },
         ) {

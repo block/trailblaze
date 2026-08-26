@@ -874,12 +874,14 @@ open class TrailCommand : Callable<Int> {
               if (sessionIds.isNotEmpty()) {
                 val logsRepo = app.deviceManager.logsRepo
                 for (sessionId in sessionIds) {
-                  val classifiers = logsRepo.getSessionInfo(sessionId)
+                  val sessionInfo = logsRepo.getSessionInfo(sessionId)
+                  val classifiers = sessionInfo
                     ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-                  if (shouldSaveRecording(item.file, classifiers)) {
-                    saveRecordingToTrailDirectory(item.file, sessionId, classifiers)
+                  val configurationName = sessionInfo?.selectedDeviceConfiguration
+                  if (shouldSaveRecording(item.file, classifiers, configurationName)) {
+                    saveRecordingToTrailDirectory(item.file, sessionId, classifiers, configurationName)
                   } else {
-                    logSkippedRecording(item.file, classifiers)
+                    logSkippedRecording(item.file, classifiers, configurationName)
                   }
                 }
               }
@@ -1109,14 +1111,14 @@ open class TrailCommand : Callable<Int> {
               // the mirror site inside runSingleTrailFile below for the full heuristic.
               val sid = response.sessionId
               if (sid != null) {
-                if (shouldSaveRecording(file, response.deviceClassifiers)) {
+                if (shouldSaveRecording(file, response.deviceClassifiers, response.selectedDeviceConfiguration)) {
                   val sessionId = SessionId(sid)
                   generateRecordingForSession(sessionId)
                   saveRecordingToTrailDirectory(
-                    file, sessionId, response.deviceClassifiers,
+                    file, sessionId, response.deviceClassifiers, response.selectedDeviceConfiguration,
                   )
                 } else {
-                  logSkippedRecording(file, response.deviceClassifiers)
+                  logSkippedRecording(file, response.deviceClassifiers, response.selectedDeviceConfiguration)
                 }
               }
             } else {
@@ -1689,6 +1691,9 @@ open class TrailCommand : Callable<Int> {
       forceStopTargetApp = false,
       runYamlRequest = runYamlRequest,
       targetTestApp = targetTestApp,
+      // Same registry the session target resolves against above, so a multi-device
+      // configuration's per-device `target:` override resolves here too.
+      findTargetById = { id -> config.availableAppTargets.findById(id) },
       onProgressMessage = { message ->
         Console.info(message)
         lastProgress = message
@@ -1820,9 +1825,10 @@ open class TrailCommand : Callable<Int> {
     // happen to be in the repo. Skip generation when shouldSaveRecording would no-op the
     // eventual copy anyway — no point burning the log-stability wait when the result
     // will be discarded.
-    val classifiers = app.deviceManager.logsRepo.getSessionInfo(pinnedSessionId)
+    val pinnedSessionInfo = app.deviceManager.logsRepo.getSessionInfo(pinnedSessionId)
+    val classifiers = pinnedSessionInfo
       ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-    if (shouldSaveRecording(file, classifiers)) {
+    if (shouldSaveRecording(file, classifiers, pinnedSessionInfo?.selectedDeviceConfiguration)) {
       generateRecordingForSession(pinnedSessionId)
     }
 
@@ -1921,10 +1927,12 @@ open class TrailCommand : Callable<Int> {
       }
 
       // The on-disk intermediate is a unified trail document; the save-back step re-reads it and
-      // merges this device's slot.
+      // merges this device's slot. A configuration session's legs are keyed by the configuration
+      // NAME (from the Started log), never by the launch device's classifier chain.
       val recordingYaml = logs.generateUnifiedRecordedYaml(
         sessionTrailConfig = sessionTrailConfig,
         customToolClasses = customToolClasses,
+        selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
       )
       if (recordingYaml.isBlank()) {
         Console.log("No recording data for session ${sessionId.value}, skipping")
@@ -2012,11 +2020,17 @@ open class TrailCommand : Callable<Int> {
    * @param trailFile The trail file or directory that was executed
    * @param sessionId The session ID from the completed run
    * @param deviceClassifiers Device classifiers for the recorded slot / filename
+   * @param selectedDeviceConfiguration The multi-device configuration the session selected, or
+   *   null for a single-device run. A configuration session's recording is keyed by this NAME
+   *   (matched exactly), never by the launch device's classifier chain. Only the unified branch
+   *   has to honor it: a cast is only expressible in a unified document, so a run that bound a
+   *   configuration always routes to [RecordingSaveTarget.UNIFIED_MERGE].
    */
   private fun saveRecordingToTrailDirectory(
     trailFile: File,
     sessionId: SessionId,
     deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
   ) {
     try {
       val gitRoot = GitUtils.getGitRootViaCommand() ?: return
@@ -2026,12 +2040,13 @@ open class TrailCommand : Callable<Int> {
         return
       }
 
-      when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+      when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
         RecordingSaveTarget.CLASSIFIER_SIBLING -> {
           val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
           saveRecordingAsSibling(trailFile, recordingFile, targetFile, deviceClassifiers)
         }
-        RecordingSaveTarget.UNIFIED_MERGE -> saveRecordingAsUnified(trailFile, recordingFile, deviceClassifiers)
+        RecordingSaveTarget.UNIFIED_MERGE ->
+          saveRecordingAsUnified(trailFile, recordingFile, deviceClassifiers, selectedDeviceConfiguration)
       }
     } catch (e: Exception) {
       Console.error(
@@ -2108,8 +2123,9 @@ open class TrailCommand : Callable<Int> {
     trailFile: File,
     recordingFile: File,
     deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
   ) {
-    val classifier = deviceClassifiers.joinToString("-")
+    val classifier = recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration)
     val decoded = runCatching { createTrailblazeYaml().decodeUnifiedTrail(recordingFile.readText()) }
     val unified = decoded.getOrNull()
     if (unified == null) {
@@ -2126,8 +2142,15 @@ open class TrailCommand : Callable<Int> {
     val recordedItems = UnifiedTrailAdapter.lowerToTrailItems(
       unified,
       deviceClassifiers.map { TrailblazeDeviceClassifier(it) },
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
     )
-    when (val outcome = UnifiedRecordingWriter.mergeIntoUnified(trailFile, recordedItems, classifier)) {
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      trailFileOrDir = trailFile,
+      recordedItems = recordedItems,
+      classifier = classifier,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
+    )
+    when (outcome) {
       is UnifiedRecordingWriter.MergeOutcome.Merged ->
         Console.info("Recording merged into ${outcome.target.absolutePath} (classifier `$classifier`)")
 
@@ -2167,6 +2190,16 @@ open class TrailCommand : Callable<Int> {
             "${outcome.existingStepCount} steps, so there is no step structure to align it to",
           hint = "this run's recording is preserved at ${recordingFile.absolutePath}",
         )
+
+      is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail ->
+        // Multi-device trails key their legs by configuration name, not device classifier — a
+        // classifier merge would duplicate the configuration's steps. Expected on every replay of
+        // a multi-device trail, so log rather than error; the source trail is untouched.
+        Console.log(
+          "[unified-record] " +
+            UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames) +
+            " This run's recording is preserved at ${recordingFile.absolutePath}.",
+        )
     }
   }
 
@@ -2177,19 +2210,49 @@ open class TrailCommand : Callable<Int> {
   internal enum class RecordingSaveTarget { UNIFIED_MERGE, CLASSIFIER_SIBLING }
 
   /**
+   * The `recordings:` slot this run writes back to: a multi-device session's slot is the NAME of
+   * the configuration it bound (matched exactly), a single-device session's is its classifier
+   * chain. Every routing, skip and save decision resolves the slot here so a new save site can't
+   * key a configuration session's legs by its launch device — the bug that duplicated every leg of
+   * a dual-display trail under its launch display's classifier chain.
+   */
+  internal fun recordingSlotKey(deviceClassifiers: List<String>, selectedDeviceConfiguration: String?): String =
+    selectedDeviceConfiguration ?: deviceClassifiers.joinToString("-")
+
+  /**
    * The CLI's view of [UnifiedRecordingWriter.shouldMergeIntoSharedTrail], which owns the routing
    * rules: `true` → [RecordingSaveTarget.UNIFIED_MERGE] (this device's slot is merged into the
    * shared unified trail), `false` → [RecordingSaveTarget.CLASSIFIER_SIBLING] (a per-device
    * `<classifier>.trail.yaml`, or the classifier-agnostic `recording.trail.yaml` when there is no
    * classifier at all).
    *
+   * A non-null [selectedDeviceConfiguration] is [RecordingSaveTarget.UNIFIED_MERGE] outright — the
+   * sibling layout can only express a per-classifier file, never a configuration's leg.
+   *
    * `internal` so unit tests can exercise each branch directly against a temp directory.
    */
-  internal fun recordingSaveTarget(trailFile: File, deviceClassifiers: List<String>): RecordingSaveTarget =
-    // Routing (empty-classifier / existing-sibling / greenfield branches) lives in the shared writer
-    // so the CLI, MCP, and desktop surfaces can't diverge. The CLI keeps its own enum;
-    // shouldSaveRecording separately refuses to write a sibling next to a shared unified trail.
-    if (UnifiedRecordingWriter.shouldMergeIntoSharedTrail(trailFile, deviceClassifiers.joinToString("-"))) {
+  internal fun recordingSaveTarget(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ): RecordingSaveTarget =
+    // A configuration session always merges: the sibling layout names its file after the device
+    // classifiers and renders the leg under them, so routing a configuration there would write the
+    // very classifier-keyed leg this keying exists to prevent. Every configuration trail is a
+    // unified document (a cast can't be expressed any other way), so the shared writer already
+    // answers UNIFIED_MERGE for the reachable cases — this makes the invariant enforced rather than
+    // merely documented, so no layout quirk can route a cast's legs to a per-device file.
+    if (selectedDeviceConfiguration != null) {
+      RecordingSaveTarget.UNIFIED_MERGE
+    } else if (
+      // Routing (empty-classifier / existing-sibling / greenfield branches) lives in the shared
+      // writer so the CLI, MCP, and desktop surfaces can't diverge. The CLI keeps its own enum;
+      // shouldSaveRecording separately refuses to write a sibling next to a shared unified trail.
+      UnifiedRecordingWriter.shouldMergeIntoSharedTrail(
+        trailFile,
+        recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration),
+      )
+    ) {
       RecordingSaveTarget.UNIFIED_MERGE
     } else {
       RecordingSaveTarget.CLASSIFIER_SIBLING
@@ -2241,23 +2304,31 @@ open class TrailCommand : Callable<Int> {
    * The internal generation site uses this purely to short-circuit work, so it should not
    * emit user-visible output that the outer save site will repeat one moment later.
    */
-  internal fun shouldSaveRecording(trailFile: File, deviceClassifiers: List<String>): Boolean {
+  internal fun shouldSaveRecording(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ): Boolean {
     if (!resolveEffectiveSaveRecording()) return false
     if (resolveEffectiveSelfHeal()) return true
     // Deterministic re-run guard: skip when this device's recording already exists on disk, so a
     // plain re-run never clobbers a (possibly hand-edited) source. "Already exists" is per-target:
     //  - CLASSIFIER_SIBLING: the `<classifier>.trail.yaml` sibling exists (also skip when no target
     //    resolves — an orphan file with no parent — matching prior behavior).
-    //  - UNIFIED_MERGE: this classifier's slot already carries a recording in the unified target file
+    //  - UNIFIED_MERGE: this session's slot (the selected configuration's NAME, or this device's
+    //    classifier chain) already carries a recording in the unified target file
     //    ([UnifiedRecordingWriter.unifiedRecordingTarget]). A missing file (greenfield) or an absent slot means "not
     //    recorded yet" → save.
-    return when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+    return when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
       RecordingSaveTarget.CLASSIFIER_SIBLING -> {
         val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return false
         !targetFile.exists()
       }
       RecordingSaveTarget.UNIFIED_MERGE ->
-        !UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, deviceClassifiers.joinToString("-"))
+        !UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(
+          trailFile,
+          recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration),
+        )
     }
   }
 
@@ -2275,17 +2346,21 @@ open class TrailCommand : Callable<Int> {
    * generation site inside [runSingleTrailFile] deliberately omits the call so a single
    * skipped trail produces at most one log line per session.
    */
-  private fun logSkippedRecording(trailFile: File, deviceClassifiers: List<String>) {
+  private fun logSkippedRecording(
+    trailFile: File,
+    deviceClassifiers: List<String>,
+    selectedDeviceConfiguration: String?,
+  ) {
     if (!resolveEffectiveSaveRecording()) return // user explicitly opted out — silent skip
     if (resolveEffectiveSelfHeal()) return // shouldSaveRecording would have been true
-    val skippedTarget: String = when (recordingSaveTarget(trailFile, deviceClassifiers)) {
+    val skippedTarget: String = when (recordingSaveTarget(trailFile, deviceClassifiers, selectedDeviceConfiguration)) {
       RecordingSaveTarget.CLASSIFIER_SIBLING -> {
         val targetFile = computeRecordingTargetFile(trailFile, deviceClassifiers) ?: return
         if (!targetFile.exists()) return // not the "existing target" skip reason
         targetFile.absolutePath
       }
       RecordingSaveTarget.UNIFIED_MERGE -> {
-        val classifier = deviceClassifiers.joinToString("-")
+        val classifier = recordingSlotKey(deviceClassifiers, selectedDeviceConfiguration)
         if (!UnifiedRecordingWriter.unifiedClassifierAlreadyRecorded(trailFile, classifier)) return
         val unifiedFile = UnifiedRecordingWriter.unifiedRecordingTarget(trailFile) ?: return
         "${unifiedFile.absolutePath} (classifier `$classifier`)"

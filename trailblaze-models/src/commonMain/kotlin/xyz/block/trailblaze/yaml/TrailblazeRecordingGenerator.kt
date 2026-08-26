@@ -59,6 +59,13 @@ private fun List<TrailblazeLog>.recordingClassifier(): String =
  * when the caller knows the device but the logs don't carry a `Started` entry (the interactive
  * recorder), or to force a specific slot in a test.
  *
+ * A multi-device session's legs are keyed by its configuration's NAME (matched exactly), never by
+ * the launch device's classifier chain, and the merge leaves the authored cast in `config.devices`
+ * untouched. Callers that carry the configuration pass [selectedDeviceConfiguration]; when omitted
+ * it is derived from the session's [SessionStatus.Started.selectedDeviceConfiguration] log, so
+ * logs-only preview callers key correctly too. Either way it takes precedence over
+ * [classifierOverride], which addresses a device.
+ *
  * **Preserves the other platforms.** A run only re-records the one device it ran on, but the
  * unified `trail.yaml` it ran against can already hold recordings for other classifiers. The merge
  * is seeded with the original run's full document — recovered from the session's
@@ -82,6 +89,7 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
   trailblazeYaml: TrailblazeYaml,
   sessionTrailConfig: TrailConfig? = null,
   classifierOverride: String? = null,
+  selectedDeviceConfiguration: String? = null,
 ): String {
   val items = try {
     generateRecordedTrailItems(trailblazeYaml, sessionTrailConfig)
@@ -89,7 +97,15 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
     Console.error("Failed to build recording items: ${e.stackTraceToString()}")
     return ""
   }
-  val classifier = classifierOverride ?: recordingClassifier()
+  // A configuration session keyed by a device-shaped fallback would merge a classifier leg (plus
+  // its driver pin) into a document whose authored legs are configuration-keyed, duplicating every
+  // step — so the session's own record of the configuration outranks both device fallbacks.
+  // Blank counts as absent at both levels. A blank slot would otherwise win the Elvis chain, key
+  // the whole document under "", and render an empty preview rather than falling back to the
+  // device classifier — the failure it is meant to prevent, in a worse form.
+  val sessionConfiguration = selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
+    ?: getSessionStartedInfo()?.selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
+  val classifier = sessionConfiguration ?: classifierOverride ?: recordingClassifier()
   if (classifier.isBlank()) {
     Console.error(
       "Can't render this recording: a unified trail keys each device's tools under a classifier " +
@@ -102,6 +118,7 @@ fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
       existing = existingUnifiedTrailFromRawYaml(trailblazeYaml),
       recordedItems = items,
       classifier = classifier,
+      selectedDeviceConfiguration = sessionConfiguration,
     )
     // An empty `trail:` is emitted as a config-only unified doc (decodeUnifiedTrail accepts it),
     // so the recording round-trips without ever re-parsing v1. A trailhead-only merge still can't

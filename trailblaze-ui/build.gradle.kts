@@ -96,3 +96,15 @@ kotlin {
     }
   }
 }
+
+// CoilProguardKeepRegressionTest reads the desktop ProGuard ruleset off disk, so Gradle can't see
+// that file as an input on its own — editing the rules alone would leave jvmTest UP-TO-DATE and the
+// guard silently skipped in the dev loop. Declaring it re-runs the test whenever the rules change.
+// Sibling-relative, so it resolves without hardcoding a path from the checkout root. `named` rather
+// than a name match inside `withType`, so a rename fails the build instead of quietly dropping the
+// input declaration — which is the same silent skip this exists to prevent.
+tasks.named<Test>("jvmTest") {
+  inputs.file(layout.projectDirectory.file("../trailblaze-desktop/proguard-rules.pro"))
+    .withPropertyName("desktopProguardRules")
+    .withPathSensitivity(PathSensitivity.RELATIVE)
+}

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host
 
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.After
@@ -11,6 +12,7 @@ import org.junit.rules.TemporaryFolder
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 
@@ -317,6 +319,45 @@ class AppTargetDiscoveryTest {
     val target = discovered.firstOrNull { it.id == "filesystemtarget" }
     assertNotNull(target)
     assertEquals("Filesystem Target", target.displayName)
+  }
+
+  @Test
+  fun `failFast rejects a malformed workspace trailblaze_yaml instead of returning a partial set`() {
+    val workspace = tempFolder.newFolder("workspace")
+    File(workspace, "trails/config/trailblaze.yaml").apply {
+      parentFile.mkdirs()
+      writeText(
+      """
+      targets:
+        - id: broken
+          display_name
+      """.trimIndent(),
+      )
+    }
+    val targetsDir = File(workspace, "trails/config/targets").apply { mkdirs() }
+    File(targetsDir, "filesystem-target.yaml").writeText(
+      """
+      id: filesystemtarget
+      display_name: Filesystem Target
+      platforms:
+        android:
+          app_ids:
+            - com.example.filesystem
+      """.trimIndent(),
+    )
+
+    // Leniency is right for the startup seed (see the sibling test: the workspace's readable
+    // targets still show up). It is wrong for a caller that REPLACES a live set, because the
+    // partial result is indistinguishable from a clean discovery and would be installed over the
+    // previous workspace's real targets — and would then match itself on the drift check.
+    assertFailsWith<Exception> {
+      AppTargetDiscovery.discover(
+        workspaceConfigProvider = {
+          TrailblazeWorkspaceConfigResolver.resolve(workspace.toPath(), envReader = { null })
+        },
+        failFast = true,
+      )
+    }
   }
 
   @Test
@@ -771,5 +812,51 @@ class AppTargetDiscoveryTest {
       "dist/targets/ must override workspace targets/ on id collision so freshly-compiled " +
         "trailmaps win over stale hand-authored copies left over from a pre-trailmap-migration setup",
     )
+  }
+
+  @Test
+  fun `a discovery failure resolves to the fallback set by default`() {
+    val discovered = AppTargetDiscovery.discover(
+      workspaceConfigProvider = { error("workspace resolution blew up") },
+    )
+
+    // The daemon-startup seed can't be denied a set, so the error is absorbed. This is also what
+    // makes `failFast` necessary: the result is indistinguishable from a workspace that simply
+    // declares no targets of its own.
+    assertEquals(
+      setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id),
+      discovered.map { it.id }.toSet(),
+    )
+  }
+
+  @Test
+  fun `failFast propagates a discovery failure instead of masking it as the fallback set`() {
+    val thrown = assertFailsWith<IllegalStateException> {
+      AppTargetDiscovery.discover(
+        workspaceConfigProvider = { error("workspace resolution blew up") },
+        failFast = true,
+      )
+    }
+
+    // Callers that REPLACE a live set (TrailblazeDeviceManager.reloadAppTargets) rely on this:
+    // without it a broken workspace silently overwrites real targets with the one-target fallback.
+    assertEquals("workspace resolution blew up", thrown.message)
+  }
+
+  @Test
+  fun `failFast still returns the fallback for a workspace that declares no targets`() {
+    val workspace = tempFolder.newFolder("empty-workspace")
+    File(workspace, "trails/config").mkdirs()
+
+    val discovered = AppTargetDiscovery.discover(
+      workspaceConfigProvider = {
+        TrailblazeWorkspaceConfigResolver.resolve(workspace.toPath(), envReader = { null })
+      },
+      failFast = true,
+    )
+
+    // failFast changes the ERROR path only. An empty result is a legitimate answer, so a switch
+    // into a bare workspace must still leave the picker with something to render.
+    assertTrue(discovered.isNotEmpty())
   }
 }

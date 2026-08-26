@@ -1,6 +1,6 @@
 // @ts-nocheck -- migrated from .jsx; this file has pre-existing type errors from years of
 // untyped legacy JS (mostly optional params/props without defaults, inferred by TS as required).
-// Babel strips types at load time regardless, so the browser runtime is unaffected.
+// The build-time transpile strips types regardless, so the browser runtime is unaffected.
 // Remove this pragma once the file's real errors are fixed; run `bun run typecheck` to see them.
 
 const { useState, useEffect } = React;
@@ -55,7 +55,10 @@ const NAV = [
   // or both) renders its own session list above these, in NavRail.
   { group: 'Trails', items: [['trails', 'Trails', 'route']] },
 ];
-const RUNS_NAV = [{ group: 'Runs', items: [['active', 'Active', 'radio'], ['completed', 'History', 'check-circle-2']] }];
+// One door for runs: the Runs screen lists in-flight runs under an "Active" section and finished
+// ones under "Completed", so there's nothing to split across two nav rows. No group heading — it
+// would render "Runs" directly above the single row also labelled "Runs".
+const RUNS_NAV = [{ group: null, items: [['runs', 'Runs', 'gallery-vertical-end']] }];
 // Trailmaps is reference material, not part of the Blaze→Trails authoring flow — pin it to the
 // bottom of the rail (just above Search), visually separated by a divider.
 const TRAILMAPS = [
@@ -353,7 +356,7 @@ function RailNavigationGroups({ groups, route, go, badges, compact }) {
       {g.group && <div className="tb-rail-h">{g.group}</div>}
       {g.items.map(([id, label, ico, params]) => {
         const on = route === id;
-        const tip = id === 'trails' ? 'Trails' : id === 'active' ? 'Active runs' : id === 'completed' ? 'Run history' : label;
+        const tip = id === 'trails' ? 'Trails' : id === 'runs' ? 'Active and completed runs' : label;
         // Parameterized destinations use their payload object as an effect trigger. Copy it for
         // every activation so clicking an already-visited destination (notably Test YAML) reopens
         // the requested panel instead of reusing a stale object reference.
@@ -520,7 +523,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
     ['braces', 'Test YAML…', null, () => { go('interact', { openYaml: true }); close(); }],
     ['play', 'Run a trail…', '⌘↵', () => { openRun(); close(); }],
     ['smartphone', 'Choose target & devices…', '⌘D', () => { go('home'); close(); }],
-    ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('completed'); close(); }],
+    ['gallery-vertical-end', 'Go to Runs', '⌘O', () => { go('runs'); close(); }],
     ['wrench', 'Browse custom tools', null, () => { go('tools'); close(); }],
   ].filter(([, label]) => match(label)).map(([ico, label, kbd, fn]) => ({ ico, label, kbd, sub: null, fn }));
 
@@ -544,7 +547,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
       label: s.title || s.id,
       status: s.status,
       sub: [...new Set([s.target, s.platform, s.device].filter(Boolean)), s.ago].filter(Boolean).join(' · '),
-      fn: () => { go('completed', { sel: s.id }); close(); },
+      fn: () => { go('runs', { sel: s.id }); close(); },
     }));
 
   const flat = [...actions, ...trailItems, ...sessionItems];
@@ -604,7 +607,7 @@ function CommandPalette({ go, openRun, close, closing, trails = [] }) {
 // A retired route that forwards to its replacement (params intact), so old links and
 // TRAILRUNNER_UI navigate commands keep working after routes merge.
 function RedirectScreen({ go, to, params, active }) {
-  React.useEffect(() => { if (active) go(to, params || {}); }, [active]);
+  React.useEffect(() => { if (active) go(to, params || {}, true); }, [active]);
   return null;
 }
 
@@ -750,10 +753,13 @@ function App() {
   // Payloads are addressed to one screen: with every visited screen now staying
   // mounted, an unscoped payload would also fire effects on hidden screens that
   // happen to read the same prop names (Active and Completed both take `sel`).
-  const go = (r, p = {}) => {
+  // `replace` swaps the current entry instead of pushing a new one — what a retired route needs
+  // when it forwards, so ⌘[ returns to wherever the stale link was clicked instead of landing back
+  // on the retired route and being bounced forward again.
+  const go = (r, p = {}, replace = false) => {
     const pl = { for: r, data: p };
     setRoute(r); setPayload(pl);
-    const h = histRef.current.slice(0, histIdxRef.current + 1);
+    const h = histRef.current.slice(0, histIdxRef.current + (replace ? 0 : 1));
     h.push({ route: r, payload: pl });
     histRef.current = h;
     histIdxRef.current = h.length - 1;
@@ -868,11 +874,11 @@ function App() {
     if (gtPlatform) arr = arr.filter((t) => t.platform === gtPlatform);
     return TB.countTrailBundles(arr);
   }, [trails.data, gt && gt.target, gtPlatform]);
-  // Runs badges: a live count, plus a glowing dot on Active while a run is in flight (the
-  // sessions hook polls every 2.5s while anything is running, so this stays current).
+  // Runs badge: the count of every run the screen lists (active + completed), plus a glowing dot
+  // while a run is in flight (the sessions hook polls every 2.5s while anything is running, so
+  // this stays current).
   const sessionList = sessions.data || [];
   const runningCount = sessionList.filter((s) => s.status === 'running').length;
-  const completedCount = sessionList.length - runningCount;
   const externalAgentRuns = (externalAgents.data && externalAgents.data.runs) || [];
   // A generation run (non-null demoRunId) is embedded inside its demo run's view, never its own
   // sidebar entry - the demo run is the single door for the whole Record -> Generate flow.
@@ -881,8 +887,7 @@ function App() {
   const navBadges = {
     create: { count: runningExternalAgentCount, glow: runningExternalAgentCount > 0 },
     trails: { count: bundleCount },
-    active: { count: runningCount, glow: runningCount > 0 },
-    completed: { count: completedCount },
+    runs: { count: sessionList.length, glow: runningCount > 0 },
   };
   const [pinnedId, setPinnedId] = useState(null);
   useEffect(() => {
@@ -897,12 +902,15 @@ function App() {
     agents: <RedirectScreen go={go} to="create" params={pf('agents')} />,
     'agents-setup': <AgentSetupScreen go={go} />,
     interact: <RecordScreen key="interact" go={go} yamlSeed={pf('interact')} />,
-    trails: <TrailsScreen go={go} openRun={openRun} initSel={pf('trails').sel} initMode={pf('trails').mode} />,
+    trails: <TrailsScreen go={go} openRun={openRun} initSel={pf('trails').sel} initMode={pf('trails').mode}
+      initRequest={payload.for === 'trails' ? payload : null} />,
     tools: <ToolsScreen initTool={pf('tools').tool} go={go} />,
     trailheads: <ComponentTypeScreen kind="trailheads" initSel={pf('trailheads').sel} />,
-    active: <SessionsScreen view="active" initSel={pf('active').sel} followLive={pf('active').followLive} go={go} />,
-    completed: <SessionsScreen view="completed" initSel={pf('completed').sel} followLive={pf('completed').followLive} go={go} />,
-    runs: <SessionsScreen view="all" initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
+    // Active and History merged into Runs; both old routes forward there with their payload so
+    // existing links (retry/dispatch hand-offs, embedded workspace links, UI commands) keep working.
+    active: <RedirectScreen go={go} to="runs" params={pf('active')} />,
+    completed: <RedirectScreen go={go} to="runs" params={pf('completed')} />,
+    runs: <SessionsScreen initSel={pf('runs').sel} followLive={pf('runs').followLive} go={go} />,
     integrations: <IntegrationsScreen go={go} />,
     settings: <SettingsScreen go={go} initTab={pf('settings').tab} />,
     // Deep-link only (#companion/<runId>, opened by `trailblaze companion start`): the read-only

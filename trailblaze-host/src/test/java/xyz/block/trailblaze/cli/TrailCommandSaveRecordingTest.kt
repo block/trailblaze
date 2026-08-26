@@ -97,7 +97,7 @@ class TrailCommandSaveRecordingTest {
     }
     val trail = tempFolder.newFile("foo.trail.yaml")
 
-    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone")))
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -110,7 +110,7 @@ class TrailCommandSaveRecordingTest {
     val trailDir = tempFolder.newFolder()
     val trail = File(trailDir, "source.trail.yaml").apply { writeText("") }
 
-    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone")))
+    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -122,7 +122,7 @@ class TrailCommandSaveRecordingTest {
     val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
     assertTrue(trail.exists())
 
-    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone")))
+    assertFalse(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -133,7 +133,7 @@ class TrailCommandSaveRecordingTest {
     val trailDir = tempFolder.newFolder()
     val trail = File(trailDir, "android-phone.trail.yaml").apply { writeText("") }
 
-    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone")))
+    assertTrue(cmd.shouldSaveRecording(trail, listOf("android-phone"), selectedDeviceConfiguration = null))
   }
 
   // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ class TrailCommandSaveRecordingTest {
     File(dir, "blaze.yaml").writeText("config:\n  id: x\ntrail:\n  - step: do it\n")
     assertEquals(
       TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
-      cmd.recordingSaveTarget(dir, listOf("android")),
+      cmd.recordingSaveTarget(dir, listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -212,7 +212,7 @@ class TrailCommandSaveRecordingTest {
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText("trail:\n  - step: s\n")
     assertEquals(
       TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
-      cmd.recordingSaveTarget(dir, listOf("android")),
+      cmd.recordingSaveTarget(dir, listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -223,7 +223,7 @@ class TrailCommandSaveRecordingTest {
     val unified = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("trail:\n  - step: s\n") }
     assertEquals(
       TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
-      cmd.recordingSaveTarget(unified, listOf("android")),
+      cmd.recordingSaveTarget(unified, listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -237,7 +237,26 @@ class TrailCommandSaveRecordingTest {
     writeUnifiedWithSlot(File(dir, "ios.trail.yaml"), "ios")
     assertEquals(
       TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
-      cmd.recordingSaveTarget(dir, listOf("android")),
+      cmd.recordingSaveTarget(dir, listOf("android"), selectedDeviceConfiguration = null),
+    )
+  }
+
+  @Test
+  fun `recordingSaveTarget is UNIFIED_MERGE for a configuration session in a sibling-layout directory`() {
+    // The layout that would otherwise route to a sibling: per-device files, no shared trail.yaml.
+    // A sibling names its file after the device classifiers and renders the leg under them, so a
+    // configuration session routed there would write the classifier-keyed leg this keying prevents.
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    writeUnifiedWithSlot(File(dir, "lab-a.trail.yaml"), "lab-a")
+    assertEquals(
+      TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
+      cmd.recordingSaveTarget(dir, listOf("lab-a"), selectedDeviceConfiguration = null),
+      "a single-device run in this layout still updates its own per-device file",
+    )
+    assertEquals(
+      TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
+      cmd.recordingSaveTarget(dir, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair"),
     )
   }
 
@@ -248,7 +267,7 @@ class TrailCommandSaveRecordingTest {
     val dir = tempFolder.newFolder()
     assertEquals(
       TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
-      cmd.recordingSaveTarget(dir, emptyList()),
+      cmd.recordingSaveTarget(dir, emptyList(), selectedDeviceConfiguration = null),
     )
   }
 
@@ -258,7 +277,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     assertEquals(
       TrailCommand.RecordingSaveTarget.CLASSIFIER_SIBLING,
-      cmd.recordingSaveTarget(File("orphan.trail.yaml"), listOf("android")),
+      cmd.recordingSaveTarget(File("orphan.trail.yaml"), listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -271,7 +290,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     File(dir, "blaze.yaml").writeText("- prompts:\n  - step: s\n")
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("android")))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -279,7 +298,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android")))
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -288,7 +307,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("ios")))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("ios"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -296,7 +315,7 @@ class TrailCommandSaveRecordingTest {
     val cmd = command(selfHeal = true)
     val dir = tempFolder.newFolder()
     writeUnifiedWithAndroidSlot(dir)
-    assertTrue(cmd.shouldSaveRecording(dir, listOf("android")))
+    assertTrue(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -311,7 +330,7 @@ class TrailCommandSaveRecordingTest {
       trail = listOf(UnifiedTrailStep(step = "Step 1")),
     )
     File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(createTrailblazeYaml().encodeUnifiedTrailToString(unified))
-    assertFalse(cmd.shouldSaveRecording(dir, listOf("android")))
+    assertFalse(cmd.shouldSaveRecording(dir, listOf("android"), selectedDeviceConfiguration = null))
   }
 
   @Test
@@ -320,15 +339,15 @@ class TrailCommandSaveRecordingTest {
     val cmd = command()
     val dir = tempFolder.newFolder()
     val recording = File(dir, "recording.trail.yaml").apply {
-      writeText(unifiedRecordingYaml(driver = "D", toolName = "tapCart", classifier = "android-phone"))
+      writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android-phone"))
     }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android", "phone"), selectedDeviceConfiguration = null)
 
     val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
     assertEquals(listOf("tapCart"), unified.trail.single().recordings["android-phone"]?.map { it.name })
     assertFalse(
-      cmd.shouldSaveRecording(dir, listOf("android", "phone")),
+      cmd.shouldSaveRecording(dir, listOf("android", "phone"), selectedDeviceConfiguration = null),
       "the same multi-segment device is now recorded, so a plain re-run skips",
     )
   }
@@ -339,10 +358,10 @@ class TrailCommandSaveRecordingTest {
     val dir = tempFolder.newFolder()
     val corrupt = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).apply { writeText("foo: not a unified trail\n") }
     val recording = File(dir, "recording.trail.yaml").apply {
-      writeText(unifiedRecordingYaml(driver = "D", toolName = "tapCart", classifier = "android"))
+      writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android"))
     }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     assertEquals(
       "foo: not a unified trail\n",
@@ -362,10 +381,10 @@ class TrailCommandSaveRecordingTest {
     val templated = "config:\n  target: {{CWD}}\ntrail:\n  - step: s\n"
     val named = File(dir, "login.trail.yaml").apply { writeText(templated) }
     val recording = File(dir, "recording.trail.yaml").apply {
-      writeText(unifiedRecordingYaml(driver = "D", toolName = "tapCart", classifier = "android"))
+      writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android"))
     }
 
-    cmd.saveRecordingAsUnified(named, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(named, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     assertEquals(templated, named.readText(), "the template-bearing source must be left byte-identical")
     assertFalse(File(dir, "android.trail.yaml").exists(), "no legacy sibling either")
@@ -381,7 +400,7 @@ class TrailCommandSaveRecordingTest {
     val dir = tempFolder.newFolder()
     val recording = File(dir, "recording.trail.yaml").apply { writeText("not: [a, trail\n") }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     assertFalse(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(), "no shared trail written")
     assertFalse(File(dir, "android.trail.yaml").exists(), "no per-device sibling written either")
@@ -441,12 +460,12 @@ class TrailCommandSaveRecordingTest {
       writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android"))
     }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
     assertTrue(unifiedFile.isFile, "a fresh unified trail.yaml must be written")
     val unified = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText())
-    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android"))
+    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android")?.driver?.name)
     assertEquals(listOf("tapCart"), unified.trail.single().recordings["android"]?.map { it.name })
   }
 
@@ -480,7 +499,7 @@ class TrailCommandSaveRecordingTest {
     )
     val recording = File(dir, "recording.trail.yaml").apply { writeText(yaml.encodeUnifiedTrailToString(bothDevices)) }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     val unified = yaml.decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
     val step = unified.trail.single()
@@ -495,20 +514,20 @@ class TrailCommandSaveRecordingTest {
     // First device.
     File(dir, "recording.trail.yaml").apply {
       writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "androidCart", classifier = "android"))
-    }.also { cmd.saveRecordingAsUnified(dir, it, listOf("android")) }
+    }.also { cmd.saveRecordingAsUnified(dir, it, listOf("android"), selectedDeviceConfiguration = null) }
     // Second device, same NL step, different recording.
     val iosRecording = File(dir, "recording.trail.yaml").apply {
       writeText(unifiedRecordingYaml(driver = "IOS_HOST", toolName = "iosCart", classifier = "ios"))
     }
 
-    cmd.saveRecordingAsUnified(dir, iosRecording, listOf("ios"))
+    cmd.saveRecordingAsUnified(dir, iosRecording, listOf("ios"), selectedDeviceConfiguration = null)
 
     val unified = createTrailblazeYaml().decodeUnifiedTrail(File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).readText())
     val step = unified.trail.single()
     assertEquals(listOf("androidCart"), step.recordings["android"]?.map { it.name }, "android slot preserved")
     assertEquals(listOf("iosCart"), step.recordings["ios"]?.map { it.name }, "ios slot added")
-    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android"))
-    assertEquals("IOS_HOST", unified.config.devices?.get("ios"))
+    assertEquals("ANDROID_ONDEVICE_INSTRUMENTATION", unified.config.devices?.get("android")?.driver?.name)
+    assertEquals("IOS_HOST", unified.config.devices?.get("ios")?.driver?.name)
   }
 
   // ---------------------------------------------------------------------------
@@ -526,7 +545,7 @@ class TrailCommandSaveRecordingTest {
     File(dir, "payment.trail.yaml").writeText("trail:\n  - step: p\n")
     assertEquals(
       TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
-      cmd.recordingSaveTarget(named, listOf("android")),
+      cmd.recordingSaveTarget(named, listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -543,7 +562,7 @@ class TrailCommandSaveRecordingTest {
     }
     assertEquals(
       TrailCommand.RecordingSaveTarget.UNIFIED_MERGE,
-      cmd.recordingSaveTarget(named, listOf("android")),
+      cmd.recordingSaveTarget(named, listOf("android"), selectedDeviceConfiguration = null),
     )
   }
 
@@ -558,7 +577,7 @@ class TrailCommandSaveRecordingTest {
       writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android"))
     }
 
-    cmd.saveRecordingAsUnified(named, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(named, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     assertFalse(
       File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).exists(),
@@ -583,11 +602,11 @@ class TrailCommandSaveRecordingTest {
     writeUnifiedWithSlot(named, "android")
 
     assertFalse(
-      cmd.shouldSaveRecording(named, listOf("android")),
+      cmd.shouldSaveRecording(named, listOf("android"), selectedDeviceConfiguration = null),
       "this classifier is already recorded in the named file, so a plain re-run skips",
     )
     assertTrue(
-      cmd.shouldSaveRecording(named, listOf("ios")),
+      cmd.shouldSaveRecording(named, listOf("ios"), selectedDeviceConfiguration = null),
       "a classifier without a slot in the named file still saves",
     )
   }
@@ -602,7 +621,7 @@ class TrailCommandSaveRecordingTest {
       writeText(unifiedRecordingYamlWithTrailhead(trailheadToolName = "openBootstrap", classifier = "android"))
     }
 
-    cmd.saveRecordingAsUnified(dir, recording, listOf("android"))
+    cmd.saveRecordingAsUnified(dir, recording, listOf("android"), selectedDeviceConfiguration = null)
 
     val unifiedFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
     assertTrue(unifiedFile.isFile, "a single-tool trailhead stays unified")
@@ -610,6 +629,115 @@ class TrailCommandSaveRecordingTest {
     val unified = createTrailblazeYaml().decodeUnifiedTrail(unifiedFile.readText())
     assertEquals(listOf("openBootstrap"), unified.trailhead?.recordings?.get("android")?.map { it.name })
   }
+
+  // ---------------------------------------------------------------------------
+  // Multi-device configuration sessions — legs keyed by the configuration NAME
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `a configuration session saves under the configuration name and leaves the cast untouched`() {
+    // The live dual-display repro, fixed: the session ran the `pos-pair` configuration, so its recording merges
+    // under the `pos-pair` slot — never under the start device's classifier chain — and the authored
+    // cast in config.devices is not stripped, re-keyed, or given a driver pin.
+    val cmd = TrailCommand()
+    val dir = tempFolder.newFolder()
+    val trailFile = File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME)
+    val declaredDevices = configurationDevices()
+    val yaml = createTrailblazeYaml()
+    trailFile.writeText(
+      yaml.encodeUnifiedTrailToString(
+        UnifiedTrail(
+          config = UnifiedTrailConfig(id = "pos/tip", target = "pos", devices = declaredDevices),
+          trail = listOf(UnifiedTrailStep(step = "The buyer chooses a tip")),
+        ),
+      ),
+    )
+    // The intermediate the run produces: seeded from the executed trail (so it carries the cast),
+    // with this session's leg keyed by the configuration name.
+    val recording = File(dir, "recording.trail.yaml").apply {
+      writeText(
+        yaml.encodeUnifiedTrailToString(
+          UnifiedTrailAdapter.mergeRecordedClassifier(
+            existing = yaml.decodeUnifiedTrail(trailFile.readText()),
+            recordedItems = listOf(
+              TrailYamlItem.ConfigTrailItem(TrailConfig(id = "pos/tip", target = "pos", driver = "ANDROID_ONDEVICE_ACCESSIBILITY")),
+              TrailYamlItem.PromptsTrailItem(
+                listOf(DirectionStep(step = "The buyer chooses a tip", recording = ToolRecording(tools = listOf(tool("tapTip"))))),
+              ),
+            ),
+            classifier = "pos-pair",
+            selectedDeviceConfiguration = "pos-pair",
+          ),
+        ),
+      )
+    }
+
+    cmd.saveRecordingAsUnified(dir, recording, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair")
+
+    val unified = yaml.decodeUnifiedTrail(trailFile.readText())
+    val step = unified.trail.single()
+    assertEquals(listOf("tapTip"), step.recordings["pos-pair"]?.map { it.name }, "leg keyed by the configuration name")
+    assertNull(step.recordings["lab-a"], "no leg keyed by the start device's classifier chain")
+    assertEquals(declaredDevices, unified.config.devices, "cast preserved byte-identical, no driver pin added")
+  }
+
+  @Test
+  fun `shouldSaveRecording checks the configuration slot for a configuration session`() {
+    val cmd = command()
+    val dir = tempFolder.newFolder()
+    val yaml = createTrailblazeYaml()
+    File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      yaml.encodeUnifiedTrailToString(
+        UnifiedTrail(
+          config = UnifiedTrailConfig(id = "pos/tip", target = "pos", devices = configurationDevices()),
+          trail = listOf(
+            UnifiedTrailStep(
+              step = "The buyer chooses a tip",
+              recordings = mapOf("pos-pair" to listOf(tool("tapTip"))),
+            ),
+          ),
+        ),
+      ),
+    )
+
+    assertFalse(
+      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair"),
+      "the pos-pair slot is already recorded, so a plain replay of the configuration skips the save",
+    )
+    assertTrue(
+      cmd.shouldSaveRecording(dir, listOf("lab-a"), selectedDeviceConfiguration = null),
+      "the launch device's own chain has no leg — the guard reads the configuration slot, not this",
+    )
+
+    // First authoring of the same configuration: same cast, no leg recorded yet.
+    val unrecorded = tempFolder.newFolder()
+    File(unrecorded, TrailRecordings.UNIFIED_TRAIL_FILENAME).writeText(
+      yaml.encodeUnifiedTrailToString(
+        UnifiedTrail(
+          config = UnifiedTrailConfig(id = "pos/tip", target = "pos", devices = configurationDevices()),
+          trail = listOf(UnifiedTrailStep(step = "The buyer chooses a tip")),
+        ),
+      ),
+    )
+    assertTrue(
+      cmd.shouldSaveRecording(unrecorded, listOf("lab-a"), selectedDeviceConfiguration = "pos-pair"),
+      "the configuration has no leg yet, so first authoring saves",
+    )
+  }
+
+  /** An authored `config.devices:` cast: the `pos-pair` configuration plus an unrelated single entry. */
+  private fun configurationDevices(): Map<String, xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition> =
+    linkedMapOf(
+      "pos-pair" to xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition(
+        devices = linkedMapOf(
+          "seller" to xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition(classifier = "lab-a"),
+          "buyer" to xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition(classifier = "lab-b"),
+        ),
+      ),
+      "android-tablet" to xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition(
+        driver = xyz.block.trailblaze.devices.TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      ),
+    )
 
   // --- fixtures ---
 
@@ -630,7 +758,7 @@ class TrailCommandSaveRecordingTest {
   private fun writeUnifiedWithSlot(target: File, classifier: String) {
     val yaml = createTrailblazeYaml()
     val recordingItems = listOf<TrailYamlItem>(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "D")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "x", target = "y", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
       TrailYamlItem.PromptsTrailItem(
         listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("a"))))),
       ),
@@ -672,7 +800,7 @@ class TrailCommandSaveRecordingTest {
       UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = null,
         recordedItems = listOf(
-          TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "D")),
+          TrailYamlItem.ConfigTrailItem(TrailConfig(id = "app/x", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
           TrailYamlItem.TrailheadTrailItem(
             TrailheadDefinition(step = "Bootstrap", tools = listOf(tool(trailheadToolName))),
           ),

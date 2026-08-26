@@ -64,7 +64,7 @@ object TrailYamlSchemaBuilder {
     val toolCallItem = ToolYamlSchemaBuilder.toolCallItemSchema(tools, closedToolNames = false)
     putJsonArray("oneOf") {
       add(v1ListSchema(toolCallItem))
-      add(unifiedMappingSchema())
+      add(unifiedMappingSchema(toolCallItem))
     }
   }
 
@@ -80,7 +80,7 @@ object TrailYamlSchemaBuilder {
       put("type", "object")
       put("additionalProperties", true)
       putJsonObject("properties") {
-        put("config", configObjectSchema())
+        put("config", configObjectSchema(unified = false))
         putJsonObject("prompts") {
           put("type", "array")
           put("description", "Ordered natural-language steps. A `step:` performs an action; a `verify:` asserts state.")
@@ -96,8 +96,12 @@ object TrailYamlSchemaBuilder {
   }
 
   /** The `config:` value schema — known [xyz.block.trailblaze.yaml.TrailConfig] fields for completion,
-   * open (`additionalProperties: true`) so a new/unknown config field never false-flags a valid trail. */
-  private fun configObjectSchema(): JsonObject = buildJsonObject {
+   * open (`additionalProperties: true`) so a new/unknown config field never false-flags a valid trail.
+   * [unified] switches the handful of fields that genuinely differ in
+   * [xyz.block.trailblaze.yaml.unified.UnifiedTrailConfig]: the unified format retires `platform:` and
+   * `driver:` in favor of a per-classifier `devices:` map, and its `skip:` is per-classifier too — so
+   * typing those v1-style here would red-squiggle a valid unified config. */
+  private fun configObjectSchema(unified: Boolean): JsonObject = buildJsonObject {
     put("type", "object")
     put("additionalProperties", true)
     putJsonObject("properties") {
@@ -107,9 +111,14 @@ object TrailYamlSchemaBuilder {
       stringField("description", "Longer description of what the trail does.")
       stringField("priority", "Priority label (e.g. P0…P3).")
       stringField("target", "Target identifier: an org alias, a package id, or a web URL.")
-      stringField("platform", "Platform hint for device selection — commonly `android`, `ios`, or `web`.")
-      stringField("driver", "Explicit driver type (e.g. `ANDROID_ONDEVICE_ACCESSIBILITY`, `IOS_HOST`); takes precedence over platform.")
-      stringField("skip", "When set, mark the trail skipped with this reason (empty string = not skipped).")
+      if (unified) {
+        putJsonObject("devices") { put("type", "object"); put("description", "Per-classifier driver pins (e.g. `android: ANDROID_ONDEVICE_ACCESSIBILITY`); the keys also declare which device classifiers this trail targets."); put("additionalProperties", true) }
+        putJsonObject("skip") { put("type", "object"); put("description", "Per-classifier skip reasons (e.g. `android: \"blocked on #123\"`); a non-blank reason skips the trail on that device family."); put("additionalProperties", true) }
+      } else {
+        stringField("platform", "Platform hint for device selection — commonly `android`, `ios`, or `web`.")
+        stringField("driver", "Explicit driver type (e.g. `ANDROID_ONDEVICE_ACCESSIBILITY`, `IOS_HOST`); takes precedence over platform.")
+        stringField("skip", "When set, mark the trail skipped with this reason (empty string = not skipped).")
+      }
       putJsonObject("tags") { put("type", "array"); put("description", "Free-form labels for grouping/filtering."); putJsonObject("items") { put("type", "string") } }
       putJsonObject("metadata") { put("type", "object"); put("description", "Arbitrary string metadata (e.g. external test-case ids), surfaced on the run report's Info tab. The `owner` key also renders as the run's subtitle and powers the report's Owner sort."); put("additionalProperties", true) }
       putJsonObject("memory") { put("type", "object"); put("description", "Pre-seeded AgentMemory variables, visible to {{name}} interpolation."); put("additionalProperties", true) }
@@ -146,21 +155,83 @@ object TrailYamlSchemaBuilder {
   }
 
   /**
-   * Unified format: a mapping with `config:` + `trail:`. Kept intentionally loose — the unified step
-   * shape carries per-device-classifier recordings whose keys are dynamic, so deeply modelling it here
-   * would risk false errors for little completion gain. We validate only that the two top-level keys
-   * are objects/arrays and leave their interiors open. (Tool-completion for unified recordings is a
-   * follow-up once the format is more common.)
+   * Unified format: a mapping with `config:` + `trail:`, plus the optional `trailhead:` (step 0) —
+   * mirrors [xyz.block.trailblaze.yaml.unified.UnifiedTrail]. Modeled as richly as the v1 branch (and
+   * just as open) so trails written in the unified format — now the format the library writes — get
+   * the same config-field and tool-name completion instead of none.
+   *
+   * No `required` here, deliberately: this is a `oneOf` branch, so requiring `config` + `trail` would
+   * make a half-written mapping (just `config:` so far) match neither branch and report "matches no
+   * schema" while the author is still typing.
    */
-  private fun unifiedMappingSchema(): JsonObject = buildJsonObject {
+  private fun unifiedMappingSchema(toolCallItem: JsonObject): JsonObject = buildJsonObject {
     put("type", "object")
     put("description", "Unified trail: a `config:` mapping plus a `trail:` list of steps.")
-    putJsonArray("required") { add("config"); add("trail") }
     put("additionalProperties", true)
     putJsonObject("properties") {
-      putJsonObject("config") { put("type", "object"); put("additionalProperties", true) }
-      putJsonObject("trail") { put("type", "array") }
+      put("config", configObjectSchema(unified = true))
+      put(
+        "trailhead",
+        unifiedStepSchema(
+          "The deterministic step 0, run before the `trail:` steps. Shaped like a step, except each classifier records at most one tool call.",
+          trailheadToolCallSchema(toolCallItem),
+          isTrailhead = true,
+        ),
+      )
+      putJsonObject("trail") {
+        put("type", "array")
+        put("description", "Ordered unified steps: one natural-language line each, plus per-device-classifier recordings.")
+        put(
+          "items",
+          unifiedStepSchema(
+            "One unified step: an action or assertion in natural language, optionally with recorded tool calls per device classifier.",
+            buildJsonObject { put("type", "array"); put("items", toolCallItem) },
+            isTrailhead = false,
+          ),
+        )
+      }
     }
+  }
+
+  /**
+   * One unified step (also the `trailhead:` shape): a `step:` OR a `verify:` natural-language line
+   * (mirrors [xyz.block.trailblaze.yaml.unified.UnifiedTrailStep]) plus a `recording:` map keyed by
+   * DEVICE CLASSIFIER (`android`, `ios-iphone`, `web`, …). That classifier vocabulary is dynamic, so
+   * the tool completion hangs off `recording`'s `additionalProperties` ([classifierRecording]) rather
+   * than named properties. Open per-step so we never flag a valid step.
+   *
+   * [isTrailhead] mirrors [xyz.block.trailblaze.yaml.unified.UnifiedTrailStepSerializer]'s own flag:
+   * a trailhead is a deterministic bootstrap, not an assertion, so its decoder rejects `verify:`.
+   * Offering it here would autocomplete a trailhead the parser then refuses to load.
+   */
+  private fun unifiedStepSchema(description: String, classifierRecording: JsonObject, isTrailhead: Boolean): JsonObject = buildJsonObject {
+    put("type", "object")
+    put("description", description)
+    put("additionalProperties", true)
+    putJsonObject("properties") {
+      stringField("step", "An action to perform, in natural language.")
+      if (!isTrailhead) stringField("verify", "An assertion about the current screen, in natural language.")
+      putJsonObject("recordable") { put("type", "boolean"); put("description", "Whether this step is recorded/replayed. Defaults to true.") }
+      putJsonObject("maxRetries") { put("type", "integer"); put("description", "Per-step AI retry budget override.") }
+      putJsonObject("recording") {
+        put("type", "object")
+        put("description", "Recorded tool calls per device classifier (e.g. `android:`, `ios:`, `web:`). Autocompletes + validates against the trail's target tools.")
+        put("additionalProperties", classifierRecording)
+      }
+    }
+  }
+
+  /**
+   * A trailhead classifier's recorded value: at most ONE tool call (`android: { launchApp: {…} }`), or
+   * an explicit empty map (`android: {}`) for a deterministic no-op — never a list. Reuses the
+   * tool-call item's tool-name properties for completion but drops its `minProperties: 1` so the `{}`
+   * no-op the emitter writes isn't flagged.
+   */
+  private fun trailheadToolCallSchema(toolCallItem: JsonObject): JsonObject = buildJsonObject {
+    put("type", "object")
+    put("maxProperties", 1)
+    put("additionalProperties", true)
+    put("properties", toolCallItem.getValue("properties"))
   }
 
   private fun JsonObjectBuilder.stringField(name: String, description: String) {

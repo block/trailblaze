@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<!-- The daemon-served live report document: one run rendered by the SAME run-report viewer the
+     exported .html and the CLI report use, but with screenshots LINKED to the daemon's /static/
+     tree instead of embedded as base64. Reachable at /trailrunner/report-live.html?session=<id>,
+     and meant to be embedded by Trail Runner in a same-origin iframe.
+
+     `<base href="/trailrunner/">` is injected into index.html only, not into this resource, so every
+     path below is root-absolute. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Run report</title>
+<script>
+  // Theming. EMBEDDED, the host owns it: Trail Runner's own 'tb-theme' decides, applied before first
+  // paint using the app's own rule so the frame and the app around it can't disagree, and the viewer
+  // drops its theme toggle under ?chrome=none so nothing in here can argue with that.
+  //
+  // Opened DIRECTLY there is no host, and the viewer's toggle IS on screen, so this document has to
+  // honour what that toggle stored ('trailblaze-report-theme') — the viewer applies it on click but
+  // never reads it back at boot, that is the job of whatever page hosts it. Failing that, the app's
+  // preference, then the OS.
+  //
+  // Kept in sync two ways: a `storage` event, which fires here when the app next door (or another
+  // tab of this document) writes a preference, and the OS switch, which only moves the unpinned case.
+  (function () {
+    var embedded = /(^|[?&])chrome=none(&|$)/.test(location.search);
+    function apply() {
+      try {
+        var own = embedded ? null : localStorage.getItem('trailblaze-report-theme');
+        var mode = own === 'light' || own === 'dark' ? own : (JSON.parse(localStorage.getItem('tb-theme')) || 'system');
+        var prefersLight = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches;
+        var dark = mode === 'dark' || (mode === 'system' && !prefersLight);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+    }
+    apply();
+    window.addEventListener('storage', function (e) { if (!e.key || e.key === 'tb-theme' || e.key === 'trailblaze-report-theme') apply(); });
+    var media = window.matchMedia && matchMedia('(prefers-color-scheme: light)');
+    if (media && media.addEventListener) media.addEventListener('change', apply);
+  })();
+</script>
+<!-- Shared run-report renderer + log→timeline extraction, and the payload assembler shared with the
+     Share button. Blocking classic scripts, so the stylesheet below is in place before first paint. -->
+<script src="/trailrunner/app/run-report-core.js"></script>
+<script src="/trailrunner/app/run-payload.js"></script>
+<script>
+  (function () {
+    var style = document.createElement('style');
+    style.textContent = window.RUN_REPORT_CSS || '';
+    document.head.appendChild(style);
+  })();
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function () {
+  'use strict';
+  var app = document.getElementById('app');
+  var sessionId = new URLSearchParams(location.search).get('session');
+
+  // A readable sentence beats a blank frame: this document is embedded, so a silent failure would
+  // just look like Trail Runner hanging.
+  function fail(message) {
+    app.setAttribute('style', 'padding:28px;font:13.5px/1.6 system-ui,-apple-system,sans-serif;color:#9aa4b2');
+    app.textContent = message;
+  }
+
+  async function getJson(url) {
+    var res = await fetch(url);
+    if (!res.ok) throw new Error(url + ' returned HTTP ' + res.status);
+    return res.json();
+  }
+
+  function apiUrl(suffix) {
+    return '/trailrunner/api/session/' + encodeURIComponent(sessionId) + '/' + suffix;
+  }
+
+  // The log records the agent has written so far, indexed exactly as the daemon indexes them. The
+  // first paint reads /logs; the live tail below fills in the rest as they land.
+  var logs = [];
+
+  // The CLI command that reproduces this run, which the report offers on its Info tab. Resolved once
+  // and reused: it derives from the run's identity, which cannot change while the run executes.
+  var rerunCmd;
+
+  // This run's entry in the daemon's session list: its status, target, device and timings.
+  async function findSession() {
+    var listed = await getJson('/trailrunner/api/sessions');
+    var wire = ((listed && listed.sessions) || []).filter(function (x) { return x && x.id === sessionId; })[0];
+    if (!wire) throw new Error('Run "' + sessionId + '" is not on this daemon.');
+    return wire;
+  }
+
+  // One assembler for the first paint AND for every live update, so what a reader sees while a run
+  // executes can't drift in shape from what they see once it finishes.
+  async function buildSession(final, preloaded) {
+    var wire = preloaded || await findSession();
+    if (rerunCmd === undefined) rerunCmd = await window.TbRunPayload.fetchRerunCommand(wire);
+    // Derived in timestamp order, not the filename order the daemon serves, so this document reads a
+    // run exactly as its exported report does (see orderLogsForExtraction). `logs` itself stays in
+    // record-id order — that is the index the live stream addresses records by.
+    var records = window.TbRunPayload.orderLogsForExtraction(logs.filter(Boolean));
+    var input = await window.TbRunPayload.buildSessionInput({
+      s: window.TbRunPayload.normalizeSummary(wire),
+      trace: window.extractTrace(records),
+      llmLogs: window.extractLlmLogs(records),
+      sessionId: sessionId,
+      mode: 'link',
+      cmd: rerunCmd,
+      logs: records,
+      // Mid-run rebuilds skip the recording export: it costs the daemon a full re-derivation per
+      // push to describe a recording that is still being written. The authored trail comes from the
+      // logs either way, so the reader loses nothing until the run ends and this asks for it.
+      withRecordingYaml: final !== false,
+    });
+    // Link mode packs nothing, so every field here is uncompressed — which is what the viewer's live
+    // seam requires: a gz field would be inflated once and then served from its cache for the rest of
+    // the run, so the timeline would keep growing while the device log stayed frozen.
+    return {
+      payload: window.toSessionPayloads({ generatedAt: input.meta.generatedAt, sessions: [input] })[0],
+      generatedAt: input.meta.generatedAt,
+    };
+  }
+
+  // Follows a run that is still executing. The daemon pushes each log record as the agent writes it
+  // (one held SSE connection, no polling), and each burst is reassembled into a payload the viewer
+  // merges in place. Merging rather than rebooting is the whole point: a reboot would throw away the
+  // reader's tab, selected step, scroll offset and expanded groups, several times per step.
+  function tail() {
+    var stream = new EventSource(apiUrl('stream'));
+    var coalesce = null;
+    // One build at a time, and at most one waiting. A build awaits the daemon several times, so
+    // without this a burst that lands mid-build starts a second one, and whichever finishes LAST
+    // wins — which is not necessarily the one holding more records. Serializing removes the race
+    // outright, and a request that arrives while a build is running becomes the single queued
+    // successor instead of another concurrent build.
+    var building = false;
+    var queued = null;
+    // The terminal build is the last one there will ever be — the stream is closed and no record is
+    // coming — so a dropped one has nothing behind it to correct the screen, and the reader would be
+    // left looking at a finished run's next-to-last snapshot for good. It is the one build worth
+    // retrying; every other has the following record to fix it.
+    var finalRetries = 0;
+
+    function publish(final) {
+      building = true;
+      // The stream numbers records by position in the session's log directory, so a run whose files
+      // land out of order (or a record this document failed to parse) can leave the tail slightly
+      // wrong. Re-reading /logs once, on the build that follows the run's end, makes the state the
+      // reader is left with the daemon's own — not whatever the stream happened to deliver.
+      var read = final ? getJson(apiUrl('logs')).then(function (all) { logs = all; }) : Promise.resolve();
+      read.then(function () { return buildSession(final); }).then(function (built) {
+        if (window.__TB_REPORT_LIVE__) window.__TB_REPORT_LIVE__.update(0, built.payload);
+        return true;
+      }).catch(function () {
+        return false; // a dropped rebuild is not worth a visible error
+      }).then(function (ok) {
+        building = false;
+        var next = queued;
+        queued = null;
+        if (next) { publish(next.final); return; }
+        if (final && !ok && finalRetries < 5) {
+          finalRetries++;
+          setTimeout(function () { publish(true); }, 1000 * finalRetries);
+        }
+      });
+    }
+
+    function flush(final) {
+      coalesce = null;
+      if (building) { queued = { final: !!final || !!(queued && queued.final) }; return; }
+      publish(!!final);
+    }
+
+    stream.addEventListener('log', function (e) {
+      var record;
+      // A record read while the agent is still writing its file can arrive as truncated JSON. Drop
+      // it rather than letting the throw skip the flush; the reconcile on `done` fills it back in.
+      try { record = JSON.parse(e.data); } catch (err) { return; }
+      // The stream replays its whole backlog on connect (and again after a reconnect), which the
+      // first paint already has. Indexing by the record's own id makes a replay a no-op rewrite
+      // instead of a duplicated trace.
+      logs[Number(e.lastEventId)] = record;
+      // A step's worth of records arrives in a burst and each rebuild re-derives the whole trace, so
+      // pushing per record would rebuild the view a dozen times for one step of the trail.
+      if (!coalesce) coalesce = setTimeout(function () { flush(false); }, 400);
+    });
+    stream.addEventListener('done', function () {
+      stream.close();
+      if (coalesce) clearTimeout(coalesce);
+      flush(true); // the terminal status and the last records land together
+    });
+    // The daemon has no way to send an HTTP 404 from inside an open stream, so it reports a run it
+    // can no longer resolve as `event: error` and closes. EventSource reconnects a closed connection
+    // by itself, which would turn that into a reconnect loop every few seconds for as long as the
+    // page is open. Give up instead — but only on an error that carries the daemon's message; a
+    // plain transport blip has no data, and reconnecting is exactly the right answer for those.
+    // The report already on screen stays: its records are still the run's, and this document has no
+    // way to say "stopped following" without replacing what the reader is reading.
+    stream.addEventListener('error', function (e) {
+      if (!e || !e.data) return;
+      stream.close();
+      if (coalesce) clearTimeout(coalesce);
+      // Same reason `done` flushes: the records of the last <=400ms are sitting in `logs` unpainted,
+      // and with the stream closed for good nothing else will ever push them. In the only error the
+      // daemon actually sends — the run is no longer in its session list — the rebuild's findSession
+      // throws and this paints nothing, which is the right outcome and costs one request. It is not
+      // final: a run that vanished mid-stream has no terminal status to report.
+      flush(false);
+    });
+    window.addEventListener('beforeunload', function () { stream.close(); });
+  }
+
+  (async function () {
+    if (!sessionId) { fail('No run selected — add ?session=<run id> to this address.'); return; }
+    try {
+      // The status is read BEFORE the logs, and it is that reading — not the one the build performs —
+      // that decides whether to follow. The other order loses records: a run that ends between the
+      // two reads reports a terminal status over a log snapshot taken while it was still writing, and
+      // with nothing following it, nothing would ever reconcile the difference. Read the status first
+      // and each answer is safe. "Terminal" means every record was on disk before the log read.
+      // "Running" costs at most a stream that closes immediately, and its `done` reconcile re-reads
+      // the logs anyway.
+      var wire = await findSession();
+      logs = await getJson(apiUrl('logs'));
+      var built = await buildSession(true, wire);
+      window.__TB_RUN_DATA__ = { generatedAt: built.generatedAt, sessions: [built.payload] };
+      window.RUN_REPORT_VIEWER();
+      if (String(wire.status || '').toLowerCase() === 'running') tail();
+    } catch (e) {
+      fail('Could not load this run: ' + ((e && e.message) || e));
+    }
+  })();
+})();
+</script>
+</body>
+</html>

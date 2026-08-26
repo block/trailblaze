@@ -19,7 +19,6 @@
 <link rel="stylesheet" href="./app/app.css" />
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css" />
 <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
@@ -36,25 +35,31 @@
 <body>
 <div id="root"></div>
 <!-- Typed daemon-RPC client (generated bindings, bundled by `bun build app/rpc/daemon.ts`).
-     Loaded before the .jsx so `window.TbRpc` is published before any data hook runs. -->
+     Loaded before the screens so `window.TbRpc` is published before any data hook runs. -->
 <script src="./app/rpc/daemon.bundle.js"></script>
 <!-- Shared run-report renderer + log→timeline extraction (plain JS, no JSX). Loaded as a classic
-     script BEFORE the babel screens so extractTrace/extractLlmLogs/buildRunReportHtml are globals
-     the timeline + Share button use. The same module is require()'d by the bun CLI report generator. -->
+     script BEFORE the screens so extractTrace/extractLlmLogs/buildRunReportHtml are globals
+     that run-payload.js and the Share button use. The same module is require()'d by the bun CLI report
+     generator, and by the report document the app embeds in a run's details. -->
 <script src="./app/run-report-core.js"></script>
 <!-- Monaco + LSP client for the scripted-tool (.ts) + tool-definition (.tool.yaml) editors. Plain JS
      (no JSX/bundler): lazy-loads Monaco from the CDN on first use and publishes `window.TBMonaco`.
-     Loaded before the babel screens so tools.jsx can feature-detect it; if it's absent or fails, the
+     Loaded before the screens so tools.tsx can feature-detect it; if it's absent or fails, the
      editor falls back to CodeMirror. lsp-convert.js (shared, unit-tested conversions) loads first. -->
 <script src="./app/editor/lsp-convert.js"></script>
 <script src="./app/editor/monaco-lsp.js"></script>
 <!-- Pure trail step-matrix model (window.TM): normalizes both the unified single-file format and
      legacy per-platform folders into one shape. Plain JS (no JSX/bundler), unit-tested in
-     app/screens/trail-model.test.ts; loaded before the babel screens so trail-detail.tsx sees it. -->
+     app/screens/trail-model.test.ts; loaded before the screens so trail-detail.tsx sees it. -->
 <script src="./app/screens/trail-model.js"></script>
+<!-- Pure History grouping model: local day → logical device leg with status summaries. -->
+<script src="./app/screens/session-history-model.js"></script>
+<!-- Decides which run the Active screen follows after a launch: the id dispatch reported, or the
+     newest running row when no id is coming. Plain JS with a sibling bun test. -->
+<script src="./app/screens/follow-run-model.js"></script>
 <!-- Unified trail/blaze YAML producers (config: + trail:, per-step recording keyed by device
      classifier). Single source of truth shared with the recorder screens (thin delegating wrappers)
-     and bun tests in app/trail-yaml.test.ts. Plain JS; loaded before the babel screens. -->
+     and bun tests in app/trail-yaml.test.ts. Plain JS; loaded before the screens. -->
 <script src="./app/trail-yaml.js"></script>
 <!-- Pure target/device grouping model. Browser devices join declared web targets here rather than
      being flattened into an anonymous Web bucket by the React screen. -->
@@ -68,46 +73,62 @@
 <script src="./app/workspace-navigation.js"></script>
 <!-- Live device mirror transport (H.264/CDP live stream with layered JPEG/poll fallback), shared by
      the recorder + companion mirror. Plain JS with a sibling live-device-stream.test.ts; loaded
-     before the babel screens so they see window.TbLiveDeviceStream. -->
+     before the screens so they see window.TbLiveDeviceStream. -->
 <script src="./app/live-device-stream.js"></script>
 <!-- Session-zip → run-report assembly (window.TbZipReport): ZIP reader + the LogsRepo/SessionInfo
      read-slice ports that turn a downloaded session archive into buildRunReportHtml inputs. Plain
-     JS with a sibling zip-report-core.test.ts; loaded before the babel screens so the zip-report
+     JS with a sibling zip-report-core.test.ts; loaded before the screens so the zip-report
      screen sees it. Served from :trailblaze-report's resources at this same classpath path (like
      run-report-core.js), because the report viewer shell inlines it at transpile time — one copy of
      the pipeline, whichever home loads it. -->
 <script src="./app/zip-report-core.js"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/ui.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/data-core.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/data-hooks.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/data-extract.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/editor.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/home.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/settings.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/devices.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/integrations.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/blaze.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/record.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/steps-board.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trail-tree.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trail-detail.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trails.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/tools.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trailmaps.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/timeline.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/phone-preview.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/llm-panel.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/demonstrate.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/external-agents.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/companion.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/agent-setup.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/share-export.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/zip-report.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/trace-viewer.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/screens/sessions.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/runcommand.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/runconfig-steps.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/runconfig.tsx"></script>
-<script type="text/babel" data-presets="react,typescript,env" src="./app/shell.tsx"></script>
+<!-- Run-report payload assembly from live daemon data (window.TbRunPayload): screenshots either
+     embedded as data URIs (the Share button's portable export) or linked to /static/ (the
+     daemon-served report-live.html document). Plain JS with a sibling run-payload.test.ts; loaded
+     after run-report-core.js (whose extractors it reads) and before the screens. -->
+<script src="./app/run-payload.js"></script>
+<!-- Device selection + multi-device launch for the Run trail dialog (window.TbRunFanout): which
+     devices a freshly opened dialog starts with, and the per-device connect/dispatch fan-out that
+     runs a trail once on each checked device. Plain JS with a sibling run-fanout.test.ts; loaded
+     before the screens so runconfig.tsx sees it. -->
+<script src="./app/run-fanout.js"></script>
+<!-- What the trail editor does when the file it has open changes on disk (window.TbEditorSync):
+     follow it, or report a conflict rather than overwrite unsaved edits. Plain JS with a sibling
+     editor-sync.test.ts; loaded before the screens so editor.tsx sees it. -->
+<script src="./app/editor-sync.js"></script>
+<!-- The screens. Authored as .tsx (see app/), transpiled 1:1 to these .js artifacts at build
+     time by :trailblaze-host:transpileTrailRunnerApp — no bundling and no renaming, because these
+     are classic scripts that share one global scope and read each other by bare name. The order
+     below IS the dependency order: a screen must come after every global it reads. Adding a screen
+     means adding both the .tsx and its <script> tag here; the build fails if they disagree. -->
+<script src="./app/ui.js"></script>
+<script src="./app/data-core.js"></script>
+<script src="./app/data-hooks.js"></script>
+<script src="./app/data-extract.js"></script>
+<script src="./app/editor.js"></script>
+<script src="./app/screens/home.js"></script>
+<script src="./app/screens/settings.js"></script>
+<script src="./app/screens/devices.js"></script>
+<script src="./app/screens/integrations.js"></script>
+<script src="./app/screens/blaze.js"></script>
+<script src="./app/screens/record.js"></script>
+<script src="./app/screens/steps-board.js"></script>
+<script src="./app/screens/trail-tree.js"></script>
+<script src="./app/screens/trail-detail.js"></script>
+<script src="./app/screens/trails.js"></script>
+<script src="./app/screens/tools.js"></script>
+<script src="./app/screens/trailmaps.js"></script>
+<script src="./app/screens/demonstrate.js"></script>
+<script src="./app/screens/external-agents.js"></script>
+<script src="./app/screens/companion.js"></script>
+<script src="./app/screens/agent-setup.js"></script>
+<script src="./app/share-export.js"></script>
+<script src="./app/screens/zip-report.js"></script>
+<script src="./app/screens/trace-viewer.js"></script>
+<script src="./app/screens/sessions.js"></script>
+<script src="./app/runcommand.js"></script>
+<script src="./app/runconfig-steps.js"></script>
+<script src="./app/runconfig.js"></script>
+<script src="./app/shell.js"></script>
 </body>
 </html>

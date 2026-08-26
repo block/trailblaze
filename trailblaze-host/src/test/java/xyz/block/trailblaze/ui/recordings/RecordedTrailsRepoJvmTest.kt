@@ -123,7 +123,7 @@ class RecordedTrailsRepoJvmTest {
 
   private fun recordingItems(toolName: String): List<TrailYamlItem> =
     listOf(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
       TrailYamlItem.PromptsTrailItem(
         listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool(toolName))))),
       ),
@@ -132,7 +132,7 @@ class RecordedTrailsRepoJvmTest {
   /** A recording whose trailhead carries [toolNames] (>1 has no unified representation). */
   private fun recordingItemsWithMultiToolTrailhead(toolNames: List<String>): List<TrailYamlItem> =
     listOf(
-      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "D")),
+      TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flows/login", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
       TrailYamlItem.TrailheadTrailItem(TrailheadDefinition(step = "Bootstrap", tools = toolNames.map { tool(it) })),
       TrailYamlItem.PromptsTrailItem(
         listOf(DirectionStep(step = "Open the cart", recording = ToolRecording(tools = listOf(tool("tapCart"))))),

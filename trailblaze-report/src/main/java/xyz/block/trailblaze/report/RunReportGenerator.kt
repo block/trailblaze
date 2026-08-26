@@ -7,6 +7,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.time.TimeSource
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -16,6 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -127,13 +129,11 @@ class RunReportGenerator(
     imageBaseUrl: String? = null,
   ): File? {
     if (snapshots.isEmpty()) return null
-    val bun = bunBinary
-    if (bun == null) {
+    if (bunBinary == null) {
       logBunUnavailable()
       return null
     }
 
-    val generateStart = TimeSource.Monotonic.markNow()
     val sessionsJson = ReportTiming.stage("RunReportGenerator.buildSessionJson") {
       buildJsonArray {
         for (snapshot in snapshots) {
@@ -147,6 +147,43 @@ class RunReportGenerator(
       return null
     }
 
+    val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }
+    // The timestamp keeps repeated generate() calls from clobbering each other in reports/; the
+    // "interactive" token distinguishes this from the legacy WASM report, which ReportMain writes
+    // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
+    // canonical trailblaze_report_interactive.html).
+    val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
+    return render(sessionsJson, dest, shareUrl, fullEventPayloads, imageBaseUrl)
+  }
+
+  /**
+   * Render an already-built driver `sessions` array to [destination] — the shared back half of
+   * every report this class produces: stage the renderer + driver + formatters into a temp dir,
+   * write input.json, run bun, copy the result out.
+   *
+   * Split from [generateFromSnapshots] because not every report is built from session LOGS.
+   * [RunIndexGenerator] builds its sessions from CI result rows, which carry no logs at all — the
+   * runs they describe live in other reports entirely.
+   *
+   * @param sessionsJson one entry per session, in the driver's input shape (see the `DriverInput`
+   *   interface in run-report-cli.ts): `meta`, `sessionDir`, `logs`, and the optional YAML fields.
+   * @return [destination], or null when bun is unavailable or the subprocess failed.
+   */
+  @JvmOverloads
+  fun render(
+    sessionsJson: JsonArray,
+    destination: File,
+    shareUrl: String? = null,
+    fullEventPayloads: Boolean = false,
+    imageBaseUrl: String? = null,
+  ): File? {
+    val bun = bunBinary
+    if (bun == null) {
+      logBunUnavailable()
+      return null
+    }
+
+    val generateStart = TimeSource.Monotonic.markNow()
     val generatedAt = LocalDateTime.now().format(HUMAN_TS)
 
     val workDir = Files.createTempDirectory("trailblaze-run-report-").toFile()
@@ -189,14 +226,9 @@ class RunReportGenerator(
         return null
       }
 
-      val reportsDir = File(logsRepo.logsDir, "reports").apply { mkdirs() }
-      // The timestamp keeps repeated generate() calls from clobbering each other in reports/; the
-      // "interactive" token distinguishes this from the legacy WASM report, which ReportMain writes
-      // as trailblaze_report.html in the logs-dir root (ReportMain copies the latest of these to the
-      // canonical trailblaze_report_interactive.html).
-      val dest = File(reportsDir, "trailblaze_report_interactive_${LocalDateTime.now().format(FILE_TS)}.html")
+      destination.parentFile?.mkdirs()
       ReportTiming.stage("RunReportGenerator.outputCopy") {
-        outputFile.copyTo(dest, overwrite = true)
+        outputFile.copyTo(destination, overwrite = true)
       }
       // Name the image mode on every generation. A report whose screenshots don't load is the
       // failure this switch can cause, and "was it even linking?" is the first question — without
@@ -206,8 +238,8 @@ class RunReportGenerator(
         "[RunReportGenerator] images: " +
           if (imageBaseUrl == null) "embedded" else "linked at '$imageBaseUrl<sessionId>/<file>'",
       )
-      Console.log("[RunReportGenerator] report generated at ${dest.absolutePath}")
-      return dest
+      Console.log("[RunReportGenerator] report generated at ${destination.absolutePath}")
+      return destination
     } finally {
       workDir.deleteRecursively()
       ReportTiming.log("RunReportGenerator.generate", generateStart)
@@ -499,6 +531,18 @@ class RunReportGenerator(
       sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase()?.let { put("platform", it) }
       sessionInfo.trailblazeDeviceId?.instanceId?.let { put("device", it) }
       sessionInfo.trailblazeDeviceInfo?.let { device ->
+        // The device's SPECIFIC compound classifier — `android-phone`, `ios-ipad`, `android-kiosk` —
+        // rather than the broad platform family it falls back to. The head of
+        // [TrailblazeClassifierLineage.resolutionChain] IS that identity, and it's the same string
+        // the results model stores as `SessionResult.device_classifier`, the same key the trail
+        // files its `recordings:` under, and the same key a CI config names its device by. The
+        // report keys its matrix columns on it, so a column heading is a string the reader already
+        // greps for elsewhere.
+        TrailblazeClassifierLineage.resolutionChain(device.classifiers)
+          .firstOrNull()
+          ?.classifier
+          ?.takeIf { it.isNotBlank() }
+          ?.let { put("deviceClassifier", it) }
         device.classifiers
           .map { it.classifier }
           .filterNot { it.equals(device.platform.name, ignoreCase = true) }

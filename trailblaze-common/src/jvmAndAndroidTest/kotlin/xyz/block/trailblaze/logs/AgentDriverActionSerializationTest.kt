@@ -52,6 +52,54 @@ class AgentDriverActionSerializationTest {
   }
 
   @Test
+  fun `TapPoint carries a recorded-coordinate fallback through serialization`() {
+    val action = AgentDriverAction.TapPoint(
+      x = 540,
+      y = 1790,
+      dispatchRoute = TapDispatchRoute.RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
+    )
+    val serialized = json.encodeToString(AgentDriverAction.serializer(), action)
+    val deserialized = json.decodeFromString(AgentDriverAction.serializer(), serialized)
+    assertIs<AgentDriverAction.TapPoint>(deserialized)
+    assertEquals(
+      TapDispatchRoute.RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
+      deserialized.dispatchRoute,
+      "A tap whose selector matched nothing still reports success, so the log is the only " +
+        "record that it landed on record-time coordinates.",
+    )
+  }
+
+  @Test
+  fun `LongPressPoint carries the dispatch route that actually delivered the press`() {
+    val action = AgentDriverAction.LongPressPoint(
+      x = 120,
+      y = 640,
+      dispatchRoute = TapDispatchRoute.RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
+    )
+    val serialized = json.encodeToString(AgentDriverAction.serializer(), action)
+    val deserialized = json.decodeFromString(AgentDriverAction.serializer(), serialized)
+    assertIs<AgentDriverAction.LongPressPoint>(deserialized)
+    assertEquals(120, deserialized.x)
+    assertEquals(640, deserialized.y)
+    assertEquals(
+      TapDispatchRoute.RECORDED_COORDINATES_AFTER_SELECTOR_MISS,
+      deserialized.dispatchRoute,
+    )
+  }
+
+  @Test
+  fun `a long press with no route emits no key and reads back as no route`() {
+    val serialized = json.encodeToString(
+      AgentDriverAction.serializer(),
+      AgentDriverAction.LongPressPoint(x = 3, y = 4),
+    )
+    assertEquals(false, serialized.contains("dispatchRoute"), "Payload was: $serialized")
+    val deserialized = json.decodeFromString(AgentDriverAction.serializer(), serialized)
+    assertIs<AgentDriverAction.LongPressPoint>(deserialized)
+    assertEquals(null, deserialized.dispatchRoute)
+  }
+
+  @Test
   fun `a tap with no route emits no key and reads back as no route`() {
     // A route-less encoding is byte-identical to what a session recorded before the field existed
     // wrote, so decoding it back is the compatibility check: those logs still have to load.

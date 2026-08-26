@@ -8,6 +8,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.cli.daemonSpawnArgv
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -78,6 +79,12 @@ internal suspend fun buildRebuildDaemonResponse(deps: TrailRunnerDeps): RebuildD
   val launcher = System.getenv("TRAILBLAZE_LAUNCHER")?.takeIf { it.isNotBlank() }
     ?: File(root, "trailblaze").absolutePath
   val d = "$"
+  // Same argv builder the CLI's spawn sites use, so the restart can't drift back to a flags-only
+  // `app …` form that a wrapper on PATH would answer with its own usage instead of a daemon.
+  // The launcher is interpolated separately (quoted, for paths with spaces), so drop it here.
+  val spawnFlags = daemonSpawnArgv(File(launcher), foreground = true, headless = true)
+    .drop(1)
+    .joinToString(" ")
   val script = File.createTempFile("trailrunner-restart", ".sh")
   // The restart outlives this process, so we can't delete the script inline;
   // deleteOnExit covers the failure path where it never gets exec'd, and the
@@ -94,7 +101,7 @@ internal suspend fun buildRebuildDaemonResponse(deps: TrailRunnerDeps): RebuildD
     done
     cd "${root.absolutePath}"
     export BLAZE_JAR=0
-    exec "$launcher" app --foreground --headless
+    exec "$launcher" $spawnFlags
     """.trimIndent(),
   )
   script.setExecutable(true)

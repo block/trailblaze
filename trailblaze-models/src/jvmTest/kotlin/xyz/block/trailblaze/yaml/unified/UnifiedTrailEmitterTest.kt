@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.yaml.unified
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -149,7 +150,7 @@ class UnifiedTrailEmitterTest {
         id = "myapp/checkout",
         target = "myapp",
         description = "Open the checkout flow and complete a payment.",
-        devices = mapOf("android" to "ANDROID_ONDEVICE_ACCESSIBILITY", "ios" to "IOS_HOST"),
+        devices = mapOf("android" to devicePin("ANDROID_ONDEVICE_ACCESSIBILITY"), "ios" to devicePin("IOS_HOST")),
         context = "Test context — one line",
         memory = mapOf("email" to "tb+test@example.com"),
         metadata = mapOf("jira" to "PROJ-123"),
@@ -276,4 +277,57 @@ class UnifiedTrailEmitterTest {
       raw = JsonObject(mapOf("note" to JsonPrimitive("placeholder"))),
     ),
   )
+
+  @Test
+  fun `devices always emit the object form — the legacy string form is decode-only`() {
+    // A trail still carrying the deprecated bare-string pin re-emits as the
+    // canonical object form: `driver:` nested under the classifier, never the scalar.
+    val legacy =
+      """
+      config:
+        id: myapp/login
+        target: myapp
+        devices:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+      trail:
+        - step: Open the app
+          recordable: false
+      """.trimIndent()
+    val decoded = yaml.decodeUnifiedTrail(legacy)
+    val emitted = yaml.encodeUnifiedTrailToString(decoded)
+    assertTrue(
+      "    android:\n      driver: ANDROID_ONDEVICE_ACCESSIBILITY" in emitted,
+      "expected the object form under the classifier key, got:\n$emitted",
+    )
+    assertFalse(
+      "android: ANDROID_ONDEVICE_ACCESSIBILITY" in emitted,
+      "the legacy scalar form must never be emitted, got:\n$emitted",
+    )
+    assertEquals(decoded.config, yaml.decodeUnifiedTrail(emitted).config)
+  }
+
+  @Test
+  fun `a migrated devices block is emit-stable — re-encoding is byte-identical`() {
+    // The mechanical bare-string → object-form migration writes exactly what the encoder emits,
+    // so the first post-migration write-back (a re-record, a merge) can't churn the diff.
+    val legacy =
+      """
+      config:
+        id: myapp/checkout
+        target: myapp
+        devices:
+          android: ANDROID_ONDEVICE_ACCESSIBILITY
+          ios: IOS_HOST
+      trail:
+        - step: Open the app
+          recordable: false
+      """.trimIndent()
+    val migrated = yaml.encodeUnifiedTrailToString(yaml.decodeUnifiedTrail(legacy))
+    val reEmitted = yaml.encodeUnifiedTrailToString(yaml.decodeUnifiedTrail(migrated))
+    assertEquals(migrated, reEmitted, "emit(decode(emit)) must be a fixed point")
+  }
 }
+
+/** The canonical devices-map value for a driver pin, keeping test fixtures terse. */
+private fun devicePin(driverName: String): TrailblazeDeviceDefinition =
+  TrailblazeDeviceDefinition(driver = TrailblazeDriverType.fromString(driverName)!!)

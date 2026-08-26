@@ -431,7 +431,12 @@ object TrailConfigCache {
       try {
         val trail = trailblazeYaml.decodeUnifiedTrail(yamlContent)
         classifiers = UnifiedTrailTargets.declaredClassifiers(trail)
+        // Lower each device definition to its driver name for the display matrix; an entry that
+        // declares a classifier without pinning a driver contributes no row here (it still counts
+        // toward `classifiers` above).
         devices = trail.config.devices.orEmpty()
+          .mapNotNull { (classifier, definition) -> definition.driver?.let { classifier to it.name } }
+          .toMap()
       } catch (e: Throwable) {
         // Content is unified but wouldn't decode here — keep the unified flag, drop the targets.
         // Most often a trail using app-specific tools not on the desktop classpath. Log once per

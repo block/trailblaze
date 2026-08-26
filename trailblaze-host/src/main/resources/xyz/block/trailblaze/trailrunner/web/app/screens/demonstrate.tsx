@@ -1,5 +1,5 @@
 // @ts-nocheck -- Create-screen demonstrate-first phase components. Follows the Trail Runner
-// browser-runtime pattern: Babel strips types at load, and top-level functions are cross-file
+// browser-runtime pattern: the build-time transpile strips types, and top-level functions are cross-file
 // globals (this file is loaded BEFORE external-agents.tsx in index.html, mirroring record.tsx).
 //
 // The demonstrate-first Create flow is a phased session, driven entirely by the demo run's

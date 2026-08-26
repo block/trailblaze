@@ -11,6 +11,7 @@ import { rpcCall, type RpcResult, type RpcCallOptions } from "../rpc/client.js";
 
 export interface ConnectToDeviceRequest {
   trailblazeDeviceId: TrailblazeDeviceId;
+  targetAppId?: string | null;
 }
 
 export interface ConnectToDeviceResponse {

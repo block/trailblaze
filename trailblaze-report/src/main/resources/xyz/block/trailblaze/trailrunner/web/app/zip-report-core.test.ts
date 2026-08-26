@@ -9,6 +9,9 @@ import { describe, expect, test } from "bun:test";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 // zip-report-core.js dual-exports via module.exports; bun interops the CJS default import.
 import Zip from "./zip-report-core.js";
+// The frame walk is the real shared one (run-report-core) even where the extractors are faked:
+// which files a report gathers is exactly the behavior these tests pin.
+import { REPORT_DERIVE } from "./run-report-shell";
 
 const inflateRaw = (data: Uint8Array) => new Uint8Array(inflateRawSync(data));
 const encoder = new TextEncoder();
@@ -181,6 +184,20 @@ describe("session file selection (LogsRepo read slice)", () => {
     ]);
     expect(sorted.map((l: { tag: string }) => l.tag)).toEqual(["first", "second-a", "second-b", "third"]);
   });
+
+  // The pair this ordering exists for: a driver action and the tool call it belongs to, microseconds
+  // apart, written to files in the opposite order. Date.parse stops at the millisecond, so a
+  // millisecond-only key calls them equal and the feed-order tiebreak keeps the order that needs
+  // correcting — and the run then folds or counts differently here than in the report the daemon
+  // and the CLI render from the same logs.
+  test("orders a sub-millisecond pair by its fraction, not the filename order it arrived in", () => {
+    const at = (t: string, tag: string) => ({ timestamp: t, tag });
+    const sorted = Zip.sortLogsByTimestamp([
+      at("2026-06-30T20:21:28.500900Z", "tool"),
+      at("2026-06-30T20:21:28.500120Z", "driver-action"),
+    ]);
+    expect(sorted.map((l: { tag: string }) => l.tag)).toEqual(["driver-action", "tool"]);
+  });
 });
 
 describe("trail names and status labels", () => {
@@ -212,6 +229,7 @@ describe("run meta derivation", () => {
     expect(meta.platform).toBe("android");
     expect(meta.device).toBe("emulator-5554");
     expect(meta.deviceType).toBe("phone"); // classifiers minus the platform name
+    expect(meta.deviceClassifier).toBe("android-phone"); // the specific compound classifier
     expect(meta.trailId).toBe("suites/suite_1/case_2");
     expect(meta.duration).toBe("1m 30s");
     expect(meta.cmd).toContain("./trailblaze run ");
@@ -219,6 +237,21 @@ describe("run meta derivation", () => {
     expect(meta.generatedAt).toBe("test-time");
     expect(meta.error).toBeUndefined();
     expect(meta.selfHeal).toBeUndefined();
+  });
+
+  test("the classifier is the whole compound identity, not the platform-stripped tail", () => {
+    // A zip-opened report has to key its matrix columns the same way a CI-generated one does, so
+    // two devices from one hardware family stay distinguishable even though their tails collide.
+    const withClassifiers = (classifiers: string[] | null) =>
+      Zip.buildRunMeta(
+        [startedLog({}, { trailblazeDeviceInfo: { trailblazeDeviceId: { instanceId: "d", trailblazeDevicePlatform: "ANDROID" }, classifiers } })],
+        {},
+      );
+    expect(withClassifiers(["kiosk", "v2"]).deviceClassifier).toBe("kiosk-v2");
+    expect(withClassifiers(["kiosk", "v3"]).deviceClassifier).toBe("kiosk-v3");
+    // No classifiers → absent, not an empty string a consumer would treat as a real column.
+    expect(withClassifiers([]).deviceClassifier).toBeUndefined();
+    expect(withClassifiers(null).deviceClassifier).toBeUndefined();
   });
 
   test("title falls back through config id, trail path, then test class:name", () => {
@@ -352,8 +385,12 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
   // the browser this same code path reads the renderer from the globals run-report-core.js sets.
   const REMOTE = "https://x.lambda-url.us-east-2.on.aws/?bucket=farm&key=remote.webp";
 
+  // Spread from the viewer shell's real collaborator object, so the only things stubbed here are the
+  // derivations this test wants to control. A function the pipeline starts consulting that the shell
+  // does not hand it fails here instead of in a browser.
   function fakeRenderer(captured: { input?: unknown }) {
     return {
+      ...REPORT_DERIVE,
       extractTrace: () => [
         { screenshotFile: "shot_1.webp", label: "in-zip" },
         { screenshotFile: REMOTE, label: "remote" },
@@ -413,9 +450,11 @@ describe("buildReportHtmlFromZipBytes (shared zip → report-HTML assembly)", ()
       { name: dir + "002_Log.json", text: JSON.stringify(endedLog("Ended.Succeeded")) },
       { name: dir + "shot_1.webp", data: new Uint8Array([1, 2, 3, 4]) },
     ]);
-    // Deliberately NO buildRunReportHtml / buildMultiReportHtml: a shell embeds only the viewer
-    // bundle, so this stage must never reach for them.
+    // The shell's own collaborator object, which deliberately carries NO buildRunReportHtml /
+    // buildMultiReportHtml: a shell embeds only the viewer bundle, so this stage must never reach
+    // for them — and must find everything else it does reach for.
     const derivationOnly = {
+      ...REPORT_DERIVE,
       extractTrace: () => [{ screenshotFile: "shot_1.webp", label: "in-zip" }],
       extractLlmLogs: () => [{ id: "llm-1" }],
       originalYamlFromLogs: () => "orig: yaml",

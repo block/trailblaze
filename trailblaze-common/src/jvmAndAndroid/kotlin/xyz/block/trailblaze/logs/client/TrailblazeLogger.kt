@@ -208,6 +208,7 @@ class TrailblazeLogger(
     session: TrailblazeSession,
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
+    stepIndex: Int,
   ): TrailblazeSession {
     log(
       session,
@@ -216,6 +217,7 @@ class TrailblazeLogger(
         session = session.sessionId,
         timestamp = Clock.System.now(),
         recordingResult = recordingResult,
+        stepIndex = stepIndex,
       ),
     )
     return session.withSelfHealUsed()

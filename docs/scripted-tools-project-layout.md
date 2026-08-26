@@ -51,11 +51,33 @@ your trailmap can dispatch). You don't commit any of it, and you don't set up th
 either — `check` writes the `.gitignore` and seeds your local `.git/info/exclude`, so generated
 files never clutter `git status`.
 
+### Don't commit `tools/tsconfig.json`
+
+It's tempting to commit it — it's the file your editor reads, so a fresh clone with no
+`tsconfig.json` shows red squiggles until someone runs `check`. Commit it anyway and you inherit two
+problems, because the file is **workspace-relative and machine-generated**:
+
+```json
+"paths": {
+  "@trailblaze/scripting": ["../../../../.trailblaze/sdk/dist/index"]
+}
+```
+
+1. **It doesn't buy you a working fresh checkout.** That path points into `trails/.trailblaze/`,
+   which is itself generated and ignored. A committed `tsconfig.json` on a fresh clone resolves
+   `@trailblaze/scripting` to a directory that isn't there yet, so `bun test` and your editor still
+   need `trailblaze check` first — exactly what committing it was supposed to avoid.
+2. **The `..` climb is counted from where the trailmap sits.** It's correct only while every
+   consumer keeps the trailmap at the same depth below the workspace root. Vendor or copy the
+   trailmap into a project that nests it differently and the committed paths point outside that
+   workspace, so every tool in it fails with `Cannot find module '@trailblaze/scripting'`.
+
+Run `trailblaze check` instead. It's one command, it writes the paths for *the workspace it's
+running in*, and the `.gitignore` it maintains keeps the result out of `git status`.
+
 ### Committing a generated file anyway
 
-Occasionally a trailmap needs one of those files committed — most often `tools/tsconfig.json`, so
-that `bun test` resolves `@trailblaze/scripting` on a fresh checkout without running `check` first.
-Say so by **negating** the entry in the trailmap's `.gitignore`:
+If you do need one committed, say so by **negating** the entry in the trailmap's `.gitignore`:
 
 ```gitignore
 !tools/tsconfig.json
@@ -67,6 +89,11 @@ rules never apply to a file that's already tracked, so deleting the line looks f
 committed from, but a fresh **copy** of the trailmap tracks nothing yet — and there the entry
 silently keeps your committed file out of `git add`. The negation travels with the trailmap, and it
 also overrides the `.git/info/exclude` rule `check` seeds locally.
+
+**Remove the negation when you stop committing the file.** The negation is what tells `check` the
+path is deliberately yours, so it keeps suppressing the plain entry after the committed file is
+gone — and then nothing ignores the regenerated one. The symptom is a `tools/tsconfig.json` that
+shows up as untracked in `git status` after every `check`, in every clone.
 
 ## Why aren't the typed bindings committed?
 

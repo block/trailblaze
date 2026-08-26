@@ -6,11 +6,13 @@
 // as monolithic fallbacks for older files and in-app embedders).
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
-import { isLlmTurnRow, localRunAgentPrompt, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
+import { declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt, rowToolCallCount, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
 import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
 import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
+import { createReportTraceModelResolver, type ReportTraceGroup } from './run-report-trace-model';
+import { formatUsd } from './report-format';
 
 // Run `fn` once the document has finished streaming (immediately when it already has). A chunked
 // report's UI is interactive while the document tail — later sessions' #tb-session-<i> /
@@ -77,17 +79,46 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const RAW: Partial<ReportPayload> = INDEX_PAYLOAD || readJsonScript('tb-run-data') || window.__TB_RUN_DATA__ || {};
   const root = document.getElementById('app') as HTMLElement;
   const esc = (s: unknown) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-  // Embedded screenshots and sprite sheets must remain data images. Besides keeping generated
-  // reports self-contained, this prevents payload text from becoming executable markup or CSS
-  // when renderers place an image URI inside an HTML attribute.
-  const safeImageDataUri = (value: unknown) => {
+  // A report references its frames one of three ways, and every one has to reach the screen:
+  // embedded base64 (the exported, portable report), a relative path (the daemon's /static/ tree
+  // and `generate-report --link-images`), or an absolute http(s) URL (device-farm sessions leave
+  // frames hosted rather than inlining hundreds of megabytes). What this must keep out is a
+  // payload string reaching script or non-image position through an HTML attribute, so: data:
+  // must be an image, any other scheme must be http(s), and a relative path may not carry the
+  // characters that would end the attribute or open a tag.
+  //
+  // Nothing is trimmed and no C0 control survives: a browser strips leading controls and whitespace
+  // BEFORE it parses a scheme, so a `\u0001javascript:` payload would reach the sink as `javascript:` while
+  // a check on the raw string sees a harmless non-letter first character. Reject those outright
+  // rather than normalizing, since no producer here emits them.
+  const safeImageSrc = (value: unknown) => {
     const uri = String(value || '');
-    return /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+$/i.test(uri) ? uri : '';
+    if (/[\u0000-\u001F\u007F]/.test(uri.replace(/[\r\n]/g, ''))) return '';
+    // Only the raster formats the report generators actually produce. `image/svg+xml` is an image to
+    // the browser but a document to an attacker, and no producer emits one.
+    if (/^data:/i.test(uri)) return /^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=\r\n]+$/i.test(uri) ? uri : '';
+    if (/["'<>`\\\s]/.test(uri) || uri.startsWith('//')) return '';
+    return !/^[a-z][a-z0-9+.-]*:/i.test(uri) || /^https?:\/\//i.test(uri) ? uri : '';
   };
   const safeHref = (value: unknown) => {
     try { const url = new URL(String(value || '')); return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null; }
     catch (e) { return null; }
   };
+
+  // A LINK-OUT run: one whose evidence lives in ANOTHER report rather than in this document. The
+  // `generate-run-index` command emits a whole document of these — a CI build's per-session
+  // evidence runs to hundreds of megabytes, far past what one embedded report can carry, so the
+  // index holds only the matrix and each cell navigates to that run's own report.
+  //
+  // `meta.linkOut` says a run is one; `meta.reportUrl` only says where it went. Those are separate
+  // because a stub can legitimately have nowhere to point — a row with no session archive, or an
+  // index built without a viewer URL — and reading absence as "ordinary embedded run" would offer
+  // to open a detail view that is empty by construction and report the missing payload as zero
+  // tools and no LLM spend. `reportUrl` still implies it, so a document written before the flag
+  // existed reads the same. Two consequences below: the index's open controls become links or go
+  // inert (see openControl), and every per-run number comes from what the generator precomputed
+  // onto `meta` rather than from a payload that isn't here.
+  const isLinkOut = (s) => !!(s.meta && (s.meta.linkOut || s.meta.reportUrl));
 
   // Normalize to a sessions[] array. Chunked documents list index stubs (hydrated on open);
   // monolithic payloads embed full sessions; tolerate the older single-run shape
@@ -95,11 +126,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const SESSIONS: SessionPayload[] = (RAW.sessions && RAW.sessions.length)
     ? RAW.sessions.map((s) => INDEX_PAYLOAD ? { trace: [], llm: [], shots: {}, recordingYaml: null, originalYaml: null, ...s } : s)
     : [{ meta: RAW.meta || {}, trace: RAW.trace || [], llm: RAW.llm || [], shots: RAW.shots || {}, recordingYaml: (RAW.meta && RAW.meta.recordingYaml) || null, originalYaml: (RAW.meta && RAW.meta.originalYaml) || null }];
-  const MULTI = SESSIONS.length > 1;
+  // A lone run normally opens straight on its own detail. Not when it is a link-out stub: that
+  // detail is an empty document by construction, so a one-row index stays an index — showing the
+  // one link the reader came for instead of a run with no steps.
+  const MULTI = SESSIONS.length > 1 || SESSIONS.every(isLinkOut);
   // Sessions still awaiting their #tb-session-<i> chunk. Hydration assigns the chunk's fields
   // INTO the existing stub (object identity preserved — the inflater caches and `D` hold object
   // references) and removes the entry. Empty for monolithic payloads (everything starts hydrated).
   const unhydrated = new Set<number>(INDEX_PAYLOAD && RAW.sessions && RAW.sessions.length ? SESSIONS.map((_, i) => i) : []);
+  // What a live push has delivered for a run whose chunk is still unparsed. Hydration assigns the
+  // chunk over the stub, and that chunk is the run as it stood when the document was written — so
+  // without this a `deviceLog` or `events` stream a push had already merged in would silently roll
+  // back to the older copy the moment the reader opened the run.
+  const livePatched = new Map<number, Record<string, unknown>>();
   // A chunk element the HTML parser has NOT closed yet holds a partial payload: its text keeps
   // growing until the `</script>` end tag lands, and `nextSibling` is the parser's own signal that
   // it has. A completed document has nothing left to stream, so the final chunk qualifies there.
@@ -151,7 +190,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const awaitingSprites = !docComplete && full.video && full.video.sprites.length
         && full.video.sprites.every((sp) => !sp.uri) && !primeSpriteChunk(i);
       if (awaitingSprites) return false;
-      Object.assign(SESSIONS[i], full); unhydrated.delete(i); return true;
+      Object.assign(SESSIONS[i], full);
+      const patch = livePatched.get(i);
+      if (patch) { Object.assign(SESSIONS[i], patch); livePatched.delete(i); }
+      unhydrated.delete(i); return true;
     }
     if (docComplete) { unhydrated.delete(i); return true; }
     return false;
@@ -195,8 +237,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (chunk) { spriteChunkCache[key] = chunk; return chunk; }
     return spriteStore()[key] || [];
   };
-  const spriteUrl = (v: VideoInfo | null | undefined, sheet: number, sessionIndex?: number) => safeImageDataUri(spriteUrls(v, sessionIndex)[sheet]);
+  const spriteUrl = (v: VideoInfo | null | undefined, sheet: number, sessionIndex?: number) => safeImageSrc(spriteUrls(v, sessionIndex)[sheet]);
   const generatedAt = RAW.generatedAt || (SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta.generatedAt) || '';
+  // `?chrome=none` — the report is embedded in a host that already renders a run header of its own
+  // (Trail Runner's run details). Drop the duplicated identity row: the run title, the status dot,
+  // and the theme toggle, whose owner is then the embedder, right down to which theme is on. It is
+  // deliberately NOT a route key: it describes the frame the report is mounted in, not which
+  // run/tab/step is on screen. writeRoute leaves params it doesn't own alone, so the flag rides
+  // along through the route writes navigation performs and a reload inside the frame stays
+  // chromeless — but nothing in here ever writes it, and no history entry can turn it on.
+  const EMBEDDED = (() => {
+    if (typeof location === 'undefined') return false;
+    const search = String(location.search || '').replace(/^\?/, '');
+    return !!search && search.split('&').some((pair) => pair === 'chrome=none');
+  })();
   const themeKey = 'trailblaze-report-theme';
   const currentTheme = () => document.documentElement?.dataset?.theme === 'light' ? 'light' : 'dark';
   const renderThemeToggle = () => {
@@ -205,6 +259,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<button class="themetoggle" type="button" data-theme-toggle aria-label="Use ${next} mode" title="Use ${next} mode"><svg class="themeicon sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.6" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M12 2.5v2M12 19.5v2M5.28 5.28l1.42 1.42M17.3 17.3l1.42 1.42M2.5 12h2M19.5 12h2M5.28 18.72l1.42-1.42M17.3 6.7l1.42-1.42" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="themeicon moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 15.1A8 8 0 0 1 8.9 4.5a8 8 0 1 0 10.6 10.6Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
   };
   const BACK_ICON_SVG = '<svg class="backicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 5 12l7 7M5 12h14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CHEVRON_LEFT_SVG = '<svg class="txnavicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m10 3-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CHEVRON_RIGHT_SVG = '<svg class="txnavicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const setTheme = (theme, persist = true) => {
     document.documentElement.dataset.theme = theme;
     if (persist) { try { localStorage.setItem(themeKey, theme); } catch (e) {} }
@@ -217,8 +273,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Registered per boot, so it is torn down per boot too (disposeThemeListener, called from
   // disposeViewerGlobals) — otherwise a document that boots repeatedly, like the viewer shell loading
   // one archive after another, accumulates one stale follower per load.
+  // Not registered when embedded: the host app owns the theme there, and its choice may be a pinned
+  // one. Following the OS instead would yank the frame to dark the moment the OS flipped, with the
+  // app around it still light.
   let disposeThemeListener = null;
-  if (typeof matchMedia === 'function') {
+  if (typeof matchMedia === 'function' && !EMBEDDED) {
     const media = matchMedia('(prefers-color-scheme: light)');
     const followSystem = (event) => { try { if (!localStorage.getItem(themeKey)) setTheme(event.matches ? 'light' : 'dark', false); } catch (e) {} };
     if (media.addEventListener) {
@@ -235,6 +294,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const a = document.createElement('a'); a.href = url; a.download = filename; a.style.display = 'none';
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
   };
+  // Both document exports (Export report, Download report) clone this document and rewrite its
+  // payload node. A document that publishes its payload as a global instead — the daemon's
+  // report-live.html, any embedder that injects window.__TB_RUN_DATA__ — has no node to rewrite, so
+  // exportReport bails at its `if (!data) return` and the click does nothing. Adding a node to those
+  // documents wouldn't fix it either: report-live.html loads its renderer from daemon-absolute
+  // /trailrunner/app/*.js, so the clone would be a file that can't boot once the daemon exits.
+  // The frame guards below already hide these items for such a document in the common case (a live
+  // report links its frames), but a run with no frames at all leaves them nothing to find.
+  const documentCarriesItsPayload = !!document.getElementById('tb-index') || !!document.getElementById('tb-run-data');
   // Deferred through whenDocumentComplete: exporting while the document tail is still streaming
   // would clone a DOM missing later #tb-session-<i>/#tb-sprites-<i> chunks — a truncated file.
   // The exported runs travel as the `sessions` array (captured at click), so a deferred export
@@ -296,6 +364,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       }),
     ];
   }).map(([name, src], index) => [`${index + 1}. ${name}`, src]);
+  // A report whose frames are references, not bytes: the daemon's own /report page, a
+  // `--link-images` build, a device-farm run whose screenshots stay hosted. Exporting one produces
+  // a file whose images point back at a server, so it looks portable and silently isn't — the
+  // pictures die with the daemon or the artifact retention window.
+  const linkedFrame = (value) => { const v = String(value || ''); return !!v && !/^data:image\//.test(v); };
+  // The video's sprite sheets are frames too, and they follow the same embed-or-link switch as the
+  // step screenshots (readVideo's spriteValue in run-report-cli.ts). A run can have a video and no
+  // step screenshots at all, so a guard reading only `shots` would clear a linked video-only run
+  // for export and hand back a file whose Video tab dies outside the serving daemon.
+  const linksItsFrames = (session, spriteUris) => Object.keys(session.shots || {}).some((f) => linkedFrame(session.shots[f]))
+    || spriteUris.some(linkedFrame);
+  // The sprite URIs a payload carries inline. Deliberately NOT the chunk-resolving spriteUrls: the
+  // index header asks this of every session, and JSON.parsing every #tb-sprites-<i> chunk there is
+  // the boot cost the hoist exists to avoid — and would make the answer depend on which runs the
+  // reader had already opened. A hoisted URI reads as '' here, which is neither a link nor a claim
+  // of embedded bytes; the detail menu resolves the open run's for real.
+  const inlineSpriteUris = (session) => session.video ? session.video.sprites.map((sheet) => sheet.uri) : [];
   const exportScreenshots = (session) => {
     const screenshots = screenshotEntries(session);
     if (!screenshots.length) return;
@@ -370,7 +455,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // with an inlined screenshot AND a hierarchy. Known precisely once hierarchies are inline (or
   // inflated); while a compressed payload hasn't inflated yet the affordance shows optimistically
   // for a screenshot step, then corrects on the post-inflate re-render.
-  const stepInspectable = (t) => Boolean(!t.objective && t.screenshotFile && safeImageDataUri(D.shots[t.screenshotFile])
+  const stepInspectable = (t) => Boolean(!t.objective && t.screenshotFile && safeImageSrc(D.shots[t.screenshotFile])
     && (stepHierarchy(t.i) != null || (D.hierarchiesGz && !hierarchiesInflater.cache.has(D))));
 
   const logPayload = (session) => ({
@@ -398,6 +483,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `D` is the session currently in view; every renderer reads D.trace / D.llm / D.shots / D.meta /
   // D.recordingYaml, so the single-run renderers below are unchanged across a session switch.
   let D: SessionPayload = SESSIONS[0];
+  const resolveTraceModel = createReportTraceModelResolver();
+  const traceModel = () => resolveTraceModel(D);
   const TIMELINE_EVENT_KINDS = ['tool', 'llm', 'assert', 'fail'];
   const stepCat = (t) => {
     if (!t.ok) return 'fail';
@@ -410,7 +497,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
   // Timeline playback stop handle (the active rAF engine run's stop function). Declared up here
   // (before openSession, which stops it) so the init-time openSession() call for a single-session
   // report doesn't hit a temporal-dead-zone ref.
@@ -420,19 +507,71 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // openSession() call can close a stale dialog without a temporal-dead-zone ref. The dialog
   // itself (openTranscript etc.) lives beside the zoom overlay below.
   let txEl = null;
+  let txPanelEl = null;
+  let txBodyEl = null;
   let txReturnFocus = null;
   let txReturnSelector = null;
   let txCallIndex = 0;
+  let txHistoryPushed = false;
+  let txHistoryClosing = false;
+  // Inspector route state also participates in the init-time canonical URL write. Keep these
+  // declarations above routeParams so a report without an open inspector serializes safely.
+  let inspectorEl = null;
+  let inspectorReturnFocus = null;
+  let inspectorHistoryPushed = false;
+  let inspectorHistoryClosing = false;
+  const inspState = { step: 0, selected: null, hovered: null, raw: false, session: null };
+  // Pushed destinations share the report's navigation motion in both directions. They are mounted
+  // outside #app so the report beneath keeps its exact scroll and selection state; on dismissal,
+  // animate that preserved page back into place without forcing a render.
+  const animateReportReturn = () => {
+    // CSS animations only restart when the class is removed for a rendered frame. Pushed views can
+    // be opened and dismissed repeatedly without a report render in between, so explicitly reset
+    // the class and force style resolution before applying the shared reverse transition again.
+    root.className = '';
+    void root.offsetWidth;
+    root.className = 'page-enter-back';
+  };
+  // One keyboard boundary for every aria-modal report destination. Keeping this beside the shared
+  // pushed-view state prevents the transcript and Inspector from drifting into different dialog
+  // behavior as their controls evolve.
+  const trapModalTab = (container, e) => {
+    if (e.key !== 'Tab' || !container || typeof container.querySelectorAll !== 'function') return false;
+    const focusables = Array.from(container.querySelectorAll('button, [href], summary, [tabindex]:not([tabindex="-1"])'))
+      .filter((el: any) => !el.disabled && (el.offsetParent !== undefined ? el.offsetParent !== null || el === document.activeElement : true));
+    if (!focusables.length) { e.preventDefault(); return true; }
+    const first = focusables[0] as any; const last = focusables[focusables.length - 1] as any;
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === container)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    return true;
+  };
   // Armed by a `?llm=N` route: the next LLM-tab render scrolls to the deep-linked table row and
   // opens its transcript lightbox (the tab's only detail surface).
   let pendingLlmOpen = false;
+  let pendingLlmHistoryBacked = false;
+  let pendingInspectorOpen = null;
+  let pendingInspectorHistoryBacked = false;
   // `syncRoute` is for the reader-initiated dismissals (Escape, the close button): the lightbox is
   // what `?llm=N` encodes, so closing drops the param back to the tab route. Every other caller
   // (re-open, opening a session, popstate, teardown) is mid-navigation and owns the URL itself —
   // writing here would replaceState the state being navigated away from back over the new one.
-  const closeTranscript = (syncRoute = false) => {
+  const closeTranscript = (syncRoute = false, animateReturn = false) => {
     if (!txEl) return;
+    // A pointer/keyboard dismissal should consume the history entry created by openTranscript,
+    // exactly like the browser's Back button. Deep-linked transcripts did not create an entry in
+    // this document, so they still close in place and replace the `llm` parameter below.
+    if (syncRoute && txHistoryClosing) return;
+    if (syncRoute && txHistoryPushed && typeof history !== 'undefined' && typeof history.back === 'function') {
+      txHistoryClosing = true;
+      history.back();
+      return;
+    }
     txEl.remove(); txEl = null;
+    txPanelEl = null;
+    txBodyEl = null;
+    txHistoryPushed = false;
+    txHistoryClosing = false;
+    if (animateReturn) animateReportReturn();
     const back = txReturnFocus; txReturnFocus = null;
     const backSelector = txReturnSelector; txReturnSelector = null;
     // Re-resolve the trigger by selector first: a gz report's transcript inflation completes with a
@@ -492,6 +631,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     return -1;
   };
+
+  // The newest row a reader can actually be parked on. A growing run's trace usually ENDS on a
+  // structural row — the objective header of a step that has started but not acted yet — and a
+  // structural row holds no selection. Both the seed for a running session and the live seam's
+  // follow ask this one question, so they can't answer it differently: when they did, the seed
+  // resolved the tail to a real row while the follow compared against the raw one, the two never
+  // matched, and a run streamed in with its selection stuck on the step it opened at.
+  const newestSelectableStep = () => {
+    if (!D || !D.trace || !D.trace.length) return null;
+    const last = D.trace[D.trace.length - 1].i;
+    const at = selectableTimelineIndexFor(last);
+    return at >= 0 ? D.trace[at].i : last;
+  };
   const normalizeTimelineSelection = () => {
     const selectable = selectableTimelineIndexFor(st.step);
     if (selectable < 0) return;
@@ -503,6 +655,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // A route into a not-yet-hydrated session, parked until the chunk lands: the step/llm bounds
   // checks in applyDetailRoute need the real trace, so seedSessionDetail re-applies it.
   let pendingDetailRoute = null;
+  let pendingDetailRouteFromHistory = false;
   // Seed the detail view of the (hydrated) session in D. Failed runs lead with the actionable
   // tool; passing runs start at the authored trail so any recovery summary remains the first
   // thing visible above it. Incidental failed polling rows (a passing run, or a passing step of a
@@ -513,30 +666,46 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     ensureLogsInflated(D);
     ensureTranscriptsInflated(D);
     const runFailed = ['failed', 'error'].indexOf(String((D.meta && D.meta.status) || '').toLowerCase()) >= 0;
+    const runInProgress = String((D.meta && D.meta.status) || '').toLowerCase() === 'running';
     const firstFail = runFailed ? failureAnchorIndex() : -1;
     st.step = firstFail >= 0 ? D.trace[firstFail].i : ((D.trace[0] && D.trace[0].i) || 0);
     const trailheadStart = D.trace.findIndex((t) => t.objective && t.trailhead);
     const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
-    // Tool-action count, so the auto-collapse threshold below keeps its pre-LLM-row meaning: per-call
-    // LLM rows are not actions (same filter the step headers and phase stats apply).
+    // How many ROWS the trailhead phase would render, which is what the threshold below is about:
+    // how much of the screen setup takes. Deliberately not the step cards' dispatch count — a folded
+    // row's dispatches stay collapsed inside it, so they cost no height. Per-call LLM rows are not
+    // rows the reader counts as setup work either.
     const trailheadEnd = trailStart >= 0 ? trailStart : D.trace.length;
-    const trailheadActions = trailheadStart >= 0
+    const trailheadRows = trailheadStart >= 0
       ? D.trace.slice(trailheadStart + 1, trailheadEnd).filter((t) => !isLlmTurnRow(t)).length
       : 0;
     const failureIsInTrailhead = firstFail >= 0 && trailheadStart >= 0 && (trailStart < 0 || firstFail < trailStart);
     // Setup is supporting context. Keep small setup visible, but collapse high-volume setup so the
     // authored Trail remains the dominant content. A setup failure overrides that default.
-    st.trailheadOpen = trailStart < 0 || failureIsInTrailhead || trailheadActions <= 12;
+    st.trailheadOpen = trailStart < 0 || failureIsInTrailhead || trailheadRows <= 12;
     if (firstFail < 0 && !st.trailheadOpen && trailStart >= 0) st.step = D.trace[trailStart].i;
+    // A run still in progress has no conclusion to lead with, and its interesting end is the end:
+    // open on the newest row so the first thing on screen is what the device is doing now. The
+    // live seam below keeps following that tail on each update.
+    if (firstFail < 0 && runInProgress) { const newest = newestSelectableStep(); if (newest != null) st.step = newest; }
     const selectable = selectableTimelineIndexFor(st.step);
     if (selectable >= 0) st.step = D.trace[selectable].i;
-    if (pendingDetailRoute) { const r = pendingDetailRoute; pendingDetailRoute = null; applyDetailRoute(r); }
+    if (pendingDetailRoute) {
+      const r = pendingDetailRoute;
+      const fromHistory = pendingDetailRouteFromHistory;
+      pendingDetailRoute = null;
+      pendingDetailRouteFromHistory = false;
+      applyDetailRoute(r, fromHistory);
+    }
+    // Last, so it opens the group holding whatever the route settled on rather than the seeded
+    // step the route was about to replace.
+    revealTimelineStep(st.step);
   };
   // Open a session's detail view.
   const openSession = (i) => {
     // st.lightboxZoom deliberately survives this reset: thumbnail size is a cross-run viewing
     // preference, unlike the per-session lightboxAll expansion.
-    stopTimeline(); closeTranscript(); spriteAspect = null; pendingDetailRoute = null; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.trailOpen = true; st.kidsOpen = {}; st.lightboxAll = false;
+    stopTimeline(); closeTranscript(); spriteAspect = null; pendingDetailRoute = null; pendingDetailRouteFromHistory = false; st.session = i; D = SESSIONS[i]; st.view = 'detail'; st.tab = 'timeline'; st.step = 0; st.kid = null; st.llmSel = 0; st.tlStreams = []; st.tlEventKinds = allTimelineEventKinds(); st.tlMenuOpen = false; st.tlEventMenuOpen = false; st.trailOpen = true; st.stepsOpen = {}; st.kidsOpen = {}; st.lightboxAll = false;
     // Chunked documents hydrate on open: synchronous when the session's chunk has already
     // streamed in (the common case). Otherwise render()'s loading shell holds the view until the
     // chunk lands, then the seed + re-render below run.
@@ -553,12 +722,36 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     seedSessionDetail();
   };
+  // The header id of the group a row belongs to. Resolved through the trace model rather than by
+  // scanning back for the nearest objective, because a self-heal retry is itself an objective row
+  // that the model MERGES into the group it retried — its own id names no rendered header.
+  const groupHeaderIdOf = (stepId) => {
+    const index = traceModel().indexById.get(stepId);
+    const row = index == null ? null : D.trace[index];
+    const group = row ? traceModel().groupByRow.get(row) : null;
+    return group && group.header ? group.header.i : null;
+  };
+  // Whether a step group renders expanded: an explicit toggle first, then the group holding the
+  // selection (the preview pane must never point into a hidden body), then the caller's default.
+  //
+  // The selected group is DERIVED, never recorded. Recording it would make every automatic reveal
+  // permanent, so following a live tail or watching a playback to the end would leave every step it
+  // walked through expanded — rebuilding the wall this collapse exists to remove. It also keeps
+  // `st.stepsOpen` to entries the reader actually asked for, which matters because a row's `i` is
+  // positional and a live push can renumber it.
+  const groupOpen = (headerId, byDefault) => (headerId in st.stepsOpen
+    ? !!st.stepsOpen[headerId]
+    : !!byDefault || headerId === groupHeaderIdOf(st.step));
   const revealTimelineStep = (stepId) => {
-    const index = D.trace.findIndex((t) => t.i === stepId);
-    if (index < 0) return;
+    const index = traceModel().indexById.get(stepId);
+    if (index == null) return;
     const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
     if (trailStart >= 0 && index >= trailStart) st.trailOpen = true;
     else if (D.trace.some((t) => t.objective && t.trailhead)) st.trailheadOpen = true;
+    // Navigating into a step the reader had collapsed re-opens it, so a selection is never stranded
+    // behind a closed header. This only ever CLEARS a toggle — see groupOpen on why it never sets one.
+    const headerId = groupHeaderIdOf(stepId);
+    if (headerId != null && st.stepsOpen[headerId] === false) delete st.stepsOpen[headerId];
   };
 
   // ── Autoplay-capture contract (`?autoplay=1`) ───────────────────────────────────────────────
@@ -589,11 +782,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // pure-affordance chrome is hidden and transitions are stilled so no frame catches a half-played
   // one. Set at boot, before the first render, so the very first captured frame is already framed.
   if (AUTOPLAY && document.documentElement && document.documentElement.dataset) document.documentElement.dataset.tbAutoplay = '1';
+  // Same idea for the embedded frame (see the html[data-tb-embedded] rules): the host's surface
+  // shows through instead of the report painting its own page colour, so the frame reads as a panel
+  // of the app rather than a window cut into it.
+  if (EMBEDDED && document.documentElement && document.documentElement.dataset) document.documentElement.dataset.tbEmbedded = '1';
 
   // Report state lives in query parameters so copied URLs communicate their selected run, view,
   // and step. Only these owned keys are changed: signed-artifact parameters such as `jwt` survive
   // every navigation. Legacy hash routes remain readable and are canonicalized on initial load.
-  const routeKeys = ['view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'stream', 'group', 'sort', 'search', 'filter'];
+  const routeKeys = ['view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'inspect', 'stream', 'group', 'sort', 'search', 'filter'];
   // 'stream' (the retired Events tab's selected-stream index) and 'filter' (the retired
   // Self-healed index filter) stay in routeKeys so legacy URLs that carry them are still
   // canonicalized away, but they are no longer read or written.
@@ -616,6 +813,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       step: p.has('step') ? Number(p.get('step')) : null,
       kid: p.has('kid') ? Number(p.get('kid')) : null,
       llm: p.has('llm') ? Number(p.get('llm')) : null,
+      inspect: p.has('inspect') ? Number(p.get('inspect')) : null,
       streams: p.get('streams'),
       types: p.get('types'),
     };
@@ -623,7 +821,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Apply the detail-view parts of a parsed route (tab/step/llm/streams) to the open session.
   // Split out of applyRoute because a route into a not-yet-hydrated session parks here and
   // re-applies from seedSessionDetail once the chunk lands.
-  const applyDetailRoute = (r) => {
+  const applyDetailRoute = (r, fromHistory = false) => {
+    pendingInspectorOpen = null;
+    pendingInspectorHistoryBacked = false;
+    pendingLlmHistoryBacked = false;
     const requestedTab = r.tab === 'grid' ? 'lightbox' : r.tab;
     // Legacy 'events' routes land on the timeline, where inline event streams now live.
     const allowed = ['timeline', 'lightbox', 'video', 'llm', 'config', 'recording', 'device', 'network', 'info'];
@@ -640,13 +841,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // A deep-linked call (`?llm=N`) highlights its per-request table row AND opens that call's
     // transcript lightbox — the lightbox IS the detail surface, so the link lands the reader in
     // the transcript with the row waiting underneath when it closes.
-    if (r.llm != null && Number.isFinite(r.llm) && r.llm >= 0 && r.llm < D.llm.length) { st.llmSel = r.llm; pendingLlmOpen = st.tab === 'llm'; }
+    if (r.llm != null && Number.isFinite(r.llm) && r.llm >= 0 && r.llm < D.llm.length) {
+      st.llmSel = r.llm;
+      pendingLlmOpen = true;
+      pendingLlmHistoryBacked = fromHistory;
+    }
+    if (r.inspect != null && Number.isFinite(r.inspect) && D.trace.some((t) => t.i === r.inspect)) {
+      pendingInspectorOpen = r.inspect;
+      pendingInspectorHistoryBacked = fromHistory;
+    }
     // No upper-bound check here: stream counts may be unknown while a compressed events payload
     // is still inflating, so the consumer owns the clamp (streamEvents ignores unknown tlStreams
     // indices).
     if (r.streams != null) st.tlStreams = r.streams.split(',').map(Number).filter((i) => Number.isInteger(i) && i >= 0);
   };
-  const applyRoute = () => {
+  const applyRoute = (fromHistory = false) => {
     const r = readRoute();
     if (!r) return;
     if (r.view === 'index' && MULTI) {
@@ -658,8 +867,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     const si = Number.isFinite(r.session) ? Math.max(0, Math.min(SESSIONS.length - 1, r.session)) : 0;
     openSession(si);
-    if (unhydrated.has(si)) pendingDetailRoute = r;
-    else applyDetailRoute(r);
+    if (unhydrated.has(si)) { pendingDetailRoute = r; pendingDetailRouteFromHistory = fromHistory; }
+    else applyDetailRoute(r, fromHistory);
   };
   // The viewer's owned route state, serialized. The single source both the URL writer and the
   // Copy-link grafter consume — the grafter can't read the state back off location.search in a
@@ -678,15 +887,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (st.tab === 'timeline' && st.kid != null) params.set('kid', String(st.kid));
       if (st.tab === 'timeline' && st.tlStreams.length) params.set('streams', st.tlStreams.join(','));
       if (st.tab === 'timeline' && st.tlEventKinds.length !== TIMELINE_EVENT_KINDS.length) params.set('types', st.tlEventKinds.length ? st.tlEventKinds.join(',') : 'none');
-      // `llm` means "the transcript lightbox is open on this call" — written while it's open on
-      // the LLM tab, dropped when it closes, so back/forward and copied links land in the same
-      // state the reader sees (the lightbox is the tab's only detail surface).
-      if (st.tab === 'llm' && txEl) params.set('llm', String(txCallIndex));
+      // Pushed destinations are route state: opening one creates a history entry, so browser Back
+      // dismisses it without navigating away from the selected report. The same parameters make
+      // copied links and browser Forward reopen the exact transcript or hierarchy capture.
+      if (txEl || pendingLlmOpen) params.set('llm', String(txEl ? txCallIndex : st.llmSel));
+      if (inspectorEl || pendingInspectorOpen != null) params.set('inspect', String(inspectorEl ? inspState.step : pendingInspectorOpen));
     }
     return params;
   };
   const writeRoute = (replace) => {
-    if (typeof history === 'undefined' || typeof location === 'undefined') return;
+    if (typeof history === 'undefined' || typeof location === 'undefined') return false;
     const params = new URLSearchParams(String(location.search || ''));
     routeKeys.forEach((key) => params.delete(key));
     routeParams().forEach((value, key) => params.set(key, value));
@@ -694,11 +904,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const legacyHash = /^#(?:runs(?:&|$)|run=|tab=|step=)/.test(String(location.hash || ''));
     const next = `${String(location.pathname || '')}${search ? `?${search}` : ''}${legacyHash ? '' : String(location.hash || '')}`;
     const current = `${String(location.pathname || '')}${String(location.search || '')}${String(location.hash || '')}`;
-    if (current === next) return;
+    if (current === next) return false;
     // Route persistence is a progressive enhancement: in an `about:srcdoc`/sandboxed embed (e.g.
     // Trail Runner's zip-report iframe) the History API refuses URL writes with a SecurityError —
     // the report must still render, just without deep-linkable tab/step state.
-    try { history[replace ? 'replaceState' : 'pushState'](null, '', next); } catch (_) { /* embedded */ }
+    try { history[replace ? 'replaceState' : 'pushState'](null, '', next); return !replace; } catch (_) { return false; /* embedded */ }
   };
   // A report served over HTTP(S) is shareable by URL — the route already encodes the view, sort,
   // run, and step state, so the browser's current address IS the deep link. file:// documents and
@@ -707,7 +917,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // (`trailblaze report --share-url …`, e.g. CI pointing at the hosted artifact), which wins over
   // the browser address and keeps the affordance available from any viewing context.
   const SHARE_URL = safeHref(RAW.shareUrl) || '';
-  const shareLinkAvailable = () => !!SHARE_URL || (typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || '')));
+  // Embedded, the address IS this frame's `report-live.html?...&chrome=none` URL: it opens, but it
+  // is a header-less document rather than the run page the host would send someone to, and the
+  // host owns sharing its own runs. A baked share URL still wins, from any context.
+  const shareLinkAvailable = () => !!SHARE_URL || (!EMBEDDED && typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || '')));
   const reportLink = () => {
     if (SHARE_URL) {
       // Graft the current route state onto the canonical URL so the copied link deep-links to
@@ -747,16 +960,27 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   applyRoute();
   writeRoute(true);
 
-  const catColor = { fail: 'var(--fail)', llm: 'var(--ai)', assert: 'var(--pass)', tool: 'var(--pass)' };
+  const catColor = { fail: 'var(--fail)', llm: 'var(--ai)', assert: 'var(--pass)', tool: 'var(--txt)' };
   const timelineEventKindMeta = {
-    tool: { label: 'Tool / action', color: 'var(--pass)' },
+    tool: { label: 'Tool / action', color: 'var(--txt)' },
     llm: { label: 'LLM / agent', color: 'var(--ai)' },
     assert: { label: 'Assertion', color: 'var(--amber)' },
     fail: { label: 'Error', color: 'var(--fail)' },
   };
   const TIMELINE_FILTER_ICON_SVG = '<svg class="streamselectoricon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M4.5 8h7M6.5 12h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
   const TIMELINE_CHECK_ICON_SVG = '<svg class="streamoptioncheck" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8.5 3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const STEP_DISCLOSURE_SVG = '<svg class="grpchev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // The step outcome, stated twice on purpose: as the colour of its STEP token (scannable down a
+  // long collapsed trail) and as a word in its status line (readable, and not colour-only).
+  const stepStatusIcon = (glyph) => `<svg class="grpstatusicon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".16"/><path d="${glyph}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const STEP_STATUS_ICON_SVG = {
+    pass: stepStatusIcon('m4.8 8.3 2.2 2.2 4.2-4.6'),
+    fail: stepStatusIcon('m5.6 5.6 4.8 4.8M10.4 5.6l-4.8 4.8'),
+    selfheal: stepStatusIcon('M8 4.6v4.2l2.6 1.6'),
+    skip: stepStatusIcon('M5.2 8h5.6'),
+  };
   const llmStepIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg>';
+  const toolStepIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9Z"/></svg>';
   const stepIcon = (t) => {
     const label = String(t.label || '').toLowerCase();
     const tool = String(t.tool || '').toLowerCase();
@@ -767,7 +991,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (llm) return { cls: 'llm', glyph: llmStepIcon };
     if (assertion) return { cls: 'verify', glyph: '✓' };
     if (tap) return { cls: 'tap', glyph: '◉' };
-    return { cls: 'dot', glyph: '' };
+    return { cls: 'tool', glyph: toolStepIcon };
   };
 
   // Error producers do not share one wire shape: JVM failures usually arrive as
@@ -904,25 +1128,32 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     </section>`;
   };
 
-  const idxOf = (i) => Math.max(0, D.trace.findIndex((t) => t.i === i));
+  const idxOf = (i) => Math.max(0, traceModel().indexById.get(i) ?? -1);
+  // What a row IS, independent of where it sits: its capture time and label. Only the live seam
+  // needs this, to recognize the reader's selected row again after a push renumbered the trace.
+  // A row with no capture time has no identity to match on, so it yields null and is left alone.
+  const traceRowKey = (t) => (t && t.ts ? String(t.ts) + ' ' + String(t.label || '') : null);
   const shotForStep = (i) => {
     const at = idxOf(i);
     // Resolve a row to its inlined screenshot — but only if the image is actually present in
     // D.shots. A screenshotFile whose inline failed (the Share path skips failed fetches;
     // run-report-cli skips files dataUri() can't read) must NOT short-circuit the fallbacks and
     // leave the pane empty.
-    const shot = (r) => (r && r.screenshotFile) ? safeImageDataUri(D.shots[r.screenshotFile]) || null : null;
+    const shot = (r) => (r && r.screenshotFile) ? safeImageSrc(D.shots[r.screenshotFile]) || null : null;
     // 1. The row's own frame — the screen it acted on (action/tool rows carry their pre-action frame).
     let s = shot(D.trace[at]);
     if (s) return s;
-    // 2. Screenshot-less rows (step/objective headers, agent-reasoning turns) show the NEXT frame —
+    // 2. A folded row whose own span captured nothing borrows from the dispatches it absorbed: they
+    // are the interactions it stands for, so their first frame beats a neighbouring row's screen.
+    for (const c of (D.trace[at] && D.trace[at].children) || []) { s = shot(c); if (s) return s; }
+    // 3. Screenshot-less rows (step/objective headers, agent-reasoning turns) show the NEXT frame —
     // the screen this step is about to act on. Bounded to THIS step: stop at the next objective
     // header so a frameless middle step never previews a future step's screen.
     for (let k = at + 1; k < D.trace.length && !D.trace[k].objective; k++) {
       s = shot(D.trace[k]);
       if (s) return s;
     }
-    // 3. Nothing usable ahead in this step: fall back to the nearest earlier frame so the pane is
+    // 4. Nothing usable ahead in this step: fall back to the nearest earlier frame so the pane is
     // never empty.
     for (let k = at - 1; k >= 0; k--) {
       s = shot(D.trace[k]);
@@ -930,6 +1161,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     return null;
   };
+
+  // The child dispatch a (step, kid) selection previews — its own frame and tap/swipe mark. A row
+  // selection (kid null) previews the row's own frame: a folded row stands for its FIRST dispatch,
+  // and every dispatch it absorbed is its own timeline entry the transport and playback walk
+  // through, so the row has no reason to jump ahead to the batch's last interaction.
+  const selectedChild = (row) => (st.kid != null && row && row.children) ? row.children[st.kid] || null : null;
 
   // The session's video, but only when it can be mapped onto the run clock (its capture-start
   // timestamp and at least one step timestamp exist). Otherwise the timeline keeps screenshots.
@@ -978,54 +1215,73 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<div class="mark ${cls}" style="left:${esc(left)}%;top:${esc(top)}%"></div>`;
   };
 
-  // Group flat trace under objective rows -> { header, num, items } (same shape as the app's
-  // StepStack). The trailhead (step 0) keeps num 0 so the trail steps still read STEP 1..N.
+  // Group flat trace under objective rows -> { header, num, items }. The trailhead (step 0) keeps
+  // num 0 so the trail steps still read STEP 1..N.
   // A failed recorded objective followed by the same objective is the recovery retry emitted by
   // self-healing, not another authored step. Keep both attempts in one card and remember where the
   // retry begins so the UI can label the transition without inventing another step number.
-  const groupTrace = () => {
-    const gs = []; let cur = null; let n = 0;
-    for (const t of D.trace) {
-      if (t.objective) {
-        const retry = cur && cur.header && cur.header.selfHeal && !cur.header.ok
-          && !t.trailhead && cur.header.label === t.label;
-        if (retry) { cur.retryAt.push(cur.items.length); continue; }
-        cur = { header: t, num: t.trailhead ? 0 : ++n, items: [], retryAt: [] };
-        gs.push(cur);
-      } else {
-        if (!cur) { cur = { header: null, num: 0, items: [], retryAt: [] }; gs.push(cur); }
-        cur.items.push(t);
-      }
+  const groupTrace = () => traceModel().groups;
+
+  // The timeline's addressable units — every trace row, each followed by the extra tool dispatches
+  // a traceId fold absorbed into it that captured their own frame (see ReportTimelineEntry). The
+  // scrub rail, its tick marks, the transport buttons, keyboard navigation and playback all index
+  // into THIS list, so a step that tapped four targets replays as four frames rather than one.
+  const timelineEntries = () => traceModel().entries;
+  const entryIndexOfRow = (i) => Math.max(0, traceModel().entryIndexById.get(i) ?? -1);
+  // Entry index of the current (step, kid) selection. A row's dispatches sit immediately after its
+  // own entry, so the scan is bounded by that row's dispatch count. Every dispatch in a fold is
+  // clickable but only the ones that captured a frame are entries, so a selection can land between
+  // two of them: resolve that to the nearest entry BEFORE it, never the row's own. Falling back to
+  // the row would put the rail behind the reader's selection and make Next walk backwards, onto a
+  // dispatch they already passed.
+  const selectedEntryIndex = () => {
+    const entries = timelineEntries();
+    const at = entryIndexOfRow(st.step);
+    let preceding = at;
+    for (let k = at; k < entries.length && entries[k].row.i === st.step; k++) {
+      if (entries[k].kid === st.kid) return k;
+      if (st.kid != null && entries[k].kid != null && entries[k].kid < st.kid) preceding = k;
     }
-    return gs;
+    return preceding;
+  };
+  // The run-clock instant the current selection describes, which is what the video frame under it
+  // must show. A selected dispatch has an instant of its own - its entry carries one even when the
+  // log had none - and a fold can span seconds, so falling back to the row's clock here would draw
+  // that dispatch's mark over a screen from a different interaction.
+  const selectedClockMs = () => {
+    const entry = timelineEntries()[selectedEntryIndex()];
+    if (entry && entry.kid === st.kid && entry.ts != null) return entry.ts;
+    const child = selectedChild(D.trace.find((t) => t.i === st.step));
+    return (child && child.ts != null) ? child.ts : stepClockMs(st.step);
   };
 
   // First wall-clock timestamp in the trace — the run-clock zero every row's elapsed offset is
   // measured from (parity with the legacy report's elapsed-from-session-start gutter).
-  const traceT0 = () => { for (const t of D.trace) { if (t.ts != null) return t.ts; } return null; };
+  const traceT0 = () => traceModel().traceT0;
   const fmtDur = (ms) => !ms ? '' : ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
   const fmtClock = (ms) => `${Math.floor((ms || 0) / 60000)}:${String(Math.floor(((ms || 0) % 60000) / 1000)).padStart(2, '0')}`;
 
-  // Same time-compression model as Trail Runner's VerticalScrubber: real gaps are preserved but
+  // Time-compressed scrub rail: real gaps are preserved but
   // clamped so a fast burst stays clickable and a long idle period does not consume the rail. The
   // whole axis derives from the shared steps-mode playback schedule (compressed positions AND the
   // haveTs/lo/hi timestamp coverage) so the rail, its tick marks, and the steps-mode playback
   // clock can never drift apart. Callers that already built the steps schedule pass it in.
-  const timelineAxis = (schedule = buildPlaybackSchedule(D.trace, null)) => {
+  const timelineAxis = (schedule = buildPlaybackSchedule(timelineEntries(), null)) => {
+    const entries = timelineEntries();
     const haveTs = schedule.haveTs; const lo = schedule.lo; const hi = schedule.hi;
     const pos = schedule.offsets;
     const real = [];
-    D.trace.forEach((t, i) => {
+    entries.forEach((t, i) => {
       const raw = haveTs && t.ts != null ? t.ts - lo : (i > 0 ? real[i - 1] : 0);
       real.push(i > 0 ? Math.max(real[i - 1], raw) : Math.max(0, raw));
     });
     const span = Math.max(1, pos.length ? pos[pos.length - 1] : 0);
     const stepFrac = pos.map((p) => p / span);
     const tsFrac = (ms) => {
-      if (ms == null || !haveTs || !D.trace.length) return null;
+      if (ms == null || !haveTs || !entries.length) return null;
       const r = ms - lo;
       if (r <= real[0]) return stepFrac[0];
-      for (let i = 1; i < D.trace.length; i++) {
+      for (let i = 1; i < entries.length; i++) {
         if (r <= real[i]) {
           const d = real[i] - real[i - 1] || 1;
           return Math.min(1, Math.max(0, stepFrac[i - 1] + ((r - real[i - 1]) / d) * (stepFrac[i] - stepFrac[i - 1])));
@@ -1122,41 +1378,130 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Screen-reader value text for the scrubber's current position — used by the static render AND
   // updated in place as playback advances, so assistive tech always hears the current row.
   const scrubValueText = (pos) => {
-    const current = D.trace[pos];
-    const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
-    const hasTrailhead = D.trace.some((t) => t.objective && t.trailhead);
+    const entries = timelineEntries();
+    const current = entries[pos];
+    const trailStart = entries.findIndex((e) => e.row.objective && !e.row.trailhead);
+    const hasTrailhead = entries.some((e) => e.row.objective && e.row.trailhead);
     const phase = hasTrailhead && (trailStart < 0 || pos < trailStart) ? 'Trailhead' : 'Trail';
-    return `${phase}, item ${pos + 1} of ${D.trace.length}: ${(current && current.label) || 'Timeline item'}`;
+    const label = current ? (current.child ? `${current.row.label} · ${current.child.label}` : current.row.label) : null;
+    return `${phase}, item ${pos + 1} of ${entries.length}: ${label || 'Timeline item'}`;
   };
 
   // Objective rows are structural group headers, not selectable timeline actions. Keyboard and
   // transport navigation move between the tool-call rows inside those groups so the selection
   // rail never lands on (or visually promotes) the step container itself.
   const isSelectableTimelineRow = (t) => !!t && !t.objective && !t.terminal && st.tlEventKinds.indexOf(stepCat(t)) >= 0;
+  // A dispatch entry is selectable when its row is AND it has a frame of its own to show. In steps
+  // mode that means its screenshotFile actually inlined; a failed inline would be an entry showing
+  // the frame before it. With a run-clock video there is always a frame at the dispatch's instant —
+  // the same reason paintTimelinePane lets `hasVideo` carry a dispatch's mark — so dropping it would
+  // hide an interaction the video is displaying.
+  const isSelectableTimelineEntry = (e) => !!e && isSelectableTimelineRow(e.row)
+    && (e.kid == null || !!tlVideo() || !!(e.child.screenshotFile && safeImageSrc(D.shots[e.child.screenshotFile])));
   const adjacentSelectableIndex = (from, direction) => {
-    for (let i = from + direction; i >= 0 && i < D.trace.length; i += direction) {
-      if (isSelectableTimelineRow(D.trace[i])) return i;
+    const entries = timelineEntries();
+    for (let i = from + direction; i >= 0 && i < entries.length; i += direction) {
+      if (isSelectableTimelineEntry(entries[i])) return i;
     }
     return -1;
   };
 
+  // Resolve empty space on the scrubber to its authored objective. This keeps the rail useful
+  // between dense event markers: every horizontal position can still explain which step owns that
+  // part of the run. Self-heal retries keep the original authored step number.
+  const scrubTimelineModel = (axis) => {
+    const outcome = indexOutcome(D);
+    const runFailed = outcome === 'failed';
+    const failureAnchor = runFailed ? D.trace[failureAnchorIndex()] : null;
+    const groups = groupTrace().filter((g) => g.header);
+    const rowRange = new Map();
+    const ranges = groups.map((g, groupIndex) => {
+      const selfHealed = outcome === 'selfheal' && !!g.header.selfHeal;
+      const failed = !selfHealed && (!g.header.ok || (runFailed && (
+        g.header === failureAnchor || g.items.indexOf(failureAnchor) >= 0 || g.retryHeaders.indexOf(failureAnchor) >= 0
+      )));
+      const startIndex = entryIndexOfRow(g.header.i);
+      const next = groups[groupIndex + 1];
+      const endIndex = next ? entryIndexOfRow(next.header.i) : -1;
+      const range = {
+        group: g,
+        token: g.header.trailhead ? 'Trailhead' : `Step ${g.num}`,
+        start: axis.stepFrac[startIndex] || 0,
+        end: endIndex >= 0 ? (axis.stepFrac[endIndex] || 0) : 1,
+        tone: selfHealed ? 'selfhealed' : failed ? 'failed' : '',
+      };
+      [g.header, ...g.retryHeaders, ...g.items].forEach((row) => rowRange.set(row, range));
+      return range;
+    });
+    return { ranges, rowRange };
+  };
+
+  const scrubStepAtFraction = (ranges, fraction) => {
+    if (!ranges.length) return { token: 'Timeline', start: 0, end: 1, tone: '' };
+    let lo = 0; let hi = ranges.length - 1; let selected = 0;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (ranges[mid].start <= fraction) { selected = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ranges[selected];
+  };
+
   const scrubberHtml = (axis, events, pos) => {
-    const ticks = D.trace.map((t, i) => (!t.objective && !t.terminal && st.tlEventKinds.indexOf(stepCat(t)) < 0) ? '' : `<span class="scrubtick" aria-hidden="true" style="left:calc(${(axis.stepFrac[i] || 0) * 100}% - 1px);background:${catColor[stepCat(t)]}"></span>`).join('');
+    // Objective rows are authored step landmarks, not LLM calls. Although their stored tool name
+    // is "agent step", painting them with --ai made most scrubber marks purple and obscured the
+    // handful of real LLM turns. Ordinary structural steps use the neutral grayscale token, while
+    // failed and recovered objectives reuse the same semantic status as their cards. This makes a
+    // recovery or terminal failure visible on the rail without mistaking every objective for AI.
+    const scrubModel = scrubTimelineModel(axis);
+    const ticks = timelineEntries().map((entry, i) => {
+      const t = entry.row;
+      // A dispatch entry marks one interaction inside a folded row: it earns its own tick only when
+      // the transport can actually land on it, so the rail's marks and playback's stops agree.
+      if (entry.kid != null && !isSelectableTimelineEntry(entry)) return '';
+      if (entry.kid == null && !t.objective && !t.terminal && st.tlEventKinds.indexOf(stepCat(t)) < 0) return '';
+      const cat = stepCat(t);
+      const authoredRange = scrubModel.rowRange.get(t);
+      const currentStep = authoredRange?.token || 'Timeline';
+      const objectiveTone = t.objective ? (authoredRange?.tone || '') : '';
+      const color = objectiveTone === 'selfhealed' ? 'var(--status-self-healed-mark)'
+        : objectiveTone === 'failed' ? 'var(--status-failed-mark)'
+        : t.objective ? 'var(--timeline-objective-mark)' : catColor[cat];
+      const kind = objectiveTone === 'selfhealed' ? 'Self-healed'
+        : objectiveTone === 'failed' ? 'Failed'
+        : t.objective ? '' : cat === 'llm' ? 'LLM' : cat === 'fail' ? 'Error' : cat === 'assert' ? 'Assertion' : 'Tool / action';
+      // A semantic range below represents a recovered or failed authored step more clearly than
+      // paired objective bars. A recovered objective can also appear twice (attempt + retry), so
+      // this avoids duplicating its status at both boundaries.
+      if (t.objective && (objectiveTone === 'selfhealed' || objectiveTone === 'failed')) return '';
+      const fraction = axis.stepFrac[i] || 0;
+      return `<span class="scrubtick ${t.objective ? `objective${objectiveTone ? ` ${objectiveTone}` : ''}` : `event ${cat}`}" data-scrub-step="${esc(currentStep)}" data-scrub-kind="${esc(kind)}" aria-hidden="true" style="left:calc(${fraction * 100}% - 1px);background:${color};--tick-color:${color}"></span>`;
+    }).join('');
+    const statusRanges = scrubModel.ranges.map((range) => {
+      const tone = range.tone;
+      if (tone !== 'selfhealed' && tone !== 'failed') return '';
+      const start = range.start; const end = range.end; const token = range.token;
+      const kind = tone === 'selfhealed' ? 'Self-healed' : 'Failed';
+      const color = tone === 'selfhealed' ? 'var(--status-self-healed-mark)' : 'var(--status-failed-mark)';
+      // Inset both edges so adjacent semantic ranges leave the step landmark visible between
+      // them instead of joining into one continuous failed/self-healed outline.
+      return `<span class="scrubstatusbox ${tone}" data-scrub-step="${esc(token)}" data-scrub-kind="${kind}" aria-hidden="true" style="left:calc(${start * 100}% + 2px);right:calc(${Math.max(0, 1 - end) * 100}% + 2px);--tick-color:${color}"></span>`;
+    }).join('');
     const eventTicks = events.map((e) => {
       const f = axis.tsFrac(e.t); if (f == null) return '';
-      return `<span class="scrubtick" aria-hidden="true" title="${esc(e.stream)}" style="left:calc(${f * 100}% - 1px);background:${streamColor(e.streamIndex)}"></span>`;
+      const color = streamColor(e.streamIndex);
+      return `<span class="scrubtick event stream" data-scrub-step="${esc(scrubStepAtFraction(scrubModel.ranges, f).token)}" data-scrub-kind="Stream" aria-hidden="true" style="left:calc(${f * 100}% - 1px);background:${color};--tick-color:${color}"></span>`;
     }).join('');
     const frac = axis.stepFrac[pos] || 0;
-    const trailStart = D.trace.findIndex((t) => t.objective && !t.trailhead);
+    const trailStart = timelineEntries().findIndex((e) => e.row.objective && !e.row.trailhead);
     const hasTrailhead = D.trace.some((t) => t.objective && t.trailhead);
     const trailFrac = trailStart >= 0 ? (axis.stepFrac[trailStart] || 0) : 1;
     const rail = hasTrailhead && trailStart < 0
-      ? `<div class="scrubline setup" style="width:100%"></div>`
+      ? `<div class="scrubphasebox" style="width:100%"></div>`
       : hasTrailhead
-      ? `<div class="scrubline setup" style="width:${trailFrac * 100}%"></div><div class="scrubline trail" style="left:${trailFrac * 100}%"></div><span class="scrubphasebreak" style="left:${trailFrac * 100}%" title="Trail begins" aria-hidden="true"></span>`
+      ? `<div class="scrubphasebox" style="width:${trailFrac * 100}%"></div><div class="scrubline trail" style="left:${trailFrac * 100}%"></div>`
       : `<div class="scrubline trail" style="left:0"></div>`;
-    const phaseLabel = hasTrailhead && trailStart < 0 ? 'Timeline for Trailhead setup. The dotted rail marks deterministic setup.'
-      : hasTrailhead ? 'Timeline. Dotted segment is Trailhead setup; solid segment is the authored Trail.'
+    const phaseLabel = hasTrailhead && trailStart < 0 ? 'Timeline for Trailhead setup. The dashed box encloses Trailhead activity.'
+      : hasTrailhead ? 'Timeline. Dashed box encloses Trailhead activity; solid rail marks the authored Trail.'
       : 'Timeline for the authored Trail.';
     const playbackLabel = st.playing ? 'Stop' : 'Play';
     const previousAction = adjacentSelectableIndex(pos, -1);
@@ -1166,7 +1511,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <button type="button" class="timelinecontrol play" id="tlplay" aria-label="${playbackLabel} timeline" title="${playbackLabel} timeline">${st.playing ? '<span class="transporticon stopicon" aria-hidden="true"></span>' : '<svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5v17L20 12Z" fill="currentColor"/></svg>'}</button>
       <button type="button" class="timelinecontrol" id="next" aria-label="Next tool call" title="Next tool call"${nextAction < 0 ? ' disabled' : ''}><span class="transporticon direction" aria-hidden="true"></span></button>
     </div>`;
-    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${D.trace.length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${ticks}${eventTicks}<div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}</div>`;
+    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}</div>`;
   };
 
   // Chat glyph for every "open this call's transcript" affordance (timeline rows, LLM tab rows) —
@@ -1175,10 +1520,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const txOpenBtnHtml = (llmIndex, context) =>
     `<button type="button" class="txopenbtn" data-tx="${esc(llmIndex)}" aria-label="Open LLM transcript${context ? ` for ${esc(context)}` : ''}" title="LLM transcript">${TX_ICON_SVG}</button>`;
 
+  // Public reports stamp each produced row with the exact LLM-list index. Trace ids are only an
+  // extraction-time join key: one id can cover a whole tool batch, so it cannot identify a single
+  // transcript after the report has been compacted.
+  const llmIndexForTraceRow = (row) => {
+    if (row.llm != null && row.llm >= 0 && row.llm < D.llm.length) return row.llm;
+    return null;
+  };
+
   const INSPECTOR_CODE_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4-4 4 4 4M10 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const INSPECTOR_TREE_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h3v3H3zM10 3.5h3v3h-3zM10 10h3v3h-3zM6 5h2.25A1.75 1.75 0 0 1 10 6.75v4.75M8.25 8.25H10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const INSPECTOR_COPY_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 11V4.5A1.5 1.5 0 0 1 4.5 3H11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  const INSPECTOR_CLOSE_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
   const stepRowHtml = (t, child) => {
     const cat = stepCat(t); const sel = t.i === st.step;
@@ -1195,7 +1547,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // every interaction is followable, not just the row's first frame.
     const kidList = t.children || [];
     const kidSelected = (k) => sel && st.kid === k;
-    const kidRow = (c, k) => `<div class="kid${c.ok === false ? ' bad' : ''}${kidSelected(k) ? ' sel' : ''}" data-kidsel="${esc(t.i)}:${k}" role="button" tabindex="0"${kidSelected(k) ? ' aria-current="step"' : ''}><span class="mono">${esc(c.label)}</span>${(c.count || 1) > 1 ? `<span class="kcount">×${esc(c.count)}</span>` : ''}<span class="kt mono">${esc(c.tool)}</span>${c.ms != null ? `<span class="kms">${esc(fmtDur(c.ms) || '0ms')}</span>` : ''}</div>${kidSelected(k) && c.args ? `<pre class="toolargs mono">${esc(c.args)}</pre>` : ''}${c.ok === false && (c.err || c.code) ? `<div class="kiderr">${c.code ? `<span class="kidcode">${esc(c.code)}</span>` : ''}${esc(c.err || '')}</div>` : ''}`;
+    const kidRow = (c, k) => `<div class="kid${c.ok === false ? ' bad' : ''}${kidSelected(k) ? ' sel' : ''}" data-kidsel="${esc(t.i)}:${k}" role="button" tabindex="0"${kidSelected(k) ? ' aria-current="step"' : ''}>${c.note ? `<blockquote class="stepreason">“${esc(c.note)}”</blockquote>` : ''}<span class="mono">${esc(c.label)}</span>${(c.count || 1) > 1 ? `<span class="kcount">×${esc(c.count)}</span>` : ''}<span class="kt mono">${esc(c.tool)}</span>${c.ms != null ? `<span class="kms">${esc(fmtDur(c.ms) || '0ms')}</span>` : ''}</div>${kidSelected(k) && c.args ? `<pre class="toolargs mono">${esc(c.args)}</pre>` : ''}${kidSelected(k) && c.result != null ? `<div class="kidresult"><div class="kidresultlabel">Result${c.resultVaries ? '<span>varies across folded calls</span>' : ''}</div><pre class="mono">${esc(c.result)}</pre></div>` : ''}${c.ok === false && (c.err || c.code) ? `<div class="kiderr">${c.code ? `<span class="kidcode">${esc(c.code)}</span>` : ''}${esc(c.err || '')}</div>` : ''}`;
     const kidRows = kidList.map(kidRow).join('');
     const dispatchCount = kidList.reduce((n, c) => n + (c.count || 1), 0);
     const failedCount = kidList.reduce((n, c) => n + (c.ok === false ? (c.count || 1) : 0), 0);
@@ -1217,7 +1569,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const time = (rel || dur) ? `<span class="ts">${esc(rel)}${dur ? `<span class="dur">${esc(dur)}</span>` : ''}</span>` : '';
     // An LLM-call row shows the call's own accounting (model + tokens, from the linked llm entry)
     // as its detail line — the same metadata the WASM report's "LLM Request" child row carries.
-    const llmCall = t.llm != null ? D.llm[t.llm] : null;
+    const llmIndex = t.llm != null ? llmIndexForTraceRow(t) : null;
+    const llmCall = llmIndex != null ? D.llm[llmIndex] : null;
     // Keep the dense timeline categorical. Producer-specific labels such as "Screen Analyzer",
     // "Outer Agent", or "Koog Strategy Graph" remain available in the LLM detail view.
     const rowLabel = llmCall ? 'LLM' : t.label;
@@ -1229,9 +1582,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ${child ? '' : `<span class="num">${stepId}</span>`}
       <span class="ic ${icon.cls}"${icon.cls === 'dot' ? ` style="--icon-color:${catColor[cat]}"` : ''} aria-hidden="true">${icon.glyph}</span>
       <div style="flex:1;min-width:0">
+        ${t.note ? `<blockquote class="stepreason">“${esc(t.note)}”</blockquote>` : ''}
         <div class="lbl">${esc(rowLabel)}${count}</div>
         ${t.params && t.params.length ? t.params.map((p) => `<div class="tl-tool mono">${esc(p)}</div>`).join('') : detail ? `<div class="tl-tool mono">${esc(detail)}</div>` : ''}
-        ${t.note ? `<div class="note">${esc(t.note)}</div>` : ''}
         ${sel && st.kid == null && t.args ? `<pre class="toolargs mono">${esc(t.args)}</pre>` : ''}
       </div>
       ${time}
@@ -1239,7 +1592,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     </div>`;
     // The transcript affordance remains a sibling of its row because the row itself is a button.
     // UI inspection belongs to the device preview and is rendered once for the selected step.
-    const affordances = llmCall ? txOpenBtnHtml(t.llm, `call ${Number(t.llm) + 1}`) : '';
+    const affordances = llmCall ? txOpenBtnHtml(llmIndex, `call ${Number(llmIndex) + 1}`) : '';
     return affordances ? `<div class="steprow">${row}${affordances}</div>` : row;
   };
 
@@ -1270,7 +1623,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ? `<button type="button" class="statusjump failedjump" data-failure-step="${esc(failureAnchor.i)}" title="Go to ${esc(outcomeLabel)}" aria-label="Go to ${esc(outcomeLabel)}"><span class="statusjumplabel">Failed</span><span class="statusjumptoken">${esc(failureStepToken)}</span></button>`
       : outcome === 'selfheal' && selfHealAnchor
       ? `<button type="button" class="statusjump selfhealjump" data-selfheal-step="${esc(selfHealAnchor.i)}" title="Go to self-healed ${esc(selfHealStepToken.toLowerCase())}" aria-label="Go to self-healed ${esc(selfHealStepToken.toLowerCase())}"><span class="statusjumplabel">Self-healed</span><span class="statusjumptoken">${esc(selfHealStepToken)}</span></button>`
-      : `<span class="badge ${esc(outcome)}">${esc(outcomeLabel)}</span>`;
+      : `<span class="badge ${esc(outcome)}">${esc(outcome === 'passed' ? 'PASSED' : outcomeLabel)}</span>`;
     const controls = `<div class="timelinecontrols">${outcomeControl}<span class="timelinefilters">${eventChooser}${streamChooser}</span></div>`;
     // An event-only session (e.g. a run that failed before its first step) still gets its streams:
     // the chooser plus a flat stream list — there are no steps to bucket the events under.
@@ -1298,24 +1651,63 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const isTrailhead = g.header && g.header.trailhead;
         // The header's count keeps tool-call semantics (LLM-turn rows render below but are calls,
         // not device actions — same split the WASM header's "N tools" subtitle makes).
-        const actionCount = g.items.filter((t) => !isLlmTurn(t)).length;
-        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}" data-group="${g.header.i}" tabindex="-1">
-            <span class="chip">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span>
-            <span class="dot" style="background:${selfHealed ? 'var(--status-self-healed-mark)' : failed ? 'var(--status-failed-mark)' : 'var(--status-passed-mark)'}"></span>
-            ${actionCount ? `<span style="font-size:11px;color:var(--sub)">${actionCount} action${actionCount === 1 ? '' : 's'}</span>` : ''}
-            <span class="lbl" style="width:100%">${esc(g.header.label)}</span>
+        const actionCount = g.items.reduce((n, t) => n + rowToolCallCount(t), 0);
+        const durationMs = g.items.reduce((ms, t) => ms + (t.ms || 0), 0);
+        const mood = selfHealed ? 'selfheal' : failed ? 'fail' : 'pass';
+        // A step whose outcome the reader already accepts is noise in a long trail — collapse it so
+        // what needs attention leads. groupOpen keeps an explicit toggle, and the selected step's
+        // group, ahead of that default: the preview pane must never point into a hidden body.
+        const leads = failed || selfHealed;
+        const open = !g.header || groupOpen(g.header.i, leads);
+        const status = [
+          selfHealed ? 'Self-healed' : failed ? 'Failed' : 'Succeeded',
+          actionCount ? `${actionCount} action${actionCount === 1 ? '' : 's'}` : '',
+          fmtDur(durationMs),
+        ].filter(Boolean).join(' · ');
+        const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}" data-group="${g.header.i}" aria-expanded="${open}" data-group-leads="${leads}">
+            ${STEP_DISCLOSURE_SVG}
+            <span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span>
+            <span class="lbl">${esc(g.header.label)}</span>
+            <span class="grpstatus ${mood}">${STEP_STATUS_ICON_SVG[mood]}${esc(status)}</span>
           </button>` : '';
         const headerEvents = g.header ? streamGroupHtml(buckets[idxOf(g.header.i)] || []) : '';
         const inlineHeaderFailure = failureSummary && g === failureGroup && (!anchorRow || g.header === anchorRow) ? failureSummary : '';
         const inlineHeaderSelfHeal = selfHealSummary && g === healedGroup && selfHealAnchor === g.header ? selfHealSummary : '';
         const items = g.items.map((t, itemIndex) => `${g.retryAt.indexOf(itemIndex) >= 0 ? `<div class="retrydivider"><span>Retry ${g.retryAt.indexOf(itemIndex) + 1}</span></div>` : ''}${withEvents(t, hasSteps)}${failureSummary && g === failureGroup && t === anchorRow ? failureSummary : ''}${selfHealSummary && g === healedGroup && t === selfHealAnchor ? selfHealSummary : ''}`).join('');
-        return `<div class="stepgroup${selfHealed ? ' selfhealed' : failed ? ' failed' : ''}">${hdr}<div class="stepgroupbody">${headerEvents}${inlineHeaderFailure}${inlineHeaderSelfHeal}${items}</div></div>`;
+        // Collapsed bodies stay in the document and hide, the way the phase sections do: playback
+        // paints the moving selection in place, and it has to find the row it is moving to.
+        return `<div class="stepgroup${selfHealed ? ' selfhealed' : failed ? ' failed' : ''}">${hdr}<div class="stepgroupbody"${open ? '' : ' hidden'}>${headerEvents}${inlineHeaderFailure}${inlineHeaderSelfHeal}${items}</div></div>`;
       }).join('');
       const trailheadGroups = groups.filter((g) => g.header && g.header.trailhead);
       const trailGroups = groups.filter((g) => !g.header || !g.header.trailhead);
       const trailStepCount = trailGroups.filter((g) => g.header).length;
+      // The steps a failure cut off. Nothing in the logs records them — a step that never started
+      // emitted no objective — so the timeline used to just stop, taking with it the "which stage
+      // did it die in?" read that the remaining steps give a triager. Only for a failed run: a
+      // passing run has no missing tail, and a shorter declared list than what ran means the run
+      // didn't come from this YAML.
+      const skippedSteps = (() => {
+        if (!runFailed) return [];
+        const declared = declaredTrailSteps(D.originalYaml);
+        const ran = trailGroups.filter((g) => g.header);
+        if (declared.length <= ran.length) return [];
+        // Trust the tail only when the head lines up. A declared list that disagrees with what
+        // actually ran is a YAML we misread, and inventing step numbers beats showing none.
+        const key = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+        if (ran.some((g, i) => key(g.header.label) !== key(declared[i]))) return [];
+        return declared.slice(ran.length);
+      })();
+      // Deliberately inert: no data-group, no button, nothing to select. There is no trace row
+      // behind these, so every affordance the timeline offers a step would dead-end.
+      const skippedHtml = skippedSteps.map((label, i) => `<div class="stepgroup skipped">
+          <div class="grphdr">
+            <span class="chip skip">STEP ${trailStepCount + i + 1}</span>
+            <span class="lbl">${esc(label)}</span>
+            <span class="grpstatus skip">${STEP_STATUS_ICON_SVG.skip}Not run</span>
+          </div>
+        </div>`).join('');
       const phaseStats = (phaseGroups) => {
-        const actions = phaseGroups.reduce((n, g) => n + g.items.filter((t) => !isLlmTurn(t)).length, 0);
+        const actions = phaseGroups.reduce((n, g) => n + g.items.reduce((m, t) => m + rowToolCallCount(t), 0), 0);
         const duration = phaseGroups.reduce((ms, g) => ms + g.items.reduce((sum, t) => sum + (t.ms || 0), 0), 0);
         return { actions: `${actions} action${actions === 1 ? '' : 's'}`, duration: duration ? fmtDur(duration) : '' };
       };
@@ -1324,7 +1716,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const phaseDisclosure = '<span class="phasedisclosure" aria-hidden="true"><svg class="phasechev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
       stepsHtml = `<div class="timelinephases">
         ${trailheadGroups.length ? `<section class="tlphase trailhead" aria-labelledby="trailhead-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trailhead" aria-expanded="${st.trailheadOpen}">${phaseDisclosure}<span class="name" id="trailhead-heading">Trailhead</span><span class="desc">${trailheadStats.actions}</span>${trailheadStats.duration ? `<span class="phaseduration">${trailheadStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailheadOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailheadGroups)}</div></div></section>` : ''}
-        ${trailGroups.length ? `<section class="tlphase" aria-labelledby="trail-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trail" aria-expanded="${st.trailOpen}">${phaseDisclosure}<span class="name" id="trail-heading">Trail</span><span class="counttoken">${trailStepCount}</span><span class="desc">${trailStats.actions}</span>${trailStats.duration ? `<span class="phaseduration">${trailStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailGroups)}</div></div></section>` : ''}
+        ${trailGroups.length || skippedSteps.length ? `<section class="tlphase" aria-labelledby="trail-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trail" aria-expanded="${st.trailOpen}">${phaseDisclosure}<span class="name" id="trail-heading">Trail</span><span class="counttoken">${trailStepCount}${skippedSteps.length ? `/${trailStepCount + skippedSteps.length}` : ''}</span><span class="desc">${trailStats.actions}</span>${trailStats.duration ? `<span class="phaseduration">${trailStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailGroups)}${skippedHtml}</div></div></section>` : ''}
       </div>`;
     }
     const cur = D.trace.find((t) => t.i === st.step) || D.trace[0];
@@ -1333,14 +1725,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // visible, not just the row's first frame. The explicit child selection also wins over the
     // run-clock video frame: the reader asked for that dispatch, and the row's clock can't
     // address one dispatch inside the fold.
-    const kid = st.kid != null && cur && cur.children ? cur.children[st.kid] : null;
-    const kidShot = kid && kid.screenshotFile ? safeImageDataUri(D.shots[kid.screenshotFile]) || null : null;
-    const shot = kidShot || shotForStep(st.step);
-    const paneLabel = kid ? `${cur.label} · ${kid.label}` : cur.label;
-    const paneMark = kidShot
-      ? (kid.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: kid.mark }) : '')
-      : (cur.screenshotFile ? markHtml(cur) : '');
-    const pos = idxOf(st.step);
+    const paneCapture = selectedChild(cur);
+    const captureShot = paneCapture && paneCapture.screenshotFile ? safeImageSrc(D.shots[paneCapture.screenshotFile]) || null : null;
+    const shot = captureShot || shotForStep(st.step);
+    const paneLabel = paneCapture ? `${cur.label} · ${paneCapture.label}` : cur.label;
+    // The mark for a selected dispatch's own frame — its screenshot here, or the video frame at its
+    // instant below. A dispatch owns that frame, so the row's mark must never be drawn over it: it
+    // would circle a point from a different interaction than the one on screen. Null when the
+    // selection is the row itself.
+    const captureMark = paneCapture
+      ? (paneCapture.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: paneCapture.mark }) : '')
+      : null;
+    const paneMark = captureShot ? captureMark : (cur.screenshotFile ? markHtml(cur) : '');
+    const pos = selectedEntryIndex();
     const inspectable = stepInspectable(cur);
     // An inspectable row's hierarchy and screenshot are one capture and must remain paired. A
     // nearby video frame can show a different screen for a long-running composite tool (notably a
@@ -1348,12 +1745,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // capture. Keep that exact screenshot in the static preview; playback still uses the video,
     // and video remains the fallback for rows without an inspectable capture.
     const v = tlVideo();
-    const clockAtStep = v && !kidShot ? stepClockMs(st.step) : null;
+    // Playback paints frames into `#tlvframe` and nothing else, so a capture that displaces the
+    // frame box would freeze the preview on one screenshot for the whole run. While playing, the
+    // video always wins.
+    const clockAtStep = v && (st.playing || !captureShot) ? selectedClockMs() : null;
     const cell = v && clockAtStep != null ? spriteFrameCss(v, videoFrameAt(v, clockAtStep)) : null;
     const pane = inspectable && shot && !st.playing
       ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${pos + 1}" />${paneMark}</div>`
       : cell
-      ? `<div class="shotwrap"><div class="tlvframe" id="tlvframe" role="img" aria-label="Video frame at ${esc(cur.label)}, step ${pos + 1}" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-size:${cell.size};background-position:${cell.position}"></div>${markHtml(cur)}</div>`
+      ? `<div class="shotwrap"><div class="tlvframe" id="tlvframe" role="img" aria-label="Video frame at ${esc(paneLabel)}, step ${pos + 1}" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-size:${cell.size};background-position:${cell.position}"></div>${captureMark ?? markHtml(cur)}</div>`
       : shot
       ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${pos + 1}" />${paneMark}</div>`
       : `<div class="noshot">No screenshot captured before this step.</div>`;
@@ -1373,7 +1773,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
 
   const fmtN = (n) => n == null ? '—' : n.toLocaleString();
-  const fmtCost = (c) => c == null ? '—' : c === 0 ? '$0.000000' : c < 0.000001 ? '<$0.000001' : '$' + c.toFixed(6);
+  const fmtCost = (c) => c == null ? '—' : formatUsd(c);
   const decisionOf = (r) => { const t = (r.response || []).find((p) => p.kind === 'tool'); return t ? t.tool : ((r.response || []).find((p) => p.kind === 'text') ? 'text reply' : r.label); };
   // The repo's canonical LLM identity: `<provider id>/<model id>` — the form `trailblaze config`
   // prints, the CLI's "Using LLM:" line uses, and workspace LLM config keys models under. A call
@@ -1407,7 +1807,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // small-caps treatment can never mangle a camelCase tool name.
   const txRoleLabel = (m) => {
     const role = String(m.role || '');
-    if (role === 'user') return 'User';
+    if (role === 'user') return 'Trailblaze';
     if (role === 'assistant') return 'Assistant';
     if (role === 'system') return 'System';
     if (role === 'tool_call' || role === 'tool_use') return 'Tool call';
@@ -1428,7 +1828,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const txAvatar = (m) => {
     const role = String(m.role || '');
     const voice = txVoice(role);
-    const glyph = voice === 'llm' ? 'AI' : role === 'system' ? 'S' : role === 'user' ? 'U' : '⚙';
+    const glyph = voice === 'llm' ? 'AI' : role === 'system' ? 'S' : role === 'user' ? 'T' : '⚙';
     return `<span class="txavatar ${voice}" aria-hidden="true">${glyph}</span>`;
   };
   const txMsgHtml = (m) => {
@@ -1450,13 +1850,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // The tool name rides in its own untransformed span — the role word is small-caps styled, but
     // a camelCase tool name must read exactly as authored (never uppercased).
     const roleTag = `${txAvatar(m)}<span class="txrole ${txRoleClass(role)}">${esc(txRoleLabel(m))}</span>${m.toolName ? `<span class="txtool mono">${esc(String(m.toolName))}</span>` : ''}`;
+    // User prompts and tool results are both Trailblaze-authored turns. Keep their identity on the
+    // right in both the compact header and the expanded <summary>; otherwise long messages snap the
+    // avatar back beside the character count when their disclosure opens.
+    const authoredClass = voice === 'user' ? ' user-authored' : '';
     const rawHtml = raw != null ? `<details class="txraw"><summary>raw</summary><pre class="txbody">${esc(raw)}</pre></details>` : '';
-    if (text.length <= TX_COLLAPSE_CHARS) return `<div class="txmsg voice-${voice}"><div class="txhead">${roleTag}</div><pre class="txbody">${esc(text)}</pre>${rawHtml}</div>`;
-    return `<details class="txmsg voice-${voice}"><summary>${roleTag}<span class="txpeek">${esc(text.slice(0, 140))}…</span><span class="txlen">${fmtN(text.length)} chars</span></summary><pre class="txbody">${esc(text)}</pre>${rawHtml}</details>`;
+    if (text.length <= TX_COLLAPSE_CHARS) return `<div class="txmsg voice-${voice}"><div class="txhead${authoredClass}">${roleTag}</div><pre class="txbody">${esc(text)}</pre>${rawHtml}</div>`;
+    return `<details class="txmsg voice-${voice}"><summary class="${authoredClass.trim()}">${roleTag}<span class="txpeek">${esc(text.slice(0, 140))}…</span><span class="txlen">${fmtN(text.length)} chars</span></summary><pre class="txbody">${esc(text)}</pre>${rawHtml}</details>`;
   };
-  // The transcript lightbox's body for one call: role-labeled messages in request order, or the
+  // The transcript conversation for one call: role-labeled messages in request order, or the
   // pending/failed/empty note. Reused on the async refresh after gz inflation lands.
-  const txPanelBodyHtml = (callIndex) => {
+  const txConversationHtml = (callIndex) => {
     const tx = sessionTranscripts(D);
     if (!tx && !D.llmMessagesGz) return `<div class="txnote">No transcript was captured for this run (older report payload).</div>`;
     const messages = transcriptCallMessages(tx, callIndex);
@@ -1465,6 +1869,83 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : 'Could not decompress the transcript (requires DecompressionStream support).';
     return note ? `<div class="txnote">${esc(note)}</div>` : messages.map(txMsgHtml).join('');
   };
+
+  // Resolve every LLM call back to the authored step containing its trace row. This one mapping
+  // drives the transcript header, context rail, screenshot, and navigation so they cannot drift
+  // into showing different steps.
+  const txCallMap = () => traceModel().callMap;
+
+  const txCallContext = (callIndex) => {
+    const map = txCallMap();
+    const mapped = map.byCall[callIndex];
+    const group = mapped && mapped.group;
+    const row = mapped && mapped.row;
+    const stepAt = group ? map.stepIndexByGroup.get(group) ?? -1 : -1;
+    const outcome = indexOutcome(D);
+    const runFailed = outcome === 'failed';
+    const anchor = runFailed ? D.trace[failureAnchorIndex()] : null;
+    const anchorGroup = anchor ? traceModel().groupByRow.get(anchor) || null : null;
+    const selfHealed = outcome === 'selfheal' && !!(group && group.header && group.header.selfHeal);
+    const failed = !selfHealed && !!(runFailed && group && anchorGroup && group.header === anchorGroup.header);
+    const rows = group ? [group.header].concat(group.items).filter(Boolean) : [];
+    const rowAt = row ? rows.indexOf(row) : rows.length - 1;
+    const preceding = rows.slice(0, Math.max(0, rowAt) + 1).reverse();
+    const errorRow = preceding.find((item) => item && item.ok === false && item.err)
+      || rows.find((item) => item && item.ok === false && item.err)
+      || (group && group.header && group.header.selfHealError ? group.header : null);
+    const parsed = parseFailure(errorRow && (errorRow.err || errorRow.selfHealError));
+    const stepToken = group && group.header && group.header.trailhead ? 'TRAILHEAD'
+      : group && group.num ? `STEP ${group.num}` : 'UNSCOPED';
+    // A legacy/unscoped call has no authored step outcome to report. Avoid presenting that missing
+    // relationship as a passed step: the transcript still opens, but only scoped calls get a
+    // semantic outcome token.
+    const scoped = !!(group && group.header);
+    const passed = scoped && outcome === 'passed';
+    const status = failed ? 'failed' : selfHealed ? 'selfheal' : passed ? 'passed' : 'neutral';
+    const statusLabel = failed ? 'FAILED' : selfHealed ? 'SELF-HEALED' : passed ? 'PASSED' : '';
+    // Most exported runs use the session video as their canonical visual record rather than
+    // attaching a standalone screenshot to every LLM row. Resolve the call onto that same sprite
+    // clock used by the timeline preview so opening a transcript cannot show an older fallback
+    // screenshot (or an empty rail) while the report itself has the exact current frame.
+    const video = row ? tlVideo() : null;
+    const clock = video && row ? stepClockMs(row.i) : null;
+    const videoCell = video && clock != null ? spriteFrameCss(video, videoFrameAt(video, clock)) : null;
+    return {
+      map, group, row, stepAt, status, statusLabel, stepToken,
+      title: group && group.header ? group.header.label : 'LLM call',
+      shot: !videoCell && row ? shotForStep(row.i) : null,
+      video, videoCell,
+      errorRow, parsed,
+    };
+  };
+
+  const txContextHtml = (callIndex) => {
+    const context = txCallContext(callIndex);
+    const shot = context.videoCell
+      ? `<div class="txscreenframe"><div class="txscreenvideo" role="img" aria-label="Screen at ${esc(context.stepToken.toLowerCase())}, call ${callIndex + 1}" style="${spriteAspect ? `--tx-screen-aspect:${spriteAspect};aspect-ratio:${spriteAspect};` : ''}background-size:${context.videoCell.size};background-position:${context.videoCell.position}"></div></div>`
+      : context.shot
+      ? `<div class="txscreenframe"><img src="${esc(context.shot)}" alt="Screen at ${esc(context.stepToken.toLowerCase())}, call ${callIndex + 1}"></div>`
+      : `<div class="txscreenempty"><span>Screen unavailable</span><small>No frame was captured near this call.</small></div>`;
+    const failure = context.parsed ? `<section class="txfailure ${esc(context.status)}">
+      <span class="txcontextlabel">${context.status === 'selfheal' ? 'Recovered failure' : 'What failed'}</span>
+      <strong>${esc(failureCauseName(context.parsed))}</strong>
+      ${context.errorRow && context.errorRow.label ? `<span class="txfailuretool mono">${esc(context.errorRow.label)}</span>` : ''}
+      <p>${esc(context.parsed.message)}</p>
+    </section>` : '';
+    return `<aside class="txcontext" aria-label="Current screen and step context">
+      <section class="txstepcontext">
+        <div class="txcontexttokens"><span class="txsteptoken">${esc(context.stepToken)}</span>${context.statusLabel ? `<span class="txstatustoken ${esc(context.status)}">${esc(context.statusLabel)}</span>` : ''}</div>
+        <h2>${esc(context.title)}</h2>
+      </section>
+      ${shot}
+      ${failure}
+    </aside>`;
+  };
+
+  const txWorkspaceHtml = (callIndex) => `<div class="txworkspace">
+    ${txContextHtml(callIndex)}
+    <main class="txconversation" aria-label="Transcript for call ${callIndex + 1}"><div class="txconversationinner">${txConversationHtml(callIndex)}</div></main>
+  </div>`;
 
   const viewPage = (title, meta, body, className = '') => `<section class="viewpage${className ? ` ${className}` : ''}">
     <div class="viewhead"><h2 class="viewtitle">${esc(title)}</h2>${meta ? `<span class="viewmeta">${esc(meta)}</span>` : ''}</div>
@@ -1482,14 +1963,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // objective's step, so one trace walk recovers the mapping). "Request 12345" alone isn't
     // actionable; "which objective burned the budget" is — a deliberate improvement over the WASM
     // report's flat request list. Old payloads without stamped trace rows keep the flat list.
-    const objectiveByCall = new Array(D.llm.length).fill(null);
-    {
-      let currentObjective = null;
-      for (const t of D.trace) {
-        if (t.objective) currentObjective = t;
-        if (t.llm != null && t.llm >= 0 && t.llm < objectiveByCall.length) objectiveByCall[t.llm] = currentObjective;
-      }
-    }
+    const objectiveByCall = txCallMap().byCall.map((mapped) => mapped && mapped.group && mapped.group.header);
     const callGroups: Array<{ objective: any; calls: number[] }> = [];
     D.llm.forEach((_, i) => {
       const objective = objectiveByCall[i];
@@ -1588,9 +2062,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // — including each folded child dispatch's own capture, so a batched step's interactions are all
   // present (frames the row's fold would otherwise hide; duplicates within a row are skipped).
   const renderLightbox = () => {
-    const entries = groupTrace().flatMap((group) => {
-      const rows = [group.header, ...group.items].filter(Boolean);
-      const has = (f) => f && safeImageDataUri(D.shots[f]);
+    type LightboxEntry = { trace: TraceStep; group: ReportTraceGroup; kid?: TraceChild; kidIndex?: number };
+    const entries: LightboxEntry[] = groupTrace().flatMap((group): LightboxEntry[] => {
+      const rows = [group.header, ...group.items].filter((row): row is TraceStep => Boolean(row));
+      const has = (f) => f && safeImageSrc(D.shots[f]);
       if (!st.lightboxAll) {
         const shots = rows.filter((t) => has(t.screenshotFile));
         if (shots.length) return shots.slice(-1).map((trace) => ({ trace, group }));
@@ -1747,6 +2222,29 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }, true);
   };
 
+  // Which event bodies the reader has expanded. A <details> open state lives in the DOM and nowhere
+  // in `st`, so a re-render collapses every one of them — and on a live run that is once per log
+  // burst, several times a step, on an event the reader is still reading. Keys are the same
+  // per-stream `data-lazykey` the lazy fill resolves through, so an event that keeps its key across
+  // a push (an append, which is what a growing stream does) stays open.
+  const openTimelineEventKeys = () => {
+    const keys = new Set<string>();
+    Array.from(root.querySelectorAll<HTMLElement>('.timelineevent[data-lazykey]')).forEach((el: any) => {
+      if (el.open) keys.add(el.dataset.lazykey);
+    });
+    return keys;
+  };
+  // Reopening is not enough: the new node's body is the empty one every render emits, and the
+  // 'toggle' listener only ever fires for the reader's own click, so fill it here too.
+  const reopenTimelineEvents = (keys) => {
+    Array.from(root.querySelectorAll<HTMLElement>('.timelineevent[data-lazykey]')).forEach((el: any) => {
+      if (!keys.has(el.dataset.lazykey)) return;
+      el.open = true;
+      const entry = tlEventByKey.get(el.dataset.lazykey);
+      if (entry) fillLazyBody(el, entry.row, entry);
+    });
+  };
+
   // Video playback over the embedded sprite sheet — pure CSS background-position scrubbing, no decode
   // step. Frame layout + range are precomputed (D.video); wireVideo() drives play/seek.
   const renderVideo = () => {
@@ -1770,7 +2268,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const renderInfo = () => {
     const m = D.meta;
     // Consumer-injected `config.metadata` key/values render after the built-in rows, keys as-is.
-    const rows = [['Target', m.target], ['App version', m.appVersion], ['Platform', m.platform], ['Device type', m.deviceType], ['Device', m.device], ['Bundle / package ID', m.appId], ['Trail', m.trailId], ['Total duration', m.duration], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt], ['Build', m.buildNumber], ['Commit', m.commitSha], ['Branch', m.branch], ...Object.entries(m.metadata || {})]
+    const rows = [['Target', m.target], ['App version', m.appVersion], ['Platform', m.platform], ['Device classifier', m.deviceClassifier], ['Device type', m.deviceType], ['Device', m.device], ['Bundle / package ID', m.appId], ['Trail', m.trailId], ['Total duration', m.duration], ['Steps', m.steps ? String(m.steps) : null], ['Ran', m.ranAt], ['Build', m.buildNumber], ['Commit', m.commitSha], ['Branch', m.branch], ...Object.entries(m.metadata || {})]
       .filter(([, v]) => v).map(([k, v]) => `<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
     return viewPage('Run details', '', `<div>
       ${m.cmd ? `<section class="infosection"><div class="eyebrow">Rerun this in the CLI</div><div class="cmd"><pre class="mono" id="cmd">${esc(m.cmd)}</pre><button class="btn" id="copycmd">Copy</button></div></section>` : ''}
@@ -1851,14 +2349,25 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const runOwner = (s) => String((s.meta && s.meta.metadata && s.meta.metadata.owner) || '').trim();
   const runPlatform = (s) => String((s.meta && s.meta.platform) || '').trim();
   // A run's device identity, in two flavors. The INSTANCE leg (`meta.device` — a simulator UDID or
-  // adb serial) names one concrete device and keys retry groups: two runs on two instances are
-  // independent runs, never each other's attempt history. The LANE leg prefers the stable device
-  // classifier (`meta.deviceType` — "iphone", "phone", "tablet") and keys matrix columns, so a
-  // build sharded across N interchangeable simulators is ONE column instead of N mostly-dashed
-  // ones (every CI shard creates a fresh UDID). Either leg falls back to the other when a payload
-  // carries only one of them.
-  const runDeviceInstance = (s) => String((s.meta && (s.meta.device || s.meta.deviceType)) || '');
-  const runLane = (s) => String((s.meta && (s.meta.deviceType || s.meta.device)) || '');
+  // adb serial) names one concrete device. Retry groups use it together with the LANE leg, because
+  // one CI worker can execute several device classes; sharing an instance id must not collapse a
+  // phone, tablet, T2, and T3 into one attempt history. The LANE leg is the stable device identity
+  // and keys matrix columns, so a build sharded across N interchangeable simulators is ONE column
+  // instead of N mostly-dashed ones (every CI shard creates a fresh UDID). Either leg falls back to
+  // the other when a payload carries only one of them.
+  //
+  // The lane prefers `meta.deviceClassifier` — the device's SPECIFIC compound classifier
+  // (`android-phone`, `ios-ipad`, `android-kiosk`), not the broad platform family it falls back to.
+  // It's the identity the CI config names, the trail files its `recordings:` under, and the results
+  // store keys a cell on, so a column heading is a string the reader can carry straight back to
+  // those — and it already names its own platform, so it needs no platform prefix.
+  // `meta.deviceType` (the platform-stripped, ` · `-joined classifier tail) is the fallback for
+  // payloads generated before deviceClassifier existed; those columns still get composed with their
+  // platform below.
+  const runDeviceInstance = (s) => String((s.meta && (s.meta.device || s.meta.deviceClassifier || s.meta.deviceType)) || '');
+  const runDeviceType = (s) => String((s.meta && s.meta.deviceType) || '');
+  const runDeviceClassifier = (s) => String((s.meta && s.meta.deviceClassifier) || '');
+  const runLane = (s) => String((s.meta && (s.meta.deviceClassifier || s.meta.deviceType || s.meta.device)) || '');
   // Real step / tool-call counts come from the trace (traceStepCount/traceToolCallCount in
   // run-report-extract — shared with buildMultiReportHtml so the run list and detail view always
   // agree). Chunked index stubs precompute both counts at build time (s.stepCount/s.toolCallCount)
@@ -1869,12 +2378,38 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const runToolCallCount = (s) => {
     const trace = s.trace || [];
     if (trace.length) return traceToolCallCount(trace);
+    // A link-out run has no trace here, and neither fallback survives that: both the index
+    // precompute and meta.steps are DERIVED from a trace, so on a stub both read 0 and would
+    // report an agent-driven run as having called no tools.
+    if (isLinkOut(s)) return null;
     if (s.toolCallCount != null) return s.toolCallCount;
     return s.meta && s.meta.steps != null ? s.meta.steps : null;
   };
-  const runLlmCallCount = (s) => (s.llm || []).length;
-  // A mixed-platform report renders one row per trail with a per-platform cell matrix; a
-  // single-platform report keeps the flat per-run rows (the header already names the platform once).
+  const runReportHref = (s) => safeHref(s.meta && s.meta.reportUrl);
+  /**
+   * Element name + attributes for an index control that opens a run — the matrix cell, the flat
+   * row, the attempt row. A run carried by this document keeps the interactive in-document form the
+   * caller describes (`inDocTag`/`inDocAttrs`, always including `data-session` so wire() binds it).
+   * A link-out run becomes an anchor to its own report instead: no `data-session`, role, or
+   * tabindex, since an anchor is already keyboard-activable and the [data-session] handler would
+   * otherwise hijack the click. With no usable http(s) URL — absent, or a scheme the viewer
+   * refuses — the control goes INERT rather than falling back to the in-document form, which could
+   * only try to hydrate a payload the document never carried.
+   *
+   * `interactive` is what callers label against. An inert control still needs its outcome
+   * described, but describing it as "Open …" would promise assistive tech an action that does not
+   * exist, so callers word the label for the control they actually got.
+   */
+  const openControl = (s, inDocTag, inDocAttrs) => {
+    if (!isLinkOut(s)) return { tag: inDocTag, attrs: inDocAttrs, interactive: true };
+    const href = runReportHref(s);
+    return href
+      ? { tag: 'a', attrs: `href="${esc(href)}" target="_blank" rel="noopener noreferrer"`, interactive: true }
+      : { tag: 'span', attrs: 'aria-disabled="true"', interactive: false };
+  };
+  // Counts a link-out run can't derive from an absent payload come from the generator; null when it
+  // supplied none, which renders blank rather than as a confident zero.
+  const runLlmCallCount = (s) => (isLinkOut(s) ? (s.meta.llmCallCount != null ? Number(s.meta.llmCallCount) : null) : (s.llm || []).length);
   const mixedPlatforms = new Set(SESSIONS.map(runPlatform).filter(Boolean)).size > 1;
   const allPlatforms = Array.from(new Set(SESSIONS.map(runPlatform))).sort((a, b) => Number(!a) - Number(!b) || a.localeCompare(b));
   const runTarget = (s) => String((s.meta && s.meta.target) || '').trim();
@@ -1889,19 +2424,91 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const lane = runLane(s);
     return lane ? `${encodeURIComponent(runPlatform(s))}:${encodeURIComponent(lane)}` : encodeURIComponent(runPlatform(s));
   };
-  // Column order: alphabetical by platform then lane, platform-less runs last. The lane qualifies
-  // the label only when a platform ran on more than one lane.
-  const matrixColumns = () => {
+  // Column order: alphabetical by platform then lane, platform-less runs last.
+  //
+  // Labels, in priority order:
+  //  1. the specific device classifier (`android-kiosk`, `ios-ipad`) verbatim;
+  //  2. otherwise `platform · lane`, but only when the platform ran on more than one lane —
+  //     a lone lane adds nothing the platform name doesn't already say;
+  //  3. otherwise the bare platform.
+  // SESSIONS is fixed for the life of the document, so the columns are computed once and shared by
+  // the header strip, the matrix gate and the row renderer rather than rebuilt on every render.
+  const matrixColumns = (() => {
     const byKey = new Map<string, any>();
     SESSIONS.forEach((s) => {
       const key = matrixColKey(s);
-      if (!byKey.has(key)) byKey.set(key, { key, platform: runPlatform(s), lane: runLane(s) });
+      if (!byKey.has(key)) byKey.set(key, { key, platform: runPlatform(s), lane: runLane(s), deviceClassifier: runDeviceClassifier(s) });
     });
     const cols: any[] = Array.from(byKey.values()).sort((a: any, b: any) => Number(!a.platform) - Number(!b.platform) || a.platform.localeCompare(b.platform) || a.lane.localeCompare(b.lane));
     const perPlatform = new Map<string, number>();
     cols.forEach((col: any) => perPlatform.set(col.platform, (perPlatform.get(col.platform) || 0) + 1));
-    cols.forEach((col: any) => { col.label = col.lane && (perPlatform.get(col.platform) as number) > 1 ? `${platformLabel(col.platform)} · ${col.lane}` : platformLabel(col.platform); });
+    cols.forEach((col: any) => {
+      col.label = col.deviceClassifier
+        ? col.deviceClassifier
+        : col.lane && (perPlatform.get(col.platform) as number) > 1 ? `${platformLabel(col.platform)} · ${col.lane}` : platformLabel(col.platform);
+    });
     return cols;
+  })();
+  // Columns that actually name a device. A session carrying neither platform nor device (a bare
+  // local run, an older payload) still gets a column so its runs stay visible, but that column is
+  // labelled `other` and is not a device — so it neither counts toward the matrix gate nor appears
+  // in the header's list of what the report covers.
+  const identifiedColumns = matrixColumns.filter((col: any) => col.platform || col.lane);
+  // Every device the report covers, in column order — the header's `Device classifiers` strip.
+  const allDeviceLabels = identifiedColumns.map((col: any) => col.label);
+  // One row per trail with a cell per device whenever the report covers more than one device.
+  // Gating on the COLUMN count rather than on a platform count is what makes an N-device
+  // single-platform report (five Android devices, say) a matrix instead of a flat run list — the
+  // two-platform case is just the instance of that rule people happened to hit first. One device
+  // has nothing to compare across, so it keeps the flat per-run rows, and letting a lone `other`
+  // column tip the gate would turn a plain run list into a grid whose second column is all dashes.
+  const useMatrix = identifiedColumns.length > 1;
+  // Only a semantic device class belongs in the reader-facing row subtitle. `meta.device` is an
+  // instance identity (often a simulator UDID or adb serial); it remains part of retry identity,
+  // but must never leak into the compact index just because a sharded build used several devices.
+  // Unreachable while a multi-device report is a matrix — kept for the one-column reports where a
+  // device still varies (interchangeable instances of a single class).
+  const qualifyFlatRowsByDevice = !useMatrix && new Set(SESSIONS.map(runDeviceType).filter(Boolean)).size > 1;
+  // Cells are one uniform width — misaligned columns would defeat the point of a grid — but that
+  // width has to come from the LABELS, not from a constant. The stock 164px was sized for
+  // `android`/`ios`; a classifier column heading (`android-tablet`) is twice that and would just
+  // ellipsis away the part that distinguishes it from its neighbour. Widen every cell to fit the
+  // longest heading in the report, never below the stock width.
+  //
+  // Sized in ch of the .pk type ramp (10px, uppercase, .08em tracking ≈ 0.72em per character)
+  // rather than measured, because the index HTML is built as a string with no layout to measure
+  // against — and the CSS ellipsis is still there as the backstop if a repo's keys outrun it.
+  //
+  // Sized from every RENDERED column, `other` included — the header lists only real devices, but a
+  // column that renders still has to fit its heading.
+  const matrixCellWidth = () => {
+    const longest = matrixColumns.reduce((max: number, col: any) => Math.max(max, String(col.label).length), 0);
+    return Math.max(164, Math.round(96 + longest * 7.2));
+  };
+  // How many cells the shell is allowed to widen to hold on ONE line. `.idxcells` wraps, and every
+  // row carries the same cell count (a device a trail didn't run on is still a `—` cell), so a wrap
+  // breaks at the same place on every row and the grid stays aligned — a wrapped matrix is
+  // readable, just two lines per trail. But the stock 1120px shell fits four device columns, so a
+  // seven-device fleet wraps even on a monitor with room to spare. Widen the shell to fit the
+  // fleet, up to this many columns, then let wrapping take over rather than growing without bound.
+  const MATRIX_INLINE_COLUMN_LIMIT = 7;
+  // `--content-wide` is what caps each `.indexshell` — the header strip, the run list and the
+  // footer — and a custom property set on an element feeds that element's own
+  // `max-width: var(--content-wide)`, so putting the override on all three widens them together and
+  // keeps the `Device classifiers` strip aligned with the columns it names. It only ever grows: the
+  // stock width is the floor, and `max-width` means a narrow viewport still wraps responsively.
+  // Everything between the shell edge and the cells, from the CSS above: the run list's 1px border
+  // either side, a row's `var(--space-4)` padding either side, the trail-name column's 220px
+  // minimum, and the `var(--space-4)` grid gap after it.
+  const CELLS_LEFT_OF_ROW = 2 + 32 + 220 + 16;
+  const CELL_GAP = 8;
+  const DEFAULT_CONTENT_WIDE = 1120;
+  const indexShellStyle = () => {
+    if (!useMatrix) return '';
+    const cell = matrixCellWidth();
+    const inline = Math.min(matrixColumns.length, MATRIX_INLINE_COLUMN_LIMIT);
+    const needed = CELLS_LEFT_OF_ROW + inline * cell + (inline - 1) * CELL_GAP;
+    return ` style="--idxcell-w: ${cell}px; --content-wide: ${Math.max(DEFAULT_CONTENT_WIDE, needed)}px"`;
   };
   const sharedMeta = (key) => {
     const first = SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta[key];
@@ -1936,16 +2543,31 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const renderIndexHeader = () => {
     const platformEntry = mixedPlatforms ? ['Platforms', allPlatforms.filter(Boolean).join(', ')] : ['Platform', sharedMeta('platform')];
     const targetEntry = allTargets.length > 1 ? ['Targets', allTargets.join(', ')] : ['Target', sharedMeta('target') || allTargets[0]];
+    // Plural when the report covers several devices, singular otherwise: a one-device report still
+    // wants to say WHICH device it ran (`ios-iphone`, `android-tablet`, `android-kiosk`) — the Platform
+    // row only names the family. Back-compat payloads that carry no classifier drop the row rather
+    // than restate the platform, and a disagreeing set of runs is not shared context.
+    const deviceEntry = useMatrix
+      ? ['Device classifiers', allDeviceLabels.join(', ')]
+      : ['Device classifier', sharedMeta('deviceClassifier')];
     const buildUrl = safeHref(sharedMeta('buildUrl'));
     const commitUrl = safeHref(sharedMeta('commitUrl'));
     const buildNumber = sharedMeta('buildNumber');
     const commitSha = sharedMeta('commitSha');
-    const metaEntries: any[] = [targetEntry, ['App version', sharedMeta('appVersion')], platformEntry, ['Bundle / package ID', sharedMeta('appId')]];
+    const metaEntries: any[] = [targetEntry, ['App version', sharedMeta('appVersion')], platformEntry, deviceEntry, ['Bundle / package ID', sharedMeta('appId')]];
     if (buildNumber || buildUrl) metaEntries.push(['Build', buildNumber || 'Open build', buildUrl]);
     if (commitSha || commitUrl) metaEntries.push(['Commit', commitSha ? String(commitSha).slice(0, 8) : 'Open commit', commitUrl]);
     const meta = metaEntries.filter(([, value]) => value).map(([label, value, url]) => `<div><div class="k">${label}</div><div class="v">${url ? `<a class="indexmetalink" href="${esc(url)}" target="_blank" rel="noopener">${esc(value)} <span aria-hidden="true">↗</span></a>` : esc(value)}</div></div>`).join('');
-    const reportMenu = `<details class="exportmenu" data-export-menu><summary aria-label="Report options" title="Report options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${shareLinkAvailable() ? '<button class="exportmenuitem" type="button" id="copylink">Copy link</button>' : ''}<button class="exportmenuitem" type="button" id="exportall">Download report</button></div></details>`;
-    return `<header class="indexheader"><div class="indexshell">
+    // Same rule the run menu applies to its own Export items: a report whose frames are links would
+    // download as a file whose pictures die with the server holding them, so it isn't offered.
+    const downloadable = documentCarriesItsPayload && !SESSIONS.some((session) => linksItsFrames(session, inlineSpriteUris(session)));
+    const reportMenuItems = `${shareLinkAvailable() ? '<button class="exportmenuitem" type="button" id="copylink">Copy link</button>' : ''}${downloadable ? '<button class="exportmenuitem" type="button" id="exportall">Download report</button>' : ''}`;
+    // Both items can be gone at once — an embedded, link-framed report has nothing here to offer —
+    // and a ⋯ that opens on nothing is worse than no ⋯.
+    const reportMenu = reportMenuItems
+      ? `<details class="exportmenu" data-export-menu><summary aria-label="Report options" title="Report options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${reportMenuItems}</div></details>`
+      : '';
+    return `<header class="indexheader"><div class="indexshell"${indexShellStyle()}>
       <div class="title-row indexheadrow"><h1>Trailblaze Report</h1><div class="indexheadactions">${renderThemeToggle()}${reportMenu}</div></div>
       <div class="indexcontext"><div class="meta indexmeta">${meta}</div>${renderIndexControls()}</div>
       </div>
@@ -1955,7 +2577,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const renderIndexSummary = () => {
     // Count what the index shows: matrix rows (one per trail) on mixed-platform reports, per-run
     // retry groups otherwise — so the footer tallies always match the section counts.
-    const groups = mixedPlatforms ? indexMatrixRows() : indexRunGroups();
+    const groups = useMatrix ? indexMatrixRows() : indexRunGroups();
     const outcomes = groups.map((group) => group.outcome);
     const pass = outcomes.filter((outcome) => outcome === 'passed').length;
     const selfHeal = outcomes.filter((outcome) => outcome === 'selfheal').length;
@@ -2000,15 +2622,22 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Null when any call lacks a finite cost — a partial sum would understate real spend.
   const llmCostTotal = (calls) => calls.some((call) => call.totalCost == null || String(call.totalCost).trim() === '' || !Number.isFinite(Number(call.totalCost))) ? null : calls.reduce((sum, call) => sum + Number(call.totalCost), 0);
   const llmCostLabel = (calls) => { const total = llmCostTotal(calls); return total == null ? '—' : fmtCost(total); };
-  // Compact cost for index rows; sub-dollar runs (the common case) keep 4 decimals so small
-  // per-trail costs stay comparable at a glance.
-  const fmtCostShort = (c) => c == null ? '—' : c === 0 ? '$0.00' : c < 1 ? `$${c.toFixed(4)}` : `$${c.toFixed(2)}`;
+  const fmtCostShort = fmtCost;
 
-  const aggregateLlmCostLabel = () => llmCostLabel(SESSIONS.flatMap((s) => s.llm || []));
+  // One run's LLM spend. A link-out run has no calls to sum, so it reports what the generator
+  // precomputed — or null, because summing an absent payload would report every such run as $0.00.
+  const runLlmCost = (s) => (isLinkOut(s) ? (s.meta.llmCostUsd != null ? Number(s.meta.llmCostUsd) : null) : llmCostTotal(s.llm || []));
+  // Total across runs, null as soon as one is unknown — same rule llmCostTotal applies to calls.
+  const sumRunCosts = (runs) => { const costs = runs.map(runLlmCost); return costs.some((c) => c == null) ? null : costs.reduce((sum, c) => sum + c, 0); };
+
+  const aggregateLlmCostLabel = () => { const total = sumRunCosts(SESSIONS); return total == null ? '—' : fmtCost(total); };
 
   const renderIndexMetrics = () => {
-    const calls = SESSIONS.flatMap((s) => s.llm || []);
-    return `<div class="indexmetrics"><span class="detailfooteritem"><span class="k">Total duration</span><span class="v">${esc(aggregateDurationLabel())}</span></span><span class="detailfooteritem"><span class="k">Total tokens</span><span class="v">${esc(llmTokensLabel(calls))}</span></span><span class="detailfooteritem"><span class="k">Total LLM cost</span><span class="v">${esc(aggregateLlmCostLabel())}</span></span></div>`;
+    // Token totals have no link-out equivalent (the generator carries cost and call count, not
+    // tokens), so a document holding any payload-less run reports them as unknown rather than as
+    // the zero an empty call list would sum to.
+    const tokens = SESSIONS.some((s) => isLinkOut(s) && !(s.llm || []).length) ? '—' : llmTokensLabel(SESSIONS.flatMap((s) => s.llm || []));
+    return `<div class="indexmetrics"><span class="detailfooteritem"><span class="k">Total duration</span><span class="v">${esc(aggregateDurationLabel())}</span></span><span class="detailfooteritem"><span class="k">Total tokens</span><span class="v">${esc(tokens)}</span></span><span class="detailfooteritem"><span class="k">Total LLM cost</span><span class="v">${esc(aggregateLlmCostLabel())}</span></span></div>`;
   };
 
   const indexGroupKey = (s, index) => {
@@ -2016,10 +2645,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Only an explicit trail identity is safe to coalesce. Older exports without trailId can carry
     // independent same-title runs; keeping them separate avoids hiding a failure as retry history.
     if (!m.trailId) return `session:${index}`;
-    // The device leg is the INSTANCE id, not the column's lane: attempts only ever coalesce
-    // within one device, so a second simulator's run can never slip into another's attempt
-    // history. indexMatrixRows folds a lane's instance groups into one column afterwards.
-    return [m.trailId, m.target || '', runPlatform(s), runDeviceInstance(s)].join('\u0001');
+    // Retry identity includes BOTH the stable device class and the concrete instance. The same
+    // worker/device id may run multiple form factors, while different instances of one form factor
+    // remain independent histories. indexMatrixRows folds a lane's instance groups afterwards.
+    return [m.trailId, m.target || '', runPlatform(s), runLane(s), runDeviceInstance(s)].join('\u0001');
   };
 
   const attemptTime = (attempt) => {
@@ -2088,20 +2717,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // the final attempt determines the section while the earlier attempts remain nested beneath it.
   // On mixed-platform reports a trail's per-platform runs share one row (see indexMatrixRows).
   const renderIndex = () => {
-    const allRuns = mixedPlatforms ? indexMatrixRows() : indexRunGroups();
-    const entryHasRetries = (entry) => mixedPlatforms
+    const allRuns = useMatrix ? indexMatrixRows() : indexRunGroups();
+    const entryHasRetries = (entry) => useMatrix
       ? Array.from(entry.cells.values()).some((cell: any) => cell.attempts.length > 1)
       : entry.attempts.length > 1;
     // Every LLM call a row paid for: all attempts, and on a matrix row all platforms' cells —
     // the total the row subtitle shows and the Cost sort orders by.
-    const entryLlmCalls = (entry) => (mixedPlatforms
+    const entryRuns = (entry) => (useMatrix
       ? Array.from(entry.cells.values()).flatMap((cell: any) => cell.attempts)
-      : entry.attempts).flatMap((attempt) => attempt.s.llm || []);
+      : entry.attempts).map((attempt) => attempt.s);
     const compareOrder = (a, b) => {
       if (st.runSort === 'name') return String(a.latest.s.meta.title || '').localeCompare(String(b.latest.s.meta.title || '')) || a.first - b.first;
       if (st.runSort === 'cost') {
-        const aCost = llmCostTotal(entryLlmCalls(a));
-        const bCost = llmCostTotal(entryLlmCalls(b));
+        const aCost = sumRunCosts(entryRuns(a));
+        const bCost = sumRunCosts(entryRuns(b));
         // Most expensive first; rows whose cost is unknowable sort last.
         return Number(aCost == null) - Number(bCost == null) || (bCost || 0) - (aCost || 0) || a.first - b.first;
       }
@@ -2126,7 +2755,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchText = (s, outcome) => {
       const status = String((s.meta && s.meta.status) || 'unknown').toLowerCase();
       const outcomeLabel = indexOutcomeLabel(outcome);
-      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, ...Object.values(s.meta.metadata || {})]
+      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceClassifier, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, ...Object.values(s.meta.metadata || {})]
         .filter((v) => v != null && v !== '').join(' ').toLowerCase();
     };
     const facts = (pairs) => `<div class="idxfacts">${pairs.map(([label, value]) => `<div class="idxfact"><div class="k">${label}</div><div class="v">${esc(value != null && value !== '' ? value : '—')}</div></div>`).join('')}</div>`;
@@ -2135,17 +2764,18 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // across every attempt on the row (all platforms) — the same total the Cost sort orders by.
     const entryStats = (entry) => {
       const steps = runStepCount(entry.latest.s);
-      const parts = [...(steps != null ? [`${steps} step${steps === 1 ? '' : 's'}`] : []), fmtCostShort(llmCostTotal(entryLlmCalls(entry)))];
+      const parts = [...(steps != null ? [`${steps} step${steps === 1 ? '' : 's'}`] : []), fmtCostShort(sumRunCosts(entryRuns(entry)))];
       return `<div class="idxstats">${esc(parts.join(' · '))}</div>`;
     };
     const attemptRows = (attempts) => attempts.map((attempt, attemptIndex) => {
       const label = indexOutcomeLabel(attempt.outcome);
-      return `<div class="idxattemptrow" data-session="${attempt.i}" data-outcome="${esc(attempt.outcome)}" role="button" tabindex="0" aria-label="Open attempt ${attemptIndex + 1}, ${esc(label)}">
+      const ctl = openControl(attempt.s, 'div', `data-session="${attempt.i}" role="button" tabindex="0"`);
+      return `<${ctl.tag} class="idxattemptrow" ${ctl.attrs} data-outcome="${esc(attempt.outcome)}" aria-label="${ctl.interactive ? 'Open attempt' : 'Attempt'} ${attemptIndex + 1}, ${esc(label)}${ctl.interactive ? '' : ' (no report to open)'}">
             <span class="idxstatus" role="img" aria-label="${esc(label)}" title="${esc(label)}"><span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true"></span></span>
             <div class="idxattemptmain"><span class="idxattemptlabel">Attempt ${attemptIndex + 1}</span><span class="idxattemptstatus ${esc(attempt.outcome)}">${esc(label)}</span></div>
             ${runFacts(attempt.s)}
             <span class="arr" aria-hidden="true">→</span>
-          </div>`;
+          </${ctl.tag}>`;
     }).join('');
     const renderRow = (entry) => {
       const { attempts, latest, outcome } = entry;
@@ -2154,7 +2784,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const search = attempts.map((attempt) => searchText(attempt.s, attempt.outcome)).join(' ');
       // The owner subtitle is redundant inside its own owner section — the section head already says it.
       const owner = st.runGroup === 'owner' ? '' : runOwner(s);
-      const rowMain = `<div class="idxmain"><div class="nm">${esc(s.meta.title || ('Run ' + (i + 1)))}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}${entryStats(entry)}</div>`;
+      const context = [owner, qualifyFlatRowsByDevice ? runDeviceType(s) : ''].filter(Boolean).join(' · ');
+      const rowMain = `<div class="idxmain"><div class="nm">${esc(s.meta.title || ('Run ' + (i + 1)))}</div>${context ? `<div class="idxowner">${esc(context)}</div>` : ''}${entryStats(entry)}</div>`;
       if (attempts.length > 1) {
         const attemptLabels = attempts.map((attempt) => indexOutcomeLabel(attempt.outcome));
         const attemptDots = attempts.map((attempt, attemptIndex) => `<span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true" title="Attempt ${attemptIndex + 1}: ${esc(attemptLabels[attemptIndex])}"></span>`).join('');
@@ -2165,15 +2796,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           <span class="idxretrychev" aria-hidden="true"></span>
         </summary><div class="idxattempts">${attemptRows(attempts)}</div></details>`;
       }
-      return `<div class="idxrow" data-run-entry data-session="${i}" data-search="${esc(search)}" role="button" tabindex="0">
+      const ctl = openControl(s, 'div', `data-session="${i}" role="button" tabindex="0"`);
+      return `<${ctl.tag} class="idxrow" data-run-entry ${ctl.attrs} data-search="${esc(search)}">
           <span class="idxstatus" role="img" aria-label="${esc(outcomeLabel)}" title="${esc(outcomeLabel)}"><span class="idxstatusdot ${esc(outcome)}" aria-hidden="true"></span></span>
           ${rowMain}
           ${runFacts(s)}
           <span class="arr">→</span>
-        </div>`;
+        </${ctl.tag}>`;
     };
     // --- mixed-platform matrix rows ---------------------------------------------------------
-    const matrixCols = mixedPlatforms ? matrixColumns() : [];
+    const matrixCols = useMatrix ? matrixColumns : [];
     const cellKey = (row, col) => `${row.key}:${col.key}`;
     const renderCell = (row, col) => {
       const cell = row.cells.get(col.key);
@@ -2192,7 +2824,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // an interactive chevron inside a role="button" cell would be invalid HTML (two tab stops
       // with ambiguous activation for keyboard and screen-reader users).
       const tools = runToolCallCount(cell.latest.s);
-      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><button class="idxcellopen" type="button" data-session="${cell.latest.i}" aria-label="Open latest ${esc(col.label)} run, ${esc(outcomeLabel)}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? `<span class="pvtxt">${esc(duration)}</span>` : ''}</span><span class="pcounts">${runLlmCallCount(cell.latest.s)} LLM</span></button>${chev}</div>`;
+      const llmCalls = runLlmCallCount(cell.latest.s);
+      const ctl = openControl(cell.latest.s, 'button', `type="button" data-session="${cell.latest.i}"`);
+      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><${ctl.tag} class="idxcellopen" ${ctl.attrs} aria-label="${ctl.interactive ? 'Open latest' : 'Latest'} ${esc(col.label)} run, ${esc(outcomeLabel)}${ctl.interactive ? '' : ' (no report to open)'}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? `<span class="pvtxt">${esc(duration)}</span>` : ''}</span><span class="pcounts">${llmCalls != null ? `${llmCalls} LLM` : ''}</span></${ctl.tag}>${chev}</div>`;
     };
     const renderMatrixRow = (row) => {
       const title = row.latest.s.meta.title || ('Run ' + (row.latest.i + 1));
@@ -2210,7 +2844,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           <div class="idxrow idxmatrixrow"><div class="idxmain"><div class="nm">${esc(title)}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>
           ${panel}</div>`;
     };
-    const renderEntry = mixedPlatforms ? renderMatrixRow : renderRow;
+    const renderEntry = useMatrix ? renderMatrixRow : renderRow;
     const sectionLabel = { failed: 'Failed', selfheal: 'Self-healed', passed: 'Passed', other: 'Other' };
     // `ordered` is already owner-alphabetized (ownerless last), so distinct owners come out in
     // section order and each section's runs retain the selected ordering.
@@ -2237,10 +2871,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const previousTimelineScroll = preserveTimelineScroll ? root.querySelector<HTMLElement>('.timelinescroll')?.scrollTop : null;
     const previousMainScroll = preserveTimelineScroll ? root.querySelector<HTMLElement>('main')?.scrollTop : null;
     const previousPageScroll = preserveTimelineScroll && typeof window.scrollY === 'number' ? window.scrollY : null;
+    const openEventKeys = preserveTimelineScroll ? openTimelineEventKeys() : null;
     const active = preserveTimelineScroll ? document.activeElement as HTMLElement | null : null;
     const focusSelector = active && active.matches('[data-scrub]') ? '[data-scrub]'
       : active && active.matches('[data-kidsel]') ? `[data-kidsel="${active.dataset.kidsel}"]`
-      : active && active.matches('[data-step], [data-group]') ? `[data-step="${st.step}"]`
+      // A step header stays put across a render, so focus returns to the header the reader just
+      // toggled. Sending it to the selected step instead would aim at a row the collapse just hid.
+      : active && active.matches('[data-group]') ? `[data-group="${active.dataset.group}"]`
+      : active && active.matches('[data-step]') ? `[data-step="${st.step}"]`
       : active && active.matches('[data-llm]') ? `[data-llm="${active.dataset.llm}"]`
       : active && active.matches('[data-tlstream]') ? `[data-tlstream="${active.dataset.tlstream}"]`
       : active && active.matches('[data-tlstreams]') ? `[data-tlstreams="${active.dataset.tlstreams}"]`
@@ -2255,8 +2893,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const runDate = indexRunDate();
       root.innerHTML = `
         ${renderIndexHeader()}
-        <main><div class="indexshell">${renderIndex()}</div></main>
-        <footer class="indexfooter"><div class="indexshell indexfootercontent">${renderIndexSummary()}${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
+        <main><div class="indexshell"${indexShellStyle()}>${renderIndex()}</div></main>
+        <footer class="indexfooter"><div class="indexshell indexfootercontent"${indexShellStyle()}>${renderIndexSummary()}${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
       wire();
       return;
     }
@@ -2313,19 +2951,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const shotCount = screenshotEntries(D).length;
     const logsAvailable = hasLogs(D);
     const localPrompt = localRunAgentPrompt(m);
-    const exportMenu = `<details class="exportmenu" data-export-menu><summary aria-label="Run and export options" title="Run and export options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${shareLinkAvailable() ? '<button class="exportmenuitem" type="button" id="copylinkrun">Copy link</button>' : ''}<button class="exportmenuitem" type="button" id="copylocalprompt"${localPrompt ? '' : ' disabled'}>Copy local run prompt</button><button class="exportmenuitem" type="button" id="exportrun">Export report</button><button class="exportmenuitem" type="button" id="exportscreenshots"${shotCount ? '' : ' disabled'}><span>Export screenshots</span><span class="count">${shotCount}</span></button><button class="exportmenuitem" type="button" id="exportlogs"${logsAvailable ? '' : ' disabled'}>Export logs</button></div></details>`;
-    const footerItems = [['Target', m.target], ['App version', m.appVersion], ['Platform', m.platform], ['Device type', m.deviceType], ['Device', m.device], ['Bundle / package', m.appId], ['Total duration', m.duration], ['Tokens used', llmTokensLabel(D.llm || [])], ['LLM cost', llmCostLabel(D.llm || [])]]
+    // Both image exports write out bytes this document holds: Export report snapshots the document
+    // itself, Export screenshots zips its frames. A linked report holds neither, so it offers
+    // neither — an "Export screenshots 0" that a reader can't click would also be claiming a run
+    // with frames on screen has none. Producing a portable copy of a linked report is the embedding
+    // host's job, and its own share action does exactly that.
+    // Sprite URLs resolved for real here (chunk included): the open run's chunk is one parse, and
+    // its Video tab pays that same parse on first frame anyway. Export report additionally needs a
+    // payload node to rewrite in the clone (documentCarriesItsPayload); Export screenshots builds
+    // its own blob from the frames and doesn't care where the payload came from.
+    const framesEmbedded = !linksItsFrames(D, spriteUrls(D.video));
+    const exportMenu = `<details class="exportmenu" data-export-menu><summary aria-label="Run and export options" title="Run and export options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${shareLinkAvailable() ? '<button class="exportmenuitem" type="button" id="copylinkrun">Copy link</button>' : ''}<button class="exportmenuitem" type="button" id="copylocalprompt"${localPrompt ? '' : ' disabled'}>Copy local run prompt</button>${framesEmbedded ? `${documentCarriesItsPayload ? '<button class="exportmenuitem" type="button" id="exportrun">Export report</button>' : ''}<button class="exportmenuitem" type="button" id="exportscreenshots"${shotCount ? '' : ' disabled'}><span>Export screenshots</span><span class="count">${shotCount}</span></button>` : ''}<button class="exportmenuitem" type="button" id="exportlogs"${logsAvailable ? '' : ' disabled'}>Export logs</button></div></details>`;
+    const footerItems = [['Target', m.target], ['App version', m.appVersion], ['Platform', m.platform], ['Device classifier', m.deviceClassifier], ['Device type', m.deviceType], ['Device', m.device], ['Bundle / package', m.appId], ['Total duration', m.duration], ['Tokens used', llmTokensLabel(D.llm || [])], ['LLM cost', llmCostLabel(D.llm || [])]]
       .filter(([, v]) => v != null && v !== '').map(([k, v]) => `<span class="detailfooteritem"><span class="k">${k}</span><span class="v">${esc(v)}</span></span>`).join('');
     const runOn = m.ranAt ? `<span class="detailfooteritem runon"><span class="k">Run on</span><span class="v">${esc(m.ranAt)}</span></span>` : '';
-    root.innerHTML = `
-      <header class="detailheader">
+    const tabsNav = `<nav aria-label="Report views">${tabs.map(([id, l]) => `<button class="${st.tab === id ? 'active' : ''}" data-tab="${id}">${l}</button>`).join('')}</nav>`;
+    // Embedded, the identity row is the host's job, so the tabs and the export menu share one row
+    // instead: tabs left, ⋯ right. The menu can't simply be dropped with the row — four of its five
+    // items (Copy link, Copy local run prompt, Export screenshots, Export logs) have no equivalent
+    // in the host's own run actions.
+    const header = EMBEDDED
+      ? `<header class="detailheader notitle"><div class="tabrow">${tabsNav}<div class="detailactions">${exportMenu}</div></div></header>`
+      : `<header class="detailheader">
         <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${renderThemeToggle()}${exportMenu}</div></div>
-        <nav aria-label="Report views">${tabs.map(([id, l]) => `<button class="${st.tab === id ? 'active' : ''}" data-tab="${id}">${l}</button>`).join('')}</nav>
-      </header>
+        ${tabsNav}
+      </header>`;
+    root.innerHTML = `
+      ${header}
       <main class="${st.tab === 'timeline' ? 'timelinemain' : ''}">${body}</main>
-      ${st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), idxOf(st.step)) : ''}
+      ${st.tab === 'timeline' && D.trace.length ? scrubberHtml(timelineAxis(), streamEvents(), selectedEntryIndex()) : ''}
       <footer class="detailfooter"><div class="detailfootermeta" tabindex="0" aria-label="Run metadata">${footerItems}${runOn}</div></footer>`;
     wire();
+    // Before the scroll restores below: an expanded body is content, and clamping a scrollTop
+    // against a shorter list would land the reader somewhere other than where they were.
+    if (openEventKeys && openEventKeys.size) reopenTimelineEvents(openEventKeys);
     if (previousTimelineScroll != null) {
       const timelineList = root.querySelector<HTMLElement>('.timelinescroll');
       if (timelineList) timelineList.scrollTop = previousTimelineScroll;
@@ -2340,12 +2999,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // (the lightbox is the detail surface, so the link opens straight into it; closing leaves the
     // reader at the row).
     if (pendingLlmOpen) {
+      const historyBacked = pendingLlmHistoryBacked;
       pendingLlmOpen = false;
-      if (st.tab === 'llm' && st.llmSel >= 0 && st.llmSel < D.llm.length) {
-        const rowEl = root.querySelector<HTMLElement>(`[data-llm="${st.llmSel}"]`);
+      pendingLlmHistoryBacked = false;
+      if (st.llmSel >= 0 && st.llmSel < D.llm.length) {
+        const rowEl = root.querySelector<HTMLElement>(st.tab === 'llm' ? `[data-llm="${st.llmSel}"]` : `[data-tx="${st.llmSel}"]`);
         if (rowEl && typeof rowEl.scrollIntoView === 'function') rowEl.scrollIntoView({ block: 'center' });
-        openTranscript(st.llmSel, rowEl);
+        openTranscript(st.llmSel, rowEl, false, historyBacked);
       }
+    }
+    if (pendingInspectorOpen != null) {
+      const step = pendingInspectorOpen;
+      const historyBacked = pendingInspectorHistoryBacked;
+      pendingInspectorOpen = null;
+      pendingInspectorHistoryBacked = false;
+      if (st.tab === 'timeline' && D.trace.some((t) => t.i === step)) openInspector(step, false, historyBacked);
     }
   };
 
@@ -2415,16 +3083,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     zoomEl.focus();
   };
 
-  // ── LLM transcript lightbox (see the state + closeTranscript beside stopTimeline above) ─────
-  // The full conversation for ONE call, as a modal over whatever view opened it — 1:1 with the
-  // WASM report's Chat History dialog (FullScreenModalOverlay + ChatHistoryDialog): a secondary
-  // inspector that never disturbs the primary view. Triggers: the per-call timeline rows, the LLM
-  // tab's call list / per-request table / detail card. Lives on document.body OUTSIDE #app, so
-  // opening and closing it can't touch the timeline's scroll, selection, or render state.
-  // Dismissal is Escape or the close button ONLY (scrim clicks are deliberately inert, matching
-  // the WASM overlay — and protecting a text-selection drag that ends outside the panel).
+  // ── LLM transcript pushed view (see the state + closeTranscript beside stopTimeline above) ──
+  // The full conversation for ONE call pushes on from the right like run-detail navigation. It
+  // still lives on document.body OUTSIDE #app, so opening and closing it cannot disturb the
+  // timeline's scroll, selection, or render state. Triggers: the per-call timeline rows and the
+  // LLM tab's per-request table. Dismissal remains Escape or the close button only.
   const txHeaderHtml = (i) => {
     const r: any = D.llm[i] || {};
+    const context = txCallContext(i);
+    const step = context.stepAt >= 0 ? context.map.steps[context.stepAt] : null;
+    const callAt = step ? step.calls.indexOf(i) : -1;
+    const previousStep = context.stepAt > 0 ? context.map.steps[context.stepAt - 1].calls[0] : -1;
+    const nextStep = context.stepAt >= 0 && context.stepAt < context.map.steps.length - 1
+      ? context.map.steps[context.stepAt + 1].calls[0] : -1;
+    const previousCall = step && callAt > 0 ? step.calls[callAt - 1] : -1;
+    const nextCall = step && callAt >= 0 && callAt < step.calls.length - 1 ? step.calls[callAt + 1] : -1;
     const meta = [
       // Same `<provider>/<model>` identity the LLM tab shows, so the two surfaces agree.
       llmModelLabel(r) !== '—' ? `<span class="mono">${esc(llmModelLabel(r))}</span>` : '',
@@ -2434,18 +3107,135 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       r.durationMs ? `<span>${(r.durationMs / 1000).toFixed(1)}s</span>` : '',
     ].filter(Boolean).join('');
     return `<div class="txpanelhead">
-      <div class="txpaneltitle"><span class="h" id="txpanel-title">Transcript · Call ${i + 1} <span class="txof">of ${D.llm.length}</span></span><div class="txpanelmeta">${meta}</div></div>
-      <button type="button" class="txclose" data-tx-close aria-label="Close transcript">×</button>
+      <div class="detailedge"><button type="button" class="back" data-tx-close aria-label="Back to report" title="Back to report">${BACK_ICON_SVG}</button></div>
+      <div class="txpaneltitle">
+        <div class="txpanelidentity"><span class="txsteptoken">${esc(context.stepToken)}</span><span class="h" id="txpanel-title">LLM transcript</span><span class="txcallposition">Call ${callAt >= 0 ? callAt + 1 : i + 1} of ${step ? step.calls.length : D.llm.length}</span></div>
+        <div class="txpanelmeta">${meta}</div>
+      </div>
+      <nav class="txnav" aria-label="Transcript navigation">
+        <div class="txnavgroup"><span class="txnavlabel">Step</span><button type="button" class="btn txnavbutton" data-tx-nav="${previousStep}" data-tx-nav-kind="step" data-tx-nav-direction="previous" ${previousStep < 0 ? 'disabled' : ''} aria-label="Previous step with an LLM call">${CHEVRON_LEFT_SVG}</button><button type="button" class="btn txnavbutton" data-tx-nav="${nextStep}" data-tx-nav-kind="step" data-tx-nav-direction="next" ${nextStep < 0 ? 'disabled' : ''} aria-label="Next step with an LLM call">${CHEVRON_RIGHT_SVG}</button></div>
+        <div class="txnavgroup"><span class="txnavlabel">Call</span><button type="button" class="btn txnavbutton" data-tx-nav="${previousCall}" data-tx-nav-kind="call" data-tx-nav-direction="previous" ${previousCall < 0 ? 'disabled' : ''} aria-label="Previous LLM call in this step">${CHEVRON_LEFT_SVG}</button><button type="button" class="btn txnavbutton" data-tx-nav="${nextCall}" data-tx-nav-kind="call" data-tx-nav-direction="next" ${nextCall < 0 ? 'disabled' : ''} aria-label="Next LLM call in this step">${CHEVRON_RIGHT_SVG}</button></div>
+      </nav>
     </div>`;
   };
-  // Re-render the open panel's message list in place (used by the post-inflate refresh). The
-  // overlay node itself is stable, so focus inside the dialog survives.
-  let txBodyEl = null;
-  const refreshTranscriptPanel = () => {
-    if (txEl && txBodyEl) txBodyEl.innerHTML = txPanelBodyHtml(txCallIndex);
+  // Re-render the open panel in place (used by navigation and the post-inflate refresh). The
+  // overlay node itself is stable, so the report beneath keeps its exact scroll position.
+  const renderTranscriptPanel = () => {
+    if (!txPanelEl) return;
+    txPanelEl.innerHTML = txHeaderHtml(txCallIndex);
+    txBodyEl = document.createElement('div');
+    txBodyEl.className = 'txbodylayout';
+    txBodyEl.innerHTML = txWorkspaceHtml(txCallIndex);
+    txPanelEl.appendChild(txBodyEl);
+    wireTranscriptScreen();
+    if (txEl) txEl.setAttribute('aria-label', `LLM transcript, call ${txCallIndex + 1} of ${D.llm.length}`);
   };
-  const openTranscript = (i, opener) => {
+  const wireTranscriptScreen = () => {
+    if (!txBodyEl) return;
+    const box: any = txBodyEl.querySelector('.txscreenvideo');
+    const context = txCallContext(txCallIndex);
+    if (!box || !context.video || !context.videoCell) return;
+    box.style.backgroundImage = `url('${spriteUrl(context.video, context.videoCell.sheet)}')`;
+    if (spriteAspect == null) measureSpriteAspect(context.video, () => {
+      box.style.aspectRatio = spriteAspect;
+      if (box.style.setProperty) box.style.setProperty('--tx-screen-aspect', spriteAspect);
+    });
+  };
+  const transcriptFocusDescriptor = () => {
+    const active: any = document.activeElement;
+    if (!active) return null;
+    if (active.matches && active.matches('[data-tx-close]')) return { close: true };
+    const kind = active.dataset && active.dataset.txNavKind;
+    const direction = active.dataset && active.dataset.txNavDirection;
+    if (kind && direction) return { kind, direction };
+    // The conversation contains disclosure summaries and other controls that do not have a
+    // semantic navigation key. Preserve their ordinal position through a live DOM refresh so
+    // keyboard focus never falls back to the now-detached node.
+    const focusables = transcriptFocusableControls();
+    const focusIndex = focusables.indexOf(active);
+    return focusIndex >= 0 ? { focusIndex } : null;
+  };
+  const transcriptFocusableControls = () => {
+    const selector = 'button, [href], summary, [tabindex]:not([tabindex="-1"])';
+    const controls: any[] = [];
+    [txPanelEl, txBodyEl].forEach((container: any) => {
+      if (!container || typeof container.querySelectorAll !== 'function') return;
+      Array.from(container.querySelectorAll(selector)).forEach((control: any) => {
+        if (!controls.includes(control) && !control.disabled) controls.push(control);
+      });
+    });
+    return controls;
+  };
+  const restoreTranscriptControlFocus = (descriptor) => {
+    if (!descriptor || !txPanelEl || !txPanelEl.querySelector) return;
+    let nextFocus: any = descriptor.focusIndex != null
+      ? transcriptFocusableControls()[descriptor.focusIndex]
+      : descriptor.close
+        ? txPanelEl.querySelector('[data-tx-close]')
+        : txPanelEl.querySelector(`[data-tx-nav-kind="${descriptor.kind}"][data-tx-nav-direction="${descriptor.direction}"]`);
+    // A live update can finish the run or move the selected call to a boundary. Keep focus in the
+    // same control group when the equivalent button is no longer available.
+    if (nextFocus && nextFocus.disabled && descriptor.kind && descriptor.direction) {
+      const opposite = descriptor.direction === 'next' ? 'previous' : 'next';
+      nextFocus = txPanelEl.querySelector(`[data-tx-nav-kind="${descriptor.kind}"][data-tx-nav-direction="${opposite}"]`);
+    }
+    if (nextFocus && !nextFocus.disabled && nextFocus.focus) nextFocus.focus();
+  };
+  const transcriptScrollState = () => ({
+    body: txBodyEl ? txBodyEl.scrollTop || 0 : 0,
+    context: txBodyEl && txBodyEl.querySelector ? txBodyEl.querySelector('.txcontext')?.scrollTop || 0 : 0,
+    conversation: txBodyEl && txBodyEl.querySelector ? txBodyEl.querySelector('.txconversation')?.scrollTop || 0 : 0,
+  });
+  const restoreTranscriptScrollState = (scroll) => {
+    if (!scroll || !txBodyEl) return;
+    txBodyEl.scrollTop = scroll.body;
+    const context: any = txBodyEl.querySelector && txBodyEl.querySelector('.txcontext');
+    const conversation: any = txBodyEl.querySelector && txBodyEl.querySelector('.txconversation');
+    if (context) context.scrollTop = scroll.context;
+    if (conversation) conversation.scrollTop = scroll.conversation;
+  };
+  const refreshTranscriptPanel = (includeHeader = false, preserveReaderState = false) => {
+    if (!txEl) return;
+    const focus = includeHeader || preserveReaderState ? transcriptFocusDescriptor() : null;
+    const scroll = preserveReaderState ? transcriptScrollState() : null;
+    if (includeHeader) {
+      renderTranscriptPanel();
+    } else if (txBodyEl) {
+      txBodyEl.innerHTML = txWorkspaceHtml(txCallIndex);
+      wireTranscriptScreen();
+    }
+    restoreTranscriptScrollState(scroll);
+    restoreTranscriptControlFocus(focus);
+  };
+  const navigateTranscript = (callIndex, focusKind = null, focusDirection = null) => {
+    if (!txEl || callIndex < 0 || callIndex >= D.llm.length || callIndex === txCallIndex) return;
+    txCallIndex = callIndex;
+    st.llmSel = callIndex;
+    const context = txCallContext(callIndex);
+    // Stepping through the transcript moves the timeline selection with it, so the phase and step
+    // holding the destination have to open — closing the dialog returns the reader to that row.
+    if (context.row) { st.step = context.row.i; st.kid = null; revealTimelineStep(st.step); }
+    txReturnSelector = st.tab === 'llm' ? `[data-llm="${callIndex}"]` : `[data-tx="${callIndex}"]`;
+    writeRoute(true);
+    render(true);
+    renderTranscriptPanel();
+    // Re-rendering replaces the activated navigation button. Put focus on its matching live
+    // control so keyboard readers can advance repeatedly and always retain a visible focus cue.
+    const focusSelector = focusKind && focusDirection
+      ? `[data-tx-nav-kind="${focusKind}"][data-tx-nav-direction="${focusDirection}"]`
+      : null;
+    let nextFocus: any = focusSelector && txPanelEl && txPanelEl.querySelector ? txPanelEl.querySelector(focusSelector) : null;
+    // At a step/call boundary the activated direction becomes disabled after navigation. Keep
+    // focus inside the same control group by falling back to its enabled opposite direction.
+    if (nextFocus && nextFocus.disabled && focusKind && focusDirection && txPanelEl && txPanelEl.querySelector) {
+      const opposite = focusDirection === 'next' ? 'previous' : 'next';
+      nextFocus = txPanelEl.querySelector(`[data-tx-nav-kind="${focusKind}"][data-tx-nav-direction="${opposite}"]`);
+    }
+    if (nextFocus && !nextFocus.disabled && nextFocus.focus) nextFocus.focus();
+  };
+  const openTranscript = (i, opener, pushHistory = true, historyBacked = false) => {
     closeTranscript();
+    txHistoryClosing = false;
     txReturnFocus = opener || document.activeElement;
     // Selector for the trigger, re-resolved at close time so focus still returns after a render()
     // has replaced the captured node (the gz-transcript inflation path does exactly that).
@@ -2461,50 +3251,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     txEl.tabIndex = -1;
     const panel = document.createElement('div');
     panel.className = 'txpanel';
-    panel.innerHTML = txHeaderHtml(i);
-    // The message list is its own held element so the post-inflate refresh can swap its content
-    // directly (no querySelector round-trip — also what keeps this drivable in the test shim).
-    txBodyEl = document.createElement('div');
-    txBodyEl.className = 'txscroll';
-    txBodyEl.innerHTML = txPanelBodyHtml(i);
-    panel.appendChild(txBodyEl);
+    txPanelEl = panel;
+    renderTranscriptPanel();
     // Close clicks by delegation (the header close button lives inside panel.innerHTML).
     panel.onclick = (e) => {
       const target = e && (e.target as any);
-      if (target && target.closest && target.closest('[data-tx-close]')) closeTranscript(true);
+      if (target && target.closest && target.closest('[data-tx-close]')) closeTranscript(true, true);
+      else if (target && target.closest) {
+        const nav = target.closest('[data-tx-nav]');
+        if (nav && !nav.disabled) navigateTranscript(+nav.dataset.txNav, nav.dataset.txNavKind, nav.dataset.txNavDirection);
+      }
       if (e && e.stopPropagation) e.stopPropagation();
     };
     txEl.appendChild(panel);
     // Keyboard contract: Escape closes (and never reaches the document-level handlers under the
     // modal); Tab is trapped inside the dialog, wrapping at both ends.
     txEl.onkeydown = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTranscript(true); return; }
-      if (e.key !== 'Tab' || !txEl || typeof txEl.querySelectorAll !== 'function') return;
-      const focusables = Array.from(txEl.querySelectorAll('button, [href], summary, [tabindex]:not([tabindex="-1"])'))
-        .filter((el: any) => !el.disabled && (el.offsetParent !== undefined ? el.offsetParent !== null || el === document.activeElement : true));
-      if (!focusables.length) { e.preventDefault(); return; }
-      const first = focusables[0] as any; const last = focusables[focusables.length - 1] as any;
-      if (e.shiftKey && (document.activeElement === first || document.activeElement === txEl)) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTranscript(true, true); return; }
+      trapModalTab(txEl, e);
     };
     document.body.appendChild(txEl);
     txEl.focus();
-    // On the LLM tab the open lightbox IS the route's `llm` param (see routeParams) — record it
-    // so the address stays a shareable deep link into this call.
-    writeRoute(true);
+    // The pushed transcript IS the route's `llm` param (see routeParams) — record it so the
+    // address stays a shareable deep link whether it opened from the timeline or the LLM table.
+    txHistoryPushed = pushHistory ? writeRoute(false) : historyBacked;
     // A gz transcript may still be inflating: the panel shows the Decompressing note now and
     // swaps in the messages when the shared inflater resolves (same session + still open).
     ensureTranscriptsInflated(D).then(() => { if (txEl && D === session) refreshTranscriptPanel(); });
   };
   // ── UI Inspector ──────────────────────────────────────────────────────────────────────────────
   // Per-step view-hierarchy inspector (tree + node details + bounds overlay on the screenshot +
-  // raw JSON), opened from the selected step's device-side "Inspect UI" control. An imperative overlay on
-  // document.body like the zoom lightbox: full app re-renders replace #app underneath it without
-  // touching it. The markup builders are pure (run-report-inspector.ts); this block owns only the
-  // overlay lifecycle, state, and event wiring.
-  let inspectorEl = null;
-  let inspectorReturnFocus = null;
-  const inspState = { step: 0, selected: null, hovered: null, raw: false, session: null };
+  // raw JSON), opened from the selected step's device-side "Inspect UI" control. It pushes on as a
+  // full-page destination but remains mounted on document.body, so full app re-renders can replace
+  // #app underneath it without touching it. The markup builders are pure
+  // (run-report-inspector.ts); this block owns only the pushed-view lifecycle, state, and wiring.
   // Memoized model of the hierarchy being inspected — the painters and the screenshot hit-testing
   // all read it, and rebuilding a few-hundred-node model per hover/click is avoidable.
   let inspModelCache = { hier: null, model: null };
@@ -2514,9 +3294,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (inspModelCache.hier !== hier) inspModelCache = { hier, model: inspectorModel(hier) };
     return inspModelCache.model;
   };
-  const closeInspector = () => {
+  const closeInspector = (syncRoute = false, animateReturn = false) => {
     if (!inspectorEl) return;
+    // Match transcript dismissal: pop only when this open created a browser-history entry. A
+    // directly loaded `?inspect=N` route closes locally because there is no report entry behind it.
+    if (syncRoute && inspectorHistoryClosing) return;
+    if (syncRoute && inspectorHistoryPushed && typeof history !== 'undefined' && typeof history.back === 'function') {
+      inspectorHistoryClosing = true;
+      history.back();
+      return;
+    }
     inspectorEl.remove(); inspectorEl = null;
+    inspectorHistoryPushed = false;
+    inspectorHistoryClosing = false;
+    if (animateReturn) animateReportReturn();
     // Re-resolve the "Inspect UI" trigger by selector first (same reason closeTranscript does): a gz
     // report's hierarchy inflation completes with a full render() that replaces #app, detaching the
     // node captured on open — focusing that node would drop the reader on <body>.
@@ -2524,6 +3315,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const live = root.querySelector(`[data-inspect="${inspState.step}"]`);
     const target = live || back;
     if (target && target.focus) target.focus();
+    if (syncRoute) writeRoute(true);
   };
   // FULL rebuild of the overlay markup. Reserved for changes that alter its structure (open, the
   // raw-JSON toggle, a decompress landing) — NEVER for hover or selection: see
@@ -2601,7 +3393,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const row = D.trace.find((t) => t.i === inspState.step);
     const hier = stepHierarchy(inspState.step);
     const model = inspectedModel();
-    const shot = row && row.screenshotFile ? safeImageDataUri(D.shots[row.screenshotFile]) || null : null;
+    const shot = row && row.screenshotFile ? safeImageSrc(D.shots[row.screenshotFile]) || null : null;
     const anchorDims = inspectorAnchorDims();
     const shape = inspectorShape(anchorDims);
     let body;
@@ -2627,9 +3419,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : `${INSPECTOR_CODE_ICON_SVG}<span>Raw JSON</span>`;
     inspectorEl.innerHTML = `<div class="insppanel insp-${shape}">
       <div class="insphead">
+        <div class="detailedge"><button class="back" type="button" data-inspclose aria-label="Back to report" title="Back to report">${BACK_ICON_SVG}</button></div>
         <span class="insptitle" id="insp-title">UI Inspector</span>
         <span class="inspcontext">${esc((row && row.label) || `Step ${inspState.step}`)}</span>
-        <span class="inspactions">${model ? `<button class="btn inspaction" type="button" data-inspraw>${rawAction}</button><button class="btn inspaction" type="button" data-inspcopy>${INSPECTOR_COPY_ICON_SVG}<span data-inspcopy-label>Copy JSON</span></button>` : ''}<button class="btn inspaction" type="button" data-inspclose>${INSPECTOR_CLOSE_ICON_SVG}<span>Close</span></button></span>
+        <span class="inspactions">${model ? `<button class="btn inspaction" type="button" data-inspraw>${rawAction}</button><button class="btn inspaction" type="button" data-inspcopy>${INSPECTOR_COPY_ICON_SVG}<span data-inspcopy-label>Copy JSON</span></button>` : ''}</span>
       </div>
       ${body}
     </div>`;
@@ -2906,7 +3699,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const onInspectorClick = (e) => {
     const target = e && e.target;
     const closest = (sel) => (target && target.closest ? target.closest(sel) : null);
-    if (closest('[data-inspclose]')) { closeInspector(); return; }
+    if (closest('[data-inspclose]')) { closeInspector(true, true); return; }
     if (closest('[data-inspraw]')) { inspState.raw = !inspState.raw; paintInspector(); return; }
     if (closest('[data-inspcopy]')) {
       const btn = closest('[data-inspcopy]');
@@ -2960,10 +3753,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (key != null) selectInspectorNode(key);
     }
   };
-  const openInspector = (stepId) => {
+  const openInspector = (stepId, pushHistory = true, historyBacked = false) => {
     closeInspector();
+    inspectorHistoryClosing = false;
     inspState.step = stepId; inspState.selected = null; inspState.hovered = null; inspState.raw = false; inspState.session = D;
-    // Fresh overlay, fresh suggestion state; preload the engine now (async — the modal paints
+    // Fresh pushed view, fresh suggestion state; preload the engine now (async — the view paints
     // first) so the first hover/commit isn't dead for the one-time bundle eval.
     inspSelCache.clear();
     clearInspectorSuggestions(null);
@@ -3002,6 +3796,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Each row is the single tab stop for its node (the branch <summary> is tabindex="-1"), so the
     // row also carries the branch keys: Enter/space selects, ArrowRight/ArrowLeft expand/collapse.
     inspectorEl.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeInspector(true, true); return; }
+      if (trapModalTab(inspectorEl, e)) return;
       const target = e.target;
       const nodeEl = target && target.closest ? target.closest('[data-inspnode]') : null;
       if (!nodeEl) return;
@@ -3020,6 +3816,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ensureHierarchiesInflated(session).then(() => { if (inspectorEl && inspState.session === session) paintInspector(); });
     }
     if (inspectorEl.focus) inspectorEl.focus();
+    inspectorHistoryPushed = pushHistory ? writeRoute(false) : historyBacked;
   };
 
   const centerTimelineSelection = (immediate = false) => {
@@ -3044,9 +3841,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (typeof requestAnimationFrame === 'undefined') center();
     else requestAnimationFrame(() => requestAnimationFrame(center));
   };
-  // Select the trace row at index `p`: the shared landing sequence for every explicit timeline
-  // navigation (transport buttons, scrubber, arrow keys).
-  const gotoStep = (p) => { stopTimeline(); st.step = D.trace[p].i; st.kid = null; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection(); };
+  // Select the timeline entry at index `p` — a trace row, or one folded dispatch inside it: the
+  // shared landing sequence for every explicit timeline navigation (transport buttons, scrubber,
+  // arrow keys).
+  const gotoEntry = (p) => {
+    const entry = timelineEntries()[p];
+    if (!entry) return;
+    stopTimeline(); st.step = entry.row.i; st.kid = entry.kid; revealTimelineStep(st.step); writeRoute(true); render(true); centerTimelineSelection();
+  };
   // The single playback engine behind the timeline AND the Video tab: one requestAnimationFrame
   // loop that accumulates elapsed playback time from real frame-to-frame deltas (dt × speed(), so a
   // throttled or late frame never slows the clock, and a mid-flight speed change applies from that
@@ -3075,16 +3877,35 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;
     });
+    // Same for the step playback just walked into: its rows are in the document but hidden, so
+    // without this the selection would advance behind a closed header. The render stamped each
+    // header with whether it leads on its own merit, so this applies the same groupOpen rule the
+    // render did — including re-closing the step playback just left.
+    root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => {
+      const open = groupOpen(+control.dataset.group!, control.dataset.groupLeads === 'true');
+      control.setAttribute('aria-expanded', String(open));
+      const body = control.closest('.stepgroup')?.querySelector<HTMLElement>('.stepgroupbody');
+      if (body) body.hidden = !open;
+    });
   };
   // Move the current-step highlight in place (class + aria toggles, keep-in-view scroll) — the
   // step list's markup is otherwise untouched during playback.
   const paintTimelineSelection = () => {
     root.querySelectorAll<HTMLElement>('.step.sel').forEach((el) => { el.classList.remove('sel'); el.removeAttribute('aria-current'); });
+    // The dispatch highlight inside a folded row moves too, so the reader can see WHICH interaction
+    // is on screen — and so a dispatch highlight painted by the render playback started from does
+    // not sit there stale while playback walks away from it. A collapsed dispatch list has no
+    // element to paint; the pane still advances, and the full render at stop opens the list around
+    // the landed selection.
+    root.querySelectorAll<HTMLElement>('.kid.sel').forEach((el) => { el.classList.remove('sel'); el.removeAttribute('aria-current'); });
+    const kidEl = st.kid == null ? null : root.querySelector<HTMLElement>(`[data-kidsel="${st.step}:${st.kid}"]`);
+    if (kidEl) { kidEl.classList.add('sel'); kidEl.setAttribute('aria-current', 'step'); }
     const el = root.querySelector<HTMLElement>(`[data-step="${st.step}"]`);
     if (!el) return;
     el.classList.add('sel');
     el.setAttribute('aria-current', 'step');
-    if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    const scrollTarget = kidEl || el;
+    if (scrollTarget.scrollIntoView) scrollTarget.scrollIntoView({ block: 'nearest' });
   };
   // Per-step paint of the preview pane during playback: swap the screenshot <img> source (steps
   // mode only — in video mode the frame follows the clock), the pane's accessible name (img alt /
@@ -3103,17 +3924,28 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       inspect.setAttribute('aria-label', available ? `Inspect UI for: ${cur.label}` : `Inspect UI unavailable for: ${cur.label}`);
     }
     if (!wrap) return;
-    const pos = idxOf(st.step);
+    const pos = selectedEntryIndex();
+    // A dispatch position paints ITS own frame and mark — this is how every interaction inside a
+    // folded row replays instead of only the row's own.
+    const kid = cur ? selectedChild(cur) : null;
+    const kidShot = kid && kid.screenshotFile ? safeImageSrc(D.shots[kid.screenshotFile]) : null;
+    const paneLabel = cur ? (kid ? `${cur.label} · ${kid.label}` : cur.label) : '';
     if (hasVideo) {
       const frame = document.getElementById('tlvframe');
-      if (frame && cur) frame.setAttribute('aria-label', `Video frame at ${cur.label}, step ${pos + 1}`);
+      if (frame && cur) frame.setAttribute('aria-label', `Video frame at ${paneLabel}, step ${pos + 1}`);
     } else {
       const img = document.getElementById('shot') as HTMLImageElement | null;
-      const src = shotForStep(st.step);
-      if (img && src) { img.src = src; if (cur) img.alt = `${cur.label} at step ${pos + 1}`; }
+      const src = kidShot || shotForStep(st.step);
+      if (img && src) { img.src = src; if (cur) img.alt = `${paneLabel} at step ${pos + 1}`; }
     }
     wrap.querySelectorAll<HTMLElement>('.mark, .swipe, .markborder').forEach((el) => el.remove());
-    const markup = cur && (hasVideo || cur.screenshotFile) ? markHtml(cur) : '';
+    // The dispatch owns the frame on screen in both modes — its own screenshot in steps mode, the
+    // video frame at its instant in video mode — so its mark wins. A dispatch whose screenshot
+    // failed to inline is showing the row's frame, and keeps the row's mark.
+    const shownKid = kid && (hasVideo || kidShot) ? kid : null;
+    const markup = shownKid
+      ? (shownKid.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: shownKid.mark }) : '')
+      : cur && (hasVideo || cur.screenshotFile) ? markHtml(cur) : '';
     if (markup) wrap.insertAdjacentHTML('beforeend', markup);
   };
   // Shared landing sequence when playback ends or is paused: drop the engine, then ONE route write
@@ -3127,22 +3959,29 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // buildPlaybackSchedule), so pacing is real but a long idle gap never stalls playback. Every tick
   // paints by direct DOM mutation only — no render(true), no writeRoute — until playback ends.
   const playTimeline = () => {
-    const playbackRows = D.trace.filter(isSelectableTimelineRow);
-    if (!playbackRows.length) {
+    // Positions are timeline ENTRIES, not rows: a folded row's absorbed dispatches each carry their
+    // own frame, so playing rows alone showed one screenshot for a step that tapped four targets.
+    const playbackEntries = timelineEntries().filter(isSelectableTimelineEntry);
+    if (!playbackEntries.length) {
       st.playing = false;
       render(true);
       if (AUTOPLAY) signalPlaybackEnded();
       return;
     }
-    st.kid = null; // playback advances row by row; a child selection can't follow the clock
     const v = tlVideo();
-    const stepsSchedule = buildPlaybackSchedule(playbackRows, null);
+    const stepsSchedule = buildPlaybackSchedule(playbackEntries, null);
     // Under capture the export schedule replaces both modes: it compresses idle gaps even when a
     // video is driving, so the artifact's length tracks the step count instead of the session's
     // wall clock (a session recorded over an hour must not export an hour of a static screen).
-    const schedule = AUTOPLAY ? buildExportSchedule(playbackRows, v) : v ? buildPlaybackSchedule(playbackRows, v) : stepsSchedule;
+    const schedule = AUTOPLAY ? buildExportSchedule(playbackEntries, v) : v ? buildPlaybackSchedule(playbackEntries, v) : stepsSchedule;
     const axis = timelineAxis();
-    const selectedPlaybackIndex = Math.max(0, playbackRows.findIndex((row) => row.i === st.step));
+    // Where Play resumes from, resolved by POSITION rather than by finding the selected entry among
+    // the playable ones: the selection can be an entry playback skips (a dispatch whose screenshot
+    // never inlined), and a live push mid-run replaces the entry objects outright. Counting the
+    // playable entries up to the selection lands on the nearest frame at or before it; the old
+    // `indexOf` answered -1 in both cases and restarted the run from the top.
+    const played = timelineEntries().slice(0, selectedEntryIndex() + 1).filter(isSelectableTimelineEntry).length;
+    const selectedPlaybackIndex = Math.max(0, played - 1);
     const startMs = schedule.offsets[selectedPlaybackIndex] ?? 0;
     const span = Math.max(1, schedule.offsets.length ? schedule.offsets[schedule.offsets.length - 1] : 0);
     const grab = () => ({
@@ -3162,22 +4001,26 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const pos = playbackPositionAt(schedule, playMs);
       if (pos.stepIndex !== lastIndex) {
         lastIndex = pos.stepIndex;
-        const row = playbackRows[pos.stepIndex];
-        if (row && row.i !== st.step) {
-          st.step = row.i;
+        const entry = playbackEntries[pos.stepIndex];
+        if (entry && (entry.row.i !== st.step || entry.kid !== st.kid)) {
+          st.step = entry.row.i;
+          st.kid = entry.kid;
           revealTimelineStepInPlace();
           paintTimelineSelection();
           paintTimelinePane(pos.frame != null);
           if (els.scrub) {
-            const traceIndex = idxOf(row.i);
-            els.scrub.setAttribute('aria-valuenow', String(traceIndex + 1));
-            els.scrub.setAttribute('aria-valuetext', scrubValueText(traceIndex));
+            // Resolve the rail position from the (step, kid) just assigned, NOT by looking up the
+            // entry object: a live push replaces the trace array mid-playback, and an entry held
+            // from the pre-push model would then be found nowhere.
+            const entryIndex = selectedEntryIndex();
+            els.scrub.setAttribute('aria-valuenow', String(entryIndex + 1));
+            els.scrub.setAttribute('aria-valuetext', scrubValueText(entryIndex));
           }
           // Keep the frame transport live as playback advances (the full render only runs at
           // stop): Previous must work once playback has moved off the first row, and Next must
           // disable on the last one.
           if (els.prev) els.prev.disabled = pos.stepIndex <= 0;
-          if (els.next) els.next.disabled = pos.stepIndex >= playbackRows.length - 1;
+          if (els.next) els.next.disabled = pos.stepIndex >= playbackEntries.length - 1;
         }
       }
       if (els.frame && pos.frame != null && pos.frame !== lastFrame) {
@@ -3193,9 +4036,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         els.frame.style.backgroundPosition = cell.position;
       }
       if (els.head) {
-        const currentRow = playbackRows[pos.stepIndex];
-        const currentTraceIndex = currentRow ? idxOf(currentRow.i) : -1;
-        const f = pos.clockMs != null ? axis.tsFrac(pos.clockMs) : currentTraceIndex >= 0 ? axis.stepFrac[currentTraceIndex] : Math.min(1, playMs / span);
+        const f = pos.clockMs != null ? axis.tsFrac(pos.clockMs) : axis.stepFrac[selectedEntryIndex()];
         if (f != null) els.head.style.left = `${f * 100}%`;
       }
       if (pos.done) { endTimelinePlayback(); if (AUTOPLAY) signalPlaybackEnded(); return false; }
@@ -3409,19 +4250,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const body = control.closest('.tlphase')?.querySelector<HTMLElement>('.tlphasebody');
       if (body) body.hidden = !open;
     });
-    // Clicking a step header selects the step's first tool call — skipping agent-reasoning rows
-    // and trailing terminal snapshots, falling back to the header row itself when the step has no
-    // actions — so the preview pane jumps to that screenshot.
+    // A step header expands and collapses its own tool calls. Expanding also selects the step's
+    // first tool call — skipping agent-reasoning rows and trailing terminal snapshots — so the
+    // preview pane jumps to that screenshot, which is what the header click has always done.
+    // Collapsing leaves the selection alone; there is nothing to look at in a closed step.
     root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => control.onclick = () => {
-      const at = D.trace.findIndex((t) => t.i === +control.dataset.group);
-      if (at < 0) return;
+      const headerId = +control.dataset.group;
+      const open = control.getAttribute('aria-expanded') !== 'true';
+      st.stepsOpen[headerId] = open;
+      const at = D.trace.findIndex((t) => t.i === headerId);
       let nextIndex = -1;
-      for (let j = at + 1; j < D.trace.length && !D.trace[j].objective; j++) {
-        if (!D.trace[j].terminal && !isLlmTurn(D.trace[j])) { nextIndex = j; break; }
+      if (open && at >= 0) {
+        for (let j = at + 1; j < D.trace.length && !D.trace[j].objective; j++) {
+          if (!D.trace[j].terminal && !isLlmTurn(D.trace[j])) { nextIndex = j; break; }
+        }
       }
-      if (nextIndex < 0) return;
-      const next = D.trace[nextIndex];
-      stopTimeline(); st.step = next.i; st.kid = null; revealTimelineStep(st.step); writeRoute(true); render(true);
+      if (nextIndex >= 0) { stopTimeline(); st.step = D.trace[nextIndex].i; st.kid = null; revealTimelineStep(st.step); }
+      writeRoute(true); render(true);
     });
     const eventSelect = root.querySelector<HTMLDetailsElement>('[data-eventselect]');
     const streamSelect = root.querySelector<HTMLDetailsElement>('[data-streamselect]');
@@ -3469,7 +4314,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       centerTimelineSelection();
     });
     const galleryShots = Array.from(root.querySelectorAll<HTMLElement>('[data-shot]'));
-    const galleryEntries = galleryShots.map((el) => ({ src: safeImageDataUri(D.shots[el.dataset.shot]), token: el.dataset.shotToken, label: el.dataset.shotLabel, tool: el.dataset.shotTool }));
+    const galleryEntries = galleryShots.map((el) => ({ src: safeImageSrc(D.shots[el.dataset.shot]), token: el.dataset.shotToken, label: el.dataset.shotLabel, tool: el.dataset.shotTool }));
     galleryShots.forEach((el, index) => {
       const entry = galleryEntries[index];
       const image = el.querySelector?.('img') as HTMLImageElement | null;
@@ -3509,10 +4354,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const previewShot = root.querySelector<HTMLImageElement>('.preview .shot');
     if (previewShot) {
       // Same resolution as the pane render: a selected child dispatch's own frame wins.
-      const curRow = D.trace.find((t) => t.i === st.step);
-      const selKid = st.kid != null && curRow && curRow.children ? curRow.children[st.kid] : null;
-      const kidSrc = selKid && selKid.screenshotFile ? safeImageDataUri(D.shots[selKid.screenshotFile]) : '';
-      const src = kidSrc || shotForStep(st.step);
+      const capture = selectedChild(D.trace.find((t) => t.i === st.step));
+      const captureSrc = capture && capture.screenshotFile ? safeImageSrc(D.shots[capture.screenshotFile]) : '';
+      const src = captureSrc || shotForStep(st.step);
       if (src) previewShot.src = src;
     }
     if (previewShot && !previewShot.complete) previewShot.addEventListener('load', () => centerTimelineSelection(), { once: true });
@@ -3521,31 +4365,86 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // the whole DOM out from under a running playback; later renders inline the now-cached spriteAspect.
     const tlvframeBox = document.getElementById('tlvframe');
     const timelineVideo = tlVideo();
-    const timelineClock = timelineVideo ? stepClockMs(st.step) : null;
+    // Same instant the pane's background-POSITION was rendered from: a dispatch's frame can live on
+    // a different sprite sheet than its row's, and reading a different clock here would apply one
+    // sheet's coordinates to the other sheet's image.
+    const timelineClock = timelineVideo ? selectedClockMs() : null;
     const timelineCell = timelineVideo && timelineClock != null ? spriteFrameCss(timelineVideo, videoFrameAt(timelineVideo, timelineClock)) : null;
     if (tlvframeBox && timelineCell) tlvframeBox.style.backgroundImage = `url('${spriteUrl(timelineVideo, timelineCell.sheet)}')`;
     if (tlvframeBox && spriteAspect == null) measureSpriteAspect(tlVideo(), () => { tlvframeBox.style.aspectRatio = spriteAspect; });
     const prev = document.getElementById('prev'); const next = document.getElementById('next');
-    if (prev) prev.onclick = () => { stopTimeline(); const target = adjacentSelectableIndex(idxOf(st.step), -1); if (target >= 0) gotoStep(target); };
-    if (next) next.onclick = () => { stopTimeline(); const target = adjacentSelectableIndex(idxOf(st.step), 1); if (target >= 0) gotoStep(target); };
+    if (prev) prev.onclick = () => { stopTimeline(); const target = adjacentSelectableIndex(selectedEntryIndex(), -1); if (target >= 0) gotoEntry(target); };
+    if (next) next.onclick = () => { stopTimeline(); const target = adjacentSelectableIndex(selectedEntryIndex(), 1); if (target >= 0) gotoEntry(target); };
     const scrub = root.querySelector<HTMLElement>('[data-scrub]');
+    const scrubHover = root.querySelector<HTMLElement>('[data-scrubhover]');
+    const scrubHoverRange = root.querySelector<HTMLElement>('[data-scrubhover-range]');
+    if (scrub && scrubHover) {
+      const hoverRanges = scrubTimelineModel(timelineAxis()).ranges;
+      const hoverStep = scrubHover.querySelector<HTMLElement>('[data-scrubhover-step]');
+      const hoverKind = scrubHover.querySelector<HTMLElement>('[data-scrubhover-kind]');
+      scrub.onpointermove = (e) => {
+        const r = scrub.getBoundingClientRect();
+        const pointerX = Math.min(r.width, Math.max(0, e.clientX - r.left));
+        const f = pointerX / Math.max(1, r.width);
+        const hoveredRange = scrubStepAtFraction(hoverRanges, f);
+        const marker = (e.target as HTMLElement | null)?.closest?.('.scrubtick,.scrubstatusbox') as HTMLElement | null;
+        const step = marker?.dataset.scrubStep || hoveredRange.token;
+        const kind = marker?.dataset.scrubKind || '';
+        if (scrubHoverRange) {
+          scrubHoverRange.style.left = `${hoveredRange.start * 100}%`;
+          scrubHoverRange.style.right = `${Math.max(0, 1 - hoveredRange.end) * 100}%`;
+          scrubHoverRange.classList.add('visible');
+          scrubHoverRange.setAttribute('aria-hidden', 'false');
+        }
+        if (hoverStep) {
+          hoverStep.textContent = step;
+          hoverStep.classList.toggle('scrubtooltiptrailhead', step === 'Trailhead');
+        }
+        if (hoverKind) {
+          hoverKind.textContent = kind;
+          hoverKind.classList.toggle('visible', !!kind);
+        }
+        const markerColor = marker ? getComputedStyle(marker).getPropertyValue('--tick-color') : '';
+        scrubHover.style.setProperty('--tick-color', markerColor || 'var(--timeline-objective-mark)');
+        scrubHover.classList.add('visible');
+        scrubHover.setAttribute('aria-hidden', 'false');
+        const tooltipRect = scrubHover.getBoundingClientRect();
+        const stepRect = hoverStep?.getBoundingClientRect();
+        const stepCenterOffset = stepRect
+          ? stepRect.left - tooltipRect.left + stepRect.width / 2
+          : tooltipRect.width / 2;
+        const desiredLeft = pointerX - stepCenterOffset;
+        const maxLeft = Math.max(0, r.width - tooltipRect.width);
+        scrubHover.style.left = `${Math.min(maxLeft, Math.max(0, desiredLeft))}px`;
+      };
+      scrub.onpointerleave = () => {
+        scrubHover.classList.remove('visible');
+        scrubHover.setAttribute('aria-hidden', 'true');
+        if (scrubHoverRange) {
+          scrubHoverRange.classList.remove('visible');
+          scrubHoverRange.setAttribute('aria-hidden', 'true');
+        }
+      };
+    }
     if (scrub) scrub.onclick = (e) => {
       const r = scrub.getBoundingClientRect();
       const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      const axis = timelineAxis(); let best = -1; let dist = Infinity;
-      axis.stepFrac.forEach((sf, i) => { if (!isSelectableTimelineRow(D.trace[i])) return; const d = Math.abs(sf - f); if (d < dist) { dist = d; best = i; } });
-      if (D.trace[best]) gotoStep(best);
+      const axis = timelineAxis(); const entries = timelineEntries(); let best = -1; let dist = Infinity;
+      axis.stepFrac.forEach((sf, i) => { if (!isSelectableTimelineEntry(entries[i])) return; const d = Math.abs(sf - f); if (d < dist) { dist = d; best = i; } });
+      if (best >= 0) gotoEntry(best);
     };
     if (scrub) scrub.onkeydown = (e) => {
-      const p = idxOf(st.step);
-      const target = e.key === 'Home' ? adjacentSelectableIndex(-1, 1) : e.key === 'End' ? adjacentSelectableIndex(D.trace.length, -1) : (e.key === 'ArrowUp' || e.key === 'ArrowLeft') ? adjacentSelectableIndex(p, -1) : (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? adjacentSelectableIndex(p, 1) : -1;
-      if (target >= 0 && target < D.trace.length) { e.preventDefault(); e.stopPropagation(); gotoStep(target); }
+      const p = selectedEntryIndex();
+      const total = timelineEntries().length;
+      const target = e.key === 'Home' ? adjacentSelectableIndex(-1, 1) : e.key === 'End' ? adjacentSelectableIndex(total, -1) : (e.key === 'ArrowUp' || e.key === 'ArrowLeft') ? adjacentSelectableIndex(p, -1) : (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? adjacentSelectableIndex(p, 1) : -1;
+      if (target >= 0 && target < total) { e.preventDefault(); e.stopPropagation(); gotoEntry(target); }
     };
     const tlplay = document.getElementById('tlplay');
     if (tlplay) tlplay.onclick = () => {
       if (timelinePlaybackStop) { endTimelinePlayback(); return; }
       if (!D.trace.length) return;
-      if (idxOf(st.step) >= D.trace.length - 1) st.step = D.trace[0].i; // restart from the top if parked at the end
+      // Restart from the top if parked at the end.
+      if (selectedEntryIndex() >= timelineEntries().length - 1) { st.step = D.trace[0].i; st.kid = null; }
       st.playing = true;
       // Render the playing state (pause icon, selection) FIRST, then start the engine so it caches
       // paint targets from the fresh DOM — playback itself never re-renders.
@@ -3562,12 +4461,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (shot) shot.onclick = () => {
       const cur = D.trace.find((t) => t.i === st.step);
       // A selected child dispatch zooms ITS own frame + mark (same resolution as the pane).
-      const kid = st.kid != null && cur && cur.children ? cur.children[st.kid] : null;
-      const kidSrc = kid && kid.screenshotFile ? safeImageDataUri(D.shots[kid.screenshotFile]) || null : null;
-      const src = kidSrc || shotForStep(st.step);
+      const capture = selectedChild(cur);
+      const captureSrc = capture && capture.screenshotFile ? safeImageSrc(D.shots[capture.screenshotFile]) || null : null;
+      const src = captureSrc || shotForStep(st.step);
       if (!src) return;
-      openZoom(src, kidSrc
-        ? (kid.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: kid.mark }) : '')
+      openZoom(src, captureSrc
+        ? (capture.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: capture.mark }) : '')
         : (cur && cur.screenshotFile ? markHtml(cur) : ''));
     };
     if (st.tab === 'video') wireVideo();
@@ -3654,9 +4553,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const onKeydown = (e: KeyboardEvent) => {
     // The transcript dialog owns the keyboard while open (its own handler covers Escape and the
     // Tab trap); the timeline/zoom shortcuts below must not fire underneath an aria-modal dialog.
-    if (txEl) { if (e.key === 'Escape') { e.preventDefault(); closeTranscript(); } return; }
+    if (txEl) { if (e.key === 'Escape') { e.preventDefault(); closeTranscript(true, true); } return; }
     if (inspectorEl) {
-      if (e.key === 'Escape') { e.preventDefault(); closeInspector(); }
+      if (e.key === 'Escape') { e.preventDefault(); closeInspector(true, true); }
       return; // the overlay is modal — timeline/zoom shortcuts stay inert underneath it
     }
     if (zoomEl) {
@@ -3671,11 +4570,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Space toggles playback on the video tab too (parity with the legacy player's spacebar).
     if (st.view === 'detail' && st.tab === 'video' && e.key === ' ') { e.preventDefault(); const b = document.getElementById('vplay'); if (b) b.click(); return; }
     if (st.view !== 'detail' || st.tab !== 'timeline' || !D.trace.length) return;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { stopTimeline(); const target = adjacentSelectableIndex(idxOf(st.step), -1); if (target >= 0) { e.preventDefault(); gotoStep(target); } }
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { stopTimeline(); const target = adjacentSelectableIndex(idxOf(st.step), 1); if (target >= 0) { e.preventDefault(); gotoStep(target); } }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { stopTimeline(); const target = adjacentSelectableIndex(selectedEntryIndex(), -1); if (target >= 0) { e.preventDefault(); gotoEntry(target); } }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { stopTimeline(); const target = adjacentSelectableIndex(selectedEntryIndex(), 1); if (target >= 0) { e.preventDefault(); gotoEntry(target); } }
     if (e.key === ' ') { e.preventDefault(); const b = document.getElementById('tlplay'); if (b) b.click(); } // space toggles play/pause
   };
   const onPopstate = () => {
+    const hadPushedDestination = Boolean(inspectorEl || txEl);
     closeInspector(); // history navigation replaces the view under the modal overlay
     const previousView = st.view;
     const restoreTimelineFocus = st.view === 'detail' && st.tab === 'timeline'
@@ -3683,10 +4583,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // Navigating away closes the dialog: applyRoute's index branch never reaches openSession, so
     // without this a Back to the runs index re-renders the index with the modal stranded over it.
     closeTranscript();
-    applyRoute();
+    applyRoute(true);
     if (st.view !== previousView) st.pageTransition = st.view === 'detail' ? 'forward' : 'back';
-    render();
-    if (st.view === 'detail' && st.tab === 'timeline') centerTimelineSelection(true);
+    render(hadPushedDestination);
+    if (hadPushedDestination && !inspectorEl && !txEl) animateReportReturn();
+    if (!hadPushedDestination && st.view === 'detail' && st.tab === 'timeline') centerTimelineSelection(true);
     if (restoreTimelineFocus && st.view === 'detail' && st.tab === 'timeline') {
       root.querySelector<HTMLElement>(`[data-step="${st.step}"]`)?.focus({ preventScroll: true });
     }
@@ -3713,6 +4614,125 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     try { closeTranscript(); } catch (e) { /* overlay's own nodes are already gone */ }
     try { closeInspector(); } catch (e) { /* overlay's own nodes are already gone */ }
   };
+
+  // The live seam. A same-origin embedder (Trail Runner's run details) follows a run as it executes —
+  // the live report document does it with the daemon's log stream — and pushes the grown payload in
+  // through here. It exists because the alternative — booting the viewer again with a fresh payload —
+  // resets `st`: the selected tab, the selected step, scroll offsets, which groups are expanded. A
+  // run's records arrive several times a step, so that would yank the view out from under whoever is
+  // reading it at exactly that rate.
+  //
+  // Two rules for callers, both load-bearing:
+  //
+  //  1. Push UNCOMPRESSED `events` / `deviceLog` / `network` / `llmMessages` / `hierarchies`, never
+  //     their `*Gz` counterparts. The inflaters cache by session OBJECT and the accessors prefer the
+  //     inline field, so an inline value is always read fresh, whereas a gz value would be inflated
+  //     once on first use and then served from that cache forever — the reader would watch the
+  //     timeline grow while the device log stayed frozen at its first push.
+  //  2. Only push when something actually changed. `render` rebuilds the whole subtree, so a
+  //     no-change push is pure cost, and on a long run it is cost paid on every update.
+  if (typeof window !== 'undefined') {
+    // This handle belongs to THIS boot. A document that boots the viewer more than once (the shell
+    // does, once per archived run) leaves the module-scoped disposer pointing at the newest boot, so
+    // a handle held from an earlier one would tear down its successor's listeners instead of its own.
+    const ownDispose = disposeViewerGlobals;
+    let torn = false;
+    window.__TB_REPORT_LIVE__ = {
+      // Merge a payload into the session at `sessionIndex` and re-render in place. Merging INTO the
+      // existing object rather than replacing it is required, not incidental: `D` and the inflater
+      // caches both hold that object by reference.
+      //
+      // A null or absent field is left alone rather than merged. A push carries what its producer
+      // could assemble at that moment, so a side channel it merely failed to fetch this time (the
+      // live document's `/events`, `/analytics`) arrives empty; merging that would blank a stream
+      // the reader already has, and if no later push succeeds it would stay blank for good. A push
+      // adds and replaces; it never clears.
+      update(sessionIndex, payload) {
+        // A push queued before teardown must not paint into a document this viewer no longer owns.
+        if (torn) return;
+        const i = Number(sessionIndex) || 0;
+        const session = SESSIONS[i];
+        if (!session || !payload) return;
+        // Where the tail was before the merge, so the follow decision below can tell "parked at the
+        // end" from "reading something earlier".
+        const wasAtTail = session.trace && session.trace.length ? st.step === newestSelectableStep() : true;
+        // A row's `i` is its POSITION in the derived trace, so a record that lands late and sorts
+        // before the reader's selection renumbers it: same `st.step`, different step underneath.
+        // Remember which row that number named, and put the selection back on it after the merge.
+        const selectedKey = st.view === 'detail' && D === session && session.trace
+          ? traceRowKey(session.trace[idxOf(st.step)])
+          : null;
+        // Positional LLM indexes can also move when an older request arrives late and the live
+        // payload is rebuilt in timestamp order. Remember the open request by its stable trace id
+        // before replacing the session arrays, then resolve its new index after the merge.
+        const selectedLlmTraceId = txEl && D === session && session.llm && session.llm[txCallIndex]
+          ? session.llm[txCallIndex].traceId
+          : null;
+        Object.keys(payload).forEach((key) => { if (payload[key] != null) session[key] = payload[key]; });
+        // A push carrying the trace IS what hydration would have delivered, so the chunk it would
+        // have come from is moot. A partial push is not: clearing the marker for one of those would
+        // make hydrateSession short-circuit, the #tb-session-<i> chunk would never be parsed, and
+        // that run would lose its trace, screenshots and side channels for the life of the document.
+        if (payload.trace) unhydrated.delete(i);
+        // Still unhydrated: remember what this push delivered, so the chunk that eventually parses
+        // over the stub does not roll these fields back (see livePatched).
+        if (unhydrated.has(i)) {
+          const patch = livePatched.get(i) || {};
+          Object.keys(payload).forEach((key) => { if (payload[key] != null) patch[key] = payload[key]; });
+          livePatched.set(i, patch);
+        }
+        // A push for a run the reader is not looking at still has to repaint (the index counts its
+        // steps and outcome), but it must not cost them their scroll position or focus.
+        if (st.view !== 'detail' || D !== session) { render(true); return; }
+        // Sticky follow: track the newest row for as long as the reader is parked on the newest row,
+        // and stop the moment they select an earlier one. No flag to keep in sync — where the
+        // selection sits IS the intent. Selecting the last row again resumes following, which is
+        // what "watch the tail" means.
+        let followed = false;
+        let movedSelection = false;
+        if (wasAtTail && session.trace && session.trace.length) {
+          const tail = newestSelectableStep();
+          if (tail != null && st.step !== tail) { st.step = tail; st.kid = null; followed = true; }
+        } else if (selectedKey) {
+          const moved = (session.trace || []).find((t) => traceRowKey(t) === selectedKey);
+          if (moved && moved.i !== st.step) { st.step = moved.i; st.kid = null; movedSelection = true; }
+        }
+        let movedTranscript = false;
+        if (selectedLlmTraceId) {
+          const nextCallIndex = (session.llm || []).findIndex((call) => call.traceId === selectedLlmTraceId);
+          if (nextCallIndex >= 0 && nextCallIndex !== txCallIndex) {
+            txCallIndex = nextCallIndex;
+            st.llmSel = nextCallIndex;
+            const context = txCallContext(nextCallIndex);
+            if (context.row) { st.step = context.row.i; st.kid = null; }
+            txReturnSelector = st.tab === 'llm' ? `[data-llm="${nextCallIndex}"]` : `[data-tx="${nextCallIndex}"]`;
+            movedTranscript = true;
+          }
+        }
+        // The address bar is selection state here as everywhere else: leaving it behind would mean
+        // reloading a running report lands on whatever step was newest minutes ago. Replace rather
+        // than push, so following a run doesn't fill the reader's history with one entry per step.
+        // A run in progress has failed nothing yet, so every step group defaults to collapsed.
+        // Following the tail into a new step therefore has to open it, or the reader watches a
+        // preview pane track a selection hidden behind a closed header.
+        if (followed || movedSelection || movedTranscript) { revealTimelineStep(st.step); writeRoute(true); }
+        render(true);
+        // The pushed transcript is mounted outside #app. Refresh it explicitly so a running call's
+        // tokens, status, objective context, and messages stay in sync with the live session while
+        // retaining both the selected call and the reader's current header control focus.
+        if (txEl && D === session && txCallIndex >= 0 && txCallIndex < D.llm.length) refreshTranscriptPanel(true, true);
+        // Only scroll when the selection actually moved. render(true) already restored the reader's
+        // scroll offset, and centering on a push that changed nothing they were looking at would
+        // drag the timeline out from under them on every tick.
+        if (followed && st.tab === 'timeline') centerTimelineSelection(false);
+      },
+      destroy() {
+        torn = true;
+        if (ownDispose) ownDispose();
+        if (disposeViewerGlobals === ownDispose) disposeViewerGlobals = null;
+      },
+    };
+  }
 
   render();
   if (st.view === 'detail' && st.tab === 'timeline') centerTimelineSelection(true);

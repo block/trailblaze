@@ -22,6 +22,10 @@ trail:
                 textRegex: Catalog
 
   - verify: "\"Pumpkin Spice\" is not visible on the screen"
+    recording:
+      android-phone:
+        - assertNotVisibleWithText:
+            text: Pumpkin Spice
 
   - step: "Tap \"Show seasonal\" to reveal seasonal items"
     recording:

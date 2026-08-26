@@ -591,11 +591,17 @@ private fun ViewHierarchyInspector(
     imageLoader.getImageModel(sessionId, screenshotFile)
   }
 
+  // The model resolving is not the same as the image loading. When the loader itself fails, the
+  // pane would otherwise stay empty and draw overlays over nothing, with no message anywhere —
+  // that's what made the ProGuard/Coil ServiceLoader breakage (block/trailblaze#194) so hard to
+  // place. Recording the failure here routes it to the visible branch below.
+  var loadError by remember(sessionId, screenshotFile, imageModel) { mutableStateOf<String?>(null) }
+
   Box(
     modifier = Modifier.fillMaxSize(),
     contentAlignment = Alignment.Center
   ) {
-    if (imageModel != null) {
+    if (imageModel != null && loadError == null) {
       // Screenshot as background
       AsyncImage(
         model = imageModel,
@@ -605,7 +611,12 @@ private fun ViewHierarchyInspector(
           .fillMaxSize()
           .defaultMinSize(minWidth = 200.dp, minHeight = 200.dp)
           .clip(MaterialTheme.shapes.medium),
-        contentScale = ContentScale.Fit
+        contentScale = ContentScale.Fit,
+        onError = { state ->
+          val throwable = state.result.throwable
+          Console.log("❌ Inspector screenshot failed to load: $screenshotFile: $throwable")
+          loadError = throwable.message ?: throwable::class.simpleName ?: "unknown error"
+        },
       )
 
       // Overlays for each UI element
@@ -666,7 +677,7 @@ private fun ViewHierarchyInspector(
       }
     } else {
       SelectableText(
-        text = "Failed to load screenshot",
+        text = loadError?.let { "Failed to load screenshot: $it" } ?: "Failed to load screenshot",
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )

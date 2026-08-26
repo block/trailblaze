@@ -40,6 +40,9 @@ object GetEditedTrailsRequest : RpcRequest<EditedTrailsResponse>
 data class GetTrailDetailRequest(val id: String) : RpcRequest<TrailDetailResponse>
 
 @Serializable
+data class GetTrailGitBaselineRequest(val id: String) : RpcRequest<TrailGitBaselineResponse>
+
+@Serializable
 data class ValidateTrailRequest(val yaml: String) : RpcRequest<ValidateTrailResponse>
 
 @Serializable
@@ -192,6 +195,18 @@ internal class GetTrailDetailHandler(private val deps: TrailRunnerDeps) :
       ?: RpcResult.Failure(
         // A lookup miss, not a server fault — HTTP_ERROR keeps it distinguishable in logs/telemetry
         // from real faults (the convention in ConnectToDeviceHandler / SetCurrentTargetAppHandler).
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        message = "No trail found for id '${request.id}'",
+      )
+}
+
+internal class GetTrailGitBaselineHandler(private val deps: TrailRunnerDeps) :
+  RpcHandler<GetTrailGitBaselineRequest, TrailGitBaselineResponse> {
+  // Same id shape and same miss semantics as GetTrailDetailHandler: slash-separated path segments,
+  // and an id that resolves to no trail file is an HTTP_ERROR rather than a server fault.
+  override suspend fun handle(request: GetTrailGitBaselineRequest): RpcResult<TrailGitBaselineResponse> =
+    buildTrailGitBaselineResponse(deps, request.id.split("/"))?.let { RpcResult.Success(it) }
+      ?: RpcResult.Failure(
         errorType = RpcResult.ErrorType.HTTP_ERROR,
         message = "No trail found for id '${request.id}'",
       )
@@ -499,6 +514,7 @@ internal fun Routing.trailRunnerRpcRoutes(deps: TrailRunnerDeps) {
   registerRpcHandler<TrailRootsResponse, GetTrailRootsRequest>(GetTrailRootsHandler(deps))
   registerRpcHandler<EditedTrailsResponse, GetEditedTrailsRequest>(GetEditedTrailsHandler(deps))
   registerRpcHandler<TrailDetailResponse, GetTrailDetailRequest>(GetTrailDetailHandler(deps))
+  registerRpcHandler<TrailGitBaselineResponse, GetTrailGitBaselineRequest>(GetTrailGitBaselineHandler(deps))
   registerRpcHandler<ValidateTrailResponse, ValidateTrailRequest>(ValidateTrailHandler(deps))
   registerRpcHandler<FavoritesResponse, GetFavoritesRequest>(GetFavoritesHandler())
   registerRpcHandler<IntegrationsResponse, GetIntegrationsRequest>(GetIntegrationsHandler(deps))

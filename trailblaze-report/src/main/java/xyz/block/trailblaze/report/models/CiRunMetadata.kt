@@ -104,8 +104,8 @@ data class CiRunMetadata(
   /** Whether AI execution was enabled */
   val ai_enabled: Boolean = true,
 
-  /** Whether self-heal on recording failure was enabled */
-  val self_heal_enabled: Boolean = true,
+  /** Whether self-heal on recording failure was explicitly configured for this run. */
+  val self_heal_enabled: Boolean = false,
 
   /** Whether tests ran in parallel */
   val parallel_execution: Boolean = false,

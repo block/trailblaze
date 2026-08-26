@@ -284,7 +284,7 @@ class TrailblazeWrapperEnvTest {
   }
 
   @Test
-  fun `app activates the callers git root before opening Trail Runner`() {
+  fun `app v2 activates the callers git root before opening Trail Runner`() {
     assumeTrue("bash required for wrapper tests", File("/bin/bash").exists())
     assumeTrue("git required for workspace-root test", ProcessBuilder("git", "--version").start().waitFor() == 0)
     val wrapper = locateWrapperScript()
@@ -322,11 +322,11 @@ class TrailblazeWrapperEnvTest {
           return 0
         }
         cd '${nested.absolutePath}'
-        source '${wrapper.absolutePath}' app
+        source '${wrapper.absolutePath}' app --v2
       """.trimIndent()
 
       val (exitCode, _, stderr) = runBash(script, emptyMap())
-      assertEquals(0, exitCode, "app wrapper should exit cleanly; stderr=\n$stderr")
+      assertEquals(0, exitCode, "app --v2 wrapper should exit cleanly; stderr=\n$stderr")
       assertEquals(
         repo.canonicalPath,
         captured.readText(),

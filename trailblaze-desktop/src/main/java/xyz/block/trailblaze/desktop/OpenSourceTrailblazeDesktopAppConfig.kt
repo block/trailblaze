@@ -84,7 +84,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   // with opensource defaults (no companions, DefaultTrailblazeHostAppTarget fallback).
   override val availableAppTargets: Set<TrailblazeHostAppTarget> by lazy { rediscoverAppTargets() }
 
-  override fun rediscoverAppTargets(): Set<TrailblazeHostAppTarget> =
+  override fun rediscoverAppTargets(failFast: Boolean): Set<TrailblazeHostAppTarget> =
     // Anchor discovery at the user's configured workspace (the trails dir picked in settings),
     // not the daemon launch CWD - same rule the create-target write path follows via
     // WorkspaceConfigDirHolder, so a target created in Trail Runner is discoverable by the
@@ -93,6 +93,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
       workspaceConfigProvider = xyz.block.trailblaze.host.AppTargetDiscovery
         .anchoredWorkspaceConfigProvider { workspaceConfigDirOrNull() },
       logPrefix = "[OpenSourceAppTargets]",
+      failFast = failFast,
     )
   override val logsDir = File(
     TrailblazeDesktopUtil.getEffectiveLogsDirectory(

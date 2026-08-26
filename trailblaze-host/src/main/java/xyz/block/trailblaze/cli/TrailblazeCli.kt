@@ -86,10 +86,23 @@ object TrailblazeCli {
    */
   private val bootstrapHasRun = AtomicBoolean(false)
 
+  /**
+   * Builds the subcommands contributed by the distribution, registered alongside the
+   * annotation-declared set. Captured by [run] so [executeForDaemon] builds the same command tree
+   * the JVM-spawn path does.
+   *
+   * A FACTORY rather than a list. picocli reads a command instance's field values at model-build
+   * time and treats them as that model's defaults, so registering one instance in more than one
+   * CommandLine — which the daemon path does, once per request — would carry a flag parsed in one
+   * request into the next as its default. A fresh instance per CommandLine cannot.
+   */
+  @Volatile private var extraSubcommandsRef: () -> List<Any> = ::emptyList
+
   fun run(
     args: Array<String>,
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
+    extraSubcommands: () -> List<Any> = ::emptyList,
   ) {
     // Every Trailblaze process is a macOS agent app (LSUIElement) unless it deliberately
     // shows a window. Read at AWT initialization, so it must be set before ANY code path
@@ -131,6 +144,7 @@ object TrailblazeCli {
     }
     appProviderRef = bootstrappedAppProvider
     configProviderRef = configProvider
+    extraSubcommandsRef = extraSubcommands
 
     // Capture argv so any CliMcpClient created downstream sends it as
     // `X-Trailblaze-Origin`. The daemon surfaces this in the device-busy
@@ -157,6 +171,7 @@ object TrailblazeCli {
 
     val cli = TrailblazeCliCommand(bootstrappedAppProvider, configProvider)
     val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+    registerExtraSubcommands(commandLine)
     installTrailblazeExceptionHandlers(commandLine)
     installPerToolHelpExecutionStrategy(commandLine)
 
@@ -181,6 +196,21 @@ object TrailblazeCli {
     if (exitCode != 0) {
       exitProcess(exitCode)
     }
+  }
+
+  /**
+   * Adds the distribution's own subcommands to [commandLine].
+   *
+   * The annotation-declared set in [TrailblazeCliCommand] can only name classes this module can see,
+   * so a command that depends on anything a distribution adds downstream has nowhere to be declared.
+   * Registering instances keeps that command out of this module while leaving it indistinguishable
+   * from a declared one to picocli: same parsing, same `--help`, same exception handlers.
+   *
+   * They land in the `Other:` tail of [GroupedCommandListRenderer] rather than a named group, since
+   * the groups describe the shared surface and a distribution's commands are not part of it.
+   */
+  internal fun registerExtraSubcommands(commandLine: CommandLine) {
+    extraSubcommandsRef().forEach { commandLine.addSubcommand(it) }
   }
 
   /**
@@ -315,6 +345,11 @@ object TrailblazeCli {
         CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
           val cli = TrailblazeCliCommand(appProvider, configProvider)
           val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+          // Same tree as the JVM-spawn path. No distribution command is in
+          // FORWARDABLE_SUBCOMMANDS today, so this registration is currently unreachable — it is
+          // here so adding one to that set doesn't silently produce "Unmatched argument" on the
+          // daemon fast path only.
+          registerExtraSubcommands(commandLine)
           installTrailblazeExceptionHandlers(commandLine)
           // `tool` is in FORWARDABLE_SUBCOMMANDS, so this branch DOES see
           // `tool <name> --help` invocations — installing the per-tool help
@@ -427,8 +462,10 @@ class TrailblazeVersionProvider : IVersionProvider {
     ToolCommand::class,
     ToolboxCommand::class,
     TrailCommand::class,
+    UsagesCommand::class,
     SessionCommand::class,
     ReportCommand::class,
+    ViewerCommand::class,
     ProfileCommand::class,
     WaypointCommand::class,
     ResultsCommand::class,
@@ -505,11 +542,15 @@ class TrailblazeCliCommand(
 
     // No subcommand → show help. Use `trailblaze app` to launch the desktop GUI.
     //
-    // Mirror the renderer wiring that `TrailblazeCli.run` and `executeForDaemon` apply to
-    // their `CommandLine` instances. Without this, bare `trailblaze` (no args) would render
-    // help via the default picocli renderer — losing the grouped-section headings (Drive:,
-    // Trail:, Setup:, Built-in agent:) that `--help` already shows.
+    // Mirror the renderer AND subcommand wiring that `TrailblazeCli.run` and `executeForDaemon`
+    // apply to their `CommandLine` instances. Without the renderer, bare `trailblaze` (no args)
+    // would render help via the default picocli renderer — losing the grouped-section headings
+    // (Drive:, Trail:, Setup:, Built-in agent:) that `--help` already shows. Without the extras,
+    // this fresh tree carries only the annotation-declared subcommands, so a distribution's own
+    // commands would appear under `--help` but not under the bare invocation the docs point new
+    // users at.
     val cl = CommandLine(this).setCaseInsensitiveEnumValuesAllowed(true)
+    TrailblazeCli.registerExtraSubcommands(cl)
     cl.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
       GroupedCommandListRenderer(showHidden = showAll)
     cl.usage(System.out)
@@ -593,7 +634,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Trail:",
-      listOf("run", "session", "report", "profile", "results", "waypoint"),
+      listOf("run", "usages", "session", "report", "viewer", "profile", "results", "waypoint"),
     ),
     Group(
       "Setup:",

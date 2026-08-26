@@ -17,6 +17,7 @@ class ReportCliArgsTest {
    */
   private val ciArgs = arrayOf(
     "/logs",
+    "--no-wasm-report",
     "--use-relative-image-urls",
     "--link-images",
     "--triage",
@@ -49,7 +50,7 @@ class ReportCliArgsTest {
   @Test
   fun `html report keeps its own flags and loses the test-results-only ones`() {
     assertEquals(
-      listOf("/logs", "--use-relative-image-urls", "--link-images"),
+      listOf("/logs", "--no-wasm-report", "--use-relative-image-urls", "--link-images"),
       ReportCliArgs.forHtmlReport(ciArgs).toList(),
     )
   }

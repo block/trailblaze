@@ -116,7 +116,7 @@ the full LLM transcript (when an LLM was involved), and video replay when captur
 
 Same viewer surface, three ways:
 
-- **Trail Runner desktop app** — `trailblaze app` opens one workspace for trails,
+- **Trail Runner desktop app** — `trailblaze app --v2` opens one workspace for trails,
   live and completed runs, recording, and integrations, with rich trace inspection
   and inline editing.
 - **Inline on every CI build** — share a URL, open in a browser, no Trailblaze install

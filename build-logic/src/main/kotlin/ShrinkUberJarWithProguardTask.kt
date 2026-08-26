@@ -15,6 +15,7 @@ import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -32,6 +33,21 @@ abstract class ShrinkUberJarWithProguardTask @Inject constructor(objects: Object
   @get:InputFile
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val proguardRules: RegularFileProperty
+
+  /**
+   * Rules files pulled in by `-include` from [proguardRules], which Gradle cannot discover on its
+   * own.
+   *
+   * Without this the task is UP-TO-DATE after an edit to an included file, so it silently keeps
+   * serving a JAR shrunk under the OLD ruleset. That is the worst possible failure mode here: the
+   * whole point of a keep rule is to prevent a shrink that only breaks the published binary, and a
+   * stale shrink means adding a keep appears to work while changing nothing. A downstream module's
+   * rules file can be a couple of lines that `-include` this project's shared ruleset, in which
+   * case EVERY real rule lives behind an `-include` and none of them would be tracked.
+   */
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val includedProguardRules: ConfigurableFileCollection
 
   @get:InputDirectory
   @get:PathSensitive(PathSensitivity.NAME_ONLY)

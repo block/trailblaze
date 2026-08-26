@@ -29,6 +29,7 @@ define a waypoint, curate which tools the agent sees, write a
 - [When the tool doesn't appear in `toolbox`](#when-the-tool-doesnt-appear-in-toolbox)
 - [Inspecting your composed surface](#inspecting-your-composed-surface)
 - [Using your tool in a trail](#using-your-tool-in-a-trail)
+- [Editing a tool: find its blast radius first](#editing-a-tool-find-its-blast-radius-first)
 - [Distribution](#distribution)
 - [What's mature vs. still landing on this rung](#whats-mature-vs-still-landing-on-this-rung)
 
@@ -261,6 +262,72 @@ arguments, the structured error envelope, and the captured screen
 state at the point of failure. Diagnose authoring bugs there before
 re-editing the `.ts`. See [`save-and-replay.md`](save-and-replay.md)
 for more on the report surface.
+
+## Editing a tool: find its blast radius first
+
+Before editing or deleting a tool, know which trails the change can
+reach. There are two tiers, and they have different certainty.
+
+**Tier 1 — trails that invoke the tool directly (certain).** This is
+a parsed-model fact, and the framework answers it:
+
+```bash
+trailblaze usages myapp_login --json      # every trail whose recordings invoke it,
+                                          # with the device classifiers per usage
+trailblaze usages --changed-since origin/main --json
+                                          # derive the tool set from your diff instead: every
+                                          # added / removed / modified scripted tool, plus the
+                                          # tier-2 callers below
+```
+
+Each usage reports *which device classifiers'* recordings carry the
+invocation, so an `android:`-only usage never implicates a trail's
+iOS legs. `--changed-since` hashes each tool's source together with
+its resolved import closure, so editing a shared helper module flags
+every tool that imports it. A non-empty `warnings` array means the
+report may be incomplete — treat "zero usages" as unproven, not as
+license to delete.
+
+**Tier 2 — tools that compose your tool (inferred).** One tool can
+dispatch another from its implementation. `ctx.tools.other(...)` is a
+runtime call through the host, not an import, so the callee never
+enters the caller's import closure and tier 1's hashes cannot see it
+— a tool that is mostly a delegation to a changed tool hashes as
+untouched.
+
+`--changed-since` infers these edges for you and reports them under
+`changedSince.impactedViaCallers`, transitively: if your tool's caller
+has a caller, both are listed. Those tools are queried for trails like
+any other, so the `tools` array already covers them.
+
+```bash
+trailblaze usages --changed-since origin/main --json \
+  | jq '.changedSince.impactedViaCallers'
+```
+
+It is kept out of `added` / `removed` / `modified` because those are
+facts about bytes and this is an inference from reading each tool's
+bundled output for names. What that means in practice:
+
+- It reads the BUNDLE, so a dispatch buried in a helper several
+  modules deep, or reached through a renamed receiver, is still found.
+  String dispatch — `client.callTool("myapp_login")` — is found too.
+- It over-reports by design: a redundant replay is cheap, a missed
+  edge ships with no coverage.
+- It cannot see a callee name COMPUTED at runtime
+  (`callTool(prefix + suffix)`). No static analysis can; an IDE's
+  "find usages" misses it for the same reason.
+- Tools the in-process bundler cannot build (`runtime: subprocess`)
+  are named in `warnings` — they still count as a callee, but no edge
+  points out of them.
+
+The two tiers compose: tier 2 gives you the caller set, tier 1 gives
+you each caller's trails. The union is the blast radius; replaying
+those trails before the change lands is what proves it safe. When you
+have named a tool explicitly rather than using `--changed-since`,
+tier 2 is still yours to establish — grep the trailmap's `tools/`
+directory for `ctx.tools.myapp_login(`, and for Kotlin-backed tools
+`invokeFrameworkTool("myapp_login")`.
 
 ## Distribution
 

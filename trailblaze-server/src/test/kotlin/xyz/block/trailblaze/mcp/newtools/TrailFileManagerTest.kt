@@ -427,7 +427,7 @@ class TrailFileManagerTest {
   // ---------------------------------------------------------------------------
 
   private fun recordedTrailItems(toolName: String = "recordedTapCart"): List<TrailYamlItem> = listOf(
-    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "D")),
+    TrailYamlItem.ConfigTrailItem(TrailConfig(id = "flow", target = "app", driver = "ANDROID_ONDEVICE_INSTRUMENTATION")),
     TrailYamlItem.PromptsTrailItem(
       listOf(DirectionStep(step = "Tap login", recording = ToolRecording(tools = listOf(yamlTool(toolName))))),
     ),

@@ -21,7 +21,9 @@ interface RunMeta {
   /** Display version of the app under test, e.g. "5.58.0.0 (67500009)". */
   appVersion?: string;
   device?: string;
-  /** Human-readable device category/classifier, e.g. "phone" or "tablet". */
+  /** The device's specific compound classifier — `android-phone`, `ios-ipad`, `android-kiosk`. */
+  deviceClassifier?: string;
+  /** Human-readable device category, e.g. "phone" or "tablet" — the classifier minus its platform. */
   deviceType?: string;
   platform?: string;
   trailId?: string;
@@ -51,6 +53,28 @@ interface RunMeta {
    * "Owner" sort sections.
    */
   metadata?: Record<string, string>;
+  /**
+   * This run's evidence is NOT in the document carrying it — the session is a stub. Set by the
+   * `generate-run-index` command on every row it emits, whether or not [reportUrl] came out with a
+   * value: a stub with nowhere to point still has no payload to count, open, or price.
+   */
+  linkOut?: boolean;
+  /**
+   * URL of THIS run's own report, for a session whose evidence isn't in the document carrying it.
+   * Set only by the `generate-run-index` command, which builds a matrix of runs whose payloads are
+   * far too large to embed: the index's open controls become links to this URL instead of opening
+   * an in-document detail view. Must be http(s) — the viewer refuses any other scheme. Absent when
+   * the row had no session archive or the index was built without a viewer URL, which leaves the
+   * cell inert rather than linked.
+   */
+  reportUrl?: string;
+  /**
+   * LLM call count and spend for a run whose payload isn't embedded (see [reportUrl]), precomputed
+   * by the generator because there are no calls in the document to count. Null/absent renders as
+   * unknown rather than zero.
+   */
+  llmCallCount?: number | null;
+  llmCostUsd?: number | null;
   /** Legacy single-run payloads carried the YAML on meta; lifted onto the session by the builder. */
   recordingYaml?: string | null;
   /** Legacy-compatible transport for the authored trail before the run recorded concrete actions. */
@@ -76,14 +100,25 @@ interface ActionMark {
 interface TraceChild {
   label: string;
   tool: string;
+  /** Human-readable reasoning from the LLM response that produced this dispatch. */
+  note?: string | null;
   /** Summed execution time of the folded dispatches; null for a declared-but-never-logged dispatch. */
   ms?: number | null;
+  /** Wall-clock ms this dispatch was logged at (the FIRST member's, for a ×N fold) — the run-clock
+   * instant timeline playback schedules this interaction on. Null for a declared-but-never-logged
+   * dispatch, or one whose log carried no timestamp. */
+  ts?: number | null;
   /** `false` when the dispatch logged a failure. */
   ok?: boolean;
   /** The failed dispatch's error message (errorMessage or the JVM log's exceptionMessage); null when it passed or logged none. */
   err?: string | null;
   /** Machine-readable code from the failed dispatch's structured error payload (top-level string `code`); null when it passed or the payload carried none. */
   code?: string | null;
+  /** The dispatch's result summary. Preserved independently from failures so a successful nested
+   * interaction remains inspectable without opening its raw log. */
+  result?: string | null;
+  /** True when otherwise-identical folded dispatches returned different summaries. */
+  resultVaries?: boolean;
   /** Consecutive identical dispatches folded into this child (×N); 1 when it ran once. */
   count?: number | null;
   /** Full tool call as trail-file YAML (`- toolName:` + indented args) — what the selected child
@@ -94,6 +129,8 @@ interface TraceChild {
   screenshotFile?: string | null;
   /** Tap/swipe/assert overlay for this dispatch's frame (see ActionMark). */
   mark?: ActionMark | null;
+  /** Live Trail Runner detail source. Deliberately omitted from the slim shared-report payload. */
+  _logs?: TrailblazeLogRecord[];
 }
 
 /** One timeline row after slimTraceForShare — the embedded shape the viewer renders. */
@@ -140,6 +177,11 @@ interface TraceStep {
    * that lets the timeline open this call's transcript/usage. Absent on every other row.
    */
   llm?: number | null;
+  /**
+   * Turn-level trace id shared by an LLM request and the tool/action rows it produced. `llm` is
+   * the durable positional link; this id is a compatibility fallback for older report rows.
+   */
+  traceId?: string | null;
   /**
    * Device/viewport extent of this row's capture (the log's deviceWidth×deviceHeight) — the
    * coordinate space the screenshot shows. The UI Inspector anchors its bounds overlay and
@@ -200,6 +242,8 @@ interface LlmComp {
 /** One LLM call after slimLlmForShare — the embedded shape the LLM tab renders. */
 interface LlmCall {
   model: string;
+  /** Optional compatibility fallback shared with older timeline rows from this request. */
+  traceId?: string | null;
   /**
    * Provider id (`TrailblazeLlmProvider.id`, e.g. "openai") that owns `model`, forming the
    * repo's canonical `<provider>/<model>` identity. Absent when the log carried no provider (older
@@ -525,10 +569,23 @@ interface ZipReportExports {
   ) => Promise<{ sessions: SessionInput[]; generatedAt: string; zipBytes: number }>;
 }
 
+/**
+ * The viewer's live-update seam, published by a booted viewer. A same-origin embedder polls the
+ * daemon and merges each grown payload into the rendered session instead of rebooting, which would
+ * reset the reader's tab, step and scroll. Callers must push the uncompressed fields, never `*Gz` —
+ * see the seam's own contract in run-report-viewer.ts.
+ */
+interface ReportLiveHandle {
+  update: (sessionIndex: number, payload: Partial<SessionPayload>) => void;
+  destroy: () => void;
+}
+
 interface Window {
   __TB_RUN_DATA__?: ReportPayload;
   /** Set by run-report-viewer-boot; the viewer shell's handoff into the report once a payload is in place. */
   __TB_BOOT_REPORT__?: () => void;
+  /** Published by a booted viewer for live embedders. */
+  __TB_REPORT_LIVE__?: ReportLiveHandle;
   /** Published by zip-report-core.js. */
   TbZipReport?: ZipReportExports;
 }
