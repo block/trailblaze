@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.toolcalls.carriesPayload
 
 /**
  * Pins the `carriesPayload()` predicate the `AndroidTrailblazeRule.runSuspend` trail-item fold

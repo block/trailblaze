@@ -1385,6 +1385,44 @@ function RecordScreen({ go, active, yamlSeed }) {
     return els.filter((e) => [e.label, e.type].some((v) => v && String(v).toLowerCase().includes(q)));
   }, [els, elQuery]);
 
+  // Live validation for the scratch editor: the same normalize + daemon-validate pair Run does, so
+  // a typo is a squiggle while typing instead of a failed dispatch. What the daemon sees is the
+  // NORMALIZED document, not the fragment on screen (this surface accepts a bare tool call or a
+  // step list), so line numbers are only trustworthy when normalization passed the text through
+  // untouched. A converted fragment reports on line 1 and names the expanded line in the message
+  // rather than pointing at an unrelated line of the editor.
+  async function adhocLint(text) {
+    // An empty editor is not a broken one. Normalizing a blank buffer refuses it ("Enter a command
+    // or step to run."), which is the right answer for Run and the wrong one for a card nobody has
+    // typed into yet - the hint above already says what to put there.
+    if (!String(text == null ? '' : text).trim()) return { errors: [] };
+    const picked = adhocDeviceIds.map((sid) => deviceList.find((d) => d.id === sid)).filter(Boolean);
+    // Normalizing a recorded tool call needs a device classifier. Before anything is checked, lint
+    // against the connected devices so typing is still validated; with no devices at all the
+    // editor's own YAML syntax check is all there is.
+    const platforms = (picked.length ? picked : deviceList).map((d) => d.platform).filter(Boolean);
+    if (!platforms.length) return { errors: [] };
+    const normalized = window.TrailYamlBuild.normalizeScratchTrailYaml(text, platforms, adhocName || 'Ad hoc run', target);
+    if (normalized.error) return { errors: [{ line: 1, message: normalized.error }] };
+    const validation = await TB.validateTrail(normalized.yaml);
+    if (!validation || validation.unavailable) return { unavailable: true };
+    if (validation.valid === false) {
+      const raw = String(text == null ? '' : text);
+      // Normalization trims, so a whole document that only lost surrounding whitespace still counts
+      // as passed through - its line numbers just start lower down. Shift them by however many lines
+      // came off the top rather than treating the document as rewritten.
+      const verbatim = normalized.yaml === raw.trim();
+      const shift = verbatim ? raw.slice(0, raw.length - raw.trimStart().length).split('\n').length - 1 : 0;
+      return {
+        errors: (validation.errors || []).map((er) => (verbatim ? { ...er, line: (er.line || 1) + shift } : {
+          line: 1,
+          message: er.message + (er.line ? ` (line ${er.line} of the expanded trail)` : ''),
+        })),
+      };
+    }
+    return { errors: [] };
+  }
+
   // Ad hoc YAML tester card + its Run footer. Shared by the connected right panel's "Test YAML"
   // tab and the disconnected view (the command palette can open this before a Record session
   // exists — dispatching a run doesn't need the mirror, it connects the device itself).
@@ -1392,11 +1430,25 @@ function RecordScreen({ go, active, yamlSeed }) {
     <div className="tb-card tb-record-yaml-card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', borderBottom: '1px solid var(--tb-hairline)' }}>
         <Ico n="braces" s={14} c="var(--text-subtle)" />
-        <label id="tb-test-yaml-editor-label" htmlFor="tb-test-yaml-editor" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)' }}>{adhocName || 'YAML'}</label>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-standard)', flex: '0 0 auto' }}>{adhocName || 'YAML'}</div>
+        {/* The editor has no placeholder, so the shape a fragment can take is spelled out here while
+            it's empty - the same two examples the old textarea's placeholder carried. */}
+        {!adhocYaml.trim() && (
+          <span className="tb-sub" style={{ fontSize: 11, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            e.g. <span className="tb-mono">- step: "Open the app"</span>, or one tool: <span className="tb-mono">tapOn: {'{ text: Continue }'}</span>
+          </span>
+        )}
       </div>
-      <textarea id="tb-test-yaml-editor" aria-labelledby="tb-test-yaml-editor-label" value={adhocYaml} onChange={(e) => { setAdhocYaml(e.target.value); setAdhocErr(null); setAdhocRuns([]); }} spellCheck={false}
-        placeholder={'- step: "Open the app"\n\n# or one tool command:\ntapOn:\n  text: Continue'}
-        style={{ flex: 1, minHeight: 0, width: '100%', boxSizing: 'border-box', display: 'block', resize: 'none', border: 'none', outline: 'none', background: '#0a0a0a', color: '#d7dee8', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.55, tabSize: 2 }} />
+      {/* Same editor as the trail editor: YAML syntax errors from js-yaml, plus the daemon's own
+          trail validation, both as gutter markers while typing. This surface used to be a bare
+          textarea, so a typo only surfaced as a failed run. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {/* No Cmd-S handler: there is no file behind this buffer, and the only other thing the key
+            could do is dispatch the run - which starts something on a real device, and is what the
+            Run button is for. */}
+        <CodeEditor value={adhocYaml} onChange={(v) => { setAdhocYaml(v); setAdhocErr(null); setAdhocRuns([]); }}
+          ariaLabel={(adhocName || 'Test') + ' YAML'} serverLint={adhocLint} />
+      </div>
       <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--tb-hairline)', padding: '9px 12px' }}>
         <div className="tb-eyebrow" style={{ fontSize: 9.5, marginBottom: 7 }}>Run on</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>

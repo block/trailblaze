@@ -642,6 +642,244 @@ class TrailblazeNodeSelectorResolverTest {
     assertEquals(target.nodeId, result.node.nodeId)
   }
 
+  // -- Compose: the matchable fields beyond the original ten --
+
+  @Test
+  fun `Compose - each extended matchable field narrows the match`() {
+    // One row per field: a node carrying it, next to a node that doesn't. Table-driven so a
+    // dropped predicate in matchesCompose shows up as a widened match here rather than
+    // silently making every selector that carries the field match its neighbours too.
+    val cases: List<Triple<String, DriverNodeDetail.Compose, DriverNodeMatch.Compose>> = listOf(
+      Triple(
+        "collectionItemRowIndex",
+        DriverNodeDetail.Compose(collectionItemRowIndex = 2),
+        DriverNodeMatch.Compose(collectionItemRowIndex = 2),
+      ),
+      Triple(
+        "collectionItemColumnIndex",
+        DriverNodeDetail.Compose(collectionItemColumnIndex = 3),
+        DriverNodeMatch.Compose(collectionItemColumnIndex = 3),
+      ),
+      Triple(
+        "stateDescriptionRegex",
+        DriverNodeDetail.Compose(stateDescription = "Expanded"),
+        DriverNodeMatch.Compose(stateDescriptionRegex = "Expanded"),
+      ),
+      Triple(
+        "isHeading",
+        DriverNodeDetail.Compose(isHeading = true),
+        DriverNodeMatch.Compose(isHeading = true),
+      ),
+      Triple(
+        "paneTitleRegex",
+        DriverNodeDetail.Compose(paneTitle = "Confirm deletion"),
+        DriverNodeMatch.Compose(paneTitleRegex = "Confirm deletion"),
+      ),
+      Triple(
+        "isDialog",
+        DriverNodeDetail.Compose(isDialog = true),
+        DriverNodeMatch.Compose(isDialog = true),
+      ),
+      Triple(
+        "isPopup",
+        DriverNodeDetail.Compose(isPopup = true),
+        DriverNodeMatch.Compose(isPopup = true),
+      ),
+      Triple(
+        "errorTextRegex",
+        DriverNodeDetail.Compose(errorText = "Email is required"),
+        DriverNodeMatch.Compose(errorTextRegex = "Email is required"),
+      ),
+      Triple(
+        "hasSetTextAction",
+        DriverNodeDetail.Compose(hasSetTextAction = true),
+        DriverNodeMatch.Compose(hasSetTextAction = true),
+      ),
+    )
+
+    cases.forEach { (field, detail, match) ->
+      nextId = 1L
+      val target = nodeOf(detail = detail)
+      val lacking = nodeOf(detail = DriverNodeDetail.Compose(text = "Something else"))
+      val root = nodeOf(detail = DriverNodeDetail.Compose(), children = listOf(target, lacking))
+
+      val result = TrailblazeNodeSelectorResolver.resolve(root, TrailblazeNodeSelector.withMatch(match))
+      assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(
+        result,
+        "$field must resolve to the one node that carries it, got $result",
+      )
+      assertEquals(target.nodeId, result.node.nodeId, field)
+    }
+  }
+
+  // ======================================================================
+  // AndroidView variant matching
+  //
+  // The native View tree, captured in-process. Matched with the strict NATIVE dialect —
+  // the contrast against the lenient Maestro dialect is the load-bearing property here.
+  // ======================================================================
+
+  @Test
+  fun `AndroidView - a lowercase pattern misses mixed-case text that androidMaestro would match`() {
+    nextId = 1L
+    val viewNode = nodeOf(detail = DriverNodeDetail.AndroidView(text = "Cancel"))
+    val viewRoot = nodeOf(detail = DriverNodeDetail.AndroidView(), children = listOf(viewNode))
+
+    val strict = TrailblazeNodeSelectorResolver.resolve(
+      viewRoot,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "cancel")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(strict)
+
+    // The documented escape hatch: opt into case-insensitivity per selector.
+    val optedIn = TrailblazeNodeSelectorResolver.resolve(
+      viewRoot,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "(?i)cancel")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(optedIn)
+    assertEquals(viewNode.nodeId, optedIn.node.nodeId)
+
+    // Same pattern, same text, Maestro shape: the lenient dialect matches without opting in.
+    val maestroNode = nodeOf(detail = DriverNodeDetail.AndroidMaestro(text = "Cancel"))
+    val maestroRoot = nodeOf(detail = DriverNodeDetail.AndroidMaestro(), children = listOf(maestroNode))
+    val lenient = TrailblazeNodeSelectorResolver.resolve(
+      maestroRoot,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidMaestro(textRegex = "cancel")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(lenient)
+    assertEquals(maestroNode.nodeId, lenient.node.nodeId)
+  }
+
+  @Test
+  fun `AndroidView - dot does not cross a newline without opting into dotall`() {
+    nextId = 1L
+    val target = nodeOf(detail = DriverNodeDetail.AndroidView(text = "line1\nline2"))
+    val root = nodeOf(detail = DriverNodeDetail.AndroidView(), children = listOf(target))
+
+    val strict = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = ".+")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(strict)
+
+    val optedIn = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "(?s).+")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(optedIn)
+    assertEquals(target.nodeId, optedIn.node.nodeId)
+  }
+
+  @Test
+  fun `AndroidView - the native shape stays isolated, the projected shapes cross by design`() {
+    nextId = 1L
+    // Three nodes with identical text, one per Android shape. The per-backend androidView shape
+    // resolves only its own node. The two PROJECTED shapes bridge onto the in-process details:
+    // androidAccessibility is the canonical selector (see CanonicalSelectorBridgeTest), and
+    // androidMaestro is the estate's recorded dialect (see EstateSelectorBridgeTest) — each
+    // matches its own node AND the View node, but neither matches the other's node: the bridges
+    // point at the in-process hybrid tree, never across the two out-of-process dialects.
+    val viewNode = nodeOf(detail = DriverNodeDetail.AndroidView(text = "Submit"))
+    val accessibilityNode = nodeOf(detail = DriverNodeDetail.AndroidAccessibility(text = "Submit"))
+    val maestroNode = nodeOf(detail = DriverNodeDetail.AndroidMaestro(text = "Submit"))
+    val root = nodeOf(
+      detail = DriverNodeDetail.AndroidView(),
+      children = listOf(viewNode, accessibilityNode, maestroNode),
+    )
+
+    val viaView = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "Submit")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaView)
+    assertEquals(viewNode.nodeId, viaView.node.nodeId)
+
+    val viaAccessibility = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Submit")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(viaAccessibility)
+    assertEquals(
+      setOf(accessibilityNode.nodeId, viewNode.nodeId),
+      viaAccessibility.nodes.map { it.nodeId }.toSet(),
+    )
+
+    val viaMaestro = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidMaestro(textRegex = "Submit")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches>(viaMaestro)
+    assertEquals(
+      setOf(maestroNode.nodeId, viewNode.nodeId),
+      viaMaestro.nodes.map { it.nodeId }.toSet(),
+    )
+  }
+
+  @Test
+  fun `AndroidView - isChecked false matches an unchecked Checkable, never a non-Checkable view`() {
+    nextId = 1L
+    // isChecked == null means the view is not Checkable at all, so `isChecked: false` must
+    // stay a two-value predicate over checkable views instead of matching the whole screen.
+    val unchecked = nodeOf(detail = DriverNodeDetail.AndroidView(text = "Notifications", isChecked = false))
+    val checked = nodeOf(detail = DriverNodeDetail.AndroidView(text = "Sounds", isChecked = true))
+    val notCheckable = nodeOf(detail = DriverNodeDetail.AndroidView(text = "About"))
+    val root = nodeOf(
+      detail = DriverNodeDetail.AndroidView(),
+      children = listOf(unchecked, checked, notCheckable),
+    )
+
+    val viaFalse = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(isChecked = false)),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaFalse)
+    assertEquals(unchecked.nodeId, viaFalse.node.nodeId)
+
+    val viaTrue = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(isChecked = true)),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaTrue)
+    assertEquals(checked.nodeId, viaTrue.node.nodeId)
+
+    // Pinned to the one node the text can reach, so the outcome turns purely on how a null
+    // isChecked is treated rather than on anything else in the tree.
+    val nonCheckable = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "About", isChecked = false)),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(nonCheckable)
+  }
+
+  @Test
+  fun `AndroidView - textRegex matches resolveText so a hint-only field matches by its hint`() {
+    nextId = 1L
+    // resolveText(): text > hintText > contentDescription. An empty EditText has only a hint.
+    val hintOnly = nodeOf(
+      detail = DriverNodeDetail.AndroidView(hintText = "Enter your email", isEditable = true),
+    )
+    val descriptionOnly = nodeOf(detail = DriverNodeDetail.AndroidView(contentDescription = "Close"))
+    val withText = nodeOf(detail = DriverNodeDetail.AndroidView(text = "Submit"))
+    val root = nodeOf(
+      detail = DriverNodeDetail.AndroidView(),
+      children = listOf(hintOnly, descriptionOnly, withText),
+    )
+
+    val viaHint = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "Enter your email")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaHint)
+    assertEquals(hintOnly.nodeId, viaHint.node.nodeId)
+
+    val viaContentDescription = TrailblazeNodeSelectorResolver.resolve(
+      root,
+      TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidView(textRegex = "Close")),
+    )
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(viaContentDescription)
+    assertEquals(descriptionOnly.nodeId, viaContentDescription.node.nodeId)
+  }
+
   // ======================================================================
   // AndroidMaestro variant matching
   // ======================================================================
@@ -789,11 +1027,12 @@ class TrailblazeNodeSelectorResolverTest {
   @Test
   fun `cross-driver mismatch returns NoMatch`() {
     nextId = 1L
-    // Tree uses Compose nodes
-    val target = nodeOf(detail = DriverNodeDetail.Compose(text = "Submit"))
-    val root = nodeOf(detail = DriverNodeDetail.Compose(), children = listOf(target))
+    // Tree uses iOS AXe nodes. The canonical androidAccessibility shape bridges to the
+    // Android in-process details (AndroidView/Compose — see CanonicalSelectorBridgeTest),
+    // but never across platforms.
+    val target = nodeOf(detail = DriverNodeDetail.IosAxe(label = "Submit"))
+    val root = nodeOf(detail = DriverNodeDetail.IosAxe(), children = listOf(target))
 
-    // Selector uses AndroidAccessibility matcher — should not match Compose nodes
     val selector = TrailblazeNodeSelector.withMatch( DriverNodeMatch.AndroidAccessibility(textRegex = "Submit"),
     )
     val result = TrailblazeNodeSelectorResolver.resolve(root, selector)

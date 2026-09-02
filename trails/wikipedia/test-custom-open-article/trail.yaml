@@ -8,7 +8,8 @@ config:
   id: 'wikipedia/test-custom-open-article'
   target: wikipedia
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Wikipedia (scripted): open Albert Einstein via wikipedia_web_openArticle'
 
 trail:

@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.prompt.withPerStepSystemPromptContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
@@ -65,6 +66,9 @@ class KoogTestAgentRunner(
   private val maxLlmCalls: Int? = null,
   systemPromptTemplate: String,
 ) : TestAgentRunner {
+
+  /** Dynamic session context re-read before each step (e.g. roster + active device). */
+  var perStepSystemPromptContextProvider: (() -> String?)? = null
 
   /** Mutable so trail `config.context` can be folded in via [appendToSystemPrompt], like the legacy runner. */
   private var currentSystemPrompt: String = systemPromptTemplate
@@ -123,7 +127,9 @@ class KoogTestAgentRunner(
         session = session,
         traceId = traceId,
         maxLlmCalls = maxLlmCalls,
-        systemPromptTemplate = currentSystemPrompt,
+        systemPromptTemplate = currentSystemPrompt.withPerStepSystemPromptContext(
+          perStepSystemPromptContextProvider?.invoke(),
+        ),
       )
       status = result.toAgentTaskStatus(prompt, startTime)
       return status

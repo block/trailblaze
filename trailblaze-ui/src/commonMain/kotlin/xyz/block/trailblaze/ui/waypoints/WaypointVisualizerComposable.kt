@@ -951,6 +951,7 @@ private fun MatchStatusBadge(overlay: WaypointSelectorOverlay) {
 private fun DriverBadge(selector: TrailblazeNodeSelector) {
   val label = when (selector.driverMatch) {
     is DriverNodeMatch.AndroidAccessibility -> "android-a11y"
+    is DriverNodeMatch.AndroidView -> "android-view"
     is DriverNodeMatch.AndroidMaestro -> "android-maestro"
     is DriverNodeMatch.IosMaestro -> "ios-maestro"
     is DriverNodeMatch.IosAxe -> "ios-axe"
@@ -1034,6 +1035,24 @@ private fun TrailblazeNodeSelector.toFieldRows(): List<Pair<String, String>> {
       match.collectionItemRowIndex?.let { rows += "collectionItemRowIndex" to it.toString() }
       match.collectionItemColumnIndex?.let { rows += "collectionItemColumnIndex" to it.toString() }
     }
+    is DriverNodeMatch.AndroidView -> {
+      match.classNameRegex?.let { rows += "className~" to it }
+      match.resourceIdRegex?.let { rows += "resourceId~" to it }
+      match.tagRegex?.let { rows += "tag~" to it }
+      match.textRegex?.let { rows += "text~" to it }
+      match.contentDescriptionRegex?.let { rows += "contentDescription~" to it }
+      match.hintTextRegex?.let { rows += "hintText~" to it }
+      match.stateDescriptionRegex?.let { rows += "stateDescription~" to it }
+      match.errorTextRegex?.let { rows += "errorText~" to it }
+      match.isEnabled?.let { rows += "isEnabled" to it.toString() }
+      match.isClickable?.let { rows += "isClickable" to it.toString() }
+      match.isChecked?.let { rows += "isChecked" to it.toString() }
+      match.isSelected?.let { rows += "isSelected" to it.toString() }
+      match.isFocused?.let { rows += "isFocused" to it.toString() }
+      match.isEditable?.let { rows += "isEditable" to it.toString() }
+      match.isPassword?.let { rows += "isPassword" to it.toString() }
+      match.inputType?.let { rows += "inputType" to it.toString() }
+    }
     is DriverNodeMatch.AndroidMaestro -> {
       match.textRegex?.let { rows += "text~" to it }
       match.resourceIdRegex?.let { rows += "resourceId~" to it }
@@ -1066,6 +1085,15 @@ private fun TrailblazeNodeSelector.toFieldRows(): List<Pair<String, String>> {
       match.isFocused?.let { rows += "isFocused" to it.toString() }
       match.isSelected?.let { rows += "isSelected" to it.toString() }
       match.isPassword?.let { rows += "isPassword" to it.toString() }
+      match.collectionItemRowIndex?.let { rows += "collectionItemRowIndex" to it.toString() }
+      match.collectionItemColumnIndex?.let { rows += "collectionItemColumnIndex" to it.toString() }
+      match.stateDescriptionRegex?.let { rows += "stateDescription~" to it }
+      match.isHeading?.let { rows += "isHeading" to it.toString() }
+      match.paneTitleRegex?.let { rows += "paneTitle~" to it }
+      match.isDialog?.let { rows += "isDialog" to it.toString() }
+      match.isPopup?.let { rows += "isPopup" to it.toString() }
+      match.errorTextRegex?.let { rows += "errorText~" to it }
+      match.hasSetTextAction?.let { rows += "hasSetTextAction" to it.toString() }
     }
     is DriverNodeMatch.IosMaestro -> {
       match.textRegex?.let { rows += "text~" to it }

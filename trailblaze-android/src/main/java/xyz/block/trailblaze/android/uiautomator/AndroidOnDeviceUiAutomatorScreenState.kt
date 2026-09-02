@@ -365,7 +365,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       return null
     }
 
-    private inline fun <T> traceOnDeviceUiAutomatorScreenState(name: String, block: () -> T): T = traceRecorder.trace(name, "OnDeviceUiAutomatorScreenState", emptyMap(), block)
+    private inline fun <T> traceOnDeviceUiAutomatorScreenState(name: String, block: () -> T): T = traceRecorder.trace(name, "OnDeviceUiAutomatorScreenState", emptyMap(), block = block)
 
     fun dumpViewHierarchy(): String = traceOnDeviceUiAutomatorScreenState("dumpViewHierarchy") {
       // dumpWindowHierarchy traverses the accessibility tree via IPC and can deadlock

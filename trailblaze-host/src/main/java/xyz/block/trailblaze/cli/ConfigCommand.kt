@@ -210,11 +210,14 @@ class ConfigCommand : Callable<Int> {
     Console.info("  trailblaze config llm <provider/model>      Set LLM")
     Console.info("  trailblaze config llm none                  Disable LLM")
     Console.info("  trailblaze config target <name>             Set target app")
-    Console.info("  trailblaze config android-driver <type>     Set Android driver (instrumentation|accessibility)")
-    Console.info("  trailblaze config ios-driver <type>         Set iOS driver (host|axe)")
+    // Derived, not spelled out: this line drifted from the enum the moment a driver was added,
+    // telling users a value the CLI would reject (and hiding one it accepts).
+    Console.info("  trailblaze config android-driver <type>     Set Android driver (${driverChoices(TrailblazeDevicePlatform.ANDROID)})")
+    Console.info("  trailblaze config ios-driver <type>         Set iOS driver (${driverChoices(TrailblazeDevicePlatform.IOS)})")
     Console.info("  trailblaze config screenshot-format <fmt>   Set screenshot format (png|jpeg|webp|unset)")
     Console.info("  trailblaze config screenshot-max-dimensions <WxH>  Set max screenshot dimensions")
     Console.info("  trailblaze config screenshot-quality <0..1> Set lossy compression quality")
+    Console.info("  trailblaze config capture-video <true|false>  Record session video (default: off, opt-in)")
     Console.info("  trailblaze config stream-screenshots <true|false|unset>  (experimental) Serve agent screenshots from the live device stream (Android/iOS/web)")
     Console.info("  trailblaze config disable-animations <true|false|unset>  (experimental) Disable OS animations during each session, restored at session end")
     Console.info("  trailblaze config models                    List available models")
@@ -256,6 +259,11 @@ class ConfigCommand : Callable<Int> {
       Console.info("    $prefix [$check] ${driverType.cliShortName}$defaultTag")
     }
   }
+
+  /** The values `config <platform>-driver` actually accepts, straight from the enum. */
+  private fun driverChoices(platform: TrailblazeDevicePlatform): String =
+    TrailblazeDriverType.selectableForPlatform(platform).mapNotNull { it.cliShortName }
+      .joinToString("|")
 
   private fun showLlmConfig(): Int {
     val currentConfig = CliConfigHelper.getOrCreateConfig()

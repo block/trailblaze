@@ -14,6 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.datetime.Clock
@@ -23,6 +25,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.agent.TwoTierAgentConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -39,6 +42,9 @@ import xyz.block.trailblaze.util.Console
  * CLI's own short-lived one-shot sessions.
  */
 const val TRAILBLAZE_CLI_CLIENT_NAME: String = "TrailblazeCLI"
+
+/** Default bound on how long a device move waits for another one to finish. */
+private const val DEVICE_MOVE_WAIT_MS = 30_000L
 
 /**
  * Wire names of the MCP session tools, referenced by the @Tool annotations in
@@ -181,6 +187,10 @@ class TrailblazeMcpSessionContext(
    * The device ID associated with this MCP session.
    * Set when connectToDevice is called, cleared on endSession.
    * Used for cancellation propagation when the MCP client disconnects.
+   *
+   * In a session with named bindings (see [namedDeviceBindings]) this is the ACTIVE device — the
+   * one `switchDevice` last handed the session to. It stays the single value tool dispatch reads,
+   * so the roster never introduces a second routing path.
    *
    * Note: a CLI-side workaround in `CliMcpClient.ensureDevice` re-issues
    * `device(action=PLATFORM, deviceId=…)` on every session reuse to defend
@@ -483,6 +493,238 @@ class TrailblazeMcpSessionContext(
    */
   fun clearAssociatedDevice() {
     associatedDeviceId = null
+    clearNamedDeviceBindings()
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Named device bindings (interactive multi-device)
+  //
+  // A session accumulates devices under names — `device(action=BIND, name=buyer, …)` — and
+  // `switchDevice` hands the session between them. [associatedDeviceId] above stays the ACTIVE
+  // device and remains the only value tool dispatch reads (it becomes the per-call
+  // `McpDeviceContext.currentDeviceId`); the roster here is state beside it, and switching is its
+  // only additional writer. A session that never binds a name keeps an empty roster and behaves
+  // exactly as it did before named bindings existed.
+  //
+  // The roster is held as a [SessionDeviceBindings] — the same type the replay path builds and
+  // `SwitchDeviceTrailblazeTool` reads — rather than a parallel registry, so an interactive
+  // handover and a recorded one address devices through one model. That type is immutable and
+  // non-empty by construction, which is the right contract for a replay whose cast is fixed at
+  // session start, so an additive bind rebuilds it and carries the active name across.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private val namedBindingsLock = Any()
+
+  /**
+   * Serializes any operation that moves the session's device — a handover, a bind, an unbind, a
+   * replacing connect — which [namedBindingsLock] cannot: each moves the active name, then suspends
+   * on the bridge, then commits [associatedDeviceId], and a lock can't be held across a suspension
+   * point.
+   *
+   * Two of them interleaved in that window commit different halves — one owns the active name while
+   * the other sets the routing id — and the session then drives one device while reporting the
+   * other, which is the exact failure the roster exists to prevent. MCP dispatches each `tools/call`
+   * independently, so overlapping calls in one session are the client's to make.
+   */
+  private val deviceHandoverMutex = Mutex()
+
+  /** What holds [deviceHandoverMutex], for the error a caller that can't get a turn is given. */
+  @Volatile
+  private var deviceMoveInFlight: String? = null
+
+  /** How long a device move waits for the one in flight. Shortened by tests. */
+  internal var deviceMoveWaitMs: Long = DEVICE_MOVE_WAIT_MS
+
+  /**
+   * Runs [block] as the session's only in-flight device move, or reports through [onBusy] rather
+   * than queueing behind one indefinitely.
+   *
+   * The wait is bounded because a move can hold the mutex across a cold connect — the WEB path
+   * downloads a browser — and an MCP client whose call sits there gets no signal at all. [label]
+   * names this move so the refused caller is told what it is waiting on.
+   */
+  suspend fun <T> runDeviceMove(
+    label: String,
+    onBusy: (inFlight: String?) -> T,
+    block: suspend () -> T,
+  ): T {
+    // `lock()` doesn't acquire when it is cancelled while suspended, so a timed-out wait can't
+    // leave the mutex held by a caller that already gave up.
+    val acquired = withTimeoutOrNull(deviceMoveWaitMs) { deviceHandoverMutex.lock() }
+    if (acquired == null) return onBusy(deviceMoveInFlight)
+    deviceMoveInFlight = label
+    return try {
+      block()
+    } finally {
+      deviceMoveInFlight = null
+      deviceHandoverMutex.unlock()
+    }
+  }
+
+  /** Names in bind order — the first bound name is where the session starts. */
+  private val namedDevices = LinkedHashMap<String, SessionDeviceBindings.BoundDevice>()
+
+  /**
+   * The session's named devices with one active, or null while no name has been bound.
+   *
+   * `@Volatile` for the same reason [associatedDeviceId] is: written from the request handler
+   * running a `device()` / `switchDevice` call, read from another thread's tool dispatch.
+   */
+  @Volatile
+  var namedDeviceBindings: SessionDeviceBindings? = null
+    private set
+
+  /** Bound names in bind order. Empty for an ordinary single-device session. */
+  fun boundDeviceNames(): List<String> = synchronized(namedBindingsLock) { namedDevices.keys.toList() }
+
+  /** The bound device for [name], or null when nothing is bound under it. */
+  fun boundDevice(name: String): SessionDeviceBindings.BoundDevice? =
+    synchronized(namedBindingsLock) { namedDevices[name] }
+
+  /** The active name, or null when no name has been bound. */
+  fun activeDeviceName(): String? = namedDeviceBindings?.activeName
+
+  /**
+   * Binds [device] under [name], keeping every already-bound name. Rebinding an existing name
+   * replaces that entry in place (its position in bind order is kept, so the start device stays the
+   * start device).
+   *
+   * @return true when this bind made [name] the active device — the first bind of the session, or a
+   * rebind of the already-active name. The caller owns the device-side consequences (claiming the
+   * device, pointing the bridge at it, re-registering the tool surface).
+   */
+  fun bindNamedDevice(name: String, device: SessionDeviceBindings.BoundDevice): Boolean =
+    synchronized(namedBindingsLock) {
+      val previousActive = namedDeviceBindings?.activeName
+      namedDevices[name] = device
+      rebuildNamedBindings(activeName = previousActive ?: name)
+      val becameActive = namedDeviceBindings?.activeName == name
+      Console.log(
+        "[MCP Bindings] Bound '$name' -> ${device.trailblazeDeviceId.toFullyQualifiedDeviceId()} " +
+          "(roster: ${namedDevices.keys.joinToString()}, active: ${namedDeviceBindings?.activeName})",
+      )
+      becameActive
+    }
+
+  /**
+   * Removes the binding for [name].
+   *
+   * @return the outcome — [UnbindResult.NotBound] when nothing was bound under that name,
+   * [UnbindResult.LastRemaining] when [name] is the only bound device (refused: a session with an
+   * empty roster and a still-connected device is what `session(action=STOP)` is for), else
+   * [UnbindResult.Unbound] carrying the name that is active afterwards. When the unbound name WAS
+   * active, the first remaining name takes over and the caller must point the bridge at it.
+   */
+  fun unbindNamedDevice(name: String): UnbindResult = synchronized(namedBindingsLock) {
+    val removed = namedDevices[name] ?: return UnbindResult.NotBound
+    if (namedDevices.size == 1) return UnbindResult.LastRemaining
+    val wasActive = namedDeviceBindings?.activeName == name
+    namedDevices.remove(name)
+    val nextActive = if (wasActive) namedDevices.keys.first() else namedDeviceBindings?.activeName
+    rebuildNamedBindings(activeName = nextActive)
+    Console.log(
+      "[MCP Bindings] Unbound '$name' (${removed.trailblazeDeviceId.instanceId}); " +
+        "active: ${namedDeviceBindings?.activeName}",
+    )
+    UnbindResult.Unbound(
+      unbound = removed,
+      activeName = namedDeviceBindings?.activeName,
+      activeChanged = wasActive,
+    )
+  }
+
+  /**
+   * Moves the binding at [from] onto [to], keeping the device, its place in bind order, and its
+   * active status.
+   *
+   * Renaming in place is the only way to correct a name: a device holds one name, so re-binding it
+   * under another would be a duplicate, and unbinding the old name first is refused when it is the
+   * session's last binding.
+   *
+   * @return the moved device, or null when [from] isn't bound or [to] already is — reassigning a
+   * name that another device holds would silently unbind that device.
+   */
+  fun renameNamedDevice(from: String, to: String): SessionDeviceBindings.BoundDevice? =
+    synchronized(namedBindingsLock) {
+      val device = namedDevices[from] ?: return null
+      if (to in namedDevices) return null
+      val wasActive = namedDeviceBindings?.activeName == from
+      // Rebuilt rather than remove-then-put: bind order marks the start device, and re-adding under
+      // the new name would move it to the end of the roster.
+      val renamed = LinkedHashMap<String, SessionDeviceBindings.BoundDevice>(namedDevices.size)
+      namedDevices.forEach { (boundName, bound) ->
+        renamed[if (boundName == from) to else boundName] = bound
+      }
+      namedDevices.clear()
+      namedDevices.putAll(renamed)
+      rebuildNamedBindings(activeName = if (wasActive) to else namedDeviceBindings?.activeName)
+      Console.log(
+        "[MCP Bindings] Renamed '$from' to '$to' (${device.trailblazeDeviceId.instanceId}); " +
+          "roster: ${namedDevices.keys.joinToString()}, active: ${namedDeviceBindings?.activeName}",
+      )
+      device
+    }
+
+  /**
+   * Makes [name] the active device.
+   *
+   * @return the newly-active device, or null when [name] isn't bound. Only the session-side switch;
+   * the caller does the device-side work (bridge selection, [associatedDeviceId], tool re-register).
+   */
+  fun switchActiveNamedDevice(name: String): SessionDeviceBindings.BoundDevice? =
+    synchronized(namedBindingsLock) {
+      val bindings = namedDeviceBindings ?: return null
+      if (bindings.deviceFor(name) == null) return null
+      bindings.switchTo(name)
+    }
+
+  /**
+   * Every device this session addresses: the active/associated device plus each named binding.
+   *
+   * Session teardown iterates this rather than [associatedDeviceId] alone — a bound device gets its
+   * driver warmed at bind time, so cleaning up only the active one leaves the rest connected.
+   */
+  fun addressedDeviceIds(): List<TrailblazeDeviceId> = synchronized(namedBindingsLock) {
+    (listOfNotNull(associatedDeviceId) + namedDevices.values.map { it.trailblazeDeviceId }).distinct()
+  }
+
+  /** Drops every named binding. Called when the session's device association is cleared. */
+  fun clearNamedDeviceBindings() = synchronized(namedBindingsLock) {
+    if (namedDevices.isEmpty()) return
+    namedDevices.clear()
+    namedDeviceBindings = null
+    Console.log("[MCP Bindings] Cleared all named bindings")
+  }
+
+  /**
+   * Rebuilds [namedDeviceBindings] from [namedDevices], restoring [activeName] when it is still
+   * bound. A [SessionDeviceBindings] always starts on its first entry, so the active name has to be
+   * re-applied — otherwise adding a second device would silently hand the session back to the first.
+   */
+  private fun rebuildNamedBindings(activeName: String?) {
+    namedDeviceBindings = if (namedDevices.isEmpty()) {
+      null
+    } else {
+      SessionDeviceBindings(LinkedHashMap(namedDevices)).also { rebuilt ->
+        activeName?.takeIf { it in namedDevices }?.let { rebuilt.switchTo(it) }
+      }
+    }
+  }
+
+  /** Outcome of [unbindNamedDevice]. */
+  sealed interface UnbindResult {
+    /** No device was bound under the requested name. */
+    data object NotBound : UnbindResult
+
+    /** The requested name is the session's only bound device, so it was kept. */
+    data object LastRemaining : UnbindResult
+
+    /** The binding was removed. [activeChanged] is true when the unbound device was the active one. */
+    data class Unbound(
+      val unbound: SessionDeviceBindings.BoundDevice,
+      val activeName: String?,
+      val activeChanged: Boolean,
+    ) : UnbindResult
   }
 
   /**

@@ -7,7 +7,8 @@ config:
     disambiguate which container to scroll. Models that scroll the
     wrong panel (or scroll the page) will fail the final verify.
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Scroll the correct container of two'
 
 trail:

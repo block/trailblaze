@@ -665,6 +665,334 @@ class UnifiedTrailMergeTest {
     assertEquals(listOf("iosTapCart"), merged.trail[0].recordings["ios"]?.map { it.name })
   }
 
+  // A partial run ("record from step N") records only part of the trail. The window is the only
+  // thing that says which steps that recording is allowed to touch - recorded items carry no step
+  // provenance, so without it the merge aligns from step 1 and strips the rest.
+
+  @Test
+  fun `a windowed recording lands at its offset and leaves steps outside the window untouched`() {
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("newTapPay")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
+      existing = existing,
+      recordedItems = recorded,
+      classifier = "android",
+      selectedDeviceConfiguration = null,
+      stepWindow = 2..2,
+    )
+
+    assertEquals(listOf("Open the cart", "Review", "Pay"), merged.trail.map { it.step })
+    // Only the windowed step took the new recording.
+    assertEquals(listOf("newTapPay"), merged.trail[2].recordings["android"]?.map { it.name })
+    // The steps this run never reached keep the recordings an earlier full run left there. Under an
+    // unwindowed merge these would both be stripped, which is the corruption the window prevents.
+    assertEquals(listOf("oldTapCart"), merged.trail[0].recordings["android"]?.map { it.name })
+    assertEquals(listOf("oldTapReview"), merged.trail[1].recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `a windowed recording leaves another classifier's legs alone inside the window too`() {
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("aCart")), "ios" to listOf(tool("iCart")))),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("aPay")), "ios" to listOf(tool("iPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("aPay2")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..1)
+
+    assertEquals(listOf("aPay2"), merged.trail[1].recordings["android"]?.map { it.name })
+    assertEquals(listOf("iPay"), merged.trail[1].recordings["ios"]?.map { it.name })
+    assertEquals(listOf("iCart"), merged.trail[0].recordings["ios"]?.map { it.name })
+  }
+
+  @Test
+  fun `a windowed recording keeps the trailhead's recording for the same classifier`() {
+    // A partial run skips the trailhead by design (sliceTrail drops it), so the merge must not treat
+    // "this recording had no trailhead" as "this device no longer has a trailhead tool".
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("signIn")))),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("oldTapCart")))),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("oldTapPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("newTapPay")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..1)
+
+    assertEquals(listOf("signIn"), merged.trailhead?.recordings?.get("android")?.map { it.name })
+  }
+
+  @Test
+  fun `an unwindowed merge still strips this classifier from every step`() {
+    // The window is opt-in: the ordinary whole-trail save-back keeps replace-per-classifier.
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Open the cart", tool("newTapCart")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android")
+
+    assertEquals(listOf("newTapCart"), merged.trail[0].recordings["android"]?.map { it.name })
+    assertNull(merged.trail[1].recordings["android"])
+    assertNull(merged.trail[2].recordings["android"])
+  }
+
+  @Test
+  fun `a window covering more steps than the recording produced is rejected`() {
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Review", tool("tapReview")))),
+    )
+
+    // One recorded step against a two-step window: aligning it would leave step 3 stripped and
+    // silently shift what the user sees. Refused instead.
+    assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..2)
+    }
+  }
+
+  @Test
+  fun `a window naming steps the trail does not have is rejected`() {
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("tapPay")))),
+    )
+
+    assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 3..3)
+    }
+  }
+
+  @Test
+  fun `a window that covers no steps is rejected`() {
+    // An inverted window is in bounds and matches a zero-step recording's count, so without its own
+    // guard it would merge nothing into the steps and report a successful merge.
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(v1Config(driver = null, id = "app/checkout", target = "app"))
+
+    assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..0)
+    }
+  }
+
+  @Test
+  fun `a windowed recording carrying a trailhead is rejected rather than replacing one outside the window`() {
+    // The trailhead is outside every window. A window that also overlaid a recorded trailhead could
+    // delete the existing one, which is the exact guarantee a window exists to make impossible.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("signIn")))),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("oldTapCart")))),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("oldTapPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.TrailheadTrailItem(TrailheadDefinition(step = "Sign in again", tools = listOf(tool("newSignIn")))),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("newTapPay")))),
+    )
+
+    assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..1)
+    }
+  }
+
+  @Test
+  fun `a windowed recording carrying a multi-tool trailhead is rejected for its trailhead`() {
+    // A window's first step is the step it named, not the trail's step 1, so relocating trailhead
+    // tools into it would fold a bootstrap into an unrelated step's recording. The trailhead guard
+    // already refuses the whole recording — this pins that the narrowing runs behind it, so the
+    // caller is told about the trailhead rather than about a step count the narrowing changed.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("signIn")))),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("oldTapCart")))),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("oldTapPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(step = "Sign in", tools = listOf(tool("launch"), tool("settle"), tool("signIn"))),
+      ),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("newTapPay")))),
+    )
+
+    val failure = assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..1)
+    }
+    assertTrue(failure.message!!.contains("recorded trailhead"), "message named the wrong guard: ${failure.message}")
+  }
+
+  @Test
+  fun `a windowed trailhead-only recording is refused for the steps it did not record`() {
+    // The narrowing must not manufacture a step for a window to align: relocating these tools would
+    // invent one placeholder step, which MATCHES a one-step window's count and buries the real
+    // problem — this run recorded no step at all — under a message about the trailhead.
+    val existing = threeStepAndroidTrail()
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(step = "Sign in", tools = listOf(tool("launch"), tool("signIn"))),
+      ),
+    )
+
+    val failure = assertFailsWith<IllegalArgumentException> {
+      UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android", selectedDeviceConfiguration = null, stepWindow = 1..1)
+    }
+    assertTrue(
+      failure.message!!.contains("recorded 0 step(s)"),
+      "the window mismatch is what the user has to act on: ${failure.message}",
+    )
+  }
+
+  @Test
+  fun `a multi-tool trailhead keeps only its first tool when step 1 holds no recording`() {
+    // recordable:false is "always ask the LLM", and the format makes it mutually exclusive with a
+    // recording — so the relocated tools are dropped there along with the step's own. What must NOT
+    // happen is the trailhead losing its tool too: keeping the first is what leaves the run with a
+    // deterministic step 0 at all, and the rest of the trail with its recordings.
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordable = false),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("oldTapPay")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(step = "Sign in", tools = listOf(tool("launch"), tool("settle"), tool("signIn"))),
+      ),
+      TrailYamlItem.PromptsTrailItem(
+        listOf(directionStep("Open the cart"), directionStep("Pay", tool("newTapPay"))),
+      ),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android")
+
+    assertEquals(listOf("launch"), merged.trailhead?.recordings?.get("android")?.map { it.name })
+    // The author's always-LLM intent survives: no recording lands on step 1, relocated or not.
+    assertNull(merged.trail[0].recordings["android"])
+    assertFalse(merged.trail[0].recordable)
+    assertEquals(listOf("newTapPay"), merged.trail[1].recordings["android"]?.map { it.name })
+  }
+
+  @Test
+  fun `a multi-tool trailhead relocates into a recordable step 1 ahead of its own tools`() {
+    val existing = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("oldTapCart")))),
+      ),
+    )
+    val recorded = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.TrailheadTrailItem(
+        TrailheadDefinition(step = "Sign in", tools = listOf(tool("launch"), tool("settle"), tool("signIn"))),
+      ),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Open the cart", tool("newTapCart")))),
+    )
+
+    val merged = UnifiedTrailAdapter.mergeRecordedClassifier(existing, recorded, "android")
+
+    assertEquals(listOf("launch"), merged.trailhead?.recordings?.get("android")?.map { it.name })
+    // Recorded order across the boundary: the trailhead's tool, then the rest, then step 1's own.
+    assertEquals(
+      listOf("settle", "signIn", "newTapCart"),
+      merged.trail[0].recordings["android"]?.map { it.name },
+    )
+  }
+
+  @Test
+  fun `recordedStepCount counts what the merge will align`() {
+    val twoSteps = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.PromptsTrailItem(listOf(directionStep("Open the cart", tool("a")), directionStep("Pay", tool("b")))),
+    )
+    assertEquals(2, UnifiedTrailAdapter.recordedStepCount(twoSteps))
+
+    // Tools recorded outside any objective are folded into the first step, so they never take an
+    // index of their own.
+    val steplessOnly = listOf(
+      v1Config(driver = null, id = "app/checkout", target = "app"),
+      TrailYamlItem.ToolTrailItem(listOf(tool("a"), tool("b"))),
+    )
+    assertEquals(1, UnifiedTrailAdapter.recordedStepCount(steplessOnly))
+
+    val steplessPlusSteps = steplessOnly + TrailYamlItem.PromptsTrailItem(listOf(directionStep("Pay", tool("c"))))
+    assertEquals(1, UnifiedTrailAdapter.recordedStepCount(steplessPlusSteps))
+
+    assertEquals(0, UnifiedTrailAdapter.recordedStepCount(listOf(v1Config(null, null, null))))
+  }
+
+  @Test
+  fun `sliceTrail keeps the selected steps, drops the trailhead and marks the title partial`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app", title = "Checkout"),
+      trailhead = UnifiedTrailStep(step = "Sign in", recordings = mapOf("android" to listOf(tool("signIn")))),
+      trail = listOf(
+        UnifiedTrailStep(step = "Open the cart"),
+        UnifiedTrailStep(step = "Review"),
+        UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("tapPay")))),
+      ),
+    )
+
+    val slice = UnifiedTrailAdapter.sliceTrail(unified, 1, 2)
+
+    assertEquals(listOf("Review", "Pay"), slice?.trail?.map { it.step })
+    // Dropped on purpose: a partial run starts from whatever is on the device's screen.
+    assertNull(slice?.trailhead)
+    assertEquals("Partial: Checkout (2-3)", slice?.config?.title)
+    // Config is otherwise carried over so the slice resolves the same target and legs.
+    assertEquals("app", slice?.config?.target)
+    assertEquals(listOf("tapPay"), slice?.trail?.get(1)?.recordings?.get("android")?.map { it.name })
+
+    assertEquals("Partial: Checkout (3)", UnifiedTrailAdapter.sliceTrail(unified, 2, 2)?.config?.title)
+  }
+
+  @Test
+  fun `sliceTrail refuses a range outside the trail`() {
+    val unified = UnifiedTrail(
+      config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+      trail = listOf(UnifiedTrailStep(step = "Open the cart")),
+    )
+
+    assertNull(UnifiedTrailAdapter.sliceTrail(unified, 0, 1))
+    assertNull(UnifiedTrailAdapter.sliceTrail(unified, -1, 0))
+    assertNull(UnifiedTrailAdapter.sliceTrail(unified, 1, 0))
+  }
+
+  /** Three steps, all recorded for `android` by an earlier full run. */
+  private fun threeStepAndroidTrail() = UnifiedTrail(
+    config = UnifiedTrailConfig(id = "app/checkout", target = "app"),
+    trail = listOf(
+      UnifiedTrailStep(step = "Open the cart", recordings = mapOf("android" to listOf(tool("oldTapCart")))),
+      UnifiedTrailStep(step = "Review", recordings = mapOf("android" to listOf(tool("oldTapReview")))),
+      UnifiedTrailStep(step = "Pay", recordings = mapOf("android" to listOf(tool("oldTapPay")))),
+    ),
+  )
+
   private fun v1Config(driver: String?, id: String?, target: String?) =
     TrailYamlItem.ConfigTrailItem(TrailConfig(id = id, target = target, driver = driver))
 

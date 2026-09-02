@@ -18,9 +18,25 @@ import kotlin.reflect.KClass
  *   is [isRecordable].
  * @property isRecordable Whether this tool can appear in trail recordings. Set to false for
  *   wrapper tools that delegate to more precise tools.
- * @property requiresHost Whether this tool requires host-side execution (e.g., ADB commands,
- *   USB hardware access like cbot). Tools with requiresHost=true are excluded from on-device
- *   agents and can only run from a host JVM process.
+ * @property requiresHost **The tool cannot run anywhere but a host machine.** Reserved for
+ *   low-level framework plumbing that has no on-device meaning at all: forking a subprocess
+ *   (`exec`, `runCommand`), holding a second bound device (`switchDevice`), reading a registry only
+ *   the host populates (`assertWaypoint`). Setting it makes the host dispatch forks
+ *   (`HostOnDeviceRpcTrailblazeAgent`, `HostAccessibilityRpcClient`,
+ *   `TrailblazeMcpBridgeImpl.resolveToolDispatchRoute`) keep the call host-side, and for a
+ *   *scripted* tool it additionally drops the tool at on-device registration
+ *   (`TrailblazeToolMeta`/`QuickJsToolMeta.shouldRegister`, reading `trailblaze/requiresHost` out of
+ *   a `*.tool.yaml` or a TS `_meta` block — never this annotation).
+ *
+ *   **Do not copy this onto a tool that merely wants to skip the device driver.** That is a
+ *   different, much more common requirement, and its spelling is
+ *   `: HostLocalExecutableTrailblazeTool` — "execute in whichever JVM runs the agent loop", which is
+ *   the host daemon locally and the on-device runner in CI. The two are orthogonal, and conflating
+ *   them has a concrete cost: a tool marked host-only that did not need to be is invisible to every
+ *   on-device session. A downstream login helper documents that failure — as a host-only scripted
+ *   tool it dropped at registration and every CI trail using it died at step one with "no tool
+ *   registered with that name". A host-only tool should declare BOTH: this flag for the machine
+ *   requirement, the marker for the dispatch.
  * @property isVerification Whether this tool is read-only and self-validates a condition (e.g.,
  *   `assertVisible`, `web_verifyTextVisible`). Verification tools never mutate the device, and
  *   their successful execution is the assertion verdict. Used by `blaze(hint=VERIFY)` to decide

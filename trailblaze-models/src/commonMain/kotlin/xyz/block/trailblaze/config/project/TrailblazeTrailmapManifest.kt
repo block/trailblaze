@@ -298,6 +298,13 @@ data class TrailmapTargetConfig(
    * [toAppTargetYamlConfig] so the host runner reads it off the resolved target at run time.
    */
   @SerialName("electron") val electron: xyz.block.trailblaze.yaml.ElectronAppConfig? = null,
+  /**
+   * The in-process test APK for an `ANDROID_TEST` run against this target — see
+   * [AppTargetYamlConfig.androidTest]. Target-level for the same reason as [electron]: the
+   * harness is a property of the app under test, not of an individual trail. Threaded onto the
+   * resolved [AppTargetYamlConfig] by [toAppTargetYamlConfig].
+   */
+  @SerialName("android_test") val androidTest: xyz.block.trailblaze.config.AndroidTestInstrumentationConfig? = null,
 ) {
   fun toAppTargetYamlConfig(
     defaultId: String,
@@ -313,5 +320,6 @@ data class TrailmapTargetConfig(
       tools = resolvedTools.takeIf { it.isNotEmpty() },
       icon = icon,
       electron = electron,
+      androidTest = androidTest,
     )
 }

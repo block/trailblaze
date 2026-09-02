@@ -551,6 +551,15 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
         if (d.isHeading) parts += "isHeading"
         if (d.isClickable) parts += "isClickable"
       }
+      is DriverNodeDetail.AndroidView -> {
+        d.className?.substringAfterLast('.')?.let { parts += it }
+        d.text?.takeIf { it.isNotBlank() }?.let { parts += "text=\"$it\"" }
+        d.contentDescription?.takeIf { it.isNotBlank() }?.let { parts += "desc=\"$it\"" }
+        d.resourceId?.let { parts += "id=\"$it\"" }
+        d.tag?.takeIf { it.isNotBlank() }?.let { parts += "tag=\"$it\"" }
+        if (d.isSelected) parts += "isSelected"
+        if (d.isClickable) parts += "isClickable"
+      }
       else -> parts += d::class.simpleName.orEmpty()
     }
     return if (parts.isEmpty()) "(no identifying properties)" else parts.joinToString(" ")

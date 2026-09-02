@@ -19,6 +19,7 @@ import java.net.URI
 import java.util.UUID
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
@@ -32,9 +33,15 @@ import java.util.function.Consumer
  *
  * Each captured exchange emits two events (REQUEST_START + RESPONSE_END) sharing
  * an [NetworkEvent.id]; failures emit one (FAILED) instead of RESPONSE_END.
- * Events are appended one-per-line to `<session-dir>/network.ndjson` via a
- * long-lived [BufferedWriter] so we don't pay an open/write/close syscall per
- * event on the Playwright thread. Bodies larger than [INLINE_BODY_LIMIT_BYTES]
+ * Events are appended one-per-line to `<session-dir>/network.ndjson`. The
+ * listener thread does NO disk I/O: it reads only local, non-blocking accessors
+ * off the Playwright objects and hands a [PendingWrite] to [queue]; a dedicated
+ * background [drainer] thread does JSON serialization, body persistence, and
+ * the NDJSON write+flush (same design as
+ * [xyz.block.trailblaze.playwright.console.WebConsoleCapture], and the same
+ * reason: Playwright dispatches every page event on a single thread, so a
+ * synchronized write+flush per event on that thread serializes page operations
+ * behind disk I/O). Bodies larger than [INLINE_BODY_LIMIT_BYTES]
  * (or non-text by content-type) are written to `<session-dir>/bodies/` and
  * referenced via [BodyRef.blobPath]; payloads beyond [MAX_BLOB_BYTES] are
  * truncated and flagged with [BodyRef.truncated].
@@ -78,8 +85,35 @@ class WebNetworkCapture private constructor(
   private val droppedRequestBodies = AtomicInteger(0)
   private val droppedResponseBodies = AtomicInteger(0)
   private val droppedWrites = AtomicInteger(0)
+  private val droppedEnqueues = AtomicInteger(0)
+
+  // Events are handed off to this queue on the Playwright dispatcher thread (an O(1),
+  // lock-free, no-I/O enqueue) and drained to disk by [drainer]. See the class kdoc for
+  // why the listener thread must never touch disk. Single consumer thread + FIFO queue
+  // preserves NDJSON line order.
+  private val queue: ConcurrentLinkedQueue<PendingWrite> = ConcurrentLinkedQueue()
+  // Tracked explicitly because ConcurrentLinkedQueue.size is O(n) — calling it per event
+  // on the dispatcher thread (to enforce the cap) would be O(n²).
+  private val queuedCount: AtomicInteger = AtomicInteger(0)
+  private var drainer: Thread? = null
 
   private data class RequestState(val id: String, val startMs: Long)
+
+  /**
+   * A captured event awaiting its drainer-side work. [requestBodyBytes] is read on the
+   * listener thread (a local, in-memory accessor) and already clamped to
+   * [MAX_BLOB_BYTES] — a queue of up to [MAX_QUEUED_EVENTS] entries must not be able to
+   * pin more than that per entry, and persistence would discard the excess anyway.
+   * [requestBodyOriginalSize] carries the pre-clamp length so the renderer still reports
+   * the true magnitude. Persisting ([persistBody] — potentially a blob file write) stays
+   * on the drainer with the rest of the disk I/O.
+   */
+  private class PendingWrite(
+    val event: NetworkEvent,
+    val requestBodyBytes: ByteArray? = null,
+    val requestBodyContentType: String? = null,
+    val requestBodyOriginalSize: Long = requestBodyBytes?.size?.toLong() ?: 0L,
+  )
 
   /** True iff this capture was constructed for the given session. */
   internal fun matches(otherSessionId: String, otherSessionDir: File): Boolean =
@@ -107,6 +141,12 @@ class WebNetworkCapture private constructor(
       active.set(false)
       throw e
     }
+    // Start the background drainer BEFORE attaching listeners so no queued event waits
+    // for a consumer. Daemon so it never blocks JVM exit if a stop() is somehow missed.
+    drainer = Thread({ runDrainLoop() }, "web-network-capture").apply {
+      isDaemon = true
+      start()
+    }
     ctx.onRequest(onRequestListener)
     ctx.onResponse(onResponseListener)
     ctx.onRequestFailed(onRequestFailedListener)
@@ -118,8 +158,22 @@ class WebNetworkCapture private constructor(
     ctx.offRequest(onRequestListener)
     ctx.offResponse(onResponseListener)
     ctx.offRequestFailed(onRequestFailedListener)
+    // Wake the drainer out of its idle sleep and let it flush the queued tail — its exit
+    // condition (`active == false && queue empty`) drives the final drain — then join briefly.
+    drainer?.let { t ->
+      t.interrupt()
+      runCatching { t.join(DRAIN_JOIN_TIMEOUT_MS) }
+    }
+    drainer = null
+    // Safety net: drain any straggler the drainer didn't reach (e.g. join timed out), then close.
     synchronized(ndjsonLock) {
-      runCatching { ndjsonWriter?.close() }
+      val w = ndjsonWriter
+      if (w != null) {
+        flushCounting(w, drainInto(w), "flushTail")
+        // close() re-attempts the flush, so after a failed one this throws too — already
+        // counted above, but log it so a broken close never passes for a clean shutdown.
+        runCatching { w.close() }.onFailure { logSwallowed("closeWriter", it) }
+      }
       ndjsonWriter = null
     }
     // End any still-tracked in-flight ids so a session boundary doesn't pin
@@ -146,13 +200,15 @@ class WebNetworkCapture private constructor(
     // re-entrantly when the parent Playwright API call (e.g. waitForFunction)
     // is what's holding the dispatcher.
     val headers = redactRequestHeaders(safeHeaders { request.headers() })
-    // Body capture is the failure-prone step (Playwright body access, disk I/O
-    // for blob write). On failure, drop the body but keep the event — the
-    // renderer can still pair REQUEST_START with RESPONSE_END.
-    val bodyRef = runCatching { buildRequestBodyRef(id, request, headers["content-type"]) }
+    // Read the raw body bytes here — `postDataBuffer()` is non-blocking because
+    // Playwright already holds those bytes in memory — but leave persistence
+    // (potentially a blob file write) to the drainer. On failure, drop the body
+    // but keep the event — the renderer can still pair REQUEST_START with
+    // RESPONSE_END.
+    val bodyBytes = runCatching { extractRequestBodyBytes(request) }
       .onFailure {
         droppedRequestBodies.incrementAndGet()
-        logSwallowed("buildRequestBody", it)
+        logSwallowed("readRequestBody", it)
       }
       .getOrNull()
     val event = NetworkEvent(
@@ -164,7 +220,6 @@ class WebNetworkCapture private constructor(
       url = request.url(),
       urlPath = pathOf(request.url()),
       requestHeaders = headers,
-      requestBodyRef = bodyRef,
       source = Source.PLAYWRIGHT_WEB,
     )
     // Insert the entry only after we've committed to writing the event so a
@@ -175,7 +230,14 @@ class WebNetworkCapture private constructor(
     // observe network activity. Done after we've committed to writing the
     // event so a transient build-event throw can't poison tracker state.
     tracker?.onRequestStart(id, request.url())
-    tryWriteEvent(event)
+    enqueue(
+      PendingWrite(
+        event = event,
+        requestBodyBytes = bodyBytes?.let { clampBodyForQueue(it) },
+        requestBodyContentType = headers["content-type"],
+        requestBodyOriginalSize = bodyBytes?.size?.toLong() ?: 0L,
+      ),
+    )
   }
 
   private fun handleResponse(response: Response) {
@@ -207,7 +269,7 @@ class WebNetworkCapture private constructor(
       responseBodyRef = bodyRef,
       source = Source.PLAYWRIGHT_WEB,
     )
-    tryWriteEvent(event)
+    enqueue(PendingWrite(event))
   }
 
   private fun handleFailed(request: Request) {
@@ -226,39 +288,168 @@ class WebNetworkCapture private constructor(
       durationMs = nowMs - state.startMs,
       source = Source.PLAYWRIGHT_WEB,
     )
-    tryWriteEvent(event)
+    enqueue(PendingWrite(event))
   }
 
-  private fun tryWriteEvent(event: NetworkEvent) {
-    runCatching { writeEvent(event) }
-      .onFailure {
-        droppedWrites.incrementAndGet()
-        logSwallowed("writeEvent", it)
+  /**
+   * Runs on the Playwright dispatcher thread — an O(1) handoff, no disk I/O. The bounded
+   * queue caps worst-case memory if the producer ever outruns the drainer; excess is
+   * dropped and counted, never blocks the dispatcher.
+   */
+  private fun enqueue(pending: PendingWrite) {
+    // Nothing may enter the queue once capture is stopped: [detach] closes the writer, so a
+    // late arrival could never be written, and leaving it queued strands the drainer on a
+    // non-empty queue it can't drain. Playwright can call a listener that passed the
+    // `active` check at the top of the handler while detach runs, so the check belongs here
+    // too — the pre-queue writer re-checked `active` for the same reason.
+    if (!active.get()) {
+      droppedEnqueues.incrementAndGet()
+      return
+    }
+    // Claim the slot BEFORE publishing. Incrementing after `queue.add` lets the drainer
+    // poll the entry and decrement in between, driving the counter negative and leaving
+    // the cap unenforceable.
+    if (queuedCount.incrementAndGet() > MAX_QUEUED_EVENTS) {
+      queuedCount.decrementAndGet()
+      droppedEnqueues.incrementAndGet()
+      return
+    }
+    queue.add(pending)
+    // Re-read AFTER publishing, because the check above is not atomic with the add: detach
+    // can flip `active`, drain an empty queue, close the writer and retire the drainer in
+    // that window, leaving this entry queued forever — pinning its body with no drop
+    // diagnostic. Taking the admission through `ndjsonLock` instead would put the
+    // dispatcher thread behind disk I/O, which is the whole reason this queue exists.
+    if (!active.get()) {
+      // The drainer may have taken it first, in which case it WAS written — only account
+      // for an entry we actually reclaim.
+      if (queue.remove(pending)) {
+        queuedCount.decrementAndGet()
+        droppedEnqueues.incrementAndGet()
       }
-  }
-
-  private fun writeEvent(event: NetworkEvent) {
-    val line = JSON.encodeToString(NetworkEvent.serializer(), event)
-    synchronized(ndjsonLock) {
-      // Re-check active under the lock so a handler in flight when stop() ran
-      // can't write past detach. The lock also guards ndjsonWriter mutation.
-      if (!active.get()) return
-      val w = ndjsonWriter ?: return
-      w.write(line)
-      w.newLine()
-      // Flush per event so a JVM crash mid-session leaves a complete prefix —
-      // partial trailing lines are skipped + logged by the read tool.
-      w.flush()
     }
   }
 
-  internal fun buildRequestBodyRef(eventId: String, request: Request, contentType: String?): BodyRef? {
+  /**
+   * Background drain loop (the only thread that touches the writer outside [detach]'s
+   * safety net). Drains the queue in batches and flushes after each batch, so a JVM crash
+   * mid-session leaves a complete prefix — partial trailing lines are skipped + logged by
+   * the read tool. Sleeps when idle; [detach] interrupts it for the final tail flush.
+   * Exits once capture is stopped AND the queue is empty — or as soon as the writer is
+   * gone, since nothing queued can be written after that and looping would spin forever.
+   */
+  private fun runDrainLoop() {
+    while (active.get() || queue.isNotEmpty()) {
+      val drained = synchronized(ndjsonLock) {
+        val w = ndjsonWriter ?: return@synchronized null
+        val batch = drainInto(w)
+        flushCounting(w, batch, "flushEvents")
+        batch.drained
+      } ?: break
+      if (drained == 0) {
+        try {
+          Thread.sleep(DRAIN_INTERVAL_MS)
+        } catch (_: InterruptedException) {
+          // Woken by detach() for the final drain — loop re-checks the exit condition.
+        }
+      }
+    }
+    // Anything still queued once the writer is gone can never be written. Account for it so
+    // the stop summary reports the loss instead of implying a clean session. A no-op on the
+    // ordinary exit, where the queue is already empty.
+    while (queue.poll() != null) {
+      queuedCount.decrementAndGet()
+      droppedWrites.incrementAndGet()
+    }
+  }
+
+  /**
+   * [drained] is every entry removed from the queue, [buffered] only the ones whose line
+   * made it into the writer's buffer — and therefore what a failing flush loses.
+   */
+  private class DrainBatch(val drained: Int, val buffered: Int)
+
+  /** Drains all currently-queued events into [w]. Caller holds [ndjsonLock]. */
+  private fun drainInto(w: BufferedWriter): DrainBatch {
+    var drained = 0
+    var buffered = 0
+    while (true) {
+      val pending = queue.poll() ?: break
+      queuedCount.decrementAndGet()
+      drained++
+      runCatching {
+        w.write(toLine(pending))
+        w.newLine()
+      }.onSuccess {
+        buffered++
+      }.onFailure {
+        droppedWrites.incrementAndGet()
+        logSwallowed("writeEvent", it)
+      }
+    }
+    return DrainBatch(drained, buffered)
+  }
+
+  /**
+   * Flushes a drained batch, charging a failure to [droppedWrites].
+   *
+   * A [BufferedWriter] takes writes into memory and only touches the disk on flush, so a
+   * full or read-only filesystem raises here, not in [drainInto] — swallowing it loses the
+   * whole batch while the stop summary still reports zero writes dropped.
+   */
+  private fun flushCounting(w: BufferedWriter, batch: DrainBatch, where: String) {
+    if (batch.buffered == 0) return
+    runCatching { w.flush() }.onFailure {
+      droppedWrites.addAndGet(batch.buffered)
+      logSwallowed(where, it)
+    }
+  }
+
+  /**
+   * Drainer-side completion of a pending event: persist the request body (the disk-I/O
+   * step deliberately deferred off the listener thread) and serialize. A body-persist
+   * failure drops the body but keeps the event.
+   */
+  private fun toLine(pending: PendingWrite): String {
+    val bodyRef = pending.requestBodyBytes?.let { bytes ->
+      runCatching {
+        persistBody(
+          eventId = pending.event.id,
+          bytes = bytes,
+          contentType = pending.requestBodyContentType,
+          prefix = "req",
+          originalSizeBytes = pending.requestBodyOriginalSize,
+        )
+      }
+        .onFailure {
+          droppedRequestBodies.incrementAndGet()
+          logSwallowed("persistRequestBody", it)
+        }
+        .getOrNull()
+    }
+    val event = bodyRef?.let { pending.event.copy(requestBodyRef = it) } ?: pending.event
+    return JSON.encodeToString(NetworkEvent.serializer(), event)
+  }
+
+  /**
+   * Raw request-body bytes via the non-blocking local accessors ([Request.postDataBuffer]
+   * / [Request.postData] — Playwright holds these in memory before sending, no CDP
+   * roundtrip). Null for empty/absent bodies.
+   */
+  internal fun extractRequestBodyBytes(request: Request): ByteArray? {
     val bytes: ByteArray = runCatching { request.postDataBuffer() }.getOrNull()
       ?: runCatching { request.postData()?.toByteArray(Charsets.UTF_8) }.getOrNull()
       ?: return null
-    if (bytes.isEmpty()) return null
-    return persistBody(eventId, bytes, contentType, prefix = "req")
+    return bytes.takeIf { it.isNotEmpty() }
   }
+
+  /**
+   * Clamps a captured body to what persistence would keep. Applied before the bytes enter
+   * the queue: otherwise a burst of multi-MB uploads pins its full size in heap until the
+   * drainer catches up, only for [persistBody] to throw the excess away.
+   */
+  private fun clampBodyForQueue(bytes: ByteArray): ByteArray =
+    if (bytes.size > MAX_BLOB_BYTES) bytes.copyOf(MAX_BLOB_BYTES) else bytes
 
   @Suppress("UNUSED_PARAMETER") // params kept for future opt-in body capture path; see kdoc.
   internal fun buildResponseBodyRef(
@@ -293,18 +484,24 @@ class WebNetworkCapture private constructor(
     return null
   }
 
+  /**
+   * @param originalSizeBytes the body's length BEFORE any upstream clamping, so the
+   *   truncation badge and reported magnitude stay accurate when the caller already
+   *   trimmed the bytes (see `clampBodyForQueue`). Defaults to [bytes]'s own length.
+   */
   internal fun persistBody(
     eventId: String,
     bytes: ByteArray,
     contentType: String?,
     prefix: String,
+    originalSizeBytes: Long = bytes.size.toLong(),
   ): BodyRef {
-    val originalSize = bytes.size.toLong()
-    val truncated = bytes.size > MAX_BLOB_BYTES
+    val originalSize = maxOf(originalSizeBytes, bytes.size.toLong())
+    val truncated = originalSize > MAX_BLOB_BYTES
     // Persist at most MAX_BLOB_BYTES so a single multi-MB asset can't bloat the
     // session bundle. sizeBytes still reports the original Content-Length so the
     // renderer can show the real magnitude alongside the truncation badge.
-    val effective = if (truncated) bytes.copyOf(MAX_BLOB_BYTES) else bytes
+    val effective = if (bytes.size > MAX_BLOB_BYTES) bytes.copyOf(MAX_BLOB_BYTES) else bytes
 
     if (effective.size <= INLINE_BODY_LIMIT_BYTES && isLikelyText(contentType)) {
       return BodyRef(
@@ -367,9 +564,10 @@ class WebNetworkCapture private constructor(
     val req = droppedRequestBodies.get()
     val res = droppedResponseBodies.get()
     val writes = droppedWrites.get()
-    if (req == 0 && res == 0 && writes == 0) return null
+    val enqueues = droppedEnqueues.get()
+    if (req == 0 && res == 0 && writes == 0 && enqueues == 0) return null
     return "WebNetworkCapture stopped for session=$sessionId — " +
-      "dropped: requestBody=$req responseBody=$res writes=$writes"
+      "dropped: requestBody=$req responseBody=$res writes=$writes queueOverflow=$enqueues"
   }
 
   private fun logSwallowed(where: String, t: Throwable) {
@@ -391,6 +589,19 @@ class WebNetworkCapture private constructor(
      * we truncate; we accept that since Playwright doesn't expose a streaming read.
      */
     const val MAX_BLOB_BYTES: Int = 1 * 1024 * 1024
+
+    /** How long the drainer idles between polls when the queue is empty. */
+    private const val DRAIN_INTERVAL_MS: Long = 250L
+
+    /** Max time [detach] waits for the drainer to flush the queued tail before its own safety drain. */
+    private const val DRAIN_JOIN_TIMEOUT_MS: Long = 2_000L
+
+    /**
+     * Soft cap on un-drained queued events. A page flooding requests faster than disk can
+     * drain would otherwise grow this unbounded (each entry can carry up to [MAX_BLOB_BYTES]
+     * of body); beyond the cap we drop + count rather than risk memory pressure.
+     */
+    private const val MAX_QUEUED_EVENTS: Int = 10_000
 
     private val JSON: Json = Json {
       encodeDefaults = false

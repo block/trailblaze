@@ -457,6 +457,7 @@ class ShortcutProposerTest {
         collectionItemRowIndex = 1,
         collectionItemColumnIndex = 2,
       ),
+      androidView = xyz.block.trailblaze.api.DriverNodeMatch.AndroidView(tagRegex = "^tag$"),
       containsChild = TrailblazeNodeSelector(
         androidAccessibility = xyz.block.trailblaze.api.DriverNodeMatch.AndroidAccessibility(textRegex = "^cc$"),
       ),
@@ -497,9 +498,16 @@ class ShortcutProposerTest {
         selectorDescription = "max",
       ),
     )
+    val fpNoAndroidView = ShortcutProposer.fingerprint(
+      ShortcutProposer.ToolBody.TapOnElementBySelector(
+        selector = maximal.copy(androidView = null),
+        selectorDescription = "max",
+      ),
+    )
     assertTrue(fpMax != fpNoDescendants, "dropping containsDescendants must change fp")
     assertTrue(fpMax != fpNoSpatial, "dropping spatial siblings must change fp")
     assertTrue(fpMax != fpNoIndex, "dropping index must change fp")
+    assertTrue(fpMax != fpNoAndroidView, "dropping androidView must change fp")
   }
 
   @Test

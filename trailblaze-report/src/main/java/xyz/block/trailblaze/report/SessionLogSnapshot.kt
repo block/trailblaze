@@ -34,11 +34,17 @@ import xyz.block.trailblaze.util.Console
  *   extractor folds adjacent records into steps (tool groups by traceId, assertion bursts,
  *   objective nesting), so a non-chronological array doesn't just mis-sort the timeline — it
  *   mis-groups it.
+ * - [traceEventsJson] — the session's `trace.json`, the Chrome Trace "X" (Complete) events
+ *   `TrailblazeTracer` recorded in-process, or an empty array when the session has none (older
+ *   sessions, and any run whose trace upload failed with no disk fallback). Unlike the log
+ *   records these carry real instrumentation parentage: each event is a lexically nested
+ *   `trace { }` block on a known (pid, tid), so containment on one thread IS nesting.
  */
 class SessionLogSnapshot(
   val sessionId: SessionId,
   val logs: List<TrailblazeLog>,
   val rawLogsJson: JsonArray,
+  val traceEventsJson: JsonArray = JsonArray(emptyList()),
 ) {
   companion object {
 
@@ -103,7 +109,23 @@ class SessionLogSnapshot(
         sessionId = sessionId,
         logs = typedLogs.sortedBy { it.timestamp },
         rawLogsJson = buildJsonArray { rawRecords.sortedBy { recordTimestamp(it) }.forEach { add(it) } },
+        traceEventsJson = readTraceEvents(sessionDir),
       )
+    }
+
+    /**
+     * The session's `trace.json` as a [JsonArray]. Absent, unreadable, or non-array content all
+     * yield an empty array: the trace is an optional enrichment, and a session with none still
+     * profiles from its log records alone.
+     */
+    private fun readTraceEvents(sessionDir: File): JsonArray {
+      val file = File(sessionDir, "trace.json")
+      if (!file.isFile) return JsonArray(emptyList())
+      return runCatching { RAW_PARSER.parseToJsonElement(file.readText()) as? JsonArray }
+        .getOrElse { e ->
+          Console.log("Warning: could not read trace file ${file.absolutePath}: $e")
+          null
+        } ?: JsonArray(emptyList())
     }
 
     /**

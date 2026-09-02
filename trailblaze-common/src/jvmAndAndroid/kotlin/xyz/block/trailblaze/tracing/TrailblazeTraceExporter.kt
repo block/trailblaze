@@ -18,17 +18,25 @@ object TrailblazeTraceExporter {
    * @param client The log server client to post the trace to.
    * @param isServerAvailable Whether the server is known to be reachable.
    * @param writeToDisk Optional fallback that writes the trace JSON to disk.
+   * @param onDeviceClock Whether these timestamps came from a device's own clock rather than the
+   *   host's. Only the producer knows: every process that records part of a run uploads through the
+   *   same route, so the receiver would otherwise have to guess, and guessing wrong takes a whole
+   *   process's spans off the timeline.
    */
   suspend fun exportAndSave(
     sessionId: SessionId,
     client: TrailblazeLogServerClient,
     isServerAvailable: Boolean,
     writeToDisk: ((traceJson: String) -> Unit)? = null,
+    onDeviceClock: Boolean = false,
   ) {
-    val traceJson = TrailblazeTracer.exportJson()
+    // Drains rather than exporting-then-clearing: a flush keeps the recording's trace id, so a
+    // session that exports more than once files both halves under one trace instead of two
+    // unrelated ones.
+    val traceJson = TrailblazeTracer.traceRecorder.drain()
     try {
       if (isServerAvailable) {
-        val sent = client.sendTrace(sessionId, traceJson)
+        val sent = client.sendTrace(sessionId, traceJson, onDeviceClock)
         if (sent) {
           Console.info("Trace posted to server for session ${sessionId.value}")
         } else {
@@ -45,8 +53,6 @@ object TrailblazeTraceExporter {
       } catch (diskError: Exception) {
         Console.log("Failed to write trace to disk: ${diskError.message}")
       }
-    } finally {
-      TrailblazeTracer.clear()
     }
   }
 }

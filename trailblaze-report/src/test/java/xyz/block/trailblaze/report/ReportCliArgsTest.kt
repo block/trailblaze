@@ -17,8 +17,6 @@ class ReportCliArgsTest {
    */
   private val ciArgs = arrayOf(
     "/logs",
-    "--no-wasm-report",
-    "--use-relative-image-urls",
     "--link-images",
     "--triage",
   )
@@ -50,16 +48,20 @@ class ReportCliArgsTest {
   @Test
   fun `html report keeps its own flags and loses the test-results-only ones`() {
     assertEquals(
-      listOf("/logs", "--no-wasm-report", "--use-relative-image-urls", "--link-images"),
+      listOf("/logs", "--link-images"),
       ReportCliArgs.forHtmlReport(ciArgs).toList(),
     )
   }
 
   @Test
-  fun `retired dedup flag reaches neither command`() {
-    val args = arrayOf("/logs", "--dedup")
-    assertEquals(listOf("/logs"), ReportCliArgs.forHtmlReport(args).toList())
-    assertEquals(listOf("/logs"), ReportCliArgs.forTestResults(args).toList())
+  fun `retired flags reach neither command`() {
+    // A pipeline in another repo can still be passing these; neither command declares them, and an
+    // unknown `--` flag aborts the run rather than being ignored.
+    listOf("--dedup", "--no-wasm-report", "--use-relative-image-urls").forEach { retired ->
+      val args = arrayOf("/logs", retired)
+      assertEquals(listOf("/logs"), ReportCliArgs.forHtmlReport(args).toList(), retired)
+      assertEquals(listOf("/logs"), ReportCliArgs.forTestResults(args).toList(), retired)
+    }
   }
 
   @Test

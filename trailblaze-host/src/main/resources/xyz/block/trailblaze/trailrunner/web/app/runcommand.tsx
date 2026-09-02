@@ -26,7 +26,7 @@ function buildRunCommand(cfg) {
   if ((cfg.llm || '').trim()) parts.push('--llm', shQuote(cfg.llm.trim()));
   if (cfg.verbose) parts.push('--verbose');
   if (cfg.devicePlatform === 'web' && !cfg.headless) parts.push('--no-headless');
-  if (!cfg.captureVideo) parts.push('--no-capture-video');
+  if (cfg.captureVideo) parts.push('--capture-video');
   if (cfg.captureLogcat) parts.push('--capture-logcat');
   if (cfg.captureNetwork) parts.push('--capture-network');
   if (cfg.captureIosLogs) parts.push('--capture-ios-logs');

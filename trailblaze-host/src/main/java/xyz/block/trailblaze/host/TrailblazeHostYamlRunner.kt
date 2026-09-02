@@ -1,7 +1,8 @@
 package xyz.block.trailblaze.host
 
 import java.io.File
-import java.util.UUID
+import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.NonCancellable
@@ -18,9 +19,6 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.KoogRunnableAgent
-import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
-import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
-import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcTrailblazeAgent
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -28,23 +26,17 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
+import xyz.block.trailblaze.host.golden.SnapshotBaselineSource
 import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
-import xyz.block.trailblaze.host.revyl.RevylTrailblazeAgent
-import xyz.block.trailblaze.revyl.RevylCliClient
-import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
-import xyz.block.trailblaze.revyl.RevylScreenState
-import xyz.block.trailblaze.revyl.RevylSession
-import xyz.block.trailblaze.host.rules.BaseComposeTest
+import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
+import xyz.block.trailblaze.host.driver.HostRunDeps
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
-import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
-import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.MultiDeviceTargetBinding
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
@@ -61,46 +53,42 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.cli.CliConfigHelper
+import xyz.block.trailblaze.host.devices.HostDeviceProfile
 import xyz.block.trailblaze.host.devices.HostProbedDeviceClassifiers
-import xyz.block.trailblaze.config.InlineScriptToolConfig
-import xyz.block.trailblaze.config.ScriptedToolRuntime
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.toSessionToolRepo
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
-import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.HostScriptedToolLauncher
 import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
-import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
-import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.renderMultiDevicePromptSection
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.ResolvedToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
-import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
-import xyz.block.trailblaze.yaml.ElectronAppConfig
 import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.report.otel.SessionOtelExport
+import xyz.block.trailblaze.report.trace.SessionTraceFile
 
 object TrailblazeHostYamlRunner {
 
@@ -126,67 +114,6 @@ object TrailblazeHostYamlRunner {
   }
 
   /**
-   * How [runPlaywrightNativeYaml] should treat the cached Playwright-native test
-   * for a given device when a new run-yaml request arrives. Sealed so the three
-   * states are exhaustive at the call site and the impossible "reuse the test
-   * AND give back its browser" combination can't be constructed.
-   *
-   * See [resolvePlaywrightCacheReuse] for the decision logic.
-   */
-  internal sealed interface PlaywrightCacheResolution {
-    /** Nothing cached — construct a fresh test around a fresh browser. */
-    data object NoCachedTest : PlaywrightCacheResolution
-
-    /** Cached test's model matches the request — use it as-is. */
-    data object ReuseCachedTest : PlaywrightCacheResolution
-
-    /**
-     * Cached test's model doesn't match the request (e.g. user ran
-     * `trailblaze config llm <provider>` after the daemon cached the initial
-     * test). Discard the test but keep [browser] alive so URL / cookies /
-     * in-flight forms survive the rebuild.
-     */
-    data class RebuildWithCachedBrowser(val browser: PlaywrightPageManager) :
-      PlaywrightCacheResolution
-  }
-
-  /**
-   * Decides how to handle a cached [BasePlaywrightNativeTest] for an incoming
-   * run-yaml request. Pure function — no side effects, exhaustively covered by
-   * `PlaywrightCacheReuseTest`.
-   */
-  internal fun resolvePlaywrightCacheReuse(
-    cachedModel: TrailblazeLlmModel?,
-    cachedBrowserManager: PlaywrightPageManager?,
-    cachedMaxLlmCalls: Int?,
-    requestedModel: TrailblazeLlmModel,
-    requestedMaxLlmCalls: Int?,
-  ): PlaywrightCacheResolution = when {
-    cachedModel == null -> PlaywrightCacheResolution.NoCachedTest
-    cachedModel == requestedModel && cachedMaxLlmCalls == requestedMaxLlmCalls ->
-      PlaywrightCacheResolution.ReuseCachedTest
-    cachedBrowserManager != null ->
-      // Either the model OR the max-llm-calls cap changed. Both are baked into the lazy
-      // TrailblazeRunner inside the cached test, so the test instance has to be rebuilt;
-      // we keep the cached browser to avoid relaunching Chromium every time.
-      PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)
-    // Defensive: cached model exists but no browser to reuse — treat as no cache.
-    // In practice cachedBrowserManager is always non-null when cachedModel is, but
-    // pinning this branch keeps the function total instead of relying on caller invariants.
-    else -> PlaywrightCacheResolution.NoCachedTest
-  }
-
-  /**
-   * Resolved Playwright tool classes used for recording generation. Called from both the Native
-   * and Electron paths; each passes its own driver type so the resolution is explicit at the
-   * call site. Today the two drivers resolve to identical classes (pinned by
-   * `WebToolSetCatalogTest`), but the parameter keeps this correct if the YAMLs ever diverge.
-   */
-  private fun resolveWebToolClasses(driverType: TrailblazeDriverType) = TrailblazeToolSetCatalog
-    .resolveForDriver(driverType, WebToolSetIds.ALL)
-    .toolClasses
-
-  /**
    * Exports trace data after a session ends. Tries posting to the server first;
    * falls back to writing directly to the session logs directory on disk.
    *
@@ -196,7 +123,7 @@ object TrailblazeHostYamlRunner {
    */
   private suspend fun exportAndSaveTrace(
     sessionId: SessionId,
-    loggingRule: TrailblazeLoggingRule,
+    loggingRule: HostTrailblazeLoggingRule,
     noLogging: Boolean = false,
   ) {
     if (noLogging) return
@@ -206,12 +133,13 @@ object TrailblazeHostYamlRunner {
         client = loggingRule.trailblazeLogServerClient,
         isServerAvailable = true, // Host runner always has a server running
         writeToDisk = { traceJson ->
-          val gitRoot = GitUtils.getGitRootViaCommand()
-          val logsDir = if (gitRoot != null) File(gitRoot, "logs")
-            else File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), "logs")
-          val sessionDir = File(logsDir, sessionId.value)
+          // The rule's own repo, not a re-derived `<git root>/logs`: this fallback writes the
+          // trace for a session whose logs the rule already put in its configured directory, so
+          // deriving a second location here filed trace.json away from its own session.
+          val sessionDir = loggingRule.logsRepo.getSessionDir(sessionId)
           sessionDir.mkdirs()
-          File(sessionDir, "trace.json").writeText(traceJson)
+          SessionTraceFile.merge(File(sessionDir, SessionTraceFile.FILE_NAME), traceJson)
+          SessionOtelExport.pushIfConfigured(sessionId.value, traceJson)
         },
       )
     }
@@ -276,7 +204,7 @@ object TrailblazeHostYamlRunner {
    * coroutine is cancelled (trail timeout, user abort) — otherwise subprocess + stderr-file
    * handles leak.
    */
-  private suspend fun launchSubprocessMcpServersIfAny(
+  internal suspend fun launchSubprocessMcpServersIfAny(
     targetTestApp: TrailblazeHostAppTarget?,
     config: TrailblazeConfig,
     sessionId: SessionId,
@@ -307,8 +235,8 @@ object TrailblazeHostYamlRunner {
    * Each driver-specific method handles its own setup and passes execution
    * logic via [execute], eliminating duplicated try-catch-finally blocks.
    */
-  private suspend fun executeTrailSession(
-    loggingRule: TrailblazeLoggingRule,
+  internal suspend fun executeTrailSession(
+    loggingRule: HostTrailblazeLoggingRule,
     overrideSessionId: SessionId?,
     testName: String,
     deviceLabel: String,
@@ -326,6 +254,19 @@ object TrailblazeHostYamlRunner {
       sessionManager.startSession(testName)
     }
     loggingRule.setSession(session)
+
+    // A new session is a new recording. The JUnit path resets in `beforeTestExecution`; this path —
+    // the CLI and the daemon — had no equivalent, and relied on the trace exporter clearing after it
+    // wrote. That coupled "flushed" to "finished", so a mid-run flush renamed the trace. Resetting
+    // here is the boundary that actually exists: without it a long-lived daemon files every run it
+    // ever serves under one trace id. Conditional, because the recorder is process-wide and this
+    // daemon runs trails concurrently — see [HostRunTraceRecording].
+    if (!HostRunTraceRecording.begin()) {
+      Console.log(
+        "📊 Another run is already recording — $deviceLabel shares its trace. " +
+          "Its spans land in both sessions' trace.json.",
+      )
+    }
 
     var executionFailure: Throwable? = null
     return try {
@@ -365,6 +306,8 @@ object TrailblazeHostYamlRunner {
       throw t
     } finally {
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
+      // After the export, so the count still reflects this run while its spans are being drained.
+      HostRunTraceRecording.end()
       loggingRule.setSession(null)
       try {
         cleanup()
@@ -386,1031 +329,46 @@ object TrailblazeHostYamlRunner {
    *
    * Returns a [HostYamlRunResult] so the local-device Maestro path (iOS_HOST / Android HOST) can
    * thread the last successful tool's result up to `DesktopYamlRunner` — that's what lets
-   * `trailblaze tool <read-tool>` show the tool's real return value. The web / Compose / Revyl
-   * branches carry a null `lastToolResult`: they surface their payloads to the CLI through their
-   * own dispatch branches, not this one, so wrapping their session id is enough.
+   * `trailblaze tool <read-tool>` show the tool's real return value. The descriptor-backed
+   * drivers (web / Compose / Revyl) carry a null `lastToolResult`: they surface their payloads to
+   * the CLI through their own dispatch branches, not this one, so wrapping their session id is
+   * enough.
+   *
+   * [logsDir] is a JVM-side parameter rather than a [RunOnHostParams] field because that class is
+   * `commonMain` and can't carry a [File]. Every host path needs it: each builds its own
+   * [HostTrailblazeLoggingRule], whose own resolution lands on `<git root>/logs` regardless of the
+   * `logsDirectory` setting, and then reads that same directory back to generate the recording and
+   * compare snapshot goldens. Null keeps that fallback.
    */
   suspend fun runHostYaml(
     dynamicLlmClient: DynamicLlmClient,
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
+    logsDir: File? = null,
   ): HostYamlRunResult {
-    return when (runOnHostParams.trailblazeDriverType) {
-      TrailblazeDriverType.PLAYWRIGHT_NATIVE ->
-        HostYamlRunResult(runPlaywrightNativeYaml(dynamicLlmClient, runOnHostParams, deviceManager))
-      TrailblazeDriverType.PLAYWRIGHT_ELECTRON ->
-        HostYamlRunResult(runPlaywrightElectronYaml(dynamicLlmClient, runOnHostParams, deviceManager))
-      TrailblazeDriverType.COMPOSE ->
-        HostYamlRunResult(runComposeYaml(dynamicLlmClient, runOnHostParams, deviceManager))
-      TrailblazeDriverType.REVYL_ANDROID,
-      TrailblazeDriverType.REVYL_IOS ->
-        HostYamlRunResult(runRevylYaml(dynamicLlmClient, runOnHostParams, deviceManager))
-      else ->
-        runMaestroHostYaml(dynamicLlmClient, runOnHostParams, deviceManager)
-    }
-  }
-
-  /**
-   * Playwright-native path: launches a browser via [PlaywrightBrowserManager] and runs
-   * the trail using [PlaywrightTrailblazeAgent] with web-native tools.
-   *
-   * When `sendSessionEndLog` is false (e.g. MCP interactive authoring), the browser is kept
-   * alive between calls by caching the [BasePlaywrightNativeTest] instance in the device manager.
-   * This mirrors the Maestro path's session reuse behaviour.
-   */
-  private suspend fun runPlaywrightNativeYaml(
-    dynamicLlmClient: DynamicLlmClient,
-    runOnHostParams: RunOnHostParams,
-    deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
-    val onProgressMessage = runOnHostParams.onProgressMessage
-    val runYamlRequest = runOnHostParams.runYamlRequest
-
-    val requestDeviceId = runYamlRequest.trailblazeDeviceId
-    val keepBrowserAlive = !runYamlRequest.config.sendSessionEndLog
-
-    // Try to reuse a cached Playwright test instance (only when keeping browser alive).
-    // If the cached test was constructed for a different LLM model than this request
-    // (e.g. user ran `trailblaze config llm <provider>` after the daemon cached the
-    // initial test), we evict it but keep the live browser — otherwise the cached
-    // model/client sticks around for the daemon's lifetime and silently runs every
-    // web tool with the wrong provider.
-    val cachedTest =
-      if (keepBrowserAlive) deviceManager.getActivePlaywrightNativeTest(requestDeviceId) else null
-    val cacheResolution = resolvePlaywrightCacheReuse(
-      cachedModel = cachedTest?.trailblazeLlmModel,
-      cachedBrowserManager = cachedTest?.browserManager,
-      cachedMaxLlmCalls = cachedTest?.maxLlmCalls,
-      requestedModel = runYamlRequest.trailblazeLlmModel,
-      requestedMaxLlmCalls = runYamlRequest.maxLlmCalls,
-    )
-    val existingTest =
-      if (cacheResolution is PlaywrightCacheResolution.ReuseCachedTest) cachedTest else null
-    val staleBrowserToReuse =
-      (cacheResolution as? PlaywrightCacheResolution.RebuildWithCachedBrowser)?.browser
-    val isReusingTest = existingTest != null
-    val isRebuildingForModelChange = staleBrowserToReuse != null
-
-    // Stable device ID when reusing the same test or rebuilding-with-existing-browser
-    // (same logical session — only the LLM client is being swapped); unique suffix only
-    // for genuinely fresh test runs.
-    val trailblazeDeviceId =
-      if (isReusingTest || isRebuildingForModelChange) {
-        requestDeviceId
-      } else {
-        val sessionSuffix = UUID.randomUUID().toString().take(8)
-        TrailblazeDeviceId(
-          instanceId = "playwright-native-$sessionSuffix",
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
-        )
-      }
-
-    onProgressMessage(
-      when {
-        isReusingTest -> "Reusing Playwright-native browser session..."
-        staleBrowserToReuse != null ->
-          "LLM config changed — rebuilding Playwright-native test with current model..."
-        else -> "Initializing Playwright-native test runner..."
-      }
-    )
-
-    // If the request targets a web slot that already has a running browser
-    // (provisioned via `device create web` or the desktop UI's Launch Browser),
-    // reuse it as the rule's `existingBrowserManager`. Without this, the runner
-    // would spin up a SECOND PlaywrightBrowserManager — bypassing the slot's
-    // configured viewport / emulation profile and producing trail runs at the
-    // default 1280x800. The cache-reuse path's `staleBrowserToReuse` covers the
-    // intra-daemon model-change case; this covers the cross-command case.
-    val adoptedSlotBrowser: PlaywrightPageManager? = if (staleBrowserToReuse == null) {
-      deviceManager.webBrowserManager.getPageManager(requestDeviceId.instanceId)
-    } else null
-    val existingBrowserForRule = staleBrowserToReuse ?: adoptedSlotBrowser
-
-    val playwrightTest = existingTest ?: BasePlaywrightNativeTest(
-      customToolClasses = runOnHostParams.targetTestApp
-        ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-      dynamicLlmClient = dynamicLlmClient,
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-      config = runYamlRequest.config,
-      appTarget = runOnHostParams.targetTestApp,
-      trailblazeDeviceId = trailblazeDeviceId,
-      existingBrowserManager = existingBrowserForRule,
-      maxLlmCalls = runYamlRequest.maxLlmCalls,
-      // Capture publishes its per-session video-record dir under the un-suffixed request
-      // device id; the manager must look it up under the same key (not the per-trail
-      // suffixed `trailblazeDeviceId.instanceId` we use for session-cache identity).
-      webBrowserRecordingKey = requestDeviceId.instanceId,
-      // Honor the CLI `--no-capture-video` opt-out — this rule self-instruments video.
-      captureVideo = runOnHostParams.captureVideo,
-    )
-
-    // Reset the browser session only when starting a new Trailblaze session.
-    // In interactive blaze() mode each call is one step within the same session
-    // (sendSessionStartLog=false), so we must NOT reset between steps — that would
-    // navigate to about:blank and lose the current page state.
-    // Must run on the Playwright thread to maintain thread affinity.
-    if (isReusingTest && runYamlRequest.config.sendSessionStartLog) {
-      withContext(playwrightTest.browserManager.playwrightDispatcher) {
-        playwrightTest.browserManager.resetSession()
-      }
-    }
-
-    // Cache the test instance for reuse across subsequent MCP calls
-    if (keepBrowserAlive) {
-      deviceManager.setActivePlaywrightNativeTest(requestDeviceId, playwrightTest)
-    }
-
-    onProgressMessage("Launching browser...")
-
-    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
-    return executeTrailSession(
-      loggingRule = playwrightTest.loggingRule,
-      overrideSessionId = runYamlRequest.config.overrideSessionId,
-      testName = runYamlRequest.testName,
-      deviceLabel = "playwright-native:${trailblazeDeviceId.instanceId}",
-      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
-      onProgressMessage = onProgressMessage,
-      screenshotProvider = playwrightTest.browserManager::getScreenState,
-      noLogging = runOnHostParams.noLogging,
-      cleanup = {
-        withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-        }
-        if (!keepBrowserAlive) {
-          playwrightTest.close()
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-        }
-      },
-    ) { session ->
-      launchSubprocessMcpServersIfAny(
-        targetTestApp = runOnHostParams.targetTestApp,
-        config = runYamlRequest.config,
-        sessionId = session.sessionId,
-        deviceInfo = playwrightTest.trailblazeDeviceInfo,
-        logsRepo = playwrightTest.loggingRule.logsRepo,
-        toolRepo = playwrightTest.toolRepo,
-        onProgressMessage = onProgressMessage,
-      )?.let { subprocessRuntimes += it }
-      onProgressMessage("Executing YAML test...")
-      Console.log("▶️ Starting Playwright-native runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
-      val sessionId = playwrightTest.runTrailblazeYamlSuspend(
-        yaml = runYamlRequest.yaml,
-        trailFilePath = runYamlRequest.trailFilePath,
-        trailblazeDeviceId = trailblazeDeviceId,
-        traceId = runYamlRequest.traceId,
-        useRecordedSteps = runYamlRequest.useRecordedSteps,
-        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
-        // Routes prompt steps through the in-process Koog strategy-graph agent when the run
-        // opted in (AgentImplementation.KOOG_STRATEGY_GRAPH); otherwise the legacy runner.
-        agentImplementation = runYamlRequest.agentImplementation,
-        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
-        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
-        initialArgs = runYamlRequest.initialArgs,
-        onStepProgress = { step, total, text ->
-          onProgressMessage("Step $step/$total: $text")
-        },
-      )
-      Console.log("✅ Playwright-native runTrailblazeYamlSuspend completed for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test execution completed successfully")
-
-      if (runYamlRequest.config.sendSessionEndLog) {
-        playwrightTest.loggingRule.captureFinalScreenshot(session, playwrightTest.browserManager::getScreenState)
-        playwrightTest.loggingRule.endSession(session, isSuccess = true)
-      }
-
-      val customToolClasses = runOnHostParams.targetTestApp
-        ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet()
-      generateAndSaveRecording(
-        sessionId = sessionId,
-        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_NATIVE) + customToolClasses,
-      )
-
-      sessionId
-    }
-  }
-
-  /**
-   * Playwright-electron path: connects to an Electron app via CDP and runs the trail
-   * using [PlaywrightTrailblazeAgent] with web-native tools.
-   *
-   * Electron app configuration is resolved from:
-   * 1. The resolved target's launch config
-   * 2. The `TRAILBLAZE_ELECTRON_*` env vars as fallback (`TRAILBLAZE_ELECTRON_CDP_URL`,
-   *    `TRAILBLAZE_ELECTRON_COMMAND`, `TRAILBLAZE_ELECTRON_ARGS`, `TRAILBLAZE_ELECTRON_CDP_PORT`,
-   *    `TRAILBLAZE_ELECTRON_HEADLESS`)
-   */
-  private suspend fun runPlaywrightElectronYaml(
-    dynamicLlmClient: DynamicLlmClient,
-    runOnHostParams: RunOnHostParams,
-    deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
-    val onProgressMessage = runOnHostParams.onProgressMessage
-    val runYamlRequest = runOnHostParams.runYamlRequest
-
-    val requestDeviceId = runYamlRequest.trailblazeDeviceId
-    val keepAlive = !runYamlRequest.config.sendSessionEndLog
-
-    val existingTest =
-      if (keepAlive) deviceManager.getActivePlaywrightElectronTest(requestDeviceId) else null
-    val isReusingTest = existingTest != null
-
-    val trailblazeDeviceId =
-      if (isReusingTest) {
-        requestDeviceId
-      } else {
-        val sessionSuffix = UUID.randomUUID().toString().take(8)
-        TrailblazeDeviceId(
-          instanceId = "playwright-electron-$sessionSuffix",
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
-        )
-      }
-
-    onProgressMessage(
-      if (isReusingTest) "Reusing Playwright-electron session..."
-      else "Initializing Playwright-electron test runner..."
-    )
-
-    // Resolve ElectronAppConfig from the resolved target or environment variables
-    val electronConfig = resolveElectronAppConfig(runOnHostParams.targetTestApp)
-
-    val electronTest = existingTest ?: BasePlaywrightElectronTest(
-      electronAppConfig = electronConfig,
-      customToolClasses = runOnHostParams.targetTestApp
-        ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-      dynamicLlmClient = dynamicLlmClient,
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-      config = runYamlRequest.config,
-      appTarget = runOnHostParams.targetTestApp,
-      trailblazeDeviceId = trailblazeDeviceId,
-      maxLlmCalls = runYamlRequest.maxLlmCalls,
-      // Honor the CLI `--no-capture-video` opt-out — this rule self-instruments video.
-      captureVideo = runOnHostParams.captureVideo,
-    )
-
-    if (isReusingTest) {
-      withContext(electronTest.browserManager.playwrightDispatcher) {
-        electronTest.browserManager.resetSession()
-      }
-    }
-
-    if (keepAlive) {
-      deviceManager.setActivePlaywrightElectronTest(requestDeviceId, electronTest)
-    }
-
-    onProgressMessage("Connecting to Electron app...")
-
-    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
-    return executeTrailSession(
-      loggingRule = electronTest.loggingRule,
-      overrideSessionId = runYamlRequest.config.overrideSessionId,
-      testName = runYamlRequest.testName,
-      deviceLabel = "playwright-electron:${trailblazeDeviceId.instanceId}",
-      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
-      onProgressMessage = onProgressMessage,
-      screenshotProvider = electronTest.browserManager::getScreenState,
-      noLogging = runOnHostParams.noLogging,
-      cleanup = {
-        withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-        }
-        if (!keepAlive) {
-          electronTest.close()
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-        }
-      },
-    ) { session ->
-      launchSubprocessMcpServersIfAny(
-        targetTestApp = runOnHostParams.targetTestApp,
-        config = runYamlRequest.config,
-        sessionId = session.sessionId,
-        deviceInfo = electronTest.trailblazeDeviceInfo,
-        logsRepo = electronTest.loggingRule.logsRepo,
-        toolRepo = electronTest.toolRepo,
-        onProgressMessage = onProgressMessage,
-      )?.let { subprocessRuntimes += it }
-      onProgressMessage("Executing YAML test...")
-      Console.log("▶️ Starting Playwright-electron runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
-      val sessionId = electronTest.runTrailblazeYamlSuspend(
-        yaml = runYamlRequest.yaml,
-        trailFilePath = runYamlRequest.trailFilePath,
-        trailblazeDeviceId = trailblazeDeviceId,
-        traceId = runYamlRequest.traceId,
-        useRecordedSteps = runYamlRequest.useRecordedSteps,
-        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
-        agentImplementation = runYamlRequest.agentImplementation,
-        initialMemorySeeds = runYamlRequest.initialMemorySeeds,
-        initialMemorySensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
-        initialArgs = runYamlRequest.initialArgs,
-        onStepProgress = { step, total, text ->
-          onProgressMessage("Step $step/$total: $text")
-        },
-      )
-      Console.log("✅ Playwright-electron runTrailblazeYamlSuspend completed for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test execution completed successfully")
-
-      if (runYamlRequest.config.sendSessionEndLog) {
-        electronTest.loggingRule.captureFinalScreenshot(session, electronTest.browserManager::getScreenState)
-        electronTest.loggingRule.endSession(session, isSuccess = true)
-      }
-
-      val customToolClasses = runOnHostParams.targetTestApp
-        ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet()
-      generateAndSaveRecording(
-        sessionId = sessionId,
-        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_ELECTRON) +
-          BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
-      )
-
-      sessionId
-    }
-  }
-
-  /**
-   * Resolves [ElectronAppConfig] in priority order:
-   *  1. The resolved target's [TrailblazeHostAppTarget.getElectronAppConfig] — the target-level
-   *     home for Electron launch config. A trail carries no per-trail launch block; it selects the
-   *     target + `PLAYWRIGHT_ELECTRON` driver and the launch config comes from the target.
-   *  2. Environment variables (`TRAILBLAZE_ELECTRON_*`) as the final fallback.
-   */
-  private fun resolveElectronAppConfig(
-    targetTestApp: TrailblazeHostAppTarget?,
-  ): ElectronAppConfig {
-    // 1. Take the resolved target's launch config.
-    targetTestApp?.getElectronAppConfig()?.let { return it }
-
-    // 2. Fall back to environment variables
-    val cdpUrl = System.getenv("TRAILBLAZE_ELECTRON_CDP_URL")
-    val command = System.getenv("TRAILBLAZE_ELECTRON_COMMAND")
-    val args = System.getenv("TRAILBLAZE_ELECTRON_ARGS")
-      ?.split(" ")
-      ?.filter { it.isNotBlank() }
-      ?: emptyList()
-    val cdpPort = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT")?.toIntOrNull() ?: 9222
-    val headless = System.getenv("TRAILBLAZE_ELECTRON_HEADLESS")?.toBoolean() ?: false
-
-    return ElectronAppConfig(
-      command = command,
-      args = args,
-      cdpUrl = cdpUrl,
-      cdpPort = cdpPort,
-      headless = headless,
-    )
-  }
-
-  /**
-   * Compose RPC path: connects to a running Compose app via [ComposeRpcClient] and runs
-   * the trail using [ComposeRpcTrailblazeAgent] with Compose-native tools.
-   *
-   * The Compose app must already be running with an embedded [ComposeRpcServer] on the
-   * configured port. No device discovery or instrumentation is needed — the CLI connects
-   * directly over HTTP.
-   */
-  private suspend fun runComposeYaml(
-    dynamicLlmClient: DynamicLlmClient,
-    runOnHostParams: RunOnHostParams,
-    deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
-    val onProgressMessage = runOnHostParams.onProgressMessage
-    val runYamlRequest = runOnHostParams.runYamlRequest
-    val port = runOnHostParams.composeRpcPort
-
-    // Use the request's device ID so it matches the coroutine scope registered by
-    // DesktopYamlRunner. Creating a new ID here would cause cancelSessionForDevice()
-    // to miss the coroutine scope, making the cancel button ineffective.
-    val trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
-
-    onProgressMessage("Connecting to Compose app on port $port...")
-
-    val rpcClient = ComposeRpcClient("http://localhost:$port")
-
-    // Wait for the Compose app's RPC server to be ready
-    val serverReady = rpcClient.waitForServer(maxAttempts = 15, delayMs = 500)
-    if (!serverReady) {
-      onProgressMessage("Failed to connect to Compose app on port $port")
-      rpcClient.close()
-      throw TrailblazeException(
-        "Could not connect to Compose RPC server on port $port. " +
-          "Ensure your Compose app is running with ComposeRpcServer embedded."
-      )
-    }
-
-    onProgressMessage("Connected to Compose RPC server")
-
-    val viewportWidth = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_WIDTH
-    val viewportHeight = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_HEIGHT
-
-    val trailblazeDeviceInfo = TrailblazeDeviceInfo(
-      trailblazeDeviceId = trailblazeDeviceId,
-      trailblazeDriverType = TrailblazeDriverType.COMPOSE,
-      widthPixels = viewportWidth,
-      heightPixels = viewportHeight,
-      classifiers = listOf(TrailblazeDeviceClassifier("desktop"), TrailblazeDeviceClassifier("compose")),
-    )
-
-    val composeToolSet = TrailblazeToolSetCatalog.resolveForDriver(
-      driverType = TrailblazeDriverType.COMPOSE,
-      requestedIds = ComposeToolSetIds.ALL,
-    )
-    val toolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet.DynamicTrailblazeToolSet(
-        name = "Compose RPC Tool Set",
-        toolClasses = composeToolSet.toolClasses,
-        yamlToolNames = composeToolSet.yamlToolNames,
-      ),
-      // Bind the repo to the Compose driver so the KOOG tool surface matches it: COMPOSE is not in
-      // KOOG_INSPECTION_DRIVERS, so the generic `requestDetailedViewHierarchy` inspection tool (which
-      // a null-driver repo injects) stays off the surface — Compose's own `compose_request_details`
-      // is the detail tool. KOOG-path only; the default runner's surface is unaffected.
-      driverType = TrailblazeDriverType.COMPOSE,
-    )
-
-    // Wrap agent creation in try-catch so rpcClient is closed if setup fails before
-    // the agent (which owns the client lifecycle) is constructed.
-    val agent: ComposeRpcTrailblazeAgent
-    val loggingRule: HostTrailblazeLoggingRule
-    try {
-      loggingRule = HostTrailblazeLoggingRule(
-        trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
-        noLogging = runOnHostParams.noLogging,
-      )
-
-      agent = ComposeRpcTrailblazeAgent(
-        rpcClient = rpcClient,
-        trailblazeLogger = loggingRule.logger,
-        sessionProvider = {
-          loggingRule.session ?: error("Session not available - ensure test is running")
-        },
-        trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
-        // Thread the session tool repo through so framework-tool composition resolves by name and
-        // so the KOOG strategy graph's dynamic-tool execution context is satisfied.
-        trailblazeToolRepo = toolRepo,
-      )
-    } catch (e: Exception) {
-      rpcClient.close()
-      throw e
-    }
-
-    val screenStateProvider = agent.screenStateProvider
-
-    val elementComparator = TrailblazeElementComparator(
-      screenStateProvider = screenStateProvider,
-      llmClient = dynamicLlmClient.createLlmClient(),
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-      toolRepo = toolRepo,
-    )
-
-    // Brain selection (legacy or KOOG). Recordings replay uniformly via the runner-util below
-    // regardless of agent — only unrecorded steps reach the selected brain. Mirrors the Revyl /
-    // on-device wiring; the default TRAILBLAZE_RUNNER path is unchanged.
-    val trailblazeRunner: TestAgentRunner =
-      if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
-        KoogTestAgentRunner(
-          agent = agent,
-          toolRepo = toolRepo,
-          screenStateProvider = screenStateProvider,
-          elementComparator = elementComparator,
-          llmClient = dynamicLlmClient.createLlmClient(),
-          trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-          logger = loggingRule.logger,
-          sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-          maxLlmCalls = runYamlRequest.maxLlmCalls,
-          // Use the same Compose-desktop system prompt the legacy runner uses (not the generic
-          // mobile prompt) so the agent gets the Compose semantics-tree + takeSnapshot guidance.
-          systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
-        )
-      } else {
-        TrailblazeRunner(
-          screenStateProvider = screenStateProvider,
-          agent = agent,
-          llmClient = dynamicLlmClient.createLlmClient(),
-          trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-          trailblazeToolRepo = toolRepo,
-          systemPromptTemplate = BaseComposeTest.COMPOSE_SYSTEM_PROMPT,
-          trailblazeLogger = loggingRule.logger,
-          sessionProvider = {
-            loggingRule.session ?: error("Session not available - ensure test is running")
-          },
-          maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-        )
-      }
-
-    val trailblazeYaml = createTrailblazeYaml(
-      customTrailblazeToolClasses = composeToolSet.toolClasses,
-    )
-
-    val trailblazeRunnerUtil = TrailblazeRunnerUtil(
-      trailblazeRunner = trailblazeRunner,
-      runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        agent.runTrailblazeTools(
-          trailblazeTools,
-          runYamlRequest.traceId,
-          screenState = screenStateProvider(),
-          elementComparator = elementComparator,
-          screenStateProvider = screenStateProvider,
-        ).result
-      },
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = {
-        loggingRule.session ?: error("Session not available - ensure test is running")
-      },
-      sessionUpdater = { loggingRule.setSession(it) },
-      // Shares one execution context + snapshot frame across the recording, matching the
-      // batching pattern elsewhere. Unlike the Android/host-Maestro wiring, this agent's
-      // buildExecutionContext doesn't cache per-call device state today, so the benefit here
-      // is reduced frame/ThreadLocal churn rather than a clipboard-style state-survival fix.
-      sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
-    )
-
-    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
-    return executeTrailSession(
-      loggingRule = loggingRule,
-      overrideSessionId = runYamlRequest.config.overrideSessionId,
-      testName = runYamlRequest.testName,
-      deviceLabel = "compose-rpc:${trailblazeDeviceId.instanceId}",
-      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
-      onProgressMessage = onProgressMessage,
-      screenshotProvider = screenStateProvider,
-      noLogging = runOnHostParams.noLogging,
-      cleanup = {
-        withContext(NonCancellable) {
-          subprocessRuntimes.forEach { it.shutdownAll() }
-        }
-        agent.close()
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      },
-    ) { session ->
-      launchSubprocessMcpServersIfAny(
-        targetTestApp = runOnHostParams.targetTestApp,
-        config = runYamlRequest.config,
-        sessionId = session.sessionId,
-        deviceInfo = trailblazeDeviceInfo,
-        logsRepo = loggingRule.logsRepo,
-        toolRepo = toolRepo,
-        onProgressMessage = onProgressMessage,
-      )?.let { subprocessRuntimes += it }
-      onProgressMessage("Executing YAML test via Compose RPC...")
-      Console.log("▶️ Starting Compose RPC execution for device: ${trailblazeDeviceId.instanceId}")
-
-      // decodeTrailOrToolEnvelope (superset of decodeTrail): a trail document decodes exactly as
-      // before; a bare tool-wrapper envelope (single-tool MCP dispatch) decodes via decodeTools,
-      // never the legacy list-shape trail parser.
-      val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
-        runYamlRequest.yaml,
-        deviceClassifiers = trailblazeDeviceInfo.classifiers,
-      )
-      val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-
-      // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
-      // `planTrailExecution` planner. Short-circuit here so the runner never opens a session,
-      // runs the actionable-steps guard, or iterates trail items for a skip-marked trail.
-      trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
-        Console.log(
-          "[Trailblaze] Skipping trail" +
-            (runYamlRequest.trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
-        )
-        return@executeTrailSession session.sessionId
-      }
-
-      // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom]
-      // composition as the V3 site: YAML `config.memory:` defaults, then CLI `--memory`
-      // overrides, then CLI `--secret` (sensitive; excluded from the returned snapshot).
-      // The agent threads this memory into every tool execution context, so `{{var}}`
-      // interpolation and scripted tools' `ctx.memory` both see the seeds.
-      val resolvedInitialMemory = agent.memory.seedFrom(
-        yamlDefaults = trailConfig?.memory,
-        cliSeeds = runYamlRequest.initialMemorySeeds,
-        cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
-      )
-      // Seed the `args.` namespace from the CLI-bound values AFTER memory, so a token-valued
-      // default (`default: '{{memory.email}}'`) resolves against the just-seeded memory.
-      agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
-      val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
-
-      if (runYamlRequest.config.sendSessionStartLog) {
-        // CLI / daemon runs have no JUnit Description, so derive a readable Suite::test
-        // identity from the trail path instead of a bare "ComposeRpc::run" (see
-        // deriveTestIdentityFromTrailPath). The driver name stays the path-less fallback.
-        val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
-          TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "ComposeRpc")
-        }
-        loggingRule.logger.log(
-          session,
-          TrailblazeLog.TrailblazeSessionStatusChangeLog(
-            sessionStatus = SessionStatus.Started(
-              trailConfig = trailConfig,
-              trailFilePath = runYamlRequest.trailFilePath,
-              testClassName = derivedTestIdentity?.className ?: "ComposeRpc",
-              testMethodName = derivedTestIdentity?.methodName ?: "run",
-              trailblazeDeviceInfo = trailblazeDeviceInfo,
-              rawYaml = runYamlRequest.yaml,
-              hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-              trailblazeDeviceId = trailblazeDeviceId,
-              resolvedInitialMemory = resolvedInitialMemory,
-              sensitiveMemoryKeys = sensitiveMemoryKeys,
-            ),
-            session = session.sessionId,
-            timestamp = Clock.System.now(),
-          ),
-        )
-      }
-
-      requireActionableSteps(
-        trailblazeYaml = trailblazeYaml,
-        trailItems = trailItems,
-        trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-      )
-
-      for (item in trailItems) {
-        val itemResult = when (item) {
-          // Agent-agnostic: replays recorded steps deterministically and delegates only unrecorded
-          // steps to the selected runner (legacy / KOOG). ComposeRpcTrailblazeAgent is now a
-          // BaseTrailblazeAgent, so the KOOG strategy graph drives it through the same seam as the
-          // other drivers. Default unchanged.
-          is TrailYamlItem.PromptsTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(
-              prompts = item.promptSteps,
-              useRecordedSteps = runYamlRequest.useRecordedSteps,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.TrailheadTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(
-              prompts = listOf(item.trailhead.toPromptStep()),
-              useRecordedSteps = true,
-              selfHeal = runYamlRequest.config.selfHeal,
-            )
-          is TrailYamlItem.ToolTrailItem ->
-            trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-          is TrailYamlItem.ConfigTrailItem ->
-            item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-        }
-        if (itemResult is TrailblazeToolResult.Error) {
-          throw TrailblazeException(itemResult.errorMessage)
-        }
-      }
-
-      Console.log("✅ Compose RPC execution completed for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test execution completed successfully")
-
-      generateAndSaveRecording(
-        sessionId = session.sessionId,
-        customToolClasses = composeToolSet.toolClasses,
-      )
-
-      // Run golden comparison before ending the session so failures are reflected in session status.
-      val goldenResult = compareSnapshotsAgainstGoldens(session.sessionId)
-      val goldenPassed = goldenResult?.passed != false
-
-      if (runYamlRequest.config.sendSessionEndLog) {
-        if (goldenPassed) {
-          loggingRule.captureFinalScreenshot(session, screenStateProvider)
-        } else {
-          loggingRule.captureFailureScreenshot(session, screenStateProvider)
-        }
-        loggingRule.endSession(session, isSuccess = goldenPassed)
-      }
-
-      if (!goldenPassed) {
-        val failures = goldenResult!!.results.filter { it.goldenFound && !it.passed }
-        val msg = failures.joinToString("; ") {
-          "'${it.snapshotName}' (${"%.2f".format(it.diffPercent)}% diff, threshold ${it.thresholdPercent}%)"
-        }
-        throw TrailblazeException("Golden snapshot comparison failed: $msg")
-      }
-
-      session.sessionId
-    }
-  }
-
-  /**
-   * Revyl cloud device path: provisions a device via [RevylCliClient] and runs
-   * the trail using [RevylTrailblazeAgent] with standard mobile tools.
-   *
-   * The CLI handles device provisioning, app install, and AI-powered target
-   * grounding. Screenshots come from [RevylScreenState].
-   */
-  private suspend fun runRevylYaml(
-    dynamicLlmClient: DynamicLlmClient,
-    runOnHostParams: RunOnHostParams,
-    deviceManager: TrailblazeDeviceManager,
-  ): SessionId? {
-    val onProgressMessage = runOnHostParams.onProgressMessage
-    val runYamlRequest = runOnHostParams.runYamlRequest
-    val trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
-    val platform = if (runOnHostParams.trailblazeDriverType == TrailblazeDriverType.REVYL_ANDROID) "android" else "ios"
-
-    val instanceId = trailblazeDeviceId.instanceId
-    val deviceLabel = if (instanceId.startsWith("revyl-model:"))
-      instanceId.removePrefix("revyl-model:") else "$platform (default)"
-
-    if (System.getenv(RevylCliClient.REVYL_API_KEY_ENV).isNullOrBlank()) {
-      onProgressMessage("Error: ${RevylCliClient.REVYL_API_KEY_ENV} is not set. Configure it in Settings → Environment Variables.")
-      return null
-    }
-
-    onProgressMessage("Provisioning Revyl cloud $deviceLabel...")
-
-    val cliClient: RevylCliClient
-    val session: RevylSession
-    try {
-      cliClient = RevylCliClient()
-      session = if (instanceId.startsWith("revyl-model:")) {
-        val payload = instanceId.removePrefix("revyl-model:")
-        val parts = payload.split("::", limit = 2)
-        val modelName = parts[0]
-        val osVer = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
-        if (osVer != null) {
-          cliClient.startSession(platform = platform, deviceModel = modelName, osVersion = osVer)
-        } else {
-          Console.log("RevylYaml: device '$modelName' missing OS version — using platform default")
-          cliClient.startSession(platform = platform)
-        }
-      } else {
-        cliClient.startSession(platform = platform)
-      }
-    } catch (e: Exception) {
-      Console.log("Revyl session provisioning failed: ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Error: ${e.message}")
-      return null
-    }
-    onProgressMessage("Revyl $deviceLabel ready — viewer: ${session.viewerUrl}")
-
-    // Store the client for MCP screen state capture
-    val isMcpRequest = !runYamlRequest.config.sendSessionEndLog
-    if (isMcpRequest) {
-      deviceManager.setActiveRevylCliClient(trailblazeDeviceId, cliClient)
-    }
-
-    // Outer try-finally guarantees the cloud device is stopped even if setup
-    // (e.g. LLM client creation) fails before the inner execution try block.
-    try {
-      val trailblazeDeviceInfo = TrailblazeDeviceInfo(
-        trailblazeDeviceId = trailblazeDeviceId,
-        trailblazeDriverType = runOnHostParams.trailblazeDriverType,
-        widthPixels = session.screenWidth.takeIf { it > 0 }
-          ?: xyz.block.trailblaze.revyl.RevylDefaults.dimensionsForPlatform(platform).first,
-        heightPixels = session.screenHeight.takeIf { it > 0 }
-          ?: xyz.block.trailblaze.revyl.RevylDefaults.dimensionsForPlatform(platform).second,
-        metadata = mapOf("revyl_viewer_url" to session.viewerUrl),
-        classifiers = listOf(
-          TrailblazeDeviceClassifier(platform),
-          TrailblazeDeviceClassifier("revyl-cloud"),
+    val driverType = runOnHostParams.trailblazeDriverType
+
+    // Drivers that have been converted run through their descriptor; the Maestro path below
+    // carries the ones still waiting their turn. See HostDriverDescriptorRegistry.
+    deviceManager.hostDriverDescriptors.forDriverOrNull(driverType)?.let { descriptor ->
+      return descriptor.runYaml(
+        deps = HostRunDeps(
+          dynamicLlmClient = dynamicLlmClient,
+          deviceManager = deviceManager,
+          logsDir = logsDir,
         ),
+        params = runOnHostParams,
       )
-
-      val screenStateProvider: () -> ScreenState = {
-        RevylScreenState(cliClient, platform, session.screenWidth, session.screenHeight)
-      }
-
-      val loggingRule = HostTrailblazeLoggingRule(
-        trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
-      )
-
-      val revylToolSet = TrailblazeToolSetCatalog.resolveForDriver(
-        driverType = runOnHostParams.trailblazeDriverType,
-        requestedIds = RevylToolSetIds.ALL,
-      )
-      val toolRepo = TrailblazeToolRepo(
-        TrailblazeToolSet.DynamicTrailblazeToolSet(
-          name = "Revyl Native Tool Set",
-          toolClasses = revylToolSet.toolClasses,
-          yamlToolNames = revylToolSet.yamlToolNames,
-        ),
-        // Bind the repo to the Revyl driver so the KOOG verify-step surface scopes to
-        // `revyl_verification` (see TrailblazeToolRepo.verifyStepToolDescriptors / VERIFY_SCOPE_DRIVERS).
-        // Without this the repo's driverType is null and verify scoping no-ops. Also keeps the
-        // generic `requestDetailedViewHierarchy` inspection tool off the Revyl KOOG surface (Revyl
-        // is excluded from KOOG_INSPECTION_DRIVERS — its agent can't run that generic tool).
-        driverType = runOnHostParams.trailblazeDriverType,
-      )
-
-      val agent = RevylTrailblazeAgent(
-        cliClient = cliClient,
-        platform = platform,
-        trailblazeLogger = loggingRule.logger,
-        trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
-        sessionProvider = {
-          loggingRule.session ?: error("Session not available - ensure test is running")
-        },
-        trailblazeToolRepo = toolRepo,
-      )
-
-      val elementComparator = TrailblazeElementComparator(
-        screenStateProvider = screenStateProvider,
-        llmClient = dynamicLlmClient.createLlmClient(),
-        trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-        toolRepo = toolRepo,
-      )
-
-      // Brain selection (legacy or KOOG). Recordings replay uniformly via the runner-util below
-      // regardless of agent — only unrecorded steps reach the selected brain.
-      val trailblazeRunner: TestAgentRunner =
-        if (runYamlRequest.agentImplementation == AgentImplementation.KOOG_STRATEGY_GRAPH) {
-          KoogTestAgentRunner(
-            agent = agent,
-            toolRepo = toolRepo,
-            screenStateProvider = screenStateProvider,
-            elementComparator = elementComparator,
-            llmClient = dynamicLlmClient.createLlmClient(),
-            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-            logger = loggingRule.logger,
-            sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
-            maxLlmCalls = runYamlRequest.maxLlmCalls,
-            systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
-          )
-        } else {
-          TrailblazeRunner(
-            screenStateProvider = screenStateProvider,
-            agent = agent,
-            llmClient = dynamicLlmClient.createLlmClient(),
-            trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-            trailblazeToolRepo = toolRepo,
-            trailblazeLogger = loggingRule.logger,
-            sessionProvider = {
-              loggingRule.session ?: error("Session not available - ensure test is running")
-            },
-            maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-          )
-        }
-
-      val trailblazeYaml = createTrailblazeYaml(
-        customTrailblazeToolClasses = revylToolSet.toolClasses,
-      )
-
-      val trailblazeRunnerUtil = TrailblazeRunnerUtil(
-        trailblazeRunner = trailblazeRunner,
-        runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-          agent.runTrailblazeTools(
-            trailblazeTools,
-            runYamlRequest.traceId,
-            screenState = screenStateProvider(),
-            elementComparator = elementComparator,
-            screenStateProvider = screenStateProvider,
-          ).result
-        },
-        trailblazeLogger = loggingRule.logger,
-        sessionProvider = {
-          loggingRule.session ?: error("Session not available - ensure test is running")
-        },
-        sessionUpdater = { loggingRule.setSession(it) },
-        // Shares one execution context + snapshot frame across the recording, matching the
-        // batching pattern elsewhere. This agent's buildExecutionContext doesn't cache per-call
-        // device state today either (Revyl's device state lives in the cloud device, dispatched
-        // fresh per tool via cliClient) — the benefit here is reduced frame/ThreadLocal churn,
-        // not a clipboard-style state-survival fix.
-        sharedToolBatch = { block -> agent.runInSharedToolBatch(block) },
-      )
-
-      val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
-      return executeTrailSession(
-        loggingRule = loggingRule,
-        overrideSessionId = runYamlRequest.config.overrideSessionId,
-        testName = runYamlRequest.testName,
-        deviceLabel = "revyl:${trailblazeDeviceId.instanceId}",
-        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
-        onProgressMessage = onProgressMessage,
-        screenshotProvider = screenStateProvider,
-        noLogging = runOnHostParams.noLogging,
-        cleanup = {
-          withContext(NonCancellable) {
-            subprocessRuntimes.forEach { it.shutdownAll() }
-          }
-          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-        },
-      ) { session ->
-        launchSubprocessMcpServersIfAny(
-          targetTestApp = runOnHostParams.targetTestApp,
-          config = runYamlRequest.config,
-          sessionId = session.sessionId,
-          deviceInfo = trailblazeDeviceInfo,
-          logsRepo = loggingRule.logsRepo,
-          toolRepo = toolRepo,
-          onProgressMessage = onProgressMessage,
-        )?.let { subprocessRuntimes += it }
-        onProgressMessage("Executing YAML test via Revyl cloud device...")
-        Console.log("▶️ Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
-
-        // See the Compose runner above: envelope-tolerant decode keeps single-tool MCP dispatch off
-        // the legacy list-shape parser while trail documents decode unchanged.
-        val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrailOrToolEnvelope(
-          runYamlRequest.yaml,
-          deviceClassifiers = trailblazeDeviceInfo.classifiers,
-        )
-        val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-
-        // Honor `config.skip:` before SessionStarted is logged — matches the CLI's pre-flight
-        // `planTrailExecution` planner. See parallel comment at the ComposeRpc site.
-        trailblazeYaml.firstSkipReason(trailItems)?.let { skipReason ->
-          Console.log(
-            "[Trailblaze] Skipping trail" +
-              (runYamlRequest.trailFilePath?.let { " ($it)" } ?: "") + ": $skipReason"
-          )
-          return@executeTrailSession session.sessionId
-        }
-
-        // Seed the agent's memory before any tool runs — see parallel comment at the
-        // ComposeRpc site for the composition and why this covers both `{{var}}`
-        // interpolation and scripted tools' `ctx.memory`.
-        val resolvedInitialMemory = agent.memory.seedFrom(
-          yamlDefaults = trailConfig?.memory,
-          cliSeeds = runYamlRequest.initialMemorySeeds,
-          cliSensitiveSeeds = runYamlRequest.initialMemorySensitiveSeeds,
-        )
-        agent.memory.seedArgs(TrailArgBinder.decodeProvided(runYamlRequest.initialArgs))
-        val sensitiveMemoryKeys: Set<String> = agent.memory.sensitiveKeys.toSet()
-
-        if (runYamlRequest.config.sendSessionStartLog) {
-          // See ComposeRpc site — derive a readable Suite::test identity from the path.
-          val derivedTestIdentity = runYamlRequest.trailFilePath?.let {
-            TrailRecordings.deriveTestIdentityFromTrailPath(it, fallbackClassName = "Revyl")
-          }
-          loggingRule.logger.log(
-            session,
-            TrailblazeLog.TrailblazeSessionStatusChangeLog(
-              sessionStatus = SessionStatus.Started(
-                trailConfig = trailConfig,
-                trailFilePath = runYamlRequest.trailFilePath,
-                testClassName = derivedTestIdentity?.className ?: "Revyl",
-                testMethodName = derivedTestIdentity?.methodName ?: "run",
-                trailblazeDeviceInfo = trailblazeDeviceInfo,
-                rawYaml = runYamlRequest.yaml,
-                hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-                trailblazeDeviceId = trailblazeDeviceId,
-                resolvedInitialMemory = resolvedInitialMemory,
-                sensitiveMemoryKeys = sensitiveMemoryKeys,
-              ),
-              session = session.sessionId,
-              timestamp = Clock.System.now(),
-            ),
-          )
-        }
-
-        requireActionableSteps(
-          trailblazeYaml = trailblazeYaml,
-          trailItems = trailItems,
-          trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
-        )
-
-        for (item in trailItems) {
-          val itemResult = when (item) {
-            is TrailYamlItem.PromptsTrailItem ->
-              // Agent-agnostic: replays recorded steps deterministically and delegates only
-              // unrecorded steps to the selected runner (legacy / KOOG). Default unchanged.
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = item.promptSteps,
-                useRecordedSteps = runYamlRequest.useRecordedSteps,
-                selfHeal = runYamlRequest.config.selfHeal,
-              )
-            is TrailYamlItem.TrailheadTrailItem ->
-              trailblazeRunnerUtil.runPromptSuspend(
-                prompts = listOf(item.trailhead.toPromptStep()),
-                useRecordedSteps = true,
-                selfHeal = runYamlRequest.config.selfHeal,
-              )
-            is TrailYamlItem.ToolTrailItem ->
-              trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
-            is TrailYamlItem.ConfigTrailItem ->
-              item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
-          }
-          if (itemResult is TrailblazeToolResult.Error) {
-            throw TrailblazeException(itemResult.errorMessage)
-          }
-        }
-
-        Console.log("✅ Revyl execution completed for device: ${trailblazeDeviceId.instanceId}")
-        onProgressMessage("Test execution completed successfully")
-
-        if (runYamlRequest.config.sendSessionEndLog) {
-          loggingRule.captureFinalScreenshot(session, screenStateProvider)
-          loggingRule.endSession(session, isSuccess = true)
-        }
-
-        generateAndSaveRecording(
-          sessionId = session.sessionId,
-          customToolClasses = revylToolSet.toolClasses,
-        )
-
-        session.sessionId
-      }
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: TrailblazeSessionCancelledException) {
-      // executeTrailSession already logged the cancel and ended the session.
-      // Order matters: TSCE extends Exception (not CancellationException), so it
-      // must be caught before the generic branch below — same constraint as
-      // DesktopYamlRunner.runYaml's catch order.
-      throw e
-    } catch (e: Exception) {
-      Console.log("Revyl setup failed for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Error: ${e.message}")
-      // Re-throw so DesktopYamlRunner.runYaml's outer catch sets executionResult = Failed.
-      // Returning null was the silent-failure pattern previously fixed for executeTrailSession.
-      throw e
-    } finally {
-      if (runYamlRequest.config.sendSessionEndLog) {
-        deviceManager.removeActiveRevylCliClient(trailblazeDeviceId)
-        try { cliClient.stopSession() } catch (_: Exception) { }
-      }
     }
+
+    // A converted driver has no path below, so the Maestro fallback would run it on the wrong
+    // driver rather than reporting that nothing is plugged in. `forDriver` names the driver and
+    // the remedy.
+    if (driverType in HostDriverDescriptorRegistry.convertedDriverTypes) {
+      deviceManager.hostDriverDescriptors.forDriver(driverType)
+    }
+
+    return runMaestroHostYaml(dynamicLlmClient, runOnHostParams, deviceManager, logsDir)
   }
 
   /**
@@ -1423,6 +381,7 @@ object TrailblazeHostYamlRunner {
     dynamicLlmClient: DynamicLlmClient,
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
+    logsDir: File?,
   ): HostYamlRunResult {
 
     val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
@@ -1434,7 +393,10 @@ object TrailblazeHostYamlRunner {
     
     if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID && !isMcpRequest) {
       HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-        trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.availableAppTargets.map { it.getTrailblazeOnDeviceInstrumentationTarget() }
+        trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.availableAppTargets
+          // A declared in-process harness is an instrumentation process like the bundled
+          // runner — a stale one blocks the host Maestro instrumentation just the same.
+          .flatMap { it.allInstrumentationTargets() }
           .toSet(),
         deviceId = trailblazeDeviceId,
       )
@@ -1459,6 +421,8 @@ object TrailblazeHostYamlRunner {
       config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
       explicitDeviceId = trailblazeDeviceId,
+      logsDir = logsDir,
+      noLogging = runOnHostParams.noLogging,
     ) {
       // Honor the agent implementation chosen for THIS run (CLI --agent / settings / request),
       // overriding BaseHostTrailblazeTest's JUnit-eval system-property default so
@@ -1483,7 +447,7 @@ object TrailblazeHostYamlRunner {
     // Store the test instance for forceful shutdown on cancellation. Host-native iOS drivers
     // have no Maestro driver — and dereferencing hostTbRunner.hostRunner would construct one —
     // so this is skipped for them.
-    if (runOnHostParams.trailblazeDriverType !in TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES) {
+    if (!runOnHostParams.trailblazeDriverType.hostNativeSimulatorDriver) {
       deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
     }
 
@@ -1507,7 +471,7 @@ object TrailblazeHostYamlRunner {
     var lastToolResult: TrailblazeToolResult.Success? = null
 
     val sessionId = executeTrailSession(
-      loggingRule = hostTbRunner.loggingRule,
+      loggingRule = hostTbRunner.hostLoggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
       testName = runYamlRequest.testName,
       deviceLabel = "maestro:${trailblazeDeviceId.instanceId}",
@@ -1595,6 +559,7 @@ object TrailblazeHostYamlRunner {
       sessionId?.let {
         generateAndSaveRecording(
           sessionId = it,
+          logsDir = hostTbRunner.hostLoggingRule.logsRepo.logsDir,
           customToolClasses = runOnHostParams.targetTestApp
             ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
         )
@@ -1623,6 +588,15 @@ object TrailblazeHostYamlRunner {
    *   cancellations also propagate as exceptions — this function does NOT swallow
    *   exceptions and return null. See [executeTrailSession] re-throw semantics.
    */
+  /**
+   * The directory host-local tools resolve trail-relative paths against — see
+   * [xyz.block.trailblaze.MaestroTrailblazeAgent.workingDirectory]. One definition because every
+   * agent this file builds must anchor identically: a companion resolving a path differently from
+   * the primary would make the same trail-relative `hostPath` valid on one device and missing on
+   * another, for no reason a reader could see.
+   */
+  internal fun RunYamlRequest.trailDirectory(): File? = trailFilePath?.let { File(it).parentFile }
+
   suspend fun runHostV3WithAccessibilityYaml(
     dynamicLlmClient: DynamicLlmClient,
     onDeviceRpc: OnDeviceRpcClient,
@@ -1636,6 +610,10 @@ object TrailblazeHostYamlRunner {
      * bridge). Defaulted to a no-op so existing callers stay compatible.
      */
     onSessionStarted: (SessionId) -> Unit = {},
+    /** Directory this run's session logs are written to. See [runHostYaml]. */
+    logsDir: File? = null,
+    /** The run's `--no-logging` flag: no session files, no trace export. See [runHostYaml]. */
+    noLogging: Boolean = false,
   ): SessionId? {
     val driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val customToolClasses = targetTestApp
@@ -1646,11 +624,15 @@ object TrailblazeHostYamlRunner {
       customTrailblazeToolClasses = customToolClasses,
     )
 
-    // Query device classifiers up-front so a v3 trail can be lowered with the
+    // Query the device's own description of itself up-front so a v3 trail can be lowered with the
     // right closest-wins recording for THIS device. v1 trails ignore the list
     // (they have a single recording per step), so this re-ordering is a no-op
     // for the existing format.
-    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+    // Held in a reference, not a value: the device's size changes under the run (`setOrientation`
+    // swaps the axes, and orientation is derived from them), so the executor below refreshes it
+    // from every screen state this device reports.
+    val deviceProfile = AtomicReference(queryDeviceProfile(onDeviceRpc))
+    val classifiers = deviceProfile.get().classifiers.ifEmpty {
       HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
@@ -1685,14 +667,17 @@ object TrailblazeHostYamlRunner {
     // Set up host-side logging (session start/end logs are emitted here, not on-device)
     val loggingRule = HostTrailblazeLoggingRule(
       trailblazeDeviceInfoProvider = {
+        val profile = deviceProfile.get()
         TrailblazeDeviceInfo(
           trailblazeDeviceId = trailblazeDeviceId,
           trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-          widthPixels = 0,
-          heightPixels = 0,
+          widthPixels = profile.widthPixels,
+          heightPixels = profile.heightPixels,
           classifiers = classifiers,
         )
       },
+      logsDir = logsDir,
+      noLogging = noLogging,
     )
 
     val llmClient = dynamicLlmClient.createLlmClient()
@@ -1789,13 +774,16 @@ object TrailblazeHostYamlRunner {
           // The trail file's directory lets host-local tools resolve repo-relative files (e.g. a
           // committed account.json) against the trail on disk rather than the daemon's CWD/env,
           // which a persistent daemon doesn't share with the per-run trail-source clone.
-          workingDirectory = runYamlRequest.trailFilePath?.let { File(it).parentFile },
+          workingDirectory = runYamlRequest.trailDirectory(),
           // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts
           // under this session's on-host log dir.
           sessionDirProvider = loggingRule.logsRepo::getSessionDir,
         )
       },
       memory = sharedAgentMemory,
+      onScreenStateObserved = { response ->
+        deviceProfile.updateAndGet { it.withMeasuredSizeFrom(response) }
+      },
     )
     executorRef = executor
 
@@ -1810,6 +798,7 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = {
         runBlocking { executor.captureScreenState() } ?: error("No screen state available")
       },
+      noLogging = noLogging,
       cleanup = {
         withContext(NonCancellable) {
           subprocessRuntimes.forEach { it.shutdownAll() }
@@ -1970,6 +959,7 @@ object TrailblazeHostYamlRunner {
 
       generateAndSaveRecording(
         sessionId = session.sessionId,
+        logsDir = loggingRule.logsRepo.logsDir,
         customToolClasses = customToolClasses,
       )
 
@@ -2014,6 +1004,10 @@ object TrailblazeHostYamlRunner {
      * for the remaining names.
      */
     multiDeviceSession: MultiDeviceSessionRpc? = null,
+    /** Directory this run's session logs are written to. See [runHostYaml]. */
+    logsDir: File? = null,
+    /** The run's `--no-logging` flag: no session files, no trace export. See [runHostYaml]. */
+    noLogging: Boolean = false,
   ): SessionId? {
     val driverType = runYamlRequest.driverType
       ?: TrailblazeDriverType.DEFAULT_ANDROID
@@ -2055,9 +1049,14 @@ object TrailblazeHostYamlRunner {
       customTrailblazeToolClasses = decodeToolClasses,
     )
 
-    // Query device classifiers up-front so a v3 trail can be lowered with the
+    // Query the device's own description of itself up-front so a v3 trail can be lowered with the
     // right closest-wins recording for THIS device. v1 trails ignore the list.
-    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+    // Held in a reference, not a value: the device's size changes under the run (`setOrientation`
+    // swaps the axes, and orientation is derived from them), so the agent below refreshes it from
+    // every screen state this device reports. One reference per device — a companion rotating must
+    // not rewrite the launch device's size.
+    val deviceProfile = AtomicReference(queryDeviceProfile(onDeviceRpc))
+    val classifiers = deviceProfile.get().classifiers.ifEmpty {
       HostProbedDeviceClassifiers.forDevice(trailblazeDeviceId)
     }
 
@@ -2092,83 +1091,19 @@ object TrailblazeHostYamlRunner {
       return null
     }
 
-    // Multi-device sessions are mechanical-replay-only for now: every step must carry a recording
-    // for the selected configuration, because the LLM never learns about the bound devices (no
-    // `multi_device` toolset advertisement, no prompt context) — that wiring is deferred to
-    // docs/internal/devlog/2026-08-22-multi-device-ai-agent-wiring-plan.md. Fail at session start
-    // with the offending steps rather than letting the first unrecorded step reach a brain that
-    // can only ever drive the launch device.
-    if (multiDeviceSession != null) {
-      // The recording-coverage check below is necessary but not sufficient: both of these flags
-      // send an already-recorded step to the brain at RUN time, which lands on whichever device is
-      // active and can't address the others. Reject them here instead of discovering it mid-trail.
-      if (!runYamlRequest.useRecordedSteps) {
-        throw TrailblazeException(
-          "Multi-device sessions (configuration `${multiDeviceSession.configurationName}`) replay " +
-            "recorded steps only, so they can't run with recorded steps disabled " +
-            "(`--no-use-recorded-steps`) — the AI can't yet address the bound devices. Drop the " +
-            "flag, or run on a single device.",
-        )
-      }
-      if (runYamlRequest.config.selfHeal) {
-        throw TrailblazeException(
-          "Multi-device sessions (configuration `${multiDeviceSession.configurationName}`) can't " +
-            "run with self-heal enabled: a failed replay would hand the step to the AI, which can " +
-            "only drive whichever device is active and has no knowledge of the others. Disable " +
-            "self-heal, or run on a single device.",
-        )
-      }
-      val unrecordedSteps = trailItems.flatMap { item ->
-        when (item) {
-          // tools == null means "blaze via AI"; an explicit empty list is a deterministic no-op.
-          is TrailYamlItem.TrailheadTrailItem ->
-            if (item.trailhead.tools == null) listOf("trailhead: ${item.trailhead.step}") else emptyList()
-
-          is TrailYamlItem.PromptsTrailItem ->
-            // Mirrors the runtime's own replay predicate (TrailblazeRunnerUtil.canPromptStepUseRecording):
-            // `recordable: false` sends a step to the brain even when a recording leg parsed, so
-            // checking `recording != null` alone would let such a step through the guard.
-            item.promptSteps.filterNot { it.recordable && it.recording != null }.map { it.prompt }
-
-          else -> emptyList()
-        }
-      }
-      if (unrecordedSteps.isNotEmpty()) {
-        throw TrailblazeException(
-          "Multi-device sessions (configuration `${multiDeviceSession.configurationName}`) currently " +
-            "support fully recorded trails only — AI-driven steps can't yet address the bound devices. " +
-            "These steps have no recording for the configuration: " +
-            unrecordedSteps.joinToString("; ") { "\"$it\"" } + ". " +
-            "Record each step under the `${multiDeviceSession.configurationName}:` key, or run on a " +
-            "single device.",
-        )
-      }
-      // Resolve every recorded handover against the session's bindings before the first step runs.
-      // Only literal names are judged — a `{{…}}`/`${…}` name resolves from memory at the dispatch
-      // boundary, after the seeding below, so the guard defers it rather than rejecting it here.
-      val boundNames = setOf(multiDeviceSession.startDeviceName) + multiDeviceSession.companions.keys
-      val unboundSwitchTargets = MultiDeviceHandoverGuard.unboundTargets(trailItems, boundNames)
-      if (unboundSwitchTargets.isNotEmpty()) {
-        throw TrailblazeException(
-          "Multi-device session (configuration `${multiDeviceSession.configurationName}`) hands off " +
-            "to devices this session didn't bind: " +
-            unboundSwitchTargets.joinToString("; ") { (where, target) -> "$where → '$target'" } +
-            ". Bound devices: ${boundNames.joinToString()}. Use a name the configuration declares, " +
-            "or re-record the step on the pair.",
-        )
-      }
-    }
-
     val loggingRule = HostTrailblazeLoggingRule(
       trailblazeDeviceInfoProvider = {
+        val profile = deviceProfile.get()
         TrailblazeDeviceInfo(
           trailblazeDeviceId = trailblazeDeviceId,
           trailblazeDriverType = driverType,
-          widthPixels = 0,
-          heightPixels = 0,
+          widthPixels = profile.widthPixels,
+          heightPixels = profile.heightPixels,
           classifiers = classifiers,
         )
       },
+      logsDir = logsDir,
+      noLogging = noLogging,
     )
 
     val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
@@ -2193,19 +1128,46 @@ object TrailblazeHostYamlRunner {
       startDeviceTarget = startDeviceTarget,
       driverType = driverType,
     )
+    // `switchDevice` is session-bound, not target-declared: a multi-device session adds the
+    // `multi_device` toolset to its own surface so the LLM can hand the session over, and no target
+    // has to know it might be cast into a pair. Recorded handovers never needed this — they dispatch
+    // through the runner-util — so this is purely what makes the tool ADVERTISED.
+    val handoverToolSurface = MultiDeviceTargetBinding.handoverToolSurface(
+      isMultiDeviceSession = multiDeviceSession != null,
+    )
     val toolRepo = startDeviceTarget.toSessionToolRepo(
       driverType = driverType,
-      additional = if (webCompanionToolSurface == null) {
-        companionToolAdditions
-      } else {
+      additional = listOfNotNull(
+        companionToolAdditions,
+        webCompanionToolSurface,
+        handoverToolSurface,
+      ).let { surfaces ->
         ResolvedAgentToolbox(
-          toolClasses = companionToolAdditions.toolClasses + webCompanionToolSurface.toolClasses,
-          yamlToolNames = companionToolAdditions.yamlToolNames + webCompanionToolSurface.yamlToolNames,
-          scriptedToolNames = companionToolAdditions.scriptedToolNames +
-            webCompanionToolSurface.scriptedToolNames,
+          toolClasses = surfaces.flatMapTo(mutableSetOf()) { it.toolClasses },
+          yamlToolNames = surfaces.flatMapTo(mutableSetOf()) { it.yamlToolNames },
+          scriptedToolNames = surfaces.flatMapTo(mutableSetOf()) { it.scriptedToolNames },
         )
       },
     )
+
+    // An AI-driven step in a multi-device session is now a supported shape: the model is told the
+    // device roster and which one is active, and `switchDevice` is advertised to it, so a step
+    // without a recording reaches a brain that can both see and address the cast. What remains
+    // rejected lives in MultiDeviceSessionPreflight, which decides; this throws.
+    //
+    // Runs AFTER the repo is composed because one of those rules asks whether `switchDevice`
+    // survived the start target's `excluded_tools:` — a question only the composed surface can
+    // answer. Still ahead of the agent and the session, which is what "session start" means here.
+    if (multiDeviceSession != null) {
+      MultiDeviceSessionPreflight.rejectionReason(
+        configurationName = multiDeviceSession.configurationName,
+        selfHealEnabled = runYamlRequest.config.selfHeal,
+        handoverToolAdvertised = SwitchDeviceTrailblazeTool::class in toolRepo.getRegisteredTrailblazeTools(),
+        useRecordedSteps = runYamlRequest.useRecordedSteps,
+        trailItems = trailItems,
+        boundNames = setOf(multiDeviceSession.startDeviceName) + multiDeviceSession.companions.keys,
+      )?.let { reason -> throw TrailblazeException(reason) }
+    }
 
     // Pre-resolve the START device's target once — mirrors the V3 wiring in
     // `runHostV3WithAccessibilityYaml`. Surfaces `ctx.target.{id, appIds,
@@ -2248,6 +1210,14 @@ object TrailblazeHostYamlRunner {
       // Host-side `requiresHost` tools (e.g. a capture-reading tool) resolve capture artifacts under
       // this session's on-host log dir through the context this agent builds.
       sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+      // The trail file's directory lets host-local tools resolve trail-relative files (e.g. a
+      // committed WAV recording) against the trail on disk — same wiring as the V3 site in
+      // `runHostV3WithAccessibilityYaml`. Without it, a relative hostPath resolves against the
+      // daemon's CWD, which a CI trail-source clone in /tmp never matches.
+      workingDirectory = runYamlRequest.trailDirectory(),
+      onScreenStateObserved = { response ->
+        deviceProfile.updateAndGet { it.withMeasuredSizeFrom(response) }
+      },
     )
 
     // Seed the agent's memory before any tool runs — same [AgentMemory.seedFrom] composition
@@ -2273,7 +1243,11 @@ object TrailblazeHostYamlRunner {
       multiDeviceSession?.companions.orEmpty().mapValues { (_, companion) ->
         when (companion) {
           is CompanionDeviceConnection.AndroidRpc -> {
-            val companionClassifiers = queryDeviceClassifiers(companion.rpcClient).ifEmpty {
+            // This device's own reference — see the launch device's. A companion on an X2 pair is
+            // the display most likely to be rotated mid-trail, and sharing one reference across the
+            // pair would report whichever device captured last.
+            val companionProfile = AtomicReference(queryDeviceProfile(companion.rpcClient))
+            val companionClassifiers = companionProfile.get().classifiers.ifEmpty {
               HostProbedDeviceClassifiers.forDevice(companion.trailblazeDeviceId)
             }
             // THIS device's target and app id, not the launch device's: `ctx.target` follows the
@@ -2295,11 +1269,12 @@ object TrailblazeHostYamlRunner {
               ),
               trailblazeLogger = loggingRule.logger,
               trailblazeDeviceInfoProvider = {
+                val profile = companionProfile.get()
                 TrailblazeDeviceInfo(
                   trailblazeDeviceId = companion.trailblazeDeviceId,
                   trailblazeDriverType = driverType,
-                  widthPixels = 0,
-                  heightPixels = 0,
+                  widthPixels = profile.widthPixels,
+                  heightPixels = profile.heightPixels,
                   classifiers = companionClassifiers,
                 )
               },
@@ -2316,8 +1291,13 @@ object TrailblazeHostYamlRunner {
               resolvedTarget = companionResolvedTarget,
               appId = companionResolvedTarget?.let { resolveInstalledAppId(it) },
               sessionDirProvider = loggingRule.logsRepo::getSessionDir,
+              // Companions run the same trail file, so trail-relative paths anchor the same way.
+              workingDirectory = runYamlRequest.trailDirectory(),
               // Shared with the primary agent so a `remember` on one device resolves on another.
               memory = agent.memory,
+              onScreenStateObserved = { response ->
+                companionProfile.updateAndGet { it.withMeasuredSizeFrom(response) }
+              },
             )
             BoundSessionAgent(
               agent = companionAgent,
@@ -2331,8 +1311,17 @@ object TrailblazeHostYamlRunner {
               TrailblazeDeviceInfo(
                 trailblazeDeviceId = companion.trailblazeDeviceId,
                 trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-                widthPixels = 0,
-                heightPixels = 0,
+                // Unmeasured, and left that way deliberately. The Android companions above report
+                // their size — and keep it current — because one RPC they already make returns it;
+                // a browser's viewport has no equivalent free read: `PlaywrightPageManager` exposes
+                // only screen-state capture, and capturing here would settle the page and spend a
+                // step's pending detail request per log entry (see `captureScreenState` below). A
+                // resize tool can change the viewport mid-session, so there is no honest snapshot
+                // to take here either.
+                // Nothing web-side keys on these: recordings fold to the bare `web` classifier and
+                // orientation is meaningless for a browser window.
+                widthPixels = HostDeviceProfile.UNMEASURED,
+                heightPixels = HostDeviceProfile.UNMEASURED,
                 // The bare platform classifier (`web`) — same fold single-device web sessions get.
                 classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
               )
@@ -2375,17 +1364,35 @@ object TrailblazeHostYamlRunner {
       // The launch device is bound under the configuration's FIRST declared name (the start
       // device — declaration order is the launch marker); the remaining declared names bind
       // the companion agents. `switchDevice` addresses all of them by these names.
+      //
+      // Every device on this path has been probed, so identity comes from the probed info rather
+      // than being passed alongside it — one source, so the binding's agreement invariant holds
+      // by construction.
+      fun boundDevice(
+        deviceInfo: TrailblazeDeviceInfo,
+        name: String,
+        targetId: String?,
+      ) = SessionDeviceBindings.BoundDevice(
+        trailblazeDeviceId = deviceInfo.trailblazeDeviceId,
+        trailblazeDeviceInfo = deviceInfo,
+        description = multiDeviceSession.deviceDescriptions[name],
+        targetId = targetId,
+      )
       SessionDeviceBindings(
         devices = linkedMapOf(
-          multiDeviceSession.startDeviceName to SessionDeviceBindings.BoundDevice(
-            trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+          multiDeviceSession.startDeviceName to boundDevice(
+            deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+            name = multiDeviceSession.startDeviceName,
+            targetId = multiDeviceSession.startDeviceTarget?.id,
           ),
         ).apply {
           companionAgents.forEach { (name, bound) ->
             put(
               name,
-              SessionDeviceBindings.BoundDevice(
-                trailblazeDeviceInfo = bound.agent.trailblazeDeviceInfoProvider(),
+              boundDevice(
+                deviceInfo = bound.agent.trailblazeDeviceInfoProvider(),
+                name = name,
+                targetId = multiDeviceSession.companions.getValue(name).targetTestApp?.id,
               ),
             )
           }
@@ -2406,12 +1413,6 @@ object TrailblazeHostYamlRunner {
         },
       )
 
-    // NOTE: the `multi_device` toolset is deliberately NOT registered with the tool repo here.
-    // Multi-device sessions are mechanical-replay-only (enforced by the session-start guard
-    // above): recorded `switchDevice` steps replay through the runner-util without toolset
-    // enablement, and no unrecorded step ever reaches a brain — so advertising the tool to the
-    // LLM would be a lie until the prompt-context wiring lands. See
-    // docs/internal/devlog/2026-08-22-multi-device-ai-agent-wiring-plan.md.
     val primaryBound = BoundSessionAgent(
       agent = agent,
       screenStateProvider = agent.screenStateProvider,
@@ -2465,6 +1466,22 @@ object TrailblazeHostYamlRunner {
       }
     }
 
+    // Whether the roster also states the handover contract follows the repo's ACTUAL surface rather
+    // than the multi-device condition that added it, so a target excluding `switchDevice` can't
+    // leave the prompt describing a tool the model was never offered.
+    //
+    // Read per render, not captured: `addTrailblazeToolSet` can register after this point, and the
+    // verify surface reads the same registration live (`TrailblazeToolRepo.handoverVerifyTools`).
+    // A snapshot here would let a late registration advertise `switchDevice` on a verify step while
+    // the prompt still told the model the session has no handover.
+    val multiDevicePromptContextProvider: (() -> String?)? = deviceBindings?.let { bindings ->
+      {
+        bindings.renderMultiDevicePromptSection(
+          handoverToolAdvertised = SwitchDeviceTrailblazeTool::class in toolRepo.getRegisteredTrailblazeTools(),
+        )
+      }
+    }
+
     val elementComparator = TrailblazeElementComparator(
       screenStateProvider = activeScreenStateProvider,
       llmClient = llmClient,
@@ -2488,7 +1505,9 @@ object TrailblazeHostYamlRunner {
           sessionProvider = { loggingRule.session ?: error("Session not available") },
           maxLlmCalls = runYamlRequest.maxLlmCalls,
           systemPromptTemplate = TrailblazeRunner.composeSystemPrompt(),
-        )
+        ).apply {
+          perStepSystemPromptContextProvider = multiDevicePromptContextProvider
+        }
       } else {
         TrailblazeRunner(
           agent = routingAgent,
@@ -2499,7 +1518,9 @@ object TrailblazeHostYamlRunner {
           trailblazeLogger = loggingRule.logger,
           sessionProvider = { loggingRule.session ?: error("Session not available") },
           maxSteps = runYamlRequest.maxLlmCalls ?: TrailblazeRunner.DEFAULT_MAX_STEPS,
-        )
+        ).apply {
+          perStepSystemPromptContextProvider = multiDevicePromptContextProvider
+        }
       }
 
     // Per-tool screen capture for Maestro→accessibility migration. Read from env var
@@ -2645,6 +1666,7 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = {
         runBlocking { activeAgent().captureScreenState() } ?: error("No screen state available")
       },
+      noLogging = noLogging,
       cleanup = {
         withContext(NonCancellable) {
           subprocessRuntimes.forEach { it.shutdownAll() }
@@ -2784,6 +1806,7 @@ object TrailblazeHostYamlRunner {
 
       generateAndSaveRecording(
         sessionId = session.sessionId,
+        logsDir = loggingRule.logsRepo.logsDir,
         // Same superset the decode used, so a web companion's recorded steps round-trip.
         customToolClasses = decodeToolClasses,
       )
@@ -2793,29 +1816,37 @@ object TrailblazeHostYamlRunner {
   }
 
   /**
-   * Queries the on-device agent for its device classifiers via a lightweight screen state probe.
-   * Returns the classifiers (e.g., ["android", "phone"]) or an empty list if the device
-   * doesn't provide them (older on-device agents without classifier support).
+   * Asks the on-device agent to describe itself via a lightweight screen state probe: its
+   * classifiers (e.g. ["android", "phone"]) and its pixel dimensions.
+   *
+   * One probe for both, because the response carries both. The dimensions matter beyond display —
+   * `TrailblazeDeviceInfo` derives orientation from them, and scripted tools read them off
+   * `ctx.device` — so this used to report every RPC-driven device as an implicitly-portrait 0x0
+   * while the true size sat unread in the same response.
+   *
+   * Degrades rather than throws: an older agent without classifier support, or a failed RPC,
+   * yields empty/[HostDeviceProfile.UNMEASURED] on the axis it couldn't answer. Callers supply
+   * their own classifier fallback — which recovers classifiers but deliberately not size; see
+   * [HostDeviceProfile.unknown] for why borrowing that probe's `wm size` would be worse than
+   * reporting nothing.
    */
-  private suspend fun queryDeviceClassifiers(
+  private suspend fun queryDeviceProfile(
     onDeviceRpc: OnDeviceRpcClient,
-  ): List<TrailblazeDeviceClassifier> {
+  ): HostDeviceProfile {
     val probe = GetScreenStateRequest(
       includeScreenshot = false,
       includeAnnotatedScreenshot = false,
     )
     return when (val result = onDeviceRpc.rpcCall(probe)) {
-      is RpcResult.Success -> {
-        result.data.deviceClassifiers?.map { TrailblazeDeviceClassifier(it) } ?: emptyList()
-      }
+      is RpcResult.Success -> HostDeviceProfile.fromScreenState(result.data)
       is RpcResult.Failure -> {
         // Names the RPC cause only. The caller's fallback logs what it recovers with, so
         // stating the recovery here too would be both duplicative and wrong.
         Console.log(
-          "[Trailblaze] Failed to query device classifiers from on-device agent. " +
+          "[Trailblaze] Failed to query device profile from on-device agent. " +
             "RPC failure: ${result.message}",
         )
-        emptyList()
+        HostDeviceProfile.unknown()
       }
     }
   }
@@ -2902,6 +1933,8 @@ object TrailblazeHostYamlRunner {
      * separate follow-up work.
      */
     val startDeviceTarget: TrailblazeHostAppTarget? = null,
+    /** Human-readable role descriptions from the selected configuration, including start. */
+    val deviceDescriptions: Map<String, String?>,
   ) {
     init {
       require(startDeviceName !in companions) {
@@ -2926,18 +1959,56 @@ object TrailblazeHostYamlRunner {
   )
 
   /**
-   * Compares each snapshot taken during [sessionId] against its checked-in golden file.
-   * Goldens are resolved from the trail file's directory using the pattern:
-   * `{device-classifier}.{snapshot-name}.golden.png`
-   *
-   * Missing goldens are silently skipped (not a failure) — this allows new trails to run
-   * without goldens until they are deliberately captured and committed.
+   * Env var naming a baseline run to diff `takeSnapshot` captures against when the run itself
+   * carries no [RunOnHostParams.snapshotBaselineRef] — an http(s) URL to a session logs zip, a
+   * local zip, or an extracted session directory. Set it on the process that executes the
+   * comparison (the daemon / desktop app for delegated runs, the CLI for `--no-daemon` runs).
    */
-  private fun compareSnapshotsAgainstGoldens(sessionId: SessionId): SnapshotGoldenComparison.GoldenComparisonResult? {
-    return try {
-      val gitRoot = GitUtils.getGitRootViaCommand() ?: return null
-      val sessionDir = File(File(gitRoot, "logs"), sessionId.value)
-      if (!sessionDir.exists()) return null
+  const val SNAPSHOT_BASELINE_ENV_VAR = "TRAILBLAZE_SNAPSHOT_BASELINE"
+
+  /** Env-var counterpart of [RunOnHostParams.snapshotBaselineThresholdPercent]. */
+  const val SNAPSHOT_BASELINE_THRESHOLD_ENV_VAR = "TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD"
+
+  /**
+   * Compares each snapshot taken during [sessionId] against its reference image.
+   *
+   * Two modes:
+   *  - **Baseline run** (when [snapshotBaselineRef] or `TRAILBLAZE_SNAPSHOT_BASELINE` is set):
+   *    references come from a PREVIOUS run's session artifacts (e.g. CI's `latest_success.zip`),
+   *    matched by snapshot name — no golden files in the repo. A baseline that was explicitly
+   *    requested but cannot be resolved FAILS the run (via [TrailblazeException]) instead of
+   *    silently comparing nothing.
+   *  - **Checked-in goldens** (default): resolved from the trail file's directory using the
+   *    pattern `{device-classifier}.{snapshot-name}.golden.png`.
+   *
+   * In both modes a snapshot with no reference is skipped (not a failure) — this allows new
+   * trails/snapshots to run before their reference exists.
+   */
+  internal fun compareSnapshotsAgainstGoldens(
+    sessionId: SessionId,
+    logsDir: File,
+    snapshotBaselineRef: String? = null,
+    snapshotBaselineThresholdPercent: Double? = null,
+  ): SnapshotGoldenComparison.GoldenComparisonResult? {
+    val baselineRef = snapshotBaselineRef?.takeIf { it.isNotBlank() }
+      ?: System.getenv(SNAPSHOT_BASELINE_ENV_VAR)?.takeIf { it.isNotBlank() }
+
+    val comparison = try {
+      // Plain child join, not LogsRepo.getSessionDir — that would mkdir and defeat this guard.
+      val sessionDir = File(logsDir, sessionId.value)
+      // No session directory means no snapshot logs and no images to compare — with `--no-logging`
+      // that is the normal state, not an empty result. A requested baseline must say so rather
+      // than pass having compared nothing.
+      if (!sessionDir.exists()) {
+        if (baselineRef != null) {
+          throw TrailblazeException(
+            "Snapshot baseline '$baselineRef' was requested but this run wrote no session logs " +
+              "(${sessionDir.absolutePath}); snapshot comparison needs the run's captures, so it " +
+              "cannot be combined with logging disabled",
+          )
+        }
+        return null
+      }
 
       val logs = sessionDir.listFiles()
         ?.filter { it.extension == "json" }
@@ -2948,31 +2019,114 @@ object TrailblazeHostYamlRunner {
         ?.sortedBy { it.timestamp }
         ?: return null
 
-      val comparison = SnapshotGoldenComparison.compare(
+      if (baselineRef != null) {
+        compareAgainstBaselineRun(sessionId, sessionDir, logs, baselineRef, snapshotBaselineThresholdPercent)
+      } else {
+        SnapshotGoldenComparison.compare(
+          sessionId = sessionId,
+          sessionDir = sessionDir,
+          logs = logs,
+        )
+      }
+    } catch (e: TrailblazeException) {
+      // A baseline the caller explicitly asked for could not be resolved/compared — a silent
+      // pass here is the false green this feature exists to prevent.
+      throw e
+    } catch (e: Exception) {
+      // Same rule for anything else that goes wrong (temp-dir creation, image decode, IO): with a
+      // baseline requested, "comparison error" must not degrade into "compared nothing, passed".
+      if (baselineRef != null) {
+        throw TrailblazeException(
+          "Snapshot baseline '$baselineRef' comparison failed: ${e.message ?: e::class.simpleName}",
+        )
+      }
+      Console.log("[Golden] Comparison error (non-fatal): ${e.message}")
+      return null
+    }
+
+    val tag = "[${comparison.referenceLabel.replaceFirstChar { it.uppercase() }}]"
+    Console.log("$tag ${comparison.summary}")
+    comparison.results.forEach { r ->
+      if (r.goldenFound && !r.passed) {
+        Console.log(
+          "$tag ❌ '${r.snapshotName}': ${"%.2f".format(r.diffPercent)}% diff" +
+            " (${r.pixelDifferences}/${r.totalPixels} pixels," +
+            " threshold ${r.thresholdPercent}%)"
+        )
+      }
+    }
+    return comparison
+  }
+
+  /**
+   * Resolves [baselineRef] (download / unzip as needed) and diffs the session's snapshots
+   * against it. Resolution failures throw [TrailblazeException] — the caller asked for this
+   * comparison, so "could not fetch the baseline" must fail the run, not skip it.
+   */
+  /** Default when neither the request nor the environment names a threshold. */
+  internal const val DEFAULT_SNAPSHOT_BASELINE_THRESHOLD = 2.0
+
+  /**
+   * The threshold to compare at: the request's value, else [SNAPSHOT_BASELINE_THRESHOLD_ENV_VAR],
+   * else [DEFAULT_SNAPSHOT_BASELINE_THRESHOLD]. Both sources get the 0..100 check
+   * `--snapshot-baseline-threshold` applies, and an unparseable env value fails rather than
+   * silently defaulting: `-1` makes nothing pass, `500` makes nothing fail, and `2,0` reads as
+   * neither the 2 the author meant nor an error they can see.
+   */
+  internal fun resolveBaselineThreshold(requested: Double?, envValue: String?): Double {
+    fun validated(value: Double, source: String): Double {
+      // NaN compares false against both bounds, so an unguarded range test lets it through and then
+      // every `diffPercent > threshold` is false — the gate reports differences and passes anyway.
+      if (!value.isFinite() || value < 0.0 || value > 100.0) {
+        throw TrailblazeException("Snapshot baseline threshold from $source must be between 0 and 100 (got $value)")
+      }
+      return value
+    }
+    requested?.let { return validated(it, "the run request") }
+    val env = envValue?.takeIf { it.isNotBlank() } ?: return DEFAULT_SNAPSHOT_BASELINE_THRESHOLD
+    val parsed = env.toDoubleOrNull()
+      ?: throw TrailblazeException("$SNAPSHOT_BASELINE_THRESHOLD_ENV_VAR is not a number: '$env'")
+    return validated(parsed, SNAPSHOT_BASELINE_THRESHOLD_ENV_VAR)
+  }
+
+  private fun compareAgainstBaselineRun(
+    sessionId: SessionId,
+    sessionDir: File,
+    logs: List<TrailblazeLog>,
+    baselineRef: String,
+    thresholdPercent: Double?,
+  ): SnapshotGoldenComparison.GoldenComparisonResult {
+    val resolvedThreshold = resolveBaselineThreshold(
+      thresholdPercent,
+      System.getenv(SNAPSHOT_BASELINE_THRESHOLD_ENV_VAR),
+    )
+
+    val workDir = Files.createTempDirectory("trailblaze-snapshot-baseline").toFile()
+    try {
+      val baseline = try {
+        SnapshotBaselineSource.resolve(baselineRef, workDir)
+      } catch (e: Exception) {
+        throw TrailblazeException("Snapshot baseline '$baselineRef' could not be resolved: ${e.message}")
+      }
+      if (baseline.snapshotsByName.isEmpty()) {
+        Console.log("[Baseline] Baseline session at '$baselineRef' contains no takeSnapshot captures")
+      }
+      Console.log("[Baseline] Comparing snapshots against ${baseline.sourceDescription}")
+      return SnapshotGoldenComparison.compareToBaseline(
         sessionId = sessionId,
         sessionDir = sessionDir,
         logs = logs,
+        baseline = baseline,
+        thresholdPercent = resolvedThreshold,
       )
-
-      Console.log("[Golden] ${comparison.summary}")
-      comparison.results.forEach { r ->
-        if (r.goldenFound && !r.passed) {
-          Console.log(
-            "[Golden] ❌ '${r.snapshotName}': ${"%.2f".format(r.diffPercent)}% diff" +
-              " (${r.pixelDifferences}/${r.totalPixels} pixels," +
-              " threshold ${r.thresholdPercent}%)"
-          )
-        }
-      }
-
-      comparison
-    } catch (e: Exception) {
-      Console.log("[Golden] Comparison error (non-fatal): ${e.message}")
-      null
+    } finally {
+      // Diff images land in the CURRENT session's directory; the downloaded/extracted baseline
+      // is no longer needed once the comparison has run.
+      workDir.deleteRecursively()
     }
   }
 
-  private fun requireActionableSteps(
+  internal fun requireActionableSteps(
     trailblazeYaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
     trailItems: List<TrailYamlItem>,
     trailName: String?,
@@ -2985,17 +2139,14 @@ object TrailblazeHostYamlRunner {
     }
   }
 
-  private fun generateAndSaveRecording(
+  internal fun generateAndSaveRecording(
     sessionId: SessionId,
+    logsDir: File,
     customToolClasses: Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>> = emptySet(),
   ): RecordingResult? {
     try {
-      val gitRoot = GitUtils.getGitRootViaCommand()
-      if (gitRoot == null) {
-        Console.log("Could not determine git root, skipping recording generation")
-        return null
-      }
-      val sessionDir = File(File(gitRoot, "logs"), sessionId.value)
+      // Plain child join, not LogsRepo.getSessionDir — that would mkdir and defeat this guard.
+      val sessionDir = File(logsDir, sessionId.value)
       if (!sessionDir.exists()) {
         Console.log("Session directory not found at ${sessionDir.absolutePath}, skipping recording generation")
         return null

@@ -1,8 +1,10 @@
 package xyz.block.trailblaze.host.yaml
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.containsAtLeast
 import assertk.assertions.containsExactly
+import assertk.assertions.containsOnly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotEmpty
@@ -15,9 +17,13 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.yaml.createTrailblazeYamlFromAllTools
 
@@ -234,6 +240,65 @@ class MultiDeviceTargetBindingTest {
   fun `a device with no target resolves to nothing`() {
     assertThat(MultiDeviceTargetBinding.agentResolvedTarget(null, androidDevice("emulator-5560")))
       .isNull()
+  }
+
+  /**
+   * `switchDevice` is advertised because the SESSION bound a cast, not because a target asked for
+   * it — no app's trailmap can know whether it was cast into a pair.
+   */
+  @Test
+  fun `a multi-device session adds the handover tool and a single-device session adds nothing`() {
+    val multiDevice = MultiDeviceTargetBinding.handoverToolSurface(isMultiDeviceSession = true)
+    // Contains, not "contains only": the exact set is the catalog entry's, pinned by the test
+    // below. Growing `multi_device.yaml` should reach a session, not fail an assertion here.
+    assertThat(multiDevice.toolClasses).contains(SwitchDeviceTrailblazeTool::class)
+
+    val singleDevice = MultiDeviceTargetBinding.handoverToolSurface(isMultiDeviceSession = false)
+    assertThat(singleDevice.toolClasses).isEmpty()
+    assertThat(singleDevice.yamlToolNames).isEmpty()
+    assertThat(singleDevice.scriptedToolNames).isEmpty()
+  }
+
+  /**
+   * The surface reads the `multi_device` catalog entry rather than naming the tool class directly,
+   * so the YAML toolset stays the source of truth for what the toolset contains — adding a second
+   * tool to `multi_device.yaml` reaches a session without touching this code.
+   */
+  @Test
+  fun `the handover surface is read from the multi_device catalog entry`() {
+    val entryTools = TrailblazeToolSetCatalog.entryToolClasses(
+      SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+    )
+    assertThat(entryTools).isNotEmpty()
+
+    assertThat(MultiDeviceTargetBinding.handoverToolSurface(isMultiDeviceSession = true).toolClasses)
+      .isEqualTo(entryTools)
+  }
+
+  /**
+   * All three name kinds come from the entry, not just the class-backed one. `multi_device.yaml`
+   * declares only `switchDevice` today, so this drives a catalog that also carries a YAML-defined
+   * and a scripted tool — against the real catalog the scripted assertion would hold on an empty
+   * set whether the surface read it or not.
+   */
+  @Test
+  fun `every kind of tool the handover toolset declares reaches the surface`() {
+    val entry = ToolSetCatalogEntry(
+      id = SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+      description = "handover toolset carrying one tool of each kind",
+      toolClasses = setOf(SwitchDeviceTrailblazeTool::class),
+      yamlToolNames = setOf(ToolName("multi_device_yaml_tool")),
+      scriptedToolNames = setOf(ToolName("multi_device_scripted_tool")),
+    )
+
+    val surface = MultiDeviceTargetBinding.handoverToolSurface(
+      isMultiDeviceSession = true,
+      catalog = listOf(entry),
+    )
+
+    assertThat(surface.toolClasses).containsOnly(SwitchDeviceTrailblazeTool::class)
+    assertThat(surface.yamlToolNames).containsOnly(ToolName("multi_device_yaml_tool"))
+    assertThat(surface.scriptedToolNames).containsOnly(ToolName("multi_device_scripted_tool"))
   }
 
   private fun androidDevice(instanceId: String) = TrailblazeDeviceId(

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.scripting
 
+import java.io.File
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.Console
@@ -34,6 +35,12 @@ class LaunchedScriptingRuntime internal constructor(
    * `NameAlreadyRegistered` collisions on the next session's `addDynamicTools` call.
    */
   private val toolRepo: TrailblazeToolRepo,
+  /**
+   * Scratch directory a `--no-logging` session materialized its bundles and subprocess wrappers
+   * into, deleted at teardown. Null for a normal session, whose artifacts belong to the session
+   * directory and outlive this handle.
+   */
+  private val tempWorkDir: File? = null,
 ) {
 
   /**
@@ -67,5 +74,11 @@ class LaunchedScriptingRuntime internal constructor(
       }
     }
     subprocessRuntime?.shutdownAll()
+    // Last: the subprocesses above run out of this directory, so it can only go once they're gone.
+    tempWorkDir?.let { dir ->
+      if (!dir.deleteRecursively()) {
+        Console.log("[LaunchedScriptingRuntime] SHUTDOWN_FAIL kind=tempdir path=${dir.absolutePath}")
+      }
+    }
   }
 }

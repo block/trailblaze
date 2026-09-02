@@ -154,9 +154,10 @@ Toolsets are declared in `trailmaps/<id>/toolsets/*.yaml`. They are pure YAML gr
 | `ios` | `ios-host`, `ios-axe` |
 | `web` | `playwright-native`, `playwright-electron` |
 | `desktop` | `compose` |
-| `all` | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `ios-host`, `ios-axe`, `playwright-native`, `playwright-electron`, `revyl-android`, `revyl-ios`, `compose` |
+| `all` | `android-ondevice-accessibility`, `android-ondevice-instrumentation`, `android-test`, `ios-host`, `ios-axe`, `playwright-native`, `playwright-electron`, `revyl-android`, `revyl-ios`, `compose` |
 | `android-ondevice-accessibility` | specific `Android` driver |
 | `android-ondevice-instrumentation` | specific `Android` driver |
+| `android-test` | specific `Android` driver |
 | `ios-host` | specific `iOS` driver |
 | `ios-axe` | specific `iOS` driver |
 | `playwright-native` | specific `Web Browser` driver |

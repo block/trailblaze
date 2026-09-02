@@ -86,10 +86,10 @@ class DeviceConnectionTargetTest {
 
   @Test
   fun `every host-native ios driver is exempt, not just the one spelled out above`() {
-    // The exemption is the whole IOS_HOST_NATIVE_DRIVER_TYPES set, so adding a driver to it (the
+    // The exemption keys off `hostNativeSimulatorDriver`, so declaring it on a new driver (the
     // documented way to add one) exempts it here too rather than silently binding a target that
     // its connect never receives.
-    TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES.forEach {
+    TrailblazeDriverType.entries.filter { it.hostNativeSimulatorDriver }.forEach {
       assertFalse(bindsTargetApp(TrailblazeDevicePlatform.IOS, it), "$it should not bind a target")
     }
   }

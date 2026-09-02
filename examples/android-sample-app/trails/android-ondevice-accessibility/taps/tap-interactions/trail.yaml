@@ -2,7 +2,8 @@ config:
   id: sample-app/taps/tap-interactions
   target: xyz.block.trailblaze.examples.sampleapp
   devices:
-    android-phone: ANDROID_ONDEVICE_ACCESSIBILITY
+    android-phone:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trailhead:
   step: Launch the sample app

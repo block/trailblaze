@@ -871,7 +871,10 @@ function App() {
   const bundleCount = React.useMemo(() => {
     let arr = trails.data || [];
     if (gt && gt.target) arr = arr.filter((t) => t.target === gt.target);
-    if (gtPlatform) arr = arr.filter((t) => t.platform === gtPlatform);
+    // Through the same guard the list uses, so the badge cannot read 0 over a device platform the
+    // reader picked on another screen while the list it counts is showing everything.
+    const plat = window.TrailPlatform.platformScopeFor(arr, null, gtPlatform);
+    if (plat !== 'all') arr = arr.filter((t) => trailMatchesPlatform(t, plat));
     return TB.countTrailBundles(arr);
   }, [trails.data, gt && gt.target, gtPlatform]);
   // Runs badge: the count of every run the screen lists (active + completed), plus a glowing dot

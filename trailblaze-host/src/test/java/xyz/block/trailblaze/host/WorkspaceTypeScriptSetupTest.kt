@@ -82,6 +82,47 @@ class WorkspaceTypeScriptSetupTest {
   }
 
   @Test
+  fun `extractSdk ships the matcher subpath pair`() {
+    // `@trailblaze/scripting/matcher` is the supported specifier for the selector resolver.
+    // Both halves have to land: the per-trailmap tsconfig resolves the extensionless stem
+    // `dist/matcher`, so tsc picks up `matcher.d.ts` and bun picks up `matcher.js`. A trailmap
+    // that ships only one gets a resolution that half-works — types with no runtime (bun:
+    // "Export named 'resolve' not found") or runtime with no types (tsc: "Cannot find module").
+    val workspace = newWorkspaceRoot()
+
+    val sdkDir = WorkspaceTypeScriptSetup.extractSdk(workspace.toPath())
+
+    val dts = File(sdkDir.toFile(), "dist/matcher.d.ts")
+    assertTrue(dts.isFile, "expected the matcher declaration bundle at $dts")
+    val dtsContent = dts.readText()
+    assertTrue(
+      dtsContent.contains("declare function resolve("),
+      "expected the resolver's declaration in the matcher .d.ts; got first 200 chars: ${dtsContent.take(200)}",
+    )
+    assertTrue(
+      dtsContent.contains("interface TrailblazeNode"),
+      "expected the view-hierarchy node type in the matcher .d.ts; got first 200 chars: ${dtsContent.take(200)}",
+    )
+
+    val runtime = File(sdkDir.toFile(), "dist/matcher.js")
+    assertTrue(runtime.isFile, "expected the matcher runtime ESM bundle at $runtime")
+    val runtimeContent = runtime.readText()
+    // Assert the actual ESM export shape, not a bare substring: a bundle that kept the
+    // identifier only inside a comment or an internal closure would pass a `.contains`
+    // check while exporting nothing bun can import. Same discipline as the index.js
+    // assertion above.
+    listOf("resolve", "resolveText").forEach { symbol ->
+      val exported = Regex("""export\s*\{[^}]*\b$symbol\b""").containsMatchIn(runtimeContent) ||
+        Regex("""export\s+(?:const|let|var|function)\s+$symbol\b""").containsMatchIn(runtimeContent)
+      assertTrue(
+        exported,
+        "expected the matcher runtime to ESM-export `$symbol`; got last 500 chars: " +
+          runtimeContent.takeLast(500),
+      )
+    }
+  }
+
+  @Test
   fun `extractSdk is idempotent — re-run with same input doesn't churn mtimes`() {
     val workspace = newWorkspaceRoot()
 

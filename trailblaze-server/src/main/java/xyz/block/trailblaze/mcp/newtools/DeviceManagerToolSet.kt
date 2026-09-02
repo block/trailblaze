@@ -3,6 +3,11 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import xyz.block.trailblaze.config.KnownTargetMessages
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -14,10 +19,14 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
+import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolNames
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
+import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -101,6 +110,25 @@ class DeviceManagerToolSet(
      * a browser for that instance. Used by `trailblaze device create web`.
      */
     CREATE_WEB,
+
+    /**
+     * Add a device to this session under a NAME, keeping every device already bound —
+     * the interactive counterpart of a trail's `config.devices:` configuration, and the
+     * multi-device authoring surface for an agent that has no trail yet.
+     *
+     * Unlike [CONNECT] / [ANDROID] / [IOS] / [WEB], which replace the session's single
+     * device, BIND accumulates: bind `seller` then `buyer` and the session holds both,
+     * with `switchDevice(name=…)` handing it between them. The first name bound is the
+     * active one, mirroring "the first declared entry is the start device".
+     */
+    BIND,
+
+    /**
+     * Remove a named binding added by [BIND]. Unbinding the ACTIVE device hands the
+     * session to the first remaining name; unbinding the last one is refused (ending a
+     * session is `session(action=STOP)`, not an empty roster).
+     */
+    UNBIND,
   }
 
   /**
@@ -132,13 +160,21 @@ class DeviceManagerToolSet(
     device(action=INFO, detail=APPS) → list installed apps
     device(action=INFO, detail=FULL) → full info including apps
 
+    To drive MORE THAN ONE device in this session, bind each one under a name and hand
+    the session between them. BIND is additive — it keeps the devices already bound:
+
+    device(action=BIND, name="seller", deviceId="emulator-5554") → first bind is active
+    device(action=BIND, name="buyer", deviceId="emulator-5556")
+    switchDevice(name="buyer") → subsequent screens and tools act on the buyer device
+    device(action=UNBIND, name="buyer")
+
     Your session is recorded automatically.
     Save it anytime as a reusable test: trail(action=SAVE, name="my_test")
     """
   )
   @Tool(McpToolNames.TOOL_DEVICE)
   suspend fun device(
-    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, INFO, or CREATE_WEB")
+    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, INFO, CREATE_WEB, BIND, or UNBIND")
     action: DeviceAction,
     @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS, WEB, CREATE_WEB actions). For WEB and CREATE_WEB, any value provisions a new browser instance keyed by this ID.")
     deviceId: String? = null,
@@ -152,6 +188,8 @@ class DeviceManagerToolSet(
     viewport: String? = null,
     @LLMDescription("For INFO action: inspect only this MCP session's device binding. Internal CLI reuse probe; default false preserves the current process-wide device view.")
     sessionOnly: Boolean = false,
+    @LLMDescription("For BIND and UNBIND actions: the name this session addresses the device by (e.g. 'seller', 'buyer'). switchDevice(name=…) uses the same names.")
+    name: String? = null,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -208,6 +246,13 @@ class DeviceManagerToolSet(
           DeviceDetail.SUMMARY -> buildString {
             appendDeviceHeader(currentDeviceId)
             appendDriverStatusIfPresent(driverStatus)
+            // The roster is what tells an agent which names switchDevice accepts, so INFO reports it
+            // rather than making the agent remember what it bound. Omitted entirely for a session
+            // with no named bindings — the single-device response is unchanged.
+            if (sessionContext != null && sessionContext.boundDeviceNames().isNotEmpty()) {
+              appendLine()
+              appendLine(describeNamedBindings(sessionContext))
+            }
             val toolSummary = buildAvailableToolsSummary(currentDeviceId)
             if (toolSummary != null) {
               appendLine()
@@ -236,6 +281,12 @@ class DeviceManagerToolSet(
           DeviceDetail.FULL -> buildString {
             appendDeviceHeader(currentDeviceId)
             appendDriverStatusIfPresent(driverStatus)
+            // FULL is SUMMARY plus apps, so it carries the roster too — otherwise the agent asking
+            // for everything is the one left without the names switchDevice accepts.
+            if (sessionContext != null && sessionContext.boundDeviceNames().isNotEmpty()) {
+              appendLine()
+              appendLine(describeNamedBindings(sessionContext))
+            }
             if (driverStatus == null) {
               appendLine()
               // A failed device probe throws; degrade this section rather than discarding the
@@ -375,6 +426,391 @@ class DeviceManagerToolSet(
 
         connectToDeviceUnified(desktopDevice.trailblazeDeviceId, testName)
       }
+
+      // BIND and UNBIND move the session's device, so they serialize against each other and against
+      // a concurrent switchDevice — see [withDeviceRoutingLock].
+      DeviceAction.BIND -> withDeviceRoutingLock("BIND${name?.let { " '$it'" } ?: ""}") {
+        bindNamedDevice(name = name, deviceId = deviceId, testName = testName)
+      }
+
+      DeviceAction.UNBIND -> withDeviceRoutingLock("UNBIND${name?.let { " '$it'" } ?: ""}") {
+        unbindNamedDevice(name = name)
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Named bindings (interactive multi-device)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Adds [deviceId] to the session under [name] without dropping the devices already bound.
+   *
+   * Each named device holds its own claim — [DeviceClaimRegistry] is keyed by (device, session), so
+   * one session holding several is expressible — and each gets its driver warmed at bind time via
+   * [TrailblazeMcpBridge.selectDevice], so a later `switchDevice` is a handover rather than a cold
+   * start. Because `selectDevice` also points the bridge at the device it just warmed, binding a
+   * NON-active name re-selects the active one afterwards; otherwise the bridge and the session would
+   * disagree about which device the next tool call drives.
+   */
+  private suspend fun bindNamedDevice(
+    name: String?,
+    deviceId: String?,
+    testName: String?,
+  ): String {
+    val sessionContext = sessionContext
+      ?: return "Error: BIND needs an MCP session context, and this toolset was built without one."
+    if (name.isNullOrBlank()) {
+      return "Error: name required for BIND action, e.g. device(action=BIND, name=\"buyer\", deviceId=\"emulator-5556\")."
+    }
+    if (deviceId.isNullOrBlank()) {
+      return "Error: deviceId required for BIND action. Use LIST to see available devices."
+    }
+    val device = mcpBridge.getAvailableDevices().find { it.instanceId == deviceId }
+      ?: return "Error: Device '$deviceId' not found. Use LIST to see available devices." +
+        webBindHint(deviceId)
+
+    // Two names for one device would advertise a cast of two that is really one, and a
+    // switchDevice between them would report a handover that moved nothing — the failure is
+    // invisible until an agent wonders why the other device never reacts. SessionDeviceBindings
+    // rejects the same roster at construction; catching it here keeps it out of the roster.
+    val conflictingName = sessionContext.boundDeviceNames().firstOrNull { boundName ->
+      boundName != name && sessionContext.boundDevice(boundName)?.trailblazeDeviceId == device.trailblazeDeviceId
+    }
+    if (conflictingName != null) {
+      // Naming a device that already answers to a name means renaming it, and a rename is the one
+      // reading that keeps one device on one name. Refusing outright would dead-end the sole
+      // binding of a session: unbinding the old name first is what UNBIND refuses.
+      val nameHolder = sessionContext.boundDevice(name)
+      if (nameHolder == null) {
+        return renameBoundDevice(sessionContext, from = conflictingName, to = name, testName = testName)
+      }
+      return "Error: ${device.instanceId} is already bound as '$conflictingName', and '$name' is " +
+        "bound to ${nameHolder.trailblazeDeviceId.instanceId}. One device holds one name, so this " +
+        "would have to rename '$conflictingName' AND displace '$name'. Do it in two steps: " +
+        "device(action=UNBIND, name=\"$name\"), then bind ${device.instanceId} as '$name'."
+    }
+
+    // A name already pointing at a DIFFERENT device is a rebind, not a duplicate: release the
+    // outgoing device's claim so it isn't held by a session that no longer addresses it.
+    val previous = sessionContext.boundDevice(name)
+    // A FIRST bind while an ordinary CONNECT is in effect displaces that device — it never enters
+    // the roster and stops being the associated device, so its claim would be held for the life of
+    // a session that can no longer address it. Release and report, which is what the reverse
+    // direction does when CONNECT drops a roster.
+    val displacedUnnamed = sessionContext.associatedDeviceId
+      ?.takeIf { sessionContext.boundDeviceNames().isEmpty() && it != device.trailblazeDeviceId }
+    val claimError = claimForSession(device.trailblazeDeviceId)
+    if (claimError != null) return claimError
+
+    try {
+      mcpBridge.selectDevice(device.trailblazeDeviceId)
+    } catch (e: Exception) {
+      releaseClaimForSession(device.trailblazeDeviceId)
+      return "Error: Bound nothing — connecting to '$deviceId' failed: ${e.message}"
+    }
+
+    val becameActive = sessionContext.bindNamedDevice(
+      name = name,
+      device = SessionDeviceBindings.BoundDevice(
+        trailblazeDeviceId = device.trailblazeDeviceId,
+        // Identity is all a bind knows: nothing on this path probes geometry, and reporting 0x0
+        // would be indistinguishable from a real answer.
+        trailblazeDeviceInfo = null,
+        description = device.description,
+        targetId = mcpBridge.getSessionTargetAppIdForDevice(device.trailblazeDeviceId),
+      ),
+    )
+    if (becameActive) {
+      sessionContext.setAssociatedDevice(device.trailblazeDeviceId)
+      sessionContext.startImplicitRecording()
+    } else {
+      // Restore the bridge's selection to the active device — see the note on this method.
+      sessionContext.activeDeviceName()
+        ?.let { sessionContext.boundDevice(it) }
+        ?.let { mcpBridge.selectDeviceForSession(it.trailblazeDeviceId) }
+    }
+    // Both releases run after the roster and the associated device are settled, so the
+    // still-addressed check below sees the state a subsequent tool call will dispatch against.
+    if (previous != null && previous.trailblazeDeviceId != device.trailblazeDeviceId) {
+      releaseDeviceNoLongerAddressed(previous.trailblazeDeviceId)
+    }
+    displacedUnnamed?.let { releaseDeviceNoLongerAddressed(it) }
+    // The driver type is only known once a device is bound, and a newly-bound device can change the
+    // advertised surface (its own driver, its own target) — same reason connect fires this.
+    refreshToolsForActiveDevice()
+
+    val driverStatus = mcpBridge.getDriverConnectionStatus(device.trailblazeDeviceId)
+    return buildString {
+      append("Bound '$name' to ${device.instanceId} (${device.platform.displayName})")
+      if (previous != null && previous.trailblazeDeviceId != device.trailblazeDeviceId) {
+        append(", replacing ${previous.trailblazeDeviceId.instanceId}")
+      }
+      append(if (becameActive) " — now the ACTIVE device." else ".")
+      appendDriverStatusIfPresent(driverStatus)
+      displacedUnnamed?.let {
+        appendLine()
+        append(
+          "Released ${it.instanceId}, which was connected without a name — a named roster addresses " +
+            "devices by name, so bind it as well if this session still needs it.",
+        )
+      }
+      appendLine()
+      append(describeNamedBindings(sessionContext))
+      if (testName != null) {
+        appendLine()
+        append("(testName is ignored by BIND — name the session with session(action=START, title=…).)")
+      }
+    }
+  }
+
+  /**
+   * Moves an existing binding from [from] to [to] — a BIND naming a device that is already bound.
+   *
+   * Nothing device-side changes: the same device stays claimed, selected and active, and the
+   * advertised surface is unaffected because `switchDevice` is gated on the roster's SIZE and the
+   * names only appear in tool responses.
+   */
+  private fun renameBoundDevice(
+    sessionContext: TrailblazeMcpSessionContext,
+    from: String,
+    to: String,
+    testName: String?,
+  ): String {
+    val renamed = sessionContext.renameNamedDevice(from, to)
+      ?: return "Error: '$from' is no longer bound, so there was nothing to rename to '$to'."
+    return buildString {
+      append(
+        "Renamed '$from' to '$to' (${renamed.trailblazeDeviceId.instanceId}) — the same device, " +
+          "under a new name.",
+      )
+      appendLine()
+      append(describeNamedBindings(sessionContext))
+      if (testName != null) {
+        appendLine()
+        append("(testName is ignored by BIND — name the session with session(action=START, title=…).)")
+      }
+    }
+  }
+
+  /**
+   * Removes the binding for [name], releasing that device's claim.
+   *
+   * Refuses to unbind the session's last named device: the session would be left with a connected,
+   * claimed device and an empty roster, which reads like a disconnect but isn't one.
+   */
+  private suspend fun unbindNamedDevice(name: String?): String {
+    val sessionContext = sessionContext
+      ?: return "Error: UNBIND needs an MCP session context, and this toolset was built without one."
+    if (name.isNullOrBlank()) {
+      return "Error: name required for UNBIND action, e.g. device(action=UNBIND, name=\"buyer\")."
+    }
+    return when (val result = sessionContext.unbindNamedDevice(name)) {
+      TrailblazeMcpSessionContext.UnbindResult.NotBound -> {
+        val bound = sessionContext.boundDeviceNames()
+        "Error: No device bound as '$name'." + if (bound.isEmpty()) {
+          " This session has no named bindings — add one with device(action=BIND, name=…, deviceId=…)."
+        } else {
+          " Bound names: ${bound.joinToString()}."
+        }
+      }
+
+      TrailblazeMcpSessionContext.UnbindResult.LastRemaining ->
+        "Error: '$name' is this session's only bound device, so it was kept. Bind another device " +
+          "first, or end the session with session(action=STOP)."
+
+      is TrailblazeMcpSessionContext.UnbindResult.Unbound -> {
+        if (result.activeChanged) {
+          // The unbound device was active — hand the session to the name that took over, so the
+          // next tool call routes somewhere real instead of at a released device.
+          result.activeName
+            ?.let { sessionContext.boundDevice(it) }
+            ?.let { promoted ->
+              sessionContext.setAssociatedDevice(promoted.trailblazeDeviceId)
+              mcpBridge.selectDeviceForSession(promoted.trailblazeDeviceId)
+            }
+        }
+        // Every successful unbind, not just one that moved the active device: the roster's SIZE
+        // decides whether switchDevice is advertised, so dropping an inactive name from two to one
+        // has to retract it.
+        refreshToolsForActiveDevice()
+        // After the handover, so a device that was active and is still bound under another name
+        // keeps its claim.
+        releaseDeviceNoLongerAddressed(result.unbound.trailblazeDeviceId)
+        buildString {
+          append("Unbound '$name' (${result.unbound.trailblazeDeviceId.instanceId}).")
+          if (result.activeChanged) {
+            append(" '${result.activeName}' is now the ACTIVE device.")
+          }
+          appendLine()
+          append(describeNamedBindings(sessionContext))
+        }
+      }
+    }
+  }
+
+  /**
+   * Renders the session's named roster, or a one-liner when it has none. Named devices are what
+   * `switchDevice` addresses, so this block is what tells an agent which names are legal.
+   */
+  private fun describeNamedBindings(sessionContext: TrailblazeMcpSessionContext): String {
+    val names = sessionContext.boundDeviceNames()
+    if (names.isEmpty()) return "No named device bindings in this session."
+    val activeName = sessionContext.activeDeviceName()
+    return buildString {
+      appendLine(NAMED_DEVICES_HEADER)
+      names.forEach { boundName ->
+        val bound = sessionContext.boundDevice(boundName) ?: return@forEach
+        append("  - $boundName: ${bound.trailblazeDeviceId.toFullyQualifiedDeviceId()}")
+        // Resolved now, not at bind time: switchTargetApp and setSessionTargetForBoundDevice both
+        // move a device's target without rebuilding the roster, and a stale target here would tell
+        // an agent its tools resolve against something they don't.
+        val target = mcpBridge.getSessionTargetAppIdForDevice(bound.trailblazeDeviceId)
+          ?: bound.targetId
+        target?.let { append(" (target: $it)") }
+        if (boundName == activeName) append(" [ACTIVE]")
+        appendLine()
+      }
+      append(
+        if (names.size > 1) {
+          "Hand the session over with ${SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME}(name=\"…\")."
+        } else {
+          "Bind another device to make ${SwitchDeviceTrailblazeTool.ADVERTISED_TOOL_NAME} available."
+        },
+      )
+    }
+  }
+
+  /**
+   * `web/<id>` instances are virtual and only appear in the device listing once launched, so a BIND
+   * naming one that hasn't been provisioned reads as "not found" without saying why.
+   */
+  private fun webBindHint(deviceId: String): String =
+    if (deviceId.startsWith("web") || deviceId.contains('/')) {
+      " Web instances must be launched before they can be bound — run " +
+        "device(action=CREATE_WEB, deviceId=\"$deviceId\") first."
+    } else {
+      ""
+    }
+
+  /**
+   * Runs [block] as the session's only in-flight device move, so no two operations that move the
+   * session's device can interleave.
+   *
+   * Every one of them writes the roster and [TrailblazeMcpSessionContext.associatedDeviceId] (the id
+   * every subsequent `tools/call` routes by) around a suspending bridge call, so two running at once
+   * commit different halves: a `switchDevice` that suspends selecting its device while an UNBIND
+   * promotes another name leaves the session driving the device it just released and reporting the
+   * other. MCP dispatches each `tools/call` independently, so overlapping calls in one session are
+   * the client's to make.
+   *
+   * A move that can't get its turn within
+   * [TrailblazeMcpSessionContext.deviceMoveWaitMs] reports what is in flight rather than waiting out
+   * a cold bridge connect with nothing to show for it. Unserialized when this toolset was built
+   * without a session context — there is no roster to protect.
+   */
+  private suspend fun withDeviceRoutingLock(label: String, block: suspend () -> String): String {
+    val sessionContext = sessionContext ?: return block()
+    return sessionContext.runDeviceMove(
+      label = label,
+      onBusy = { inFlight ->
+        "Error: $label did not start — ${inFlight ?: "another device operation"} is still in flight " +
+          "on this session, and two of them at once would leave it driving one device and " +
+          "reporting another. Retry once it reports back."
+      },
+      block = block,
+    )
+  }
+
+  /**
+   * Re-registers the session's tools with the device it now routes to as the in-scope device.
+   *
+   * The registration side resolves the driver and target through
+   * `TrailblazeMcpServer.activeDeviceId`, which prefers the per-call
+   * [McpDeviceContext.currentDeviceId] — set at dispatch to the device this `tools/call` arrived
+   * for, which is the device a bind, unbind or connect has just moved OFF. Left unscoped, the
+   * refresh advertises the previous device's surface while dispatch routes to the new one.
+   */
+  private suspend fun refreshToolsForActiveDevice() {
+    val refresh = onDeviceConnected ?: return
+    val deviceId = sessionContext?.associatedDeviceId ?: return refresh()
+    withContext(McpDeviceContext.currentDeviceId.asContextElement(deviceId)) { refresh() }
+  }
+
+  /**
+   * Claims [deviceId] for this MCP session, terminating a displaced idle holder the same way
+   * [connectToDeviceUnified] does. Returns null on success, or the error string to hand back.
+   */
+  private fun claimForSession(deviceId: TrailblazeDeviceId): String? {
+    val mcpSessionId = sessionContext?.mcpSessionId?.sessionId ?: return null
+    val registry = deviceClaimRegistry ?: return null
+    return try {
+      val previousClaim = registry.claim(deviceId, mcpSessionId)
+      if (previousClaim != null && previousClaim.mcpSessionId != mcpSessionId) {
+        onTerminateSession?.invoke(previousClaim.mcpSessionId)
+      }
+      null
+    } catch (e: DeviceBusyException) {
+      "Error: ${e.message}"
+    }
+  }
+
+  private fun releaseClaimForSession(deviceId: TrailblazeDeviceId) {
+    val mcpSessionId = sessionContext?.mcpSessionId?.sessionId ?: return
+    deviceClaimRegistry?.release(deviceId, mcpSessionId)
+  }
+
+  /**
+   * Ends [deviceId]'s Trailblaze session and releases its claim, but only if nothing in this
+   * session still routes to it.
+   *
+   * The registry holds ONE claim per (device, session), and a device can be reached both as the
+   * active association and as a bound name. An unconditional release on unbind or rebind would free
+   * a device another session can then take while this one still dispatches there.
+   *
+   * Ending the session is part of letting the device go, not a nicety: session teardown only walks
+   * the devices the session can still address, so a device that leaves that set takes its open
+   * session with it. Releasing the claim alone would hand the next MCP session a device whose
+   * still-current session it would silently log into.
+   *
+   * "Addressed" is read as one snapshot ([TrailblazeMcpSessionContext.addressedDeviceIds]) rather
+   * than a roster walk, both because it takes the lock once and because it is the same definition
+   * session teardown uses — a device this returns cannot be one teardown will forget.
+   */
+  private suspend fun releaseDeviceNoLongerAddressed(deviceId: TrailblazeDeviceId) {
+    val sessionContext = sessionContext ?: return
+    if (deviceId in sessionContext.addressedDeviceIds()) return
+    // The release runs even if ending the session is cancelled: cancelling a request doesn't put
+    // the device back in this session's reach, and an unreleased claim would keep it away from
+    // every other session for good.
+    try {
+      endSessionOnDevice(deviceId)
+    } finally {
+      releaseClaimForSession(deviceId)
+    }
+  }
+
+  /**
+   * Ends any session running on [deviceId], addressing it explicitly rather than through whatever
+   * device this call happens to be dispatched against — the device being let go is by definition
+   * not the one the session is switching to.
+   *
+   * A failure here must not fail the bind or unbind that triggered it: the claim still has to be
+   * released, or the device stays locked to a session that can no longer reach it.
+   */
+  private suspend fun endSessionOnDevice(deviceId: TrailblazeDeviceId) {
+    try {
+      withContext(McpDeviceContext.currentDeviceId.asContextElement(deviceId)) {
+        if (mcpBridge.getActiveSessionId() != null) {
+          withTimeout(SESSION_END_TIMEOUT_MS) { mcpBridge.endSession() }
+        }
+      }
+    } catch (e: TimeoutCancellationException) {
+      Console.error("Timed out ending session on ${deviceId.instanceId} while releasing it: ${e.message}")
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Console.error("Error ending session on ${deviceId.instanceId} while releasing it: ${e.message}")
     }
   }
 
@@ -390,10 +826,22 @@ class DeviceManagerToolSet(
       else -> WebInstanceIds.PLAYWRIGHT_NATIVE
     }
 
+  /**
+   * Replaces the session's device, serialized against every other operation that moves it — see
+   * [withDeviceRoutingLock].
+   */
   private suspend fun connectToDeviceUnified(
     trailblazeDeviceId: TrailblazeDeviceId,
     testName: String? = null,
     webHeadless: Boolean? = null,
+  ): String = withDeviceRoutingLock("connect to ${trailblazeDeviceId.instanceId}") {
+    connectAndReplaceSessionDevice(trailblazeDeviceId, testName, webHeadless)
+  }
+
+  private suspend fun connectAndReplaceSessionDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    testName: String?,
+    webHeadless: Boolean?,
   ): String {
     // Check exclusive device claim before connecting
     val mcpSessionId = sessionContext?.mcpSessionId?.sessionId
@@ -444,13 +892,14 @@ class DeviceManagerToolSet(
     }
 
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
+    val droppedBindings = dropNamedRosterForReplacement()
     // Session creation is deferred to the first blaze/ask call so it can be named
     // after the first objective. Start implicit recording now (it just sets a flag).
     // Start implicit recording - user can save later with trail(action=SAVE, name="...")
     sessionContext?.startImplicitRecording()
     // The driver type is only known once a device is bound — this hook lets the MCP
     // server re-register the session's target-scoped tool surface for the new driver.
-    onDeviceConnected?.invoke()
+    refreshToolsForActiveDevice()
 
     // For WEB: browser may still be initializing (downloading Playwright/Chromium).
     // Surface the status so the MCP client knows to call device(action=WEB) again.
@@ -464,12 +913,42 @@ class DeviceManagerToolSet(
     }
     return buildString {
       append("Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName})$displacedMsg. Session recording - save anytime with trail(action=SAVE, name='...')")
+      if (droppedBindings.isNotEmpty()) {
+        append(
+          "\n\nDropped this session's named device bindings (${droppedBindings.joinToString()}) — " +
+            "connecting replaces the session's device. Use device(action=BIND, name=…, deviceId=…) " +
+            "to build a named roster instead.",
+        )
+      }
       val toolSummary = buildAvailableToolsSummary(trailblazeDeviceId)
       if (toolSummary != null) {
         append("\n\n")
         append(toolSummary)
       }
     }
+  }
+
+  /**
+   * Drops the session's named roster because its single device was just replaced, releasing the
+   * claim of every device that leaves the session's reach. Returns the names dropped, for the
+   * response.
+   *
+   * CONNECT/ANDROID/IOS/WEB/DESKTOP and the older [connectToDevice] all replace the device, so a
+   * roster built by BIND can't survive any of them: leaving it would advertise `switchDevice` names
+   * that no longer route anywhere while dispatch goes to the replacement.
+   */
+  private suspend fun dropNamedRosterForReplacement(): List<String> {
+    val sessionContext = sessionContext ?: return emptyList()
+    val droppedBindings = sessionContext.boundDeviceNames()
+    if (droppedBindings.isEmpty()) return emptyList()
+    val dropped = droppedBindings
+      .mapNotNull { sessionContext.boundDevice(it)?.trailblazeDeviceId }
+      .distinct()
+    // Clear first so the release below sees the roster a subsequent tool call dispatches
+    // against — the device just connected is still addressed and must keep its claim.
+    sessionContext.clearNamedDeviceBindings()
+    dropped.forEach { releaseDeviceNoLongerAddressed(it) }
+    return droppedBindings
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -489,13 +968,18 @@ class DeviceManagerToolSet(
 
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool(TOOL_CONNECT_DEVICE)
-  suspend fun connectToDevice(trailblazeDeviceId: TrailblazeDeviceId): String {
+  suspend fun connectToDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): String = withDeviceRoutingLock("connect to ${trailblazeDeviceId.instanceId}") {
     val result = mcpBridge.selectDevice(trailblazeDeviceId)
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
+    // This tool predates named bindings and keeps its JSON response, but it replaces the session's
+    // device like every other connect entry point — so it owes the roster the same cleanup.
+    dropNamedRosterForReplacement()
     // Session creation deferred to first blaze/ask call for meaningful naming.
     sessionContext?.startImplicitRecording()
-    onDeviceConnected?.invoke()
-    return TrailblazeJsonInstance.encodeToString(result)
+    refreshToolsForActiveDevice()
+    TrailblazeJsonInstance.encodeToString(result)
   }
 
   fun getAvailableAppTargets(): String {
@@ -811,11 +1295,27 @@ class DeviceManagerToolSet(
     const val TOOL_RUN_PROMPT = "runPrompt"
     const val TOOL_END_SESSION = "endSession"
 
+    /**
+     * Cap on ending the session of a device this session is letting go, matching the one session
+     * teardown uses. A device that won't finalize can't be allowed to hold up the bind or unbind
+     * that released it.
+     */
+    private const val SESSION_END_TIMEOUT_MS = 5_000L
+
     // Parameter names for the `device` tool. MCP binds arguments by the Kotlin
     // parameter name via reflection, so these string keys must exactly match
     // the parameter names on [device]. Callers (e.g. CliMcpClient) should reference
     // these constants instead of hardcoding the string.
     const val PARAM_DEVICE_ID = "deviceId"
     const val PARAM_HEADLESS = "headless"
+
+    /**
+     * Header the INFO response prints above a session's named-device roster.
+     *
+     * A const rather than an inline literal because the CLI keys on this line to find the roster
+     * in the response text, and uses its presence to decide which MCP session owns a session's
+     * lifecycle. Reworded inline, that decision would silently invert with nothing failing.
+     */
+    const val NAMED_DEVICES_HEADER = "Named devices in this session:"
   }
 }

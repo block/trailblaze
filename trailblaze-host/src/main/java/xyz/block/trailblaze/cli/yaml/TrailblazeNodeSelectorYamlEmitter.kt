@@ -28,14 +28,17 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
  *    generator never sets booleans to `false` (it uses `null` for "unconstrained"), so
  *    in practice this only ever emits `true` lines, but emitting raw `$it` lets a
  *    deliberately-set `false` round-trip through `ToolYamlConfig` without being dropped.
- *  - `inputType: 0` is treated as "unconstrained" (skipped) — `0` is Android's
- *    `InputType.TYPE_NULL`, which the generator emits as a default for nodes that
- *    don't expose an input type and is not a meaningful selector constraint. Every
- *    other nullable scalar follows the uniform "null = unconstrained, non-null =
- *    constraint" rule.
+ *  - `androidAccessibility.inputType: 0` is treated as "unconstrained" (skipped) — `0` is
+ *    Android's `InputType.TYPE_NULL`, which that generator emits as a default for nodes
+ *    that don't expose an input type. This is the ONE exception to the uniform "null =
+ *    unconstrained, non-null = constraint" rule, and it is scoped to that dialect: no
+ *    `androidView` strategy sets `inputType` at all, so a `0` there was set deliberately
+ *    and means "matches only views that take no text input" — which is what the resolver
+ *    does with it. Skipping it would emit YAML that matches a wider set than the selector
+ *    handed in, the exact silent widening [requireSelectorIsEmittable] exists to prevent.
  *
- * Emits `androidAccessibility`, `iosMaestro`, and `iosAxe` driver matchers. The remaining
- * drivers (`androidMaestro` / `web` / `compose`) are still gated by
+ * Emits `androidAccessibility`, `androidView`, `iosMaestro`, and `iosAxe` driver matchers. The
+ * remaining drivers (`androidMaestro` / `web` / `compose`) are still gated by
  * [requireSelectorIsEmittable] until their emission ladders + upstream synthesizers land.
  */
 object TrailblazeNodeSelectorYamlEmitter {
@@ -53,7 +56,7 @@ object TrailblazeNodeSelectorYamlEmitter {
    * Emit [selector] as YAML to [sink]. [indent] is the column the driver-match key
    * (`androidAccessibility:`) starts at; children indent by `+2` recursively.
    *
-   * Handles `androidAccessibility`, `iosMaestro`, and `iosAxe` matchers. Fails fast via
+   * Handles `androidAccessibility`, `androidView`, `iosMaestro`, and `iosAxe` matchers. Fails fast via
    * [requireSelectorIsEmittable] on the still-unsupported `web` / `compose` / `androidMaestro`
    * branches — a silent skip there would produce a YAML that looks fine to a human reader
    * but matches a different element (or none) at runtime.
@@ -89,6 +92,27 @@ object TrailblazeNodeSelectorYamlEmitter {
       m.inputType?.takeIf { it != 0 }?.let { sink.line("$childPad" + "inputType: $it") }
       m.collectionItemRowIndex?.let { sink.line("$childPad" + "collectionItemRowIndex: $it") }
       m.collectionItemColumnIndex?.let { sink.line("$childPad" + "collectionItemColumnIndex: $it") }
+    }
+    selector.androidView?.let { m ->
+      sink.line("${pad}androidView:")
+      m.classNameRegex?.let { sink.line("$childPad" + "classNameRegex: ${yamlQuote(it)}") }
+      m.resourceIdRegex?.let { sink.line("$childPad" + "resourceIdRegex: ${yamlQuote(it)}") }
+      m.tagRegex?.let { sink.line("$childPad" + "tagRegex: ${yamlQuote(it)}") }
+      m.textRegex?.let { sink.line("$childPad" + "textRegex: ${yamlQuote(it)}") }
+      m.contentDescriptionRegex?.let { sink.line("$childPad" + "contentDescriptionRegex: ${yamlQuote(it)}") }
+      m.hintTextRegex?.let { sink.line("$childPad" + "hintTextRegex: ${yamlQuote(it)}") }
+      m.stateDescriptionRegex?.let { sink.line("$childPad" + "stateDescriptionRegex: ${yamlQuote(it)}") }
+      m.errorTextRegex?.let { sink.line("$childPad" + "errorTextRegex: ${yamlQuote(it)}") }
+      m.isEnabled?.let { sink.line("$childPad" + "isEnabled: $it") }
+      m.isClickable?.let { sink.line("$childPad" + "isClickable: $it") }
+      m.isChecked?.let { sink.line("$childPad" + "isChecked: $it") }
+      m.isSelected?.let { sink.line("$childPad" + "isSelected: $it") }
+      m.isFocused?.let { sink.line("$childPad" + "isFocused: $it") }
+      m.isEditable?.let { sink.line("$childPad" + "isEditable: $it") }
+      m.isPassword?.let { sink.line("$childPad" + "isPassword: $it") }
+      // No `takeIf { it != 0 }` here, unlike the androidAccessibility ladder above — see the
+      // class kdoc. Nothing generates `inputType` on this dialect, so a `0` is a real constraint.
+      m.inputType?.let { sink.line("$childPad" + "inputType: $it") }
     }
     selector.iosMaestro?.let { m ->
       sink.line("${pad}iosMaestro:")
@@ -148,11 +172,11 @@ object TrailblazeNodeSelectorYamlEmitter {
 
   /**
    * Fail-fast guard for selector shapes this emitter doesn't have a field ladder for yet
-   * (`androidMaestro` / `web` / `compose`). `androidAccessibility`, `iosMaestro`, and
-   * `iosAxe` are emitted above; anything else must fail loudly rather than produce a YAML
-   * that silently drops the unsupported constraint (looks fine to a human, matches a
-   * different element — or none — at runtime). The error names each unsupported driver so
-   * the failure is self-describing.
+   * (`androidMaestro` / `web` / `compose`). `androidAccessibility`, `androidView`,
+   * `iosMaestro`, and `iosAxe` are emitted above; anything else must fail loudly rather than
+   * produce a YAML that silently drops the unsupported constraint (looks fine to a human,
+   * matches a different element — or none — at runtime). The error names each unsupported
+   * driver so the failure is self-describing.
    */
   private fun requireSelectorIsEmittable(selector: TrailblazeNodeSelector) {
     val unsupportedDrivers = listOfNotNull(
@@ -161,8 +185,8 @@ object TrailblazeNodeSelectorYamlEmitter {
       selector.compose?.let { "compose" },
     )
     require(unsupportedDrivers.isEmpty()) {
-      "TrailblazeNodeSelectorYamlEmitter supports androidAccessibility / iosMaestro / iosAxe " +
-        "driver matchers today; got unsupported driver(s): ${unsupportedDrivers.joinToString(", ")}. " +
+      "TrailblazeNodeSelectorYamlEmitter supports androidAccessibility / androidView / iosMaestro / " +
+        "iosAxe driver matchers today; got unsupported driver(s): ${unsupportedDrivers.joinToString(", ")}. " +
         "Support for the remaining drivers arrives when the upstream synthesizers (ShortcutProposer, " +
         "WaypointSuggestSelectorCommand) are platform-aware for them."
     }

@@ -86,6 +86,8 @@ object AndroidCompactElementList {
     val className: String?,
     val packageName: String?,
     val resourceId: String?,
+    /** Developer-set string `View` tag. Only the in-process driver's native shape reports one. */
+    val tag: String?,
     val uniqueId: String?,
     val text: String?,
     val contentDescription: String?,
@@ -115,6 +117,7 @@ object AndroidCompactElementList {
         className = d.className,
         packageName = d.packageName,
         resourceId = d.resourceId,
+        tag = null,
         uniqueId = d.uniqueId,
         text = d.text,
         contentDescription = d.contentDescription,
@@ -140,10 +143,46 @@ object AndroidCompactElementList {
         rangeInfo = d.rangeInfo,
       )
 
+      /**
+       * The in-process driver's native shape. `tag` gets its own slot rather than falling back
+       * into [resourceId]: the resolver matches `resourceIdRegex` and `tagRegex` against separate
+       * fields, so a tag rendered as `[id=…]` produces a selector that never matches.
+       */
+      fun from(d: DriverNodeDetail.AndroidView) = AndroidNodeProps(
+        className = d.className,
+        packageName = d.resourceId?.substringBefore(':')?.takeIf { '.' in it },
+        resourceId = d.resourceId,
+        tag = d.tag,
+        uniqueId = null,
+        text = d.text,
+        contentDescription = d.contentDescription,
+        hintText = d.hintText,
+        labeledByText = null,
+        stateDescription = d.stateDescription,
+        paneTitle = null,
+        error = d.errorText,
+        isClickable = d.isClickable,
+        isCheckable = d.isChecked != null,
+        isChecked = d.isChecked == true,
+        isSelected = d.isSelected,
+        isFocused = d.isFocused,
+        isEditable = d.isEditable,
+        isEnabled = d.isEnabled,
+        isScrollable = d.isScrollable,
+        isPassword = d.isPassword,
+        isHeading = false,
+        isVisibleToUser = d.isShown,
+        isImportantForAccessibility = true,
+        hasIdentifiableProperties = d.hasIdentifiableProperties,
+        collectionInfo = null,
+        rangeInfo = null,
+      )
+
       fun from(d: DriverNodeDetail.AndroidMaestro) = AndroidNodeProps(
         className = d.className,
         packageName = d.resourceId?.substringBefore(':')?.takeIf { '.' in it },
         resourceId = d.resourceId,
+        tag = null,
         uniqueId = null,
         text = d.text,
         contentDescription = d.accessibilityText,
@@ -169,9 +208,53 @@ object AndroidCompactElementList {
         rangeInfo = null,
       )
 
+      /**
+       * The ANDROID_TEST driver grafts native Compose semantics into the Android tree, so a mixed
+       * screen's compact text must render Compose nodes too. The test tag maps to [resourceId]:
+       * it is the developer-assigned stable identifier, exactly the role a resource-id plays for
+       * a classic View, and the compact renderer already prints that slot.
+       *
+       * An app-authored `stateDescription` wins the state slot over the derived toggle label. It
+       * is what `stateDescriptionRegex` matches on, and two controls that differ only by it render
+       * identically without this — so the agent cannot author the selector that would tell them
+       * apart. The toggle label stays as the fallback, and [isCheckable]/[isChecked] read the
+       * toggle state directly either way, so nothing about a checkbox is lost.
+       */
+      fun from(d: DriverNodeDetail.Compose) = AndroidNodeProps(
+        className = d.role,
+        packageName = null,
+        resourceId = d.testTag,
+        tag = null,
+        uniqueId = null,
+        text = d.text ?: d.editableText,
+        contentDescription = d.contentDescription,
+        hintText = null,
+        labeledByText = null,
+        stateDescription = d.stateDescription ?: d.toggleableState,
+        paneTitle = d.paneTitle,
+        error = d.errorText,
+        isClickable = d.hasClickAction,
+        isCheckable = d.toggleableState != null,
+        isChecked = d.toggleableState == "On",
+        isSelected = d.isSelected,
+        isFocused = d.isFocused,
+        isEditable = d.editableText != null,
+        isEnabled = d.isEnabled,
+        isScrollable = d.hasScrollAction,
+        isPassword = d.isPassword,
+        isHeading = d.isHeading,
+        isVisibleToUser = true,
+        isImportantForAccessibility = true,
+        hasIdentifiableProperties = d.hasIdentifiableProperties,
+        collectionInfo = null,
+        rangeInfo = null,
+      )
+
       fun of(node: TrailblazeNode): AndroidNodeProps? = when (val d = node.driverDetail) {
         is DriverNodeDetail.AndroidAccessibility -> from(d)
+        is DriverNodeDetail.AndroidView -> from(d)
         is DriverNodeDetail.AndroidMaestro -> from(d)
+        is DriverNodeDetail.Compose -> from(d)
         else -> null
       }
     }
@@ -409,6 +492,8 @@ object AndroidCompactElementList {
     val stableId = props.uniqueId?.takeIf { it.isNotBlank() }
       ?: props.resourceId?.takeIf { it.isNotBlank() }
     if (stableId != null) parts.add("[id=$stableId]")
+    // Kept out of the `[id=…]` slot on purpose — see AndroidNodeProps.from(AndroidView).
+    props.tag?.takeIf { it.isNotBlank() }?.let { parts.add("[tag=$it]") }
     if (props.isCheckable) parts.add(if (props.isChecked) "[checked]" else "[unchecked]")
     if (props.isSelected) parts.add("[selected]")
     if (props.isFocused) parts.add("[focused]")
@@ -460,6 +545,11 @@ object AndroidCompactElementList {
     if (props.error != null) return true
     // Focused element is meaningful
     if (props.isFocused) return true
+    // A tagged wrapper is meaningful even when it has nothing else: the tag is the only thing that
+    // tells otherwise-identical siblings apart, and it is only reachable as a `childOf` scope if
+    // the wrapper survives to be printed. Collapsing it leaves two identical rows in the output
+    // and no way to author a selector for either.
+    if (props.tag?.isNotBlank() == true) return true
     // Selected element is meaningful even without a click action. Material 3's
     // Compose NavigationBar moves `isSelected=true` onto a parent View and drops
     // the click action from that node while it's the current tab. Without this,

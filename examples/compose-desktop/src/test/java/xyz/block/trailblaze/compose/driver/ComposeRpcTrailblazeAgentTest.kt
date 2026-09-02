@@ -6,8 +6,10 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.containsExactly
 import assertk.assertions.hasSize
+import assertk.assertions.isEqualTo
 import assertk.assertions.isGreaterThan
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotEqualTo
 import assertk.assertions.isNotNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -32,6 +34,8 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
@@ -230,6 +234,54 @@ class ComposeRpcTrailblazeAgentTest {
       assertThat(result.executedTools).containsExactly(failing)
       // The post-batch screenshot still fires once (best-effort; report shows the failed state).
       assertThat(captured.filterIsInstance<TrailblazeLog.AgentDriverLog>()).hasSize(1)
+    }
+  }
+
+  /** Closure-carrying tool, dispatched through [ComposeRpcTrailblazeAgent]'s generic executable branch. */
+  private class LambdaTool(
+    private val block: suspend (TrailblazeToolExecutionContext) -> TrailblazeToolResult,
+  ) : ExecutableTrailblazeTool {
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult = block(toolExecutionContext)
+  }
+
+  @Test
+  fun `a nested call inside a shared tool batch is filed under its own parent's trace`() {
+    val captured = mutableListOf<TrailblazeLog>()
+    withAgent(captured) { agent ->
+      val composite = LambdaTool { ctx ->
+        ctx.nestedToolExecutor!!.invoke(LambdaTool { TrailblazeToolResult.Success() })
+      }
+      // A recorded step replays as one dispatch per recorded tool inside ONE shared batch, so the
+      // second dispatch reuses the context built for the first. This agent's nestedToolExecutor
+      // re-enters runTrailblazeTools, and re-entering with the context's BUILD-TIME trace would
+      // write the first tool's id back onto the shared context and file the nested call under it.
+      runBlocking {
+        agent.runInSharedToolBatch {
+          agent.runTrailblazeTools(
+            tools = listOf(LambdaTool { TrailblazeToolResult.Success() }),
+            traceId = null,
+            screenState = null,
+            elementComparator = stubElementComparator,
+            screenStateProvider = agent.screenStateProvider,
+          )
+          agent.runTrailblazeTools(
+            tools = listOf(composite),
+            traceId = null,
+            screenState = null,
+            elementComparator = stubElementComparator,
+            screenStateProvider = agent.screenStateProvider,
+          )
+        }
+      }
+
+      // A nested call's log lands while its parent's execute() is still running, so the order is
+      // first tool, nested call, composite parent.
+      val toolLogs = captured.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+      assertThat(toolLogs).hasSize(3)
+      assertThat(toolLogs[1].traceId).isEqualTo(toolLogs[2].traceId)
+      assertThat(toolLogs[1].traceId).isNotEqualTo(toolLogs[0].traceId)
     }
   }
 }

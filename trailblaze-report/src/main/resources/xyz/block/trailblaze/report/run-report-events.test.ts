@@ -18,6 +18,9 @@ const ev = require("./run-report-events.ts") as {
   formatterForStream: (formatters: EventStreamFormatter[], name: string) => EventStreamFormatter | null;
   formatRows: (formatter: EventStreamFormatter, entries: FormatterEntry[], ctx?: FormatterContext) => FormattedRow[] | null;
   buildEventStream: (file: string, lines: string[], formatters?: EventStreamFormatter[], ctx?: FormatterContext) => EventStream | null;
+  attachmentRefOf: (value: unknown) => AttachmentRef | null;
+  findAttachmentRefs: (value: unknown) => AttachmentRef[];
+  collectStreamAttachmentRefs: (streams: EventStream[] | null | undefined) => AttachmentRef[];
 };
 
 // A request/response-pairing formatter, the shape a real network formatter takes: it sees the whole
@@ -66,6 +69,8 @@ describe("cross-language parity fixtures", () => {
   const fixtures = require("./session-events-parity-fixtures.json") as {
     fileNames: Array<{ file: string; name: string | null }>;
     lines: Array<{ line: string; t: number | null; payload: unknown | null }>;
+    attachments: Array<{ value: unknown; refs: AttachmentRef[] }>;
+    safePaths: Array<{ path: string; safe: boolean }>;
   };
 
   test("file-name parsing agrees with the shared fixtures", () => {
@@ -84,6 +89,78 @@ describe("cross-language parity fixtures", () => {
       expect(e!.t).toBe(c.t);
       expect(e!.data).toEqual(c.payload);
     }
+  });
+
+  test("attachment detection agrees with the shared fixtures", () => {
+    expect(fixtures.attachments.length).toBeGreaterThan(0);
+    for (const c of fixtures.attachments) {
+      expect(ev.findAttachmentRefs(c.value)).toEqual(c.refs);
+    }
+  });
+
+  // Shared with the CI uploader's `_is_safe_session_relative` rather than with Kotlin: the report
+  // links every path this accepts, so a path only the uploader rejects ships a green build whose
+  // Open link 404s.
+  test("path safety agrees with the shared fixtures", () => {
+    expect(fixtures.safePaths.length).toBeGreaterThan(0);
+    for (const c of fixtures.safePaths) {
+      expect(ev.isSafeSessionRelativePath(c.path)).toBe(c.safe);
+    }
+  });
+});
+
+// The parity fixtures pin WHAT counts as a ref; these pin the TS-only surfaces around them: the
+// single-object probe's non-JSON inputs and the stream-level sweep the payload builders call.
+describe("attachment refs", () => {
+  const REF = { $attachment: true, path: "attachments/tone.wav", mimeType: "audio/wav", sizeBytes: 3 };
+
+  test("attachmentRefOf rejects non-objects, arrays, and a non-finite sizeBytes", () => {
+    expect(ev.attachmentRefOf(null)).toBeNull();
+    expect(ev.attachmentRefOf("string")).toBeNull();
+    expect(ev.attachmentRefOf([REF])).toBeNull();
+    // Unreachable through JSON.parse, but the probe also sees live JS values.
+    expect(ev.attachmentRefOf({ ...REF, sizeBytes: Infinity })).toBeNull();
+    expect(ev.attachmentRefOf({ ...REF, sizeBytes: NaN })).toBeNull();
+    expect(ev.attachmentRefOf(REF)).toEqual({ path: "attachments/tone.wav", mimeType: "audio/wav", sizeBytes: 3, label: null });
+  });
+
+  test("attachmentRefOf rejects a negative sizeBytes rather than truncating toward zero", () => {
+    // A negative size is bad input, not a very small file. Truncating -0.5 would yield -0, which
+    // renders as an empty byte count on a row claiming bytes that cannot exist — so the ref is
+    // refused outright, exactly as Kotlin's AttachmentRef.fromJsonObjectOrNull refuses it. This
+    // pair is pinned in session-events-parity-fixtures.json too; the direct assertions are here so
+    // the rule is legible next to the implementation.
+    expect(ev.attachmentRefOf({ ...REF, sizeBytes: -1 })).toBeNull();
+    expect(ev.attachmentRefOf({ ...REF, sizeBytes: -0.5 })).toBeNull();
+    // Zero is a real size (an empty capture), so it stays a ref.
+    expect(ev.attachmentRefOf({ ...REF, sizeBytes: 0 })?.sizeBytes).toBe(0);
+  });
+
+  test("collectStreamAttachmentRefs sweeps generic events and formatted rows' raw payloads", () => {
+    const streams: EventStream[] = [
+      {
+        name: "speech", total: 2, truncated: false,
+        events: [
+          { t: 1, d: JSON.stringify({ text: "hi", audio: REF }) },
+          { t: 2, d: "{\"no\":\"refs\"}" },
+        ],
+      },
+      {
+        name: "net", total: 1, truncated: false, events: [],
+        rows: [{ t: 3, label: "POST /x", raw: [{ body: { $attachment: true, path: "attachments/body.png", mimeType: "image/png", sizeBytes: 9 } }] }],
+      },
+    ];
+    expect(ev.collectStreamAttachmentRefs(streams).map((r) => r.path))
+      .toEqual(["attachments/tone.wav", "attachments/body.png"]);
+  });
+
+  test("a truncated (non-JSON) event payload contributes nothing rather than throwing", () => {
+    const streams: EventStream[] = [{
+      name: "s", total: 1, truncated: false,
+      events: [{ t: 1, d: '{"cut":"off…' }, { t: 2, d: JSON.stringify({ a: REF }) }],
+    }];
+    expect(ev.collectStreamAttachmentRefs(streams).map((r) => r.path)).toEqual(["attachments/tone.wav"]);
+    expect(ev.collectStreamAttachmentRefs(null)).toEqual([]);
   });
 });
 

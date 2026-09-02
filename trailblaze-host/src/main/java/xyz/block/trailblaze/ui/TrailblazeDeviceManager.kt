@@ -19,8 +19,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.net.HttpURLConnection
-import java.net.URI
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -36,14 +34,21 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.host.animations.SessionAnimationDisabler
 import xyz.block.trailblaze.host.capture.SessionCaptureCoordinator
 import xyz.block.trailblaze.host.capture.finalizeHostSessionResources
+import xyz.block.trailblaze.host.devices.HostProbe
 import xyz.block.trailblaze.host.devices.WebBrowserManager
+import xyz.block.trailblaze.host.driver.DeviceListingVisibility
+import xyz.block.trailblaze.host.driver.BootedIosSimulator
+import xyz.block.trailblaze.host.driver.ConnectedAdbDevice
+import xyz.block.trailblaze.host.driver.DescriptorDeviceDiscovery
+import xyz.block.trailblaze.host.driver.HostDeviceInventory
+import xyz.block.trailblaze.host.driver.HostScreenStateDeps
+import xyz.block.trailblaze.host.driver.HostDriverDescriptorRegistry
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.DeviceConnectionService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -65,6 +70,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.transport.AndroidWireTransport
 import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
@@ -81,8 +87,6 @@ import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
-import xyz.block.trailblaze.revyl.RevylCliClient
-import xyz.block.trailblaze.revyl.RevylScreenState
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -114,6 +118,17 @@ class TrailblazeDeviceManager(
   private val appVersionInfoProviderBlocking: (TrailblazeDeviceId, String) -> AppVersionInfo? = { _, _ -> null },
   val onDeviceInstrumentationArgsProvider: () -> Map<String, String>,
   private val trailblazeAnalytics: TrailblazeAnalytics,
+  /**
+   * The drivers this app has plugged in. Discovery, listing, screen-state capture and host runs
+   * all consult it before falling back to their remaining `when (driverType)` arms.
+   *
+   * Defaults to empty, which preserves the old behavior only for drivers that haven't converted —
+   * they still take their `when` arms. A converted driver is absent under the default: nothing
+   * discovers its devices and screen-state capture throws. Hand-built managers don't run
+   * [HostDriverDescriptorRegistry.validateCovers], so nothing warns; an app that wants a converted
+   * driver must pass its registry.
+   */
+  val hostDriverDescriptors: HostDriverDescriptorRegistry = HostDriverDescriptorRegistry.EMPTY,
 ) {
 
   /**
@@ -265,7 +280,7 @@ class TrailblazeDeviceManager(
    * Shared connection service for both the desktop recording tab and the HTTP recording
    * API. Centralizes the platform-specific connect logic so both surfaces stay in sync.
    */
-  val connectionService = xyz.block.trailblaze.host.recording.DeviceConnectionService(this)
+  val connectionService = DeviceConnectionService(this)
 
   /**
    * Shared registry of live [xyz.block.trailblaze.recording.DeviceScreenStream] instances, keyed by
@@ -315,20 +330,28 @@ class TrailblazeDeviceManager(
     }
   }
 
-  private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
+  // Internal (not private) so WebModeGateMembershipTest can exercise the gate directly.
+  internal val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
       val isWebMode =
         settingsRepo.serverStateFlow.value.appConfig.testingEnvironment ==
           TrailblazeServerState.TestingEnvironment.WEB
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
-        when (connectedDeviceSummary.trailblazeDriverType) {
-          // Virtual devices (Playwright, Compose) — only shown when web mode is enabled.
-          TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-          TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-          TrailblazeDriverType.COMPOSE -> isWebMode
-          TrailblazeDriverType.REVYL_ANDROID,
-          TrailblazeDriverType.REVYL_IOS -> true
-          else -> settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
+        val driverType = connectedDeviceSummary.trailblazeDriverType
+        // An addressable-but-unlisted driver stays in device state whatever the user's enabled
+        // -drivers setting says: `--device <its id>` has to keep working, and the listings that
+        // shouldn't show it strip it themselves via DeviceListingVisibility.
+        if (hostDriverDescriptors.forDriverOrNull(driverType)?.listingVisibility ==
+          DeviceListingVisibility.ADDRESSABLE_NOT_LISTED
+        ) {
+          return@filter true
+        }
+        when {
+          // Virtual devices (web browsers, desktop windows) — only shown when web mode is
+          // enabled. Keyed on the platform fact, not driver names, so a new virtual driver
+          // is gated the same way without a change here.
+          driverType.platform.usesVirtualDevice -> isWebMode
+          else -> settingsRepo.getEnabledDriverTypes().contains(driverType)
         }
       }
     }
@@ -465,7 +488,7 @@ class TrailblazeDeviceManager(
     // Per-run override (Run-config dialog); null = appConfig default.
     captureNetworkTrafficOverride: Boolean? = null,
     // Per-run video-capture override (Trail Runner / Run-config "Capture video" toggle); null =
-    // default (record). Threaded into DesktopAppRunYamlParams.captureVideo so it reaches the
+    // default (no video). Threaded into DesktopAppRunYamlParams.captureVideo so it reaches the
     // web / Electron self-instrumented capture path, which the SessionCaptureCoordinator (and thus
     // getOrCreateSessionResolution's captureVideoOverride) skips for WEB.
     captureVideoOverride: Boolean? = null,
@@ -621,12 +644,15 @@ class TrailblazeDeviceManager(
       val appConfig = settingsRepo.serverStateFlow.value.appConfig
       captureAppId = sessionTargetRegistry.get(sessionId) ?: getCurrentSelectedTargetApp()?.id
       // Resolve capture options from the daemon's `appConfig` toggles. Per-run CLI
-      // flags (--no-capture-video / --capture-logcat) are layered on by
+      // flags (--capture-video / --capture-logcat) are layered on by
       // `DesktopYamlRunner` when the CLI path also fires `startForSession`; the
       // coordinator's reservation pattern makes that second call a no-op so the
-      // appConfig-derived options here are what win for MCP-only paths.
+      // appConfig-derived options here are what win for MCP-only paths. That makes
+      // `trailblaze config capture-video true` the way interactive `session start` and
+      // MCP sessions opt into video — they have no positive per-run flag to pass.
       captureOptions = CaptureOptions.hostCaptureOptions(
-        captureVideo = captureVideoOverride ?: true,
+        captureVideo = captureVideoOverride,
+        persistedCaptureVideo = appConfig.captureVideo,
         captureLogcat = captureLogcatOverride ?: appConfig.captureLogcat,
         captureIosLogs = captureIosLogsOverride ?: appConfig.captureIosLogs,
       )
@@ -855,19 +881,40 @@ class TrailblazeDeviceManager(
     val deviceState = getDeviceState(trailblazeDeviceId) ?: return null
     val driverType = deviceState.device.trailblazeDriverType
 
+    // Contained like descriptor discovery is: a plug-in that throws costs the caller this capture,
+    // not the whole MCP-facing screen-state call. The paths below already degrade this way.
+    hostDriverDescriptors.forDriverOrNull(driverType)?.let { descriptor ->
+      return try {
+        descriptor.screenState(
+          driverType,
+          trailblazeDeviceId,
+          HostScreenStateDeps(activeMaestroDriver = ::getActiveDriverForDevice),
+        )
+      } catch (e: CancellationException) {
+        // A capture is cancellable work; swallowing this leaves the caller's coroutine looking
+        // alive and makes daemon shutdown unresponsive.
+        throw e
+      } catch (e: Exception) {
+        Console.log("❌ Exception getting screen state from $driverType descriptor: ${e.message}")
+        e.printStackTrace()
+        null
+      }
+    }
+
     return when (driverType) {
       TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> {
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      // The in-process harness hosts the same RPC server (screen-state capture stays live even
+      // while a trail occupies its instrumentation test thread), so it captures the same way.
+      TrailblazeDriverType.ANDROID_TEST -> {
         // Use RPC for on-device Android instrumentation
-        getCurrentScreenStateViaRpc(trailblazeDeviceId)
+        getCurrentScreenStateViaRpc(trailblazeDeviceId, driverType)
       }
-      TrailblazeDriverType.IOS_HOST,
-      TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-      TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> {
+      TrailblazeDriverType.IOS_HOST -> {
         // Use direct Maestro driver access for host drivers
         getCurrentScreenStateViaDriver(trailblazeDeviceId)
       }
-      // The IOS_HOST_NATIVE_DRIVER_TYPES member, spelled out so this `when` stays
+      // The host-native simulator driver, spelled out so this `when` stays
       // compile-time exhaustive — a new driver (or new set member) must add a branch here.
       TrailblazeDriverType.IOS_AXE -> {
         // This manager only holds device *summaries*; a host-native iOS driver's screen state
@@ -877,60 +924,61 @@ class TrailblazeDeviceManager(
         Console.log("⚠️ $driverType has no live connected device to capture screen state from")
         null
       }
-      TrailblazeDriverType.REVYL_ANDROID,
-      TrailblazeDriverType.REVYL_IOS -> {
-        val platform = if (driverType == TrailblazeDriverType.REVYL_ANDROID) "android" else "ios"
-        val activeClient = getActiveRevylCliClient(trailblazeDeviceId)
-        if (activeClient != null) {
-          RevylScreenState(activeClient, platform)
-        } else {
-          Console.log("No active Revyl session for ${trailblazeDeviceId.instanceId}, screen state unavailable")
-          null
-        }
-      }
-      TrailblazeDriverType.COMPOSE -> {
-        // No capture path wired for the Compose desktop driver.
-        Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
-        null
-      }
+      // Converted drivers returned above. Reaching here means one lost its descriptor without
+      // regaining an arm, which HostDriverDescriptorRegistry.validateCovers exists to prevent.
+      else -> error(
+        "$driverType has no screen-state path: it is neither handled above nor backed by a " +
+          "registered HostDriverDescriptor.",
+      )
     }
   }
   
   /**
    * Captures screen state via RPC for on-device Android instrumentation.
    */
-  private suspend fun getCurrentScreenStateViaRpc(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
+  private suspend fun getCurrentScreenStateViaRpc(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
+  ): ScreenState? {
     return try {
-      val rpcClient = OnDeviceRpcClient(
+      // Closed on every exit: the client owns a WebSocket and an HTTP engine, and this helper runs
+      // on every host-side screen-state read, so one leaked client per capture accumulates
+      // connections for the life of the daemon.
+      OnDeviceRpcClient(
         trailblazeDeviceId = trailblazeDeviceId,
         sendProgressMessage = { },
-      )
-      
-      val request = GetScreenStateRequest(includeScreenshot = true)
-        .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
-      
-      when (val result = rpcClient.rpcCall(request)) {
-        is RpcResult.Success -> {
-          val response = result.data
-          val screenshotBytes = response.screenshotBytes ?: response.screenshotBase64?.let {
-            Base64.getDecoder().decode(it)
+        wireTransportMode = AndroidWireTransport.modeFor(driverType),
+      ).use { rpcClient ->
+        val request = GetScreenStateRequest(includeScreenshot = true)
+          .withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
+
+        when (val result = rpcClient.rpcCall(request)) {
+          is RpcResult.Success -> {
+            val response = result.data
+            val screenshotBytes = response.screenshotBytes ?: response.screenshotBase64?.let {
+              Base64.getDecoder().decode(it)
+            }
+
+            object : ScreenState {
+              override val screenshotBytes: ByteArray? = screenshotBytes
+              override val deviceWidth: Int = response.deviceWidth
+              override val deviceHeight: Int = response.deviceHeight
+              override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
+              override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
+                trailblazeDeviceId.trailblazeDevicePlatform
+              override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+            }
           }
-          
-          object : ScreenState {
-            override val screenshotBytes: ByteArray? = screenshotBytes
-            override val deviceWidth: Int = response.deviceWidth
-            override val deviceHeight: Int = response.deviceHeight
-            override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
-            override val trailblazeDevicePlatform: TrailblazeDevicePlatform = 
-              trailblazeDeviceId.trailblazeDevicePlatform
-            override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
+          is RpcResult.Failure -> {
+            Console.log("❌ Failed to get screen state via RPC: ${result.message}")
+            null
           }
-        }
-        is RpcResult.Failure -> {
-          Console.log("❌ Failed to get screen state via RPC: ${result.message}")
-          null
         }
       }
+    } catch (e: CancellationException) {
+      // A capture is cancellable work; swallowing this leaves the caller's coroutine looking
+      // alive and makes daemon shutdown unresponsive.
+      throw e
     } catch (e: Exception) {
       Console.log("❌ Exception getting screen state via RPC: ${e.message}")
       e.printStackTrace()
@@ -1048,13 +1096,6 @@ class TrailblazeDeviceManager(
       val iosFuture = CompletableFuture.supplyAsync {
         listBootedIosSimulators()
       }
-      val electronCdpFuture = CompletableFuture.supplyAsync {
-        isElectronCdpAvailable()
-      }
-      val composeRpcFuture = CompletableFuture.supplyAsync {
-        isComposeRpcAvailable()
-      }
-
       val androidDevices = try {
         androidFuture.get(10, TimeUnit.SECONDS)
       } catch (e: Exception) {
@@ -1067,16 +1108,21 @@ class TrailblazeDeviceManager(
         Console.log("iOS device discovery timed out or failed: ${e.message}")
         emptyList()
       }
-      val electronAvailable = try {
-        electronCdpFuture.get(1, TimeUnit.SECONDS)
-      } catch (e: Exception) {
-        false
-      }
-      val composeAvailable = try {
-        composeRpcFuture.get(1, TimeUnit.SECONDS)
-      } catch (e: Exception) {
-        false
-      }
+      // Whatever the plugged-in drivers find, given the transports enumerated above so none of
+      // them re-runs an enumeration the host already paid for. Runs concurrently with itself and
+      // contains its own failures — see [DescriptorDeviceDiscovery].
+      val descriptorDevices = DescriptorDeviceDiscovery.discoverAll(
+        descriptors = hostDriverDescriptors.descriptors,
+        inventory = HostDeviceInventory(
+          adbDevices = androidDevices.map { (serial, description) ->
+            ConnectedAdbDevice(serial = serial, description = description)
+          },
+          bootedIosSimulators = iosSimulators.map { (udid, name) ->
+            BootedIosSimulator(udid = udid, name = name)
+          },
+          runningWebBrowsers = webBrowserManager.getAllRunningBrowserSummaries(),
+        ),
+      )
 
       val allDevices = buildList {
         // Connected Android Devices
@@ -1095,16 +1141,26 @@ class TrailblazeDeviceManager(
               description = description,
             )
           )
+          // The in-process driver is offered on every Android device like the two above; whether
+          // the selected target declares an in-process harness (and whether its APK is installed)
+          // is checked at dispatch/connect time, where the error can name the fix.
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_TEST,
+              instanceId = instanceId,
+              description = description,
+            )
+          )
         }
 
         // Connected iOS Simulators — always emit IOS_HOST; emit each host-native iOS
         // driver only when its host dependency probe passes. Otherwise users would see
         // an entry they can't actually use, which would fail at connect time with a
-        // confusing error. The probe is fail-closed by construction: a new member of
-        // IOS_HOST_NATIVE_DRIVER_TYPES with no branch here fails discovery loudly
+        // confusing error. The probe is fail-closed by construction: a new driver declaring
+        // `hostNativeSimulatorDriver` with no branch here fails discovery loudly
         // instead of silently listing (or hiding) the new driver.
-        val availableIosNativeDrivers = TrailblazeDriverType.IOS_HOST_NATIVE_DRIVER_TYPES.filter { driverType ->
-          when (driverType) {
+        val availableIosNativeDrivers = TrailblazeDriverType.entries.filter { driverType ->
+          driverType.hostNativeSimulatorDriver && when (driverType) {
             TrailblazeDriverType.IOS_AXE -> xyz.block.trailblaze.host.axe.AxeCli.isAvailable()
             else -> error("No availability probe for host-native iOS driver $driverType — add a branch here")
           }
@@ -1128,84 +1184,11 @@ class TrailblazeDeviceManager(
           }
         }
 
-        // Include any currently running web browsers. Each named instance
-        // (e.g. `--device web/foo`) is provisioned on demand by the MCP bridge,
-        // so the running set is what's worth listing alongside the always-on
-        // virtual default below.
-        val runningWebBrowsers = webBrowserManager.getAllRunningBrowserSummaries()
-        runningWebBrowsers.forEach { add(it) }
-
-        // Playwright-native is a virtual device (no hardware connection needed) —
-        // always include it so web trails work from both GUI and CLI even when
-        // no browser has been launched yet. Skip when the running set already
-        // includes it to avoid a duplicate entry.
-        if (runningWebBrowsers.none { it.instanceId == PLAYWRIGHT_NATIVE_INSTANCE_ID }) {
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-              instanceId = PLAYWRIGHT_NATIVE_INSTANCE_ID,
-              description = "Playwright Browser (Native)",
-            )
-          )
-        }
-
-        // Playwright-electron — only show if CDP endpoint is responding.
-        if (electronAvailable) {
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-              instanceId = PLAYWRIGHT_ELECTRON_INSTANCE_ID,
-              description = "Playwright Electron (CDP)",
-            )
-          )
-        }
-
-        // Compose — only show if the RPC server is responding. Instance id is "self"
-        // so the device addresses as `desktop/self` (one logical instance per host —
-        // the desktop window itself); the platform is `DESKTOP` per
-        // `TrailblazeDriverType.COMPOSE.platform`.
-        if (composeAvailable) {
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.COMPOSE,
-              instanceId = "self",
-              description = "Compose Desktop (RPC)",
-            )
-          )
-        }
-
-        // Revyl cloud devices — only show if the CLI is installed.
-        if (revylCliClient.isCliAvailable) {
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
-              instanceId = "revyl-android-phone",
-              description = "Revyl Android (Default)",
-            )
-          )
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
-              instanceId = "revyl-ios-iphone",
-              description = "Revyl iOS (Default)",
-            )
-          )
-
-          val targets = runWithTimeout(10, "revyl-catalog", "device targets") {
-            revylCliClient.getDeviceTargets()
-          } ?: emptyList()
-          for (target in targets) {
-            val driverType = if (target.platform == TrailblazeDevicePlatform.ANDROID)
-              TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = driverType,
-                instanceId = "revyl-model:${target.model}::${target.osVersion}",
-                description = "Revyl ${target.model} (${target.osVersion})",
-              )
-            )
-          }
-        }
+        // Each descriptor returns nothing when its driver isn't usable on this host, so an app
+        // that doesn't register one never sees its devices. Web devices (running browsers, the
+        // always-on Playwright-native default, an answering Electron CDP endpoint) arrive here
+        // too, via the Playwright descriptors.
+        addAll(descriptorDevices)
       }
 
       Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
@@ -1316,14 +1299,8 @@ class TrailblazeDeviceManager(
   fun getCurrentSelectedTargetAppForCallerCwd(callerWorkspaceDir: String?): TrailblazeHostAppTarget? =
     settingsRepo.getCurrentSelectedTargetAppForCallerCwd(callerWorkspaceDir)
 
-  private val revylCliClient: RevylCliClient by lazy { RevylCliClient() }
-
   // Store running test instances per device - allows forceful driver shutdown
   private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> =
-    java.util.concurrent.ConcurrentHashMap()
-
-  // Store active Revyl CLI clients per device for session reuse across MCP calls
-  private val revylCliClientByDeviceMap: MutableMap<TrailblazeDeviceId, RevylCliClient> =
     java.util.concurrent.ConcurrentHashMap()
 
   // Store running Playwright-native test instances per device for browser reuse across MCP calls
@@ -1581,23 +1558,6 @@ class TrailblazeDeviceManager(
     return playwrightElectronTestByDeviceMap[trailblazeDeviceId]
   }
 
-  fun setActiveRevylCliClient(
-    trailblazeDeviceId: TrailblazeDeviceId,
-    client: RevylCliClient,
-  ) {
-    revylCliClientByDeviceMap[trailblazeDeviceId] = client
-  }
-
-  fun getActiveRevylCliClient(
-    trailblazeDeviceId: TrailblazeDeviceId,
-  ): RevylCliClient? {
-    return revylCliClientByDeviceMap[trailblazeDeviceId]
-  }
-
-  fun removeActiveRevylCliClient(trailblazeDeviceId: TrailblazeDeviceId) {
-    revylCliClientByDeviceMap.remove(trailblazeDeviceId)
-  }
-
   private fun closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
     playwrightElectronTestByDeviceMap.remove(trailblazeDeviceId)?.let { test ->
       try {
@@ -1848,70 +1808,8 @@ class TrailblazeDeviceManager(
     /**
      * Runs a blocking operation with a timeout. Returns null if it times out or fails.
      */
-    private fun <T> runWithTimeout(timeoutSeconds: Long, deviceId: String, label: String, block: () -> T): T? {
-      val executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "device-query-$deviceId").apply { isDaemon = true }
-      }
-      return try {
-        executor.submit(Callable { block() })
-          .get(timeoutSeconds, TimeUnit.SECONDS)
-      } catch (e: TimeoutException) {
-        Console.log("[loadDevices] $label for $deviceId TIMED OUT after ${timeoutSeconds}s")
-        null
-      } catch (e: Exception) {
-        Console.log("[loadDevices] $label for $deviceId FAILED: ${e.message}")
-        null
-      } finally {
-        executor.shutdownNow()
-      }
-    }
-
-    /**
-     * Quick probe to check if an Electron app's CDP endpoint is responding.
-     * Uses a 500ms connect/read timeout — if nothing is listening, this fails fast.
-     *
-     * Resolves the base URL through [DeviceConnectionService.resolveElectronCdpUrl] (the same
-     * resolver the connect path attaches with) so an explicit `TRAILBLAZE_ELECTRON_CDP_URL`
-     * makes the tile discoverable — not just `TRAILBLAZE_ELECTRON_CDP_PORT`. Otherwise the tile
-     * could be attachable yet never listed.
-     */
-    internal fun isElectronCdpAvailable(): Boolean {
-      var connection: HttpURLConnection? = null
-      return try {
-        val baseUrl = DeviceConnectionService.resolveElectronCdpUrl(
-          cdpUrlEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_URL"),
-          cdpPortEnv = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT"),
-        )
-        val url = URI("${baseUrl.trimEnd('/')}/json/version").toURL()
-        connection = url.openConnection() as HttpURLConnection
-        connection.connectTimeout = 500
-        connection.readTimeout = 500
-        connection.responseCode == 200
-      } catch (_: Exception) {
-        false
-      } finally {
-        connection?.disconnect()
-      }
-    }
-
-    /**
-     * Quick probe to check if the Compose RPC server is responding.
-     * Uses a 500ms connect/read timeout — if nothing is listening, this fails fast.
-     */
-    internal fun isComposeRpcAvailable(): Boolean {
-      var connection: HttpURLConnection? = null
-      return try {
-        val url = URI("http://localhost:${TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT}/ping").toURL()
-        connection = url.openConnection() as HttpURLConnection
-        connection.connectTimeout = 500
-        connection.readTimeout = 500
-        connection.responseCode == 200
-      } catch (_: Exception) {
-        false
-      } finally {
-        connection?.disconnect()
-      }
-    }
+    private fun <T> runWithTimeout(timeoutSeconds: Long, deviceId: String, label: String, block: () -> T): T? =
+      HostProbe.withTimeout(timeoutSeconds, deviceId, label, block = block)
 
     /**
      * Lists connected Android devices via the adb host-services protocol (no `adb` binary spawn).

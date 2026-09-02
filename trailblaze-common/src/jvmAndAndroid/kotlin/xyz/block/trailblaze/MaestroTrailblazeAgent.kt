@@ -113,6 +113,24 @@ abstract class MaestroTrailblazeAgent(
    * — see `BaseHostTrailblazeTest` / `TrailblazeHostYamlRunner`.
    */
   val sessionDirProvider: ((SessionId) -> File)? = null,
+  /**
+   * The trail file's own directory, surfaced to tools via
+   * [TrailblazeToolExecutionContext.workingDirectory] so host-local tools can resolve
+   * TRAIL-relative files — a path is anchored beside the trail file, not at any repo root — such
+   * as a WAV recording committed next to the trail. Without it they fall back to the daemon's
+   * CWD/env, which a persistent daemon doesn't share with the per-run trail-source clone.
+   *
+   * Null for on-device agents (the trail file lives on the host) and for callers with no trail
+   * file.
+   *
+   * A `var` because the trail file is not always known when the agent is built:
+   * [xyz.block.trailblaze.host.HostOnDeviceRpcTrailblazeAgent] is constructed per run and passes
+   * it here, while `BaseHostTrailblazeTest` builds ONE agent for a test class and only learns
+   * each `trailFilePath` per run, so it assigns this before dispatching — the same shape
+   * `PlaywrightTrailblazeAgent.workingDirectory` already uses. [buildExecutionContext] reads it
+   * at call time, so either wiring reaches every tool.
+   */
+  var workingDirectory: File? = null,
 ) : BaseTrailblazeAgent(memory = memory) {
 
   override val trailblazeToolRepo: TrailblazeToolRepo? = trailblazeToolRepo
@@ -266,6 +284,7 @@ abstract class MaestroTrailblazeAgent(
       resolvedTarget = resolvedTarget,
       appId = appId,
       sessionDirProvider = sessionDirProvider,
+      workingDirectory = workingDirectory,
       deviceBindings = deviceBindings,
     )
     return context

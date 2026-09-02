@@ -16,7 +16,7 @@ import xyz.block.trailblaze.yaml.unified.TrailDocument
  *
  * ## Why this exists alongside the `trailblaze check` phase
  *
- * `CheckCommand.runSelectorDialectLintPhase` applies the same lint, but only to a **workspace**'s
+ * `CheckCommand.runTrailLintPhase` applies the same lint, but only to a **workspace**'s
  * `trails/` directory, and only where a built CLI + bun + registry access are available. This test
  * walks the **git root** with nothing but a JVM, so it covers every trail in the repo — fixtures,
  * scratch trails, and anything not shaped as a workspace — and it runs in plain `./gradlew check`

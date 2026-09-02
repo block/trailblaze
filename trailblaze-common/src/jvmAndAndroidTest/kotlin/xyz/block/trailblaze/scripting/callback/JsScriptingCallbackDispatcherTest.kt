@@ -3,8 +3,10 @@ package xyz.block.trailblaze.scripting.callback
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.doesNotContain
+import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.prop
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import kotlinx.coroutines.awaitCancellation
@@ -39,11 +41,15 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 
 /**
  * Direct coverage of [JsScriptingCallbackDispatcher.dispatch]. The HTTP endpoint test
- * (`ScriptingCallbackEndpointTest`) exercises the same core through the HTTP shell; this
- * test skips the shell and hits the dispatcher directly so the shared semantics stay pinned
- * regardless of transport. Matters because the on-device `__trailblazeCallback` binding in
- * `:trailblaze-scripting-bundle` also calls this dispatcher — a regression that only shows
- * up on one transport would bypass the endpoint test.
+ * (`ScriptingCallbackEndpointTest`) exercises the same core through the HTTP shell; this test
+ * skips the shell and hits the dispatcher directly so the semantics stay pinned independently
+ * of HTTP framing.
+ *
+ * The in-process transport is a separate implementation
+ * (`SessionScopedHostBinding.callFromBundle` in `:trailblaze-quickjs-tools`) and does NOT call
+ * this dispatcher, so the cross-transport parity these tests describe — same argument
+ * validation, same unfiltered tool resolution — is a maintained invariant with a counterpart
+ * test on that side, not something either test can prove alone.
  */
 class CallbackDispatcherTest {
 
@@ -58,7 +64,16 @@ class CallbackDispatcherTest {
     heightPixels = 2400,
   )
 
-  private fun makeContext(sessionId: SessionId): TrailblazeToolExecutionContext =
+  /**
+   * Single construction site for the execution context. Tests that need to intercept dispatch
+   * pass [nestedToolExecutor] rather than rebuilding the context field-by-field:
+   * [TrailblazeToolExecutionContext] is not a data class, so a hand-rolled copy silently
+   * reverts every field added to it later.
+   */
+  private fun makeContext(
+    sessionId: SessionId,
+    nestedToolExecutor: (suspend (TrailblazeTool) -> TrailblazeToolResult)? = null,
+  ): TrailblazeToolExecutionContext =
     TrailblazeToolExecutionContext(
       screenState = null,
       traceId = null,
@@ -68,6 +83,7 @@ class CallbackDispatcherTest {
       },
       trailblazeLogger = TrailblazeLogger.createNoOp(),
       memory = AgentMemory(),
+      nestedToolExecutor = nestedToolExecutor,
     )
 
   private fun makeRepo(): TrailblazeToolRepo = TrailblazeToolRepo(
@@ -265,6 +281,90 @@ class CallbackDispatcherTest {
     }
   }
 
+  /**
+   * Repo registering no tool classes and no YAML names, so any resolution must come from the
+   * global (unfiltered) tiers that `TrailblazeSerializationInitializer` builds. This is the
+   * shape a class-backed tool appearing in no toolset yaml presents to any session.
+   */
+  private fun emptySessionRepo(): TrailblazeToolRepo = TrailblazeToolRepo(
+    TrailblazeToolSet.DynamicTrailblazeToolSet(
+      name = "empty-session-toolset",
+      toolClasses = emptySet(),
+      yamlToolNames = emptySet(),
+    ),
+  )
+
+  @Test
+  fun `class-backed tool missing from the session toolset resolves via the global registry`() = runBlocking {
+    // Registry-consistency contract between the two scripted-tool transports. The argument
+    // validator walks the UNFILTERED tool tier (expectedArgumentKeysFor's global fallback),
+    // and the in-process QuickJS transport (SessionScopedHostBinding) resolves via
+    // toolCallToTrailblazeToolUnfiltered — so this subprocess transport must too. Before the
+    // fix, a class-backed tool in no toolset (mobile_maestro, tapOnElementBySelector, …)
+    // passed validation and then failed decode with "Could not find Trailblaze tool",
+    // making `trailblaze tool` fail where `trailblaze run` succeeded. `inputText` is
+    // globally registered via @TrailblazeToolClass, so an empty session repo forces
+    // resolution through the global-class tier, reproducing that shape.
+    val dispatchedTools = mutableListOf<TrailblazeTool>()
+    val sessionId = SessionId("unfiltered-resolution")
+    val handle = register(
+      sessionId = sessionId,
+      // Intercept execution — this test is about resolution, not device dispatch.
+      executionContext = makeContext(sessionId) { tool ->
+        dispatchedTools += tool
+        TrailblazeToolResult.Success(message = "intercepted")
+      },
+      repo = emptySessionRepo(),
+    )
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(sessionId.value, handle.invocationId, "inputText", """{"text":"hi"}"""),
+      )
+      val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+      assertThat(cap.errorMessage.orEmpty()).doesNotContain("Could not find Trailblaze tool")
+      assertThat(cap.success).isEqualTo(true)
+      assertThat(dispatchedTools).hasSize(1)
+      assertThat(dispatchedTools.single()).isInstanceOf(InputTextTrailblazeTool::class)
+        .prop(InputTextTrailblazeTool::text).isEqualTo("hi")
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `unknown tool name keeps the did-you-mean suggestions and is tagged UNKNOWN_TOOL`() = runBlocking {
+    // Guards the OTHER branch of resolution: the unfiltered lookup returns null (rather than
+    // throwing) on a miss, so the rich unknown-tool message has to be harvested deliberately.
+    // A NEAR-MISS name is required for this to have any power — `unknownToolSuggestions`
+    // only offers candidates within edit distance min(3, len/3), so a wildly wrong name like
+    // `tool_that_does_not_exist` yields ZERO suggestions and would pass even if the
+    // suggestion-bearing lookup were dropped entirely. `inputTex` is one deletion away from
+    // the registered `inputText`.
+    //
+    // Also pins the log tag: an unknown NAME must not be reported as DESERIALIZE_FAILED,
+    // which is reserved for payloads that failed to decode against a schema that does exist.
+    val sessionId = SessionId("unknown-tool-suggestions")
+    val handle = register(sessionId)
+    val output = try {
+      captureConsoleLog {
+        val result = JsScriptingCallbackDispatcher.dispatch(
+          buildCallToolRequest(sessionId.value, handle.invocationId, "inputTex", """{"text":"hi"}"""),
+        )
+        val cap = result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+        assertThat(cap.success).isEqualTo(false)
+        val message = cap.errorMessage ?: error("Expected errorMessage on unknown tool")
+        assertThat(message).contains("Could not find Trailblaze tool for name: inputTex")
+        assertThat(message).contains("Did you mean `inputText`?")
+        assertThat(message).contains("Accepted arguments")
+        assertThat(message).doesNotContain("Failed to deserialize")
+      }
+    } finally {
+      handle.close()
+    }
+    assertThat(output).contains("[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool 'inputTex'")
+    assertThat(output).doesNotContain("DESERIALIZE_FAILED")
+  }
+
   @Test
   fun `nested tool executor is preferred over direct tool execution`() = runBlocking {
     var directExecutionCount = 0
@@ -290,24 +390,9 @@ class CallbackDispatcherTest {
     val repo = makeRepo()
     repo.addDynamicTools(listOf(registration))
     val sessionId = SessionId("nested-executor")
-    val context = makeContext(sessionId).let { base ->
-      TrailblazeToolExecutionContext(
-        screenState = base.screenState,
-        traceId = base.traceId,
-        trailblazeDeviceInfo = base.trailblazeDeviceInfo,
-        sessionProvider = base.sessionProvider,
-        screenStateProvider = base.screenStateProvider,
-        androidDeviceCommandExecutor = base.androidDeviceCommandExecutor,
-        trailblazeLogger = base.trailblazeLogger,
-        memory = base.memory,
-        maestroTrailblazeAgent = base.maestroTrailblazeAgent,
-        nestedToolExecutor = { tool ->
-          dispatchedTools += tool
-          TrailblazeToolResult.Success(message = "nested-executor")
-        },
-        workingDirectory = base.workingDirectory,
-        nodeSelectorMode = base.nodeSelectorMode,
-      )
+    val context = makeContext(sessionId) { tool ->
+      dispatchedTools += tool
+      TrailblazeToolResult.Success(message = "nested-executor")
     }
     val handle = register(sessionId = sessionId, executionContext = context, repo = repo)
     try {

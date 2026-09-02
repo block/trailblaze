@@ -4,6 +4,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.IVersionProvider
 import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.cli.inprocess.InProcessCommand
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigBootstrap
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
@@ -58,7 +59,7 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  *   trailblaze report              - Generate HTML report for all sessions
  *   trailblaze device               - List connected devices
  *   trailblaze show                - Open the multi-device live grid (/devices/all) in your default browser
- *   TRAILBLAZE_PORT=52900 trailblaze - Launch on a custom port (allows multiple instances)
+ *   TRAILBLAZE_PORT=31900 trailblaze - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
  */
 object TrailblazeCli {
@@ -467,6 +468,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     ReportCommand::class,
     ViewerCommand::class,
     ProfileCommand::class,
+    OtelCommand::class,
     WaypointCommand::class,
     ResultsCommand::class,
     ConfigCommand::class,
@@ -475,6 +477,10 @@ class TrailblazeVersionProvider : IVersionProvider {
     AppCommand::class,
     McpCommand::class,
     CheckCommand::class,
+    // Reads an APK and answers whether the in-process (ANDROID_TEST) driver can attach to it, and
+    // builds the test APK that drives it. Host-only and device-free on purpose: an adopting team
+    // runs both on a machine with no Android SDK. See docs/internal/inprocess-dogfooding-plan.md.
+    InProcessCommand::class,
     SkillCommand::class,
     // (No standalone `test` subcommand — bun unit tests run as part of `trailblaze
     // check`'s third phase. `trailblaze test` collided with "Trailblaze runs trails"
@@ -528,6 +534,15 @@ class TrailblazeCliCommand(
   fun getEffectiveHttpsPort(): Int = CliConfigHelper.resolveEffectiveHttpsPort()
 
   /**
+   * The port of a daemon that is already running, without the device-allocation-range check.
+   *
+   * Only for `--stop` and `--status`. A daemon that came up before that check existed is still on
+   * its port, and refusing to resolve it would leave no way to shut it down — see
+   * [CliConfigHelper.resolveRunningDaemonHttpPortUnchecked].
+   */
+  fun getRunningDaemonPortUnchecked(): Int = CliConfigHelper.resolveRunningDaemonHttpPortUnchecked()
+
+  /**
    * Whether any port override is active (from env var or saved settings).
    */
   fun hasPortOverride(): Boolean {
@@ -537,7 +552,9 @@ class TrailblazeCliCommand(
 
   override fun call(): Int {
     if (stop) {
-      return shutdownDaemonAndWait(getEffectivePort())
+      // Unchecked: a daemon already listening on a device-allocatable port has to remain
+      // stoppable, and nothing else can terminate it.
+      return shutdownDaemonAndWait(getRunningDaemonPortUnchecked())
     }
 
     // No subcommand → show help. Use `trailblaze app` to launch the desktop GUI.
@@ -568,6 +585,13 @@ class TrailblazeCliCommand(
     } else {
       headless
     }
+
+    // Before the probe: a device's `adb forward` on the configured port answers /ping, so
+    // attaching without this check would hide a port no daemon can ever bind.
+    TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(
+      httpPort = getEffectivePort(),
+      httpsPort = getEffectiveHttpsPort(),
+    )
 
     // Check if Trailblaze is already running.
     // Note: "show window" is handled by AppCommand.launchInBackground() before this method
@@ -638,7 +662,7 @@ internal class GroupedCommandListRenderer(
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "show", "app", "mcp", "check", "test", "skill"),
+      listOf("config", "device", "show", "app", "mcp", "check", "test", "skill", "inprocess"),
     ),
     Group(
       BUILT_IN_AGENT_GROUP_NAME,

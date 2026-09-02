@@ -214,6 +214,57 @@ data class RunYamlRequest(
    * rehydrating args, keeping the device's LLM-context and log-safe surfaces redacted.
    */
   val sensitiveArgNames: List<String> = emptyList(),
+
+  /**
+   * The tracing span this dispatch is happening inside, as a W3C `traceparent`, so the spans the
+   * device records join the host's trace instead of starting one of their own.
+   *
+   * Distinct from [traceId], which groups this dispatch's LOGS. This groups its SPANS: each process
+   * runs its own trace recorder and mints its own trace id, so without this a run's merged
+   * `trace.json` carries two of them and a trace viewer shows the host's half and the device's half
+   * as two unrelated traces.
+   *
+   * Null when the host has nothing to hand over — tracing off, or no span open at the dispatch —
+   * and the device then records its own trace, which is the behavior that predates this field.
+   * A device predating it ignores the field and does the same.
+   */
+  val traceParent: String? = null,
+
+  /**
+   * Which of a multi-device trail's `config.devices:` CONFIGURATION entries this run binds — a
+   * named entry with an inner `devices:` map, e.g. a paired-display setup. Null (the default) means
+   * the run makes no selection: a trail declaring exactly one configuration binds it implicitly, a
+   * trail declaring none runs single-device, and a trail declaring more than one is rejected.
+   *
+   * Takes precedence over the `TRAILBLAZE_DEVICE_CONFIGURATION` env var, which a daemon snapshots
+   * from its own process environment at launch and therefore applies identically to every trail it
+   * serves. This field is what lets one daemon lifetime bind a different configuration per trail.
+   *
+   * Naming a configuration a single-device trail does not declare is an error, not a fallback — the
+   * caller named it for THIS trail, and a silent single-device run is the failure this field exists
+   * to prevent. The env var is lenient there for the opposite reason: it is a daemon-wide default
+   * and must not break the single-device trails that daemon also serves.
+   *
+   * Host-side only, and deliberately not carried over the on-device RPC proto: multi-device
+   * dispatch resolves the whole device set on the host before any RPC, so the device never sees a
+   * configuration.
+   *
+   * Trailing field for positional/binary-compat stability, same as the seeds and args above.
+   */
+  val deviceConfiguration: String? = null,
+
+  /**
+   * Binds the selected configuration's non-start device names to connected device instance ids
+   * (`"buyer" to "emulator-5562"`). The configuration's first declared device is the START device
+   * and always binds to [trailblazeDeviceId], so it must NOT appear here.
+   *
+   * REPLACES the `TRAILBLAZE_DEVICE_BINDINGS` env var when non-empty rather than merging with it: a
+   * merge would mix a stale daemon-wide binding into a caller's fresh device set, producing a run
+   * against devices no caller named. Empty (the default) falls back to the env var.
+   *
+   * Host-side only, for the same reason as [deviceConfiguration].
+   */
+  val deviceBindings: Map<String, String> = emptyMap(),
 ) : RpcRequest<RunYamlResponse> {
   init {
     require(awaitCompletion || memorySnapshot.isEmpty()) {

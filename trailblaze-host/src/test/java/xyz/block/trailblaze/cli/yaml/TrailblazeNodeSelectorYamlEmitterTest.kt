@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.cli.yaml
 
 import kotlin.reflect.KClass
+import kotlin.reflect.KProperty1
+import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
@@ -12,18 +15,22 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
  * Pins the shared selector-YAML emitter that both `ShortcutYamlEmitter` and
  * `WaypointSuggestSelectorCommand` route through. Three forcing functions are load-bearing:
  *
- *  1. [`emit covers every DriverNodeMatch AndroidAccessibility field`] — a maximal
- *     `AndroidAccessibility` (every field set) must show up in the emitted YAML
- *     field-by-field, so an emitter regression that drops a `?.let { … }` line is caught.
- *  2. [`MAXIMAL_FIELD_NAMES tracks AndroidAccessibility primary constructor`] —
- *     the hand-listed maximal field set is checked against the type's primary
- *     constructor, so a new field added to `AndroidAccessibility` fails this test
- *     with a clear "update both MAXIMAL_FIELD_NAMES and MAXIMAL_ANDROID_ACCESSIBILITY"
- *     message before the emitter coverage check fires.
+ *  1. [`emit covers every field of every supported driver matcher`] — for each driver
+ *     matcher in [SUPPORTED_DIALECTS], a maximal instance (every field set) must show up
+ *     in the emitted YAML field-by-field, so an emitter regression that drops a
+ *     `?.let { … }` line is caught. Expected field names come from the type's primary
+ *     constructor, so a newly added field is checked without any hand-listed set to update.
+ *  2. [`maximal driver matchers set every primary-constructor field`] — a new field on
+ *     one of those types fails here first, with a clear "set a non-null value in the
+ *     maximal fixture" message, rather than being silently unchecked by (1).
  *  3. [`EMITTED_TOP_LEVEL_SELECTOR_SLOTS covers every recursive TrailblazeNodeSelector slot`] —
  *     filters the primary constructor's parameters **by type** (`TrailblazeNodeSelector?`
  *     or `List<TrailblazeNodeSelector>?`) so a new recursive slot like `inFrontOf` is
  *     caught even if the developer forgets to update any hand-listed set.
+ *
+ * `compose` / `web` / `androidMaestro` have no field ladder yet, so their no-silent-drop
+ * guard is [`emit fails fast on each unsupported driver matcher`] instead — the emitter
+ * must refuse them rather than emit a selector missing the constraint.
  *
  * Field-name assertions use [linesContainKey] rather than `String.contains` so a future
  * field whose name is a prefix of an existing one (`isChecked` vs a hypothetical
@@ -32,88 +39,42 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 class TrailblazeNodeSelectorYamlEmitterTest {
 
   @Test
-  fun `emit covers every DriverNodeMatch AndroidAccessibility field`() {
-    val selector = TrailblazeNodeSelector(androidAccessibility = MAXIMAL_ANDROID_ACCESSIBILITY)
-    val lines = emit(selector)
-    for (name in MAXIMAL_FIELD_NAMES) {
+  fun `emit covers every field of every supported driver matcher`() {
+    for (dialect in SUPPORTED_DIALECTS) {
+      val lines = emit(dialect.selector)
       assertTrue(
-        lines.linesContainKey(name),
-        "emitter dropped DriverNodeMatch.AndroidAccessibility.$name from output. yaml=\n${lines.joinToString("\n")}",
+        lines.linesContainKey(dialect.selectorKey),
+        "missing ${dialect.selectorKey}: header. yaml=\n${lines.joinToString("\n")}",
       )
+      for (name in primaryCtorParameterNames(dialect.maximal::class)) {
+        assertTrue(
+          lines.linesContainKey(name),
+          "emitter dropped ${dialect.typeName}.$name from output. yaml=\n${lines.joinToString("\n")}",
+        )
+      }
     }
   }
 
   @Test
-  fun `MAXIMAL_FIELD_NAMES tracks AndroidAccessibility primary constructor`() {
-    // Independent of the emitter — this checks that the hand-listed [MAXIMAL_FIELD_NAMES]
-    // covers every primary-constructor parameter on the data class. If a new field
-    // lands but isn't added to MAXIMAL_FIELD_NAMES (and a non-null value isn't set in
-    // MAXIMAL_ANDROID_ACCESSIBILITY), the emitter-coverage test silently passes
-    // because the field simply isn't checked. Splitting the failure mode into its own
-    // assertion gives the developer a clear "update MAXIMAL_FIELD_NAMES /
-    // MAXIMAL_ANDROID_ACCESSIBILITY" message before they hit the emitter coverage check.
+  fun `maximal driver matchers set every primary-constructor field`() {
+    // Independent of the emitter — this checks the maximal fixtures actually populate
+    // every primary-constructor parameter on their type. A field left null is a field
+    // the emitter-coverage test above can't see, so the coverage check would silently
+    // pass while the emitter drops the constraint from every generated YAML.
     //
     // Uses `KClass.primaryConstructor` (not `.constructors.first()`) so a future
     // secondary constructor on the data class doesn't quietly start checking against
     // the wrong parameter list — `.constructors` ordering is JVM-impl-defined.
-    val ctorParams = primaryCtorParameterNames(DriverNodeMatch.AndroidAccessibility::class)
-    val missing = ctorParams - MAXIMAL_FIELD_NAMES.toSet()
-    assertTrue(
-      missing.isEmpty(),
-      "AndroidAccessibility gained primary-constructor parameter(s) ${missing.toList()} " +
-        "but TrailblazeNodeSelectorYamlEmitterTest.MAXIMAL_FIELD_NAMES + " +
-        "MAXIMAL_ANDROID_ACCESSIBILITY weren't updated. Add the field(s) to both " +
-        "(non-null value in MAXIMAL_ANDROID_ACCESSIBILITY, field name in " +
-        "MAXIMAL_FIELD_NAMES), then wire the field through TrailblazeNodeSelectorYamlEmitter.",
-    )
-  }
-
-  @Test
-  fun `emit covers every DriverNodeMatch IosMaestro field`() {
-    val lines = emit(TrailblazeNodeSelector(iosMaestro = MAXIMAL_IOS_MAESTRO))
-    assertTrue(lines.linesContainKey("iosMaestro"), "missing iosMaestro: header. yaml=\n${lines.joinToString("\n")}")
-    for (name in MAXIMAL_IOS_MAESTRO_FIELD_NAMES) {
+    for (dialect in SUPPORTED_DIALECTS) {
+      val unset = primaryCtorParameterNames(dialect.maximal::class)
+        .filter { fieldValue(dialect.maximal, it) == null }
       assertTrue(
-        lines.linesContainKey(name),
-        "emitter dropped DriverNodeMatch.IosMaestro.$name from output. yaml=\n${lines.joinToString("\n")}",
+        unset.isEmpty(),
+        "${dialect.typeName} parameter(s) $unset are null in the maximal fixture in " +
+          "TrailblazeNodeSelectorYamlEmitterTest. Set a non-null value for each, then wire " +
+          "the field(s) through TrailblazeNodeSelectorYamlEmitter.",
       )
     }
-  }
-
-  @Test
-  fun `MAXIMAL_IOS_MAESTRO_FIELD_NAMES tracks IosMaestro primary constructor`() {
-    val ctorParams = primaryCtorParameterNames(DriverNodeMatch.IosMaestro::class)
-    val missing = ctorParams - MAXIMAL_IOS_MAESTRO_FIELD_NAMES.toSet()
-    assertTrue(
-      missing.isEmpty(),
-      "IosMaestro gained primary-constructor parameter(s) ${missing.toList()} but " +
-        "MAXIMAL_IOS_MAESTRO + MAXIMAL_IOS_MAESTRO_FIELD_NAMES weren't updated. Add the field(s) " +
-        "to both, then wire them through TrailblazeNodeSelectorYamlEmitter.",
-    )
-  }
-
-  @Test
-  fun `emit covers every DriverNodeMatch IosAxe field`() {
-    val lines = emit(TrailblazeNodeSelector(iosAxe = MAXIMAL_IOS_AXE))
-    assertTrue(lines.linesContainKey("iosAxe"), "missing iosAxe: header. yaml=\n${lines.joinToString("\n")}")
-    for (name in MAXIMAL_IOS_AXE_FIELD_NAMES) {
-      assertTrue(
-        lines.linesContainKey(name),
-        "emitter dropped DriverNodeMatch.IosAxe.$name from output. yaml=\n${lines.joinToString("\n")}",
-      )
-    }
-  }
-
-  @Test
-  fun `MAXIMAL_IOS_AXE_FIELD_NAMES tracks IosAxe primary constructor`() {
-    val ctorParams = primaryCtorParameterNames(DriverNodeMatch.IosAxe::class)
-    val missing = ctorParams - MAXIMAL_IOS_AXE_FIELD_NAMES.toSet()
-    assertTrue(
-      missing.isEmpty(),
-      "IosAxe gained primary-constructor parameter(s) ${missing.toList()} but " +
-        "MAXIMAL_IOS_AXE + MAXIMAL_IOS_AXE_FIELD_NAMES weren't updated. Add the field(s) " +
-        "to both, then wire them through TrailblazeNodeSelectorYamlEmitter.",
-    )
   }
 
   @Test
@@ -124,8 +85,8 @@ class TrailblazeNodeSelectorYamlEmitterTest {
     // recursive slots the emitter is responsible for descending into. Adds `index`
     // explicitly (the only non-recursive parameter the emitter terminates with).
     // Driver-match parameters (`androidAccessibility`, `iosMaestro`, …) are NOT
-    // in this set — they're handled by [requireSelectorIsEmittable] + the per-field
-    // AndroidAccessibility tests above.
+    // in this set — they're handled by [requireSelectorIsEmittable] + the per-dialect
+    // field-coverage tests above.
     //
     // Crucially: this filter does NOT consult any hand-listed name set. If a future
     // recursive slot like `inFrontOf: TrailblazeNodeSelector? = null` is added to
@@ -144,7 +105,7 @@ class TrailblazeNodeSelectorYamlEmitterTest {
 
   @Test
   fun `emit walks every spatial + hierarchy child slot of TrailblazeNodeSelector`() {
-    // Per-field-name companion to the AndroidAccessibility coverage tests, applied at
+    // Per-field-name companion to the per-dialect coverage tests, applied at
     // the parent level. The maximal selector below sets every recursive slot the
     // emitter must descend into; the assertion confirms each name appears in the
     // emitted YAML. Pairs with the reflection check above: that one catches "slot
@@ -216,6 +177,38 @@ class TrailblazeNodeSelectorYamlEmitterTest {
   }
 
   @Test
+  fun `inputType 0 is dropped only on the dialect whose generator defaults it`() {
+    // The two dialects disagree on what `inputType: 0` means, and the emitter has to follow
+    // each one. `androidAccessibility`'s generator writes 0 as its "no input type" default, so
+    // emitting it would pin a constraint the author never wrote. No `androidView` strategy sets
+    // `inputType` at all, so a 0 there is deliberate and the resolver honours it —
+    // `requireEqual(0, detail.inputType)` matches exactly the views that take no text input.
+    // Dropping it would emit YAML matching a wider set than the selector handed in.
+    val accessibility = emit(
+      TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(
+          resourceIdRegex = "^rid$",
+          inputType = 0,
+        ),
+      ),
+    )
+    assertFalse(
+      accessibility.linesContainKey("inputType"),
+      "androidAccessibility must drop its generator's default. yaml=\n${accessibility.joinToString("\n")}",
+    )
+
+    val view = emit(
+      TrailblazeNodeSelector(
+        androidView = DriverNodeMatch.AndroidView(resourceIdRegex = "^rid$", inputType = 0),
+      ),
+    )
+    assertTrue(
+      view.any { it.trim() == "inputType: 0" },
+      "androidView must keep a deliberate 0. yaml=\n${view.joinToString("\n")}",
+    )
+  }
+
+  @Test
   fun `yamlQuote escapes backslashes and quotes minimally`() {
     assertEquals("\"plain\"", TrailblazeNodeSelectorYamlEmitter.yamlQuote("plain"))
     assertEquals("\"a\\\"b\"", TrailblazeNodeSelectorYamlEmitter.yamlQuote("""a"b"""))
@@ -253,10 +246,10 @@ class TrailblazeNodeSelectorYamlEmitterTest {
   companion object {
     /**
      * Maximal `AndroidAccessibility` — every primary-constructor argument set to a
-     * non-default value. If the type gains a new field, add it here (with a non-null
-     * value) and to [MAXIMAL_FIELD_NAMES]; if you forget, the
-     * `MAXIMAL_FIELD_NAMES tracks AndroidAccessibility primary constructor` test
-     * fails with a clear pointer to both files.
+     * non-default value. If the type gains a new field, add it here with a non-null
+     * value; if you forget, the
+     * `maximal driver matchers set every primary-constructor field` test fails and
+     * names the field.
      */
     private val MAXIMAL_ANDROID_ACCESSIBILITY = DriverNodeMatch.AndroidAccessibility(
       classNameRegex = "^cls$",
@@ -286,32 +279,24 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       collectionItemColumnIndex = 9,
     )
 
-    private val MAXIMAL_FIELD_NAMES = listOf(
-      "classNameRegex",
-      "resourceIdRegex",
-      "uniqueId",
-      "composeTestTagRegex",
-      "textRegex",
-      "contentDescriptionRegex",
-      "hintTextRegex",
-      "labeledByTextRegex",
-      "stateDescriptionRegex",
-      "paneTitleRegex",
-      "roleDescriptionRegex",
-      "isEnabled",
-      "isClickable",
-      "isCheckable",
-      "isChecked",
-      "isSelected",
-      "isFocused",
-      "isEditable",
-      "isScrollable",
-      "isPassword",
-      "isHeading",
-      "isMultiLine",
-      "inputType",
-      "collectionItemRowIndex",
-      "collectionItemColumnIndex",
+    /** Maximal `AndroidView` — every primary-constructor argument set non-default. */
+    private val MAXIMAL_ANDROID_VIEW = DriverNodeMatch.AndroidView(
+      classNameRegex = "^cls$",
+      resourceIdRegex = "^rid$",
+      tagRegex = "^tag$",
+      textRegex = "^txt$",
+      contentDescriptionRegex = "^desc$",
+      hintTextRegex = "^hint$",
+      stateDescriptionRegex = "^state$",
+      errorTextRegex = "^err$",
+      isEnabled = true,
+      isClickable = true,
+      isChecked = false,
+      isSelected = true,
+      isFocused = false,
+      isEditable = true,
+      isPassword = false,
+      inputType = 33,
     )
 
     /** Maximal `IosMaestro` — every primary-constructor argument set non-default. */
@@ -323,16 +308,6 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       hintTextRegex = "^hint$",
       focused = true,
       selected = false,
-    )
-
-    private val MAXIMAL_IOS_MAESTRO_FIELD_NAMES = listOf(
-      "textRegex",
-      "resourceIdRegex",
-      "accessibilityTextRegex",
-      "classNameRegex",
-      "hintTextRegex",
-      "focused",
-      "selected",
     )
 
     /** Maximal `IosAxe` — every primary-constructor argument set non-default. */
@@ -348,17 +323,42 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       enabled = true,
     )
 
-    private val MAXIMAL_IOS_AXE_FIELD_NAMES = listOf(
-      "roleRegex",
-      "subroleRegex",
-      "labelRegex",
-      "valueRegex",
-      "uniqueId",
-      "typeRegex",
-      "titleRegex",
-      "customAction",
-      "enabled",
+    /**
+     * One entry per driver matcher the emitter has a field ladder for. Adding a driver
+     * to [TrailblazeNodeSelectorYamlEmitter] means adding it here — the emitter's
+     * [requireSelectorIsEmittable] guard (pinned by
+     * `emit fails fast on each unsupported driver matcher`) covers the rest.
+     */
+    private val SUPPORTED_DIALECTS = listOf(
+      Dialect(
+        selectorKey = "androidAccessibility",
+        maximal = MAXIMAL_ANDROID_ACCESSIBILITY,
+        selector = TrailblazeNodeSelector(androidAccessibility = MAXIMAL_ANDROID_ACCESSIBILITY),
+      ),
+      Dialect(
+        selectorKey = "androidView",
+        maximal = MAXIMAL_ANDROID_VIEW,
+        selector = TrailblazeNodeSelector(androidView = MAXIMAL_ANDROID_VIEW),
+      ),
+      Dialect(
+        selectorKey = "iosMaestro",
+        maximal = MAXIMAL_IOS_MAESTRO,
+        selector = TrailblazeNodeSelector(iosMaestro = MAXIMAL_IOS_MAESTRO),
+      ),
+      Dialect(
+        selectorKey = "iosAxe",
+        maximal = MAXIMAL_IOS_AXE,
+        selector = TrailblazeNodeSelector(iosAxe = MAXIMAL_IOS_AXE),
+      ),
     )
+
+    private class Dialect(
+      val selectorKey: String,
+      val maximal: DriverNodeMatch,
+      val selector: TrailblazeNodeSelector,
+    ) {
+      val typeName: String get() = "DriverNodeMatch.${maximal::class.simpleName}"
+    }
 
     /**
      * Every recursive / spatial-anchor slot the emitter is required to descend into,
@@ -383,6 +383,13 @@ class TrailblazeNodeSelectorYamlEmitterTest {
       (kClass.primaryConstructor ?: error("$kClass has no primary constructor"))
         .parameters
         .mapNotNull { it.name }
+
+    private fun fieldValue(match: DriverNodeMatch, fieldName: String): Any? {
+      val property = match::class.memberProperties.firstOrNull { it.name == fieldName }
+        ?: error("${match::class} has no property named $fieldName")
+      @Suppress("UNCHECKED_CAST")
+      return (property as KProperty1<DriverNodeMatch, Any?>).get(match)
+    }
 
     /**
      * Returns the primary-constructor parameter names of [kClass] whose declared type is

@@ -273,6 +273,7 @@ data class TrailblazeNode(
  */
 private fun DriverNodeDetail.ownLabel(): String? = when (this) {
   is DriverNodeDetail.AndroidAccessibility -> firstNonBlank(text, contentDescription)
+  is DriverNodeDetail.AndroidView -> firstNonBlank(text, contentDescription)
   is DriverNodeDetail.AndroidMaestro -> firstNonBlank(text, accessibilityText)
   is DriverNodeDetail.IosMaestro -> firstNonBlank(text, accessibilityText)
   is DriverNodeDetail.IosAxe -> resolveText() // already blank-aware per step
@@ -291,6 +292,8 @@ fun TrailblazeNode.describe(): String {
   val detail = driverDetail
   val (text, type) = when (detail) {
     is DriverNodeDetail.AndroidAccessibility ->
+      detail.resolveText() to detail.className?.substringAfterLast('.')
+    is DriverNodeDetail.AndroidView ->
       detail.resolveText() to detail.className?.substringAfterLast('.')
     is DriverNodeDetail.AndroidMaestro ->
       detail.resolveText() to detail.className?.substringAfterLast('.')

@@ -254,117 +254,62 @@ describe("buildRecordedTrailYaml", () => {
   });
 });
 
-describe("runnableToolCalls", () => {
-  test("finds every unified recording tool with its line and device classifier", () => {
+describe("runnableSteps", () => {
+  test("marks each trail step with the index a step window means, not its tool calls", () => {
     const source = [
       "config:",
       "  title: Demo",
+      "trailhead:",
+      "  step: Launch the app",
+      "  recording:",
+      "    android:",
+      "      launchApp: {}",
       "trail:",
       "  - step: Open settings",
       "    recording:",
       "      ios-iphone:",
       "        - tapOn:",
       "            text: Settings",
-      "        - pressBack: {}",
       "  - verify: Done",
     ].join("\n");
-    expect(TY.runnableToolCalls(source)).toEqual([
-      { line0: 6, endLine0: 7, name: "tapOn", tool: { tapOn: { text: "Settings" } }, platform: "ios-iphone" },
-      { line0: 8, endLine0: 8, name: "pressBack", tool: { pressBack: {} }, platform: "ios-iphone" },
+    // The trailhead is NOT a step: it runs first, but no window can name it, so it carries no
+    // marker. Step indices are positions in `trail:`, which is what the server slices and merges by.
+    expect(TY.runnableSteps(source)).toEqual([
+      { line0: 8, endLine0: 12, index: 0, kind: "step", label: "Open settings" },
+      { line0: 13, endLine0: 13, index: 1, kind: "verify", label: "Done" },
     ]);
   });
 
-  test("keeps finding sibling tools after nested argument maps", () => {
+  test("reads a quoted step's prose and an indentless step sequence", () => {
     const source = [
       "trail:",
-      "  - step: Open settings",
-      "    recording:",
-      "      android:",
-      "        - tapOn:",
-      "            selector:",
-      "              text: Settings",
-      "        - pressBack: {}",
+      "- step: \"Navigate to the \\\"Loading\\\" tab\"",
+      "  recording:",
+      "    android:",
+      "    - tapOn: { text: Loading }",
+      "- step: Wait",
     ].join("\n");
-    expect(TY.runnableToolCalls(source).map(({ name, platform }) => ({ name, platform }))).toEqual([
-      { name: "tapOn", platform: "android" },
-      { name: "pressBack", platform: "android" },
+    expect(TY.runnableSteps(source).map(({ index, label }) => ({ index, label }))).toEqual([
+      { index: 0, label: 'Navigate to the "Loading" tab' },
+      { index: 1, label: "Wait" },
     ]);
   });
 
-  test("recognizes indentless tool sequences under a device classifier", () => {
-    const source = `trail:
-  - step: Open settings
-    recording:
-      android:
-      - tapOn:
-          selector:
-            text: Settings
-      - pressBack: {}`;
-
-    expect(TY.runnableToolCalls(source).map(({ name, platform }) => ({ name, platform }))).toEqual([
-      { name: "tapOn", platform: "android" },
-      { name: "pressBack", platform: "android" },
+  test("finds the prose when it is not the item's first key", () => {
+    const source = "trail:\n  - recording:\n      android: []\n    step: Pay\n";
+    expect(TY.runnableSteps(source)).toEqual([
+      { line0: 1, endLine0: 3, index: 0, kind: "step", label: "Pay" },
     ]);
   });
 
-  test("recognizes a trailhead's single-tool recording map", () => {
-    const source = `trailhead:
-  step: Launch the app
-  recording:
-    android:
-      launchApp:
-        clearState: true
-trail: []`;
-
-    expect(TY.runnableToolCalls(source)).toEqual([
-      { line0: 4, endLine0: 5, name: "launchApp", tool: { launchApp: { clearState: true } }, platform: "android" },
-    ]);
+  test("a legacy list-root trail gets no markers", () => {
+    const source = "- prompts:\n    - step: Enter email\n      recording:\n        tools:\n          - pressBack: {}";
+    expect(TY.runnableSteps(source)).toEqual([]);
   });
 
-  test("recognizes a compact trailhead classifier and tool map", () => {
-    const source = `trailhead:
-  step: Sign in
-  recording:
-    android-phone: { signInViaUI: { email: "person@example.com" } }
-trail: []`;
-
-    expect(TY.runnableToolCalls(source)).toEqual([
-      { line0: 3, endLine0: 3, name: "signInViaUI", tool: { signInViaUI: { email: "person@example.com" } }, platform: "android-phone" },
-    ]);
-  });
-
-  test("recognizes a compact tool inside a block trailhead classifier", () => {
-    const source = `trailhead:
-  step: Open the app
-  recording:
-    android:
-      launchApp: {}`;
-
-    expect(TY.runnableToolCalls(source)).toEqual([
-      { line0: 4, endLine0: 4, name: "launchApp", tool: { launchApp: {} }, platform: "android" },
-    ]);
-  });
-
-  test("supports legacy recording.tools and root tools lists", () => {
-    const source = [
-      "- prompts:",
-      "    - step: Enter email",
-      "      recording:",
-      "        tools:",
-      "          - inputText:",
-      "              text: person@example.com",
-      "- tools:",
-      "    - pressBack: {}",
-    ].join("\n");
-    expect(TY.runnableToolCalls(source)).toEqual([
-      { line0: 4, endLine0: 5, name: "inputText", tool: { inputText: { text: "person@example.com" } }, platform: null },
-      { line0: 7, endLine0: 7, name: "pressBack", tool: { pressBack: {} }, platform: null },
-    ]);
-  });
-
-  test("does not mark natural-language steps or incomplete tool YAML", () => {
+  test("a step's own tool calls never become markers of their own", () => {
     const source = "trail:\n  - step: Open settings\n    recording:\n      android:\n        - tapOn: [";
-    expect(TY.runnableToolCalls(source)).toEqual([]);
+    expect(TY.runnableSteps(source).map((s) => s.index)).toEqual([0]);
   });
 });
 

@@ -7,7 +7,23 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import picocli.CommandLine
+import kotlinx.datetime.Instant
+import kotlinx.serialization.encodeToString
+import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TaskId
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -613,8 +629,8 @@ class TrailCommandSaveRecordingTest {
 
   @Test
   fun `saveRecordingAsUnified keeps a single-tool trailhead in the unified trail`() {
-    // The one-tool trailhead is the representable case: it stays in the unified format (guards the
-    // boundary of the multi-tool fallback above).
+    // The one-tool trailhead needs no mapping at all — it lands in the trailhead slot as recorded,
+    // and nothing spills into the first step.
     val cmd = TrailCommand()
     val dir = tempFolder.newFolder()
     val recording = File(dir, "recording.trail.yaml").apply {
@@ -738,6 +754,399 @@ class TrailCommandSaveRecordingTest {
         driver = xyz.block.trailblaze.devices.TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       ),
     )
+
+  // ---------------------------------------------------------------------------
+  // Recording generation and save-back read the configured logs directory
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `saveRecordingToTrailDirectory reads the recording from the given logs directory`() {
+    // `logsDirectory` is a persisted setting that can point anywhere, including outside the
+    // checkout. The save-back must read the session's recording from THAT directory — this test
+    // runs inside the repo, so a regression back to the old hard-coded `<git root>/logs` path
+    // finds no recording for this session and silently skips the save.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder("custom-logs-root")
+    val sessionId = SessionId("session-under-custom-logs-dir")
+    File(logsDir, sessionId.value).apply { mkdirs() }
+      .resolve("recording.trail.yaml")
+      .writeText(unifiedRecordingYaml(driver = "ANDROID_ONDEVICE_INSTRUMENTATION", toolName = "tapCart", classifier = "android-phone"))
+
+    val trailDir = tempFolder.newFolder("trail-src")
+    // An existing per-device sibling routes the save to CLASSIFIER_SIBLING, so the recording
+    // lands as `android-phone.trail.yaml` beside it.
+    writeUnifiedWithSlot(File(trailDir, "ios.trail.yaml"), "ios")
+    val trailFile = File(trailDir, "android-phone.trail.yaml")
+
+    cmd.saveRecordingToTrailDirectory(
+      trailFile, sessionId, listOf("android-phone"), selectedDeviceConfiguration = null, logsDir = logsDir,
+    )
+
+    val saved = File(trailDir, "android-phone.trail.yaml")
+    assertTrue(saved.exists(), "the recording read from the custom logs directory must be saved beside the trail")
+    assertTrue(saved.readText().contains("tapCart"), "the saved trail must carry the recorded tool")
+  }
+
+  @Test
+  fun `generateRecordingForSession writes the recording into the given logs directory`() {
+    // The producer half of the pair above: the on-device/delegated path generates
+    // `recording.trail.yaml` from the session's logs on disk. Both the read of the logs and the
+    // write of the recording must happen under the configured logs directory, or the save-back
+    // (which reads the same directory) finds nothing.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder("producer-logs-root")
+    val sessionId = SessionId("producer-session")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    val step = DirectionStep(step = "Open the cart")
+    // The Started log supplies the device classifier the recording's slot is keyed by.
+    writeLog(
+      sessionDir,
+      "000.json",
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = null,
+          hasRecordedSteps = false,
+          testMethodName = "test",
+          testClassName = "Test",
+          trailblazeDeviceInfo = TrailblazeDeviceInfo(
+            trailblazeDeviceId = TrailblazeDeviceId(
+              instanceId = "pixel-7",
+              trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+            ),
+            trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            widthPixels = 1080,
+            heightPixels = 1920,
+            classifiers = listOf(TrailblazeDeviceClassifier("android-phone")),
+          ),
+          rawYaml = null,
+        ),
+        session = sessionId,
+        timestamp = FIXED_NOW,
+      ),
+    )
+    writeLog(sessionDir, "001.json", TrailblazeLog.ObjectiveStartLog(promptStep = step, session = sessionId, timestamp = FIXED_NOW))
+    writeLog(
+      sessionDir,
+      "002.json",
+      TrailblazeLog.TrailblazeToolLog(
+        trailblazeTool = tool("tapCart").trailblazeTool.toLogPayload(),
+        rawTrailblazeTool = null,
+        toolName = "tapCart",
+        successful = true,
+        traceId = null,
+        durationMs = 100,
+        session = sessionId,
+        timestamp = FIXED_NOW,
+        isRecordable = true,
+        isTopLevelToolCall = false,
+        isVerification = false,
+      ),
+    )
+    writeLog(
+      sessionDir,
+      "003.json",
+      TrailblazeLog.ObjectiveCompleteLog(
+        promptStep = step,
+        objectiveResult = AgentTaskStatus.Success.ObjectiveComplete(
+          llmExplanation = "Done",
+          statusData = AgentTaskStatusData(
+            taskId = TaskId.generate(),
+            prompt = step.prompt,
+            callCount = 1,
+            taskStartTime = FIXED_NOW,
+            totalDurationMs = 100,
+          ),
+        ),
+        session = sessionId,
+        timestamp = FIXED_NOW,
+      ),
+    )
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val recording = File(sessionDir, "recording.trail.yaml")
+    assertTrue(recording.exists(), "the recording must be generated into the configured logs directory")
+    assertTrue(recording.readText().contains("tapCart"), "the recording must carry the session's recorded tool")
+  }
+
+  @Test
+  fun `generateRecordingForSession writes a recording for an AI-blazed multi-tool trailhead`() {
+    // The reported symptom: a green run whose natural-language trailhead was satisfied by several
+    // tools (four here, five live) produced NO recording.trail.yaml at all — the render threw, was
+    // caught, and the CLI logged "No recording data". Every tool must reach the file, split across
+    // the trailhead slot (which holds one) and the first step. Tool names are stand-ins, as
+    // elsewhere in this file: what matters is how many there are and the order they replay in.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder("blazed-trailhead-logs")
+    val sessionId = SessionId("blazed-trailhead-session")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    val trailhead = DirectionStep(step = "Launch the sample app", isTrailhead = true)
+    val firstStep = DirectionStep(step = "Open the cart")
+    // Distinct, increasing timestamps: the generator orders the session by timestamp, so equal
+    // stamps would let the directory's listing order decide which window each tool fell in.
+    listOf(
+      startedLog(sessionId, classifier = "android-phone"),
+      objectiveStartLog(sessionId, trailhead),
+      recordableToolLog(sessionId, "bootstrapProbe", atSecond(1)),
+      recordableToolLog(sessionId, "bootstrapLaunch", atSecond(2)),
+      recordableToolLog(sessionId, "bootstrapSettle", atSecond(3)),
+      recordableToolLog(sessionId, "bootstrapCheck", atSecond(4)),
+      objectiveCompleteLog(sessionId, trailhead, atSecond(5)),
+      objectiveStartLog(sessionId, firstStep, atSecond(6)),
+      recordableToolLog(sessionId, "tapCart", atSecond(7)),
+      objectiveCompleteLog(sessionId, firstStep, atSecond(8)),
+    ).forEachIndexed { i, log -> writeLog(sessionDir, "%03d.json".format(i), log) }
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val recording = File(sessionDir, "recording.trail.yaml")
+    assertTrue(recording.exists(), "a green AI-driven run must leave a recording behind")
+    // Decoded, not grepped: the file has to be one the reader accepts, since that is what the
+    // save-back and any replay will do with it.
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(recording.readText())
+    assertEquals(
+      listOf("bootstrapProbe"),
+      unified.trailhead?.recordings?.get("android-phone")?.map { it.name },
+    )
+    assertEquals(
+      listOf("bootstrapLaunch", "bootstrapSettle", "bootstrapCheck", "tapCart"),
+      unified.trail.single().recordings["android-phone"]?.map { it.name },
+      "the trailhead's remaining tools replay at the start of step 1, in the order they ran",
+    )
+  }
+
+  @Test
+  fun `the daemon's reported logs dir outranks the client's own resolution`() {
+    // The daemon pins its logs repo at boot, so a client attached to a daemon started from another
+    // checkout resolves a different directory from the same settings. The run's own response is
+    // the only authority on where its session actually landed.
+    val cmd = command()
+    val daemonDir = tempFolder.newFolder("daemon-logs")
+    val clientDir = tempFolder.newFolder("client-logs")
+
+    assertEquals(
+      daemonDir,
+      cmd.sessionLogsDir(CliRunResponse(success = true, logsDir = daemonDir.absolutePath), fallback = clientDir),
+    )
+  }
+
+  @Test
+  fun `an older daemon that sends no logs dir falls back to the client's resolution`() {
+    // Absent must degrade rather than fail: the field is new, and a mixed client/daemon pair is
+    // the normal state right after an upgrade.
+    val cmd = command()
+    val clientDir = tempFolder.newFolder("fallback-logs")
+
+    assertEquals(clientDir, cmd.sessionLogsDir(CliRunResponse(success = true), fallback = clientDir))
+    assertEquals(
+      clientDir,
+      cmd.sessionLogsDir(CliRunResponse(success = true, logsDir = "  "), fallback = clientDir),
+    )
+  }
+
+  @Test
+  fun `a device-clock skew must not pull a step's first tool into the trailhead window`() {
+    // The live repro: a replayed run whose ObjectiveStart/Complete logs are stamped by the HOST
+    // runner while each tool's TrailblazeToolLog is stamped ON DEVICE, with the device clock ~0.7s
+    // behind. Sorted by timestamp, step 1's first tool then lands before the trailhead's complete
+    // log — the trailhead collects 2 tools, the unified emitter's one-tool-per-platform rule
+    // throws, and the CLI writes NO recording for a passing run. Window membership must follow the
+    // tool's execution-span overlap, not its sorted position.
+    val cmd = command()
+    val logsDir = tempFolder.newFolder("skewed-logs-root")
+    val sessionId = SessionId("skewed-clock-session")
+    val sessionDir = File(logsDir, sessionId.value).apply { mkdirs() }
+    // The authored trail the run replayed: its one-tool trailhead is declared under the `android:`
+    // family leg, while the run records under the device's own `android-phone` slot. Tool names are
+    // synthetic stand-ins (not registered tools) so the YAML round-trips via the generic decoder.
+    val authoredYaml = createTrailblazeYaml().encodeUnifiedTrailToString(
+      UnifiedTrail(
+        config = UnifiedTrailConfig(id = "app/skew", target = "app"),
+        trailhead = UnifiedTrailStep(
+          step = "Launch the app",
+          recordings = mapOf("android" to listOf(tool("bootstrapLaunch"))),
+        ),
+        trail = listOf(
+          UnifiedTrailStep(
+            step = "Open the menu",
+            recordings = mapOf("android" to listOf(tool("tapMenu"), tool("scrollList"))),
+          ),
+        ),
+      ),
+    )
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): Instant = Instant.fromEpochMilliseconds(FIXED_NOW.toEpochMilliseconds() + ms)
+    writeLog(
+      sessionDir,
+      "000.json",
+      TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        sessionStatus = SessionStatus.Started(
+          trailConfig = null,
+          trailFilePath = null,
+          hasRecordedSteps = true,
+          testMethodName = "test",
+          testClassName = "Test",
+          trailblazeDeviceInfo = TrailblazeDeviceInfo(
+            trailblazeDeviceId = TrailblazeDeviceId(
+              instanceId = "pixel-7",
+              trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+            ),
+            trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+            widthPixels = 1080,
+            heightPixels = 1920,
+            classifiers = listOf(TrailblazeDeviceClassifier("android-phone")),
+          ),
+          rawYaml = authoredYaml,
+        ),
+        session = sessionId,
+        timestamp = at(0),
+      ),
+    )
+    // Host clock: trailhead window [100, 3800], menu window [3810, 10400].
+    writeLog(sessionDir, "001.json", TrailblazeLog.ObjectiveStartLog(promptStep = trailheadStep, session = sessionId, timestamp = at(100)))
+    // Device clock (~0.7s behind the host): the trailhead's own tool sits inside its window…
+    writeLog(sessionDir, "002.json", skewedToolLog("bootstrapLaunch", sessionId, timestamp = at(1_900), durationMs = 500))
+    writeLog(sessionDir, "003.json", objectiveCompleteLog(trailheadStep, sessionId, timestamp = at(3_800)))
+    writeLog(sessionDir, "004.json", TrailblazeLog.ObjectiveStartLog(promptStep = menuStep, session = sessionId, timestamp = at(3_810)))
+    // …but the menu step's first tool's device stamp (3200) sorts BEFORE the trailhead's complete
+    // (3800). Its span [3200, 6600] overlaps the menu window far more than the trailhead's.
+    writeLog(sessionDir, "005.json", skewedToolLog("tapMenu", sessionId, timestamp = at(3_200), durationMs = 3_400))
+    writeLog(sessionDir, "006.json", skewedToolLog("scrollList", sessionId, timestamp = at(6_900), durationMs = 1_000))
+    writeLog(sessionDir, "007.json", objectiveCompleteLog(menuStep, sessionId, timestamp = at(10_400)))
+
+    cmd.generateRecordingForSession(sessionId, logsDir)
+
+    val recording = File(sessionDir, "recording.trail.yaml")
+    assertTrue(recording.exists(), "a passing skewed-clock run must still render its recording")
+    val unified = createTrailblazeYaml().decodeUnifiedTrail(recording.readText())
+    assertEquals(
+      listOf("bootstrapLaunch"),
+      unified.trailhead?.recordings?.get("android-phone")?.map { it.name },
+      "the trailhead records exactly its own tool — not the next step's skew-shifted first tool",
+    )
+    assertEquals(
+      listOf("bootstrapLaunch"),
+      unified.trailhead?.recordings?.get("android")?.map { it.name },
+      "the authored android family leg is preserved untouched",
+    )
+    assertEquals(
+      listOf("tapMenu", "scrollList"),
+      unified.trail.single().recordings["android-phone"]?.map { it.name },
+      "the step keeps both of its own tools",
+    )
+  }
+
+  /** A device-stamped recordable tool log, as the on-device runner path emits (no top-level mark). */
+  private fun skewedToolLog(
+    toolName: String,
+    sessionId: SessionId,
+    timestamp: Instant,
+    durationMs: Long,
+  ) = TrailblazeLog.TrailblazeToolLog(
+    trailblazeTool = tool(toolName).trailblazeTool.toLogPayload(),
+    rawTrailblazeTool = null,
+    toolName = toolName,
+    successful = true,
+    traceId = null,
+    durationMs = durationMs,
+    session = sessionId,
+    timestamp = timestamp,
+    isRecordable = true,
+    isTopLevelToolCall = false,
+    isVerification = false,
+  )
+
+  private fun objectiveCompleteLog(step: DirectionStep, sessionId: SessionId, timestamp: Instant) =
+    TrailblazeLog.ObjectiveCompleteLog(
+      promptStep = step,
+      objectiveResult = AgentTaskStatus.Success.ObjectiveComplete(
+        llmExplanation = "Done",
+        statusData = AgentTaskStatusData(
+          taskId = TaskId.generate(),
+          prompt = step.prompt,
+          callCount = 1,
+          taskStartTime = timestamp,
+          totalDurationMs = 100,
+        ),
+      ),
+      session = sessionId,
+      timestamp = timestamp,
+    )
+
+  private fun writeLog(sessionDir: File, fileName: String, log: TrailblazeLog) {
+    File(sessionDir, fileName).writeText(TrailblazeJsonInstance.encodeToString<TrailblazeLog>(log))
+  }
+
+  /** The `Started` log supplying the device [classifier] a recording's slot is keyed by. */
+  private fun startedLog(sessionId: SessionId, classifier: String) =
+    TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = SessionStatus.Started(
+        trailConfig = null,
+        trailFilePath = null,
+        hasRecordedSteps = false,
+        testMethodName = "test",
+        testClassName = "Test",
+        trailblazeDeviceInfo = TrailblazeDeviceInfo(
+          trailblazeDeviceId = TrailblazeDeviceId(
+            instanceId = "pixel-7",
+            trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+          ),
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          widthPixels = 1080,
+          heightPixels = 1920,
+          classifiers = listOf(TrailblazeDeviceClassifier(classifier)),
+        ),
+        rawYaml = null,
+      ),
+      session = sessionId,
+      timestamp = FIXED_NOW,
+    )
+
+  /** [FIXED_NOW] plus [seconds], for fixtures that need the session's log order to be unambiguous. */
+  private fun atSecond(seconds: Int): Instant =
+    Instant.fromEpochMilliseconds(FIXED_NOW.toEpochMilliseconds() + seconds * 1_000L)
+
+  private fun objectiveStartLog(sessionId: SessionId, step: DirectionStep, timestamp: Instant = FIXED_NOW) =
+    TrailblazeLog.ObjectiveStartLog(promptStep = step, session = sessionId, timestamp = timestamp)
+
+  private fun objectiveCompleteLog(sessionId: SessionId, step: DirectionStep, timestamp: Instant = FIXED_NOW) =
+    TrailblazeLog.ObjectiveCompleteLog(
+      promptStep = step,
+      objectiveResult = AgentTaskStatus.Success.ObjectiveComplete(
+        llmExplanation = "Done",
+        statusData = AgentTaskStatusData(
+          taskId = TaskId.generate(),
+          prompt = step.prompt,
+          callCount = 1,
+          taskStartTime = FIXED_NOW,
+          totalDurationMs = 100,
+        ),
+      ),
+      session = sessionId,
+      timestamp = timestamp,
+    )
+
+  private fun recordableToolLog(sessionId: SessionId, toolName: String, timestamp: Instant = FIXED_NOW) =
+    TrailblazeLog.TrailblazeToolLog(
+      trailblazeTool = tool(toolName).trailblazeTool.toLogPayload(),
+      rawTrailblazeTool = null,
+      toolName = toolName,
+      successful = true,
+      traceId = null,
+      durationMs = 100,
+      session = sessionId,
+      timestamp = timestamp,
+      isRecordable = true,
+      isTopLevelToolCall = false,
+      isVerification = false,
+    )
+
+  private companion object {
+    /** Any fixed instant — the generator only sorts by timestamp. */
+    val FIXED_NOW: Instant = Instant.parse("2026-01-01T00:00:00Z")
+  }
 
   // --- fixtures ---
 

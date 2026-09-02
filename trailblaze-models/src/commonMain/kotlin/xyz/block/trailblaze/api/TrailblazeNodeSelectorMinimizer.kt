@@ -194,6 +194,7 @@ internal object TrailblazeNodeSelectorMinimizer {
     stillUnique: (DriverNodeMatch) -> Boolean,
   ): DriverNodeMatch = when (match) {
     is DriverNodeMatch.AndroidAccessibility -> minimizeAndroidAccessibility(match, stillUnique)
+    is DriverNodeMatch.AndroidView -> minimizeAndroidView(match, stillUnique)
     is DriverNodeMatch.AndroidMaestro -> minimizeAndroidMaestro(match, stillUnique)
     is DriverNodeMatch.Web -> minimizeWeb(match, stillUnique)
     is DriverNodeMatch.Compose -> minimizeCompose(match, stillUnique)
@@ -294,6 +295,41 @@ internal object TrailblazeNodeSelectorMinimizer {
     return greedilyApply(match, drops, stillUnique)
   }
 
+  /**
+   * Stability order for AndroidView, least-stable → most-stable:
+   *
+   *   transient state flags → error text → numeric input type → meta-text (state
+   *   description) → **className** → secondary text (hint/contentDescription) →
+   *   primary text → tag → resourceId.
+   *
+   * Same rationale as [minimizeAndroidAccessibility]. `tag` sits just under `resourceId`:
+   * both are developer-assigned, but a tag is untyped and apps sometimes reuse one.
+   */
+  private fun minimizeAndroidView(
+    match: DriverNodeMatch.AndroidView,
+    stillUnique: (DriverNodeMatch) -> Boolean,
+  ): DriverNodeMatch.AndroidView {
+    val drops: List<(DriverNodeMatch.AndroidView) -> DriverNodeMatch.AndroidView> = listOf(
+      { it.copy(isSelected = null) },
+      { it.copy(isFocused = null) },
+      { it.copy(isChecked = null) },
+      { it.copy(isEnabled = null) },
+      { it.copy(isClickable = null) },
+      { it.copy(isPassword = null) },
+      { it.copy(isEditable = null) },
+      { it.copy(errorTextRegex = null) },
+      { it.copy(inputType = null) },
+      { it.copy(stateDescriptionRegex = null) },
+      { it.copy(classNameRegex = null) },
+      { it.copy(hintTextRegex = null) },
+      { it.copy(contentDescriptionRegex = null) },
+      { it.copy(textRegex = null) },
+      { it.copy(tagRegex = null) },
+      { it.copy(resourceIdRegex = null) },
+    )
+    return greedilyApply(match, drops, stillUnique)
+  }
+
   private fun minimizeCompose(
     match: DriverNodeMatch.Compose,
     stillUnique: (DriverNodeMatch) -> Boolean,
@@ -303,6 +339,15 @@ internal object TrailblazeNodeSelectorMinimizer {
       { it.copy(isFocused = null) },
       { it.copy(isEnabled = null) },
       { it.copy(isPassword = null) },
+      { it.copy(hasSetTextAction = null) },
+      { it.copy(isPopup = null) },
+      { it.copy(isDialog = null) },
+      { it.copy(isHeading = null) },
+      { it.copy(errorTextRegex = null) },
+      { it.copy(collectionItemColumnIndex = null) },
+      { it.copy(collectionItemRowIndex = null) },
+      { it.copy(stateDescriptionRegex = null) },
+      { it.copy(paneTitleRegex = null) },
       { it.copy(toggleableState = null) },
       { it.copy(role = null) },
       { it.copy(editableTextRegex = null) },
@@ -421,12 +466,26 @@ internal object TrailblazeNodeSelectorMinimizer {
       ),
       stillUnique,
     )
+    is DriverNodeMatch.AndroidView -> greedilyApply(
+      match,
+      listOf(
+        { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.contentDescriptionRegex)?.let { m.copy(contentDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.hintTextRegex)?.let { m.copy(hintTextRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.stateDescriptionRegex)?.let { m.copy(stateDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.errorTextRegex)?.let { m.copy(errorTextRegex = it) } ?: m },
+      ),
+      stillUnique,
+    )
     is DriverNodeMatch.Compose -> greedilyApply(
       match,
       listOf(
         { m -> unescapeForSelector(m.textRegex)?.let { m.copy(textRegex = it) } ?: m },
         { m -> unescapeForSelector(m.editableTextRegex)?.let { m.copy(editableTextRegex = it) } ?: m },
         { m -> unescapeForSelector(m.contentDescriptionRegex)?.let { m.copy(contentDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.stateDescriptionRegex)?.let { m.copy(stateDescriptionRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.paneTitleRegex)?.let { m.copy(paneTitleRegex = it) } ?: m },
+        { m -> unescapeForSelector(m.errorTextRegex)?.let { m.copy(errorTextRegex = it) } ?: m },
       ),
       stillUnique,
     )
@@ -695,6 +754,12 @@ internal fun DriverNodeMatch.isEmpty(): Boolean = when (this) {
       isFocused == null && isEditable == null && isScrollable == null && isPassword == null &&
       isHeading == null && isMultiLine == null && inputType == null &&
       collectionItemRowIndex == null && collectionItemColumnIndex == null
+  is DriverNodeMatch.AndroidView ->
+    classNameRegex == null && resourceIdRegex == null && tagRegex == null && textRegex == null &&
+      contentDescriptionRegex == null && hintTextRegex == null && stateDescriptionRegex == null &&
+      errorTextRegex == null && isEnabled == null && isClickable == null && isChecked == null &&
+      isSelected == null && isFocused == null && isEditable == null && isPassword == null &&
+      inputType == null
   is DriverNodeMatch.AndroidMaestro ->
     textRegex == null && resourceIdRegex == null && accessibilityTextRegex == null &&
       classNameRegex == null && hintTextRegex == null && clickable == null && enabled == null &&
@@ -705,7 +770,10 @@ internal fun DriverNodeMatch.isEmpty(): Boolean = when (this) {
   is DriverNodeMatch.Compose ->
     testTag == null && role == null && textRegex == null && editableTextRegex == null &&
       contentDescriptionRegex == null && toggleableState == null && isEnabled == null &&
-      isFocused == null && isSelected == null && isPassword == null
+      isFocused == null && isSelected == null && isPassword == null &&
+      collectionItemRowIndex == null && collectionItemColumnIndex == null &&
+      stateDescriptionRegex == null && isHeading == null && paneTitleRegex == null &&
+      isDialog == null && isPopup == null && errorTextRegex == null && hasSetTextAction == null
   is DriverNodeMatch.IosMaestro ->
     textRegex == null && resourceIdRegex == null && accessibilityTextRegex == null &&
       classNameRegex == null && hintTextRegex == null && focused == null && selected == null

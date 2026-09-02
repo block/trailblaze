@@ -9,6 +9,9 @@ class DriverTypeKeyTest {
 
   @Test
   fun `android resolves to on-device android driver types`() {
+    // ANDROID_TEST is deliberately absent: toolsets authored with `drivers: [android]`
+    // target host-driven tools that cannot execute inside the instrumentation runner.
+    // The in-process driver must be referenced explicitly via "android-test".
     val result = DriverTypeKey.resolve("android")
     assertEquals(
       setOf(
@@ -92,7 +95,11 @@ class DriverTypeKeyTest {
   fun `resolveAll combines multiple keys`() {
     val result = DriverTypeKey.resolveAll(listOf("android", "ios-host"))
     assertEquals(
-      TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES + TrailblazeDriverType.IOS_HOST,
+      setOf(
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        TrailblazeDriverType.IOS_HOST,
+      ),
       result,
     )
   }

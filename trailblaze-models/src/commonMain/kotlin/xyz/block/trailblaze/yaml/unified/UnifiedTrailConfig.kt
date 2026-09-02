@@ -130,6 +130,31 @@ data class UnifiedTrailConfig(
   val multiDeviceConfigurationNames: Set<String>
     get() = devices?.filterValues { it.isConfiguration }?.keys ?: emptySet()
 
+  /**
+   * The configuration a **pre-flight** surface must assume this trail will bind: its single
+   * declared configuration, or null when it declares none or more than one.
+   *
+   * A session is told which configuration it selected; a surface that reasons about a trail before
+   * any session exists — a CI `requireRecordings` gate, a skip gate, a planning banner — is not.
+   * Passing null there is not neutral: every configuration-keyed leg, pin, and skip is invisible to
+   * classifier lineage, so the trail reads as unrecorded and unskipped no matter what it declares.
+   *
+   * The rule mirrors `MultiDeviceConfigurationResolver.resolve`, which is what actually binds a
+   * session, and it must keep mirroring it: this value only means anything because it predicts
+   * that decision. The resolver discards ordinary single-device entries
+   * (`filterValues { it.isConfiguration }`) and binds the sole surviving configuration, so
+   * **ordinary entries alongside a configuration do not withhold the selection** — a trail
+   * declaring `pos-pair` plus an `android-phone` pin still runs as `pos-pair`. Predicting null for
+   * that shape would reproduce, for mixed trails, the same unrecorded/unskipped misreading this
+   * property exists to prevent.
+   *
+   * The one abstention is more than one configuration: such a trail is refused at session start,
+   * so there is no decision to predict. Returning null leaves the pre-existing invisible-legs
+   * behavior rather than guessing which one would have run.
+   */
+  val soleMultiDeviceConfigurationName: String?
+    get() = multiDeviceConfigurationNames.singleOrNull()
+
   companion object {
     /**
      * Reserved [metadata] key bridging v1 `source.type` (a `TrailSourceType` name; empty string

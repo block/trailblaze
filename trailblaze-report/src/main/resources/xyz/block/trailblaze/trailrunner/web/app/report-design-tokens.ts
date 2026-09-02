@@ -56,6 +56,9 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --warning-surface: var(--status-self-healed-surface); --warning-border: var(--status-self-healed-border); --warning-text: var(--status-self-healed-text);
   --success-surface: var(--status-passed-surface); --success-border: var(--status-passed-border); --success-text: var(--status-passed-text);
   --accent-surface: var(--accent-3); --violet-surface: var(--violet-3); --code-surface: var(--neutral-2); --code-text: var(--neutral-12);
+  /* Word-level diff tint: the changed span INSIDE a changed line, one shade deeper than the line's
+     own surface. Translucent so it composes over the add/del row backgrounds. */
+  --diff-word-hi-add: var(--success-9); --diff-word-hi-del: var(--error-9);
   --r-sm: 4px; --r-md: 6px; --r-lg: 8px;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
   --type-micro: 10px; --type-caption: 11px; --type-small: 12px; --type-body: 14px; --type-title: 24px;
@@ -108,6 +111,8 @@ export const REPORT_DESIGN_TOKENS_CSS = `
   --warning-surface: var(--status-self-healed-surface); --warning-border: var(--status-self-healed-border); --warning-text: var(--status-self-healed-text);
   --success-surface: var(--status-passed-surface); --success-border: var(--status-passed-border); --success-text: var(--status-passed-text);
   --accent-surface: var(--accent-3); --violet-surface: var(--violet-3); --code-surface: var(--neutral-1); --code-text: var(--neutral-12);
+  /* Dark's error-9/success-9 are opaque; the word tint needs alpha to sit over the row surface. */
+  --diff-word-hi-add: #3fb95059; --diff-word-hi-del: #f8514966;
   --shadow-raised: 0 18px 48px color-mix(in srgb,var(--accent-1) 76%,transparent), 0 2px 8px color-mix(in srgb,var(--accent-1) 82%,transparent);
   --shadow-device: 0 1px 3px rgba(0,0,0,.32), 0 8px 20px rgba(0,0,0,.22);
 }`;

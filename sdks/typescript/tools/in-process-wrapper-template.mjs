@@ -40,10 +40,32 @@ __client.tools = new Proxy({}, {
 
 function __normalizeResult(result) {
   if (result == null) return { content: [] };
+  // Author hand-rolled an MCP envelope — pass through, structuredContent included or not.
   if (typeof result === 'object' && Array.isArray(result.content)) return result;
   if (typeof result === 'string') return { content: [{ type: 'text', text: result }] };
-  return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+  if (typeof result !== 'object') return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+  // Typed-overload return: send it as text AND as structuredContent, matching
+  // `normalizeInlineToolResult` in InlineScriptToolServerSynthesizer. Text alone is what the
+  // caller's proxy unwraps when structuredContent is absent, so a composing tool would receive
+  // the JSON *string* cast as the declared type and read `undefined` off every field — and only
+  // when running in-process, which is the on-device runtime.
+  return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
 }
 
 globalThis.__trailblazeTools = globalThis.__trailblazeTools || {};
 // __TRAILBLAZE_REGISTRATION__
+// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__
+// Every function-valued export becomes a tool under its own export name. Type-only exports erase
+// at bundle time; the typeof filter skips any non-tool export. `const` inside the loop gives each
+// iteration its own binding, so the handler closure captures the right definition.
+for (const __exportName of Object.keys(__userModule)) {
+  const __def = __userModule[__exportName];
+  if (typeof __def !== 'function') continue;
+  globalThis.__trailblazeTools[__exportName] = {
+    handler: async (args, ctx) => {
+      const result = await __def(args, ctx, __client);
+      return __normalizeResult(result);
+    },
+  };
+}
+// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__

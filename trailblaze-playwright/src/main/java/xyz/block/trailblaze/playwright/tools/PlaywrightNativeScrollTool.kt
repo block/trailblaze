@@ -81,7 +81,7 @@ data class PlaywrightNativeScrollTool(
         // dance (visible, stable, receives events) so the subsequent `page.mouse().wheel`
         // dispatches inside a real container, not on top of an overlay. Wheel itself has
         // no locator-based equivalent — coordinate-driven is the Playwright primitive.
-        locator!!.first().hover()
+        locator!!.hover()
       }
 
       page.mouse().wheel(deltaX, deltaY)

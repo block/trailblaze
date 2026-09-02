@@ -18,14 +18,10 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
-import xyz.block.trailblaze.report.ReportArtifacts
-import xyz.block.trailblaze.report.ReportTemplateResolver
 import xyz.block.trailblaze.report.ReportTiming
 import xyz.block.trailblaze.report.RunReportGenerator
 import xyz.block.trailblaze.report.SessionLogSnapshot
-import xyz.block.trailblaze.report.WasmReportRequest
-import xyz.block.trailblaze.report.generateWasmReport
-import xyz.block.trailblaze.report.overlapReports
+import xyz.block.trailblaze.report.toSessionResult
 import xyz.block.trailblaze.report.models.AccessibilityTruncationSummary
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
@@ -36,6 +32,7 @@ import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
+import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
@@ -44,7 +41,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 /**
  * Generates a pass/fail summary and optional HTML report after CLI trail execution.
  *
- * Subclasses can override [generateReport] and [generateMarkdownReport] to customize
+ * Subclasses can override [generateMarkdownReport] to customize
  * report generation (via [xyz.block.trailblaze.ui.TrailblazeDesktopApp.createCliReportGenerator]).
  */
 open class CliReportGenerator {
@@ -155,63 +152,51 @@ open class CliReportGenerator {
   private val runReportGenerator by lazy { RunReportGenerator() }
 
   /**
-   * Generates the legacy WASM report and the interactive report CONCURRENTLY: the
-   * interactive leg (mostly waiting on an external bun subprocess) overlaps the CPU-bound
-   * WASM build, same as the CI path in
-   * [xyz.block.trailblaze.report.GenerateReportCliCommand]. Routes each leg through the
-   * open [generateReport] / [generateInteractiveReport] seams so subclass overrides apply.
+   * Generates the Trailblaze report for [sessionIds], routed through the open
+   * [generateInteractiveReport] seam so subclass overrides apply. Returns null when it could not
+   * be produced, which means a broken `bun` — a required dependency, not an optional one.
    *
-   * Either leg can individually be unavailable — the corresponding artifact is null. For the
-   * legacy leg that is routine (no WASM template); for the interactive leg it means a broken
-   * `bun`, which is a required dependency rather than an optional one. [generateWasm] false
-   * skips the legacy leg entirely (the `--no-wasm-report` path).
-   *
-   * The session logs are parsed ONCE here (into immutable [SessionLogSnapshot]s) and shared
-   * by both legs. Before this, each leg independently re-read + re-decoded every log file:
-   * the daemon repo's parse cache is deliberately evicted the moment a session ends, so the
-   * interactive leg triggered a full re-parse, and the WASM leg's session-scoped temp repo
-   * re-parsed the same files a third time.
+   * The session logs are parsed ONCE here (into immutable [SessionLogSnapshot]s) and handed to
+   * the generator, because the daemon repo's parse cache is deliberately evicted the moment a
+   * session ends and the generator would otherwise trigger a full re-parse.
    */
   fun generateHtmlReports(
     logsRepo: LogsRepo,
     sessionIds: List<SessionId>,
-    generateWasm: Boolean = true,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
-  ): ReportArtifacts {
-    // Skip the capture when nothing would consume it: with bun missing the interactive leg
-    // resolves to null before touching the snapshots, and with the WASM leg off there is no
-    // scoped repo to seed either.
-    val snapshots = if (generateWasm || runReportGenerator.isBunAvailable) {
+    skips: List<SkippedTrail> = emptyList(),
+  ): File? {
+    // Skip the capture when nothing would consume it: with bun missing the generator resolves to
+    // null before touching the snapshots.
+    val snapshots = if (runReportGenerator.isBunAvailable) {
       SessionLogSnapshot.captureAll(logsRepo, sessionIds)
     } else {
       null
     }
-    return overlapReports(
-      interactive = { generateInteractiveReport(logsRepo, sessionIds, snapshots, shareUrl, fullEventPayloads) },
-      wasm = { if (generateWasm) generateReport(logsRepo, sessionIds, snapshots) else null },
-    )
+    return generateInteractiveReport(logsRepo, sessionIds, snapshots, shareUrl, fullEventPayloads, skips)
   }
 
   /**
    * Generates the lightweight, self-contained interactive HTML report — the Trailblaze report,
-   * and the same artifact the Trail Runner app's "Share as HTML" button produces. Report-producing
-   * surfaces generate this ALONGSIDE the deprecated WASM report from [generateReport]; there is no
-   * format selector.
+   * the same artifact the Trail Runner app's "Share as HTML" button produces, and the same
+   * renderer the hosted report viewer serves.
    *
    * Generated headlessly by [RunReportGenerator] (a bun subprocess over the shared run-report
    * renderer). Returns null when it can't be produced — a broken `bun` (a required Trailblaze
-   * dependency), or a subprocess failure — with the cause logged. The deprecated legacy artifact
-   * a caller may still hold is not a substitute; the fix is to repair the install.
+   * dependency), or a subprocess failure — with the cause logged; the fix is to repair the install.
    *
    * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports],
-   *   which shares one parse across both report legs). Null — e.g. a direct call to this seam —
+   *   which shares one parse with this seam). Null — e.g. a direct call to this seam —
    *   means the generator captures its own.
    * @param shareUrl Optional canonical hosted URL baked into the report so its Copy link
    *   produces deep links against that URL (the `report --share-url` path).
    * @param fullEventPayloads When true (the `--full-report-payloads` flag), event formatters
    *   embed full payloads even for passed sessions instead of applying their report size
    *   budgets. Failed sessions always embed full payloads regardless.
+   * @param skips Trails the runner declined to run, already scoped by the caller to the same work
+   *   [sessionIds] covers. Empty — the default — is the safe answer for a report over a SUBSET of a
+   *   logs directory, which is why this is passed in rather than read from the directory here.
    */
   open fun generateInteractiveReport(
     logsRepo: LogsRepo,
@@ -219,74 +204,11 @@ open class CliReportGenerator {
     snapshots: List<SessionLogSnapshot>? = null,
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
+    skips: List<SkippedTrail> = emptyList(),
   ): File? = if (snapshots != null) {
-    runReportGenerator.generateFromSnapshots(logsRepo, snapshots, shareUrl, fullEventPayloads)
+    runReportGenerator.generateFromSnapshots(logsRepo, snapshots, shareUrl, fullEventPayloads, skips = skips)
   } else {
-    runReportGenerator.generate(logsRepo, sessionIds, shareUrl, fullEventPayloads)
-  }
-
-  /**
-   * Generates a self-contained HTML report for the given session IDs.
-   *
-   * Subclasses can override this to customize report generation (e.g., using
-   * block-specific report features).
-   *
-   * @param snapshots Already-captured snapshots for [sessionIds] (from [generateHtmlReports]);
-   *   used to seed [generateWasmReport]'s session-scoped repo so the WASM build doesn't
-   *   re-parse the log files. Null — e.g. a direct call to this seam — means the scoped repo
-   *   parses from disk itself.
-   * @return the report [File] if generation succeeded, null otherwise.
-   */
-  open fun generateReport(
-    logsRepo: LogsRepo,
-    sessionIds: List<SessionId>,
-    snapshots: List<SessionLogSnapshot>? = null,
-  ): File? {
-    if (sessionIds.isEmpty()) return null
-    val generateReportStart = TimeSource.Monotonic.markNow()
-
-    // Resolve the git root ONCE and share it across the ui-dir + template lookups —
-    // each resolution forks a `git rev-parse` subprocess.
-    val gitRoot = ReportTemplateResolver.getGitRoot()
-    val trailblazeUiDir = findTrailblazeUiDir(gitRoot)
-    val wasmBuildDir =
-      trailblazeUiDir?.let {
-        File(it, "build/kotlin-webpack/wasmJs/productionExecutable")
-      }
-    val hasWasmBuild = wasmBuildDir?.exists() == true
-
-    // Resolve template: local file at git root → classpath (bundled in JAR)
-    val effectiveTemplateFile = ReportTemplateResolver.resolveTemplate(gitRoot)
-
-    if (effectiveTemplateFile == null && !hasWasmBuild) {
-      Console.log("")
-      Console.log("No report template found. To enable HTML reports, build the WASM report viewer:")
-      Console.log("  ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true")
-      Console.log("This is a one-time step. Re-run to pick up report UI changes.")
-      return null
-    }
-
-    val reportsDir = File(logsRepo.logsDir, "reports")
-    reportsDir.mkdirs()
-    val timestamp =
-      LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
-    val outputFile = File(reportsDir, "trailblaze_report_$timestamp.html")
-
-
-    try {
-      return generateWasmReport(
-        logsRepo = logsRepo,
-        sessionIds = sessionIds,
-        request = WasmReportRequest(
-          outputFile = outputFile,
-          templateFile = effectiveTemplateFile,
-          trailblazeUiProjectDir = trailblazeUiDir,
-        ),
-        preParsedLogs = snapshots?.associate { it.sessionId to it.logs } ?: emptyMap(),
-      )
-    } finally {
-      ReportTiming.log("CliReportGenerator.generateReport", generateReportStart)
-    }
+    runReportGenerator.generate(logsRepo, sessionIds, shareUrl, fullEventPayloads, skips = skips)
   }
 
   /**
@@ -418,17 +340,6 @@ open class CliReportGenerator {
     return outputFile
   }
 
-  /**
-   * Finds the trailblaze-ui project directory relative to the git root.
-   *
-   * Delegates to [ReportTemplateResolver.findTrailblazeUiDir] (standalone layout
-   * checked before nested — the standalone opensource checkout is the more common
-   * case for external consumers); the embedding-parent override can still pre-empt
-   * either by overriding this method.
-   */
-  protected open fun findTrailblazeUiDir(gitRoot: File?): File? =
-    ReportTemplateResolver.findTrailblazeUiDir(gitRoot)
-
   internal fun mapStatusToOutcome(status: SessionStatus): Outcome = when (status) {
     is SessionStatus.Ended.Succeeded -> Outcome.PASSED
     is SessionStatus.Ended.SucceededWithSelfHeal -> Outcome.PASSED
@@ -517,7 +428,11 @@ open class CliReportGenerator {
    *   write failed (a write failure is logged via [Console.error] and reported as null
    *   rather than propagated, so a transient disk issue can't crash a CLI invocation).
    */
-  open fun generateJsonReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
+  open fun generateJsonReport(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    skips: List<SkippedTrail> = emptyList(),
+  ): File? {
     if (sessionIds.isEmpty()) return null
     val generateJsonReportStart = TimeSource.Monotonic.markNow()
 
@@ -529,7 +444,16 @@ open class CliReportGenerator {
     }
     if (results.isEmpty()) return null
 
-    val report = CiSummaryReport(metadata = emptyMetadata(), results = results)
+    // Skips join the rows that ran, so this file and the HTML report generated beside it from the
+    // same call describe the same set of trails. Added AFTER the two early returns above, not
+    // folded into them, so an all-skipped run still writes nothing here: this artifact is one of
+    // the two halves of a report, the other half already declines to render when no session opened,
+    // and a JSON listing only skips would have no sibling to agree with. `trailblaze report` is a
+    // report over sessions; the CI results task is what reports an all-skipped scope.
+    val report = CiSummaryReport(
+      metadata = emptyMetadata(),
+      results = results + skips.map { it.toSessionResult() },
+    )
 
     val reportsDir = File(logsRepo.logsDir, "reports")
     if (!reportsDir.mkdirs() && !reportsDir.isDirectory) {
@@ -601,6 +525,11 @@ open class CliReportGenerator {
       title = title,
       test_key = sessionInfo.stableTestKey,
       metadata = sessionInfo.trailConfig?.metadata,
+      // Blank normalizes to null, as it does for `test_class`/`test_name` below and for
+      // `SessionInfo.displayName`: a consumer reads null as "named no trail", and an empty string
+      // that survived to the report would answer that question two different ways depending on
+      // whether it was checked for null or for emptiness.
+      trail_file_path = sessionInfo.trailFilePath?.takeIf { it.isNotBlank() },
       test_class = sessionInfo.testClass?.takeIf { it.isNotBlank() },
       test_name = sessionInfo.testName?.takeIf { it.isNotBlank() },
       platform = platform,

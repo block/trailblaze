@@ -185,6 +185,11 @@ class MainTrailblazeApp(
         Console.info("Trailblaze daemon is already running on port ${portManager.httpPort} — nothing to do.")
         return
       }
+      // Pin the resolved ports before binding (in `wait = true` mode the call below never
+      // returns): from here on the getters mean "what this daemon is serving on", so a later
+      // settings patch cannot redirect `adb reverse` and the on-device log endpoint to a port
+      // this process never bound.
+      portManager.pinBoundPorts(httpPort = portManager.httpPort, httpsPort = portManager.httpsPort)
       try {
         trailblazeMcpServer.startStreamableHttpMcpServer(
           port = portManager.httpPort,
@@ -218,6 +223,9 @@ class MainTrailblazeApp(
         // path's first-launch case (no prior daemon) drops `_meta.trailblaze` envelopes
         // on every subprocess scripted-tool dispatch.
         xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
+        // Same pin as the headless branch: the getters become "what this daemon bound", so a
+        // runtime settings patch cannot redirect live device routing to an unbound port.
+        portManager.pinBoundPorts(httpPort = portManager.httpPort, httpsPort = portManager.httpsPort)
         try {
           trailblazeMcpServer.startStreamableHttpMcpServer(
             port = portManager.httpPort,
@@ -651,6 +659,8 @@ private fun rememberTrayIcon(): Painter {
  * The bind is the atomic arbiter for "one daemon (and one tray icon) per port". Waits briefly for
  * the rival to answer (it may have bound the socket before its routes are up), then exits: cleanly
  * as a duplicate when a rival daemon is healthy, or as an infra failure when nothing owns the port.
+ * A port the configuration made unusable skips the wait entirely — [classifyPortBindFailure] owns
+ * that decision so it can be unit-tested.
  *
  * Runs on the server-start coroutine while `application {}` renders concurrently, so a losing
  * non-headless instance may show its window/tray for the few seconds this takes before exiting —
@@ -659,8 +669,19 @@ private fun rememberTrayIcon(): Painter {
 private fun exitOnPortBindFailure(port: Int, headless: Boolean, cause: Exception): Nothing {
   val causeText = cause.message ?: cause.toString()
   DaemonClient(port = port).use { daemon ->
-    val rivalDaemonIsRunning = daemon.waitForDaemon(maxWaitMs = RIVAL_DAEMON_WAIT_MS)
-    when (val action = classifyPortBindFailure(rivalDaemonIsRunning, headless)) {
+    // The probe is a lambda so the classifier decides whether it happens at all: a configuration
+    // error must never consult the port (see classifyPortBindFailure).
+    when (
+      val action = classifyPortBindFailure(
+        cause = cause,
+        headless = headless,
+        probeForRivalDaemon = { daemon.waitForDaemon(maxWaitMs = RIVAL_DAEMON_WAIT_MS) },
+      )
+    ) {
+      PortBindFailureAction.ExitAsConfigError -> {
+        Console.error(causeText)
+        exitProcess(TrailblazeExitCode.INFRA_FAILED.code)
+      }
       is PortBindFailureAction.ExitAsDuplicate -> {
         // info (not log): the exit reason must survive CLI quiet mode — this is the only
         // record of why this instance vanished.

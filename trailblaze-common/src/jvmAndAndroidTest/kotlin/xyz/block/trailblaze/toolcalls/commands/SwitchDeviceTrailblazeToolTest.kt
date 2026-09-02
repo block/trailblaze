@@ -2,6 +2,7 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -62,9 +63,86 @@ class SwitchDeviceTrailblazeToolTest {
     }
     assertTrue(result is TrailblazeToolResult.Success, "expected Success but was $result")
     assertEquals("buyer", bindings.activeName)
-    assertEquals("device-buyer", bindings.active.trailblazeDeviceInfo.trailblazeDeviceId.instanceId)
+    assertEquals("device-buyer", bindings.active.trailblazeDeviceId.instanceId)
     val message = (result as TrailblazeToolResult.Success).message.orEmpty()
     assertTrue("buyer" in message && "seller" in message, "message must name both devices, was: $message")
+  }
+
+  @Test
+  fun `switches to a device bound without probed info and still names it`() {
+    // A handover needs identity, not geometry. A caller that binds a device by name with nothing
+    // probed — an interactive session — must still be switchable to, and the confirmation must
+    // still identify the device it landed on.
+    val bindings = SessionDeviceBindings(
+      devices = linkedMapOf(
+        "seller" to boundDevice(instanceId = "device-seller"),
+        "buyer" to SessionDeviceBindings.BoundDevice(
+          trailblazeDeviceId = deviceId("device-buyer"),
+          trailblazeDeviceInfo = null,
+          description = null,
+          targetId = null,
+        ),
+      ),
+    )
+
+    val result = runBlocking {
+      SwitchDeviceTrailblazeTool(name = "buyer").execute(context(bindings))
+    }
+
+    assertTrue(result is TrailblazeToolResult.Success, "expected Success but was $result")
+    assertEquals("buyer", bindings.activeName)
+    val message = (result as TrailblazeToolResult.Success).message.orEmpty()
+    assertTrue(
+      "device-buyer" in message,
+      "the handover confirmation must identify the device even unprobed, was: $message",
+    )
+  }
+
+  @Test
+  fun `rejects a binding whose probed info names a different device`() {
+    // Two fields can name the device; a mismatch would let `switchDevice` resolve one identity
+    // while the prompt roster describes another. Fail at bind time, not mid-trail.
+    val failure = assertFailsWith<IllegalArgumentException> {
+      SessionDeviceBindings.BoundDevice(
+        trailblazeDeviceId = deviceId("device-buyer"),
+        trailblazeDeviceInfo = deviceInfo("device-seller"),
+        description = null,
+        targetId = null,
+      )
+    }
+    assertTrue(
+      "device-buyer" in failure.message.orEmpty() && "device-seller" in failure.message.orEmpty(),
+      "the failure must name both disagreeing ids, was: ${failure.message}",
+    )
+  }
+
+  @Test
+  fun `rejects two names bound to the same device`() {
+    // Reachable precisely because a binding is identity-only: hand the same serial in under two
+    // names and the roster advertises a pair that is one device. `switchDevice` would then report
+    // success and change nothing, and every assertion after it would run on the display the agent
+    // believes it left — a handover that passes while proving nothing.
+    val failure = assertFailsWith<IllegalArgumentException> {
+      SessionDeviceBindings(
+        devices = mapOf(
+          "seller" to boundDevice(instanceId = "emulator-5560"),
+          "buyer" to boundDevice(instanceId = "emulator-5560"),
+        ),
+      )
+    }
+    val message = failure.message.orEmpty()
+    assertTrue(
+      "seller" in message && "buyer" in message && "emulator-5560" in message,
+      "the failure must name both colliding names and the device, was: $message",
+    )
+  }
+
+  @Test
+  fun `binds distinct devices under distinct names`() {
+    // The invariant must not reject the normal pair — a same-platform, different-serial roster is
+    // exactly what an X2 seller/buyer session binds.
+    val bindings = bindings("seller", "buyer")
+    assertEquals(setOf("seller", "buyer"), bindings.names)
   }
 
   @Test
@@ -130,14 +208,19 @@ class SwitchDeviceTrailblazeToolTest {
 
   private fun boundDevice(instanceId: String): SessionDeviceBindings.BoundDevice =
     SessionDeviceBindings.BoundDevice(
+      trailblazeDeviceId = deviceId(instanceId),
       trailblazeDeviceInfo = deviceInfo(instanceId),
+      description = null,
+      targetId = null,
     )
 
+  private fun deviceId(instanceId: String): TrailblazeDeviceId = TrailblazeDeviceId(
+    instanceId = instanceId,
+    trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+  )
+
   private fun deviceInfo(instanceId: String): TrailblazeDeviceInfo = TrailblazeDeviceInfo(
-    trailblazeDeviceId = TrailblazeDeviceId(
-      instanceId = instanceId,
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-    ),
+    trailblazeDeviceId = deviceId(instanceId),
     trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     widthPixels = 1080,
     heightPixels = 1920,

@@ -415,6 +415,48 @@ Remote device support:
 | --- | --- | --- |
 | Revyl | iOS, Android | Uses the Revyl CLI with the Trailblaze Agent. See [Revyl integration](revyl-integration.md). |
 
+### How a driver plugs into the host
+
+A driver is described in two places, and the split is deliberate:
+
+- **`TrailblazeDriverType`** (in `trailblaze-models`, so it is shared with on-device code) is the
+  driver's *identity* and its portable facts: platform, whether it needs a host, whether it runs
+  tools on the device, whether the host can reach it over RPC.
+- **`HostDriverDescriptor`** (in `trailblaze-host`) is everything the *host* does with that driver:
+  discover its devices, run a trail's YAML on it, capture a screen state, and whether its devices
+  belong in a browsable device list.
+
+Before descriptors, host behavior lived in `when (driverType)` arms scattered across device
+discovery, the YAML runner, screen-state capture, and three separate device listings. Adding a
+driver meant finding every one of them; missing one produced a driver that half-worked.
+
+With a descriptor, adding a driver is three edits: one `TrailblazeDriverType` entry, one
+`HostDriverDescriptor` implementation, and one line registering it in an app config's
+`hostDriverDescriptors`. Removing a driver is deleting the same three. An app that doesn't register
+a descriptor simply doesn't have that driver, rather than having a partly-wired one.
+
+Registering is what makes a driver supported — an app config folds its descriptors' `driverTypes`
+into the `supportedDriverTypes` it hands the settings repo, so a newly plugged-in driver is
+selectable without a fourth edit that is easy to forget.
+
+Discovery has a sharing contract, because several drivers can offer themselves on the same
+physical device (one connected Android device is offered under multiple execution engines). The
+host enumerates each shared transport exactly once per pass — `adb devices`, booted iOS
+simulators — and hands the result to every descriptor as `HostDeviceInventory`. A descriptor
+whose devices live on one of those transports maps from the inventory; one that owns its transport
+(Revyl's CLI) ignores it and probes on its own. Descriptors run concurrently and are contained: a
+plug-in that throws or hangs costs the user that driver's devices, never the whole device list.
+
+One descriptor may speak for several `TrailblazeDriverType` entries, but only when they are one
+backend split across platforms (Revyl's Android and iOS entries share one CLI and one catalog).
+Distinct engines that merely enumerate the same transport get one descriptor each and share
+through the inventory — bundling them would make removing a single driver surgery inside a shared
+class instead of deleting a file.
+
+The trade is that a converted driver is no longer proven present by `when` exhaustiveness.
+`HostDriverDescriptorRegistry.validateCovers` checks at startup that every supported driver has a
+descriptor, and lookups throw with a remedy rather than falling through.
+
 ## Logging & Reporting
 
 All tool executions are logged with:

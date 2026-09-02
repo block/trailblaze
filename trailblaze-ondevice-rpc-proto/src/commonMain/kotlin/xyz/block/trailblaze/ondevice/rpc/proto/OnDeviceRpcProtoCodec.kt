@@ -146,6 +146,7 @@ object OnDeviceRpcProtoCodec {
       initial_args = initialArgs,
       args_snapshot = argsSnapshot,
       sensitive_arg_names = sensitiveArgNames,
+      traceparent = traceParent,
     )
 
   fun RunYamlRequest.toModel(): ModelRunYamlRequest =
@@ -173,6 +174,7 @@ object OnDeviceRpcProtoCodec {
       initialArgs = initial_args,
       argsSnapshot = args_snapshot,
       sensitiveArgNames = sensitive_arg_names,
+      traceParent = traceparent,
     )
 
   fun ModelRunYamlResponse.toProto(): RunYamlResponse =

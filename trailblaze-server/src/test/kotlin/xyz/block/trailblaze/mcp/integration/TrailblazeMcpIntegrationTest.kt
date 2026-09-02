@@ -59,8 +59,9 @@ import kotlin.test.assertTrue
 class TrailblazeMcpIntegrationTest {
 
   companion object {
-    // Use incrementing ports starting from 53000 to avoid conflicts
-    private val portCounter = AtomicInteger(53000)
+    // Incrementing ports, below DEVICE_ALLOCATION_PORT_RANGE so the daemon will bind them, and
+    // below the OS ephemeral range (32768+ on Linux) so no outbound socket can be holding one.
+    private val portCounter = AtomicInteger(31300)
   }
 
   private lateinit var server: EmbeddedServer<*, *>

@@ -26,11 +26,11 @@ interface TrailblazeSdkDtsBundleExtension {
   /** Root of the TS SDK package — contains `package.json`, `src/`, `node_modules/.bin/dts-bundle-generator`. */
   val trailblazeSdkDir: DirectoryProperty
 
-  /** Path to the committed `dist/index.d.ts` that consumers ship as a JAR resource. */
+  /** Path to the generated `dist/index.d.ts` that consumers ship as a JAR resource. */
   val sdkDtsBundleOutputFile: RegularFileProperty
 
   /**
-   * Path to the committed `dist/testing.d.ts` — the secondary declaration bundle for the
+   * Path to the generated `dist/testing.d.ts` — the secondary declaration bundle for the
    * `@trailblaze/scripting/testing` subpath module (mock client + mock context helpers
    * authors import into `*.test.ts` files). Generated from `src/testing.ts` with the
    * same external-inline flags as the primary bundle so consumers can `import { ... }
@@ -42,7 +42,7 @@ interface TrailblazeSdkDtsBundleExtension {
   val sdkDtsTestingBundleOutputFile: RegularFileProperty
 
   /**
-   * Path to the committed `dist/testing.js` — the runtime ESM module that `bun test`
+   * Path to the generated `dist/testing.js` — the runtime ESM module that `bun test`
    * loads when an author imports from `@trailblaze/scripting/testing` inside a
    * `*.test.ts` file. Transpiled (not bundled) from `src/testing.ts` via esbuild;
    * `src/testing.ts` has only type-only imports from the rest of the SDK so the
@@ -56,7 +56,7 @@ interface TrailblazeSdkDtsBundleExtension {
   val sdkTestingRuntimeOutputFile: RegularFileProperty
 
   /**
-   * Path to the committed `dist/index.js` — the runtime ESM module bun resolves when
+   * Path to the generated `dist/index.js` — the runtime ESM module bun resolves when
    * a scripted tool authored against the typed surface does
    * `import { trailblaze } from "@trailblaze/scripting"`. Without this artifact the
    * `paths` mapping in the per-trailmap tsconfig resolves only to `dist/index.d.ts`
@@ -79,6 +79,31 @@ interface TrailblazeSdkDtsBundleExtension {
    * together.
    */
   val sdkRuntimeBundleOutputFile: RegularFileProperty
+
+  /**
+   * Path to the generated `dist/matcher.d.ts` — the declaration bundle for the
+   * `@trailblaze/scripting/matcher` subpath module (selector resolver + view-hierarchy
+   * node types a tool or its `*.test.ts` matches selectors with). Generated from
+   * `src/matcher/index.ts`.
+   *
+   * Paired with [sdkMatcherRuntimeOutputFile] on the same "both or neither" invariant the
+   * testing pair carries — see [requireExtensionConfigured].
+   */
+  val sdkDtsMatcherBundleOutputFile: RegularFileProperty
+
+  /**
+   * Path to the generated `dist/matcher.js` — the runtime ESM module bun loads when a
+   * trailmap tool or `*.test.ts` imports from `@trailblaze/scripting/matcher`.
+   *
+   * **Bundled, not transpiled** (unlike [sdkTestingRuntimeOutputFile]):
+   * `src/matcher/index.ts` re-exports RUNTIME values from three sibling modules
+   * (`resolver`, `driver-node-detail`, `trailblaze-node`), and the framework ships only
+   * the rolled-up `dist/` files to a workspace — never the SDK source tree — so a
+   * transpile-only output would dangle on `./resolver.js` at load time. The three modules
+   * have no external dependencies (their only cross-package imports are `import type` from
+   * `../generated/selectors.js`, which erase), so the bundle stays small.
+   */
+  val sdkMatcherRuntimeOutputFile: RegularFileProperty
 }
 
 /**
@@ -113,12 +138,16 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
       task.sdkDtsTestingBundleOutputFile.set(ext.sdkDtsTestingBundleOutputFile)
       task.sdkTestingRuntimeOutputFile.set(ext.sdkTestingRuntimeOutputFile)
       task.sdkRuntimeBundleOutputFile.set(ext.sdkRuntimeBundleOutputFile)
+      task.sdkDtsMatcherBundleOutputFile.set(ext.sdkDtsMatcherBundleOutputFile)
+      task.sdkMatcherRuntimeOutputFile.set(ext.sdkMatcherRuntimeOutputFile)
       task.projectDir.set(project.layout.projectDirectory)
       task.installLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-install.log"))
       task.dtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts.log"))
       task.testingDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-testing.log"))
       task.testingRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-testing-runtime.log"))
       task.runtimeBundleLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-runtime.log"))
+      task.matcherDtsLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-dts-matcher.log"))
+      task.matcherRuntimeLogFile.set(project.layout.buildDirectory.file("tmp/bundle-trailblaze-sdk-matcher-runtime.log"))
       declareSdkDtsBundleInputs(task, ext, project)
       task.outputs.files(
         project.provider {
@@ -147,6 +176,24 @@ class TrailblazeSdkDtsBundlePlugin : Plugin<Project> {
           }
         },
       ).withPropertyName("sdkRuntimeBundle")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkDtsMatcherBundleOutputFile.isPresent) {
+            project.files(ext.sdkDtsMatcherBundleOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkDtsMatcherBundle")
+      task.outputs.files(
+        project.provider {
+          if (ext.sdkMatcherRuntimeOutputFile.isPresent) {
+            project.files(ext.sdkMatcherRuntimeOutputFile)
+          } else {
+            project.files()
+          }
+        },
+      ).withPropertyName("sdkMatcherRuntime")
 
     }
 
@@ -172,6 +219,14 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
   @get:OutputFile
   abstract val sdkRuntimeBundleOutputFile: RegularFileProperty
 
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkDtsMatcherBundleOutputFile: RegularFileProperty
+
+  @get:Optional
+  @get:OutputFile
+  abstract val sdkMatcherRuntimeOutputFile: RegularFileProperty
+
   @get:Internal
   abstract val projectDir: DirectoryProperty
 
@@ -190,6 +245,12 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
   @get:Internal
   abstract val runtimeBundleLogFile: RegularFileProperty
 
+  @get:Internal
+  abstract val matcherDtsLogFile: RegularFileProperty
+
+  @get:Internal
+  abstract val matcherRuntimeLogFile: RegularFileProperty
+
   @TaskAction
   fun bundle() {
     requireExtensionConfigured(
@@ -197,6 +258,8 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
       sdkDtsBundleOutputFilePresent = sdkDtsBundleOutputFile.isPresent,
       sdkDtsTestingBundleOutputFilePresent = sdkDtsTestingBundleOutputFile.isPresent,
       sdkTestingRuntimeOutputFilePresent = sdkTestingRuntimeOutputFile.isPresent,
+      sdkDtsMatcherBundleOutputFilePresent = sdkDtsMatcherBundleOutputFile.isPresent,
+      sdkMatcherRuntimeOutputFilePresent = sdkMatcherRuntimeOutputFile.isPresent,
     )
     val sdkDir = trailblazeSdkDir.get().asFile
     val projectDirectory = projectDir.get().asFile
@@ -272,6 +335,43 @@ abstract class BundleTrailblazeSdkDtsTask : DefaultTask() {
           "(${runtimeBundleFile.length() / 1024} KiB).",
       )
     }
+
+    if (sdkDtsMatcherBundleOutputFile.isPresent) {
+      val matcherDtsFile = sdkDtsMatcherBundleOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK matcher .d.ts bundle → ${matcherDtsFile.relativeToOrSelf(projectDirectory)}",
+      )
+      runDtsBundleGenerator(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/matcher/index.ts"),
+        outputFile = matcherDtsFile,
+        logFile = matcherDtsLogFile.get().asFile,
+        appendRuntimeGlobals = false,
+      )
+      logger.lifecycle(
+        "Regenerated ${matcherDtsFile.relativeToOrSelf(projectDirectory)} " +
+          "(${matcherDtsFile.length() / 1024} KiB).",
+      )
+    }
+
+    if (sdkMatcherRuntimeOutputFile.isPresent) {
+      val matcherRuntimeFile = sdkMatcherRuntimeOutputFile.get().asFile
+      logger.lifecycle(
+        "Regenerating SDK matcher runtime ESM bundle → ${matcherRuntimeFile.relativeToOrSelf(projectDirectory)}",
+      )
+      // Bundle, not transpile — the entry re-exports runtime values from sibling modules
+      // that never ship to a workspace. See [TrailblazeSdkDtsBundleExtension.sdkMatcherRuntimeOutputFile].
+      runEsbuildEsmBundle(
+        sdkDir = sdkDir,
+        entryFile = File(sdkDir, "src/matcher/index.ts"),
+        outputFile = matcherRuntimeFile,
+        logFile = matcherRuntimeLogFile.get().asFile,
+      )
+      logger.lifecycle(
+        "Regenerated ${matcherRuntimeFile.relativeToOrSelf(projectDirectory)} " +
+          "(${matcherRuntimeFile.length() / 1024} KiB).",
+      )
+    }
   }
 }
 
@@ -280,6 +380,8 @@ private fun requireExtensionConfigured(
   sdkDtsBundleOutputFilePresent: Boolean,
   sdkDtsTestingBundleOutputFilePresent: Boolean,
   sdkTestingRuntimeOutputFilePresent: Boolean,
+  sdkDtsMatcherBundleOutputFilePresent: Boolean,
+  sdkMatcherRuntimeOutputFilePresent: Boolean,
 ) {
   if (!trailblazeSdkDirPresent || !sdkDtsBundleOutputFilePresent) {
     throw GradleException(
@@ -290,27 +392,60 @@ private fun requireExtensionConfigured(
         "  }",
     )
   }
-  // Enforce the "both testing outputs or neither" invariant the kdoc claims. Without
-  // this check, a consumer that wires only `sdkDtsTestingBundleOutputFile` (or only the
-  // runtime) silently ships an incomplete pair — the missing artifact only surfaces at
+  // Enforce the "both outputs or neither" invariant each subpath's kdoc claims. Without
+  // this check, a consumer that wires only the declaration bundle (or only the runtime)
+  // silently ships an incomplete pair — the missing artifact only surfaces at
   // trailmap-author time as a `bun test` module-resolution failure or a tsc unresolved-import
   // error, which is failure-far-from-cause. Better to fail loud at Gradle configure time.
-  val testingDtsSet = sdkDtsTestingBundleOutputFilePresent
-  val testingRuntimeSet = sdkTestingRuntimeOutputFilePresent
-  if (testingDtsSet != testingRuntimeSet) {
-    val missing = if (testingDtsSet) "sdkTestingRuntimeOutputFile" else "sdkDtsTestingBundleOutputFile"
-    val present = if (testingDtsSet) "sdkDtsTestingBundleOutputFile" else "sdkTestingRuntimeOutputFile"
-    throw GradleException(
-      "trailblaze.sdk-dts-bundle: $present is set but $missing is not — the testing " +
-        "declaration bundle (`testing.d.ts`) and runtime module (`testing.js`) are a " +
-        "paired unit (one is the type surface, the other is what `bun test` executes). " +
-        "Set both, or neither. To wire both:\n" +
-        "  trailblazeSdkDtsBundle {\n" +
-        "    sdkDtsTestingBundleOutputFile.set(layout.projectDirectory.file(\"...\"))\n" +
-        "    sdkTestingRuntimeOutputFile.set(layout.projectDirectory.file(\"...\"))\n" +
-        "  }",
-    )
-  }
+  requireSubpathPairWired(
+    subpath = "testing",
+    dtsPropertyName = "sdkDtsTestingBundleOutputFile",
+    dtsFileName = "testing.d.ts",
+    dtsSet = sdkDtsTestingBundleOutputFilePresent,
+    runtimePropertyName = "sdkTestingRuntimeOutputFile",
+    runtimeFileName = "testing.js",
+    runtimeSet = sdkTestingRuntimeOutputFilePresent,
+  )
+  requireSubpathPairWired(
+    subpath = "matcher",
+    dtsPropertyName = "sdkDtsMatcherBundleOutputFile",
+    dtsFileName = "matcher.d.ts",
+    dtsSet = sdkDtsMatcherBundleOutputFilePresent,
+    runtimePropertyName = "sdkMatcherRuntimeOutputFile",
+    runtimeFileName = "matcher.js",
+    runtimeSet = sdkMatcherRuntimeOutputFilePresent,
+  )
+}
+
+/**
+ * Fail if exactly one half of a `@trailblaze/scripting/<subpath>` artifact pair is wired.
+ * Each subpath ships a declaration bundle (the type surface `tsc` reads) and a runtime ESM
+ * module (what bun executes); the per-trailmap tsconfig's subpath-glob `paths` mapping
+ * resolves BOTH from the same extensionless stem, so shipping one without the other
+ * produces a resolution that half-works.
+ */
+internal fun requireSubpathPairWired(
+  subpath: String,
+  dtsPropertyName: String,
+  dtsFileName: String,
+  dtsSet: Boolean,
+  runtimePropertyName: String,
+  runtimeFileName: String,
+  runtimeSet: Boolean,
+) {
+  if (dtsSet == runtimeSet) return
+  val missing = if (dtsSet) runtimePropertyName else dtsPropertyName
+  val present = if (dtsSet) dtsPropertyName else runtimePropertyName
+  throw GradleException(
+    "trailblaze.sdk-dts-bundle: $present is set but $missing is not — the $subpath " +
+      "declaration bundle (`$dtsFileName`) and runtime module (`$runtimeFileName`) are a " +
+      "paired unit (one is the type surface, the other is what bun executes). " +
+      "Set both, or neither. To wire both:\n" +
+      "  trailblazeSdkDtsBundle {\n" +
+      "    $dtsPropertyName.set(layout.projectDirectory.file(\"...\"))\n" +
+      "    $runtimePropertyName.set(layout.projectDirectory.file(\"...\"))\n" +
+      "  }",
+  )
 }
 
 // Bundle-source input declarations for `bundleTrailblazeSdkDts` — they drive Gradle's

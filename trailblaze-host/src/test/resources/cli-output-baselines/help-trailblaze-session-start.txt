@@ -8,7 +8,23 @@
 Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] [-d=<device>]
                                 [--headless=<headless>] [--mode=<mode>]
                                 [--target=<target>] [--title=<title>]
+                                [--bind=<name=deviceId>[,<name=deviceId>...]]...
 Start a new session with automatic video and log capture
+      --bind=<name=deviceId>[,<name=deviceId>...]
+                          Start a MULTI-DEVICE session: bind each device under
+                            a NAME, e.g. `--bind seller=emulator-5554 --bind
+                            buyer=emulator-5556`. Repeatable or
+                            comma-separated; the session's cast is exactly the
+                            bound devices. The FIRST bind is the start device
+                            (same ordered semantics as a trail's `config.
+                            devices:`); pass --device naming one bind's
+                            DEVICE_ID to start on that entry instead. Each name
+                            must bind a DIFFERENT device — two names on one
+                            device is refused. `switchDevice(name=…)` hands the
+                            session between the names. Follow-up commands
+                            (`step`, `verify`, `session info`, `session stop`)
+                            reach the roster with the --device value the start
+                            prints.
   -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
                             Defaults to `$TRAILBLAZE_DEVICE` if set (manual
                             override; rare), otherwise this terminal's pin (set

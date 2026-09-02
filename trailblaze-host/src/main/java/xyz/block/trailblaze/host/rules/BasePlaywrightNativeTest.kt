@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.rules
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
@@ -46,6 +47,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
+import java.io.File
 import kotlin.reflect.KClass
 
 /**
@@ -82,7 +84,7 @@ open class BasePlaywrightNativeTest(
    * Null = use the runner's built-in [TrailblazeRunner.DEFAULT_MAX_STEPS].
    *
    * Tracked as a public `val` so the daemon's cache-reuse logic (in
-   * [xyz.block.trailblaze.host.TrailblazeHostYamlRunner.resolvePlaywrightCacheReuse])
+   * [xyz.block.trailblaze.host.playwright.PlaywrightNativeHostDriverDescriptor.Companion.resolvePlaywrightCacheReuse])
    * can compare the request's cap against the cached test's cap and rebuild the test
    * when they differ — otherwise the lazy `trailblazeRunner` field would freeze the
    * cap at construction time and silently ignore later flag changes.
@@ -97,6 +99,12 @@ open class BasePlaywrightNativeTest(
    */
   val webBrowserRecordingKey: String = trailblazeDeviceId.instanceId,
   /**
+   * The browser slot as device discovery advertises it — see
+   * [TrailblazeDeviceInfo.advertisedInstanceId]. Null is right for callers that already pass an
+   * un-suffixed [trailblazeDeviceId] (the JUnit eval path).
+   */
+  val advertisedDeviceInstanceId: String? = null,
+  /**
    * Viewport / device-emulation spec used when this rule constructs its OWN browser
    * (no [existingBrowserManager] provided). Pass null for the desktop default.
    *
@@ -109,10 +117,23 @@ open class BasePlaywrightNativeTest(
   viewportSpec: String? = null,
   /**
    * Whether to self-instrument session-video capture. Web self-instruments its own recording (the
-   * host capture coordinator skips WEB), so this is the only place the CLI's `--no-capture-video`
-   * opt-out can take effect for web runs. Defaults to true.
+   * host capture coordinator skips WEB), so this is the only place the CLI's `--capture-video`
+   * opt-in can take effect for web runs. Defaults to false — video is opt-in.
    */
-  val captureVideo: Boolean = true,
+  val captureVideo: Boolean = false,
+  /**
+   * Directory session logs are written to. Null lets [HostTrailblazeLoggingRule] use its own
+   * default resolution — correct for the JUnit-eval path, which has no app config to read. The
+   * host runner passes the configured `logsDirectory` so this rule's own disk writes, and the
+   * recording generation that reads them back, land where the setting points.
+   */
+  logsDir: File? = null,
+  /**
+   * When true, this rule installs the no-op logger and a read-only [xyz.block.trailblaze.report.utils.LogsRepo],
+   * so the run writes no session files to disk. False lets the JUnit-eval path log normally; the host
+   * runner passes the run's `--no-logging` flag.
+   */
+  noLogging: Boolean = false,
 ) {
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
@@ -127,6 +148,28 @@ open class BasePlaywrightNativeTest(
     // Same key the capture stream publishes under in `PlaywrightVideoRecordDir`.
     deviceId = webBrowserRecordingKey,
   )
+
+  /**
+   * Dedicated single thread for the trail/agent loop ([runTrailblazeYamlSuspend]).
+   *
+   * The loop needs a STABLE thread — coroutines must resume from LLM calls on the same
+   * thread ([xyz.block.trailblaze.toolcalls.ToolBatchScope], snapshot-cache frames and the
+   * execution-context ThreadLocal are all thread-scoped) — but it must NOT be the Playwright
+   * thread. Tool dispatch is non-suspend, so a host-local scripted tool blocks the loop
+   * thread for its whole runtime, and a `runtime: subprocess` tool composes other tools
+   * through `/scripting/callback`, whose nested Playwright dispatch bridges onto
+   * [PlaywrightPageManager.playwrightDispatcher] via [PlaywrightPageManager.onPlaywrightThread].
+   * Running the loop ON the Playwright thread therefore parks the very thread the nested
+   * call needs, deadlocking every such composition until the subprocess's callback timeout
+   * (120s+) aborts it. Every Playwright API touch bridges onto the Playwright thread
+   * per-call instead — the same model multi-device sessions already use (their loop runs
+   * on the session's routing thread).
+   */
+  private val trailLoopExecutor: java.util.concurrent.ExecutorService =
+    java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, "playwright-trail-loop").apply { isDaemon = true }
+    }
+  private val trailLoopDispatcher = trailLoopExecutor.asCoroutineDispatcher()
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo
     get() {
@@ -144,11 +187,14 @@ open class BasePlaywrightNativeTest(
         widthPixels = viewport.width,
         heightPixels = viewport.height,
         classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+        advertisedInstanceId = advertisedDeviceInstanceId,
       )
     }
 
   val loggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+    logsDir = logsDir,
+    noLogging = noLogging,
   )
 
   private val playwrightAgent by lazy {
@@ -331,10 +377,11 @@ open class BasePlaywrightNativeTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
-  ): SessionId = withContext(browserManager.playwrightDispatcher) {
-    // Run the entire agent loop on the Playwright thread to maintain thread affinity.
-    // After callLlm() suspends and resumes, the coroutine resumes here (not on a
-    // random Dispatchers.IO thread), so all Playwright API calls stay on the correct thread.
+  ): SessionId = withContext(trailLoopDispatcher) {
+    // Run the agent loop on its own stable thread (NOT the Playwright thread — see
+    // [trailLoopDispatcher]). After callLlm() suspends and resumes, the coroutine resumes
+    // here (not on a random Dispatchers.IO thread), keeping thread-scoped tool state stable;
+    // Playwright API calls bridge onto the Playwright thread per-call.
 
     // Set working directory to the trail file's own directory so that relative paths
     // in tools (e.g., navigate) resolve from the trail file's location.
@@ -466,6 +513,9 @@ open class BasePlaywrightNativeTest(
    * Idempotent — subsequent calls within the same session are no-ops.
    */
   private fun ensurePlaywrightVideoCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     if (!captureVideo) return
     if (ownedCaptureSession != null) return
     // Outer runner (DesktopYamlRunner via CLI/daemon) already wired capture for this
@@ -502,16 +552,24 @@ open class BasePlaywrightNativeTest(
   }
 
   private fun ensureWebNetworkCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     if (!config.captureNetworkTraffic) return
     val session = loggingRule.session ?: return
     val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
     try {
-      WebNetworkCapture.start(
-        ctx = browserManager.currentPage.context(),
-        sessionId = session.sessionId.value,
-        sessionDir = sessionDir,
-        tracker = playwrightAgent.inflightRequestTracker,
-      )
+      // Bridged: `currentPage` can lazily create the page, and listener registration can
+      // send wire messages — both are Playwright API touches, and the trail loop no longer
+      // runs on the Playwright thread.
+      browserManager.onPlaywrightThread {
+        WebNetworkCapture.start(
+          ctx = browserManager.currentPage.context(),
+          sessionId = session.sessionId.value,
+          sessionDir = sessionDir,
+          tracker = playwrightAgent.inflightRequestTracker,
+        )
+      }
     } catch (e: Exception) {
       // Don't let a capture-start failure tear down the trail — log and continue.
       Console.log("Auto-start of web network capture failed: ${e.message}")
@@ -528,14 +586,20 @@ open class BasePlaywrightNativeTest(
    * start failure never tears down the trail. No-op when no session is set.
    */
   private fun ensureWebConsoleCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     val session = loggingRule.session ?: return
     val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
     try {
-      WebConsoleCapture.start(
-        ctx = browserManager.currentPage.context(),
-        sessionId = session.sessionId.value,
-        sessionDir = sessionDir,
-      )
+      // Bridged for the same reason as ensureWebNetworkCaptureStarted.
+      browserManager.onPlaywrightThread {
+        WebConsoleCapture.start(
+          ctx = browserManager.currentPage.context(),
+          sessionId = session.sessionId.value,
+          sessionDir = sessionDir,
+        )
+      }
     } catch (e: Exception) {
       Console.log("Auto-start of web console capture failed: ${e.message}")
     }
@@ -546,9 +610,10 @@ open class BasePlaywrightNativeTest(
     runCatching { webStreamScreenshots.close() }
     // Always try to stop capture on test teardown — even when we don't own the
     // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
-    // capture was never started.
-    runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
-    runCatching { WebConsoleCapture.stop(browserManager.currentPage.context()) }
+    // capture was never started. Bridged like the matching starts: `currentPage.context()`
+    // touches Page objects, and close() runs on the JUnit thread.
+    runCatching { browserManager.onPlaywrightThread { WebNetworkCapture.stop(browserManager.currentPage.context()) } }
+    runCatching { browserManager.onPlaywrightThread { WebConsoleCapture.stop(browserManager.currentPage.context()) } }
     // Stop the owned video capture (if any) BEFORE tearing the browser down — the
     // stream's registered finalizer needs the manager alive to close the BrowserContext
     // and flush the in-progress `.webm` to disk. No-op when an outer runner owns the
@@ -557,6 +622,8 @@ open class BasePlaywrightNativeTest(
     if (ownsTheBrowser) {
       browserManager.close()
     }
+    // Closing the dispatcher shuts down the executor it wraps.
+    trailLoopDispatcher.close()
   }
 
   companion object {

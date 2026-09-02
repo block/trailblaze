@@ -180,11 +180,13 @@ class StepToolSet(
   /** Detects platform from the TrailblazeNode tree by checking root and first child. */
   private fun detectPlatformFromTree(tree: xyz.block.trailblaze.api.TrailblazeNode): String? {
     if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+    if (tree.driverDetail is DriverNodeDetail.AndroidView) return "android"
     if (tree.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
     if (tree.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
     if (tree.driverDetail is DriverNodeDetail.IosAxe) return "ios"
     val firstChild = tree.children.firstOrNull() ?: return null
     if (firstChild.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+    if (firstChild.driverDetail is DriverNodeDetail.AndroidView) return "android"
     if (firstChild.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
     if (firstChild.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
     if (firstChild.driverDetail is DriverNodeDetail.IosAxe) return "ios"

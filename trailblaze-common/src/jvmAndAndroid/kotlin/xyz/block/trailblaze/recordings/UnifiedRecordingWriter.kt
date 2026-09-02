@@ -6,7 +6,10 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
+import xyz.block.trailblaze.yaml.unified.UnifiedTrail
 import xyz.block.trailblaze.yaml.unified.UnifiedTrailAdapter
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailStep
 import java.io.File
 
 /**
@@ -40,6 +43,13 @@ object UnifiedRecordingWriter {
       "would shadow the unified trail at run time. Record against the unified trail so this " +
       "device's tools merge into its own classifier slot."
 
+  /** Refusal message for a synthesized cast that a per-classifier sibling would shadow at run time. */
+  fun synthesizedCastShadowedMessage(target: File, siblingFileNames: List<String>): String =
+    "Multi-device cast not saved to ${target.absolutePath}: that directory already holds " +
+      "${siblingFileNames.joinToString(", ")}, and a directory replay resolves per-classifier trail " +
+      "files before trail.yaml — the cast would be written and then never run. Fold the existing " +
+      "file(s) into a shared trail.yaml first, or save this session under a new trail name."
+
   /** Refusal message for merging into an unreadable existing unified trail (left untouched). */
   fun corruptRefusalMessage(target: File, reason: String): String =
     "Existing unified trail is unreadable and was left untouched (${target.absolutePath}): $reason. " +
@@ -64,10 +74,76 @@ object UnifiedRecordingWriter {
       "classifier leg would duplicate the configuration's steps. The trail on disk is unchanged; " +
       "edit it directly to update a multi-device recording."
 
-  /** Refusal message for a recorded trailhead the unified one-tool-per-classifier slot can't hold. */
-  fun multiToolTrailheadMessage(toolCount: Int): String =
-    "Can't save this recording: a unified trail's trailhead holds a single tool, and this " +
-      "recording's trailhead has $toolCount. Re-record with a single trailhead tool."
+  /**
+   * Refusal message for a configuration session saving into a trail that doesn't declare its cast.
+   *
+   * A configuration's legs are keyed by the configuration NAME, and replay only resolves a name the
+   * target's own `config.devices` declares. Nothing in a recording can supply that cast — a
+   * recording lowers to v1 items, and v1 `TrailConfig` has no `devices:` — so seeding a fresh
+   * document from one produces a file whose legs no run can reach, reported as a success.
+   */
+  fun configurationNotDeclaredMessage(
+    target: File,
+    configurationName: String,
+    declaredConfigurationNames: Set<String>,
+  ): String = buildString {
+    append(
+      "Recording not saved to ${target.absolutePath}: this session bound multi-device " +
+        "configuration `$configurationName`, whose legs are keyed by that name, but ",
+    )
+    append(
+      if (declaredConfigurationNames.isEmpty()) {
+        "that trail declares no multi-device configuration. A recording can't supply the cast " +
+          "(`config.devices`) itself, so saving would write legs no replay can resolve."
+      } else {
+        "that trail declares ${declaredConfigurationNames.joinToString(", ") { "`$it`" }} instead."
+      },
+    )
+    append(
+      " Save back to the trail that declares `$configurationName`, or declare the cast in the " +
+        "destination first.",
+    )
+  }
+
+  /** Refusal message for a partial recording whose window names steps the trail no longer has. */
+  fun stepWindowOutOfRangeMessage(target: File, window: IntRange, existingStepCount: Int): String =
+    "Can't save this partial recording: it covered steps ${window.first + 1}-${window.last + 1}, " +
+      "but ${target.name} now has $existingStepCount step(s). The trail changed while the run was " +
+      "in flight. Re-run the range against the current trail."
+
+  /**
+   * Refusal message for a partial recording that produced a different number of steps than its
+   * window covers.
+   *
+   * Recorded steps carry no provenance, so alignment is positional. A run that added or dropped a
+   * step (self-healing, or an objective that split) leaves no way to tell which recorded step
+   * belongs to which authored step, and guessing shifts every later step's recording by one. Refuse
+   * instead: the trail on disk stays correct and the user re-records deliberately.
+   */
+  fun stepWindowMismatchMessage(
+    target: File,
+    window: IntRange,
+    expectedStepCount: Int,
+    recordedStepCount: Int,
+  ): String =
+    "Can't save this partial recording into ${target.name}: it covered steps " +
+      "${window.first + 1}-${window.last + 1} ($expectedStepCount step(s)) but recorded " +
+      "$recordedStepCount. Aligning them would shift every later step's recording, so the trail " +
+      "was left unchanged. Re-record the whole trail to pick up the changed step count."
+
+  /**
+   * Refusal message for a recording whose trail was rewritten under it while it ran. [changed] is a
+   * clause naming what moved ("the steps it covered were edited"), so the reader learns which edit
+   * invalidated the recording rather than just that one did.
+   *
+   * Same root cause as [stepWindowMismatchMessage] - recorded steps carry no provenance, so
+   * alignment is positional - but no count moves, so nothing else can catch it. The recording still
+   * describes the trail as it was when the run started, and the file now says something else.
+   */
+  fun trailChangedUnderRunMessage(target: File, changed: String): String =
+    "Can't save this recording into ${target.name}: $changed while the run was in flight, so its " +
+      "tool calls no longer describe what the trail asks for. The trail was left unchanged. " +
+      "Re-record against the trail as it is now."
 
   /**
    * True when a unified `trail.yaml` is present for [trailFileOrDir] — the gate-OFF refusal guard.
@@ -133,12 +209,26 @@ object UnifiedRecordingWriter {
     if (executedFileIsUnified(trailFileOrDir)) return true
     val dir = dirOf(trailFileOrDir) ?: return false
     if (File(dir, TrailRecordings.UNIFIED_TRAIL_FILENAME).isFile) return true
-    val hasPerClassifierSibling = dir.listFiles { f ->
+    return perClassifierSiblingFileNames(trailFileOrDir).isEmpty()
+  }
+
+  /**
+   * Names of the per-classifier `<classifier>.trail.yaml` siblings in [trailFileOrDir]'s directory,
+   * sorted; empty when the directory holds none.
+   *
+   * Two callers that must agree. [shouldMergeIntoSharedTrail] routes a re-record to the device's own
+   * sibling rather than forking a second layout beside it. [mergeIntoUnified] refuses to synthesize a
+   * cast into a `trail.yaml` one of these would shadow: directory replay resolves per-classifier
+   * names BEFORE `trail.yaml` (see [TrailRecordings.computePossibleFileNamesForDeviceClassifiers]),
+   * so such a cast is written and then never run.
+   */
+  fun perClassifierSiblingFileNames(trailFileOrDir: File): List<String> {
+    val dir = dirOf(trailFileOrDir) ?: return emptyList()
+    return dir.listFiles { f: File ->
       f.isFile &&
         f.name.endsWith(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX) &&
         !TrailRecordings.isUnifiedTrailFile(f.name)
-    }?.isNotEmpty() == true
-    return !hasPerClassifierSibling
+    }.orEmpty().map { it.name }.sorted()
   }
 
   /**
@@ -161,13 +251,6 @@ object UnifiedRecordingWriter {
   sealed interface MergeOutcome {
     /** The classifier slot was merged and the unified file written atomically to [target]. */
     data class Merged(val target: File) : MergeOutcome
-
-    /**
-     * The recorded trailhead carries [toolCount] (> 1) tools, which the unified one-tool-per-
-     * classifier trailhead can't represent. Nothing was written — the caller must preserve the
-     * recording as a legacy `<classifier>.trail.yaml` sibling instead of losing it.
-     */
-    data class MultiToolTrailheadUnsupported(val toolCount: Int) : MergeOutcome
 
     /**
      * The existing unified [target] is unreadable ([reason] is the parse error). Left untouched —
@@ -196,6 +279,71 @@ object UnifiedRecordingWriter {
      * passes the configuration name as its classifier and merges normally.
      */
     data class SkippedMultiDeviceTrail(val target: File, val configurationNames: Set<String>) : MergeOutcome
+
+    /**
+     * The merge is a configuration session's save-back ([configurationName]), but [target] does not
+     * declare that configuration — it declares [declaredConfigurationNames] (empty when the file
+     * doesn't exist yet, or declares no cast at all). Nothing written.
+     *
+     * The converse of [SkippedMultiDeviceTrail], and the reason it can't be folded into it: that
+     * gate asks whether a CLASSIFIER-keyed merge would corrupt a configuration trail, and it never
+     * fires when the target declares nothing. This one asks whether a CONFIGURATION-keyed merge has
+     * a cast to key against at all. Writing anyway seeds a document with configuration-keyed legs
+     * and no `config.devices` — replay resolves the name to nothing, so the file is unreachable
+     * while the save reports success. A recording can't supply the missing cast: it lowers to v1
+     * items and v1 `TrailConfig` has no `devices:`.
+     */
+    data class ConfigurationNotDeclared(
+      val target: File,
+      val configurationName: String,
+      val declaredConfigurationNames: Set<String>,
+    ) : MergeOutcome
+
+    /**
+     * A cast synthesized from a session's named-device roster was refused because [target]'s
+     * directory holds per-classifier [siblingFileNames]. Nothing written.
+     *
+     * Distinct from every other refusal here in what it reads: those inspect the destination
+     * DOCUMENT, and the file that makes this one wrong is a different file. A directory replay
+     * resolves `<classifier>.trail.yaml` before `trail.yaml`
+     * ([TrailRecordings.computePossibleFileNamesForDeviceClassifiers]), so writing the cast would
+     * report a saved multi-device trail that every directory-addressed run then ignores in favor of
+     * the sibling.
+     */
+    data class SynthesizedCastWouldBeShadowed(
+      val target: File,
+      val siblingFileNames: List<String>,
+    ) : MergeOutcome
+
+    /**
+     * A partial recording was asked to replace steps [window] of [target], but [target] holds
+     * [existingStepCount] steps, so the window names steps that don't exist. Nothing written -
+     * reachable when the trail was edited between dispatching the partial run and its save-back.
+     */
+    data class StepWindowOutOfRange(
+      val target: File,
+      val window: IntRange,
+      val existingStepCount: Int,
+    ) : MergeOutcome
+
+    /**
+     * A partial recording covering steps [window] produced [recordedStepCount] steps instead of the
+     * window's [expectedStepCount]. Nothing written - see [stepWindowMismatchMessage].
+     */
+    data class StepWindowMismatch(
+      val target: File,
+      val window: IntRange,
+      val expectedStepCount: Int,
+      val recordedStepCount: Int,
+    ) : MergeOutcome
+
+    /**
+     * The trail this recording ran against is not the trail on disk: [target] was edited while the
+     * run was in flight, and [changed] is the clause naming what moved. Nothing written - see
+     * [trailChangedUnderRunMessage]. The count guards can't see this one, because rewriting a step
+     * in place (or retargeting the trail at another app) keeps every count intact.
+     */
+    data class TrailChangedUnderRun(val target: File, val changed: String) : MergeOutcome
   }
 
   /**
@@ -217,13 +365,49 @@ object UnifiedRecordingWriter {
    * recording generates) under [classifier], and write the result atomically. Preserves every other
    * classifier already on disk; existing NL and `recordable:false` intent win on drift (enforced by
    * [UnifiedTrailAdapter.mergeRecordedClassifier]). Fails loud rather than corrupting: an unreadable
-   * target is refused untouched, a multi-tool trailhead is reported so the caller can fall back to a
-   * legacy sibling, and an empty merge is skipped (an empty `trail:` is unparseable).
+   * target is refused untouched, and an empty merge is skipped (an empty `trail:` is unparseable).
+   * A run that recorded several tools for the trailhead is not refused — the merge keeps the first
+   * as the trailhead and moves the rest into the first step.
    *
    * Pass [selectedDeviceConfiguration] when [classifier] is the multi-device configuration the run
    * bound (they are the same string): a configuration's legs are keyed by its name, and the merge
    * primitive needs to know that from the caller rather than inferring it from the target file,
    * which a first write doesn't have.
+   *
+   * [castToDeclare] is the configuration definition (the inner `devices:` map of named devices) to
+   * DECLARE under [selectedDeviceConfiguration] when the target declares no device layout of its
+   * own — how an interactive roster session (devices bound by name, no trail-declared cast) saves a
+   * replayable multi-device trail. A recording alone can't supply the cast (it lowers to v1 items,
+   * and v1 `TrailConfig` has no `devices:`), so without this the save is refused as
+   * [MergeOutcome.ConfigurationNotDeclared]. A target that ALREADY declares any device — a cast, a
+   * single-device `config.devices:` entry, or a classifier-keyed `recordings:` leg — wins and still
+   * refuses ([declaredDeviceKeys] says why); the synthesized cast is never written over or beside
+   * an authored layout.
+   *
+   * Pass [stepWindow] when [recordedItems] came from a partial run ("record from step N"): the
+   * 0-based inclusive range of the target's steps the run covered. The merge then replaces only that
+   * window and leaves this classifier's recordings on every other step alone. Without it, a partial
+   * recording aligns from step 1 and strips the classifier from everything it didn't cover.
+   *
+   * Pass [expectedDispatched] - the document this run actually executed - to hold the merge to it.
+   * It is compared with the file under the same lock as the write, so a trail edited at any point up
+   * to the merge is refused rather than handed this run's tool calls under someone else's
+   * instruction. Three things are compared, and passing the whole document rather than a few fields
+   * is what makes each comparison symmetric: a field that was absent at dispatch and is present now
+   * is drift just as much as one that changed value. All of it applies only against a document that
+   * is already on disk: a first write has nothing to have drifted from, and comparing the run's steps
+   * against an absent file's empty ones would refuse every greenfield save-back as "edited".
+   *
+   * - The covered steps, in order. Recordings are excluded (`instruction()`), or a second device
+   *   recording the same window would refuse itself over the first device's leg.
+   * - The trailhead, for a whole-trail merge only. A windowed run never ran it ([sliceTrail] drops
+   *   it) and the merge leaves it alone, so it is not something this recording claims anything about.
+   * - `config.target`, the app the run drove. Steps can be word-for-word identical while the trail
+   *   now points at a different application, and selectors captured in one app describe nothing in
+   *   another.
+   *
+   * This classifier's driver pin is deliberately NOT an expectation: re-pinning it is the recording's
+   * own documented output, so comparing it would refuse every ordinary save-back.
    *
    * No user-facing logging — the caller maps the returned [MergeOutcome] to its own output/return so
    * each surface keeps its own UX (CLI console lines, MCP/desktop result objects).
@@ -233,19 +417,10 @@ object UnifiedRecordingWriter {
     recordedItems: List<TrailYamlItem>,
     classifier: String,
     selectedDeviceConfiguration: String? = null,
+    castToDeclare: TrailblazeDeviceDefinition? = null,
+    stepWindow: IntRange? = null,
+    expectedDispatched: UnifiedTrail? = null,
   ): MergeOutcome {
-    // The unified trailhead is one tool per classifier (the emitter enforces it). A v1 recording can
-    // carry a multi-tool trailhead the unified format simply can't represent; merging anyway would
-    // build a trail that throws on encode and silently lose the recording. Report it so the caller
-    // preserves the recording as a legacy sibling. Checked before any file read so it never partially
-    // mutates the target.
-    val recordedTrailheadTools = recordedItems
-      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
-      .firstOrNull()?.trailhead?.tools.orEmpty()
-    if (recordedTrailheadTools.size > 1) {
-      return MergeOutcome.MultiToolTrailheadUnsupported(recordedTrailheadTools.size)
-    }
-
     val unifiedFile = unifiedRecordingTarget(trailFileOrDir) ?: return MergeOutcome.NoTarget
 
     // Serialize the whole read-merge-write per target file so two concurrent IN-PROCESS writers
@@ -276,6 +451,47 @@ object UnifiedRecordingWriter {
       // to coexist in one document, and re-recording such a trail's single-device leg is an
       // ordinary classifier merge, not a configuration replay. See SkippedMultiDeviceTrail.
       val configurationNames = existing?.config?.multiDeviceConfigurationNames.orEmpty()
+
+      // A configuration's legs are keyed by its NAME, and replay only resolves a name the target
+      // declares. Seeding a fresh (or foreign) document with those legs writes a trail no run can
+      // reach while reporting success, so refuse instead. Reachable two ways: saving a configuration
+      // session to a NEW destination (the MCP save-under-a-new-name path — a recording lowers to v1
+      // items and v1 `TrailConfig` carries no `devices:`, so the cast cannot come along), and saving
+      // into a directory that holds only per-classifier siblings, which would fork a second layout
+      // beside them and leave the siblings permanently stale.
+      // A caller-supplied cast opens exactly one case: the target declares NO device layout at all
+      // (a fresh file, or one whose config and legs name no device) and the caller can declare one —
+      // the interactive roster save. Anything already there refuses, for two distinct reasons:
+      //  - a DECLARED CAST is canon; a save must never add a second one beside or over it.
+      //  - a SINGLE-DEVICE layout would be silently converted. Planting a cast beside authored
+      //    single-device entries leaves the file declaring exactly one configuration, which
+      //    `MultiDeviceConfigurationResolver.selectConfigurationName` then auto-selects on EVERY
+      //    later replay — orphaning the classifier legs that worked before. And when the cast's name
+      //    collides with such an entry, `+` REPLACES it, dropping its driver pin outright.
+      // Re-saving the same roster session over its own earlier save is unaffected: that file
+      // declares the configuration, so no synthesis is needed and the ordinary name-keyed merge runs.
+      val declaresSynthesizedCast = castToDeclare != null && declaredDeviceKeys(existing).isEmpty()
+      // The cast lands in the shared `trail.yaml`, but a directory replay resolves per-classifier
+      // siblings BEFORE that file, so a cast synthesized beside one is written and then never run —
+      // a save reported as a success over a trail that cannot replay as multi-device. The
+      // declared-layout checks above cannot see this: they read the destination document, and the
+      // shadowing file is a different one.
+      if (declaresSynthesizedCast) {
+        val shadowingSiblings = perClassifierSiblingFileNames(unifiedFile)
+        if (shadowingSiblings.isNotEmpty()) {
+          return@synchronized MergeOutcome.SynthesizedCastWouldBeShadowed(unifiedFile, shadowingSiblings)
+        }
+      }
+      if (selectedDeviceConfiguration != null && selectedDeviceConfiguration !in configurationNames &&
+        !declaresSynthesizedCast
+      ) {
+        return@synchronized MergeOutcome.ConfigurationNotDeclared(
+          target = unifiedFile,
+          configurationName = selectedDeviceConfiguration,
+          declaredConfigurationNames = configurationNames,
+        )
+      }
+
       if (configurationNames.isNotEmpty() && classifier !in configurationNames) {
         // A trail declares a single-device slot two ways: a `config.devices` entry that isn't a
         // configuration, or an existing `recording:` leg keyed by the classifier. Both must stay
@@ -311,22 +527,92 @@ object UnifiedRecordingWriter {
         return@synchronized MergeOutcome.SteplessIntoExistingTrail(unifiedFile, existing.trail.size)
       }
 
+      // Both partial-recording refusals, checked here so the caller gets a message instead of the
+      // merge primitive's exception. The window is only meaningful against the file as it is NOW:
+      // the run was dispatched against an earlier read of it, and a trail edited in between makes
+      // every alignment below a guess.
+      if (stepWindow != null) {
+        val existingStepCount = existing?.trail?.size ?: 0
+        if (stepWindow.first < 0 || stepWindow.last >= existingStepCount) {
+          return@synchronized MergeOutcome.StepWindowOutOfRange(unifiedFile, stepWindow, existingStepCount)
+        }
+        val recordedCount = UnifiedTrailAdapter.recordedStepCount(recordedItems)
+        if (recordedCount != stepWindow.count()) {
+          return@synchronized MergeOutcome.StepWindowMismatch(
+            target = unifiedFile,
+            window = stepWindow,
+            expectedStepCount = stepWindow.count(),
+            recordedStepCount = recordedCount,
+          )
+        }
+      }
+
+      // The last thing checked before the write, and the only one that can see a step rewritten in
+      // place: every count still matches, and the recording would land under an instruction it never
+      // ran. Recordings are stripped from both sides, so a step is "the same step" when it asks for
+      // the same thing - the prose, whether it's a `step:` or a `verify:`, its retry budget - and a
+      // second device's leg landing on it meanwhile is not drift.
+      // Only against a document that is already there: with no file on disk there is nothing this
+      // run could have drifted from, and the absent file's empty step list would otherwise read as
+      // "the steps it covered were edited" and refuse every first write.
+      if (expectedDispatched != null && existing != null) {
+        val coveredNow = existing.trail
+          .filterIndexed { i, _ -> stepWindow == null || i in stepWindow }
+          .map { it.instruction() }
+        if (coveredNow != expectedDispatched.trail.map { it.instruction() }) {
+          return@synchronized MergeOutcome.TrailChangedUnderRun(unifiedFile, "the steps it covered were edited")
+        }
+        if (stepWindow == null && existing.trailhead?.instruction() != expectedDispatched.trailhead?.instruction()) {
+          return@synchronized MergeOutcome.TrailChangedUnderRun(unifiedFile, "its trailhead was edited")
+        }
+        if (existing.config.target != expectedDispatched.config.target) {
+          return@synchronized MergeOutcome.TrailChangedUnderRun(unifiedFile, "the app it targets was changed")
+        }
+      }
+
       val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
         existing = existing,
         recordedItems = recordedItems,
         classifier = classifier,
         selectedDeviceConfiguration = selectedDeviceConfiguration,
+        stepWindow = stepWindow,
       )
+      // Declare the synthesized cast so the configuration-keyed legs written above are resolvable
+      // at replay. Only for the no-declared-cast case gated above — when the target already
+      // declares the configuration, its authored cast is canon and stays untouched.
+      val synthesizedCast = castToDeclare
+        ?.takeIf { declaresSynthesizedCast }
+        ?.let { cast -> selectedDeviceConfiguration?.let { name -> name to cast } }
+      val withCast = if (synthesizedCast != null) {
+        merged.copy(config = merged.config.copy(devices = merged.config.devices.orEmpty() + synthesizedCast))
+      } else {
+        merged
+      }
       // A merge with no steps would emit an empty `trail:`, which the unified parser rejects — skip
       // rather than write an unreadable file (only reachable from a degenerate recording with no
       // prompt steps and no existing trail to preserve).
-      if (merged.trail.isEmpty()) {
+      if (withCast.trail.isEmpty()) {
         MergeOutcome.SkippedEmpty
       } else {
-        writeFileAtomically(unifiedFile, yaml.encodeUnifiedTrailToString(merged))
+        writeFileAtomically(unifiedFile, yaml.encodeUnifiedTrailToString(withCast))
         MergeOutcome.Merged(unifiedFile)
       }
     }
+  }
+
+  /**
+   * Every key [existing] already declares a device (or cast) under — the `config.devices:` entries
+   * plus every classifier its trailhead and steps hold a `recordings:` leg for.
+   *
+   * The union, not just `config.devices:`, because a trail declares a single-device slot both ways:
+   * a legs-only trail (recorded, never hand-authored a `config.devices:` block) is just as much an
+   * authored single-device layout, and planting a cast into it silently converts it. Empty means the
+   * document declares no device at all — the only state a synthesized cast may be written into.
+   */
+  private fun declaredDeviceKeys(existing: UnifiedTrail?): Set<String> = buildSet {
+    existing?.config?.devices?.keys?.let(::addAll)
+    existing?.trailhead?.recordings?.keys?.let(::addAll)
+    existing?.trail?.forEach { step -> addAll(step.recordings.keys) }
   }
 
   /**
@@ -334,24 +620,29 @@ object UnifiedRecordingWriter {
    * sibling counterpart of [mergeIntoUnified], seeded empty so the recording lands entirely under
    * [classifier]'s slot.
    *
-   * Applies the same invariants as the merge route (a classifier to key the slot by, a single-tool
-   * trailhead, a non-empty trail) so the same recording is refused identically whichever file layout
-   * the directory happens to use. Returns the YAML to write; the caller owns the write.
+   * Applies the same invariants as the merge route (a classifier to key the slot by, a non-empty
+   * trail) so the same recording is refused identically whichever file layout the directory happens
+   * to use. Returns the YAML to write; the caller owns the write.
+   *
+   * Pass [selectedDeviceConfiguration] (equal to [classifier]) when the session bound a multi-device
+   * configuration, so the leg is keyed by the configuration name without pinning the LAUNCH device's
+   * driver on it. The rendered document still carries no cast — a v1 recording has no `devices:` map
+   * to seed one from — so a configuration's standalone render is a preserved recording to fold into
+   * the real trail, not a replayable multi-device trail on its own.
    */
-  fun renderStandalone(recordedItems: List<TrailYamlItem>, classifier: String): Result<String> {
+  fun renderStandalone(
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+    selectedDeviceConfiguration: String? = null,
+  ): Result<String> {
     if (classifier.isBlank()) {
       return Result.failure(IllegalStateException(BLANK_CLASSIFIER_MESSAGE))
-    }
-    val recordedTrailheadTools = recordedItems
-      .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
-      .firstOrNull()?.trailhead?.tools.orEmpty()
-    if (recordedTrailheadTools.size > 1) {
-      return Result.failure(IllegalStateException(multiToolTrailheadMessage(recordedTrailheadTools.size)))
     }
     val merged = UnifiedTrailAdapter.mergeRecordedClassifier(
       existing = null,
       recordedItems = recordedItems,
       classifier = classifier,
+      selectedDeviceConfiguration = selectedDeviceConfiguration,
     )
     if (merged.trail.isEmpty()) {
       return Result.failure(IllegalStateException(EMPTY_MERGE_MESSAGE))
@@ -398,6 +689,13 @@ object UnifiedRecordingWriter {
    * here, so callers create the trail directory (`mkdirs`) before routing/target resolution.
    */
   private fun dirOf(f: File): File? = if (f.isDirectory) f else f.parentFile
+
+  /**
+   * What a step asks the device to do, with every recording of it removed — the identity a recording
+   * is aligned to. Two steps are the same step when this matches, so re-recording one classifier
+   * never reads as the step having changed.
+   */
+  private fun UnifiedTrailStep.instruction(): UnifiedTrailStep = copy(recordings = emptyMap())
 
   // Per-target-path lock registry for [mergeIntoUnified]'s in-process read-merge-write. Keyed by
   // canonical path so two File instances pointing at the same unified trail share one monitor. The

@@ -92,14 +92,24 @@ class TrailblazeLogServerClient(
     },
   )
 
-  suspend fun postTrace(sessionId: SessionId, traceJson: String): HttpResponse =
+  suspend fun postTrace(sessionId: SessionId, traceJson: String, onDeviceClock: Boolean = false): HttpResponse =
     httpClient.post("$baseUrl/log/trace") {
       parameter(key = "session", value = sessionId.value)
+      parameter(key = CLOCK_PARAM, value = if (onDeviceClock) DEVICE_CLOCK else HOST_CLOCK)
       contentType(ContentType.Application.Json)
       setBody(traceJson)
     }
 
-  suspend fun sendTrace(sessionId: SessionId, traceJson: String): Boolean =
+  /**
+   * Uploads a recorded trace.
+   *
+   * [onDeviceClock] says the timestamps were stamped by a device's own wall clock, which drifts from
+   * the host's by whole seconds. The receiver cannot work this out for itself — the host uploads its
+   * own trace through this same route — and it matters both ways: an unmarked device batch stretches
+   * the session window by the drift, and a host batch mistaken for a device one is taken off the
+   * host timeline entirely.
+   */
+  suspend fun sendTrace(sessionId: SessionId, traceJson: String, onDeviceClock: Boolean = false): Boolean =
     sendWithPreferredTransport(
       protobuf = { id ->
         LogUploadEnvelope(
@@ -107,10 +117,11 @@ class TrailblazeLogServerClient(
           trace = TraceUpload(
             session_id = sessionId.value,
             trace_json = traceJson.encodeToByteArray().toByteString(),
+            clock = if (onDeviceClock) DEVICE_CLOCK else HOST_CLOCK,
           ),
         )
       },
-      jsonHttp = { postTrace(sessionId, traceJson).status == HttpStatusCode.OK },
+      jsonHttp = { postTrace(sessionId, traceJson, onDeviceClock).status == HttpStatusCode.OK },
     )
 
   private suspend fun sendWithPreferredTransport(
@@ -133,5 +144,18 @@ class TrailblazeLogServerClient(
   fun close() {
     if (webSocketClientDelegate.isInitialized()) webSocketClientDelegate.value.close()
     httpClient.close()
+  }
+
+  companion object {
+    /**
+     * Which clock stamped a trace upload's timestamps, shared with the endpoints that read it.
+     *
+     * Both values are always sent, so that an ABSENT marker means exactly one thing: an uploader
+     * older than this field. The two routes read that absence differently, because they carry
+     * different traffic — see `LogTracePostEndpoint` and `LogWebSocketEndpoint`.
+     */
+    const val CLOCK_PARAM: String = "clock"
+    const val DEVICE_CLOCK: String = "device"
+    const val HOST_CLOCK: String = "host"
   }
 }

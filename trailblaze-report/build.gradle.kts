@@ -1,10 +1,3 @@
-import org.gradle.api.DefaultTask
-import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
-
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.vanniktech.maven.publish)
@@ -46,65 +39,6 @@ tasks.register<JavaExec>("generateRunIndex") {
   mainClass.set("xyz.block.trailblaze.report.GenerateRunIndexCliCommandKt")
 }
 
-abstract class PrepareReportTemplateDirTask : DefaultTask() {
-  @get:Input abstract val wasmEnabled: org.gradle.api.provider.Property<Boolean>
-
-  @get:OutputDirectory abstract val templateBuildDir: DirectoryProperty
-
-  @TaskAction
-  fun prepare() {
-    if (!wasmEnabled.get()) {
-      throw GradleException(
-        "generateReportTemplate requires WASM targets.\n" +
-          "Run with: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true"
-      )
-    }
-    val outputDir = templateBuildDir.get().asFile
-    if (!outputDir.mkdirs() && !outputDir.isDirectory) {
-      throw GradleException("Could not create report template output directory ${outputDir.absolutePath}")
-    }
-  }
-}
-
-val reportWasmEnabled = providers.gradleProperty("trailblaze.wasm").map(String::toBoolean).orElse(true)
-val reportTemplateBuildDir = layout.buildDirectory.dir("report-template")
-
-val prepareReportTemplateDir by tasks.registering(PrepareReportTemplateDirTask::class) {
-  wasmEnabled.set(reportWasmEnabled)
-  templateBuildDir.set(reportTemplateBuildDir)
-}
-
-val generateReportTemplate by tasks.registering(JavaExec::class) {
-  description = "Generates a blank report template HTML with embedded WASM UI (requires -Ptrailblaze.wasm=true)"
-  group = "report"
-  if (reportWasmEnabled.get()) {
-    // Register the webpack distribution (the embedded JS + WASM bundle) as an INPUT, not just a
-    // `dependsOn`. A bare `dependsOn` orders the tasks but does NOT tie this task's up-to-date
-    // state to the bundle's contents — so editing the Compose report UI would re-run the webpack
-    // build yet leave `generateReportTemplate` UP-TO-DATE, embedding a stale WASM bundle in the
-    // generated template. Declaring the output as an input makes Gradle re-run us whenever the
-    // bundle changes (and correctly stay UP-TO-DATE when it doesn't).
-    //
-    // Register the webpack task's OUTPUT FILES (resolved lazily) rather than the task object: a
-    // `KotlinWebpack` task isn't serializable by the configuration cache, so passing the task
-    // provider straight to `inputs.files(...)` fails the build with `cannot serialize object of
-    // type 'org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpack'`. Mapping to
-    // `outputs.files` stores only the file collection in the cache and keeps the implicit task
-    // dependency, which `dependsOn` also pins explicitly.
-    val webpackTask = project(":trailblaze-ui").tasks.named("wasmJsBrowserProductionWebpack")
-    dependsOn(webpackTask)
-    inputs.files(webpackTask.map { it.outputs.files })
-      .withPropertyName("wasmDist")
-      .withPathSensitivity(PathSensitivity.RELATIVE)
-  }
-  classpath = sourceSets["main"].runtimeClasspath
-  mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
-  dependsOn(prepareReportTemplateDir)
-  args(reportTemplateBuildDir.get().asFile.absolutePath)
-  jvmArgs("-Dtrailblaze.rootDir=${rootProject.projectDir.absolutePath}")
-  outputs.file(reportTemplateBuildDir.map { it.file("trailblaze_report.html") })
-}
-
 // Bundle the interactive run-report renderer from its TypeScript modules into the single plain-JS
 // resource its consumers load: the Trail Runner web app (in :trailblaze-host, which depends on
 // this module) fetches it as a classic browser <script>, and RunReportGenerator copies it beside
@@ -139,6 +73,15 @@ val bundleRunReportCore by tasks.registering(Exec::class) {
     fileTree(layout.projectDirectory.dir("../trailblaze-selector-engine-js/src/typescript")) { include("**/*.ts") },
     fileTree(layout.projectDirectory.dir("../sdks/typescript/src/generated")) { include("**/*.ts") },
   ).withPropertyName("selectorEngineWrapperSources")
+  // The report CLI sources, which the bundle reaches OUT of srcDir for: run-report-core.ts imports
+  // the attachment/event-stream helpers from ../report/run-report-events.ts (shared with the bun
+  // driver). Same undeclared-input hazard bakeViewerShell documents for its reportCliSources.
+  inputs.files(
+    fileTree(layout.projectDirectory.dir("src/main/resources/xyz/block/trailblaze/report")) {
+      include("**/*.ts")
+      exclude("**/*.test.ts")
+    },
+  ).withPropertyName("reportCliSources")
   outputs.file(out)
   workingDir(srcDir)
   commandLine(
@@ -251,7 +194,7 @@ val bakeViewerShell by tasks.registering(Exec::class) {
 //
 // `from(<task provider>)` carries the bundle's declared OUTPUT plus its implicit task dependency, so
 // there's no `dependsOn` and no hardcoded `dist/…` path to drift when that module relocates its
-// output (the :trailblaze-ui precedent above).
+// output.
 val copySelectorEngineResource by tasks.registering(Copy::class) {
   group = "trailblaze"
   description = "Stages the Kotlin/JS selector engine bundle into build/ for inclusion in this module's JAR resources."
@@ -299,7 +242,15 @@ dependencies {
   implementation(project(":trailblaze-capture"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
+  implementation(project(":trailblaze-tracing"))
   implementation(libs.kotlinx.datetime)
+  // OpenTelemetry's own exporters, rather than a hand-written OTLP encoder: the wire format has
+  // enough traps (hex-string ids, uint64 timestamps as strings) that maintaining it ourselves buys
+  // nothing, and this way the gRPC endpoint works too.
+  api(platform(libs.opentelemetry.bom))
+  api(libs.opentelemetry.sdk)
+  implementation(libs.opentelemetry.exporter.otlp)
+  implementation(libs.opentelemetry.exporter.logging.otlp)
   implementation(libs.clikt)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
   implementation(libs.kotlinx.serialization.core)

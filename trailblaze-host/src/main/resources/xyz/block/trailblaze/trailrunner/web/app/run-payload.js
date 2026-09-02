@@ -24,6 +24,15 @@
       traceScreenshotFiles: o.traceScreenshotFiles || g.traceScreenshotFiles,
       packSessionInputsHierarchies: o.packSessionInputsHierarchies || g.packSessionInputsHierarchies,
       originalYamlFromLogs: o.originalYamlFromLogs || g.originalYamlFromLogs,
+      collectStreamAttachmentRefs: o.collectStreamAttachmentRefs || g.collectStreamAttachmentRefs,
+      // The attachment resolution policy, over the same channel as the detector above — it is
+      // defined once in run-report-events.ts and re-exported by run-report-core, so this surface,
+      // the bun driver and the zip viewer cannot drift apart on what may be embedded.
+      ATTACHMENT_INLINE_MAX_BYTES: o.ATTACHMENT_INLINE_MAX_BYTES || g.ATTACHMENT_INLINE_MAX_BYTES,
+      MAX_ATTACHMENTS_PER_SESSION: o.MAX_ATTACHMENTS_PER_SESSION || g.MAX_ATTACHMENTS_PER_SESSION,
+      ATTACHMENT_EMBED_MAX_TOTAL_BYTES: o.ATTACHMENT_EMBED_MAX_TOTAL_BYTES || g.ATTACHMENT_EMBED_MAX_TOTAL_BYTES,
+      ATTACHMENT_MIME: o.ATTACHMENT_MIME || g.ATTACHMENT_MIME,
+      isSafeSessionRelativePath: o.isSafeSessionRelativePath || g.isSafeSessionRelativePath,
     };
   }
 
@@ -33,10 +42,12 @@
 
   // encodeURIComponent leaves `'` alone, and the report's own image-src check rejects a quote rather
   // than reason about the attribute it would land in, so a frame from a file with an apostrophe in
-  // its name would silently not render. Encode it here.
+  // its name would silently not render. Encode it here. `file` may be a session-RELATIVE path (an
+  // attachment under attachments/), so encoding runs per segment — its separators must stay
+  // separators for the daemon's /static tree to resolve the nested file.
   function staticUrl(sessionId, file) {
     var part = function (v) { return encodeURIComponent(v).replace(/'/g, '%27'); };
-    return '/static/' + part(sessionId) + '/' + part(file);
+    return '/static/' + part(sessionId) + '/' + String(file).split('/').map(part).join('/');
   }
 
   function humanDuration(ms) {
@@ -185,13 +196,46 @@
     return btoa(out);
   }
 
-  async function fetchAsDataUrl(url, fetchFn) {
+  // A response body read under a byte ceiling: the declared Content-Length is refused before
+  // anything is fetched, then the stream is measured chunk by chunk and cancelled the moment it
+  // goes over. Buffering first and checking the length after would let a ref that under-declares
+  // its size — stale metadata, or a crafted one — still pull an arbitrarily large body into memory.
+  // A fetch without a readable body (a shim, an older webview) falls back to buffer-then-check.
+  async function readBodyWithinLimit(res, maxBytes) {
+    if (maxBytes == null) return new Uint8Array(await res.arrayBuffer());
+    var declared = Number((res.headers && res.headers.get && res.headers.get('content-length')) || NaN);
+    if (isFinite(declared) && declared > maxBytes) return null;
+    var reader = res.body && typeof res.body.getReader === 'function' ? res.body.getReader() : null;
+    if (!reader) {
+      var whole = await res.arrayBuffer();
+      return whole.byteLength > maxBytes ? null : new Uint8Array(whole);
+    }
+    var chunks = [];
+    var total = 0;
+    for (;;) {
+      var step = await reader.read();
+      if (step.done) break;
+      total += step.value.length;
+      if (total > maxBytes) { try { await reader.cancel(); } catch (e) { /* already closed */ } return null; }
+      chunks.push(step.value);
+    }
+    var bytes = new Uint8Array(total);
+    var at = 0;
+    chunks.forEach(function (chunk) { bytes.set(chunk, at); at += chunk.length; });
+    return bytes;
+  }
+
+  // opts.type overrides the response's content-type (an attachment's declared MIME must win over a
+  // static route's generic guess); opts.maxBytes caps the body, enforced as it arrives.
+  async function fetchAsDataUrl(url, fetchFn, opts) {
+    var o = opts || {};
     try {
       var res = await fetchFn(url);
       if (!res || !res.ok) return null;
-      var buf = await res.arrayBuffer();
-      var type = String((res.headers && res.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase();
-      return 'data:' + (type || 'image/png') + ';base64,' + base64(new Uint8Array(buf));
+      var body = await readBodyWithinLimit(res, o.maxBytes);
+      if (!body) return null;
+      var type = o.type || String((res.headers && res.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase();
+      return 'data:' + (type || 'image/png') + ';base64,' + base64(body);
     } catch (e) { return null; }
   }
 
@@ -217,6 +261,75 @@
       if (onProgress) onProgress(done, files.length);
     }
     return shots;
+  }
+
+  // Attachment refs embedded in the session's event streams (see AttachmentRef in trailblaze-models
+  // and collectStreamAttachmentRefs in run-report-core), resolved into the payload's
+  // `attachments` map the same two ways as screenshots:
+  //   'link'  → the daemon's /static tree (the bytes live at <sessionDir>/<path>), fetching nothing;
+  //   'embed' → data URIs, but only browser-renderable media types at or under the inline cap — the
+  //             exported file must stay portable, not carry arbitrary megabytes. Anything left out
+  //             of the map renders as the viewer's "in the session bundle, not embedded" note.
+  async function collectAttachments(streams, sessionId, mode, deps) {
+    var d = resolve(deps);
+    if (!streams || typeof d.collectStreamAttachmentRefs !== 'function') return null;
+    // Shared policy, read through `deps` like the detector — see resolve(). A bundle too old to
+    // export them leaves this surface resolving nothing rather than silently applying a second
+    // set of limits. ALL FIVE, not just the ones that would throw: a missing ceiling degrades to
+    // NO ceiling, since `n > undefined` is false and `readBodyWithinLimit(res, undefined)` reads
+    // the whole body — an unbounded fetch, which is worse than a second copy of the limit.
+    if (typeof d.isSafeSessionRelativePath !== 'function' || !d.ATTACHMENT_MIME
+      || !d.ATTACHMENT_INLINE_MAX_BYTES || !d.MAX_ATTACHMENTS_PER_SESSION
+      || !d.ATTACHMENT_EMBED_MAX_TOTAL_BYTES) return null;
+    var inlineMaxBytes = d.ATTACHMENT_INLINE_MAX_BYTES;
+    var maxPerSession = d.MAX_ATTACHMENTS_PER_SESSION;
+    // Prototype-free: the keys are bundle-authored file names and the shared path rule accepts any
+    // single segment, so on a plain `{}` an attachment named `constructor` would dedupe itself away
+    // before it was ever fetched.
+    var seen = Object.create(null);
+    var picked = d.collectStreamAttachmentRefs(streams).filter(function (ref) {
+      if (!d.isSafeSessionRelativePath(ref.path) || seen[ref.path]) return false;
+      seen[ref.path] = true;
+      return true;
+    });
+    if (picked.length > maxPerSession) {
+      console.error('attachments: resolving only the first ' + maxPerSession + ' of ' + picked.length + ' referenced attachment files');
+      picked = picked.slice(0, maxPerSession);
+    }
+    // Prototype-free for the same reason, and one more: `attachments['__proto__'] = url` on a plain
+    // object sets nothing at all — the assignment goes through Object.prototype's setter and the
+    // entry silently never exists. The map is serialized as JSON, where a null prototype is invisible.
+    var attachments = Object.create(null);
+    // Aggregate budget for embed mode, charged in ENCODED bytes because that is what the exported
+    // HTML carries and what Share posts back: the per-file cap and the count ceiling together still
+    // permit ~137 MiB of base64, and the daemon's share route refuses HTML over 64 MiB — so an
+    // unbudgeted session inside every other limit fails to save at all. Charged from the data URI
+    // actually produced rather than the declared size, so a lying ref cannot spend less than it costs.
+    var embedBudget = d.ATTACHMENT_EMBED_MAX_TOTAL_BYTES;
+    var skippedForBudget = 0;
+    for (var i = 0; i < picked.length; i++) {
+      var ref = picked[i];
+      if (mode === 'link') {
+        attachments[ref.path] = staticUrl(sessionId, ref.path);
+        continue;
+      }
+      if (!d.ATTACHMENT_MIME.test(ref.mimeType)) continue;
+      if (ref.sizeBytes > inlineMaxBytes) continue;
+      var data = await fetchAsDataUrl(staticUrl(sessionId, ref.path), d.fetch, {
+        type: ref.mimeType.toLowerCase(),
+        // The declared size gated the fetch; the arriving body enforces the cap against a lying ref,
+        // which is why it is measured as it streams rather than after it is all in memory.
+        maxBytes: inlineMaxBytes,
+      });
+      if (!data) continue;
+      if (data.length > embedBudget) { skippedForBudget++; continue; }
+      embedBudget -= data.length;
+      attachments[ref.path] = data;
+    }
+    if (skippedForBudget) {
+      console.error('attachments: ' + skippedForBudget + ' attachment(s) left as bundle-only notes to keep the embedded total under ' + d.ATTACHMENT_EMBED_MAX_TOTAL_BYTES + ' bytes');
+    }
+    return Object.keys(attachments).length ? attachments : null;
   }
 
   // Best-effort fetch of the session's recorded .trail.yaml so the report's Recording tab matches
@@ -314,6 +427,7 @@
     var mode = a.mode === 'link' ? 'link' : 'embed';
     var shots = await collectShots(a.trace, a.sessionId, mode, a.onProgress, a.deps);
     var side = await fetchSideChannels(a.sessionId, a.deps, a.logs, a.withRecordingYaml);
+    var attachments = await collectAttachments(side.events, a.sessionId, mode, a.deps);
     var input = {
       meta: runMeta({
         s: a.s,
@@ -327,6 +441,7 @@
       llmLogs: a.llmLogs,
       shots: shots,
       events: side.events,
+      attachments: attachments,
     };
     // 'embed' compresses the per-step view hierarchies into the same gz side-channel the CLI-built
     // report carries: inline hierarchies would otherwise dominate the exported file's size AND be
@@ -349,6 +464,7 @@
     cliRerunCommand: cliRerunCommand,
     fetchRerunCommand: fetchRerunCommand,
     collectShots: collectShots,
+    collectAttachments: collectAttachments,
     fetchSideChannels: fetchSideChannels,
     buildSessionInput: buildSessionInput,
   };

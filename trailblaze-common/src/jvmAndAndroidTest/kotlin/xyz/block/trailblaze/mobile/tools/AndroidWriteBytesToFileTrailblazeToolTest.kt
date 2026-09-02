@@ -2,12 +2,15 @@ package xyz.block.trailblaze.mobile.tools
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.doesNotContain
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotInstanceOf
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import java.util.Base64
 import kotlin.test.assertIs
+import xyz.block.trailblaze.device.MAX_RUN_AS_WRITE_CONTENT_BYTES
 import kotlin.test.fail
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -38,9 +41,9 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
  *
  * Covers the `execute()` branches that don't need a real
  * [xyz.block.trailblaze.device.AndroidDeviceCommandExecutor] (non-Android platform, invalid
- * path, malformed base64, missing executor), the pure path validator, the dual-mode annotation
- * contract, and YAML round-trip. Happy-path execution against a live executor is covered by an
- * on-device run.
+ * path, invalid `runAs`, malformed base64, missing executor), the pure path and `run-as`
+ * validators, the dual-mode annotation contract, and YAML round-trip. Happy-path execution
+ * against a live executor is covered by an on-device run.
  */
 class AndroidWriteBytesToFileTrailblazeToolTest {
 
@@ -123,6 +126,122 @@ class AndroidWriteBytesToFileTrailblazeToolTest {
   }
 
   // -------------------------------------------------------------------------------------------
+  // runAs — the `run-as` write into an app's private data dir
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * Every run-as precondition must be reported BEFORE the executor lookup. Two reasons: a
+   * metacharacter-bearing package name must never reach the `run-as` shell wrapper on a
+   * device-backed context, and a caller who violated the cap or aimed at a directory needs to be
+   * told that — not "executor is not provided", which names the wrong problem and hides the real
+   * one until the wiring is fixed. `doesNotContain("AndroidDeviceCommandExecutor")` is the
+   * load-bearing assertion in each of these.
+   */
+  @Test fun `errors on a runAs bearing shell metacharacters, before the executor lookup`() = runBlocking {
+    val tool = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/shared_prefs/debug.xml",
+      base64Content = base64Of("<map/>"),
+      runAs = "com.example.app; rm -rf /",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("valid Android package name")
+    assertThat(result.errorMessage).doesNotContain("AndroidDeviceCommandExecutor")
+  }
+
+  @Test fun `errors on a blank runAs`() = runBlocking {
+    val tool = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/files/a.bin",
+      base64Content = base64Of("x"),
+      runAs = "   ",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("blank")
+    assertThat(result.errorMessage).doesNotContain("AndroidDeviceCommandExecutor")
+  }
+
+  @Test fun `errors on an over-cap runAs payload, before the executor lookup`() = runBlocking {
+    val tool = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/files/big.bin",
+      base64Content = Base64.getEncoder().encodeToString(ByteArray(MAX_RUN_AS_WRITE_CONTENT_BYTES + 1)),
+      runAs = "com.example.app",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("over the $MAX_RUN_AS_WRITE_CONTENT_BYTES-byte cap")
+    assertThat(result.errorMessage).doesNotContain("AndroidDeviceCommandExecutor")
+  }
+
+  @Test fun `a payload exactly at the cap is not rejected`() = runBlocking {
+    // Boundary: the cap is inclusive, so this must fall through to the executor lookup rather
+    // than reporting the cap. Pins that the comparison is `>` and not `>=`.
+    val tool = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/files/big.bin",
+      base64Content = Base64.getEncoder().encodeToString(ByteArray(MAX_RUN_AS_WRITE_CONTENT_BYTES)),
+      runAs = "com.example.app",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("AndroidDeviceCommandExecutor")
+  }
+
+  @Test fun `errors on a directory devicePath under runAs, before the executor lookup`() = runBlocking {
+    val tool = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/shared_prefs/",
+      base64Content = base64Of("<map/>"),
+      runAs = "com.example.app",
+    )
+    val result = tool.execute(createContext(TrailblazeDevicePlatform.ANDROID))
+
+    assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertThat(result.errorMessage).contains("must name a file, not a directory")
+    assertThat(result.errorMessage).doesNotContain("AndroidDeviceCommandExecutor")
+  }
+
+  @Test fun `validateRunAsWrite accepts a real package name, file path and in-cap payload`() {
+    assertThat(
+      AndroidWriteBytesToFileTrailblazeTool.validateRunAsWrite(
+        runAs = "com.example.app",
+        devicePath = "/data/data/com.example.app/shared_prefs/debug.xml",
+        contentSize = 1024,
+      ),
+    ).isNull()
+    assertThat(
+      AndroidWriteBytesToFileTrailblazeTool.validateRunAsWrite("com.foo.my_app", "/data/data/com.foo.my_app/a", 0),
+    ).isNull()
+  }
+
+  @Test fun `validateRunAsWrite rejects blank and single-segment ids`() {
+    assertThat(validateRunAsWriteFor("")!!).contains("blank")
+    assertThat(validateRunAsWriteFor("   ")!!).contains("blank")
+    assertThat(validateRunAsWriteFor("foo")!!).contains("package name")
+  }
+
+  @Test fun `validateRunAsWrite rejects shell metacharacters`() {
+    // The package-name grammar IS the escaping scheme for this token — anything that could split
+    // or extend the `run-as` invocation must be refused rather than quoted.
+    listOf(
+      "com.example.app; rm -rf /",
+      "com.example.app && id",
+      "com.example.app | cat",
+      "com.example.app\$(id)",
+      "com.example.app`id`",
+      "com.example app",
+      "'com.example.app'",
+    ).forEach { bad ->
+      assertThat(validateRunAsWriteFor(bad), name = bad).isNotNull().contains("package name")
+    }
+  }
+
+  private fun validateRunAsWriteFor(runAs: String) = AndroidWriteBytesToFileTrailblazeTool
+    .validateRunAsWrite(runAs = runAs, devicePath = "/data/data/com.example.app/a.bin", contentSize = 1)
+
+  // -------------------------------------------------------------------------------------------
   // validateDevicePath — pure path guard (no executor needed)
   // -------------------------------------------------------------------------------------------
 
@@ -185,6 +304,28 @@ class AndroidWriteBytesToFileTrailblazeToolTest {
 
     assertThat(tool.devicePath).isEqualTo("/storage/emulated/0/Download/logo.png")
     assertThat(tool.base64Content).isEqualTo("AQIDBA==")
+    assertThat(tool.runAs).isNull()
+  }
+
+  @Test fun `decodes runAs from trail YAML`() {
+    val yaml = """
+      config: {}
+      trail:
+        - step: recorded
+          recording:
+            android:
+              - android_writeBytesToFile:
+                  devicePath: /data/data/com.example.app/shared_prefs/debug.xml
+                  base64Content: AQIDBA==
+                  runAs: com.example.app
+    """.trimIndent()
+
+    val tool = trailblazeYaml.decodeTrail(yaml, deviceClassifiers = listOf(TrailblazeDeviceClassifier("android")))
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+      .promptSteps.single().recording!!.tools.single()
+      .trailblazeTool as AndroidWriteBytesToFileTrailblazeTool
+
+    assertThat(tool.runAs).isEqualTo("com.example.app")
   }
 
   @Test fun `round-trips through YAML encode-then-decode`() {
@@ -194,6 +335,21 @@ class AndroidWriteBytesToFileTrailblazeToolTest {
     )
     val yamlInstance = trailblazeYaml.getInstance()
     val encoded = yamlInstance.encodeToString(AndroidWriteBytesToFileTrailblazeTool.serializer(), original)
+    val decoded = yamlInstance.decodeFromString(AndroidWriteBytesToFileTrailblazeTool.serializer(), encoded)
+    assertThat(decoded).isEqualTo(original)
+  }
+
+  @Test fun `round-trips runAs through YAML encode-then-decode`() {
+    val original = AndroidWriteBytesToFileTrailblazeTool(
+      devicePath = "/data/data/com.example.app/shared_prefs/debug.xml",
+      base64Content = Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4)),
+      runAs = "com.example.app",
+    )
+    val yamlInstance = trailblazeYaml.getInstance()
+    val encoded = yamlInstance.encodeToString(AndroidWriteBytesToFileTrailblazeTool.serializer(), original)
+    // Anchored on the key, not the bare id: the devicePath already contains the package name, so
+    // `contains("com.example.app")` would pass even with runAs dropped from serialization.
+    assertThat(encoded).contains("runAs: com.example.app")
     val decoded = yamlInstance.decodeFromString(AndroidWriteBytesToFileTrailblazeTool.serializer(), encoded)
     assertThat(decoded).isEqualTo(original)
   }

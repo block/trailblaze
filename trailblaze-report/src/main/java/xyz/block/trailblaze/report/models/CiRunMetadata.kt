@@ -9,6 +9,12 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class CiRunMetadata(
   // === Target Configuration ===
+  /**
+   * CI config that produced this run (e.g., "my-config"), with no device component — every device
+   * leg of a config reports the same value. Null outside CI.
+   */
+  val config_id: String? = null,
+
   /** Target application (e.g., "myapp") */
   val target_app: String = "",
 
@@ -146,7 +152,9 @@ data class CiRunMetadata(
    * exactly those from its own pass count AND reports the whole run `FAIL` when any is present, so
    * for such a run two renderings disagree about the verdict and not merely the rate — this field
    * follows the producer that built it. A consumer that needs the stricter reading must apply it
-   * to [CiSummaryReport.results] itself.
+   * to [CiSummaryReport.results] itself, and should read [SessionResult.trail_file_path] while it
+   * does: a row that named no trail AND reached no device was never a trail, so the strict
+   * producers drop it from the denominator rather than failing the run on it.
    *
    * Deliberately provider-NEUTRAL, in name and content. "Annotation" was avoided because it means
    * a Markdown block on the build in Buildkite but a file/line diagnostic in GitHub Actions. The

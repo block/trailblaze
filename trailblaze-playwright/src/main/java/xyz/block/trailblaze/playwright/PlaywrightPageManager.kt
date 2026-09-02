@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.api.DriverDispatch
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.tracing.currentTraceSpanContext
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -36,17 +37,25 @@ interface PlaywrightPageManager : AutoCloseable, DriverDispatch {
 
   /**
    * Runs [block] on the Playwright thread and returns its result. Playwright Java objects must
-   * only be touched from the thread that created them; single-device trail runs guarantee this
-   * by wrapping the whole run in `withContext(playwrightDispatcher)`, but multi-device sessions
-   * dispatch each tool from the session's routing thread, so page-touching callers
-   * (e.g. [PlaywrightTrailblazeAgent]) bridge through here instead of assuming the thread.
+   * only be touched from the thread that created them. No caller runs ON that thread by
+   * default: single-device trail runs execute their loop on a dedicated trail-loop thread
+   * (running the loop on the Playwright thread deadlocks host-local tools that compose nested
+   * Playwright tools), and multi-device sessions dispatch each tool from the session's routing
+   * thread — so every page-touching caller (e.g. [PlaywrightTrailblazeAgent]) bridges through
+   * here instead of assuming the thread.
    *
    * Implementations that pin a dispatcher thread override this with [PlaywrightThreadBridge]
    * so the already-on-thread case runs inline — `runBlocking(playwrightDispatcher)` from the
    * dispatcher's own thread deadlocks (see the bridge's kdoc). This default exists for test
    * fakes, which have no real thread affinity.
+   *
+   * Carries the caller's open trace span across the hand-off. The dispatch span the agent opens
+   * lives on the routing thread, which this bridge leaves behind — without it every span the tool
+   * records over here is a root, and the profiler draws Playwright's work beside the tool call
+   * that caused it rather than inside it.
    */
-  fun <T> onPlaywrightThread(block: () -> T): T = runBlocking(playwrightDispatcher) { block() }
+  fun <T> onPlaywrightThread(block: () -> T): T =
+    runBlocking(playwrightDispatcher + currentTraceSpanContext()) { block() }
 
   /**
    * Implements the [DriverDispatch] contract for Playwright: runs [action] and does not return

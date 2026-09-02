@@ -15,15 +15,21 @@ import xyz.block.trailblaze.util.Console
  * Wrapped by [xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint] — the
  * daemon's HTTP `/scripting/callback` endpoint for subprocess-spawned `@trailblaze/scripting`
  * tools, which adds HTTP-specific concerns around this core (loopback gate, body-size cap,
- * JSON framing). **That subprocess/HTTP path is the only callback transport wired today.**
+ * JSON framing). This dispatcher serves that subprocess/HTTP transport only.
  *
- * A second, in-process transport — an on-device `__trailblazeCallback` QuickJS binding that
- * would call directly into this dispatcher with no HTTP layer — is the planned MCP-free
- * composition path, but its host-side installer (`QuickJsBridge`) does not exist yet (see the
- * 2026-06-17 "Consolidate scripted-tool surfaces" decision). The session-match check, depth
- * gate, timeout, and [TrailblazeToolResult] mapping live here precisely so that when the
- * in-process transport lands it produces identical semantics to the HTTP path with no second
- * copy.
+ * In-process composition is served by a **separate** implementation — the `__trailblazeCall`
+ * QuickJS binding in `:trailblaze-quickjs-tools`
+ * (`xyz.block.trailblaze.quickjs.tools.SessionScopedHostBinding.callFromBundle`), wired in
+ * #3813. There is no `__trailblazeCallback` / `QuickJsBridge` installer routing into this
+ * dispatcher; that was documentation fiction, corrected by the 2026-06-17 "Consolidate
+ * scripted-tool surfaces" decision.
+ *
+ * Because the two transports are separate code, cross-transport parity is a maintained
+ * invariant rather than a structural guarantee: argument validation
+ * ([JsScriptingCallbackArgumentValidator]) and tool resolution
+ * ([xyz.block.trailblaze.toolcalls.TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered]) must
+ * stay identical on both sides, or an author sees a tool work under `trailblaze run` and fail
+ * under `trailblaze tool`. #3214 tracks consolidating both into the repo.
  */
 object JsScriptingCallbackDispatcher {
 
@@ -37,10 +43,9 @@ object JsScriptingCallbackDispatcher {
    *
    * Default [maxDepth] / [timeoutMs] resolve from the same system properties the HTTP
    * endpoint's knobs point at ([CALLBACK_MAX_DEPTH_PROPERTY], [CALLBACK_TIMEOUT_MS_PROPERTY]),
-   * falling back to the shared constants on unset/invalid values. Resolving them here (rather
-   * than only in the HTTP endpoint) means the planned in-process on-device transport will
-   * honor the same `-D` overrides automatically once it lands, without a second configuration
-   * surface.
+   * falling back to the shared constants on unset/invalid values. Resolving them here rather
+   * than only in the HTTP endpoint keeps the knobs on the dispatch core, so a future caller of
+   * this dispatcher honors the same `-D` overrides without a second configuration surface.
    */
   suspend fun dispatch(
     request: JsScriptingCallbackRequest,
@@ -51,8 +56,7 @@ object JsScriptingCallbackDispatcher {
       is JsScriptingCallbackAction.CallTool -> "call_tool name=${action.toolName}"
     }
     // START log — one per dispatch, tagged with session + invocation so every hop can be
-    // correlated via `grep <sessionId>` in logcat/daemon logs. Covers both transports (HTTP
-    // endpoint and in-process binding hit this same function).
+    // correlated via `grep <sessionId>` in logcat/daemon logs.
     Console.log(
       "[JsScriptingCallbackDispatcher] START session=${request.sessionId} invocation=${request.invocationId} $actionSummary",
     )
@@ -212,19 +216,65 @@ object JsScriptingCallbackDispatcher {
       )
     }
 
+    // Resolution must use the UNFILTERED lookup: the validator above walks the unfiltered
+    // tier ([TrailblazeToolRepo.expectedArgumentKeysFor]'s global fallback) and so does the
+    // in-process QuickJS transport ([SessionScopedHostBinding.callFromBundle]). Resolving
+    // through the filtered lookup here would validate a schema this line then refuses to
+    // decode, so a class-backed tool in no toolset (e.g. `mobile_maestro`) failed on this
+    // transport while succeeding on QuickJS.
     val tool = try {
-      entry.toolRepo.toolCallToTrailblazeTool(action.toolName, action.argumentsJson)
-    } catch (e: Exception) {
+      entry.toolRepo.toolCallToTrailblazeToolUnfiltered(action.toolName, action.argumentsJson)
+    } catch (e: CancellationException) {
+      // Cancellation must propagate even from the lookup phase — session teardown and agent
+      // abort rely on it, and [dispatch]'s contract promises it. Ordered before the Throwable
+      // catch because CancellationException is a Throwable. Matches SessionScopedHostBinding.
+      throw e
+    } catch (e: Throwable) {
+      // Throwable, not Exception: `serializer()` on a global class-backed tool that isn't in
+      // the session's toolset can raise NoClassDefFoundError, and the HTTP endpoint wrapping
+      // this dispatcher doesn't catch around [dispatch]. Include the exception class since
+      // an unchecked throw out of a custom KSerializer often carries a null message.
       Console.log(
         "[JsScriptingCallbackDispatcher] DESERIALIZE_FAILED tool '${action.toolName}' in session " +
-          "${entry.sessionId.value}: ${e.message}",
+          "${entry.sessionId.value}: ${e::class.simpleName}: ${e.message}",
       )
       return JsScriptingCallbackResult.CallToolResult(
         success = false,
-        errorMessage = "Failed to deserialize tool call '${action.toolName}': ${e.message}",
+        errorMessage = "Failed to deserialize tool call '${action.toolName}': " +
+          (e.message ?: e::class.simpleName),
       )
     }
 
+    if (tool == null) {
+      // Unknown name — distinct from a decode failure, and tagged separately so an operator
+      // grepping DESERIALIZE_FAILED sees only real decode errors. The unfiltered lookup
+      // returns null rather than throwing, so re-run the filtered one purely to harvest its
+      // rich unknown-tool message (did-you-mean suggestions + the registered-tool listing).
+      val unknownToolMessage = try {
+        entry.toolRepo.toolCallToTrailblazeTool(action.toolName, action.argumentsJson)
+        // Unreachable in practice: the unfiltered lookup only returns null after this same
+        // call threw. Concurrent registration could in principle make it succeed — fall back
+        // to a plain message rather than dispatching a tool the null branch already rejected.
+        "Could not find Trailblaze tool for name: ${action.toolName}"
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Throwable) {
+        e.message ?: "Could not find Trailblaze tool for name: ${action.toolName}"
+      }
+      Console.log(
+        "[JsScriptingCallbackDispatcher] UNKNOWN_TOOL tool '${action.toolName}' in session " +
+          "${entry.sessionId.value}",
+      )
+      return JsScriptingCallbackResult.CallToolResult(
+        success = false,
+        errorMessage = unknownToolMessage,
+      )
+    }
+
+    // Known remaining gap vs the QuickJS transport: [SessionScopedHostBinding.executeResolved]
+    // expands a [xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool] into its executable
+    // sub-tools, while this path rejects one as NON_EXECUTABLE. Pre-existing for
+    // session-registered YAML tools; unfiltered resolution widens which tools reach it.
     if (tool !is ExecutableTrailblazeTool) {
       Console.log(
         "[JsScriptingCallbackDispatcher] NON_EXECUTABLE tool '${action.toolName}' in session " +

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 
 /**
@@ -30,13 +31,55 @@ class SessionDeviceBindings(
   /**
    * One bound device. Identity only: screen capture reads the ACTIVE device's agent through the
    * host runner's own indirection, not through the binding.
+   *
+   * Identity is [trailblazeDeviceId] and nothing else, because that is all a binding needs to be
+   * usable — routing a handover only ever needs to know WHICH device, not how big its screen is.
+   * [trailblazeDeviceInfo] is the optional richer probe.
    */
   class BoundDevice(
-    val trailblazeDeviceInfo: TrailblazeDeviceInfo,
-  )
+    /** Which device this is. The one field a binding cannot do without. */
+    val trailblazeDeviceId: TrailblazeDeviceId,
+    /**
+     * The device's probed properties, or null when identity is known but nothing was probed.
+     *
+     * Null is a real state, not a degenerate one. A caller that binds a device it was handed by
+     * name — an interactive MCP session, for instance — has no screen to measure at bind time,
+     * and requiring info there produced fabricated geometry rather than honest absence.
+     * Consumers must degrade: describe the device by id and drop whatever the probe would have
+     * added, rather than treating a zero as a measurement.
+     */
+    val trailblazeDeviceInfo: TrailblazeDeviceInfo?,
+    /** Human-readable role description declared by the selected configuration. */
+    val description: String?,
+    /** Effective app target id for this device (its override, else the session target). */
+    val targetId: String?,
+  ) {
+    init {
+      // Two fields can name the device, so they must never disagree: `switchDevice` resolves one
+      // and the prompt roster describes the other, and a mismatch would let the agent hand over
+      // to a device the prompt told it something else about.
+      val infoDeviceId = trailblazeDeviceInfo?.trailblazeDeviceId
+      require(infoDeviceId == null || infoDeviceId == trailblazeDeviceId) {
+        "bound device identity disagrees with its probed info: id is " +
+          "${trailblazeDeviceId.toFullyQualifiedDeviceId()} but info reports " +
+          "${infoDeviceId?.toFullyQualifiedDeviceId()}"
+      }
+    }
+  }
 
   init {
     require(devices.isNotEmpty()) { "a multi-device session must bind at least one device" }
+    // Sibling invariant, one level up from [BoundDevice]'s: two NAMES must not resolve to the same
+    // device. Binding by identity alone makes this reachable on the by-name path — hand the same
+    // serial in twice and the roster advertises two devices that are one, so `switchDevice` is a
+    // silent no-op and every later assertion runs on the display the agent thinks it left.
+    // Indistinguishable from a working handover in any log, which is why it fails at bind time.
+    val namesByDeviceId = devices.entries.groupBy({ it.value.trailblazeDeviceId }, { it.key })
+    val collision = namesByDeviceId.entries.firstOrNull { it.value.size > 1 }
+    require(collision == null) {
+      "device ${collision!!.key.toFullyQualifiedDeviceId()} is bound to more than one name " +
+        "(${collision.value.joinToString()}) — a handover between them would do nothing"
+    }
   }
 
   private val devicesByName: Map<String, BoundDevice> = LinkedHashMap(devices)

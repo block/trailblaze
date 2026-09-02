@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.compoundClassifier
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -18,10 +19,12 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedTrailItems
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateUnifiedRecordedYaml
+import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.toRecordingTrailConfig
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.unified.TrailblazeDeviceDefinition
 import java.io.File
 
 /**
@@ -88,6 +91,9 @@ class SessionToolSet(
     session(action=RECORDING) → return recording YAML for current session
     session(action=RECORDING, id="abc123") → return recording YAML for a specific session
     session(action=SAVE, id="abc123", title="Login") → save a specific session as trail
+    session(action=SAVE, title="Handover", configuration="pos-pair") → name the multi-device
+      configuration synthesized from the session's named-device roster (bound via
+      device(action=BIND)); defaults to the bound names joined with '-'
     session(action=DEVICE_LOGS) → read device logs from current session
     session(action=DEVICE_LOGS, id="abc123", limit=200) → last 200 lines
     session(action=DEVICE_LOGS, id="abc123", filter="Exception") → search device logs
@@ -121,11 +127,17 @@ class SessionToolSet(
     startMs: Long? = null,
     @LLMDescription("For DEVICE_LOGS: end of time window (epoch millis). Use with startMs to get logs for a specific event.")
     endMs: Long? = null,
+    @LLMDescription(
+      "For SAVE (or STOP with save=true): name of the multi-device configuration to save the " +
+        "session's named-device roster under. Only meaningful for a session with named bindings " +
+        "(device(action=BIND)); defaults to the bound names joined with '-'.",
+    )
+    configuration: String? = null,
   ): String {
     return when (action) {
       SessionAction.START -> handleStart(title, noVideo, noLogs)
-      SessionAction.STOP -> handleStop(save, title)
-      SessionAction.SAVE -> handleSave(title, id)
+      SessionAction.STOP -> handleStop(save, title, configuration)
+      SessionAction.SAVE -> handleSave(title, id, configuration)
       SessionAction.INFO -> handleInfo(id)
       SessionAction.LIST -> handleList(limit ?: 20)
       SessionAction.ARTIFACTS -> handleArtifacts(id)
@@ -233,13 +245,14 @@ class SessionToolSet(
     }
   }
 
-  private suspend fun handleStop(save: Boolean, title: String?): String {
+  private suspend fun handleStop(save: Boolean, title: String?, configuration: String? = null): String {
     // Capture sessionId before clearing state — endSession/clear will make it unavailable
     val sessionId = sessionIdProvider?.invoke()
 
-    // Save first if requested
+    // Save first if requested — before the roster/recording state below is cleared, so a
+    // stop-with-save of a named-bindings session still synthesizes its multi-device cast.
     val saveResult = if (save) {
-      handleSave(title)
+      handleSave(title, configuration = configuration)
     } else null
 
     // Check if save actually succeeded by parsing the JSON result
@@ -324,7 +337,7 @@ class SessionToolSet(
   // SAVE
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private suspend fun handleSave(title: String?, id: String? = null): String {
+  private suspend fun handleSave(title: String?, id: String? = null, configuration: String? = null): String {
     // Resolve target session — explicit id, or current session
     val targetSessionId = if (id != null) {
       resolveSessionId(id)
@@ -356,12 +369,37 @@ class SessionToolSet(
       mcpBridge.getAvailableDevices().find { it.trailblazeDeviceId == deviceId }?.platform
     }
 
+    // Blank counts as absent everywhere below, so a caller that passes "" gets today's behavior.
+    val requestedConfiguration = configuration?.takeIf { it.isNotBlank() }
+
+    // The named-device roster lives on THIS session's daemon-side context, so it only describes the
+    // CURRENT session — saving another session by id must never inherit this one's cast.
+    val isCurrentSession = targetSessionId != null && targetSessionId == sessionIdProvider?.invoke()
+
     // Try log-based trail generation first (preferred)
     if (logsRepo != null && targetSessionId != null) {
-      return saveFromLogs(trailName, targetSessionId, platform)
+      return saveFromLogs(
+        trailName = trailName,
+        sessionId = targetSessionId,
+        platform = platform,
+        requestedConfiguration = requestedConfiguration,
+        roster = if (isCurrentSession) sessionContext?.namedDeviceBindings else null,
+      )
     }
 
-    // Fallback: in-memory RecordedStep path (only for current session)
+    // Fallback: in-memory RecordedStep path (only for the current session). It has no configuration
+    // keying at all, so it CANNOT represent a multi-device save: a caller-supplied name would be
+    // dropped, and — the case that matters more — a roster session taking the DEFAULT name would
+    // save a cast-less single-device trail and report a pass. Refuse both.
+    val fallbackRoster = if (id == null) sessionContext?.namedDeviceBindings else null
+    if (requestedConfiguration != null || fallbackRoster != null) {
+      return SessionResult(
+        error = "This session's ${if (fallbackRoster != null) "named-device roster" else "`configuration`"} " +
+          "needs the log-backed save path to write a multi-device cast, and this daemon has no " +
+          "session logs configured. Saving now would write a single-device trail with no " +
+          "`config.devices:` cast.",
+      ).toJson()
+    }
     return saveFromRecordedSteps(trailName, platform)
   }
 
@@ -369,6 +407,8 @@ class SessionToolSet(
     trailName: String,
     sessionId: SessionId,
     platform: TrailblazeDevicePlatform?,
+    requestedConfiguration: String? = null,
+    roster: SessionDeviceBindings? = null,
   ): String {
     val logs = logsRepo!!.getLogsForSession(sessionId)
     if (logs.isEmpty()) {
@@ -401,7 +441,73 @@ class SessionToolSet(
     // marked `platform: ios`, but the filename lies. Falls back to the live-context
     // platform only when the session predates SessionStarted (very old logs).
     val effectivePlatform = startedStatus?.trailblazeDeviceInfo?.platform ?: platform
-    return writeTrailFile(trailName, recordedItems, effectivePlatform)
+    // Same reason, one level up: a multi-device session's legs are keyed by the configuration it
+    // bound, which only the session's own Started record names.
+    val sessionConfiguration = startedStatus?.selectedDeviceConfiguration?.takeIf { it.isNotBlank() }
+
+    // A TRAIL-DECLARED configuration (the session bound one at start) is canon: no synthesis, and a
+    // caller-supplied name may only restate it — the same rule
+    // MultiDeviceConfigurationResolver.selectConfigurationName applies at run time, where naming a
+    // configuration the trail doesn't declare is a hard error, never a silent fallback.
+    if (sessionConfiguration != null) {
+      if (requestedConfiguration != null && requestedConfiguration != sessionConfiguration) {
+        return SessionResult(
+          error = "`configuration` selects '$requestedConfiguration', but this session bound the " +
+            "trail-declared configuration '$sessionConfiguration' — its legs are keyed by that " +
+            "name. Drop the selection, or pass '$sessionConfiguration'.",
+        ).toJson()
+      }
+      return writeTrailFile(
+        trailName = trailName,
+        recordedItems = recordedItems,
+        platform = effectivePlatform,
+        selectedDeviceConfiguration = sessionConfiguration,
+      )
+    }
+
+    // An interactive roster session (devices bound by name, no trail-declared configuration):
+    // synthesize the multi-device cast from the roster so the saved trail is replayable as
+    // multi-device — legs keyed by the configuration name, `config.devices:` declaring one entry
+    // per bound name in bind order.
+    if (roster != null) {
+      val configurationName = requestedConfiguration ?: roster.names.joinToString("-")
+      unsafeConfigurationKeyReason(configurationName)?.let { reason ->
+        return SessionResult(
+          error = "Can't save this session's cast under configuration name " +
+            "'$configurationName': $reason. The name becomes a YAML key for both the " +
+            "`config.devices:` entry and every recording leg. " +
+            if (requestedConfiguration != null) {
+              "Pass a different `configuration`."
+            } else {
+              "It defaults to the bound names joined with '-' — pass `configuration` to name it, " +
+                "or re-bind the devices under key-safe names."
+            },
+        ).toJson()
+      }
+      return writeTrailFile(
+        trailName = trailName,
+        recordedItems = recordedItems,
+        platform = effectivePlatform,
+        selectedDeviceConfiguration = configurationName,
+        castToDeclare = roster.toConfigurationDefinition(),
+      )
+    }
+
+    // No configuration anywhere — naming one is the same misuse the run-time resolver throws on.
+    if (requestedConfiguration != null) {
+      return SessionResult(
+        error = "`configuration` selects '$requestedConfiguration', but this session bound no " +
+          "multi-device configuration — neither a trail-declared `config.devices:` entry nor a " +
+          "named-device roster (session start --bind / device(action=BIND)). Drop the selection.",
+      ).toJson()
+    }
+
+    return writeTrailFile(
+      trailName = trailName,
+      recordedItems = recordedItems,
+      platform = effectivePlatform,
+      selectedDeviceConfiguration = null,
+    )
   }
 
   private fun saveFromRecordedSteps(
@@ -486,18 +592,27 @@ class SessionToolSet(
     trailName: String,
     recordedItems: List<TrailYamlItem>,
     platform: TrailblazeDevicePlatform?,
+    selectedDeviceConfiguration: String? = null,
+    castToDeclare: TrailblazeDeviceDefinition? = null,
   ): String {
     // Route through the shared file manager so this log-backed save (the daemon-default session-save
     // path) honors the same refusal/merge routing as every other surface.
     // Items go straight in — no YAML encode/decode round-trip, so save-back never touches the v1 parser.
     val saveResult = TrailFileManager(trailsDirectory)
-      .saveTrailItems(trailName, recordedItems, platform)
+      .saveTrailItems(trailName, recordedItems, platform, selectedDeviceConfiguration, castToDeclare)
     return if (saveResult.success) {
-      Console.log("[session] Trail saved to: ${saveResult.filePath}")
+      // A synthesized configuration name is a DEFAULTED, renameable value the caller never typed,
+      // so the save reports it and its members — otherwise the one thing the user has to know to
+      // replay (or rename) the trail is the one thing the output omits.
+      val castNote = castToDeclare?.devices?.keys?.takeIf { it.isNotEmpty() }?.let { names ->
+        " Multi-device cast saved as configuration `$selectedDeviceConfiguration` " +
+          "(${names.joinToString()}) — rename it in the file if you prefer."
+      }.orEmpty()
+      Console.log("[session] Trail saved to: ${saveResult.filePath}$castNote")
       SessionResult(
         status = "saved",
         file = saveResult.filePath,
-        message = "Trail saved: ${saveResult.filePath}",
+        message = "Trail saved: ${saveResult.filePath}$castNote",
       ).toJson()
     } else {
       SessionResult(error = saveResult.error ?: "Failed to write trail file").toJson()
@@ -794,6 +909,66 @@ class SessionToolSet(
     const val TARGET_SOURCE_SESSION_OVERRIDE = "session-override"
     const val TARGET_SOURCE_DAEMON_WIDE = "daemon-wide"
   }
+}
+
+/**
+ * The multi-device configuration entry an interactive roster synthesizes for `session save` — the
+ * `config.devices:` cast the saved trail declares so its configuration-keyed legs are replayable.
+ *
+ * One named device per binding, in bind order (the first bound name is the start device, matching
+ * the ordered-map semantics of a trail's `config.devices:`). Each member's `classifier:` comes from
+ * the bound device's probed [SessionDeviceBindings.BoundDevice.trailblazeDeviceInfo] classifiers —
+ * the same derivation the single-device save path keys its recording slot by — degrading to the
+ * device's platform name when the bind carried no probe (an interactive BIND stores identity only).
+ */
+internal fun SessionDeviceBindings.toConfigurationDefinition(): TrailblazeDeviceDefinition {
+  // A member's `target:` is an explicit OVERRIDE of the trail's session target, and a bound
+  // device's `targetId` is its EFFECTIVE target — its own override when it has one, otherwise the
+  // daemon-wide target every other member resolved to as well. Writing that effective value on
+  // every member would turn a shared target into N per-device overrides, and the run-time resolver
+  // hard-errors on an override naming a target the replaying installation doesn't carry (where an
+  // absent one inherits). So the overrides are written only when the roster actually DISAGREES —
+  // the paired-display session whose two devices run different apps, the one case where dropping
+  // them replays both members against one app and calls it a pass.
+  val targetsById = names.associateWith { deviceFor(it)!!.targetId }
+  val membersDisagreeOnTarget = targetsById.values.distinct().size > 1
+  return TrailblazeDeviceDefinition(
+    devices = names.associateWith { name ->
+      val bound = deviceFor(name)!!
+      TrailblazeDeviceDefinition(
+        classifier = bound.recordingClassifier(),
+        target = bound.targetId?.takeIf { membersDisagreeOnTarget },
+        description = bound.description,
+      )
+    },
+  )
+}
+
+/**
+ * The classifier slot this bound device would record under: its probed classifier segments folded
+ * by the shared [compoundClassifier] rule the recording save keys its slot by, or the platform name
+ * when nothing was probed. Never blank: platform is always known from the device id.
+ */
+private fun SessionDeviceBindings.BoundDevice.recordingClassifier(): String =
+  trailblazeDeviceInfo?.classifiers.orEmpty().compoundClassifier()
+    .ifBlank { trailblazeDeviceId.trailblazeDevicePlatform.name.lowercase() }
+
+/**
+ * Why [name] can't be used as a synthesized configuration name, or null when it is safe.
+ *
+ * The name lands in the saved YAML as a bare KEY twice — the `config.devices:` entry and every
+ * step's recording leg — and the unified emitter writes a leg key unquoted, so a name carrying YAML
+ * punctuation produces a file that either fails to parse or parses as something else. Every name on
+ * this path is arbitrary operator text (a `--configuration` value, or bound `--bind NAME=…` names
+ * joined with '-'), unlike a declared configuration's name, which came from YAML that already
+ * parsed. Deliberately narrow: it accepts every classifier and configuration name this repo's
+ * trails use, and refuses loudly rather than emitting an unreadable trail.
+ */
+internal fun unsafeConfigurationKeyReason(name: String): String? = when {
+  name.isBlank() -> "it is blank"
+  !name[0].isLetterOrDigit() -> "it must start with a letter or digit"
+  else -> name.firstOrNull { !it.isLetterOrDigit() && it !in "-_." }
+    ?.let { "'$it' is not allowed — use letters, digits, '-', '_' or '.'" }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

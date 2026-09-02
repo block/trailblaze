@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -18,6 +19,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          The app's androidx.startup initializers — the in-process (ANDROID_TEST) lane's tripwire
+          for "an instrumented process still runs the app under test's startup init". Ordering
+          between them is androidx.startup's job, not this file's: a Bundle does not preserve
+          declaration order, so SampleAppGreetingInitializer asserts its dependency ran rather than
+          relying on the order these appear in. See
+          xyz.block.trailblaze.examples.sampleapp.startup.SampleAppInitializers.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="xyz.block.trailblaze.examples.sampleapp.startup.SampleAppGreetingInitializer"
+                android:value="androidx.startup" />
+            <meta-data
+                android:name="xyz.block.trailblaze.examples.sampleapp.startup.SampleAppBaseInitializer"
+                android:value="androidx.startup" />
+        </provider>
     </application>
 
 </manifest>

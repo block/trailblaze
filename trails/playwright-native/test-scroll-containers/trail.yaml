@@ -1,6 +1,7 @@
 config:
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Test: Scroll within specific containers'
 
 trail:

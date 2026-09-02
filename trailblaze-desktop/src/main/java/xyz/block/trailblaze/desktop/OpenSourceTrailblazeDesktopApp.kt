@@ -82,6 +82,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
 
   override val deviceManager: TrailblazeDeviceManager by lazy {
     TrailblazeDeviceManager(
+      hostDriverDescriptors = desktopAppConfig.hostDriverDescriptorRegistry,
       settingsRepo = desktopAppConfig.trailblazeSettingsRepo,
       currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
       initialAppTargets = desktopAppConfig.availableAppTargets,
@@ -119,7 +120,8 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       trailblazeDeviceManager = deviceManager,
       trailblazeHostAppTargetProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
       dynamicLlmClientProvider = { createDynamicClient(it) },
-      trailblazeAnalytics = TrailblazeAnalytics.NoOp
+      trailblazeAnalytics = TrailblazeAnalytics.NoOp,
+      logsDirProvider = { desktopAppConfig.logsDir },
     )
   }
 

@@ -90,6 +90,7 @@ object SelectorTemplating {
     if (target == null) return selector
     return selector.copy(
       androidAccessibility = selector.androidAccessibility?.expanded(target),
+      androidView = selector.androidView?.expanded(target),
       androidMaestro = selector.androidMaestro?.expanded(target),
       web = selector.web?.expanded(target),
       compose = selector.compose?.expanded(target),
@@ -117,6 +118,7 @@ object SelectorTemplating {
    */
   fun containsUnresolvedPlaceholder(selector: TrailblazeNodeSelector): Boolean {
     if (selector.androidAccessibility?.hasPlaceholder() == true) return true
+    if (selector.androidView?.hasPlaceholder() == true) return true
     if (selector.androidMaestro?.hasPlaceholder() == true) return true
     if (selector.web?.hasPlaceholder() == true) return true
     if (selector.compose?.hasPlaceholder() == true) return true
@@ -141,6 +143,12 @@ object SelectorTemplating {
       labeledByTextRegex.containsPlaceholder() || stateDescriptionRegex.containsPlaceholder() ||
       paneTitleRegex.containsPlaceholder() || roleDescriptionRegex.containsPlaceholder()
 
+  private fun DriverNodeMatch.AndroidView.hasPlaceholder(): Boolean =
+    classNameRegex.containsPlaceholder() || resourceIdRegex.containsPlaceholder() ||
+      tagRegex.containsPlaceholder() || textRegex.containsPlaceholder() ||
+      contentDescriptionRegex.containsPlaceholder() || hintTextRegex.containsPlaceholder() ||
+      stateDescriptionRegex.containsPlaceholder() || errorTextRegex.containsPlaceholder()
+
   private fun DriverNodeMatch.AndroidMaestro.hasPlaceholder(): Boolean =
     textRegex.containsPlaceholder() || resourceIdRegex.containsPlaceholder() ||
       accessibilityTextRegex.containsPlaceholder() || classNameRegex.containsPlaceholder() ||
@@ -151,7 +159,8 @@ object SelectorTemplating {
 
   private fun DriverNodeMatch.Compose.hasPlaceholder(): Boolean =
     textRegex.containsPlaceholder() || editableTextRegex.containsPlaceholder() ||
-      contentDescriptionRegex.containsPlaceholder()
+      contentDescriptionRegex.containsPlaceholder() || stateDescriptionRegex.containsPlaceholder() ||
+      paneTitleRegex.containsPlaceholder() || errorTextRegex.containsPlaceholder()
 
   private fun DriverNodeMatch.IosMaestro.hasPlaceholder(): Boolean =
     textRegex.containsPlaceholder() || resourceIdRegex.containsPlaceholder() ||
@@ -179,6 +188,17 @@ object SelectorTemplating {
     roleDescriptionRegex = roleDescriptionRegex.expanded(target),
   )
 
+  private fun DriverNodeMatch.AndroidView.expanded(target: TargetTemplateContext) = copy(
+    classNameRegex = classNameRegex.expanded(target),
+    resourceIdRegex = resourceIdRegex.expanded(target),
+    tagRegex = tagRegex.expanded(target),
+    textRegex = textRegex.expanded(target),
+    contentDescriptionRegex = contentDescriptionRegex.expanded(target),
+    hintTextRegex = hintTextRegex.expanded(target),
+    stateDescriptionRegex = stateDescriptionRegex.expanded(target),
+    errorTextRegex = errorTextRegex.expanded(target),
+  )
+
   private fun DriverNodeMatch.AndroidMaestro.expanded(target: TargetTemplateContext) = copy(
     textRegex = textRegex.expanded(target),
     resourceIdRegex = resourceIdRegex.expanded(target),
@@ -196,6 +216,9 @@ object SelectorTemplating {
     textRegex = textRegex.expanded(target),
     editableTextRegex = editableTextRegex.expanded(target),
     contentDescriptionRegex = contentDescriptionRegex.expanded(target),
+    stateDescriptionRegex = stateDescriptionRegex.expanded(target),
+    paneTitleRegex = paneTitleRegex.expanded(target),
+    errorTextRegex = errorTextRegex.expanded(target),
   )
 
   private fun DriverNodeMatch.IosMaestro.expanded(target: TargetTemplateContext) = copy(

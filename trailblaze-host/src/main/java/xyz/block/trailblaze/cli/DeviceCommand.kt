@@ -7,6 +7,7 @@ import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.driver.BrowsableDeviceListing
 import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
@@ -91,37 +92,14 @@ class DeviceListCommand : Callable<Int> {
         app.deviceManager.loadDevicesSuspend(applyDriverFilter = true)
       }
 
-      // Filter out Revyl cloud devices — they require the revyl CLI which
-      // may not be installed, and they clutter the output for local usage.
-      // Filter platforms with `hidden = true` (Compose desktop) unless the user
-      // passed `--all`, mirroring the top-level `trailblaze --help --all` escape hatch.
-      val devices = allDevices.filter {
-        it.trailblazeDriverType != TrailblazeDriverType.REVYL_ANDROID &&
-          it.trailblazeDriverType != TrailblazeDriverType.REVYL_IOS &&
-          (showAll || !it.platform.hidden)
-      }.let { filtered ->
-        // Re-include named web browser instances that the UI-level filter strips when
-        // web mode is off. They're real, running browsers — users need them visible
-        // here so they can reuse the same `--device web/<id>` across commands.
-        val running = app.deviceManager.webBrowserManager.getAllRunningBrowserSummaries()
-        val seen = filtered.map { it.instanceId to it.platform }.toMutableSet()
-        val withRunning = filtered + running.filter { (it.instanceId to it.platform) !in seen }
-          .also { added -> added.forEach { seen += it.instanceId to it.platform } }
-
-        // Always include the playwright-native singleton — it's the always-available
-        // virtual default that maps to bare `--device web`. Check by instanceId here
-        // (not driver type), because named web instances also use PLAYWRIGHT_NATIVE
-        // and would otherwise suppress the canonical default from the listing.
-        if (withRunning.none { it.instanceId == WebInstanceIds.PLAYWRIGHT_NATIVE }) {
-          withRunning + TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-            instanceId = WebInstanceIds.PLAYWRIGHT_NATIVE,
-            description = "Playwright Browser (Native)",
-          )
-        } else {
-          withRunning
-        }
-      }
+      // `--all` also reveals platforms flagged hidden (Compose desktop), mirroring the top-level
+      // `trailblaze --help --all` escape hatch.
+      val devices = BrowsableDeviceListing.filter(
+        devices = allDevices,
+        descriptors = app.deviceManager.hostDriverDescriptors,
+        runningWebBrowsers = app.deviceManager.webBrowserManager.getAllRunningBrowserSummaries(),
+        showHiddenPlatforms = showAll,
+      )
 
       if (devices.isEmpty()) {
         Console.info("No devices found.")

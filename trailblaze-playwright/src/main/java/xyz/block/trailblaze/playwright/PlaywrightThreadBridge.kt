@@ -2,6 +2,7 @@ package xyz.block.trailblaze.playwright
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.tracing.currentTraceSpanContext
 
 /**
  * Pins the rule that bridging onto the Playwright dispatcher thread MUST detect the
@@ -48,6 +49,9 @@ internal object PlaywrightThreadBridge {
   ): T = if (playwrightThread != null && currentThread === playwrightThread) {
     block()
   } else {
-    runBlocking(dispatcher) { block() }
+    // The caller's open trace span rides along, or every span [block] records lands as a root:
+    // the tracer's synchronous parentage is per-thread, and this is the thread change. The inline
+    // branch above needs nothing — it never leaves the thread that holds the span.
+    runBlocking(dispatcher + currentTraceSpanContext()) { block() }
   }
 }

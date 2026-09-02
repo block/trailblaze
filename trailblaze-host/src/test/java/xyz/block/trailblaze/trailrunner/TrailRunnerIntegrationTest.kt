@@ -29,6 +29,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.WorkspaceConfigDirHolder
@@ -471,6 +472,33 @@ class TrailRunnerIntegrationTest {
     }
 
     assertTrue(response.bodyAsText().contains("already exists"), "existing directory should be rejected")
+  }
+
+  @Test
+  fun `POST Trail Runner api trail record-range refuses a range the trail cannot satisfy`() = withTrailRunner {
+    writeTrail("login.trail.yaml")
+
+    // The body is exactly what TB.recordTrailRange sends, so this covers the wiring the unit tests
+    // can't: the route is registered, and the client's field names deserialize into the request.
+    val response = client.post("/trailrunner/api/trail/record-range") {
+      contentType(ContentType.Application.Json)
+      setBody(
+        """
+        {
+          "id": "login",
+          "deviceIds": [{ "instanceId": "emulator-5554", "trailblazeDevicePlatform": "ANDROID" }],
+          "from": 0,
+          "to": 7,
+          "captureVideo": true
+        }
+        """.trimIndent(),
+      )
+    }
+
+    // A range this trail can't satisfy is the caller's error, so 400 - not an OK with an empty
+    // session list, and not a 502, which would claim the daemon's dispatch is what failed.
+    assertEquals(HttpStatusCode.BadRequest, response.status)
+    assertTrue(response.bodyAsText().contains("2 step"), "expected the trail's real length: ${response.bodyAsText()}")
   }
 
   @Test
@@ -1225,20 +1253,42 @@ class TrailRunnerIntegrationTest {
     withTrailRunner(settingsRepo = repo) {
       val response = client.put("/trailrunner/api/settings") {
         contentType(ContentType.Application.Json)
-        setBody("""{"serverPort":54123,"serverHttpsPort":54124}""")
+        setBody("""{"serverPort":31123,"serverHttpsPort":31124}""")
       }
       assertEquals(HttpStatusCode.OK, response.status)
       val body = response.bodyAsText().replace(Regex("\\s"), "")
-      assertTrue(body.contains("\"serverPort\":54123"), "expected updated HTTP port in response: $body")
-      assertTrue(body.contains("\"serverHttpsPort\":54124"), "expected updated HTTPS port in response: $body")
+      assertTrue(body.contains("\"serverPort\":31123"), "expected updated HTTP port in response: $body")
+      assertTrue(body.contains("\"serverHttpsPort\":31124"), "expected updated HTTPS port in response: $body")
 
       client.put("/trailrunner/api/settings") {
         contentType(ContentType.Application.Json)
         setBody("""{"serverPort":0,"serverHttpsPort":70000}""")
       }
     }
-    assertEquals(54123, repo.serverStateFlow.value.appConfig.serverPort)
-    assertEquals("http://localhost:54123", repo.serverStateFlow.value.appConfig.serverUrl)
-    assertEquals(54124, repo.serverStateFlow.value.appConfig.serverHttpsPort)
+    assertEquals(31123, repo.serverStateFlow.value.appConfig.serverPort)
+    assertEquals("http://localhost:31123", repo.serverStateFlow.value.appConfig.serverUrl)
+    assertEquals(31124, repo.serverStateFlow.value.appConfig.serverHttpsPort)
+  }
+
+  /**
+   * A saved port outranks every source but the runtime `-p` flag, and the daemon refuses to start
+   * on a port a device could be allocated. Persisting one would brick the next launch with no
+   * working UI left to undo it — so the patch has to be dropped here, while the daemon is still up.
+   */
+  @Test
+  fun `PUT settings ignores daemon ports inside the device allocation range`() {
+    val repo = newSettingsRepo()
+    val portBefore = repo.serverStateFlow.value.appConfig.serverPort
+    val httpsPortBefore = repo.serverStateFlow.value.appConfig.serverHttpsPort
+    val inRange = TrailblazeDevicePort.DEVICE_ALLOCATION_PORT_RANGE
+    withTrailRunner(settingsRepo = repo) {
+      val response = client.put("/trailrunner/api/settings") {
+        contentType(ContentType.Application.Json)
+        setBody("""{"serverPort":${inRange.first},"serverHttpsPort":${inRange.last}}""")
+      }
+      assertEquals(HttpStatusCode.OK, response.status)
+    }
+    assertEquals(portBefore, repo.serverStateFlow.value.appConfig.serverPort)
+    assertEquals(httpsPortBefore, repo.serverStateFlow.value.appConfig.serverHttpsPort)
   }
 }

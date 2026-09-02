@@ -200,7 +200,7 @@ export type SpriteRejection = "multiSheet" | "degenerate" | "restampedDominated"
  * The single acceptance verdict: first rejection that applies, or null when the sprite is safe.
  *
  * `supportsMultiSheet` declares whether the consumer can render frames across multiple sheet
- * files (the interactive report can; WasmReport and the Compose frame caches only ever load one
+ * files (this report can; the Compose frame caches only ever load one
  * image, so they keep the default). Even a capable consumer rejects a multi-sheet sprite without
  * `uniqueFrames` — the last sheet's geometry (spriteSheetRows) is underivable without it, and the
  * extractor always writes it alongside `sheets`.

@@ -107,6 +107,14 @@ class McpProxy(
    */
   private val permissionRunId: String? =
     System.getenv("TRAILRUNNER_PERMISSION_RUN_ID")?.takeIf { it.isNotBlank() },
+  /**
+   * Test seam for the `/ping` reachability probe, defaulting to the real one.
+   *
+   * Injectable because the regression the port guard exists for is a device *answering* that probe
+   * on the daemon's port — which a test cannot produce with a real socket, and which is precisely
+   * the case where checking the port after the probe would proxy the agent to a device RPC server.
+   */
+  private val daemonReachableOverride: (() -> Boolean)? = null,
 ) {
 
   /** Test/prod seam: whether this proxy runs in human-approvable permission mode. */
@@ -187,7 +195,10 @@ class McpProxy(
   // retry) instead of the ~60s the startup wait advertises. Cleared by the
   // first successful forwardRequest so a daemon that recovers mid-session
   // doesn't keep getting the fast-fail behavior.
-  private val daemonStartupFailed = AtomicBoolean(false)
+  // Internal rather than private so tests can assert the fast-fail state itself, not just the
+  // branch that sets it — dropping the set() while keeping the branch would silently restore the
+  // full maxRetryMs spin.
+  internal val daemonStartupFailed = AtomicBoolean(false)
 
   fun run(): Int {
     System.setProperty("java.awt.headless", "true")
@@ -216,8 +227,14 @@ class McpProxy(
     log("Starting MCP proxy -> $daemonUrl")
     log("Waiting for daemon... (restart it freely, proxy handles reconnection)")
 
-    // Wait for daemon to be available before accepting client requests
-    waitForDaemon(log)
+    // Wait for daemon to be available before accepting client requests. An unusable port is fatal:
+    // a device bridged onto it answers every forwarded request, so httpPost succeeds, clears
+    // daemonStartupFailed, and the agent drives that device believing it reached a daemon. Exiting
+    // is the only way the operator hears about it.
+    if (!waitForDaemon(log)) {
+      log("Refusing to proxy on port $port — fix the port before starting the MCP server.")
+      return TrailblazeExitCode.MISUSE.code
+    }
 
     // Start SSE notification listener (daemon -> client)
     val sseThread = Thread({ runSseListener(stdoutForTransport, log) }, "mcp-proxy-sse")
@@ -314,6 +331,37 @@ class McpProxy(
   }
 
   /**
+   * Refuses a port a connected device could be allocated, before anything probes it. Returns true
+   * when the port was refused, meaning [waitForDaemon] must not continue.
+   *
+   * A device bridged with `adb forward tcp:<port> tcp:<port>` answers `/ping` on this port, so
+   * probing first reports a healthy daemon and every forwarded request then goes to a device RPC
+   * server instead. `trailblaze mcp` resolves its port through [CliConfigHelper] and cannot arrive
+   * here with a bad one, but `McpProxyMain` takes `TRAILRUNNER_DAEMON_PORT` straight to the
+   * constructor.
+   *
+   * Reported rather than thrown, because this runs with the client's JSON-RPC transport already
+   * attached and a stack trace on it tells the user nothing. [run] turns the false return into a
+   * [TrailblazeExitCode.MISUSE] exit.
+   *
+   * [daemonStartupFailed] is set for consistency with the other startup failures, but it cannot
+   * carry this one on its own: it only shortens the retry window on a `ConnectException`, and a
+   * device holding this port does not refuse connections — it answers them, which clears the flag
+   * (see [forwardRequest]). Refusing to proceed at all is the part that matters here.
+   */
+  internal fun refuseDeviceAllocatablePort(log: (String) -> Unit): Boolean {
+    // runCatching, rather than re-testing the range here, keeps the remediation text in
+    // TrailblazeDevicePort as the single source — this path only reports it.
+    val portConflict = runCatching {
+      TrailblazeDevicePort.requirePortOutsideDeviceAllocationRange(port, "The daemon port")
+    }.exceptionOrNull() ?: return false
+
+    log("Cannot reach a daemon on port $port: ${portConflict.message}")
+    daemonStartupFailed.set(true)
+    return true
+  }
+
+  /**
    * Block until the daemon is reachable, attempting to start it if not running.
    * Periodically retries starting the daemon in case the first attempt failed.
    *
@@ -323,11 +371,21 @@ class McpProxy(
    * never come. When the cap is hit we return anyway and let the first
    * forwarded request fail with a proper JSON-RPC error envelope so the client
    * surfaces "daemon unavailable" to the user rather than appearing frozen.
+   *
+   * Returns false only when the port itself is unusable, which [run] treats as fatal. The other
+   * two failure exits return true: a daemon that is merely absent may still come up, so the client
+   * gets an error envelope and the session stays alive. A device-allocatable port has no such
+   * recovery — see [refuseDeviceAllocatablePort].
    */
-  private fun waitForDaemon(log: (String) -> Unit) {
-    if (isDaemonReachable()) {
+  internal fun waitForDaemon(log: (String) -> Unit): Boolean {
+    // Ahead of the probe, and not merely ahead of it in source order: a device bridged onto this
+    // port answers /ping, so a guard placed after the probe would take the "reachable" exit below
+    // and proxy the agent to that device.
+    if (refuseDeviceAllocatablePort(log)) return false
+
+    if (daemonReachable()) {
       log("Daemon is reachable.")
-      return
+      return true
     }
 
     // With auto-start disabled, no daemon will ever appear on its own — polling the full
@@ -339,7 +397,7 @@ class McpProxy(
           "is reachable — failing fast instead of waiting. Start one with: trailblaze app",
       )
       daemonStartupFailed.set(true)
-      return
+      return true
     }
 
     log("Daemon not running -- attempting to start...")
@@ -348,9 +406,9 @@ class McpProxy(
     val deadline = System.currentTimeMillis() + DAEMON_WAIT_TIMEOUT_SECONDS * 1000L
     var attempts = 0
     while (!shutdownRequested.get()) {
-      if (isDaemonReachable()) {
+      if (daemonReachable()) {
         log("Daemon is reachable.")
-        return
+        return true
       }
       if (System.currentTimeMillis() >= deadline) {
         log(
@@ -360,7 +418,7 @@ class McpProxy(
             "window) so the client can surface the problem promptly.",
         )
         daemonStartupFailed.set(true)
-        return
+        return true
       }
       attempts++
       if (attempts % DAEMON_START_RETRY_SECONDS == 0) {
@@ -369,7 +427,11 @@ class McpProxy(
       }
       Thread.sleep(retryIntervalMs)
     }
+    return true
   }
+
+  /** [isDaemonReachable], or the injected probe when a test supplied one. */
+  private fun daemonReachable(): Boolean = daemonReachableOverride?.invoke() ?: isDaemonReachable()
 
   /**
    * Check if the daemon is reachable via /ping.

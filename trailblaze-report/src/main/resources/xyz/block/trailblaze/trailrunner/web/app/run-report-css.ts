@@ -66,6 +66,14 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .detailfooteritem .v { color: var(--sub); font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); line-height: 1.25; }
 .indexshell { width: 100%; max-width: var(--content-wide); margin-inline: auto; }
 .indexfootercontent { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+/* Sits between the scrolling index and the footer, so the selection stays in view while the reader
+   keeps scrolling for the next run to add. */
+.pickbar { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px solid var(--line); background: var(--bg2); }
+.pickbarcontent { display: flex; align-items: center; gap: var(--space-3); }
+.pickcount { color: var(--txt); font-size: var(--type-caption); }
+.picknote { color: var(--sub); font-size: var(--type-caption); }
+.pickactions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.pickopen { border-color: var(--run); color: var(--run); }
 .indexmetrics { display: flex; align-items: center; gap: var(--space-5); margin-left: auto; }
 .indexrundate { text-align: right; }
 [data-theme="light"] .idxrow:hover, [data-theme="light"] .grphdr:hover { background: var(--neutral-3); }
@@ -176,13 +184,13 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .tlphase .stepgroup.skipped { background: transparent; border-style: dashed; box-shadow: none; }
 .stepgroup.skipped .grphdr { position: static; background: transparent; cursor: default; color: var(--sub); }
 .stepgroup.skipped .grphdr:hover { background: transparent; }
-/* Nothing to disclose, but the token still lines up with the steps that ran. */
-.stepgroup.skipped .grphdr::before { content: ''; grid-row: 1 / span 2; width: 14px; }
-.grphdr { position: sticky; top: 39px; z-index: 5; width: 100%; padding: 12px 14px 11px; background: var(--bg3); color: inherit; border: 0; border-top: 1px solid var(--line2); display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 2px 8px; font: inherit; text-align: left; cursor: pointer; }
-.grphdr .grpchev { grid-row: 1 / span 2; width: 14px; height: 14px; color: var(--sub); transition: transform 120ms ease-out; }
+.grphdr { position: sticky; top: 39px; z-index: 5; width: 100%; padding: 12px 14px 11px; background: var(--bg3); color: inherit; border: 0; border-top: 1px solid var(--line2); display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 2px 10px; font: inherit; text-align: left; cursor: pointer; }
+.stepheaderrail { grid-row: 1 / span 2; grid-column: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; align-self: start; }
+.grpdisclosure { display: flex; justify-content: center; width: 100%; color: var(--sub2); opacity: .58; }
+.grphdr:hover .grpdisclosure { color: var(--sub); opacity: .9; }
+.grphdr .grpchev { width: 12px; height: 12px; transition: transform 120ms ease-out; }
 .grphdr[aria-expanded="false"] .grpchev { transform: rotate(-90deg); }
-.grphdr .chip { grid-row: 1 / span 2; }
-.grphdr .grpstatus { grid-column: 3; display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--sub); }
+.grphdr .grpstatus { grid-column: 2; display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--sub); }
 .grphdr .grpstatus .grpstatusicon { width: 13px; height: 13px; flex-shrink: 0; }
 .grphdr .grpstatus.pass .grpstatusicon { color: var(--status-passed-mark); }
 .grphdr .grpstatus.fail .grpstatusicon { color: var(--status-failed-mark); }
@@ -201,7 +209,7 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
    glance. It can't do that with hue any more, because hue now means outcome: it takes a ring in
    whatever colour the outcome already gave it. */
 .grphdr.trailhead .chip { box-shadow: inset 0 0 0 1px currentColor; }
-.grphdr .lbl { grid-column: 3; min-width: 0; display: block; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1.4; overflow-wrap: anywhere; }
+.grphdr .lbl { grid-column: 2; min-width: 0; display: block; padding-top: 1px; font-size: 14px; font-weight: var(--font-weight-emphasis); line-height: 1.4; overflow-wrap: anywhere; }
 .step { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; cursor: pointer; border-top: 1px solid var(--line); transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
 .step.child { padding-left: 22px; }
 .step:hover, .step.sel:hover { background: var(--accent-surface); }
@@ -221,7 +229,27 @@ footer { flex-shrink: 0; padding: var(--space-3) var(--page-x); border-top: 1px 
 .step .ic.tool svg, .step .ic.llm svg { width: 14px; height: 14px; display: block; }
 .step .ic.verify { color: var(--pass); }
 .step .ic.failure { color: var(--fail); }
+.step .ic.switch { color: var(--ai); font-size: 13px; }
 .step .lbl { min-width: 0; font-size: 13px; font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
+/* Multi-device timeline lanes (see detailDevices): each device's rows carry its color as a left
+   rail and indent to their own column, so the default timeline reads as interleaved device lanes
+   without opening the Trail view. Lane colors ride --lane-color, set inline per row. */
+/* Indent scales with the lane index the row carries (--lane-index), so a session with more
+   devices than we ever hard-coded still gets one column per device instead of collapsing the
+   extras onto lane 0. */
+.step.devlane { border-left: 3px solid var(--lane-color); margin-left: calc(44px * var(--lane-index, 0)); }
+/* A handover bridges the lanes: full width, washed in the DESTINATION device's color. */
+.step.handover { margin-left: 0; background: color-mix(in srgb, var(--lane-color) 8%, transparent); }
+.step.handover:hover, .step.handover.sel:hover { background: color-mix(in srgb, var(--lane-color) 14%, transparent); }
+.step.handover .ic.switch { color: var(--lane-color); }
+/* Which device a row acted on, shown only in multi-device sessions (see traceShowsDevices). */
+.step .lbl .devchip { display: inline-block; vertical-align: 1px; margin-left: 2px; padding: 0 6px; border: 1px solid var(--line); border-radius: 99px; font-size: 10px; font-weight: var(--font-weight-emphasis); letter-spacing: 0.02em; color: var(--sub2); background: var(--bg2); }
+.step.devlane .lbl .devchip { border-color: color-mix(in srgb, var(--lane-color) 45%, var(--line)); color: color-mix(in srgb, var(--lane-color) 80%, var(--txt)); background: color-mix(in srgb, var(--lane-color) 10%, var(--bg2)); }
+/* The timeline header's cast list: one dot+name per device lane, beside the verdict. */
+.devlegend { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.devlegendtitle { font-size: 11px; font-weight: var(--font-weight-emphasis); color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
+.devlegenditem { display: inline-flex; align-items: center; gap: 5px; font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); color: var(--txt); }
+.devlegenddot { width: 8px; height: 8px; border-radius: 99px; background: var(--lane-color); flex-shrink: 0; }
 .step .tl-tool { font-size: 11px; color: var(--sub); margin-top: 2px; word-break: break-word; }
 .step .stepreason { margin: 0 0 8px; color: var(--sub2); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
 /* A full-width flex row below the [num][icon][label][time] line: the kid durations right-align
@@ -452,10 +480,12 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .cmd pre { flex: 1; }
 .zoom { position: fixed; inset: 0; background: rgba(2,6,12,.9); display: flex; align-items: center; justify-content: center; gap: 32px; cursor: zoom-out; z-index: 99; backdrop-filter: blur(4px); }
 .zoom img { max-width: 92vw; max-height: 92vh; border-radius: 10px; border: 1px solid var(--line2); }
-.zoomnav { position: fixed; top: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: var(--r-md); background: color-mix(in srgb,var(--raised) 90%,transparent); color: var(--txt); font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif; font-size: 21px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; transform: translateY(-50%); box-shadow: var(--shadow-raised); }
+/* Fixed light-on-dark like the rest of the overlay, not theme vars: the scrim is dark in both
+   themes, and a themed foreground turns the glyph invisible against it on one side or the other. */
+.zoomnav { position: fixed; top: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,.2); border-radius: var(--r-md); background: rgba(34,40,50,.86); color: #fff; font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, sans-serif; font-size: 21px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; transform: translateY(-50%); box-shadow: var(--shadow-raised); }
 .zoomnav.prev { left: 24px; }
 .zoomnav.next { right: 24px; }
-.zoomnav:hover { border-color: var(--run); background: rgba(34,40,50,.96); }
+.zoomnav:hover { border-color: var(--run); background: rgba(34,40,50,.96); color: #fff; }
 .zoomnav:disabled { opacity: 0; pointer-events: none; }
 /* Step-label column beside the zoomed screenshot (centered two-column layout). The scrim is dark
    in both themes, so the column's text colors are fixed light rather than theme vars. */
@@ -466,6 +496,11 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .zoomstep.cur { opacity: 1; cursor: default; }
 .zoomstep:focus-visible { outline: 2px solid #6aa6ff; outline-offset: -2px; }
 .zoomstepchip { font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; color: #cdb8ff; background: rgba(133,102,255,.22); border-radius: var(--r-sm); padding: 2px 7px; white-space: nowrap; }
+/* Which device this frame is from. A trail gallery pages through N devices' takes on the SAME
+   step, so without the device name every entry reads as a duplicate of the last. */
+.zoomstepdev { color: rgba(255,255,255,.92); font-size: 11px; font-weight: var(--font-weight-emphasis); letter-spacing: .04em; text-transform: uppercase; word-break: break-word; }
+.zoomdevice { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px; border-radius: 0 0 10px 10px; background: linear-gradient(to top, rgba(2,6,12,.86), transparent); color: #fff; font-size: 12.5px; font-weight: var(--font-weight-emphasis); letter-spacing: .04em; text-align: center; pointer-events: none; }
+.zoomdevice[hidden] { display: none; }
 .zoomsteplabel { color: #fff; font-size: 12.5px; font-weight: var(--font-weight-emphasis); line-height: 1.4; word-break: break-word; }
 .zoomsteptool { color: rgba(255,255,255,.65); font-size: 11px; line-height: 1.4; word-break: break-word; }
 /* Narrow viewports: the fixed-width column would crush the screenshot, so drop it and give the
@@ -488,6 +523,7 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxsummary .stat.pass strong { color: var(--pass); }
 .idxsummary .stat.selfheal strong { color: var(--amber); }
 .idxsummary .stat.fail strong { color: var(--fail); }
+.idxsummary .stat.skip strong { color: var(--sub); }
 .indexcontext { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: var(--space-5); max-width: var(--content-wide); margin-top: var(--space-4); }
 .indexmeta { margin-top: 0; }
 .indexmetalink { color: inherit; text-decoration: none; text-underline-offset: 2px; }
@@ -527,11 +563,25 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxsectioncount { color: var(--sub); font-weight: var(--font-weight-emphasis); letter-spacing: 0; text-transform: none; }
 .idx { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg2); max-width: var(--content-wide); }
 .idxrow { display: grid; grid-template-columns: 12px minmax(220px,1fr) 256px 20px; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); cursor: pointer; transition: background-color 120ms ease-out, box-shadow 120ms ease-out; }
-.idxrow[hidden] { display: none; }
 .idxrow:first-child { border-top: none; }
-.idxrow.firstmatch { border-top: none; }
 .idxrow:hover { background: var(--bg3); }
 .idxrow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* A run's compare checkbox lives OUTSIDE the row's own click target, so ticking one never opens it.
+   The line owns the separator and the search filter's hidden/firstmatch state — both of which used
+   to sit on .idxrow, which is now the inner control, so the .idxrow rules for them are gone.
+   (.idxrow:first-child stays: a retry row's .idxrow is a <summary>, still its <details>'s first.) */
+.idxrowline, .idxattemptline { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: stretch; border-top: 1px solid var(--line); }
+.idxrowline[hidden], .idxattemptline[hidden] { display: none; }
+.idxrowline:first-child, .idxattemptline:first-child, .idxrowline.firstmatch { border-top: none; }
+.idxrowline > .idxrow, .idxattemptline > .idxattemptrow { border-top: none; }
+/* A fixed gutter, held open even by the empty slot a link-out or skipped run gets, so rows and
+   cells stay aligned whether or not they can be staged. */
+.idxpick { display: flex; align-items: center; justify-content: center; width: 30px; flex: none; box-sizing: border-box; padding-left: 6px; cursor: pointer; }
+.idxpick input { width: 14px; height: 14px; margin: 0; accent-color: var(--run); cursor: pointer; }
+.idxpickempty { cursor: default; }
+.idxcell > .idxpick { position: absolute; left: 0; top: 0; bottom: 0; width: 24px; padding-left: 4px; }
+.idxcell > .idxcellopen { padding-left: 26px; }
+.idxretryrow > .idxpick { width: auto; padding-left: 0; }
 .idxstatus { width: 12px; height: 12px; display: flex; align-items: center; justify-content: center; }
 .idxstatusdot { width: 7px; height: 7px; border-radius: 50%; background: var(--sub); }
 .idxstatusdot.failed { background: var(--status-failed-mark); }
@@ -547,6 +597,9 @@ pre { margin: 0; font-size: 11px; line-height: 1.5; color: var(--sub2); white-sp
 .idxentry > .idxrow { border-top: 0; }
 .idxmatrixrow { grid-template-columns: minmax(220px,1fr) minmax(0,auto); cursor: default; }
 .idxmatrixrow .nm { font-weight: var(--font-weight-emphasis); }
+.nmtrail { display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 14px; font-weight: var(--font-weight-emphasis); text-align: left; cursor: pointer; }
+.nmtrail:hover { color: var(--run); text-decoration: underline; text-underline-offset: 3px; }
+.nmtrail:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
 .idxcells { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .idxcell { position: relative; width: var(--idxcell-w, 164px); box-sizing: border-box; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg3); transition: border-color 120ms ease-out, background-color 120ms ease-out; }
 .idxcell:hover { border-color: var(--run); }
@@ -570,7 +623,14 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 [data-theme="dark"] .idxcell.selfheal { border-color: color-mix(in srgb,var(--warning-border) 28%,var(--line2)); }
 [data-theme="dark"] .idxcell.failed .idxcellchev { border-left-color: color-mix(in srgb,var(--danger-border) 58%,var(--line2)); }
 [data-theme="dark"] .idxcell.selfheal .idxcellchev { border-left-color: color-mix(in srgb,var(--warning-border) 28%,var(--line2)); }
-.idxcell.missing { display: flex; flex-direction: column; gap: 4px; padding: 9px 14px; border-style: dashed; background: transparent; }
+/* Skipped reads as "nothing ran here", the same dashed, unfilled treatment as a missing cell,
+   rather than as a neutral verdict that could be mistaken for an unknown result. */
+.idxcell.skipped { border-style: dashed; background: transparent; }
+.idxcell.skipped:hover { border-color: var(--line2); }
+.idxcell.skipped .pv { color: var(--sub); opacity: .7; }
+/* Left padding matches the gutter the .idxcellopen rule above carries, so a column the trail never
+   ran on still lines its label up with the cells beside it. */
+.idxcell.missing { display: flex; flex-direction: column; gap: 4px; padding: 9px 14px 9px 26px; border-style: dashed; background: transparent; }
 .idxcell.missing:hover { border-color: var(--line2); }
 .idxcell.missing .pv { color: var(--sub); opacity: .7; }
 .idxcell.retried .idxcellopen { padding-right: 40px; }
@@ -589,6 +649,9 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 .idxmatrixattempts .idxattemptlabel { font-weight: var(--font-weight-emphasis); }
 .idxmatrixattempts .idxattemptstatus { font-weight: var(--font-weight-emphasis); }
 .idxfacts { display: grid; grid-template-columns: 104px 60px 60px; gap: 16px; align-items: center; }
+/* Sits in the facts column of an attempt row, where a run shows Duration/Tools/LLM and a skip has
+   none of the three. One line, ellipsized, with the full reason on hover. */
+.idxattemptskip { color: var(--sub); font-size: var(--type-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .idxfact .k { color: var(--sub); font-size: var(--type-micro); letter-spacing: .08em; text-transform: uppercase; }
 .idxfact .v { color: var(--sub2); font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); margin-top: 1px; white-space: nowrap; }
 .quietlink { min-height: 32px; display: inline-flex; align-items: center; color: var(--sub2); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 5px 9px; font-size: 11px; font-weight: var(--font-weight-emphasis); text-decoration: none; background: var(--bg2); }
@@ -596,10 +659,12 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 .quietlink:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .idxrow .arr { color: var(--sub); font-size: 14px; align-self: center; }
 .idxretry { border-top: 1px solid var(--line); }
-.idxretry:first-child { border-top: 0; }
+/* A retry group is a search-filter entry like any other row, so it drops its separator when the
+   filter leaves it at the top — the same rule .idxrowline and .idxentry each carry. */
+.idxretry:first-child, .idxretry.firstmatch { border-top: 0; }
 .idxretry > summary { list-style: none; border-top: 0; }
 .idxretry > summary::-webkit-details-marker { display: none; }
-.idxretryrow { grid-template-columns: auto minmax(220px,1fr) 256px 20px; }
+.idxretryrow { grid-template-columns: auto auto minmax(220px,1fr) 256px 20px; gap: var(--space-3); padding-left: var(--space-3); }
 .idxretrydots { display: inline-flex; align-items: center; gap: 5px; padding-inline: 1px; }
 .idxretrydots .idxstatusdot { flex-shrink: 0; }
 .idxretrychev { width: 8px; height: 8px; justify-self: center; border-right: 1.75px solid currentColor; border-bottom: 1.75px solid currentColor; color: var(--sub); transform: rotate(45deg) translate(-1px,-1px); transition: transform 120ms ease-out,color 120ms ease-out; }
@@ -666,7 +731,7 @@ span.idxrow, span.idxattemptrow, span.idxcellopen { cursor: default; }
 svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .viewpage.lightboxpage { max-width: none; }
 .gal { width: 100%; display: grid; grid-template-columns: repeat(auto-fill,minmax(min(var(--galsize,190px),100%),1fr)); gap: 16px; align-items: start; }
-.lightboxtoolbar { display: flex; align-items: center; justify-content: flex-start; margin: -4px 0 var(--space-4); }
+.lightboxtoolbar { display: flex; align-items: center; justify-content: flex-start; gap: 16px; margin: -4px 0 var(--space-4); }
 .lightboxzoom { display: inline-flex; gap: 4px; margin-left: auto; }
 .lightboxzoombtn { width: 30px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); color: var(--sub2); font: inherit; font-size: 15px; font-weight: var(--font-weight-emphasis); line-height: 1; cursor: pointer; }
 .lightboxzoombtn:hover:not(:disabled) { color: var(--txt); border-color: var(--run); }
@@ -686,6 +751,13 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .galcell .cap { display: grid; gap: 5px; margin-top: 7px; line-height: 1.35; word-break: break-word; }
 .galchip { width: fit-content; }
 .galchip.trailhead { color: var(--trail-text); background: var(--trail-surface); }
+/* Multi-device runs: every frame is capped by a title bar naming the screen it came from, in the
+   same lane color the timeline uses. Above the image, flush against it — never over it, so no
+   part of the captured screen is hidden. */
+.galdevbar { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid color-mix(in srgb,var(--lane-color) 45%,var(--line2)); border-bottom: 0; border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: color-mix(in srgb,var(--lane-color) 82%,var(--txt)); background: color-mix(in srgb,var(--lane-color) 15%,transparent); }
+.galdevdot { width: 7px; height: 7px; border-radius: 99px; background: var(--lane-color); flex-shrink: 0; }
+.galcell.devlane img { border-color: color-mix(in srgb,var(--lane-color) 45%,var(--line2)); border-top-left-radius: 0; border-top-right-radius: 0; }
+.galcell.devlane:hover .galdevbar { background: color-mix(in srgb,var(--lane-color) 26%,transparent); }
 .gallabel { color: var(--sub2); font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); }
 .galtool { color: var(--sub); font-size: var(--type-caption); }
 .logpane { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); max-height: 72vh; overflow: auto; margin-top: 8px; }
@@ -760,6 +832,14 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .scrubtracktooltip.visible { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
 .scrubtick:hover { z-index: 5; opacity: 1; }
 .scrubhead { position: absolute; z-index: 3; top: 50%; width: 12px; height: 12px; box-sizing: border-box; border-radius: 99px; transform: translate(-50%,-50%); background: transparent; border: 2px solid var(--run); box-shadow: 0 1px 4px color-mix(in srgb,var(--txt) 30%,transparent); pointer-events: none; }
+/* Multi-device sessions: the one scrubber splits into stacked per-device bands (scrubberHtml
+   emits them with inline top/height, one per device in trace order). Bands and the playhead line
+   span the same fraction axis, so the strip stays a single slider. */
+.scrubtrack.devlanes { height: calc(23px * var(--scrub-lanes, 2)); }
+.scrublane { position: absolute; z-index: 0; left: 0; right: 0; border-radius: var(--r-md); background: color-mix(in srgb,var(--lane-color) 7%,transparent); pointer-events: none; }
+.scrublaneseg { position: absolute; z-index: 1; border-radius: var(--r-md); background: color-mix(in srgb,var(--lane-color) 24%,transparent); pointer-events: none; }
+.scrublanename { position: absolute; z-index: 3; left: 6px; max-width: 26%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transform: translateY(-50%); padding: 1px 4px; border-radius: 3px; background: color-mix(in srgb,var(--header) 78%,transparent); font-size: 9px; font-weight: var(--font-weight-emphasis); letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb,var(--lane-color) 82%,var(--txt)); pointer-events: none; }
+.scrubtrack.devlanes .scrubhead { top: 0; bottom: 0; width: 3px; height: auto; border: 0; border-radius: 2px; transform: translateX(-50%); background: var(--run); }
 .streamitems { display: grid; gap: 0; }
 .streamitems.timelineeventitems { margin: 0; }
 .timelineevent { min-width: 0; border-top: 1px solid var(--line); border-left: 3px solid var(--stream-color); background: var(--bg2); }
@@ -779,6 +859,34 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .timelineeventchev { width: 7px; height: 7px; border-right: 1.75px solid currentColor; border-bottom: 1.75px solid currentColor; color: var(--sub); transform: rotate(45deg) translate(-1px,-1px); transition: transform 120ms ease-out; }
 .timelineevent[open] .timelineeventchev { transform: rotate(225deg) translate(-1px,-1px); }
 .timelineevent pre { margin: 0 10px 10px; max-height: 220px; background: var(--code-surface); color: var(--code-text); }
+/* Attachment rows inside an expanded event body (label · MIME type · size · Open), plus the
+   lightbox their Open raises. Deliberately NOT the full-page .txoverlay shell the transcript and
+   inspector share: an attachment is one piece of media, so the dialog takes only the room that
+   media needs and dims the report behind it rather than replacing it — the same centered-over-a-
+   scrim treatment as the screenshot zoom above. */
+.attachrows { display: grid; gap: 6px; margin: 8px 10px; }
+.attachrow { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 4px 6px 4px 10px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg); }
+.attachname { min-width: 0; flex: 1; color: var(--txt); font-size: 11.5px; font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
+.attachmeta { color: var(--sub); font-size: var(--type-micro); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.attachoverlay { position: fixed; inset: 0; z-index: 99; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(2,6,12,.72); backdrop-filter: blur(4px); animation: attachRaise 160ms cubic-bezier(.16,1,.3,1) both; }
+.attachoverlay .attachpanel { width: auto; height: auto; max-width: min(760px, 100%); max-height: 100%; border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--shadow-raised); }
+.attachoverlay .txpanelhead { min-height: 0; padding: 11px 14px; }
+.attachoverlay .attachbody { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 14px; overflow: auto; }
+.attachbody audio { width: min(420px, 100%); }
+.attachbody video, .attachbody img { max-width: 100%; max-height: min(70vh, 100%); border-radius: var(--r-md); background: #000; }
+@keyframes attachRaise { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: scale(1); } }
+.attachmedia { display: grid; gap: 12px; justify-items: center; max-width: 100%; }
+.attachnote { max-width: 560px; display: grid; gap: 10px; color: var(--sub2); font-size: 12.5px; text-align: center; }
+/* The blocked-playback note ships hidden and is revealed on the player's error event. The
+   .attachnote rule above sets display, and an author display rule beats the UA's [hidden] rule —
+   without this the note shows on every healthy attachment, claiming a failure that never happened. */
+.attachblockednote[hidden] { display: none; }
+/* Same trap, other direction: the failed player is hidden outright so the reader is left with the
+   note and Download rather than a dead 0:00 control. Media elements carry a UA display of their
+   own, so pin it here rather than trusting [hidden] to win. */
+.attachmedia audio[hidden], .attachmedia video[hidden] { display: none; }
+.attachactions { display: flex; justify-content: center; }
+.attachpath { overflow-wrap: anywhere; }
 .eventfields { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 1px; background: var(--line); }
 .eventfield { min-width: 0; padding: 6px 9px; background: var(--bg2); }
 .eventfield .k { color: var(--sub); font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .06em; text-transform: uppercase; }
@@ -876,7 +984,7 @@ svg.swipe { position: absolute; inset: 0; width: 100%; height: 100%; pointer-eve
 .zoom .zoomwrap img { display: block; }
 button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, input:focus-visible, .shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (pointer: coarse) { nav button, button.btn, .evchip, .back, .streamselect summary, .idxsort summary, .exportmenu summary, .exportmenuitem, .phasecontrol, .grphdr { min-height: 44px; } .detailedge { width: 44px; height: 44px; } .back, .exportmenu summary { min-width: 44px; } .step { min-height: 44px; } .scrubtrack { height: 44px; } .scrubtransport button.timelinecontrol { width: 44px; height: 44px; min-width: 44px; min-height: 44px; } .txopenbtn { min-width: 44px; min-height: 44px; } }
-@media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back, .txoverlay, .inspector { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #app.page-enter-forward, #app.page-enter-back, .txoverlay, .inspector, .attachoverlay { animation: none; } }
 @media (max-width: 640px) {
   :root { --page-x: 18px; --page-y: 20px; }
   main { padding-bottom: var(--space-5); }
@@ -1009,5 +1117,390 @@ button:focus-visible, [role="button"]:focus-visible, summary:focus-visible, inpu
    transition is a frame the encoder keeps, so both are dropped for the capture only. */
 html[data-tb-autoplay] .detailactions { display: none; }
 html[data-tb-embedded] body { background: transparent; }
+/* Embedded, the host already insets the frame inside a panel, so the report's own page gutter
+   is doubled up. Narrow it to the value the report uses on a small screen - enough to keep its
+   content off the panel's edge without indenting it twice. */
+html[data-tb-embedded] { --page-x: 18px; }
 html[data-tb-autoplay] *, html[data-tb-autoplay] *::before, html[data-tb-autoplay] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+
+/* ── Trail view: the same trail across devices, one vertical lane per run ─────────────────────── */
+.trailheader .indexshell.trailshellwide, .indexfooter .trailshellwide { max-width: none; }
+/* The shell above is full-bleed, but .title-row carries its own content-wide clamp for the pages
+   that ARE clamped — without this override the theme toggle and Back button stop at the clamp
+   while the tools row below reaches the true right edge. */
+.trailheader .title-row { max-width: none; }
+.trailcontext { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); padding-bottom: var(--space-3); }
+.trailsub { font-size: var(--type-caption); color: var(--sub); }
+.trailkeys { color: var(--sub2); white-space: nowrap; }
+@media (max-width: 900px) { .trailkeys { display: none; } }
+.trailtools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Lane chips: which loaded runs are on stage. An off lane stays listed — dimmed, hollow — so
+   bringing a device back is one click, not a reload. */
+.traillanebar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.traillanechip { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); color: var(--txt); font: inherit; font-size: var(--type-caption); cursor: pointer; }
+.traillanechip:hover { border-color: var(--focus); }
+.traillanechip:not(.on) { color: var(--sub2); background: transparent; }
+.traillanechip:not(.on) .idxstatusdot { opacity: .35; }
+.trailmodes { display: inline-flex; border: 1px solid var(--line2); border-radius: var(--r-sm); overflow: hidden; }
+.trailmodebtn { min-height: 30px; padding: 4px 12px; border: 0; background: var(--bg2); color: var(--sub2); font: inherit; font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); cursor: pointer; }
+.trailmodebtn + .trailmodebtn { border-left: 1px solid var(--line2); }
+.trailmodebtn:hover { color: var(--txt); }
+.trailmodebtn.active { background: var(--bg3); color: var(--txt); }
+.trailmain { padding: 0; }
+.trailscroll { padding: 0 var(--page-x) var(--space-6); min-width: fit-content; }
+.trailgrid { display: grid; grid-template-columns: minmax(230px, 300px) repeat(var(--trail-lanes), minmax(280px, 440px)); column-gap: var(--space-4); align-items: stretch; }
+.trailrowgroup { display: contents; }
+.trailcorner, .traillanehead { position: sticky; top: 0; z-index: 4; background: var(--bg); border-bottom: 1px solid var(--line2); }
+.trailcorner { left: 0; z-index: 5; }
+.traillanehead { display: flex; align-items: center; gap: 8px; padding: 12px 4px 10px; min-width: 0; }
+.traillanehead .idxstatusdot { flex: none; }
+.traillanename { font-size: var(--type-small); font-weight: var(--font-weight-emphasis); color: var(--txt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.traillanedur { margin-left: auto; color: var(--sub); font-size: var(--type-micro); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trailstep { position: sticky; left: 0; z-index: 2; background: var(--bg); display: grid; justify-items: start; align-content: start; gap: 6px; padding: 18px var(--space-4) 18px 0; border-right: 1px solid var(--line); scroll-margin-top: 56px; }
+/* The arrow-key cursor. The row group is display:contents, so the ring goes on the step chip the
+   scroll just landed on — the reader's eye needs ONE anchor after a jump, not a lit-up row. */
+.trailrowfocus .trailsteptoggle .galchip { outline: 2px solid var(--run); outline-offset: 2px; }
+.trailsteptoggle { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; width: fit-content; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.trailsteptoggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
+.trailstepdisclosure { display: flex; justify-content: center; width: 100%; color: var(--sub2); opacity: .58; }
+.trailsteptoggle:hover .trailstepdisclosure { color: var(--sub); opacity: .9; }
+.trailstepchev { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 120ms ease-out; }
+.trailstepchev.open { transform: rotate(45deg); }
+.trailsteplabel { font-size: var(--type-caption); color: var(--sub2); line-height: 1.5; overflow-wrap: break-word; }
+.trailcell { position: relative; min-width: 0; padding: 16px 0 16px 22px; }
+.trailcell::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: var(--line2); }
+.trailcell.missing::before { background: repeating-linear-gradient(to bottom, var(--line2) 0 4px, transparent 4px 9px); }
+.traildot { position: absolute; left: 3px; top: 18px; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--bg); background: var(--sub); z-index: 1; }
+.traildot.passed { background: var(--status-passed-mark); }
+.traildot.failed { background: var(--status-failed-mark); }
+.traildot.selfheal { background: var(--status-self-healed-mark); }
+.traildot.missing { background: transparent; border: 2px dashed var(--line2); }
+.trailcard { display: grid; gap: 8px; }
+.trailnotrun { color: var(--sub); font-size: var(--type-micro); padding-top: 2px; opacity: .7; }
+.trailshots { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.trailshots.all { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.trailframe { margin: 0; min-width: 0; }
+.trailframe img { width: 100%; border: 1px solid var(--line2); border-radius: var(--r-sm); display: block; background: #000; }
+.trailcell.failed .trailframe img { border-color: var(--danger-border); }
+/* Collapsed cells frame every device's shot at ONE height, so a landscape tablet and a portrait
+   phone read at the same size instead of each stretching to its own aspect. */
+.trailshots:not(.all) .galshot { height: 340px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: var(--r-sm); background: color-mix(in srgb, var(--txt) 4%, transparent); overflow: hidden; }
+.trailshots:not(.all) .galshot img { width: auto; max-width: 100%; max-height: 100%; border: 0; }
+.trailcell.failed .trailshots:not(.all) .galshot { border-color: var(--danger-border); }
+.trailframecap { margin-top: 4px; font-size: var(--type-micro); color: var(--sub); line-height: 1.35; overflow-wrap: break-word; }
+.trailvariant { font-size: var(--type-micro); color: var(--sub); font-style: italic; line-height: 1.4; }
+.trailcellmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trailcellstats { font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; }
+.trailopenbtn { border: 0; background: transparent; padding: 2px 4px; color: var(--sub); font: inherit; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); cursor: pointer; border-radius: var(--r-sm); white-space: nowrap; }
+.trailopenbtn:hover { color: var(--txt); background: var(--button-hover); }
+.trailopenbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* Map projection: the trail as a waypoint chain over a dotted field. One node per authored step
+   holds every device's screenshot side by side; the page never scrolls in this mode — the camera
+   pans and zooms instead. */
+.trailmain.trailmapmain { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.trailcanvas { position: relative; flex: 1; min-width: 0; overflow: hidden; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; background-image: radial-gradient(color-mix(in srgb, var(--txt) 16%, transparent) 1px, transparent 1.4px); background-size: 22px 22px; }
+.trailcanvas.panning { cursor: grabbing; }
+.trailworld { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.trailworld.wpflow { display: flex; flex-direction: column; align-items: center; width: max-content; padding: 16px 64px 88px; }
+/* Horizontal pivot: the trail flows left→right, one column of device cards per step. */
+.trailworld.wpflow.wphoriz { flex-direction: row; align-items: center; padding: 64px 88px 64px 24px; }
+.wphoriz .wpframes { flex-direction: column; align-items: flex-start; gap: 40px; }
+/* Across the page a hub sits in the gutter BETWEEN two columns of devices, so it can only grow as
+   far as that gutter allows — a taller counter-scale would cover the screenshots on either side. */
+.wphoriz .wphub { margin: 0 110px; max-width: 300px; transform: scale(min(var(--wp-inv, 1), 2)); }
+.wpwires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+/* The wires ARE the structure this view claims — fan out to the devices, merge back into the next
+   step — so they are drawn to be followed at a glance, not as hairlines that dissolve into the
+   card borders. A wire into a failed device carries the failure's colour. */
+.wpwires path { fill: none; stroke: color-mix(in srgb, var(--sub) 85%, transparent); stroke-width: 2.2; }
+.wpwires marker path { fill: color-mix(in srgb, var(--sub) 95%, transparent); stroke: none; }
+[data-theme="dark"] .wpwires path { stroke: color-mix(in srgb, var(--sub) 100%, transparent); stroke-width: 2.4; }
+.wpwires path.wpwire.failed { stroke: color-mix(in srgb, var(--status-failed-mark) 85%, transparent); }
+.wpwires marker.failed path { fill: var(--status-failed-mark); }
+.wpnode { display: grid; gap: 14px; padding: 16px 18px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
+.wpstart { justify-items: center; text-align: center; gap: 6px; padding: 18px 32px 16px; max-width: 760px; }
+.wpstartkicker { font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); letter-spacing: .08em; text-transform: uppercase; color: var(--sub2); }
+.wpstarttitle { margin: 0; font-size: 20px; line-height: 1.3; }
+.wpstartdevices { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 16px; margin-top: 6px; }
+.wpdevchip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--type-caption); color: var(--txt); }
+.wpdevdur { color: var(--sub); font-variant-numeric: tabular-nums; }
+.wpdot { width: 9px; height: 9px; border-radius: 50%; background: var(--sub); flex: none; box-sizing: border-box; }
+.wpdot.passed { background: var(--status-passed-mark); }
+.wpdot.failed { background: var(--status-failed-mark); }
+.wpdot.selfheal { background: var(--status-self-healed-mark); }
+.wpdot.missing { background: transparent; border: 1.5px dashed var(--line2); }
+/* The step hub counter-scales as the camera pulls back (--wp-inv, capped), so the trail's own
+   words stay readable at overview zoom instead of becoming pills between rows of thumbnails.
+   It grows into the gap the flow already leaves around it, and sits above the frames. */
+/* The arrow-key cursor: the hub the camera just flew to. A ring, not a fill — the hub text is the
+   map's spine and recolouring it would fight the outcome colours around it. */
+.wphub.wpfocus { border-color: var(--run); box-shadow: 0 0 0 3px color-mix(in srgb, var(--run) 25%, transparent), 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
+.wphub { position: relative; z-index: 3; display: flex; align-items: flex-start; gap: 12px; max-width: 640px; margin: 96px 0; padding: 14px 20px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); transform: scale(var(--wp-inv, 1)); transform-origin: center; }
+.wphub .galchip { flex: none; margin-top: 1px; }
+.wpnodelabel { font-size: 14.5px; font-weight: var(--font-weight-emphasis); color: var(--txt); line-height: 1.45; }
+.wpframes { display: flex; align-items: flex-start; gap: 88px; }
+.wpframe { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 12px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 24px color-mix(in srgb, var(--txt) 8%, transparent); }
+.wpframe.missing { opacity: .55; background: transparent; border-style: dashed; box-shadow: none; justify-content: center; }
+.wpframe.failed { border-color: var(--status-failed-mark); box-shadow: 0 6px 24px color-mix(in srgb, var(--status-failed-mark) 22%, transparent); }
+.wpframehead { display: flex; align-items: center; gap: 7px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); color: var(--sub2); }
+.wpframe.failed .wpframedev { color: var(--status-failed-mark); }
+.wpshots { display: flex; flex-wrap: wrap; gap: 8px; max-width: 1100px; }
+.wpshot { height: 420px; min-width: 150px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--txt) 4%, transparent); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
+.wpshots.all .wpshot { height: 300px; }
+.wpshot .galshot { height: 100%; display: flex; cursor: zoom-in; }
+.wpshot img { height: 100%; width: auto; display: block; background: #000; }
+/* A screenshot that hasn't arrived yet shimmers, and one that failed to load says so. Plenty of
+   real captures are near-white splash screens, so a blank frame has to be distinguishable from a
+   frame that isn't there — otherwise every slow load reads as a broken report. */
+.galshot.loading { background: linear-gradient(100deg, color-mix(in srgb, var(--txt) 5%, transparent) 30%, color-mix(in srgb, var(--txt) 11%, transparent) 50%, color-mix(in srgb, var(--txt) 5%, transparent) 70%) 0 0 / 300% 100%; animation: shotshimmer 1.4s ease-in-out infinite; }
+.galshot.loading img { opacity: 0; }
+.galshot.broken { position: relative; }
+.galshot.broken img { opacity: 0; }
+.galshot.broken::after { content: 'image unavailable'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 0 10px; text-align: center; font-size: var(--type-micro); color: var(--sub); border: 1px dashed var(--line2); border-radius: inherit; }
+@keyframes shotshimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.wpnotreached { font-size: var(--type-micro); color: var(--sub); padding: 0 28px; }
+.wpvariant { font-size: var(--type-micro); color: var(--sub); font-style: italic; line-height: 1.4; max-width: 260px; }
+.wppace { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--txt) 9%, transparent); overflow: hidden; }
+.wppacefill { display: block; height: 100%; border-radius: 2px; background: var(--sub); }
+.wppacefill.passed { background: var(--status-passed-mark); }
+.wppacefill.failed { background: var(--status-failed-mark); }
+.wppacefill.selfheal { background: var(--status-self-healed-mark); }
+.wpframefoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; }
+.trailfitbtn { width: auto; padding: 0 10px; font-size: var(--type-micro); font-weight: var(--font-weight-emphasis); }
+/* ── Replay: the trail played back with every device on one clock ──
+   The stage is a fixed row of device columns that never scrolls sideways during playback (a column
+   sliding under the viewport edge mid-run would break the comparison the view exists for), so the
+   screens flex to whatever share of the width each device gets. */
+/* The whole projection fits the viewport: a transport you have to scroll to reach is a transport
+   you can't use while watching, so the stage takes the leftover height and the screens flex. */
+.trailreplaymain { display: grid; min-height: 0; padding: 0 var(--page-x) var(--space-4); }
+.rpwrap { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; gap: var(--space-3); min-height: 0; }
+.rpwrap:focus { outline: none; }
+.rpwrap:focus-visible { outline: 2px solid var(--focus); outline-offset: 6px; border-radius: 12px; }
+.rpstage { display: grid; grid-template-columns: repeat(var(--rp-lanes), minmax(0, 1fr)); gap: var(--space-3); align-items: stretch; min-height: 0; }
+.rplane { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 8px; min-width: 0; min-height: 0; padding: 12px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; }
+.rplane.selected { border-color: var(--run); box-shadow: 0 0 0 1px var(--run); }
+.rplane.pending { opacity: .6; }
+.rplanehead { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.rplanehead:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
+.rplanehead .idxstatusdot { flex: none; }
+.rpstatus { margin-left: auto; font-size: var(--type-micro); color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rpstatus.done { color: var(--status-passed-mark); }
+.rpstatus.failed { color: var(--status-failed-mark); }
+.rpsource { flex: none; padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: var(--font-weight-emphasis); letter-spacing: .06em; color: var(--run); background: color-mix(in srgb, var(--run) 14%, transparent); }
+/* A FIXED height, not a floor: the label runs to two clamped lines, and letting the chip grow by a
+   line as the step changed pushed the screen below it up and down all through playback. */
+.rpchip { display: flex; align-items: baseline; gap: 7px; height: 34px; min-width: 0; overflow: hidden; }
+.rpchip .galchip { flex: none; }
+.rpchip.failed .galchip { color: var(--status-failed-mark); background: var(--danger-surface); }
+.rpchiptxt { font-size: var(--type-caption); color: var(--txt); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.rpscreen { position: relative; display: grid; place-items: center; min-height: 80px; background: color-mix(in srgb, var(--txt) 4%, transparent); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; cursor: zoom-in; }
+/* A definite-size query container so the frame inside it can be fit by calculation. It is absolutely
+   positioned so its own size can never depend on its contents — size containment on the pane itself
+   would let the row collapse to its floor. */
+.rpbox { position: absolute; inset: 0; container-type: size; display: grid; place-items: center; }
+/* The one box everything in a pane is measured against: the LARGEST rectangle of the source's shape
+   that fits the pane. It has to be that rectangle exactly, not a box the picture is letterboxed
+   inside, because the action marks are positioned in percentages OF THE PICTURE — an overlay over a
+   9/19.5 box holding a 3/2 recording drops every tap a third of the pane away from its target.
+   min() against both container axes is what fits it: aspect-ratio alone recomputes only the free
+   axis, so a full-height box with a landscape ratio just hit max-width and stayed portrait-shaped.
+   Backed in black like the Map's frames, since plenty of captures are near-white splash screens. */
+.rpframe { position: relative; width: min(100cqw, calc(100cqh * var(--rp-ar, 0.4615))); aspect-ratio: var(--rp-ar, 0.4615); background: #000; border-radius: 8px; overflow: hidden; }
+/* Both capture layers are stacked, so the incoming one can cross-fade over the outgoing one
+   instead of the pane flashing empty between two frames. */
+.rpimg, .rpvid { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: contain; }
+/* A pure fade: the incoming capture used to slide up 6px as it faded, and at playback cadence that
+   read as the picture jittering vertically rather than as a transition. */
+.rpimg { opacity: 0; transition: opacity 200ms ease; }
+.rpimg.on { opacity: 1; }
+/* While the recording is on screen the stills hold their content but stay out of the way, so
+   leaving the recording's span resumes the cross-fade from whatever was last shown. */
+.rpimg.under { opacity: 0 !important; transition: none; }
+.rpvid { opacity: 0; z-index: 1; }
+.rpvid.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .rpimg { transition: none; } }
+/* The interaction overlay, over the picture and under nothing. The marks themselves are the same
+   elements the timeline draws on a screenshot (markHtml), so a tap reads identically in both. */
+.rpmarks { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.rpmark { position: absolute; inset: 0; animation: rpmarkin 240ms ease-out; }
+/* Drawn oldest first, so the last one is the newest: it stays solid and the ones it followed recede.
+   Three equally solid dots on one screen say nothing about which tap just landed. */
+.rpmark:not(:last-child) { opacity: .4; }
+/* The dot pings once on arrival: a static dot over moving video is easy to miss entirely, and the
+   ping is what tells the eye WHEN the tap landed rather than only where. */
+.rpmark .mark.tap, .rpmark .mark.assertok { animation: rpping 520ms ease-out; }
+@keyframes rpmarkin { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rpping {
+  0% { transform: scale(.35); opacity: 0; }
+  35% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .rpmark, .rpmark .mark.tap, .rpmark .mark.assertok { animation: none; } }
+.rpwaiting { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--type-micro); color: var(--sub); }
+/* An author display rule beats the UA's [hidden] rule, so the overlay needs this to hide at all. */
+.rpwaiting[hidden] { display: none; }
+.rplanefoot { display: flex; justify-content: flex-end; }
+.rptransport { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line2); border-bottom: 1px solid var(--line2); }
+.rptransport button.timelinecontrol { width: 34px; height: 30px; min-width: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); color: var(--txt); cursor: pointer; }
+.rptransport button.timelinecontrol:hover { background: var(--button-hover); }
+.rpspeed { min-width: 48px; font-variant-numeric: tabular-nums; }
+.rpclock { font-size: var(--type-caption); color: var(--sub2); font-variant-numeric: tabular-nums; }
+.rpkeys { margin-left: auto; font-size: var(--type-micro); color: var(--sub); }
+.rpnote { font-size: var(--type-micro); color: var(--sub); padding: 1px 6px; border: 1px solid var(--line2); border-radius: 999px; white-space: nowrap; }
+/* The strip: names in one column so a single playhead can span every rail in the other. */
+.rpstrip { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; }
+.rpstripnames, .rprails { display: grid; grid-auto-rows: 16px; row-gap: 5px; }
+.rprails { position: relative; }
+.rpstripaxisgap, .rpaxis { grid-row: 1; }
+.rpstripname { display: flex; align-items: center; font-size: var(--type-micro); color: var(--sub); white-space: nowrap; cursor: pointer; background: transparent; border: 0; padding: 0; }
+.rpstripname:hover { color: var(--txt); }
+.rpstripname.selected { color: var(--txt); font-weight: var(--font-weight-emphasis); }
+.rpaxis { position: relative; }
+.rptick { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--line2); }
+.rptick i { position: absolute; left: 3px; top: 1px; font-size: var(--type-micro); font-style: normal; color: var(--sub); font-variant-numeric: tabular-nums; }
+.rprail { position: relative; background: color-mix(in srgb, var(--txt) 5%, transparent); border-radius: 3px; cursor: pointer; }
+.rprail.selected { box-shadow: 0 0 0 1.5px var(--run); }
+/* A hairline on the trailing edge, so back-to-back steps read as steps and not one long bar. */
+.rpblock { position: absolute; top: 2px; bottom: 2px; min-width: 2px; border-radius: 2px; background: var(--status-passed-mark); box-shadow: inset -1px 0 0 color-mix(in srgb, var(--bg) 80%, transparent); }
+.rpblock.failed { background: var(--status-failed-mark); }
+.rpblock.selfheal { background: var(--status-self-healed-mark); }
+/* A capture tick marks an instant the stage above changes — the stops the arrow keys land on. */
+.rpcap { position: absolute; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--bg) 65%, transparent); }
+/* An interaction pip: taller and brighter than a capture tick, and it overhangs the rail, because
+   these are the moments the device ACTED — the beats the reader is scanning the strip for. */
+.rpact { position: absolute; top: -2px; height: 20px; width: 2px; border-radius: 1px; background: var(--fail); z-index: 2; }
+.rpact.assert { background: var(--pass); }
+.rpact.swipe { background: #5e9bff; }
+.rpdone { position: absolute; top: 6px; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--txt) 12%, transparent); }
+.rphead { position: absolute; top: 0; bottom: -2px; width: 1.5px; background: var(--run); pointer-events: none; z-index: 3; }
+.rphead::before { content: ''; position: absolute; top: -3px; left: -3.25px; width: 8px; height: 8px; border-radius: 50%; background: var(--run); }
+/* The failure badge: the one instant on a red rail actually worth jumping to. It rides the rail's
+   own click-to-seek, so it only has to be findable, not wired. */
+.rpfailmark { position: absolute; top: 1px; width: 14px; height: 14px; transform: translateX(-50%); display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--status-failed-mark); color: var(--bg); z-index: 2; box-shadow: 0 0 0 1.5px var(--bg); }
+.rpfailmark svg { width: 8px; height: 8px; display: block; }
+.rpfailmark:hover { transform: translateX(-50%) scale(1.25); }
+/* The hover readout. No display rule on either element: the wiring hides them with the bare
+   hidden attribute, and an author display would override it. */
+.rphoverline { position: absolute; top: 0; bottom: -2px; border-left: 1px dashed color-mix(in srgb, var(--txt) 40%, transparent); pointer-events: none; z-index: 3; }
+.rphover { position: absolute; top: -4px; transform: translateX(8px); padding: 1px 7px; background: var(--bg); border: 1px solid var(--line2); border-radius: 999px; font-size: var(--type-micro); color: var(--txt); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 44ch; overflow: hidden; text-overflow: ellipsis; pointer-events: none; z-index: 5; }
+.rphover.flip { transform: translateX(calc(-100% - 8px)); }
+.rpempty { display: grid; gap: 8px; max-width: 46ch; padding: var(--space-6) 0; }
+.rpempty h2 { margin: 0; font-size: var(--type-body); }
+.rpempty p { margin: 0; font-size: var(--type-caption); color: var(--sub); line-height: 1.6; }
+@media (max-width: 900px) { .rpstage { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } .rpscreen { height: 300px; } .rpkeys { display: none; } }
+
+/* ── Compare view: run-vs-run tool-call and event-stream diffs ──────────────────────────────── */
+.cmpmain { padding: var(--space-4) var(--page-x) var(--space-6); }
+.cmpmain section + section { margin-top: var(--space-6); }
+.cmpmain h2 { font-size: var(--type-body); font-weight: var(--font-weight-emphasis); margin: 0 0 var(--space-2); padding-bottom: var(--space-1); border-bottom: 1px solid var(--line); }
+.cmppickers { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.cmppick { display: inline-flex; align-items: center; gap: 8px; font-size: var(--type-caption); color: var(--sub); }
+.cmpsel { min-height: 30px; max-width: 44ch; padding: 4px 8px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); color: var(--txt); font: inherit; font-size: var(--type-caption); }
+.cmpswap { min-height: 30px; }
+.cmpnote { color: var(--sub); font-size: var(--type-caption); font-style: italic; }
+/* Field names, not prose — they are values a reader will grep for, so keep them upright and monospaced. */
+.cmpmask { font-style: normal; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--type-micro); }
+.cmpcross { margin: 0 0 var(--space-2); padding: 8px 10px; border: 1px solid var(--line2); border-left: 3px solid var(--run); border-radius: var(--r-sm); background: var(--accent-surface); color: var(--txt); font-size: var(--type-caption); line-height: 1.6; }
+.cmptable { border-collapse: collapse; width: 100%; font-size: var(--type-caption); }
+.cmptable th, .cmptable td { border: 1px solid var(--line); padding: 6px 10px; vertical-align: top; text-align: left; }
+.cmptable th { background: var(--bg2); color: var(--sub); font-weight: var(--font-weight-emphasis); }
+.cmptable.cmpevents { width: auto; min-width: min(480px, 100%); margin-bottom: var(--space-2); }
+.cmpnum { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmpkey { max-width: 48ch; word-break: break-word; }
+.cmpopen { padding: 2px 8px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); color: var(--sub2); font: inherit; font-size: var(--type-micro); cursor: pointer; }
+.cmpopen:hover { color: var(--txt); border-color: var(--focus); }
+.cmpstream { margin: var(--space-4) 0 var(--space-2); font-size: var(--type-body); font-weight: var(--font-weight-emphasis); }
+.cmpcounts { color: var(--sub); font-weight: normal; font-variant-numeric: tabular-nums; }
+.cmpdiffwrap { margin: var(--space-2) 0 var(--space-4); border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--bg2); }
+.cmpdiffwrap > summary { cursor: pointer; padding: 6px 10px; font-size: var(--type-caption); color: var(--sub); }
+.cmpdiffwrap > summary:hover { color: var(--txt); }
+.cmpdiffwrap[open] > summary { border-bottom: 1px solid var(--line); }
+.cmpdiffwrap > .cmpnote { margin: var(--space-1) 10px; }
+.cmpdiff { max-height: 560px; overflow: auto; padding: 6px 0; background: var(--code-surface); color: var(--code-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--type-micro); line-height: 1.55; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.cmpdiff .dl { display: block; padding: 0 12px; white-space: pre-wrap; }
+/* One event, one line — the list reads like a file, so a row must not wrap into a paragraph.
+   Deliberately sets no background or color: the sign tints below own those, and a button reset
+   that claimed them would blank out the green and red at equal specificity. */
+.cmpeventlist .dlrow { width: 100%; box-sizing: border-box; text-align: left; border: 0; font: inherit; cursor: pointer; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+/* The one row the tints don't cover — otherwise it renders on the UA's button grey. */
+.cmpeventlist .dlrow.dl-ctx { background: transparent; }
+.cmpeventlist .dlrow:hover { filter: brightness(1.08); }
+.cmpeventlist .dlrow[aria-expanded="true"] { font-weight: var(--font-weight-emphasis); }
+/* The opened event's fields, indented under the row that owns them. */
+.cmpevtdetail { margin: 2px 0 6px 24px; border-left: 2px solid var(--line2); background: var(--bg2); padding: 4px 0; }
+/* Walking the changes beats scrolling for them, so the control stays put while the list moves
+   under it. Needs its own background: sticky leaves it over the scrolling rows. */
+.cmpstepper { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+.cmpstepwhat { color: var(--sub); font-size: var(--type-micro); margin-right: auto; }
+.cmpstep { padding: 0 8px; line-height: 1.6; }
+/* Where the stepper just landed. An outline rather than a background, so it reads on top of the
+   row's own red or green instead of replacing it. */
+.cmpjumphit { outline: 2px solid var(--focus); outline-offset: -2px; }
+.cmpdiff .dl-add { background: var(--success-surface); color: var(--success-text); }
+.cmpdiff .dl-del { background: var(--danger-surface); color: var(--danger-text); }
+/* Unchanged context: present for anchoring, dimmed so the signed lines stay the content. */
+.cmpdiff .dl-ctx { color: var(--sub); }
+.cmpdiff .dl-gap { color: var(--sub); font-style: italic; }
+/* The changed span inside a changed line — GitHub's word-level tint, one shade deeper. */
+.dlhi { background: var(--diff-word-hi-add); color: inherit; border-radius: 2px; }
+.dl-del .dlhi { background: var(--diff-word-hi-del); }
+.cmpgap { padding: 4px 12px; color: var(--sub); font-style: italic; font-size: var(--type-micro); }
+/* A run of agreement between two hunks: dimmed and ruled, so the eye slides over it to the next
+   change instead of reading it as content. */
+.cmpgapkeep { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg2); }
+/* The event lane's diff sits inside a collapsible and is capped so one huge stream can't own the
+   page. The tool lane IS its section, so it scrolls with the page instead of trapping the run's
+   whole timeline in a 560px window the reader has to scroll separately. */
+.cmptooldiff { max-height: none; overflow: visible; border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 0; }
+.cmphunk { border-left: 3px solid var(--line2); }
+.cmphunk.cmp-outcome_changed { border-left-color: var(--fail); }
+.cmphunk.cmp-args_changed { border-left-color: var(--run); }
+.cmphunk.cmp-baseline_only { border-left-color: var(--danger-text); }
+.cmphunk.cmp-current_only { border-left-color: var(--success-text); }
+.cmphunkhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; background: var(--bg2); border-bottom: 1px solid var(--line); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: var(--type-caption); }
+.cmphunkpos { color: var(--sub2); font-variant-numeric: tabular-nums; }
+.cmphunktool { font-weight: var(--font-weight-emphasis); word-break: break-word; }
+.cmphunklinks { margin-left: auto; display: flex; gap: 6px; white-space: nowrap; }
+.cmphunkrow { display: flex; align-items: flex-start; gap: var(--space-3); }
+.cmphunkbody { flex: 1 1 auto; min-width: 0; padding: 4px 0; }
+/* The screens both runs were on when this call happened — the trail context the text can't carry. */
+.cmphunkframes { flex: 0 0 auto; display: flex; gap: 8px; padding: 8px 12px 8px 0; }
+.cmpframe { margin: 0; }
+.cmpframe .galshot { width: 92px; height: 150px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: var(--r-sm); background: color-mix(in srgb, var(--txt) 4%, transparent); overflow: hidden; }
+.cmpframe .galshot img { width: auto; max-width: 100%; max-height: 100%; border: 0; }
+.cmpframecap { margin-top: 2px; text-align: center; font-size: var(--type-micro); color: var(--sub); font-style: normal; }
+/* A gap between hunks doubles as the control that expands it. */
+.cmpgapbtn { display: block; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font: inherit; cursor: pointer; }
+.cmpgapbtn:hover { color: var(--txt); }
+.cmpsame { display: flex; align-items: center; gap: 8px; padding: 2px 12px; color: var(--sub); font-size: var(--type-micro); }
+.cmpsame .cmphunklinks { opacity: 0; }
+/* The links stay in the tab order, so focus has to reveal them too — hover-only leaves a keyboard
+   user tabbing through buttons they cannot see. */
+.cmpsame:hover .cmphunklinks, .cmpsame:focus-within .cmphunklinks { opacity: 1; }
+/* ── Overview cards: the lane summary that is also the drill-in control ── */
+.cmpcards { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.cmpcard { flex: 1 1 200px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; border: 1px solid var(--line2); border-radius: var(--r-md); background: var(--bg2); color: var(--txt); font: inherit; text-align: left; cursor: pointer; }
+.cmpcard:hover { border-color: var(--focus); }
+.cmpcard.on { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+.cmpcarddiff { border-left: 3px solid var(--run); }
+.cmpcardtitle { font-size: var(--type-caption); font-weight: var(--font-weight-emphasis); }
+.cmpcardstat { font-size: var(--type-caption); color: var(--sub); }
+/* ── Stream chips: narrow the events lane to one stream ── */
+.cmpchips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 var(--space-2); }
+.cmpchip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--bg2); color: var(--sub2); font: inherit; font-size: var(--type-caption); cursor: pointer; }
+.cmpchip:hover { border-color: var(--focus); }
+.cmpchip.on { border-color: var(--focus); color: var(--txt); box-shadow: inset 0 0 0 1px var(--focus); }
+.cmpchipdelta { color: var(--run); font-variant-numeric: tabular-nums; }
+/* ── Screens lane: aligned scene pairs with the golden gate's diff panel ── */
+.cmpscenes { display: flex; flex-direction: column; gap: var(--space-3); }
+.cmpscene { border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 8px 12px; background: var(--bg2); }
+.cmpscenehead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: var(--type-caption); }
+.cmpsceneframes { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: flex-start; }
+/* Scene frames read larger than the hunk thumbnails — this lane is ABOUT the pixels. */
+.cmpsceneframes .cmpframe .galshot { width: 148px; height: 240px; }
+.cmpdiffcell .cmpdiffnote { width: 148px; height: 240px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px; box-sizing: border-box; border: 1px dashed var(--line2); border-radius: var(--r-sm); color: var(--sub); font-size: var(--type-micro); font-style: italic; }
+.cmpdiffover .cmpframecap { color: var(--danger-text); font-weight: var(--font-weight-emphasis); }
+.cmpdiffover .galshot { border-color: var(--danger-border); }
 `;

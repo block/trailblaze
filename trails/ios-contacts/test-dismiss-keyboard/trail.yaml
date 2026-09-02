@@ -4,7 +4,8 @@
 config:
   target: contacts
   devices:
-    ios-iphone: IOS_HOST
+    ios-iphone:
+      driver: IOS_HOST
   tags:
   - nav
   - flaky

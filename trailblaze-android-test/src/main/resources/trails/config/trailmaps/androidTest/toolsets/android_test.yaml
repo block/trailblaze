@@ -1,0 +1,12 @@
+id: android_test
+description: >-
+  Android in-process test driver interactions. Each tool resolves a selector against the hybrid
+  View + Compose hierarchy and delegates to Espresso or the app's Compose test rule based on which
+  backend owns the matched node, so a trail never names a backend.
+drivers:
+  - android-test
+tools:
+  - androidTest_tap
+  - androidTest_type
+  - androidTest_assertVisible
+  - androidTest_scrollUntilVisible

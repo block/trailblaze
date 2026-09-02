@@ -96,8 +96,8 @@ it does for your own archives. If what you have is a **session archive** of your
 
 [**Open the report viewer →**](report-viewer/index.html)
 
-**Drop the `.zip` on that page** (or use its file picker) and every log, screenshot, LLM
-call, and step timeline in the archive renders as a full interactive report. This is the
+**Drop the `.zip` files on that page** (or use its file picker) and every log, screenshot, LLM
+call, and step timeline in them renders as a full interactive report. This is the
 path that always works: the archive is read in your browser, nothing is uploaded, and no
 request leaves the page. It works offline, and on an archive you'd never put on a network.
 
@@ -143,6 +143,24 @@ Whether this works depends on where the archive is served from:
   something the viewer can work around — the browser blocks the read before the page sees
   any bytes. When it happens, the viewer says so and you can still drop the file.
 
+### Several archives, one report
+
+The viewer holds a **list** of archives rather than a single field, and renders everything on it
+as one report. **Add** lines a URL up without rendering it; dropping or picking files adds them to
+what is already there and renders the whole list at once. Each row can be taken back out — so a URL
+from CI and a file off your own disk can sit in the same list, which no text field could express.
+
+A list of URLs is still a link: repeat the parameter, one archive per run.
+
+```
+.../report-viewer/?zip=<android-phone.zip>&zip=<ios-ipad.zip>
+```
+
+The sessions concatenate in list order, so the report's run index, device matrix, and **Trail
+view** light up exactly as they would for one multi-session archive — which is what turns runs
+of the same trail on several devices into one side-by-side comparison. A list holding a local
+file has no address to share, so it renders in place and **Share** stays off.
+
 ### A build's worth of runs: the run index
 
 An exported report carries its runs' evidence inside itself, which stops scaling somewhere
@@ -181,6 +199,85 @@ the viewer script.
 - Numbers the index can't know are shown as unknown rather than zero. A stub has no calls to
   count, so LLM cost and call count come from the results file when it carries them, and tool
   counts and token totals read `—`.
+
+## Comparing runs: the Trail view
+
+Any report holding more than one run can put several of them on one stage, as lanes side by side —
+the same trail across devices, a retry beside the run it followed, or any two runs you want to look
+at together. Every projection there (Map, Grid, Replay) reads across the lanes rather than down one
+run.
+
+There are two ways in:
+
+- **A trail's own entry point.** A run index row whose trail ran on more than one device opens that
+  trail's runs as lanes, in one click. A trail that ran once opens as a single lane — the same
+  projections, one column.
+- **Pick the runs yourself.** Each index row and matrix cell carries a checkbox. Tick any set of
+  runs and open them together, whether or not the report groups them.
+
+What a row of the stage MEANS depends on what you picked:
+
+- **One trail's runs** line up on the trail's authored steps, so row 3 is step 3 on every lane and
+  reading across a row compares the same step. A lane that never reached it says so.
+- **Runs of different trails** have no shared step to line up on, so a row is simply each lane's
+  own k-th step: rows carry no shared label, each cell keeps its own wording, and the Map — which
+  draws lanes leaving one shared step — isn't offered.
+
+The stage travels in the URL, so it can be shared or reloaded: `?view=trail&trail=<trail identity>`
+for a trail's own runs, `?view=trail&pick=0,2,5` for a set you picked. The `pick` indices are
+positions in *that* report — a report regenerated with different runs opens on whichever of them it
+still has, or falls back to the run index.
+
+Two runs that merely share a title are never treated as one trail. Only an explicit trail id
+coalesces runs, because two runs named the same can be unrelated histories — the run index takes
+the same position, and staging them as one comparison would contradict the rows you clicked from.
+
+## Trails that never ran: the Skipped section
+
+A trail whose `skip:` resolves a reason for the device it was handed to is held back *before* a
+session opens. Nothing runs, so nothing is logged, and a report built from logs alone cannot tell a
+trail that was deliberately held back from one nobody ever wrote. Coverage quietly shrinks and the
+report still reads as green.
+
+So the runner records what it declined to run. When it honors a skip it writes a small record beside
+the session logs, in `<logs-dir>/skipped/`, naming the trail, the device the skip resolved for, and
+the reason. Both halves of the report read it back:
+
+- The HTML report gains a fourth index section, **Skipped**, after Failed, Self-healed and Passed.
+  Each row states its reason and has nothing to open. On a multi-device matrix the trail keeps its
+  own row: a dashed, unfilled cell on the device that skipped it, ordinary cells on the devices that
+  ran it, and every distinct reason on the row's subtitle.
+- `trailblaze_test_report.json` gains a row per skip, with `"outcome": "SKIPPED"` and the reason in
+  `failure_reason`.
+
+A skip never moves a verdict. It is excluded from the pass rate and from the per-platform pass
+rates, it is not counted as a failure, and it is not submitted to an external results backend. The
+footer tally reads it as an annotation beside the three verdicts, and says nothing at all when
+nothing was skipped.
+
+Two things have to hold for a skip to be reported:
+
+1. **`trailblaze run` has to be the thing that declines it.** The record is that runner's account of
+   its own decision. A trail dropped further upstream, by whatever assembles the file list before
+   the run, leaves no record, because nothing was ever asked to run it. Neither does one held back
+   by a *later* check: the daemon's runner and the host test rules each re-read `config.skip:`
+   against the device they actually got, and those checks don't write a record yet. In practice the
+   two agree, and the earlier check wins.
+2. **The report has to cover the run that recorded the skip.** A logs directory outlives any one
+   run, so a report lists only the skips belonging to the work it describes: a run's own report
+   lists that run's skips, and `trailblaze report` over a whole logs directory lists every skip in
+   it. Narrowed to one session (`trailblaze report --id`) it lists none, because a skip belongs to
+   no session. `trailblaze report` and the results task both default to the run's logs directory;
+   if your pipeline passes an explicit one to either, pass the same one to the other.
+
+Two gaps remain. A run in which *every* trail was skipped produces no report from the CLI at all:
+both halves stop when no session opened, which predates skip reporting and is unchanged here — the
+interactive HTML isn't generated, and `trailblaze report`'s JSON
+(`reports/trailblaze_test_results_<timestamp>.json`) returns nothing to write. Only the CI results
+task, which builds `trailblaze_test_report.json`, lists an all-skipped scope. And a CI
+report generated in a *separate* step from the run reconstructs its logs directory from the
+per-session archives that step uploaded, which skip records are not part of; a report generated in
+the same step as the run, which is the usual arrangement, reads them straight off disk.
 
 ## How screenshots travel with a report
 

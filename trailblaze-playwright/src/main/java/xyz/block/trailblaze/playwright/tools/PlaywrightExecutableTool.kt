@@ -91,29 +91,54 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
      * Returns null when the selector has no usable web matcher (e.g., a non-web selector,
      * or one whose only signal is spatial/hierarchical and needs the resolver). Callers
      * should fall back to ref-based resolution in that case.
+     *
+     * Matchers are tried most-durable first: an explicit `data-testid` is a contract the
+     * app author opted into, an ARIA role+name survives restyling, and a raw CSS selector
+     * is the most likely to break on a refactor. A recording that captured several of
+     * these should replay against the sturdiest one, not the first one we happen to check.
+     *
+     * A role WITHOUT a name is the exception and ranks below CSS: it names a category, not
+     * an element, so `getByRole("button")` plus the caller's `.first()` acts on the first
+     * button on the page. That is strictly worse than the specific CSS selector recorded
+     * alongside it — and role-without-name IS a shape the structural selector generator
+     * emits, so this is a live path, not a hypothetical one.
      */
     fun nodeSelectorToReadinessLocator(
       page: Page,
       nodeSelector: TrailblazeNodeSelector,
     ): Locator? {
       val web = nodeSelector.web ?: return null
-      web.cssSelector?.let { return page.locator("css=$it") }
-      web.dataTestId?.let { return page.locator("[data-testid=\"$it\"]") }
-      val role = web.ariaRole ?: return null
-      val descriptor = web.ariaNameRegex?.let { name ->
-        "$role \"${unescapeLiteralRegex(name)}\""
-      } ?: role
-      val locator = PlaywrightAriaSnapshot.resolveRef(page, descriptor)
-      return web.nthIndex?.let { locator.nth(it) } ?: locator
-    }
-
-    private fun unescapeLiteralRegex(text: String): String {
-      // Regex.escape() wraps literals containing metacharacters in \Q...\E.
-      if (text.startsWith("\\Q") && text.endsWith("\\E")) {
-        return text.substring(2, text.length - 2)
+      web.dataTestId?.takeIf { it.isNotBlank() }?.let { testId ->
+        // Candidate capture reads `data-testid || data-test-id` into this one field, so
+        // matching only the hyphen-less spelling would resolve nothing on a page that
+        // uses the other one. Match both.
+        val escaped = testId.replace("\\", "\\\\").replace("\"", "\\\"")
+        val byTestId = page.locator("[data-testid=\"$escaped\"], [data-test-id=\"$escaped\"]")
+        return web.nthIndex?.let { byTestId.nth(it) } ?: byTestId
       }
-      // Selector generators sometimes anchor names with ^ ... $.
-      return text.removePrefix("^").removeSuffix("$")
+      val ariaName = web.ariaNameRegex?.takeIf { it.isNotBlank() }
+      val ariaRole = web.ariaRole
+      if (ariaRole != null && ariaName != null) {
+        // Not a quoted string descriptor: that route forces an exact match and would read a
+        // real pattern such as `Save.*` as a literal name.
+        val locator = PlaywrightAriaSnapshot.resolveRoleAndName(page, ariaRole, ariaName)
+        return web.nthIndex?.let { locator.nth(it) } ?: locator
+      }
+      web.cssSelector?.let { css ->
+        // nthIndex applies here as it does on the branches above: dropping it would resolve
+        // element 0, and the single-element narrowing downstream would make that look
+        // deliberate rather than like a lost disambiguator.
+        val byCss = page.locator("css=$css")
+        return web.nthIndex?.let { byCss.nth(it) } ?: byCss
+      }
+      // Role with no name, and no CSS to fall back on. Still worth resolving — a landmark
+      // like `navigation` or `banner` is usually unique — but it ranks last for the reason
+      // in the kdoc, so it must be tried AFTER the CSS branch, not instead of it.
+      web.ariaRole?.let { role ->
+        val locator = PlaywrightAriaSnapshot.resolveRef(page, role)
+        return web.nthIndex?.let { locator.nth(it) } ?: locator
+      }
+      return null
     }
 
     /**
@@ -156,18 +181,34 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
      * Resolution strategy uses Playwright's built-in [Locator.or] primitive rather
      * than a Trailblaze-side tiered fallback chain. When both a [nodeSelector] and a
      * [ref] are provided, we build a live Playwright locator for each and OR them
-     * together — whichever attaches to the DOM first wins. A single auto-wait covers
-     * the union ([elementResolutionTimeoutMs], default 10s). No per-tier timeout, no
-     * Trailblaze-specific race semantics — Playwright handles the matching the same
-     * way it does for any other `Locator.or()` user.
+     * together, then wait once for the union to attach ([elementResolutionTimeoutMs],
+     * default 10s). No per-tier timeout, no Trailblaze-specific race semantics —
+     * Playwright owns the waiting.
      *
-     * **Blocking:** this call may block for up to [elementResolutionTimeoutMs] while
-     * the unioned locator polls for either selector to attach. This mirrors
-     * Playwright's own actionability checks on `locator.click` / `locator.fill` and
-     * is what lets post-navigation SPA renders settle without `web_wait` filler.
+     * **The union waits; durability picks.** `Locator.or()` answers "did anything
+     * match", and `.first()` on a union answers in DOM order — which is not a ranking.
+     * A stale [ref] that happens to sit earlier in the document would otherwise beat
+     * the recorded [nodeSelector], sending `fill`/`click` to the wrong node. So once
+     * the union attaches, the recorded nodeSelector wins whenever it also matches, and
+     * the ref serves only as the fallback. One budget, one wait, deterministic pick.
      *
-     * @return The resolved [Locator], or null if validation/resolution failed
-     *   (in which case the second tuple element is set to the appropriate error result).
+     * **Blocking:** this call may block for up to [timeoutMs] (default
+     * [elementResolutionTimeoutMs]) while the unioned locator polls for either selector
+     * to attach. This mirrors Playwright's own actionability checks on `locator.click` /
+     * `locator.fill` and is what lets post-navigation SPA renders settle without
+     * `web_wait` filler. Callers resolving for a non-essential purpose (e.g. placing a
+     * screenshot overlay) should pass a short [timeoutMs] so a missing element costs
+     * them almost nothing.
+     *
+     * **Single-element contract:** the returned locator is always narrowed to one
+     * element. A union whose sides resolve to different nodes, or either side matching
+     * several nodes, otherwise makes every acting call (`fill`, `hover`, `selectOption`)
+     * throw Playwright's strict-mode error. Narrowing here rather than at each call site
+     * keeps that guarantee in one place — tools must not need to know the locator could
+     * be plural. Callers needing the full match set should build their own locator.
+     *
+     * @return The resolved single-element [Locator], or null if validation/resolution
+     *   failed (in which case the second tuple element is set to the error result).
      */
     fun validateAndResolveRef(
       page: Page,
@@ -175,6 +216,7 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       description: String,
       context: TrailblazeToolExecutionContext,
       nodeSelector: TrailblazeNodeSelector? = null,
+      timeoutMs: Double = elementResolutionTimeoutMs,
     ): Pair<Locator?, TrailblazeToolResult?> {
       val effectiveRef = ref?.takeIf { it.isNotBlank() }
       if (effectiveRef == null && nodeSelector == null) {
@@ -208,14 +250,19 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       // semantics Playwright applies inside `locator.click` / `locator.fill` / etc.
       // — poll instead of fail-fast on a not-yet-rendered element. This is what
       // lets post-navigation SPA renders settle without `web_wait` filler steps.
-      val timeoutMs = elementResolutionTimeoutMs
       return try {
         candidate.first().waitFor(
           Locator.WaitForOptions()
             .setState(WaitForSelectorState.ATTACHED)
             .setTimeout(timeoutMs),
         )
-        candidate to null
+        // Something matched. Pick by durability, not by document order: `count()` is a
+        // snapshot query (no second auto-wait), so this costs one round-trip and only
+        // when both sources are in play.
+        val preferred = nodeSelectorLocator
+          ?.takeIf { refLocator != null && it.count() > 0 }
+          ?: candidate
+        preferred.first() to null
       } catch (_: TimeoutError) {
         val identifier = effectiveRef ?: nodeSelector?.description() ?: "<unidentified>"
         null to TrailblazeToolResult.Error.ExceptionThrown(

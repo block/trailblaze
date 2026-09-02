@@ -2,7 +2,8 @@ config:
   id: clock/set-alarm-730am
   target: clock
   devices:
-    android: ANDROID_ONDEVICE_ACCESSIBILITY
+    android:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trailhead:
   step: "Launch the AOSP Desk Clock app (com.android.deskclock) fresh, landing on the Clock tab."

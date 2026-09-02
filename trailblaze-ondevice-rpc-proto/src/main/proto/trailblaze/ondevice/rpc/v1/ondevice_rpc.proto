@@ -68,6 +68,16 @@ message ScreenshotUpload {
 message TraceUpload {
   string session_id = 1;
   bytes trace_json = 2;
+  // Which clock stamped the timestamps in trace_json: "device" for a batch recorded on the device,
+  // "host" for one recorded on the host. The receiver cannot infer it — the host uploads its trace
+  // through the same route a device does — and a host batch mistaken for a device one leaves the
+  // host timeline.
+  //
+  // Current senders always set one of the two, so absence means only "an uploader older than this
+  // field", and each route reads that absence as whatever its own traffic makes likely: the log
+  // socket carries device uploads only, the HTTP route carries both. See the `CLOCK_PARAM`
+  // documentation on `TrailblazeLogServerClient`.
+  optional string clock = 3;
 }
 
 message RunYamlRequest {
@@ -92,6 +102,12 @@ message RunYamlRequest {
   map<string, string> initial_args = 19;
   map<string, string> args_snapshot = 20;
   repeated string sensitive_arg_names = 21;
+  // The tracing span this dispatch is happening inside, as a W3C traceparent. Each process runs its
+  // own trace recorder and mints its own trace id, so without this a run's merged trace.json holds
+  // two of them and a viewer shows the host's half and the device's half as unrelated traces.
+  // Absent when the host has no span to hand over; the device then records its own trace, which is
+  // also what a device predating this field does.
+  optional string traceparent = 22;
 }
 
 message RunYamlResponse {

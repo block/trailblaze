@@ -1,7 +1,8 @@
 config:
   id: clock/assert-after-navigation
   devices:
-    android: ANDROID_ONDEVICE_ACCESSIBILITY
+    android:
+      driver: ANDROID_ONDEVICE_ACCESSIBILITY
 
 trail:
   - step: "Launch the Clock app"

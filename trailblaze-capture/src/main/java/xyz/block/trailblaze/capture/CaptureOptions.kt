@@ -5,10 +5,12 @@ import xyz.block.trailblaze.util.Console
 /**
  * Options for capture, controlled by CLI flags or desktop app settings.
  *
- * Video capture is on by default; use `--no-capture-video` on the CLI to disable.
+ * Video capture is off by default — it writes large files, its timing signatures drift on some
+ * hosts, and sprite-sheet extraction is expensive. Opt in per run with `--capture-video` on the
+ * CLI (or the desktop app's "Capture video" toggle).
  */
 data class CaptureOptions(
-  val captureVideo: Boolean = true,
+  val captureVideo: Boolean = false,
   /**
    * Capture Android logcat (filtered to the app under test) to `device.log`. On by default
    * (only takes effect when running on Android). Disable with `--no-capture-logcat`.
@@ -55,8 +57,8 @@ data class CaptureOptions(
   companion object {
     /**
      * No capture at all — every stream off. Explicit (not `CaptureOptions()`) because the
-     * constructor now defaults video/logcat/iOS-logs ON, so `CaptureOptions()` is the opposite
-     * of "none". Used as `CaptureStream.stop`'s default arg, where only sprite tuning is read.
+     * constructor defaults logcat/iOS-logs ON, so `CaptureOptions()` is not "none". Used as
+     * `CaptureStream.stop`'s default arg, where only sprite tuning is read.
      */
     val NONE = CaptureOptions(captureVideo = false, captureLogcat = false, captureIosLogs = false)
     const val DEFAULT_SPRITE_FPS = 2
@@ -84,25 +86,57 @@ data class CaptureOptions(
     const val ENV_SPRITE_QUALITY = "TRAILBLAZE_SPRITE_QUALITY"
 
     /**
+     * Turns session video back ON for every host-driven run in this process. Video is opt-in
+     * (see [captureVideo]), and a CI pipeline has no CLI flag to reach through — its trails are
+     * launched by scripts it doesn't own. This is the one-line, no-release lever that gets the
+     * video and sprite timeline back for a lane or a debugging session, the same way the sprite
+     * tuning vars let CI retune sheets without a release.
+     *
+     * Only a truthy value opts in; a falsey one reads the same as unset. It is outranked by an
+     * explicit per-run choice, so `--no-capture-video` still turns video off in a lane that
+     * exports this.
+     */
+    const val ENV_CAPTURE_VIDEO = "TRAILBLAZE_CAPTURE_VIDEO"
+
+    /**
      * Capture options for host-driven sessions, with sprite tuning overridable via environment
      * variables ([ENV_SPRITE_FPS] / [ENV_SPRITE_FRAME_HEIGHT] / [ENV_SPRITE_QUALITY]) so CI
      * pipelines can trade sprite size against playback fidelity without a release. Absent or
      * invalid values fall back to the host defaults (2 fps · 720 px · quality 80) — a bad env
      * var must never take down video capture.
+     *
+     * Video resolves in one place here, in precedence order: an explicit per-run [captureVideo]
+     * (the CLI's `--capture-video` / `--no-capture-video`) wins outright; a null one — the user
+     * said nothing — inherits [ENV_CAPTURE_VIDEO], then the persisted
+     * [persistedCaptureVideo] (`trailblaze config capture-video`), then off. The env and config
+     * tiers are what reach the interactive session and MCP paths, which have no per-run flag to
+     * pass. Callers must NOT pre-collapse their null with `?: persisted` — that would make an
+     * explicit "no video" indistinguishable from silence and let the environment override it.
      */
     fun hostCaptureOptions(
-      captureVideo: Boolean = true,
+      captureVideo: Boolean? = null,
+      persistedCaptureVideo: Boolean = false,
       captureLogcat: Boolean = true,
       captureIosLogs: Boolean = true,
       env: (String) -> String? = System::getenv,
     ): CaptureOptions = CaptureOptions(
-      captureVideo = captureVideo,
+      captureVideo = captureVideo ?: (envFlagOn(env, ENV_CAPTURE_VIDEO) || persistedCaptureVideo),
       captureLogcat = captureLogcat,
       captureIosLogs = captureIosLogs,
       spriteFrameFps = spriteEnvInt(env, ENV_SPRITE_FPS, HOST_SPRITE_FPS, 1..60),
       spriteFrameHeight = spriteEnvInt(env, ENV_SPRITE_FRAME_HEIGHT, HOST_SPRITE_HEIGHT, 16..16383),
       spriteQuality = spriteEnvInt(env, ENV_SPRITE_QUALITY, HOST_SPRITE_QUALITY, 1..100),
     )
+
+    /**
+     * True only for an explicit truthy value (`1` / `true`, case-insensitive). Anything else —
+     * unset, blank, `0`, `false`, or a typo — reads as "no opt-in", so a malformed value can
+     * never silently switch a large-artifact stream on.
+     */
+    private fun envFlagOn(env: (String) -> String?, name: String): Boolean {
+      val raw = env(name)?.trim()?.lowercase() ?: return false
+      return raw == "1" || raw == "true"
+    }
 
     private fun spriteEnvInt(env: (String) -> String?, name: String, default: Int, valid: IntRange): Int {
       val raw = env(name)?.trim()?.takeIf { it.isNotEmpty() } ?: return default

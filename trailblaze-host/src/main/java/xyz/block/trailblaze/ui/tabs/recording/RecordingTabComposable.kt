@@ -31,7 +31,7 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.devices.WebInstanceIds
+import xyz.block.trailblaze.host.driver.BrowsableDeviceListing
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
@@ -90,35 +90,17 @@ fun RecordingTabComposable(
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
   val webBrowserState by deviceManager.webBrowserStateFlow.collectAsState()
 
-  // Mirror what `trailblaze device list` shows. Direct caveat: the deviceManager's
-  // `targetDeviceFilter` strips PLAYWRIGHT_NATIVE / PLAYWRIGHT_ELECTRON / COMPOSE from the
-  // state flow unless the user has enabled "web mode" in settings (see TrailblazeDeviceManager
-  // line ~138). DeviceListCommand works around this by post-filtering and explicitly re-adding
-  // the playwright-native singleton plus any running browsers — we do the same thing here so
-  // the recording tab's dropdown matches the CLI's `device list` output regardless of the web-
-  // mode setting. Filter rules: drop Revyl cloud devices (require revyl CLI) and hidden
-  // platforms (Compose desktop self-driver) — same defaults as `device list` without `--all`.
+  // Mirror what `trailblaze device list` shows, via the rules all three listings share. The
+  // deviceManager's `targetDeviceFilter` strips PLAYWRIGHT_NATIVE / PLAYWRIGHT_ELECTRON / COMPOSE
+  // from the state flow unless the user has enabled "web mode" in settings, so the shared filter
+  // re-adds the playwright-native singleton and any running browsers — same as `device list`
+  // without `--all`.
   val availableDevices: List<TrailblazeConnectedDeviceSummary> = remember(deviceState, webBrowserState) {
-    val filtered = deviceState.devices.values
-      .map { it.device }
-      .filter {
-        it.trailblazeDriverType != TrailblazeDriverType.REVYL_ANDROID &&
-          it.trailblazeDriverType != TrailblazeDriverType.REVYL_IOS &&
-          !it.platform.hidden
-      }
-    val seen = filtered.map { it.instanceId to it.platform }.toMutableSet()
-    val withRunningBrowsers = filtered + deviceManager.webBrowserManager.getAllRunningBrowserSummaries()
-      .filter { (it.instanceId to it.platform) !in seen }
-      .also { added -> added.forEach { seen += it.instanceId to it.platform } }
-    if (withRunningBrowsers.none { it.instanceId == WebInstanceIds.PLAYWRIGHT_NATIVE }) {
-      withRunningBrowsers + TrailblazeConnectedDeviceSummary(
-        trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-        instanceId = WebInstanceIds.PLAYWRIGHT_NATIVE,
-        description = "Playwright Browser (Native)",
-      )
-    } else {
-      withRunningBrowsers
-    }
+    BrowsableDeviceListing.filter(
+      devices = deviceState.devices.values.map { it.device },
+      descriptors = deviceManager.hostDriverDescriptors,
+      runningWebBrowsers = deviceManager.webBrowserManager.getAllRunningBrowserSummaries(),
+    )
   }
 
   // All three fields are read/written through the hoisted state holder so the user's

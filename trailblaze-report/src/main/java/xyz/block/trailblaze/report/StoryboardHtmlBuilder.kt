@@ -127,8 +127,8 @@ object StoryboardHtmlBuilder {
     /** On-disk screenshot for local-logs sessions. Null when the source log's
      *  `screenshotFile` is a remote URL (e.g. test-farm signed S3/CDN URLs), in which
      *  case [screenshotUrl] is populated instead and the renderer uses that as
-     *  `<img src>` directly — same pattern WasmReport uses, lets Chromium fetch the
-     *  image at headless-capture time without an extra download/base64 round-trip.
+     *  `<img src>` directly, which lets Chromium fetch the image at headless-capture
+     *  time without an extra download/base64 round-trip.
      *  Exactly one of [screenshot] / [screenshotUrl] is non-null. */
     val screenshot: File?,
     /** Remote URL form of the cell's screenshot — populated when the source log's
@@ -154,6 +154,17 @@ object StoryboardHtmlBuilder {
      *  after the trace-id field was added; re-record an older session if accurate
      *  source attribution matters for review. */
     val aiGenerated: Boolean = false,
+    /** The named device of a multi-device session this action ran on (`seller`, `buyer`, …),
+     *  joined from the sibling [TrailblazeLog.TrailblazeToolLog]'s `deviceName` by traceId.
+     *  Rendered as a chip in the cell's lower-left corner.
+     *
+     *  Null for single-device sessions, which is most of them, and the chip is then omitted
+     *  entirely rather than rendered with a placeholder — an unlabeled cell in a single-device
+     *  storyboard is unambiguous, and a "—" chip on every one of thirty cells is noise.
+     *
+     *  Without it a reader has to infer the device from the screenshot's dimensions, which
+     *  fails outright when two bound devices share a resolution. */
+    val deviceName: String? = null,
   )
 
   /**
@@ -415,6 +426,19 @@ object StoryboardHtmlBuilder {
     // so no nullable handling here.
     val llmTraceIds: Set<String> = logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
       .mapTo(mutableSetOf()) { it.traceId.traceId }
+    // traceId → the named device that ran the action. Built unconditionally for the same
+    // reason as `llmTraceIds` (one O(n) walk, and the chip has no opt-out), and separately
+    // from `toolByTraceId` because that index only exists when YAML was requested — device
+    // attribution has to survive `--storyboard-yaml` being off. Empty on a single-device
+    // session, so every cell's chip is omitted with no extra branching.
+    val deviceByTraceId: Map<String, String> = logs
+      .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+      .mapNotNull { log ->
+        val traceId = log.traceId?.traceId ?: return@mapNotNull null
+        val deviceName = log.deviceName ?: return@mapNotNull null
+        traceId to deviceName
+      }
+      .toMap()
 
     val sections = mutableListOf<StoryboardSection>()
     var currentTitle = DEFAULT_SECTION_TITLE
@@ -443,7 +467,7 @@ object StoryboardHtmlBuilder {
           // farms use, where device screenshots upload to S3/CDN and only the signed URL
           // lands in the log — skip the local-file resolver entirely. The renderer will
           // emit the URL as `<img src>` directly and Chromium fetches it during headless
-          // capture, same path WasmReport already uses for the timeline.
+          // capture.
           val rawScreenshot = withScreenshot.screenshotFile
           val (screenshotFile, screenshotUrl) = if (rawScreenshot != null && isHttpUrl(rawScreenshot)) {
             null to rawScreenshot
@@ -468,6 +492,7 @@ object StoryboardHtmlBuilder {
             deviceHeight = withScreenshot.deviceHeight,
             yamlSnippet = yaml,
             aiGenerated = aiGenerated,
+            deviceName = cellTraceId?.let { deviceByTraceId[it] },
           )
         }
       }
@@ -781,6 +806,33 @@ object StoryboardHtmlBuilder {
         }
         .source-chip.ai  { background: rgba(31, 136, 61, 0.92); }
         .source-chip.rec { background: rgba(207, 34, 46, 0.92); }
+        /* Device chip — which named device of a multi-device session ran the action
+           ("seller", "buyer"). Bottom-LEFT, the one corner the step badge (top-left) and
+           the source chip (top-right) leave free, so all three coexist on a tiny cell.
+           Rendered only when the session bound names, so a single-device storyboard is
+           unchanged. Neutral slate rather than the source chips' green/red: it reports
+           where the action ran, which is not a good/bad axis. Lowercase-preserving (no
+           letter-spacing shout) because these are names the trail author chose. */
+        .device-chip {
+          position: absolute;
+          /* Explicit inline-block: a <span> is a non-replaced inline box, where max-width,
+             overflow and text-overflow are all ignored — a long device name would spill out
+             of the cell instead of ellipsizing. */
+          display: inline-block;
+          bottom: 4px;
+          left: 4px;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 6px;
+          border-radius: 4px;
+          color: white;
+          background: rgba(71, 85, 105, 0.92);
+          box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+          max-width: calc(100% - 8px);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
         .label {
           padding: 6px 8px;
           font-size: 12px;
@@ -862,8 +914,7 @@ object StoryboardHtmlBuilder {
    */
   private fun appendCell(sb: StringBuilder, cell: StoryboardCell) {
     // URL-form cells (test-farm signed S3/CDN URLs): emit the URL verbatim so Chromium
-    // fetches the image during headless capture — same shape WasmReport uses for the
-    // timeline animation. Local-file cells: read bytes and inline as a base64 data URI
+    // fetches the image during headless capture. Local-file cells: read bytes and inline as a base64 data URI
     // so the companion `storyboard.html` is portable (scp/email-able, doesn't go stale
     // when a signed URL expires).
     val imgSrc = cell.screenshotUrl
@@ -876,6 +927,13 @@ object StoryboardHtmlBuilder {
       sb.append("<span class=\"source-chip ai\" title=\"This action was decided by an LLM\">AI</span>")
     } else {
       sb.append("<span class=\"source-chip rec\" title=\"This action was dispatched from a recorded trail (no LLM in the loop)\">REC</span>")
+    }
+    cell.deviceName?.let { deviceName ->
+      sb.append("<span class=\"device-chip\" title=\"This action ran on the device bound as &quot;")
+        .append(htmlEscape(deviceName))
+        .append("&quot;\">")
+        .append(htmlEscape(deviceName))
+        .append("</span>")
     }
     sb.append("<img alt=\"")
       .append(htmlEscape(cell.label))
@@ -947,7 +1005,7 @@ object StoryboardHtmlBuilder {
 
   /** True when [s] looks like an absolute HTTP(S) URL — used to short-circuit the
    *  local-file resolver for test-farm sessions whose `screenshotFile` is a signed
-   *  S3/CDN URL. Same recognizer WasmReport uses. */
+   *  S3/CDN URL. */
   private fun isHttpUrl(s: String): Boolean =
     s.startsWith("http://") || s.startsWith("https://")
 

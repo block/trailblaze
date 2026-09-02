@@ -883,6 +883,7 @@ class WaypointMigrateTrailCommand : Callable<Int> {
    */
   private fun DriverNodeDetail.matchableText(): String? = when (this) {
     is DriverNodeDetail.AndroidAccessibility -> text
+    is DriverNodeDetail.AndroidView -> text
     is DriverNodeDetail.AndroidMaestro -> text
     is DriverNodeDetail.Compose -> text
     is DriverNodeDetail.IosMaestro -> text
@@ -892,12 +893,14 @@ class WaypointMigrateTrailCommand : Callable<Int> {
 
   private fun DriverNodeDetail.matchableContentDescription(): String? = when (this) {
     is DriverNodeDetail.AndroidAccessibility -> contentDescription
+    is DriverNodeDetail.AndroidView -> contentDescription
     is DriverNodeDetail.AndroidMaestro -> accessibilityText
     else -> null
   }
 
   private fun DriverNodeDetail.matchableResourceId(): String? = when (this) {
     is DriverNodeDetail.AndroidAccessibility -> resourceId
+    is DriverNodeDetail.AndroidView -> resourceId
     is DriverNodeDetail.AndroidMaestro -> resourceId
     else -> null
   }

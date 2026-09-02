@@ -12,7 +12,10 @@ import io.ktor.util.AttributeKey
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.tracing.CompleteEvent
 import xyz.block.trailblaze.tracing.PlatformIds
+import xyz.block.trailblaze.tracing.SpanKind
+import xyz.block.trailblaze.tracing.TraceSpanContextElement
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
+import kotlin.coroutines.coroutineContext
 import kotlin.time.TimeSource
 
 /**
@@ -70,6 +73,13 @@ class PerfettoHttpTracing private constructor(
         val startWall = Clock.System.now()
         val mark = TimeSource.Monotonic.markNow()
 
+        // Read the enclosing span from the coroutine context, NOT from TraceSpanLocal: this
+        // interceptor runs in the caller's coroutine but may already have been dispatched to a
+        // thread whose frame belongs to someone else, and a confidently wrong parent is worse than
+        // none. Captured before the call so a request outliving its caller still names it.
+        val spanId = traceRecorder.newSpanId()
+        val parentSpanId = coroutineContext[TraceSpanContextElement.Key]?.spanId
+
         var status: Int? = null
         var bytesSent: Long? = null
         var bytesReceived: Long? = null
@@ -93,6 +103,10 @@ class PerfettoHttpTracing private constructor(
           val dur = mark.elapsedNow()
           val base = mutableMapOf<String, String>()
           base += plugin.config.commonArgs
+          // Async observation marker: this event's tid is whichever thread the intercept ran on,
+          // not a lexical call frame — concurrent requests can share a tid and overlap. Profile
+          // consumers must not nest these among other trace spans (see perf-extract.ts).
+          base["async"] = "true"
           base["method"] = method
           base["host"] = request.url.host
           base["path"] = request.url.encodedPath
@@ -112,6 +126,11 @@ class PerfettoHttpTracing private constructor(
               pid = pid,
               tid = tid,
               args = base,
+              sid = spanId,
+              psid = parentSpanId,
+              // The caller's view of an outgoing request. Its SERVER counterpart is what the callee
+              // would record; nothing on the receiving side is instrumented yet.
+              kind = SpanKind.CLIENT,
             ),
           )
         }

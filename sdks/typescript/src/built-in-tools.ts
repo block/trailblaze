@@ -233,6 +233,8 @@ declare module "@trailblaze/scripting" {
         devicePath: string;
         /** File content as a base64-encoded byte string; decoded to raw bytes before writing. */
         base64Content: string;
+        /** Optional debuggable-app id to write as, via `run-as` — the only way to reach that app's private `/data/data/<appId>/` dir. Payload rides in the command line, so it is capped at 64 KiB. */
+        runAs?: string;
       };
       result: string;
     };

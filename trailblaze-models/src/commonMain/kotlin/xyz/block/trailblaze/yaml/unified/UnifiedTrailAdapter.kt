@@ -65,6 +65,53 @@ object UnifiedTrailAdapter {
     recordedItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>().none { it.promptSteps.isNotEmpty() }
 
   /**
+   * How many steps [mergeRecordedClassifier] will align from [recordedItems] - the count callers
+   * need to check a `stepWindow` against BEFORE merging, so a mismatch is a refusal rather than a
+   * misaligned write.
+   *
+   * Mirrors [recordedStepsFrom]'s length: tools recorded outside any objective are folded into the
+   * first prompt step (no index of their own), and a recording with no objective at all becomes one
+   * placeholder step. Counting rather than returning the steps keeps this side-effect free -
+   * [recordedStepsFrom] logs where it placed things, and a caller checking a count must not emit
+   * those lines a second time.
+   */
+  fun recordedStepCount(recordedItems: List<TrailYamlItem>): Int {
+    val promptSteps = recordedItems
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .sumOf { it.promptSteps.size }
+    if (promptSteps > 0) return promptSteps
+    val steplessTools = recordedItems.filterIsInstance<TrailYamlItem.ToolTrailItem>().sumOf { it.tools.size }
+    return if (steplessTools > 0) 1 else 0
+  }
+
+  /**
+   * The contiguous `[from, to]` slice of [unified]'s steps as a runnable trail - the "run from this
+   * step" primitive. Indices are 0-based and inclusive.
+   *
+   * The trailhead is deliberately dropped: a partial run starts from whatever is already on the
+   * device's screen, which is the entire point of running a slice (the device is already signed in;
+   * re-running step 0 would undo that). The config is carried over so the slice resolves the same
+   * targets, drivers and per-classifier legs as the whole trail, with only the title marked partial
+   * so the run it dispatches is identifiable as one.
+   *
+   * The web board's `TM.sliceSteps` is the same operation on the client's own model; this is the
+   * server-side one, so the route that slices for a recording run and the merge that writes its
+   * result back agree on what a step window means.
+   *
+   * Returns null when the range is empty or outside [unified]'s steps, so a caller can't dispatch a
+   * trail with an empty `trail:` (which the parser rejects).
+   */
+  fun sliceTrail(unified: UnifiedTrail, from: Int, to: Int): UnifiedTrail? {
+    if (from < 0 || to < from || to >= unified.trail.size) return null
+    val range = if (from == to) "${from + 1}" else "${from + 1}-${to + 1}"
+    return UnifiedTrail(
+      config = unified.config.copy(title = "Partial: ${unified.config.title ?: "Trail"} ($range)"),
+      trailhead = null,
+      trail = unified.trail.subList(from, to + 1).toList(),
+    )
+  }
+
+  /**
    * Lower a [UnifiedTrail] document into legacy v1 [TrailYamlItem]s for the
    * given device. The result mirrors what `TrailblazeYaml.decodeTrail` returns
    * for a v1 YAML string: a singleton `ConfigTrailItem`, then — when the unified
@@ -218,14 +265,47 @@ object UnifiedTrailAdapter {
    *
    * Returns `false` only when NOTHING on the device's chain resolves to a declared entry — the trail
    * declares recordings for other classifiers only, or none at all.
+   *
+   * A run that selects a multi-device configuration must use the overload that names it.
    */
   fun hasRecordingForDevice(
     unified: UnifiedTrail,
     classifiers: List<TrailblazeDeviceClassifier>,
+  ): Boolean = hasRecordingForDevice(unified, classifiers, null)
+
+  /**
+   * [hasRecordingForDevice] for a run that selected a multi-device configuration.
+   *
+   * [selectedDeviceConfiguration] must be the configuration the run will bind, exactly as
+   * [lowerToTrailItems] receives it. Omitting it on a configuration trail answers `false` however
+   * completely the trail is recorded: its legs are keyed by the configuration NAME, which no
+   * classifier chain reaches. A gate that acts on that answer — `requireRecordings` — then drops
+   * a trail the executor would have replayed end to end. A pre-flight caller with no session reads
+   * the selection off the trail ([UnifiedTrailConfig.soleMultiDeviceConfigurationName]).
+   *
+   * A separate overload rather than a default argument, for the same reason
+   * [describeRecordingResolution] has one: this module's published ABI is locked down, and
+   * defaulting the parameter would replace the two-argument JVM signature already-compiled callers
+   * link against.
+   */
+  fun hasRecordingForDevice(
+    unified: UnifiedTrail,
+    classifiers: List<TrailblazeDeviceClassifier>,
+    selectedDeviceConfiguration: String?,
   ): Boolean {
-    val resolutionChain =
+    // Same three checks as lowerToTrailItems: an undeclared selection is rejected rather than
+    // prepending a phantom chain head, the selected configuration resolves exactly and first, and
+    // every other configuration name stays excluded.
+    val allConfigurationNames = unified.config.multiDeviceConfigurationNames
+    if (selectedDeviceConfiguration != null) {
+      require(selectedDeviceConfiguration in allConfigurationNames) {
+        "selected device configuration '$selectedDeviceConfiguration' is not declared in " +
+          "config.devices — declared configurations: $allConfigurationNames"
+      }
+    }
+    val resolutionChain = listOfNotNull(selectedDeviceConfiguration) +
       TrailblazeClassifierLineage.resolutionChain(classifiers).map { it.classifier }
-    val configurationNames = unified.config.multiDeviceConfigurationNames
+    val configurationNames = allConfigurationNames - setOfNotNull(selectedDeviceConfiguration)
     val stepHasRecording = unified.trail.any { step ->
       resolveClosestMatch(step.recordings, resolutionChain, configurationNames) != null
     }
@@ -568,12 +648,13 @@ object UnifiedTrailAdapter {
    * to report *which* entry matched (not just its value) use this, so "did it match" and "what
    * matched" can never come from two different traversals.
    *
-   * [excludedKeys] carries the trail's multi-device configuration names
-   * ([UnifiedTrailConfig.multiDeviceConfigurationNames]): a key that names a configuration is
-   * matched only by exact configuration selection, never by a device's classifier chain — a
-   * device whose chain contains the name (lineage re-probes bare segments and string-derived
-   * parents, so a configuration named `pair` sits on a `pair-a` device's chain) must not
-   * resolve a configuration's entry as its own.
+   * The walk itself is [TrailblazeClassifierLineage.closestDeclaredKey] — shared with every other
+   * closest-wins consumer rather than repeated here. This wrapper adds only the map-specific part:
+   * a key mapped to a null value counts as **not declared**, so an entry a caller nulled out falls
+   * through to its broader ancestor exactly as if it had been omitted.
+   *
+   * See [TrailblazeClassifierLineage.closestDeclaredKey] for what [excludedKeys] is for; callers
+   * here pass the trail's [UnifiedTrailConfig.multiDeviceConfigurationNames].
    */
   private fun <V> resolveClosestKey(
     byClassifier: Map<String, V>?,
@@ -581,8 +662,28 @@ object UnifiedTrailAdapter {
     excludedKeys: Set<String> = emptySet(),
   ): String? {
     if (byClassifier.isNullOrEmpty()) return null
-    return resolutionChain.firstOrNull { it !in excludedKeys && byClassifier[it] != null }
+    // Filtered over entries, not keys: the value is already in hand, so deciding "declared?" costs
+    // no second lookup per key.
+    return TrailblazeClassifierLineage.closestDeclaredKey(
+      declaredKeys = byClassifier.entries.mapNotNullTo(LinkedHashSet()) { (key, value) -> key.takeIf { value != null } },
+      resolutionChain = resolutionChain,
+      excludedKeys = excludedKeys,
+    )
   }
+
+  /**
+   * [mergeRecordedClassifier] for a recording that covers the whole trail — the ordinary save-back.
+   *
+   * A separate overload rather than a default argument: this module's published ABI is locked down,
+   * and defaulting the new parameter would replace the four-argument JVM signature every
+   * already-compiled caller links against.
+   */
+  fun mergeRecordedClassifier(
+    existing: UnifiedTrail?,
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+    selectedDeviceConfiguration: String? = null,
+  ): UnifiedTrail = mergeRecordedClassifier(existing, recordedItems, classifier, selectedDeviceConfiguration, null)
 
   /**
    * Fold a freshly-recorded single-device trail into an [existing] unified trail's per-classifier
@@ -601,7 +702,11 @@ object UnifiedTrailAdapter {
    * recording is overlaid — so re-recording the same device on the same trail updates its slot in
    * place instead of duplicating tools.
    *
-   * **Step alignment is by index.**
+   * **Step alignment is by index**, offset by [stepWindow] when the recording came from a partial
+   * run. Recorded items carry no step provenance, so the window is the only thing that says which
+   * steps a partial recording is allowed to touch - without it, a steps-6..8 recording would land on
+   * steps 1..3 and strip the classifier from 4..8.
+   *
    * Existing NL wins where a step already exists — it is the device-agnostic canonical intent, so a
    * re-record on one device never rewrites the shared prose; a recorded NL that disagrees at the
    * same index is logged as drift, not applied. Recorded steps beyond [existing]'s length are
@@ -610,6 +715,11 @@ object UnifiedTrailAdapter {
    * writing `classifier: []` (which the model reserves for a deliberate no-op).
    *
    * Tools recorded outside any objective window are placed by [recordedStepsFrom].
+   *
+   * **A trailhead keeps one tool.** A run that recorded several for step 0 keeps the first as the
+   * trailhead and replays the rest at the start of the trail's first step, in recorded order — and
+   * they are dropped with the rest of that step's recording if it is `recordable: false`. See
+   * [withSingleToolTrailhead] for that case and for what relocation costs.
    *
    * The step KIND (`step:` vs `verify:`) is preserved: an appended step takes `verify: true` when
    * the recorded step is a [VerificationStep]; on merge into an existing step the EXISTING kind
@@ -622,25 +732,72 @@ object UnifiedTrailAdapter {
    *   merge is a configuration session's save-back — the caller's own record of it, so a first
    *   write (which has no [existing] document to read configuration names from) still knows
    *   [classifier] names a configuration rather than a device. Must equal [classifier].
+   * @param stepWindow the 0-based inclusive range of [existing]'s steps this recording covers, when
+   *   it came from a partial run ("record from step N"). Both halves of replace-per-classifier are
+   *   then scoped to the window: recorded step `i` aligns to existing step `stepWindow.first + i`,
+   *   and steps outside the window keep this classifier's recordings untouched. Null means the
+   *   recording covers the whole trail (the ordinary save-back).
    */
   fun mergeRecordedClassifier(
     existing: UnifiedTrail?,
     recordedItems: List<TrailYamlItem>,
     classifier: String,
-    selectedDeviceConfiguration: String? = null,
+    selectedDeviceConfiguration: String?,
+    stepWindow: IntRange?,
   ): UnifiedTrail {
     require(selectedDeviceConfiguration == null || selectedDeviceConfiguration == classifier) {
       "A configuration session's recording is keyed by its configuration name: merging under " +
         "`$classifier` while the run selected `$selectedDeviceConfiguration` would write the leg " +
         "to a slot no replay resolves."
     }
-    val recordedConfig = recordedItems
+    // A window names steps that must already exist, and must cover exactly as many steps as the
+    // recording produced. Callers that can report a refusal (the recording writer) check both before
+    // getting here; these guards make a misaligned write impossible rather than merely unlikely,
+    // because the failure mode is silent corruption of the steps outside the window. The count guard
+    // waits until the recorded steps have been read, so it can be checked against that same list.
+    if (stepWindow != null) {
+      // An inverted window (`1..0`) covers nothing, and every guard below passes for it: it is in
+      // bounds, and a recording with no steps matches its count of zero - so the merge would run as
+      // a no-op window rather than saying that nothing was named.
+      require(!stepWindow.isEmpty()) {
+        "Step window ${stepWindow.first + 1}-${stepWindow.last + 1} covers no steps; a partial " +
+          "recording has to name the steps it replaces."
+      }
+      val existingSteps = existing?.trail.orEmpty()
+      require(stepWindow.first >= 0 && stepWindow.last < existingSteps.size) {
+        "Step window ${stepWindow.first + 1}-${stepWindow.last + 1} is outside this trail's " +
+          "${existingSteps.size} step(s); a partial recording can only replace steps that exist."
+      }
+    }
+    // A trailhead slot holds one tool per classifier, but a live run can record several tools for
+    // step 0 — so map the recording onto that shape before anything below reads it (see
+    // [withSingleToolTrailhead]).
+    val items = withSingleToolTrailhead(recordedItems, classifier, stepWindow)
+    val recordedConfig = items
       .filterIsInstance<TrailYamlItem.ConfigTrailItem>()
       .firstOrNull()?.config
-    val recordedPrompts = recordedStepsFrom(recordedItems, classifier)
-    val recordedTrailhead = recordedItems
+    val recordedPrompts = recordedStepsFrom(items, classifier)
+    val recordedTrailhead = items
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>()
       .firstOrNull()?.trailhead
+    if (stepWindow != null) {
+      // Counted against the list the merge actually aligns, not against a second reading of the same
+      // rule: `offset + recordedPrompts.size` is what the loop below walks, so this equality is the
+      // whole no-append/no-shift guarantee. [recordedStepCount] stays the caller's pre-check.
+      require(recordedPrompts.size == stepWindow.count()) {
+        "This run recorded ${recordedPrompts.size} step(s) but covered steps ${stepWindow.first + 1}-" +
+          "${stepWindow.last + 1} (${stepWindow.count()}); aligning them would shift every later " +
+          "step's recording."
+      }
+      // The trailhead sits outside every window, so a windowed recording has nothing to say about
+      // it. Refusing here rather than ignoring it keeps one rule for the whole function: a windowed
+      // merge touches the steps it named and nothing else.
+      require(recordedTrailhead == null) {
+        "This recording covers steps ${stepWindow.first + 1}-${stepWindow.last + 1} but carries a " +
+          "recorded trailhead, which sits outside every step window; merging it would replace a " +
+          "trailhead this run never ran."
+      }
+    }
 
     // Base config: keep the existing file's config when merging; on a first write seed from the
     // recording's own config. Carry every v1 field the unified config can model so the first write
@@ -697,11 +854,16 @@ object UnifiedTrailAdapter {
       baseConfig.copy(devices = mergedDevices)
     }
 
-    // Strip this classifier everywhere first (replace semantics), then overlay the recording.
-    val baseSteps = existing?.trail.orEmpty().map { it.withoutClassifier(classifier) }
-    val mergedSteps = (0 until maxOf(baseSteps.size, recordedPrompts.size)).mapNotNull { i ->
+    // Strip this classifier first (replace semantics), then overlay the recording. A partial
+    // recording strips only INSIDE its window: the steps it never ran still hold this device's
+    // recordings from an earlier run, and dropping them is the corruption a window exists to avoid.
+    val offset = stepWindow?.first ?: 0
+    val baseSteps = existing?.trail.orEmpty().mapIndexed { i, step ->
+      if (stepWindow == null || i in stepWindow) step.withoutClassifier(classifier) else step
+    }
+    val mergedSteps = (0 until maxOf(baseSteps.size, offset + recordedPrompts.size)).mapNotNull { i ->
       val base = baseSteps.getOrNull(i)
-      val recorded = recordedPrompts.getOrNull(i)
+      val recorded = if (i >= offset) recordedPrompts.getOrNull(i - offset) else null
       val recordedTools = recorded?.recording?.tools.orEmpty()
       when {
         base != null && recorded != null -> {
@@ -743,6 +905,16 @@ object UnifiedTrailAdapter {
             canon.withClassifier(classifier, recordedTools)
           } else {
             if (recordedTools.isNotEmpty()) logDroppedRecordableFalse(i, classifier)
+            // Replace semantics with nothing to put back: the run reached this step and recorded no
+            // tools for it, so the leg it had is gone and replay falls through to the LLM there.
+            // Deliberate (a re-record replaces what it covered), but data-affecting, so it says so
+            // rather than leaving the step quietly emptied.
+            if (recordedTools.isEmpty() && existing?.trail?.getOrNull(i)?.recordings?.get(classifier).orEmpty().isNotEmpty()) {
+              Console.info(
+                "[unified-record] step ${i + 1}: this run recorded no tools for classifier " +
+                  "`$classifier`, so the recording it had there is now cleared.",
+              )
+            }
             canon
           }
         }
@@ -763,11 +935,90 @@ object UnifiedTrailAdapter {
       }
     }
 
+    // The trailhead is step 0, outside every step window. A partial run skips it by design
+    // ([sliceTrail] drops it), so a windowed merge leaves the existing one fully intact - stripping
+    // this classifier there would delete a recording this run never had the chance to replace. A
+    // windowed recording can't carry a trailhead of its own to overlay either (guarded above).
+    val baseTrailhead = if (stepWindow != null) {
+      existing?.trailhead
+    } else {
+      existing?.trailhead?.withoutClassifier(classifier)
+    }
     return UnifiedTrail(
       config = mergedConfig,
-      trailhead = mergeRecordedTrailhead(existing?.trailhead?.withoutClassifier(classifier), recordedTrailhead, classifier),
+      trailhead = mergeRecordedTrailhead(baseTrailhead, recordedTrailhead, classifier),
       trail = mergedSteps,
     )
+  }
+
+  /**
+   * [recordedItems] with its recorded trailhead narrowed to the ONE tool a trailhead slot holds,
+   * every later tool relocated to the front of the trail's first recorded step.
+   *
+   * A trailhead is one tool per classifier in both directions — the emitter writes a single tool
+   * call and the reader refuses a list — so a recording with more is not a document the format can
+   * hold. Live runs produce that shape routinely, not just exceptionally: an AI-blazed
+   * natural-language trailhead spends several tools reaching the objective on a clean first pass,
+   * and a self-healed or retried trailhead concatenates its windows. Refusing the whole recording
+   * threw away the artifact the run existed to produce, so map it onto the format instead.
+   *
+   * Order is preserved, which is what keeps the replayed SEQUENCE identical: the trailhead runs its
+   * tool, then step 1 replays the rest before its own tools. Relocated tools go through
+   * [TrailYamlItem.ToolTrailItem] so [recordedStepsFrom] places them — prepended to the first
+   * recorded step, or, when the run recorded no objective of its own, as the one placeholder step
+   * that gives them a home (the alternative is a trailhead-only document, which cannot be emitted).
+   *
+   * What relocation cannot carry across is the trailhead's FAILURE policy: a tool that fails inside
+   * the trailhead aborts the trail, while the same tool failing in step 1 is a self-healable
+   * step failure that recovers against step 1's objective. That is the cost of holding a
+   * several-tool bootstrap in a format whose trailhead holds one, and it is still the better trade
+   * than the recording the run never got — which recovered against the whole trail from step 0.
+   *
+   * One shape keeps the relocated tools nowhere: a step 1 the author marked `recordable: false`.
+   * Recordings and always-LLM are mutually exclusive in the format, so the merge drops them there
+   * exactly as it drops that step's own recorded tools, and the author's intent — reach this state
+   * by asking the LLM — is what survives. Said out loud by both lines below rather than promised and
+   * then quietly undone.
+   *
+   * A windowed re-record is left untouched: its first step is the step it named, not the trail's
+   * step 1, so there is nothing to relocate INTO. Such a recording cannot carry a trailhead at all
+   * ([sliceTrail] drops it), and [mergeRecordedClassifier] refuses one that does — narrowing first
+   * would only turn that refusal into a less accurate one, by inventing a step the window's count
+   * guard then accepts.
+   *
+   * The format itself is untouched: the emitted document is one the reader accepts.
+   */
+  private fun withSingleToolTrailhead(
+    recordedItems: List<TrailYamlItem>,
+    classifier: String,
+    stepWindow: IntRange?,
+  ): List<TrailYamlItem> {
+    val trailheadIndex = recordedItems.indexOfFirst { it is TrailYamlItem.TrailheadTrailItem }
+    if (trailheadIndex < 0) return recordedItems
+    val trailhead = (recordedItems[trailheadIndex] as TrailYamlItem.TrailheadTrailItem).trailhead
+    val tools = trailhead.tools.orEmpty()
+    if (tools.size <= 1) return recordedItems
+    if (stepWindow != null) return recordedItems
+    val relocated = tools.drop(1)
+    // info (not log): moving recorded tools between the trailhead and step 1 is a data-affecting
+    // decision the user should see on a normal run, same policy as the drift lines below. It names
+    // the recordable:false outcome because that is where the move does not survive, and the drop
+    // line that follows there only speaks of "the recorded tools" for the step as a whole.
+    Console.info(
+      "[unified-record] the trailhead recorded ${tools.size} tools on classifier `$classifier`, and " +
+        "a trailhead holds one — keeping `${tools.first().name}` there and moving " +
+        "${relocated.joinToString { "`${it.name}`" }} into the trail's first step, in recorded order " +
+        "(dropped with that step's own recording if it is `recordable: false`).",
+    )
+    return recordedItems.toMutableList().apply {
+      set(
+        trailheadIndex,
+        TrailYamlItem.TrailheadTrailItem(trailhead.copy(tools = listOf(tools.first()))),
+      )
+      // Immediately after the trailhead so these land ahead of any tools recorded later outside an
+      // objective window — [recordedStepsFrom] reads the ToolTrailItems in list order.
+      add(trailheadIndex + 1, TrailYamlItem.ToolTrailItem(relocated))
+    }
   }
 
   /**

@@ -14,6 +14,9 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.ondevice.rpc.proto.LogUploadAck
 import xyz.block.trailblaze.ondevice.rpc.proto.OnDeviceRpcProtoCodec
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
+import xyz.block.trailblaze.report.otel.SessionOtelExport
+import xyz.block.trailblaze.report.trace.SessionTraceFile
 
 /** Persistent protobuf endpoint for device-to-host logs, screenshots, and traces. */
 internal object LogWebSocketEndpoint {
@@ -53,6 +56,9 @@ internal object LogWebSocketEndpoint {
               logsRepo = logsRepo,
               session = trace.session_id,
               json = trace.trace_json.utf8(),
+              // Absence means device here, not host: `/logs-ws` is a device-to-host route, and a new
+              // host is expected to serve older runner APKs — which upload with no marker at all.
+              onDeviceClock = trace.clock != TrailblazeLogServerClient.HOST_CLOCK,
             )
             else -> error("Protobuf log upload omitted its payload")
           }
@@ -91,8 +97,17 @@ internal object LogWebSocketEndpoint {
     destination.writeBytes(bytes)
   }
 
-  private fun saveTrace(logsRepo: LogsRepo, session: String, json: String) {
-    validatedSessionDir(logsRepo, session).resolve("trace.json").writeText(json)
+  private fun saveTrace(logsRepo: LogsRepo, session: String, json: String, onDeviceClock: Boolean) {
+    // Merged, not written: a run is recorded in more than one process, and they all upload here.
+    // The uploader declares its clock — see LogTracePostEndpoint for why the receiver cannot.
+    SessionTraceFile.merge(
+      validatedSessionDir(logsRepo, session).resolve(SessionTraceFile.FILE_NAME),
+      json,
+      onDeviceClock = onDeviceClock,
+    )
+    // Off the socket thread: the ack this upload is waiting for is sent when this returns, and the
+    // device gives it two seconds. See SessionOtelExport.pushInBackgroundIfConfigured.
+    SessionOtelExport.pushInBackgroundIfConfigured(session, json)
   }
 
   private fun validatedSessionDir(logsRepo: LogsRepo, session: String): File {

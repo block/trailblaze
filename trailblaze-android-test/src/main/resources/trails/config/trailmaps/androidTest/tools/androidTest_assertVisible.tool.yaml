@@ -1,0 +1,2 @@
+id: androidTest_assertVisible
+class: xyz.block.trailblaze.android.test.tools.AndroidTestAssertVisibleTool

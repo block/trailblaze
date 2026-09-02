@@ -3,8 +3,8 @@
 // SOURCE OF TRUTH is the Kotlin file above. See `trailblaze-node.ts` header for the parity
 // contract and editing rules — they apply to every file in this directory.
 //
-// The Kotlin file is a sealed interface with six data classes (AndroidAccessibility,
-// AndroidMaestro, Web, Compose, IosMaestro, IosAxe). We mirror it as a TypeScript
+// The Kotlin file is a sealed interface with seven data classes (AndroidAccessibility,
+// AndroidView, AndroidMaestro, Web, Compose, IosMaestro, IosAxe). We mirror it as a TypeScript
 // discriminated union — each variant carries a `kind` discriminator matching the
 // Kotlin `@SerialName(...)` value, so JSON serialized from the host hydrates directly
 // into the union without a custom deserializer. The `isInteractive` and
@@ -18,7 +18,7 @@
 // and dual enforcement would just be drift bait.
 
 /**
- * Discriminated union over the six driver-specific detail variants.
+ * Discriminated union over the seven driver-specific detail variants.
  *
  * **Discriminator: `class`.** The host's `TrailblazeJson` configuration uses
  * `class` as its polymorphic discriminator (see
@@ -36,6 +36,7 @@
  */
 export type DriverNodeDetail =
   | DriverNodeDetailAndroidAccessibility
+  | DriverNodeDetailAndroidView
   | DriverNodeDetailAndroidMaestro
   | DriverNodeDetailWeb
   | DriverNodeDetailCompose
@@ -119,6 +120,49 @@ export interface DriverNodeDetailAndroidAccessibility {
   readonly actions?: readonly string[];
   readonly collectionInfo?: AndroidCollectionInfo | null;
   readonly rangeInfo?: AndroidRangeInfo | null;
+}
+
+// ============================================================================
+// Android via live android.view.View objects (in-process test driver)
+// ============================================================================
+
+/**
+ * Classic Android View properties read straight off the live `android.view.View` objects,
+ * which only an in-process driver can produce. A superset of
+ * [DriverNodeDetailAndroidAccessibility] — that shape is the lossy `AccessibilityNodeInfo`
+ * projection of this one, so this adds View-only fields (`tag`, the un-sanitized `className`,
+ * `errorText`, `alpha`). Matches Kotlin `DriverNodeDetail.AndroidView`.
+ *
+ * Matched with strict (case-sensitive) semantics, unlike the Maestro-shaped variants.
+ */
+export interface DriverNodeDetailAndroidView {
+  readonly class: "androidView";
+  // --- Matchable: Identity ---
+  readonly className?: string | null;
+  readonly resourceId?: string | null;
+  readonly tag?: string | null;
+  // --- Matchable: Text content ---
+  readonly text?: string | null;
+  readonly contentDescription?: string | null;
+  readonly hintText?: string | null;
+  readonly stateDescription?: string | null;
+  readonly errorText?: string | null;
+  // --- Matchable: State ---
+  readonly isEnabled?: boolean;
+  readonly isClickable?: boolean;
+  // Null means the view is not `Checkable` at all — that's how checkability is expressed
+  // here, rather than a separate `isCheckable` flag.
+  readonly isChecked?: boolean | null;
+  readonly isSelected?: boolean;
+  readonly isFocused?: boolean;
+  readonly isEditable?: boolean;
+  readonly isPassword?: boolean;
+  readonly inputType?: number;
+  // --- Display-only ---
+  readonly isFocusable?: boolean;
+  readonly isScrollable?: boolean;
+  readonly alpha?: number;
+  readonly isShown?: boolean;
 }
 
 // ============================================================================
@@ -254,8 +298,26 @@ export interface DriverNodeDetailCompose {
   readonly isFocused?: boolean;
   readonly isSelected?: boolean;
   readonly isPassword?: boolean;
+  // --- Matchable: semantics beyond the original 10 ---
+  readonly collectionItemRowIndex?: number | null;
+  readonly collectionItemColumnIndex?: number | null;
+  readonly stateDescription?: string | null;
+  readonly isHeading?: boolean;
+  readonly paneTitle?: string | null;
+  readonly isDialog?: boolean;
+  readonly isPopup?: boolean;
+  readonly errorText?: string | null;
+  readonly hasSetTextAction?: boolean;
+  // --- Display-only ---
   readonly hasClickAction?: boolean;
   readonly hasScrollAction?: boolean;
+  readonly hasLongClickAction?: boolean;
+  readonly progressValue?: number | null;
+  readonly progressMax?: number | null;
+  readonly verticalScrollValue?: number | null;
+  readonly verticalScrollMax?: number | null;
+  readonly horizontalScrollValue?: number | null;
+  readonly horizontalScrollMax?: number | null;
 }
 
 // ============================================================================
@@ -274,6 +336,8 @@ function notBlank(s: string | null | undefined): boolean {
 export function resolveText(detail: DriverNodeDetail): string | null {
   switch (detail.class) {
     case "androidAccessibility":
+      return detail.text ?? detail.hintText ?? detail.contentDescription ?? null;
+    case "androidView":
       return detail.text ?? detail.hintText ?? detail.contentDescription ?? null;
     case "androidMaestro":
       return detail.text ?? detail.hintText ?? detail.accessibilityText ?? null;
@@ -307,6 +371,15 @@ export function hasIdentifiableProperties(detail: DriverNodeDetail): boolean {
         notBlank(detail.resourceId) ||
         notBlank(detail.uniqueId) ||
         notBlank(detail.composeTestTag) ||
+        notBlank(detail.contentDescription) ||
+        notBlank(detail.hintText) ||
+        notBlank(detail.className)
+      );
+    case "androidView":
+      return (
+        notBlank(detail.text) ||
+        notBlank(detail.resourceId) ||
+        notBlank(detail.tag) ||
         notBlank(detail.contentDescription) ||
         notBlank(detail.hintText) ||
         notBlank(detail.className)
@@ -368,6 +441,15 @@ export function isInteractive(detail: DriverNodeDetail): boolean {
         (detail.isFocusable ?? false) ||
         (detail.isScrollable ?? false)
       );
+    case "androidView":
+      return (
+        (detail.isClickable ?? false) ||
+        (detail.isEditable ?? false) ||
+        // Non-null (either checked state) means the view is `Checkable`, i.e. interactive.
+        detail.isChecked != null ||
+        (detail.isFocusable ?? false) ||
+        (detail.isScrollable ?? false)
+      );
     case "androidMaestro":
       return (
         (detail.clickable ?? false) ||
@@ -386,7 +468,12 @@ export function isInteractive(detail: DriverNodeDetail): boolean {
         (detail.role != null && IOS_AXE_INTERACTIVE_ROLES.has(detail.role))
       );
     case "compose":
-      return (detail.hasClickAction ?? false) || (detail.hasScrollAction ?? false);
+      return (
+        (detail.hasClickAction ?? false) ||
+        (detail.hasScrollAction ?? false) ||
+        (detail.hasLongClickAction ?? false) ||
+        (detail.hasSetTextAction ?? false)
+      );
     case "web":
       return detail.isInteractive ?? false;
   }

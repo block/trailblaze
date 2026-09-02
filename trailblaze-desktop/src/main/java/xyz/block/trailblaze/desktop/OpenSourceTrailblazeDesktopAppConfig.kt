@@ -3,7 +3,12 @@ package xyz.block.trailblaze.desktop
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.driver.HostDriverDescriptor
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.host.compose.ComposeHostDriverDescriptor
+import xyz.block.trailblaze.host.playwright.PlaywrightElectronHostDriverDescriptor
+import xyz.block.trailblaze.host.playwright.PlaywrightNativeHostDriverDescriptor
+import xyz.block.trailblaze.host.revyl.RevylHostDriverDescriptor
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -54,10 +59,8 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     TrailblazeDriverType.IOS_HOST,
     TrailblazeDriverType.IOS_AXE,
-    TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-    TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-    TrailblazeDriverType.REVYL_ANDROID,
-    TrailblazeDriverType.REVYL_IOS,
+    // Converted drivers (Revyl, Compose, Playwright ×2) are not listed here: their descriptors
+    // below supply them.
   )
 
   // Start with no platforms enabled by default - user must explicitly enable them
@@ -66,13 +69,22 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
   )
 
+  override val hostDriverDescriptors: Set<HostDriverDescriptor> = setOf(
+    RevylHostDriverDescriptor(),
+    ComposeHostDriverDescriptor(),
+    PlaywrightNativeHostDriverDescriptor(),
+    PlaywrightElectronHostDriverDescriptor(),
+  )
+
   override val defaultAppDataDir: File = TrailblazeDesktopUtil.getDefaultAppDataDirectory().apply { mkdirs() }
 
   override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
   override val trailblazeSettingsRepo = TrailblazeSettingsRepo(
     settingsFile = File(defaultAppDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME),
     initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(initialDriverTypesMap),
-    supportedDriverTypes = initialDriverTypes,
+    // Registering a descriptor is what makes a driver supported, so plugging one in doesn't also
+    // require remembering to list it here. The set above is the drivers that haven't converted yet.
+    supportedDriverTypes = initialDriverTypes + hostDriverDescriptors.flatMap { it.driverTypes },
     defaultHostAppTarget = defaultAppTarget,
     allTargetApps = { availableAppTargets }
   )

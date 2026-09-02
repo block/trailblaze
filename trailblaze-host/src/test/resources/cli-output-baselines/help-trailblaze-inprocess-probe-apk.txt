@@ -1,0 +1,50 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze inprocess probe-apk [-hV] [--declared-deps=<yaml>]
+                                      [--out=<yaml>] [--shell=<apk>]
+                                      [--shell-floor=<yaml>] [--fail-on=<CODE,
+                                      CODE>[,<CODE,CODE>...]]... <app apk>
+Fingerprint an app APK and say whether the in-process driver can attach to it.
+
+Reads the APK only — no device, no Android SDK, no signing key. Emits a few KB
+of YAML: the package, whether a launcher activity exists, every declared
+ContentProvider, the era of each library that would collide in the shared
+classloader, the signing certificate digest, and android:debuggable.
+
+Pass --shell to compare against the exact test APK the app will be paired with.
+Without it the dex intersection cannot run, and the verdict is capped at
+INCOMPLETE — never GO.
+      <app apk>              The app APK to fingerprint.
+      --declared-deps=<yaml> Library versions the app's team states, for an APK
+                               that packages no META-INF version files and
+                               whose era dex markers cannot pin. Format:
+                               `libraries:` with `library:` / `version:`
+                               entries.
+      --fail-on=<CODE,CODE>[,<CODE,CODE>...]
+                             Exit non-zero only for these disqualifiers,
+                               instead of for any of them. The fingerprint and
+                               the printed verdict are unchanged — every reason
+                               is still named, and one that fired without being
+                               enforced is marked as such. Codes:
+                               ERA_BELOW_SHELL_FLOOR, DEX_OVERLAP_WITH_SHELL,
+                               NO_LAUNCHER_ACTIVITY, LAUNCHER_IN_OTHER_PROCESS,
+                               ERA_UNDETERMINABLE, DEX_OVERLAP_UNCHECKED
+  -h, --help                 Show this help message and exit.
+      --out=<yaml>           Write the fingerprint here instead of stdout.
+      --shell=<apk>          The processed shell (test) APK this app will be
+                               paired with. Adds the dex intersection — classes
+                               the shell contributes that the app also ships,
+                               which in one classloader is the duplicated-class
+                               crash. Required to reach a GO verdict, and it
+                               must be the exact APK about to be installed, not
+                               a same-shaped build.
+      --shell-floor=<yaml>   Replaces the built-in floor for libraries the
+                               shell does not package (so the shell's own bytes
+                               cannot state one). Format: `libraries:` with
+                               `library:` / `minVersion:` / `why:` entries.
+  -V, --version              Print version information and exit.

@@ -115,6 +115,32 @@ class RunIndexGeneratorTest {
   }
 
   @Test
+  fun `a skipped row states its reason as a skip, never as an error`() {
+    // The results JSON carries a skip's reason in failure_reason — the one field consumers already
+    // read as "why this row is not a plain pass". The viewer must not inherit that framing: it
+    // styles `error` in the failure vocabulary and sections a run by its status.
+    val skipped = row(outcome = Outcome.SKIPPED, zipUrl = null)
+      .copy(failure_reason = "backend outage, see #2194")
+    val meta = RunIndexGenerator.stubMeta(skipped, report(skipped), null)
+
+    assertEquals("skipped", string(meta, "status"))
+    assertEquals("backend outage, see #2194", string(meta, "skipReason"))
+    assertNull(meta["error"])
+    // A skip's duration_ms is 0 because nothing ran. Formatted, that is "0ms" - a run that
+    // finished instantly, which is the one thing this cell must not claim.
+    assertNull(meta["duration"])
+  }
+
+  @Test
+  fun `a failing row still states its reason as an error`() {
+    val failed = row(outcome = Outcome.FAILED).copy(failure_reason = "element not found")
+    val meta = RunIndexGenerator.stubMeta(failed, report(failed), null)
+
+    assertEquals("element not found", string(meta, "error"))
+    assertNull(meta["skipReason"])
+  }
+
+  @Test
   fun `a stub is marked as one even when it has nowhere to link`() {
     // The viewer reads `linkOut` to know a session's evidence isn't in the document. Leaving it to
     // `reportUrl` would make an unlinkable row indistinguishable from an ordinary embedded run:

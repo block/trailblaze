@@ -195,6 +195,10 @@ trailmap's `platforms.<p>.tool_sets:` Kotlin primitives, sibling scripted tools 
 on `target.tools:`, and scripted tools inherited from `dependencies:` via their
 `exports:` field.
 
+That list is the **typed** surface. Dispatch resolves against the wider global registry, so
+a framework tool on the classpath but in no toolset still runs — `tapOnElementBySelector`
+below is one, dispatchable without appearing in any `tool_sets:`.
+
 ```ts
 await client.tools.android_adbShell({
   command: ["am", "force-stop", appId],

@@ -19,12 +19,15 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * serial/UDID, so trails stay portable across runs. The session starts on the first
  * declared device.
  *
- * Implemented as a [HostLocalExecutableTrailblazeTool] so `BaseTrailblazeAgent` runs it
- * in-process for every agent, before driver-specific dispatch — a device handover is
- * session state, not a device action, and must not be routed to the device being switched
- * away from. `requiresHost = true` because only a host-orchestrated session can hold a
- * second device: on-device instrumentation has no transport to reach one, and the
- * annotation flag keeps this tool out of on-device registration.
+ * Declares two separate things, both of which it needs:
+ * - `requiresHost = true`: only a host-orchestrated session can hold a second device, and an
+ *   on-device agent has no transport to reach one, so this tool cannot run off a host machine.
+ * - [HostLocalExecutableTrailblazeTool]: `BaseTrailblazeAgent` runs it in-process for every agent,
+ *   before driver-specific dispatch — a device handover is session state, not a device action, and
+ *   must not be routed to the device being switched away from.
+ *
+ * It self-guards on missing [TrailblazeToolExecutionContext.deviceBindings] for the case where it is
+ * reached anyway.
  *
  * Mid-batch semantics: the switch takes effect from the NEXT dispatch — this tool
  * invalidates the shared [ToolBatchScope] context so recorded replay rebuilds against the
@@ -69,11 +72,14 @@ data class SwitchDeviceTrailblazeTool(
     const val ADVERTISED_TOOL_NAME = "switchDevice"
 
     /**
-     * Catalog id of the YAML toolset carrying this tool (`multi_device.yaml`). Not target-declared,
-     * and not enabled by anything yet: multi-device sessions are mechanical-replay-only, and
-     * recorded `switchDevice` steps dispatch without toolset enablement. When the LLM-facing wiring
-     * lands, the host runner will auto-enable this toolset on sessions that bind a multi-device
-     * configuration — the only condition under which the tool is meaningful.
+     * Catalog id of the YAML toolset carrying this tool (`multi_device.yaml`). Never declared by a
+     * target's `tool_sets:` — no app's trailmap can know whether the session running its trails
+     * bound a second device. Instead the host runner adds this toolset to sessions that bind a
+     * multi-device configuration, the only condition under which the tool is meaningful, via
+     * `MultiDeviceTargetBinding.handoverToolSurface`.
+     *
+     * Advertisement only. Recorded handovers replay through the runner-util and never needed the
+     * toolset enabled.
      */
     const val MULTI_DEVICE_TOOLSET_ID = "multi_device"
   }
@@ -111,7 +117,7 @@ data class SwitchDeviceTrailblazeTool(
     ToolBatchScope.invalidateContext()
     return TrailblazeToolResult.Success(
       message = "Switched active device from '$previousName' to '$name' " +
-        "(${bound.trailblazeDeviceInfo.trailblazeDeviceId.toFullyQualifiedDeviceId()}). " +
+        "(${bound.trailblazeDeviceId.toFullyQualifiedDeviceId()}). " +
         "Subsequent observations and tools act on this device.",
     )
   }

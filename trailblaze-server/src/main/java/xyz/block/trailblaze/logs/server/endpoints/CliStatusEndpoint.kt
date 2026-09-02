@@ -63,7 +63,58 @@ data class CliStatusResponse(
    * tell the developer exactly who is using it.
    */
   val activeRunSummaries: List<String> = emptyList(),
+  /**
+   * Per-request features this daemon build honors, from [CliDaemonCapabilities]. Stamped
+   * server-side (see `ServerEndpoints`) so it describes the running daemon's build rather than
+   * whichever app supplied the status.
+   *
+   * Empty means an older daemon that predates the set — NOT a daemon with no features. The daemon
+   * decodes requests with `ignoreUnknownKeys`, so a field it predates is dropped silently and the
+   * run falls back to whatever the daemon's own environment says. For a field that only affects
+   * logging that is a fine trade; for one that decides WHICH DEVICES a trail drives it is a wrong
+   * result reported as a pass, so callers of such fields check here first and refuse to delegate.
+   */
+  val capabilities: Set<String> = emptySet(),
 )
+
+/**
+ * Names of per-request features a daemon build honors, advertised on
+ * [CliStatusResponse.capabilities].
+ *
+ * A capability earns a name here when a request field can be dropped SILENTLY by an older daemon
+ * and the result would still look like a pass. Fields whose loss is self-announcing (a trace level,
+ * a workspace anchor) don't need one — the existing version check and the run's own output cover
+ * them.
+ */
+object CliDaemonCapabilities {
+  /**
+   * The daemon reads [CliRunRequest.deviceBindings] and [CliRunRequest.deviceConfiguration] — i.e.
+   * `trailblaze run --bind` / `--configuration` select this run's device set. A daemon without this
+   * would fall back to its startup `TRAILBLAZE_DEVICE_BINDINGS`, driving the devices some earlier
+   * lane bound and passing.
+   */
+  const val PER_RUN_DEVICE_BINDINGS = "run.device-bindings"
+
+  /**
+   * The daemon's `session` tool reads the SAVE action's `configuration` argument and synthesizes a
+   * multi-device cast from a named-device roster — i.e. `trailblaze session save --configuration`
+   * names the saved configuration. A daemon without this drops the argument silently and saves the
+   * session without a cast, keyed by the launch device's classifier — a wrong file reported as a
+   * pass.
+   */
+  const val SESSION_SAVE_CONFIGURATION = "session.save-configuration"
+
+  /**
+   * The daemon reads [CliRunRequest.snapshotBaselineRef] and
+   * [CliRunRequest.snapshotBaselineThresholdPercent] — i.e. `trailblaze run --snapshot-baseline`
+   * compares this run's snapshots against a previous run's. A daemon without this drops both and
+   * runs the trail with no comparison at all, reporting the green of a check that never ran.
+   */
+  const val SNAPSHOT_BASELINE = "run.snapshot-baseline"
+
+  /** Every capability this build honors. */
+  val ALL: Set<String> = setOf(PER_RUN_DEVICE_BINDINGS, SESSION_SAVE_CONFIGURATION, SNAPSHOT_BASELINE)
+}
 
 /**
  * Endpoint to get daemon status.

@@ -1,0 +1,20 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze inprocess [-hV] [COMMAND]
+Check an app APK for in-process driver compatibility, and build a test APK that
+drives it.
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  probe-apk      Fingerprint an app APK and say whether the in-process driver
+                   can attach to it.
+  make-test-apk  Retarget a prebuilt in-process shell APK at one app and sign
+                   it with that app's key. Stamps the instrumentation's target
+                   package, injects trails / target config / scripted-tool
+                   bundles, then signs. Writes a build record beside the output
+                   APK.

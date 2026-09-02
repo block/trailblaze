@@ -110,10 +110,12 @@ object TrailRecordings {
    * `.replace('\\', '/')` convention the rest of the codebase uses for string-based
    * path handling.
    *
-   * The CI expected-tests manifests mirror this rule in bash (`expected_test_name` in
-   * `scripts/lib/trail_discovery.sh`, pinned by `scripts/lib/trail_discovery_test.sh`) so a
-   * no-title/no-id trail's manifest line exact-matches its report title. If this rule changes
-   * shape, update the bash mirror and its test in the same change.
+   * Two ports outside Kotlin depend on producing the identical string, and both are pinned by
+   * their own tests. If this rule changes shape, update all three in the same change:
+   * - bash `expected_test_name` (`scripts/lib/trail_discovery.sh`), so a no-title/no-id trail's
+   *   CI expected-tests manifest line exact-matches its report title.
+   * - TypeScript `shortTrailName` (`scripts/trail-dashboard/lib.ts`), which is how the trails
+   *   dashboard joins a Snowflake run's key back onto the trail file that produced it.
    */
   fun shortTrailName(trailFilePath: String): String {
     val relative = trailFilePath

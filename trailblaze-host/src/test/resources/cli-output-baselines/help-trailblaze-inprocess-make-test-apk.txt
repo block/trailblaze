@@ -1,0 +1,68 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze inprocess make-test-apk [-hV] [--allow-runtime-tool-source]
+       [--release] --alias=<alias> [--app-apk=<apk>] [--esbuild=<path>]
+       [--fingerprint=<yaml>] --keystore=<file> [-o=<apk>] --shell=<apk>
+       [--target-config=<yaml>] --target-package=<applicationId>
+       [--trail=<file>]... [--trailmap=<dir>]...
+Retarget a prebuilt in-process shell APK at one app and sign it with that app's
+key. Stamps the instrumentation's target package, injects trails / target
+config / scripted-tool bundles, then signs. Writes a build record beside the
+output APK.
+      --alias=<alias>        Key alias inside --keystore.
+      --allow-runtime-tool-source
+                             Bake `allow_runtime_tool_source: true` into the
+                               injected --target-config, letting this APK load
+                               scripted-tool bundles pushed to /data/local/tmp
+                               at run time instead of the ones packaged in it.
+                               Off by default, and written before signing
+                               either way, so the signature records the choice
+                               and a key-ceremony APK cannot be turned into one
+                               by omission.
+      --app-apk=<apk>        The app's APK, read for its certificate digest and
+                               debuggable flag. One of --app-apk or
+                               --fingerprint is required — signing blind is
+                               refused.
+      --esbuild=<path>       esbuild binary, when --trailmap carries TypeScript
+                               and esbuild is not on PATH.
+      --fingerprint=<yaml>   A `package:`/`certificate_sha256:`/`debuggable:`
+                               description of the app, for a host the app's APK
+                               never reaches. Carries the same two guard inputs
+                               --app-apk would be read for.
+  -h, --help                 Show this help message and exit.
+      --keystore=<file>      Keystore holding the app's signing key (JKS or
+                               PKCS12).
+  -o, --out=<apk>            Output APK. Defaults to
+                               <target-package>-trailblaze-test.apk in the CWD.
+      --release              Allow a non-debuggable target. Off by default: an
+                               instrumentation cannot attach to a
+                               non-debuggable app on an ordinary device, and
+                               the usual cause of one is the wrong APK.
+      --shell=<apk>          Prebuilt Trailblaze in-process shell test APK.
+                               Required, and no release publishes one yet:
+                               build it from a framework checkout with
+                               scripts/build-inprocess-shell.sh and hand the
+                               APK to whoever runs this command.
+      --target-config=<yaml> Target config to inject (`id:`, `display_name:`,
+                               `platforms:`, `tools:`). Without one the APK
+                               runs framework primitives only — no scripted
+                               tools.
+      --target-package=<applicationId>
+                             The app's applicationId — the package the
+                               instrumentation is stamped to attach to. Must
+                               match the target evidence, so a wrong value is
+                               refused rather than signed.
+      --trail=<file>         A *.trail.yaml to inject. Repeat for several. The
+                               shell discovers them at run time and reports one
+                               test per trail.
+      --trailmap=<dir>       Trailmap directory whose name is the trailmap id
+                               and which holds a tools/ subtree. Repeat for
+                               several. A tools/ of pre-built .bundle.js files
+                               needs no tooling; TypeScript sources are bundled
+                               here, which needs esbuild.
+  -V, --version              Print version information and exit.

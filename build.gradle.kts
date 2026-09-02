@@ -33,7 +33,7 @@ subprojects {
     environment("TRAILBLAZE_DISABLE_DAEMON_AUTOSTART", "1")
     // Steer default-port resolution to a port no real daemon uses, so an accidental
     // connect fails fast instead of reaching a developer's live daemon.
-    environment("TRAILBLAZE_PORT", "52995")
+    environment("TRAILBLAZE_PORT", "31995")
     // Point `user.home` at the build dir so tests read a fresh ~/.trailblaze instead of the
     // developer's real one. Without this, a persisted non-default `serverPort` in the real
     // config outranks the TRAILBLAZE_PORT env above (port precedence: persisted → env) and

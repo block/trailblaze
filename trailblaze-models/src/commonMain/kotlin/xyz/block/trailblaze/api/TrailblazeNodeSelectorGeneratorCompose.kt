@@ -90,9 +90,44 @@ internal fun composeStrategies(
     }
   },
 
+  // Strategy 8: stateDescription (+ role) — a custom control that publishes its own state label
+  // ("Expanded", "Selected") and nothing else identifying. Mirrors the accessibility generator's
+  // equivalent strategy; role plays the part className does there, narrowing the match to the same
+  // widget kind when it is present. Skips numeric/percentage-like values ("50%", "3 of 10") that
+  // change between runs. Without this, such a control falls through to the hierarchy and index
+  // fallbacks below, which a reorder of its peers breaks.
+  "State description + role" to {
+    val state = detail.stateDescription?.takeIf {
+      it.isNotBlank() && !it.any { c -> c.isDigit() }
+    }
+    state?.let {
+      selectorWith(
+        DriverNodeMatch.Compose(
+          stateDescriptionRegex = escapeForSelector(it),
+          role = detail.role,
+        ),
+      )
+    }
+  },
+
+  // Strategy 9: collection position — refines whatever identity the target already has with its
+  // semantic row/column. "The 3rd row's Delete button" survives list reordering that would break
+  // a positional index, so this ranks above the hierarchy and index fallbacks below.
+  "Collection item position" to {
+    if (detail.collectionItemRowIndex != null || detail.collectionItemColumnIndex != null) {
+      val refined = (buildTargetMatch(detail) as? DriverNodeMatch.Compose)?.copy(
+        collectionItemRowIndex = detail.collectionItemRowIndex,
+        collectionItemColumnIndex = detail.collectionItemColumnIndex,
+      )
+      refined?.let { selectorWith(it) }
+    } else {
+      null
+    }
+  },
+
   // === Hierarchy strategies ===
 
-  // Strategies 8-11: hierarchy, spatial, and index — shared across all generators.
+  // Strategies 10-13: hierarchy, spatial, and index — shared across all generators.
   childOfUniqueParentStrategy(root, target, detail, parentMap),
   containsUniqueChildStrategy(root, target, detail),
   spatialStrategy(root, target, parentMap),

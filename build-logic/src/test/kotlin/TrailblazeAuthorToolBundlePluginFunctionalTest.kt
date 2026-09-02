@@ -4,6 +4,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
+import org.gradle.testkit.runner.TaskOutcome
 
 /**
  * Plugin-level functional tests for `trailblaze.author-tool-bundle`. Runs the plugin against
@@ -171,6 +172,70 @@ class TrailblazeAuthorToolBundlePluginFunctionalTest {
     val result = runner(projectDir, "tasks", "--all").build()
     assertTrue("expected installFooAuthorToolDeps in task list:\n${result.output}") {
       result.output.contains("installFooAuthorToolDeps")
+    }
+  }
+
+  @Test
+  fun `editing an SDK source the aliases inline re-bundles instead of reporting UP-TO-DATE`() {
+    // The task aliases `@trailblaze/scripting` to the SLIM entry and
+    // `@trailblaze/scripting/matcher` to its sibling, and BOTH are barrels that re-export
+    // siblings — so esbuild inlines files neither entry path names. Declaring only the entry
+    // file as an input left an edit to `matcher/resolver.ts` reporting UP-TO-DATE, and the
+    // previously bundled SDK code stayed in the on-device bundle with nothing reporting it.
+    //
+    // Runs the task for real against a fake esbuild (a shell script that writes the outfile),
+    // because an input-model claim can only be tested through two actual executions.
+    val projectDir = newFixtureProject(
+      buildScript = """
+        plugins {
+          base
+          id("trailblaze.author-tool-bundle")
+        }
+        trailblazeAuthorToolBundles {
+          register("foo") {
+            sourceDir.set(layout.projectDirectory.dir("foo-src"))
+            entryPoint.set("tools.ts")
+            esbuildBinary.set(layout.projectDirectory.file("fake-esbuild"))
+            scriptingSdkSrc.set(layout.projectDirectory.file("sdk/src/in-process.ts"))
+            scriptingWrapperTemplate.set(layout.projectDirectory.file("wrapper-template.mjs"))
+            autoInstall.set(false)
+          }
+        }
+      """.trimIndent(),
+    )
+    File(projectDir, "foo-src").mkdirs()
+    File(projectDir, "foo-src/tools.ts").writeText("export const foo = 1;\n")
+    File(projectDir, "wrapper-template.mjs").writeText(
+      "// __TRAILBLAZE_HEADER__\nimport * as m from \"__TRAILBLAZE_IMPORT_SOURCE__\";\n" +
+        "// __TRAILBLAZE_PRELUDE__\n// __TRAILBLAZE_REGISTRATION__\n",
+    )
+    val sdkSrc = File(projectDir, "sdk/src/matcher").apply { mkdirs() }.parentFile
+    File(sdkSrc, "in-process.ts").writeText("export const trailblaze = {};\n")
+    File(sdkSrc, "matcher/index.ts").writeText("export * from \"./resolver.js\";\n")
+    val matcherImpl = File(sdkSrc, "matcher/resolver.ts")
+    matcherImpl.writeText("export const resolve = () => \"v1\";\n")
+    File(projectDir, "fake-esbuild").apply {
+      // Writes whatever `--outfile=` names, so the task's own output check passes.
+      writeText("#!/bin/sh\nfor a in \"$@\"; do case \"\$a\" in --outfile=*) printf bundled > \"\${a#--outfile=}\";; esac; done\n")
+      setExecutable(true)
+    }
+
+    val first = runner(projectDir, "bundleFooAuthorTool").build()
+    assertTrue("first run should execute the task:\n${first.output}") {
+      first.task(":bundleFooAuthorTool")?.outcome == TaskOutcome.SUCCESS
+    }
+
+    val second = runner(projectDir, "bundleFooAuthorTool").build()
+    assertTrue("unchanged inputs should be UP-TO-DATE, not re-run:\n${second.output}") {
+      second.task(":bundleFooAuthorTool")?.outcome == TaskOutcome.UP_TO_DATE
+    }
+
+    // The edit that used to be invisible: an SDK source that is neither the declared entry file
+    // nor anything under the author's own `sourceDir`.
+    matcherImpl.writeText("export const resolve = () => \"v2\";\n")
+    val third = runner(projectDir, "bundleFooAuthorTool").build()
+    assertTrue("editing sdk/src/matcher/resolver.ts must re-bundle:\n${third.output}") {
+      third.task(":bundleFooAuthorTool")?.outcome == TaskOutcome.SUCCESS
     }
   }
 

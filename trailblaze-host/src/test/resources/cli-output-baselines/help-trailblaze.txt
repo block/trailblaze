@@ -48,6 +48,10 @@ Trailblaze - AI-powered device automation
                  configured logs directory when <logs-dir> is omitted. Writes
                  <logs-dir>/trailblaze_performance_analysis.html. Requires
                  `bun` on PATH.
+  otel         Convert recorded spans to OpenTelemetry. Writes <session>/otel.
+                 json (OTLP/JSON) for every session that recorded a trace, and
+                 with --post also sends them to an OTLP endpoint. Defaults to
+                 the configured logs directory when <dir> is omitted.
   waypoint     Match named app locations (waypoints) against captured screen
                  state.
   results      Query the persisted test-result index for a test case. Passing a
@@ -70,6 +74,8 @@ Trailblaze - AI-powered device automation
                  at the workspace root if absent so `bun install` can be used
                  as the canonical bootstrap (its `postinstall` hook re-runs
                  `trailblaze check`).
+  inprocess    Check an app APK for in-process driver compatibility, and build
+                 a test APK that drives it.
   skill        Print or install the bundled agent skill that teaches a coding
                  agent this CLI
 Docs: https://block.github.io/trailblaze

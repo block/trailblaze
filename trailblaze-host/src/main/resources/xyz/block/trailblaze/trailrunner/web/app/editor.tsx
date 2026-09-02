@@ -10,18 +10,18 @@ function toolSnippet(t) {
   return `- ${t.id}:\n` + ps.map((p) => `    ${p.name}: <${p.type || 'value'}>`).join('\n');
 }
 
-function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOnly = false, wrap = false, apiRef, highlight, toolRunMarkers = [], onRunTool }) {
+function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOnly = false, wrap = false, apiRef, highlight, runMarkers = [], onRunMarker, ariaLabel = null }) {
   const hostRef = React.useRef(null);
   const flashedRef = React.useRef(null);
   const cmRef = React.useRef(null);
   const changeRef = React.useRef(onChange);
   const saveRef = React.useRef(onSave);
   const lintRef = React.useRef(serverLint);
-  const runToolRef = React.useRef(onRunTool);
+  const runMarkerRef = React.useRef(onRunMarker);
   changeRef.current = onChange;
   saveRef.current = onSave;
   lintRef.current = serverLint;
-  runToolRef.current = onRunTool;
+  runMarkerRef.current = onRunMarker;
 
   const modeKey = typeof mode === 'string' ? mode : JSON.stringify(mode);
   React.useEffect(() => {
@@ -36,7 +36,7 @@ function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOn
       indentUnit: 2,
       tabSize: 2,
       viewportMargin: Infinity,
-      gutters: [...(onRunTool ? ['tb-tool-run-gutter'] : []), 'CodeMirror-lint-markers', 'CodeMirror-linenumbers'],
+      gutters: [...(onRunMarker ? ['tb-step-run-gutter'] : []), 'CodeMirror-lint-markers', 'CodeMirror-linenumbers'],
       lint: mode !== 'yaml' ? false : {
         async: true,
         delay: 600,
@@ -117,27 +117,33 @@ function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOn
     if (cm) cm.setOption('lineWrapping', !!wrap);
   }, [wrap]);
 
+  // CodeMirror's own hidden textarea is what focus lands on, and it inherits no name from the element
+  // we mount into, so a caller with no visible <label> to point at names it here instead.
+  React.useEffect(() => {
+    const input = cmRef.current && cmRef.current.getInputField();
+    if (!input) return;
+    if (ariaLabel) input.setAttribute('aria-label', ariaLabel);
+    else input.removeAttribute('aria-label');
+  }, [ariaLabel, modeKey, readOnly]);
+
   // CodeMirror fallback parity with Monaco: one real, keyboard-focusable Play button in the far-left
-  // gutter for each independently runnable recorded tool call.
+  // gutter for each marker the caller found (a step of the trail).
   React.useEffect(() => {
     const cm = cmRef.current;
     if (!cm) return;
-    cm.clearGutter('tb-tool-run-gutter');
-    (toolRunMarkers || []).forEach((marker) => {
+    cm.clearGutter('tb-step-run-gutter');
+    (runMarkers || []).forEach((marker) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'tb-tool-run-button' + (marker.running ? ' is-running' : '');
-      btn.setAttribute('aria-label', (marker.running ? 'Running ' : (marker.disabled ? 'Wait to test ' : 'Test ')) + marker.name + ' on the connected device');
-      // Short, like the Monaco glyph's hover, and the same verb as the aria-label above — which stays
-      // spelled out for screen readers.
-      btn.title = marker.running ? `Running ${marker.name}…` : (marker.disabled ? 'Wait for the running tool to finish' : `Test ${marker.name}`);
-      btn.disabled = !!marker.disabled;
+      btn.className = 'tb-step-run-button';
+      btn.setAttribute('aria-label', marker.hover);
+      btn.title = marker.hover;
       btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
-      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (runToolRef.current) runToolRef.current(marker); });
-      cm.setGutterMarker(marker.line0, 'tb-tool-run-gutter', btn);
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (runMarkerRef.current) runMarkerRef.current(marker); });
+      cm.setGutterMarker(marker.line0, 'tb-step-run-gutter', btn);
     });
-    return () => cm.clearGutter('tb-tool-run-gutter');
-  }, [toolRunMarkers]);
+    return () => cm.clearGutter('tb-step-run-gutter');
+  }, [runMarkers]);
 
   // Jump to + flash a step's YAML block when the caller hands us a highlight target (e.g. clicking a
   // board cell). Matches the `- step:`/`- verify:` line carrying the text, then flashes through the
@@ -172,6 +178,7 @@ function CodeEditor({ value, onChange, onSave, serverLint, mode = 'yaml', readOn
         onChange={(e) => onChange && onChange(e.target.value)}
         readOnly={readOnly}
         spellCheck={false}
+        aria-label={ariaLabel || undefined}
         style={{ width: '100%', height: '100%', background: 'transparent', color: 'var(--text-standard)', border: 'none', outline: 'none', padding: 12, fontSize: 12.5, fontFamily: 'inherit', resize: 'none' }}
       />
     );
@@ -451,7 +458,7 @@ function findStepLineRange(doc, needle) {
 // under a distinct owner, alongside the schema diagnostics) and the board-cell → YAML flash. Falls back
 // to CodeMirror if Monaco's CDN load or the mount fails. Schema is scoped at mount to the trail's target
 // (open-time scoping — editing config.target re-scopes on the next mount).
-function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, readOnly, apiRef, wrap, highlight, toolRunMarkers, onRunTool }) {
+function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, readOnly, apiRef, wrap, highlight, runMarkers, onRunMarker }) {
   const hostRef = React.useRef(null);
   const handleRef = React.useRef(null);
   const flashedRef = React.useRef(null);
@@ -460,8 +467,8 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   // empty, which read as "nothing shows up for a while" on switching to Edit. Track readiness so we
   // can show a loading placeholder over the empty host instead of a blank pane.
   const [ready, setReady] = React.useState(false);
-  const cbRef = React.useRef({ onChange, onSave, onRunTool });
-  cbRef.current = { onChange, onSave, onRunTool };
+  const cbRef = React.useRef({ onChange, onSave, onRunMarker });
+  cbRef.current = { onChange, onSave, onRunMarker };
   React.useEffect(() => {
     let disposed = false;
     setFailed(false);
@@ -472,7 +479,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
       target, platform, driver, readOnly, wrap,
       onChange: (t) => cbRef.current.onChange && cbRef.current.onChange(t),
       onSave: () => cbRef.current.onSave && cbRef.current.onSave(),
-      onRunTool: onRunTool ? (marker) => cbRef.current.onRunTool && cbRef.current.onRunTool(marker) : undefined,
+      onRunMarker: onRunMarker ? (marker) => cbRef.current.onRunMarker && cbRef.current.onRunMarker(marker) : undefined,
     }).then((h) => {
       if (disposed) { h.dispose(); return; }
       handleRef.current = h;
@@ -508,8 +515,8 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
   }, [wrap]);
   React.useEffect(() => {
     const h = handleRef.current;
-    if (h && h.setToolRunMarkers) h.setToolRunMarkers(toolRunMarkers || []);
-  }, [toolRunMarkers, ready]);
+    if (h && h.setRunMarkers) h.setRunMarkers(runMarkers || []);
+  }, [runMarkers, ready]);
   // Server-side semantic lint (beyond what the schema validates) → markers. Debounced; skips the network
   // check when the client-side YAML is unparseable (the schema already flags syntax). Coexists with the
   // language server's schema diagnostics (distinct marker owner).
@@ -537,7 +544,7 @@ function MonacoTrailEditor({ value, onChange, onSave, target, platform, driver, 
     flashedRef.current = highlight;
     if (range) h.revealAndFlashLines(range.start0, Math.min(range.end0, range.start0 + 10));
   }, [highlight, value]);
-  if (failed) return <CodeEditor value={value} onChange={onChange} onSave={onSave} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={readOnly} wrap={wrap} apiRef={apiRef} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={onRunTool} />;
+  if (failed) return <CodeEditor value={value} onChange={onChange} onSave={onSave} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={readOnly} wrap={wrap} apiRef={apiRef} highlight={highlight} runMarkers={runMarkers} onRunMarker={onRunMarker} />;
   return (
     <div style={{ position: 'relative', height: '100%', minHeight: 0 }}>
       <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />
@@ -577,14 +584,88 @@ function TrailDiffView({ committed, current, wrap }) {
   return <div ref={hostRef} style={{ height: '100%', minHeight: 0 }} />;
 }
 
+function FileChangedOnDiskDialog({ onReload, onCancel }) {
+  const dialogRef = React.useRef(null);
+  const cancelRef = React.useRef(null);
+  const previousFocusRef = React.useRef(typeof document !== 'undefined' ? document.activeElement : null);
+
+  React.useEffect(() => {
+    if (cancelRef.current) cancelRef.current.focus();
+    return () => {
+      const previouslyFocused = previousFocusRef.current;
+      if (previouslyFocused && document.contains(previouslyFocused) && previouslyFocused.focus) {
+        previouslyFocused.focus();
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        onCancel();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll(focusableSelector))
+        .filter((el) => el.tabIndex >= 0);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialogRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onCancel]);
+  return (
+    <div className="tb-overlay" onClick={(e) => { e.stopPropagation(); onCancel(); }} style={{ position: 'fixed', inset: 0, alignItems: 'center', padding: 24, zIndex: 300 }}>
+      <div ref={dialogRef} className="tb-card" role="dialog" aria-modal="true" aria-label="File changed on disk" tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px, 94vw)', padding: 22, background: 'var(--bg-elevated)', boxShadow: '0 18px 50px rgba(0,0,0,.55)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <span style={{ width: 34, height: 34, borderRadius: 9, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--tb-amber)', background: 'rgba(245,166,35,.13)', border: '1px solid rgba(245,166,35,.28)', flex: '0 0 auto' }}>
+            <Ico n="refresh-cw" s={17} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h2 className="tb-h2" style={{ fontSize: 17, margin: 0 }}>File changed on disk</h2>
+            <div className="tb-sub" style={{ fontSize: 12.5, lineHeight: 1.55, marginTop: 6 }}>
+              Another editor updated this trail while this buffer has unsaved changes.
+            </div>
+          </div>
+        </div>
+        <div className="tb-sub" style={{ fontSize: 12.5, lineHeight: 1.6, marginTop: 16 }}>
+          Reload replaces the editor with the version now on disk. Cancel keeps your current buffer so you can save it or copy anything you still need.
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button ref={cancelRef} type="button" className="tb-btn" onClick={onCancel} autoFocus>Cancel</button>
+          <Btn kind="primary" ico="refresh-cw" onClick={onReload}>Reload</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // `trailId` is the id the trail is SAVED under (what `updateTrail` posts), because that's the id the
 // daemon resolves back to a file when the diff asks git for the committed version. Editors that
 // aren't editing a registered trail file (a bundle's blaze.yaml, a board's raw pane) leave it unset
 // and simply get no diff toggle.
-function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey, trailId = null, enableToolRun = false }) {
+function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dirtyRef, highlight, resetKey, trailId = null, onRunFromStep = null }) {
   useLucide();
-  const devices = TB.useDevices();
-  const [globalTarget] = TB.useGlobalTarget();
   const [text, setText] = React.useState(null);
   const [baseline, setBaseline] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -592,7 +673,6 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const [toolQuery, setToolQuery] = React.useState('');
   const [hoverTool, setHoverTool] = React.useState(null);
   const [wrap, setWrap] = useStickyState('tb-yaml-wrap', true);
-  const [toolRun, setToolRun] = React.useState(null); // { key, status, ok, msg }
   // What git has committed for this trail, and whether the diff pane is showing. `saves` only exists
   // to re-read the baseline after a write: the committed text doesn't move, but a file that matched
   // it a moment ago no longer does.
@@ -605,7 +685,6 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const [diffOpens, setDiffOpens] = React.useState(0);
   const [saves, setSaves] = React.useState(0);
   const editorApi = React.useRef(null);
-  const toolRunRef = React.useRef({ generation: 0, pending: false });
   // Mirror the latest text/baseline into refs so the content-sync effect can read them without
   // re-subscribing to every keystroke.
   const textRef = React.useRef(null); textRef.current = text;
@@ -614,6 +693,9 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   // user picks a side. The parent polls the file, so this is how an edit made in another IDE (or by
   // an agent) announces itself instead of being dropped on the floor.
   const [external, setExternal] = React.useState(null);
+  const [externalDialogOpen, setExternalDialogOpen] = React.useState(false);
+  const externalRef = React.useRef(null); externalRef.current = external;
+  const externalDialogDismissedRef = React.useRef(false);
   // (Re)seed from `content` on mount AND whenever it changes — switching trails in the sidebar, or an
   // external reload — but NEVER clobber unsaved edits. Previously this seeded only once (`text === null`),
   // so switching trails left the prior trail's YAML in the editor (read as "the detail doesn't update
@@ -629,12 +711,20 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
       : (content == null ? 'wait' : (textRef.current == null ? 'seed' : 'keep'));
     // A trail SWITCH is not a disk change: the parent bumps `resetKey`, and the effect below takes
     // the incoming file even over unsaved edits. This one only ever reasons about the same file.
-    if (act === 'conflict') { setExternal(content); return; }
+    if (act === 'conflict') {
+      if (externalRef.current !== content) externalDialogDismissedRef.current = false;
+      if (!externalDialogDismissedRef.current) setExternalDialogOpen(true);
+      setExternal(content);
+      return;
+    }
+    externalDialogDismissedRef.current = false;
     setExternal(null); // any other outcome means there is nothing left to reconcile
+    setExternalDialogOpen(false);
     if (act === 'wait' || act === 'keep') return;
     setText(content); setBaseline(content);
   }, [content]);
-  const takeExternal = () => { setText(external); setBaseline(external); setExternal(null); setNote(null); };
+  const takeExternal = () => { externalDialogDismissedRef.current = false; setText(external); setBaseline(external); setExternal(null); setExternalDialogOpen(false); setNote(null); };
+  const cancelExternal = () => { externalDialogDismissedRef.current = true; setExternalDialogOpen(false); };
   // Losing Monaco costs every YAML completion, because the CodeMirror fallback has none. Say so:
   // MonacoTrailEditor already warns when a mount FAILS, but this earlier feature-detect was silent,
   // so a total loss of autocomplete read as the editor simply not offering any.
@@ -652,13 +742,12 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const firstResetRef = React.useRef(true);
   React.useEffect(() => {
     if (firstResetRef.current) { firstResetRef.current = false; return; }
-    setText(content); setBaseline(content); setNote(null); setExternal(null);
+    externalDialogDismissedRef.current = false;
+    setText(content); setBaseline(content); setNote(null); setExternal(null); setExternalDialogOpen(false);
     // Also clear per-file editor-surface state so a switch fully resets: a stale palette filter can make
     // the new file's tool list look empty, and a hover popover can get stuck (unmounting the hovered row
     // never fires onMouseLeave).
-    toolRunRef.current.generation++;
-    toolRunRef.current.pending = false;
-    setToolQuery(''); setHoverTool(null); setToolRun(null); setShowDiff(false);
+    setToolQuery(''); setHoverTool(null); setShowDiff(false);
   }, [resetKey]);
   const dirty = editable && text != null && text !== baseline;
   if (dirtyRef) dirtyRef.current = dirty;
@@ -691,7 +780,7 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   }, [trailId, saves, content, diffOpens]);
   React.useEffect(() => { if (!canDiff) setShowDiff(false); }, [canDiff]);
   const save = async () => {
-    if (!editable || text == null || busy) return;
+    if (!editable || text == null || busy) return false;
     setBusy(true); setNote(null);
     const r = await onSave(text);
     setBusy(false);
@@ -701,12 +790,17 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
     // and must survive.
     if (r && r.success) {
       setBaseline(text);
-      if (textRef.current === text) setExternal(null);
+      if (textRef.current === text) {
+        externalDialogDismissedRef.current = false;
+        setExternal(null); setExternalDialogOpen(false);
+      }
       setNote({ ok: true, msg: 'Saved' });
       setSaves((n) => n + 1);
       onSaved && onSaved();
+      return true;
     }
-    else setNote({ ok: false, msg: (r && r.error) || 'Save failed' });
+    setNote({ ok: false, msg: (r && r.error) || 'Save failed' });
+    return false;
   };
   // Scope the trail schema to the trail's target. Derived from `content` (the loaded baseline), not the
   // live `text`, so typing in config.target doesn't remount the editor on every keystroke — open-time
@@ -714,62 +808,43 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
   const cfg = parseTrailTargetPlatform(content);
   const palette = editable && (tools || []).length > 0;
   const markerSource = text != null ? text : (content || '');
-  const toolRunMarkers = React.useMemo(() => (enableToolRun ? window.TrailYamlBuild.runnableToolCalls(markerSource) : []).map((m) => ({
-    ...m,
-    key: `${m.line0}:${m.name}`,
-    running: !!(toolRun && toolRun.status === 'running' && toolRun.key === `${m.line0}:${m.name}`),
-    disabled: !!(toolRun && toolRun.status === 'running'),
-  })), [enableToolRun, markerSource, toolRun && toolRun.key, toolRun && toolRun.status]);
-
-  const runTool = async (marker) => {
-    if (!marker || toolRunRef.current.pending) return;
-    const key = marker.key || `${marker.line0}:${marker.name}`;
-    const generation = ++toolRunRef.current.generation;
-    toolRunRef.current.pending = true;
-    setToolRun({ key, status: 'running', ok: null, msg: `Running ${marker.name}…` });
-    try {
-      const deviceList = devices.data || [];
-      const selectedIds = (globalTarget && globalTarget.deviceIds) || [];
-      const base = (p) => String(p || '').split(/[-_]/)[0].toLowerCase();
-      const requestedPlatform = base(marker.platform || cfg.platform);
-      if (!requestedPlatform) throw new Error('This tool call does not identify a device platform.');
-      let selected = selectedIds.map((id) => deviceList.find((d) => d.id === id)).filter(Boolean);
-      if (requestedPlatform !== 'all') selected = selected.filter((d) => base(d.platform) === requestedPlatform);
-      const deviceLabel = requestedPlatform === 'all' ? '' : `${requestedPlatform} `;
-      if (selected.length === 0) throw new Error(`Select a connected ${deviceLabel}device in the current target.`);
-      if (selected.length > 1) throw new Error(`Select one ${deviceLabel}device before testing this tool.`);
-      const preferred = selected[0];
-      const platform = requestedPlatform === 'all' ? base(preferred.platform) : requestedPlatform;
-      if (!platform) throw new Error('The selected device does not identify a platform.');
-      const trailblazeDeviceId = { instanceId: preferred.id, trailblazeDevicePlatform: platform.toUpperCase() };
-      const connected = await TB.withTimeout(TB.connectDeviceDetailed(trailblazeDeviceId), 45000);
-      if (connected === '__timeout__') throw new Error('The device did not respond while connecting.');
-      if (!connected || !connected.ok) throw new Error((connected && connected.error) || 'Could not connect to the selected device.');
-      const runnable = window.TrailYamlBuild.buildToolListRunYaml(marker.name, [marker.tool], platform);
-      if (!runnable) throw new Error('This tool call is not runnable yet.');
-      const result = await TB.runToolQuick(runnable, trailblazeDeviceId);
-      if (!result || result.success !== true) throw new Error((result && result.error) || 'Tool run failed.');
-      if (toolRunRef.current.generation === generation) setToolRun({ key, status: 'done', ok: true, msg: `${marker.name} ran on ${preferred.name || preferred.id}` });
-    } catch (e) {
-      if (toolRunRef.current.generation === generation) setToolRun({ key, status: 'done', ok: false, msg: String((e && e.message) || e) });
-    } finally {
-      if (toolRunRef.current.generation === generation) toolRunRef.current.pending = false;
+  // A Play control in the gutter at each STEP - the unit a run can start from. Clicking one hands
+  // the step's index to the Run trail dialog instead of starting anything here: which devices, and
+  // whether the agent re-records the steps or replays what they already hold, are that dialog's
+  // decisions. (Testing ONE tool call still lives in Grid View's tool-call popover, where the tool
+  // being tested is the thing you are editing.)
+  const runMarkers = React.useMemo(() => {
+    if (!onRunFromStep) return [];
+    const steps = window.TrailYamlBuild.runnableSteps(markerSource);
+    return steps.map((st) => ({
+      ...st,
+      total: steps.length,
+      hover: st.index === steps.length - 1
+        ? `Run step ${st.index + 1}`
+        : `Run steps ${st.index + 1}-${steps.length} (from here to the end)`,
+    }));
+  }, [!!onRunFromStep, markerSource]);
+  // A step index only means anything against the file on disk: the dialog slices that file, and a
+  // recording run writes back into those slots. So an unsaved buffer is saved before the handoff, and
+  // a failed save cancels it - running the numbers this buffer shows against the previous file would
+  // start at, and record over, a different step.
+  const runFromMarker = onRunFromStep
+    ? async (marker) => {
+      if (dirty && !(await save())) return;
+      onRunFromStep(marker.index, marker.total);
     }
-  };
+    : undefined;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 10px', flex: '0 0 auto' }}>
         {/* save state lives entirely in the button on the right; only surface a hard error here */}
         {note && !note.ok && <span style={{ fontSize: 12, color: 'var(--tb-danger-text)' }}>{note.msg}</span>}
         {/* `!== null`, not truthiness: a file emptied on disk is still a conflict worth reporting. */}
-        {external !== null && <>
+        {external !== null && !externalDialogOpen && <>
           <span style={{ fontSize: 12, color: 'var(--tb-warning-text)' }}>This file changed on disk.</span>
-          <Btn sm ico="refresh-cw" title="Replace this buffer with the version now on disk, discarding your unsaved edits" onClick={takeExternal}>Load from disk</Btn>
+          <Btn sm ico="refresh-cw" title="Replace this buffer with the version now on disk, discarding your unsaved edits" onClick={takeExternal}>Reload</Btn>
         </>}
-        {toolRun && <span role="status" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: toolRun.status === 'running' ? 'var(--text-subtle)' : (toolRun.ok ? 'var(--tb-pass)' : 'var(--tb-danger-text)') }}>
-          <Ico n={toolRun.status === 'running' ? 'loader-2' : (toolRun.ok ? 'check' : 'circle-alert')} s={13} spin={toolRun.status === 'running'} />
-          {toolRun.msg}
-        </span>}
         <span style={{ flex: 1 }} />
         {/* Real buttons, not clickable spans: Tab reaches them and Enter/Space toggle them without a
             hand-rolled key handler. `appearance: none` + `font: inherit` undo the UA control styling
@@ -818,8 +893,8 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
           {content === null && text === null
             ? <div className="tb-sub" style={{ padding: 16 }}>Loading…</div>
             : (monacoAvailable
-              ? <MonacoTrailEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} target={cfg.target} platform={cfg.platform} driver={cfg.driver} readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={enableToolRun ? runTool : undefined} />
-              : <CodeEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} toolRunMarkers={toolRunMarkers} onRunTool={enableToolRun ? runTool : undefined} />)}
+              ? <MonacoTrailEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} target={cfg.target} platform={cfg.platform} driver={cfg.driver} readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} runMarkers={runMarkers} onRunMarker={runFromMarker} />
+              : <CodeEditor value={text != null ? text : content} onChange={editable ? setText : undefined} onSave={save} serverLint={(t) => TB.validateTrail(t)} mode="yaml" readOnly={!editable} wrap={wrap} apiRef={editorApi} highlight={highlight} runMarkers={runMarkers} onRunMarker={runFromMarker} />)}
         </div>
         {/* No tool palette next to the diff: a click there would insert into the hidden editor, which
             reads as the palette doing nothing at all. */}
@@ -865,6 +940,8 @@ function TrailYamlEditor({ content, editable = true, tools, onSave, onSaved, dir
       </div>
       {hoverTool && hoverTool.tool && ReactDOM.createPortal(
         <ToolDocPopover tool={hoverTool.tool} rect={hoverTool.rect} />, document.body)}
+      {external !== null && externalDialogOpen && ReactDOM.createPortal(
+        <FileChangedOnDiskDialog onReload={takeExternal} onCancel={cancelExternal} />, document.body)}
     </div>
   );
 }

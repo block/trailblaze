@@ -18,6 +18,7 @@ import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblaz
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.VerificationStep
@@ -339,6 +340,50 @@ class DynamicToolSetTest {
     )
   }
 
+  /**
+   * A session with no target takes the whole driver-compatible catalog, and `multi_device` declares
+   * no `drivers:` — so without an explicit carve-out the implicit scope sweeps in the one toolset
+   * that is only ever meaningful when the RUNNER bound a cast, handing the model a tool whose every
+   * call returns "this session has no device bindings".
+   *
+   * Against the REAL catalog on purpose: the driver-awareness tests below build a synthetic one
+   * with no `multi_device` entry, so none of them can see this.
+   */
+  @Test
+  fun `a target-less session does not advertise the handover tool it cannot use`() {
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    )
+
+    assertFalse(
+      SwitchDeviceTrailblazeTool::class in repo.getRegisteredTrailblazeTools(),
+      "the whole-catalog fallback must not register a session-bound toolset",
+    )
+    assertFalse(
+      "switchDevice" in repo.getToolDescriptorsForStep(VerificationStep(verify = "probe")).map { it.name },
+      "and it must not reach the verify surface either",
+    )
+  }
+
+  /**
+   * The carve-out is on the IMPLICIT scope only. A multi-device session with no target still gets
+   * the tool, because the runner contributes it explicitly through `additional` — that is what
+   * `MultiDeviceTargetBinding.handoverToolSurface` feeds, and it is the only thing that should
+   * ever turn the handover surface on.
+   */
+  @Test
+  fun `a target-less multi-device session still gets the handover tool from the runner`() {
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = setOf(SwitchDeviceTrailblazeTool::class),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    )
+
+    assertTrue(
+      SwitchDeviceTrailblazeTool::class in repo.getRegisteredTrailblazeTools(),
+      "an explicitly contributed handover tool must survive the carve-out",
+    )
+  }
+
   // -- getToolDescriptorsForStep(VerificationStep) driver-awareness --
 
   /**
@@ -422,6 +467,60 @@ class DynamicToolSetTest {
     assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
     assertFalse("assertEquals" in names, "driver-specific web tool must not appear for a null driver")
     assertFalse("assertNotVisibleWithText" in names, "driver-specific revyl tool must not appear for a null driver")
+  }
+
+  // -- getToolDescriptorsForStep(VerificationStep) and the multi-device handover --
+
+  /**
+   * A cross-device check ("On the buyer display, the welcome screen is idle") is the natural way to
+   * verify a multi-device flow, so a verify step in a session that registered `switchDevice` must be
+   * able to reach the other device. Verify scoping still holds otherwise: a handover changes which
+   * device is observed, never either device's UI, so it can't leave a following recorded step
+   * looking at state a verify step scrolled or tapped into.
+   */
+  @Test
+  fun `VerificationStep advertises switchDevice when the session registered it`() {
+    val names = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = setOf(SwitchDeviceTrailblazeTool::class),
+      catalog = multiDriverVerifyCatalog(),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    ).getToolDescriptorsForStep(VerificationStep(verify = "the buyer display is idle"))
+      .map { it.name }
+      .toSet()
+
+    assertTrue("switchDevice" in names, "a multi-device session should be able to verify cross-device")
+    assertTrue("assertVisible" in names, "the driver's verify surface is unchanged")
+    assertTrue("objectiveStatus" in names, "objectiveStatus is always included")
+  }
+
+  @Test
+  fun `VerificationStep omits switchDevice on a single-device session`() {
+    // The single-device verify surface must be byte-identical to what it was before multi-device
+    // existed — nothing registers the handover tool, so nothing advertises it.
+    val names = verifyDescriptorNamesForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+
+    assertFalse("switchDevice" in names, "a single-device verify step has nothing to hand over to")
+  }
+
+  @Test
+  fun `switchDevice does not stand in for a missing verification toolset`() {
+    // A catalog carrying no toolset compatible with this driver leaves the verify surface with
+    // nothing to assert or observe with. `verifyScopedAdvertisedTools` detects that by asking
+    // whether anything but objectiveStatus resolved, and hands back the full registry instead of
+    // stranding the agent — so the handover must not be what makes that check pass.
+    val names = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = setOf(SwitchDeviceTrailblazeTool::class),
+      catalog = multiDriverVerifyCatalog().filterNot { it.id == "verification" },
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    ).getToolDescriptorsForStep(VerificationStep(verify = "the buyer display is idle"))
+      .map { it.name }
+      .toSet()
+
+    assertEquals(
+      setOf("objectiveStatus"),
+      names,
+      "with no verification toolset the surface must stay objectiveStatus-only so the caller falls back",
+    )
   }
 
   // -- entryToolClasses --

@@ -93,7 +93,8 @@ class TrailblazeMcpServerReleaseConnectionGateTest {
   }
 }
 
-private object NoopBridge : TrailblazeMcpBridge {
+/** Shared by tests in this package that need a [TrailblazeMcpServer] but never drive a device. */
+internal object NoopBridge : TrailblazeMcpBridge {
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary =
     error("not used")
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> = emptySet()

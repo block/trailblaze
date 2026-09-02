@@ -25,6 +25,25 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
     block = block,
   )
 
+  /**
+   * Suspending [traceLlmClient], for the overrides that are themselves suspending.
+   *
+   * Not interchangeable with the non-suspending one. That variant publishes its span only to
+   * [xyz.block.trailblaze.tracing.TraceSpanLocal], and an outgoing HTTP request reads its parent
+   * from the coroutine context — the thread-local is unreliable there, because the ktor interceptor
+   * may already have been dispatched to a thread whose frame belongs to someone else. Wrapping a
+   * suspending call in the non-suspending variant therefore leaves every request this LLM call makes
+   * parentless, and the network time stays inside `LlmClient.execute` self time instead of showing up
+   * as the child that explains it.
+   */
+  private suspend inline fun <T> traceLlmClientSuspend(name: String, crossinline block: suspend () -> T): T =
+    traceRecorder.traceSuspend(
+      name = name,
+      cat = "LlmClient",
+      args = emptyMap(),
+      block = block,
+    )
+
   override fun llmProvider(): LLMProvider = traceLlmClient(name = "llmProvider") {
     delegate.llmProvider()
   }
@@ -33,7 +52,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): Message.Assistant = traceLlmClient("execute") {
+  ): Message.Assistant = traceLlmClientSuspend("execute") {
     delegate.execute(
       prompt = prompt,
       model = model,
@@ -45,7 +64,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): LLMChoice = traceLlmClient("executeMultipleChoices") {
+  ): LLMChoice = traceLlmClientSuspend("executeMultipleChoices") {
     delegate.executeMultipleChoices(prompt, model, tools)
   }
 
@@ -60,7 +79,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient() {
   override suspend fun moderate(
     prompt: Prompt,
     model: LLModel,
-  ): ModerationResult = traceLlmClient("moderate") {
+  ): ModerationResult = traceLlmClientSuspend("moderate") {
     delegate.moderate(
       prompt = prompt,
       model = model,

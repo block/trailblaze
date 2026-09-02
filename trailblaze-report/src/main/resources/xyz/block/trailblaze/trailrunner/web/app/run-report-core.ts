@@ -25,6 +25,13 @@ import {
   yamlRootSection,
 } from './run-report-extract';
 import { buildMultiReportHtml, buildRunReportHtml } from './run-report-html';
+// Out-of-directory like the selector-engine wrapper: the events module lives beside the bun driver
+// (report/) because the driver imports it as a staged sibling; the viewer/zip surfaces reach the
+// SAME implementation through this bundle so attachment detection can't fork per surface.
+import {
+  ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_INLINE_MAX_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, MAX_ATTACHMENTS_PER_SESSION, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS, attachmentRefOf, buildEventStream,
+  collectStreamAttachmentRefs, findAttachmentRefs, isSafeSessionRelativePath,
+} from '../../../report/run-report-events';
 import { isSelectorAnalyzableTree } from './run-report-selectors';
 import { eventPrettyText, inflateEventsGz, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, rawPrettyText, rekeySprites, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
 import {
@@ -39,6 +46,8 @@ const RUN_REPORT_EXPORTS = {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream,
+  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS,
   playbackGapMs, exportGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt, videoLoopFrame,
 };
 (globalThis as Record<string, unknown>).__TRAILBLAZE_RUN_REPORT_CORE__ = RUN_REPORT_EXPORTS;
@@ -48,5 +57,7 @@ export {
   truncate, logClass, originalYamlFromLogs, yamlRootSection, localRunAgentPrompt, extractTrace, toolChildren, describeAction, parseLlmResponse, extractLlmLogs, estimateLlmComp,
   extractLlmTranscripts, transcriptCallMessages, jsonToYaml, transcriptToolCallYaml, transcriptToolResultDisplay, stepText, toolDetail, summarizeToolArgs, describeSelector,
   slimTraceForShare, slimLlmForShare, toSessionPayloads, traceScreenshotFiles, traceHierarchies, packSessionInputsHierarchies, isSelectorAnalyzableTree, buildRunReportHtml, buildMultiReportHtml, inflateGzText, inflateEventsGz, inflateLlmMessagesGz, inflateGzJsonRecord, normalizeEventPayload, eventPrettyText, rawPrettyText, rekeySprites, RUN_REPORT_CSS, RUN_REPORT_VIEWER,
+  attachmentRefOf, findAttachmentRefs, collectStreamAttachmentRefs, buildEventStream,
+  ATTACHMENT_INLINE_MAX_BYTES, MAX_ATTACHMENTS_PER_SESSION, ATTACHMENT_EMBED_MAX_TOTAL_BYTES, ATTACHMENT_MATERIALIZE_MAX_TOTAL_BYTES, ATTACHMENT_MIME, isSafeSessionRelativePath, MAX_EVENT_STREAM_BYTES, MAX_EVENT_STREAMS_TOTAL_CHARS,
   playbackGapMs, exportGapMs, videoFrameAt, videoEndMs, spriteFrameCss, buildPlaybackSchedule, buildExportSchedule, playbackPositionAt, videoLoopFrame,
 };

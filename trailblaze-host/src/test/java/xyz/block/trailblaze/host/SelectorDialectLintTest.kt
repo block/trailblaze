@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -478,7 +479,7 @@ class SelectorDialectLintTest {
                       textRegex: Checkout
       """.trimIndent(),
     )
-    assertEquals(CheckCommand.EXIT_TYPE_ERROR, CheckCommand().runSelectorDialectLintPhase(workspaceRoot))
+    assertEquals(CheckCommand.EXIT_TYPE_ERROR, CheckCommand().runTrailLintPhase(workspaceRoot))
   }
 
   @Test
@@ -507,12 +508,12 @@ class SelectorDialectLintTest {
                       textRegex: Checkout
       """.trimIndent(),
     )
-    assertEquals(CheckCommand.EXIT_OK, CheckCommand().runSelectorDialectLintPhase(workspaceRoot))
+    assertEquals(CheckCommand.EXIT_OK, CheckCommand().runTrailLintPhase(workspaceRoot))
   }
 
   @Test
   fun `check phase returns OK when the workspace has no trails directory`() {
-    assertEquals(CheckCommand.EXIT_OK, CheckCommand().runSelectorDialectLintPhase(tmp.newFolder("empty")))
+    assertEquals(CheckCommand.EXIT_OK, CheckCommand().runTrailLintPhase(tmp.newFolder("empty")))
   }
 
   // ---- Multi-device configuration legs ----
@@ -532,6 +533,7 @@ class SelectorDialectLintTest {
   private fun configurationTrail(
     steps: List<UnifiedTrailStep>,
     extraDevices: Map<String, TrailblazeDeviceDefinition> = emptyMap(),
+    trailhead: UnifiedTrailStep? = null,
     buyerDefinition: TrailblazeDeviceDefinition =
       TrailblazeDeviceDefinition(driver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION),
     sellerDefinition: TrailblazeDeviceDefinition =
@@ -545,6 +547,7 @@ class SelectorDialectLintTest {
         ),
       ) + extraDevices,
     ),
+    trailhead = trailhead,
     trail = steps,
   )
 
@@ -668,6 +671,347 @@ class SelectorDialectLintTest {
     assertEquals("pos-pair/seller", occurrence.deviceClassifier)
     assertEquals(0, occurrence.stepIndex)
     assertEquals("kitchen", result.undeclaredHandovers.single().target)
+  }
+
+  // ---- Handovers outside a configuration leg ----
+  // The runtime guard only sees the legs one session resolves, and only once a session binds a
+  // cast. `trailblaze check` reads the whole file, so it covers the switches no session reaches.
+
+  @Test
+  fun `a handover recorded in a classifier-keyed leg is checked too`() {
+    // The leg key is a device, not a configuration, so the dialect replay never opens it — but
+    // lowerToTrailItems resolves it for real and the switch dispatches.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(step("android" to listOf(switchDevice("kitchen")))),
+      ),
+    )
+    assertNotNull(result)
+    val handover = result.undeclaredHandovers.single()
+    assertNull(handover.configurationName)
+    assertEquals("android", handover.legKey)
+    assertEquals("kitchen", handover.target)
+    // Checked against every member any configuration declares: which configuration a
+    // classifier-keyed leg runs under isn't decidable from the file, so only a name NO
+    // configuration could bind is a defect.
+    assertEquals(listOf("seller", "buyer"), handover.declaredMembers)
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("step 1 in leg 'android'"), rendered)
+  }
+
+  @Test
+  fun `a handover naming a declared member from a classifier-keyed leg is clean`() {
+    assertNull(
+      SelectorDialectLint.lint(
+        "t/trail.yaml",
+        configurationTrail(steps = listOf(step("android" to listOf(switchDevice("buyer"))))),
+      ),
+    )
+  }
+
+  @Test
+  fun `a handover in a trail declaring no configuration is a finding`() {
+    // Nothing binds a cast, so the runtime guard never runs — and the switch can never resolve.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      trail(
+        devices = mapOf("android" to "ANDROID_ONDEVICE_INSTRUMENTATION"),
+        steps = listOf(step("android" to listOf(switchDevice("buyer")))),
+      ),
+    )
+    assertNotNull(result)
+    val handover = result.undeclaredHandovers.single()
+    assertNull(handover.configurationName)
+    assertEquals("buyer", handover.target)
+    assertEquals(emptyList(), handover.declaredMembers)
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("declares no multi-device configuration"), rendered)
+  }
+
+  @Test
+  fun `every undeclared handover is reported, not just the first`() {
+    // The dialect replay stops at the first unresolvable handover because it no longer knows the
+    // active device. A handover check needs no active device, so stopping there would turn one
+    // mis-recorded cast into a check→fix cycle per switch.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step("pos-pair" to listOf(switchDevice("kitchen"), switchDevice("printer"))),
+          step("pos-pair" to listOf(switchDevice("scale"))),
+        ),
+      ),
+    )
+    assertNotNull(result)
+    assertEquals(
+      listOf("kitchen", "printer", "scale"),
+      result.undeclaredHandovers.map { it.target },
+    )
+  }
+
+  @Test
+  fun `a handover recorded in the trailhead is checked`() {
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = emptyList(),
+        trailhead = step("pos-pair" to listOf(switchDevice("kitchen"))),
+      ),
+    )
+    assertNotNull(result)
+    assertNull(result.undeclaredHandovers.single().stepIndex)
+    assertTrue(
+      SelectorDialectLint.renderFailures(listOf(result)).contains("trailhead in configuration"),
+      SelectorDialectLint.renderFailures(listOf(result)),
+    )
+  }
+
+  @Test
+  fun `a handover nested in a conditional branch is checked like a top-level one`() {
+    // `block_runIf` records verbatim, so the switch rides inside the wrapper's `then:` array. The
+    // branch dispatches for real at replay, where an undeclared name fails the run — a gate that
+    // read only the wrapper's own name would have passed this trail.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(step("pos-pair" to listOf(runIfWrapper(then = listOf(switchDevice("kitchen")))))),
+      ),
+    )
+    assertNotNull(result)
+    val handover = result.undeclaredHandovers.single()
+    assertEquals("kitchen", handover.target)
+    assertEquals("pos-pair", handover.configurationName)
+  }
+
+  @Test
+  fun `a nested handover to a declared member is clean`() {
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(step("pos-pair" to listOf(runIfWrapper(then = listOf(switchDevice("buyer")))))),
+      ),
+    )
+    assertTrue(
+      result == null || result.undeclaredHandovers.isEmpty(),
+      "a nested switch naming a declared member is not a finding: ${result?.undeclaredHandovers}",
+    )
+  }
+
+  @Test
+  fun `a nested handover abandons the dialect replay instead of judging on a guessed device`() {
+    // Whether the branch runs is a runtime question, so past it the active device is undecidable.
+    // The tap below would be a finding on seller (accessibility) and clean on buyer — reporting
+    // either would be a coin flip dressed as a fatal gate.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(then = listOf(switchDevice("buyer"))),
+              tapBySelector(androidMaestroSelector("After the conditional handover")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertTrue(
+      result == null || result.occurrences.isEmpty(),
+      "no dialect finding may be attributed past a conditional handover: ${result?.occurrences}",
+    )
+  }
+
+  @Test
+  fun `a nested handover to an interpolated name abandons the replay too`() {
+    // `{{nextDevice}}` resolves from memory at dispatch, so the guard reports no target for it —
+    // but the branch still MOVES the session. Deciding to stop off the target list rather than off
+    // structural presence would replay on with a stale active device and judge the tap below
+    // against a member the branch may already have left.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(then = listOf(switchDevice("{{nextDevice}}"))),
+              tapBySelector(androidMaestroSelector("After the interpolated handover")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertTrue(
+      result == null || result.occurrences.isEmpty(),
+      "an unreadable nested target still ends the replay: ${result?.occurrences}",
+    )
+  }
+
+  @Test
+  fun `a conditional's condition is judged before its nested handover ends the replay`() {
+    // `block_runIf` evaluates its predicate on the CURRENT device before either branch runs, so an
+    // unreadable dialect there is decidable even though everything after the handover is not.
+    // Stopping without judging it would silently drop a real finding.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(
+                conditionSelector = androidMaestroSelector("Predicate on the accessibility seller"),
+                then = listOf(switchDevice("buyer")),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+    val findings = result?.occurrences.orEmpty()
+    assertTrue(
+      findings.any { it.toString().contains("Predicate on the accessibility seller") },
+      "the pre-handover condition must still be judged: $findings",
+    )
+  }
+
+  @Test
+  fun `a predicate that can move the session itself is not judged against the old member`() {
+    // The predicate here nests its own conditional, whose branch switches to the browser member
+    // and then selects with a `web` dialect — valid at runtime, because dispatch is in order.
+    // Judging the whole predicate subtree against the pre-predicate (Android) member would call
+    // that a foreign-platform selector and fail a trail that runs.
+    val innerThatSwitchesAndSelects = runIfWrapper(
+      then = listOf(switchDevice("buyer"), tapBySelector(webSelector("Continue"))),
+    )
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(conditionTool = "block_runIf" to innerThatSwitchesAndSelects.toJsonArgs()),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertTrue(
+      result == null || result.occurrences.isEmpty(),
+      "a predicate that hands off must not be judged against the member it started on: ${result?.occurrences}",
+    )
+  }
+
+  @Test
+  fun `a predicate switch that can only fail does not cost the rest of the leg its coverage`() {
+    // `kitchen` is declared nowhere, so this predicate can only throw — and `block_runIf` catches
+    // that into a `false` verdict on the SAME device. The active member is provably still the
+    // accessibility seller, so the tap below is decidable and is a real finding. Stopping the
+    // replay here instead would let every selector after the conditional through a fatal gate.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(conditionTool = "switchDevice" to buildJsonObject { put("name", "kitchen") }),
+              tapBySelector(androidMaestroSelector("After the known-failing predicate switch")),
+            ),
+          ),
+        ),
+      ),
+    )
+    val findings = result?.occurrences.orEmpty()
+    assertTrue(
+      findings.any { it.toString().contains("After the known-failing predicate switch") },
+      "a predicate that cannot bind leaves the active device unchanged, so the rest of the leg " +
+        "must still be judged: $findings",
+    )
+    assertTrue(
+      result == null || result.undeclaredHandovers.isEmpty(),
+      "and the predicate name itself is still not a fatal finding: ${result?.undeclaredHandovers}",
+    )
+  }
+
+  @Test
+  fun `a predicate switch to a declared member still ends the replay`() {
+    // The counterpart: `buyer` binds, so this predicate really can hand the session over before
+    // either branch runs. The tap below is clean on buyer and a finding on seller — undecidable,
+    // so it must not be reported.
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              runIfWrapper(conditionTool = "switchDevice" to buildJsonObject { put("name", "buyer") }),
+              tapBySelector(androidMaestroSelector("After the bindable predicate switch")),
+            ),
+          ),
+        ),
+      ),
+    )
+    assertTrue(
+      result == null || result.occurrences.isEmpty(),
+      "a predicate switch that can succeed still ends the replay: ${result?.occurrences}",
+    )
+  }
+
+  @Test
+  fun `a data argument named switchDevice does not end the replay or fail the trail`() {
+    // The gate is fatal, so mistaking an ordinary payload field for a handover would both stop the
+    // dialect replay early AND report a bogus unbound device. The tap here IS a real finding on
+    // the accessibility-driven seller, and it must still be reported.
+    val dataCarrier = TrailblazeToolYamlWrapper(
+      name = "recordAnalytics",
+      trailblazeTool = OtherTrailblazeTool(
+        toolName = "recordAnalytics",
+        raw = buildJsonObject {
+          putJsonObject("payload") {
+            putJsonObject("switchDevice") { put("name", "kitchen") }
+          }
+        },
+      ),
+    )
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      configurationTrail(
+        steps = listOf(
+          step(
+            "pos-pair" to listOf(
+              dataCarrier,
+              tapBySelector(androidMaestroSelector("Still judged on seller")),
+            ),
+          ),
+        ),
+      ),
+    )
+    val findings = result?.occurrences.orEmpty()
+    assertTrue(
+      findings.none { it.toString().contains("kitchen") },
+      "a payload field must not be reported as an unbound handover: $findings",
+    )
+    assertTrue(
+      findings.isNotEmpty(),
+      "the replay must continue past a data argument, so the real dialect finding still lands",
+    )
+  }
+
+  @Test
+  fun `a configuration declaring no devices says so instead of claiming the trail has no cast`() {
+    val result = SelectorDialectLint.lint(
+      "t/trail.yaml",
+      UnifiedTrail(
+        config = UnifiedTrailConfig(
+          id = "test/dialect",
+          devices = mapOf("pos-pair" to TrailblazeDeviceDefinition(devices = linkedMapOf())),
+        ),
+        trail = listOf(step("pos-pair" to listOf(switchDevice("kitchen")))),
+      ),
+    )
+    assertNotNull(result)
+    val rendered = SelectorDialectLint.renderFailures(listOf(result))
+    assertTrue(rendered.contains("that configuration declares no devices"), rendered)
+    assertFalse(rendered.contains("declares no multi-device configuration"), rendered)
   }
 
   /** phone (start device, accessibility) + dashboard (a host browser). */

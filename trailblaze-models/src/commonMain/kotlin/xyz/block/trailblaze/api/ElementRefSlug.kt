@@ -61,6 +61,7 @@ object ElementRef {
       if (detail.packageName?.startsWith("com.android.systemui") == true) return null
       if (!detail.isVisibleToUser) return null
     }
+    if (detail is DriverNodeDetail.AndroidView && !detail.isShown) return null
     // Skip non-visible (iOS)
     if (detail is DriverNodeDetail.IosMaestro && !detail.visible) return null
 
@@ -70,6 +71,12 @@ object ElementRef {
           ?: detail.contentDescription?.takeIf { it.isNotBlank() }
           ?: detail.hintText?.takeIf { it.isNotBlank() }
         // Normalize whitespace like the compact list does
+        rawLabel?.replace('\n', ' ')?.replace(Regex("\\s+"), " ")?.trim()
+      }
+      is DriverNodeDetail.AndroidView -> {
+        val rawLabel = detail.text?.takeIf { it.isNotBlank() }
+          ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+          ?: detail.hintText?.takeIf { it.isNotBlank() }
         rawLabel?.replace('\n', ' ')?.replace(Regex("\\s+"), " ")?.trim()
       }
       is DriverNodeDetail.AndroidMaestro -> {
@@ -87,6 +94,8 @@ object ElementRef {
     val className = when (detail) {
       is DriverNodeDetail.AndroidAccessibility ->
         detail.className?.substringAfterLast('.')
+      is DriverNodeDetail.AndroidView ->
+        detail.className?.substringAfterLast('.')
       is DriverNodeDetail.AndroidMaestro ->
         detail.className?.substringAfterLast('.')
       is DriverNodeDetail.IosMaestro ->
@@ -99,6 +108,16 @@ object ElementRef {
         if (detail.isClickable || detail.isCheckable) {
           node.children.firstNotNullOfOrNull { child ->
             val cd = child.driverDetail as? DriverNodeDetail.AndroidAccessibility
+            cd?.text?.takeIf { it.isNotBlank() }
+              ?: cd?.contentDescription?.takeIf { it.isNotBlank() }
+              ?: cd?.hintText?.takeIf { it.isNotBlank() }
+          }?.replace('\n', ' ')?.replace(Regex("\\s+"), " ")?.trim()
+        } else null
+      }
+      is DriverNodeDetail.AndroidView -> {
+        if (detail.isClickable || detail.isChecked != null) {
+          node.children.firstNotNullOfOrNull { child ->
+            val cd = child.driverDetail as? DriverNodeDetail.AndroidView
             cd?.text?.takeIf { it.isNotBlank() }
               ?: cd?.contentDescription?.takeIf { it.isNotBlank() }
               ?: cd?.hintText?.takeIf { it.isNotBlank() }
@@ -125,6 +144,10 @@ object ElementRef {
           (detail.isScrollable && effectiveLabel != null) ||
           detail.error != null ||
           (effectiveLabel != null && detail.isImportantForAccessibility)
+      is DriverNodeDetail.AndroidView ->
+        detail.isClickable || detail.isEditable || detail.isChecked != null ||
+          detail.isFocused || (detail.isScrollable && effectiveLabel != null) ||
+          detail.errorText != null || effectiveLabel != null
       is DriverNodeDetail.AndroidMaestro ->
         detail.clickable || detail.focused || detail.checked || detail.selected ||
           effectiveLabel != null

@@ -156,6 +156,47 @@ describe('appsDevice — which device the target-app picker reads', () => {
   });
 });
 
+describe('blockingDials — which in-flight dials a launch has to wait out', () => {
+  const entry = (target: string | null) => ({ target, p: Promise.resolve(target) });
+  // `target: null` is the case the flag exists for: a release binds nothing, so it is indistinguishable
+  // from a dial for a launch that resolved no target of its own unless it says what it is.
+  const release = () => ({ release: true, target: null, p: Promise.resolve(null) });
+
+  test('a dial already binding this run\'s target is not waited on', () => {
+    const inFlight = { 'sim-1': entry('com.app') };
+    expect(Fanout.blockingDials([IPHONE], inFlight, 'com.app')).toEqual([]);
+  });
+
+  test('a dial binding a different target is waited on, because it decides what to release', () => {
+    const inFlight = { 'sim-1': entry('com.other') };
+    expect(Fanout.blockingDials([IPHONE], inFlight, 'com.app')).toEqual([inFlight['sim-1'].p]);
+  });
+
+  test('a release in flight is always waited on', () => {
+    const inFlight = { 'sim-1': release() };
+    expect(Fanout.blockingDials([IPHONE], inFlight, 'com.app')).toEqual([inFlight['sim-1'].p]);
+  });
+
+  test('a release is still waited on when this launch resolved no target of its own', () => {
+    const inFlight = { 'sim-1': release() };
+    expect(Fanout.blockingDials([IPHONE], inFlight, null)).toEqual([inFlight['sim-1'].p]);
+  });
+
+  test('a dial for a real target is waited on by a launch with no target', () => {
+    const inFlight = { 'sim-1': entry('com.other') };
+    expect(Fanout.blockingDials([IPHONE], inFlight, null)).toEqual([inFlight['sim-1'].p]);
+  });
+
+  test('only the devices this launch selected are waited on', () => {
+    const inFlight = { 'sim-1': entry('com.other'), 'emu-1': entry('com.other') };
+    expect(Fanout.blockingDials([IPHONE], inFlight, 'com.app')).toEqual([inFlight['sim-1'].p]);
+  });
+
+  test('nothing in flight means nothing to wait for', () => {
+    expect(Fanout.blockingDials([IPHONE, PIXEL], {}, 'com.app')).toEqual([]);
+  });
+});
+
 describe('connectPlan — what to dial, and what to release first', () => {
   const plan = (args: Record<string, unknown>) => Fanout.connectPlan(args);
 
@@ -312,14 +353,46 @@ describe('connectDevices', () => {
     expect(outcomes[1].ok).toBe(true);
   });
 
-  test('a daemon that never answers fails only that device, with a reason saying so', async () => {
+  test('a caller that deadlined its own connect still gets a plain failure for that device', async () => {
+    // That caller threw the connect promise away, so there is nothing left to wait out.
     const outcomes = await Fanout.connectDevices([IPHONE, PIXEL], {
       connect: connector({ 'sim-1': () => '__timeout__' }).connect,
     });
 
     expect(outcomes[0].ok).toBe(false);
+    expect(outcomes[0].slow).toBeUndefined();
     expect(outcomes[0].error).toContain('did not respond');
     expect(outcomes[1].ok).toBe(true);
+  });
+
+  test('a device slower than the deadline comes back slow, not failed, and keeps its promise', async () => {
+    // The case this exists for: a fresh install means the device takes its time, the daemon goes on
+    // waiting, and the connect succeeds shortly after. Reporting that as unreachable cancelled a run
+    // that would have started.
+    let land: (v: unknown) => void = () => {};
+    const outcomes = await Fanout.connectDevices([IPHONE, PIXEL], {
+      timeoutMs: 5,
+      connect: connector({ 'sim-1': () => new Promise((res) => { land = res; }) }).connect,
+    });
+
+    expect(outcomes[0].ok).toBe(false);
+    expect(outcomes[0].slow).toBe(true);
+    expect(outcomes[0].error).toContain('still be starting up');
+    expect(outcomes[1].ok).toBe(true);
+
+    land({ ok: true });
+    expect((await outcomes[0].settled).ok).toBe(true);
+  });
+
+  test('a slow connect that turns out to have failed reports that failure when it lands', async () => {
+    let land: (v: unknown) => void = () => {};
+    const outcomes = await Fanout.connectDevices([IPHONE], {
+      timeoutMs: 5,
+      connect: connector({ 'sim-1': () => new Promise((res) => { land = res; }) }).connect,
+    });
+
+    land({ ok: false, error: 'No target app selected.' });
+    expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: false, error: 'No target app selected.' });
   });
 
   test('a thrown connect becomes that device\'s failure rather than rejecting the launch', async () => {
@@ -335,7 +408,7 @@ describe('connectDevices', () => {
 describe('dispatchRuns — one run per device', () => {
   test('starts a run on each connected device and reports each session id', async () => {
     const net = dispatcher({});
-    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE, PIXEL, CHROME]), { dispatch: net.dispatch });
+    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE, PIXEL, CHROME]), { dispatch: net.dispatch, isLive: () => true });
 
     // One request per device: the route takes a single device, so N devices is N runs.
     expect(net.calls).toEqual([
@@ -355,7 +428,7 @@ describe('dispatchRuns — one run per device', () => {
     const outcomes = await Fanout.dispatchRuns([
       { device: IPHONE, ok: false, error: 'No target app selected.' },
       { device: PIXEL, ok: true, error: null },
-    ], { dispatch: net.dispatch });
+    ], { dispatch: net.dispatch, isLive: () => true });
 
     expect(net.calls.map((c: any) => c.instanceId)).toEqual(['emu-1']);
     expect(outcomes[0]).toEqual({ device: IPHONE, ok: false, sessionId: null, error: 'No target app selected.' });
@@ -368,6 +441,7 @@ describe('dispatchRuns — one run per device', () => {
       dispatch: dispatcher({
         'sim-1': { ok: false, error: 'This device is busy: a trail run is still using it.' },
       }).dispatch,
+      isLive: () => true,
     });
 
     expect(outcomes[0]).toEqual({
@@ -388,6 +462,7 @@ describe('dispatchRuns — one run per device', () => {
         'emu-1': { ok: true, success: true, sessionId: null },
         'web-1': { ok: false, error: 'deviceManager not available' },
       }).dispatch,
+      isLive: () => true,
     });
 
     expect(outcomes.map((o: any) => o.ok)).toEqual([false, false, false]);
@@ -401,7 +476,7 @@ describe('dispatchRuns — one run per device', () => {
     // can still mint a session. Calling it failed is what let the outcome list miss a run that
     // really started and let the retry race a live dispatch.
     const net = deferredDispatcher('sim-1');
-    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE, PIXEL]), { dispatch: net.dispatch, timeoutMs: 20 });
+    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE, PIXEL]), { dispatch: net.dispatch, timeoutMs: 20, isLive: () => true });
 
     expect(outcomes[0].slow).toBe(true);
     expect(outcomes[0].ok).toBe(false);
@@ -412,7 +487,7 @@ describe('dispatchRuns — one run per device', () => {
 
   test('the session a still-starting dispatch goes on to create replaces its outcome', async () => {
     const net = deferredDispatcher('sim-1');
-    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE]), { dispatch: net.dispatch, timeoutMs: 20 });
+    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE]), { dispatch: net.dispatch, timeoutMs: 20, isLive: () => true });
     net.release({ ok: true, success: true, sessionId: 'sess-late' });
 
     expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: true, sessionId: 'sess-late', error: null });
@@ -420,7 +495,7 @@ describe('dispatchRuns — one run per device', () => {
 
   test('a still-starting dispatch that then fails settles as that failure, with the daemon\'s reason', async () => {
     const net = deferredDispatcher('sim-1');
-    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE]), { dispatch: net.dispatch, timeoutMs: 20 });
+    const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE]), { dispatch: net.dispatch, timeoutMs: 20, isLive: () => true });
     net.release({ ok: true, success: false, error: 'target is not registered' });
 
     expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: false, sessionId: null, error: 'target is not registered' });
@@ -429,15 +504,120 @@ describe('dispatchRuns — one run per device', () => {
   test('a thrown dispatch becomes that device\'s failure rather than rejecting the launch', async () => {
     const outcomes = await Fanout.dispatchRuns(connectedAll([IPHONE, PIXEL]), {
       dispatch: dispatcher({ 'emu-1': () => { throw new Error('socket closed'); } }).dispatch,
+      isLive: () => true,
     });
 
     expect(outcomes[0].ok).toBe(true);
     expect(outcomes[1]).toEqual({ device: PIXEL, ok: false, sessionId: null, error: 'socket closed' });
   });
 
+  // `isLive` is only consulted on the slow path, so a caller that forgot it would work on every
+  // ordinary launch and fail on the rare one - and fail inside `settled`, where nothing is watching.
+  test('a caller that forgot isLive is rejected up front, not on the first slow device', async () => {
+    const net = dispatcher({});
+    await expect(Fanout.dispatchRuns(connectedAll([IPHONE]), { dispatch: net.dispatch })).rejects.toThrow(/isLive/);
+    expect(net.calls).toEqual([]);
+  });
+
   test('nothing to launch means no requests and no outcomes to report', async () => {
     const net = dispatcher({});
-    expect(await Fanout.dispatchRuns([], { dispatch: net.dispatch })).toEqual([]);
+    expect(await Fanout.dispatchRuns([], { dispatch: net.dispatch, isLive: () => true })).toEqual([]);
     expect(net.calls).toEqual([]);
+  });
+
+  test('a slow connect is waited out and then dispatched to, rather than written off', async () => {
+    let land: (v: unknown) => void = () => {};
+    const slowConnect = {
+      device: IPHONE,
+      ok: false,
+      slow: true,
+      settled: new Promise((res) => { land = res; }),
+      error: 'still connecting',
+    };
+    const net = dispatcher({});
+    const outcomes = await Fanout.dispatchRuns([slowConnect, ...connectedAll([PIXEL])], { dispatch: net.dispatch, isLive: () => true });
+
+    // The launch is not held for the slow device, and the ready one is dispatched to immediately.
+    expect(outcomes[0].slow).toBe(true);
+    expect(outcomes[1].sessionId).toBe('sess-emu-1');
+    expect(net.calls.map((c: any) => c.instanceId)).toEqual(['emu-1']);
+
+    land({ device: IPHONE, ok: true, error: null });
+    expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: true, sessionId: 'sess-sim-1', error: null });
+    expect(net.calls.map((c: any) => c.instanceId).sort()).toEqual(['emu-1', 'sim-1']);
+  });
+
+  test('a slow connect that never comes up is never dispatched to', async () => {
+    let land: (v: unknown) => void = () => {};
+    const net = dispatcher({});
+    const outcomes = await Fanout.dispatchRuns([{
+      device: IPHONE,
+      ok: false,
+      slow: true,
+      settled: new Promise((res) => { land = res; }),
+      error: 'still connecting',
+    }], { dispatch: net.dispatch, isLive: () => true });
+
+    land({ device: IPHONE, ok: false, error: 'Device went away.' });
+    expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: false, sessionId: null, error: 'Device went away.' });
+    expect(net.calls).toEqual([]);
+  });
+
+  test('a device that comes up after the launch was stopped is not dispatched to', async () => {
+    let land: (v: unknown) => void = () => {};
+    let live = true;
+    const net = dispatcher({});
+    const outcomes = await Fanout.dispatchRuns([{
+      device: IPHONE,
+      ok: false,
+      slow: true,
+      settled: new Promise((res) => { land = res; }),
+      error: 'still connecting',
+    }], { dispatch: net.dispatch, isLive: () => live });
+
+    // The user gives up during the unbounded wait, and only then does the device finish starting.
+    live = false;
+    land({ device: IPHONE, ok: true, error: null });
+
+    // Reported as abandoned with no error, so reconciliation leaves the stopped card alone rather
+    // than resurrecting it to report a failure.
+    expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: false, abandoned: true, sessionId: null, error: null });
+    expect(net.calls).toEqual([]);
+  });
+
+  test('a device that fails to come up after the launch was stopped reports nothing either', async () => {
+    let land: (v: unknown) => void = () => {};
+    let live = true;
+    const net = dispatcher({});
+    const outcomes = await Fanout.dispatchRuns([{
+      device: IPHONE,
+      ok: false,
+      slow: true,
+      settled: new Promise((res) => { land = res; }),
+      error: 'still connecting',
+    }], { dispatch: net.dispatch, isLive: () => live });
+
+    live = false;
+    land({ device: IPHONE, ok: false, error: 'Device went away.' });
+
+    expect(await outcomes[0].settled).toEqual({ device: IPHONE, ok: false, abandoned: true, sessionId: null, error: null });
+    expect(net.calls).toEqual([]);
+  });
+
+  test('a device that comes up while the launch is still live is dispatched to', async () => {
+    let land: (v: unknown) => void = () => {};
+    const net = dispatcher({});
+    const outcomes = await Fanout.dispatchRuns([{
+      device: IPHONE,
+      ok: false,
+      slow: true,
+      settled: new Promise((res) => { land = res; }),
+      error: 'still connecting',
+    }], { dispatch: net.dispatch, isLive: () => true });
+
+    land({ device: IPHONE, ok: true, error: null });
+
+    expect((await outcomes[0].settled).sessionId).toBe('sess-sim-1');
+    expect(net.calls.map((c: any) => c.instanceId)).toEqual(['sim-1']);
   });
 });

@@ -90,6 +90,7 @@ import xyz.block.trailblaze.mcp.newtools.SessionToolSet
 import xyz.block.trailblaze.mcp.newtools.StepToolSet
 import xyz.block.trailblaze.mcp.resources.registerResources
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
+import xyz.block.trailblaze.mcp.newtools.MultiDeviceToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailMcpTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
@@ -1212,10 +1213,22 @@ class TrailblazeMcpServer(
    * cleared-vs-set branch in [DeviceManagerToolSet], and the `normalizedTarget
    * != null` branch in [pinMostRecentUnboundMcpSession]).
    *
-   * **TrailblazeCLI sessions are skipped.** The CLI's MCP client is one-shot
-   * per command; the McpProxy doesn't surface `tools/list_changed` to its
-   * (synthetic) parent because there isn't one. Sending the refresh would
-   * just churn the CLI session's `Server` for no observable effect.
+   * **TrailblazeCLI sessions re-register but skip the notification.** The
+   * CLI's MCP client is one-shot per command, so there is no connected parent
+   * for `tools/list_changed` to reach — but the re-registration itself IS
+   * observable: the session's [Server] tool table is the routing table for
+   * the CLI's next one-shot `tools/call`, and roster-gated tools (the
+   * `switchDevice` surface unlocked by a second `device(action=BIND)`) only
+   * appear when the gate is re-evaluated here. Skipping the whole refresh
+   * left a CLI session that bound its second device with `switchDevice`
+   * permanently unregistered. Reachability caveat: today only an MCP client
+   * attached to the session can call the newly-registered tool — the
+   * `trailblaze tool` command's validity gate checks the target-scoped
+   * [xyz.block.trailblaze.mcp.newtools.StepToolSet] surface, which never
+   * unions the handover toolset, and `step`'s inner agent has the same
+   * surface. Closing that gate is follow-up work; see "Driving the same
+   * pair by hand" in docs/guides/multi-device-demo.md for the user-facing
+   * statement of the gap.
    *
    * Silently no-ops when [sessionId] is unknown (the session was torn down
    * between the target-change write and our refresh attempt). That's the
@@ -1224,25 +1237,29 @@ class TrailblazeMcpServer(
    */
   internal fun refreshToolsForSession(sessionId: String) {
     val sessionContext = sessionContexts[sessionId] ?: return
-    if (sessionContext.mcpClientName == TRAILBLAZE_CLI_CLIENT_NAME) return
     // Probe fires here — before the [Server] lookup — so tests with fixture
     // sessions that bypass `createSessionForClient` can still observe the
     // caller's decision to refresh. Production deployments always have a
-    // [Server] registered for non-CLI sessions, so the SDK
-    // `notifications/tools/list_changed` dispatch below is the real effect;
+    // [Server] registered, so the re-registration below is the real effect;
     // the probe is purely a unit-test seam.
     onToolsRefreshedForTest?.invoke(sessionId)
     val mcpServer = sessionMcpServers[sessionId] ?: return
+    val isCliSession = sessionContext.mcpClientName == TRAILBLAZE_CLI_CLIENT_NAME
     Console.log(
-      "[MCP SESSION] Tool surface changed for session $sessionId — re-registering tools to fire tools/list_changed",
+      "[MCP SESSION] Tool surface changed for session $sessionId — re-registering tools" +
+        if (isCliSession) " (CLI session: no tools/list_changed emitted)" else " to fire tools/list_changed",
     )
     registerTools(mcpServer, sessionContext.mcpSessionId, sessionContext)
-    // The SDK's own ToolListChangedNotification never reaches the client in this deployment:
-    // with `enableJsonResponse = true` the StreamableHttp transport routes server-initiated
-    // notifications to its standalone GET stream, which the daemon never registers (the custom
-    // `sse("/mcp")` endpoint replaces the SDK's handleGetRequest — see the route comment).
-    // Emit the notification through the same custom channel progress notifications use.
-    sessionContext.sendToolListChangedNotification()
+    if (!isCliSession) {
+      // The SDK's own ToolListChangedNotification never reaches the client in this deployment:
+      // with `enableJsonResponse = true` the StreamableHttp transport routes server-initiated
+      // notifications to its standalone GET stream, which the daemon never registers (the custom
+      // `sse("/mcp")` endpoint replaces the SDK's handleGetRequest — see the route comment).
+      // Emit the notification through the same custom channel progress notifications use.
+      // CLI sessions skip it: their one-shot client has no listener, and each fresh CLI
+      // invocation reads the (now-updated) tool table directly.
+      sessionContext.sendToolListChangedNotification()
+    }
     emitDebugState()
   }
 
@@ -1251,7 +1268,8 @@ class TrailblazeMcpServer(
    * `tools/list_changed`). Used after a daemon-wide change that shifts the
    * advertised surface for all sessions at once — the daemon-wide target app
    * or LLM configuration changing via the `config` MCP tool. Per-session
-   * skip rules (CLI sessions, unknown ids) apply via [refreshToolsForSession].
+   * rules (unknown ids no-op; CLI sessions re-register without the
+   * notification) apply via [refreshToolsForSession].
    */
   internal fun refreshToolsForAllSessions() {
     sessionContexts.keys.toList().forEach { sessionId ->
@@ -1899,6 +1917,10 @@ class TrailblazeMcpServer(
      */
     additionalRouteRegistration: (io.ktor.server.routing.Routing.() -> Unit)? = null,
   ): EmbeddedServer<*, *> {
+    // Refuse a port a device could be allocated. `adb forward` would take it from us silently,
+    // and the daemon would go unreachable rather than fail loudly here.
+    TrailblazeDevicePort.requireDaemonPortsOutsideDeviceAllocationRange(port, httpsPort)
+
     serverStartTimeMillis = System.currentTimeMillis()
     emitDebugState()
     Console.log("═══════════════════════════════════════════════════════════")
@@ -2030,8 +2052,10 @@ class TrailblazeMcpServer(
           return@setOnSessionClosed
         }
 
-        // End the Trailblaze session gracefully and cancel running automation
-        sessionContext.associatedDeviceId?.let { deviceId ->
+        // End the Trailblaze session gracefully and cancel running automation. Every device the
+        // session addresses, not just the active one: a named bind warms that device's driver, so
+        // stopping at `associatedDeviceId` would leave the rest of the roster connected.
+        sessionContext.addressedDeviceIds().forEach { deviceId ->
           cleanupDeviceOnSessionClose(deviceId, "MCP session closure", closedSessionId)
         }
 
@@ -2441,6 +2465,24 @@ class TrailblazeMcpServer(
         if (llmConfigured) deviceManagerTools
         else deviceManagerTools.filter { it.descriptor.name != DeviceManagerToolSet.TOOL_RUN_PROMPT },
       )
+
+      // switchDevice, advertised only once the session has bound a SECOND device under a
+      // name — with fewer than two there is nothing to switch between, and a single-device
+      // session shouldn't pay context for a tool whose only argument it can't satisfy.
+      // The gate is re-evaluated on every registration and every bind/unbind chains a
+      // refreshToolsForSession, so the tool appears when the roster reaches two and is
+      // diffed away again by addToolsAsMcpToolsFromRegistry when it drops below.
+      if (sessionContext.boundDeviceNames().size >= 2) {
+        tools(
+          MultiDeviceToolSet(
+            sessionContext = sessionContext,
+            mcpBridge = mcpBridge,
+            // The devices can differ in driver and per-device target, so the whole
+            // target-scoped surface is resolved against the newly-active one.
+            onActiveDeviceChanged = { refreshToolsForSession(mcpSessionId.sessionId) },
+          ).asTools(),
+        )
+      }
 
       // Trail management tool (for test authoring persona)
       val trailLogEmitter = LogEmitter { log ->
@@ -3047,8 +3089,9 @@ class TrailblazeMcpServer(
       Thread.currentThread().let { t ->
         Console.error("[MCP STDIO]   Close triggered on thread: ${t.name} (id=${t.id})")
       }
-      // End session gracefully and cancel running automation for this STDIO session
-      sessionContext.associatedDeviceId?.let { deviceId ->
+      // End session gracefully and cancel running automation for this STDIO session — for every
+      // addressed device, since each named bind warmed its own driver.
+      sessionContext.addressedDeviceIds().forEach { deviceId ->
         cleanupDeviceOnSessionClose(deviceId, "STDIO session closure", mcpSessionId.sessionId)
       }
       deviceClaimRegistry.releaseAllForSession(mcpSessionId.sessionId)

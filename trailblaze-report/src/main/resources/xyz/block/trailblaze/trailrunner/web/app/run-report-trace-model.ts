@@ -54,6 +54,30 @@ export interface ReportTraceModel {
   entryIndexById: Map<number, number>;
 }
 
+/**
+ * Index of the row a FAILED run's failure belongs to, or -1 when no row failed.
+ *
+ * The failure belongs to the first FAILED objective's step (the Complete bookend marks that row):
+ * within it the first failed tool row wins, and a step with no failed tool row anchors on the
+ * objective itself. Tolerated tool failures inside a step that ultimately passed (retry polling, a
+ * trailhead's internal recovery loops) never anchor the failure. Only when no objective recorded a
+ * failure — a run-level error, or a crash that never logged a Complete bookend — does the first
+ * failed row in the trace anchor it.
+ *
+ * Only meaningful for a run that failed: a passing run can carry tolerated failed rows, and this
+ * would name one of them. Callers gate on the run's own outcome.
+ */
+export function failureAnchorIndex(trace: TraceStep[]): number {
+  const objIdx = trace.findIndex((t) => t.objective && !t.ok);
+  // No failed objective means no failed row is an objective, so the first failed row of any kind is
+  // the first failed tool row — and -1 when the trace has no failed row at all.
+  if (objIdx < 0) return trace.findIndex((t) => !t.objective && !t.ok);
+  for (let k = objIdx + 1; k < trace.length && !trace[k].objective; k++) {
+    if (!trace[k].ok) return k;
+  }
+  return objIdx;
+}
+
 /** Build the authored-step, retry, row-id, and exact LLM-call indexes in one trace pass. */
 export function buildReportTraceModel(trace: TraceStep[], llmCount: number): ReportTraceModel {
   const groups: ReportTraceGroup[] = [];

@@ -49,6 +49,7 @@ import xyz.block.trailblaze.yaml.TrailArgBinder
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
  * Host-side [MaestroTrailblazeAgent] that delegates individual tool executions to an on-device
@@ -123,12 +124,28 @@ class HostOnDeviceRpcTrailblazeAgent(
    */
   sessionDirProvider: ((SessionId) -> File)? = null,
   /**
+   * The trail file's own directory — see [MaestroTrailblazeAgent.workingDirectory]. Wired from
+   * `RunYamlRequest.trailFilePath` by the host runner so host-local tools dispatched through this
+   * agent resolve paths anchored BESIDE THE TRAIL (e.g. a committed WAV recording), not against
+   * the daemon's CWD; null in back-compat callers that don't yet supply it.
+   */
+  workingDirectory: File? = null,
+  /**
    * Shared [AgentMemory] — see [BaseTrailblazeAgent.memory]. Multi-device sessions construct one
    * agent per bound device and pass the primary agent's memory here so a `remember` on one device
    * resolves in `{{var}}` tokens dispatched to another. Defaults to a fresh instance for
    * single-device callers.
    */
   memory: AgentMemory = AgentMemory(),
+  /**
+   * Called with every screen state this device reports, so a caller holding a start-of-session
+   * snapshot of the device's size can keep it current — the response already carries the size, so
+   * nothing extra is asked of the device.
+   *
+   * Scoped to one agent on purpose. Each bound device gets its own agent, so a companion rotating
+   * can't rewrite the launch device's size; a session-wide hook could.
+   */
+  private val onScreenStateObserved: (GetScreenStateResponse) -> Unit = {},
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
@@ -137,6 +154,7 @@ class HostOnDeviceRpcTrailblazeAgent(
   resolvedTarget = resolvedTarget,
   appId = appId,
   sessionDirProvider = sessionDirProvider,
+  workingDirectory = workingDirectory,
   memory = memory,
 ) {
 
@@ -179,14 +197,22 @@ class HostOnDeviceRpcTrailblazeAgent(
    * trail start proves `GetScreenState` works; a failure here means the connection transitioned
    * from warm to cold mid-session (app/service restart, transient network blip). In that case
    * we re-run the readiness probe once and retry the capture — no blanket retry loop.
-   */
-  /**
+   *
    * @param includeScreenshot whether the on-device handler should bundle the screenshot
    *   bytes in the response. Migration capture (the host's per-tool snapshot hook) needs
    *   only the trees and can pass `false` to skip the Bitmap pull / WEBP encode / base64
    *   round-trip — saves ~200-500ms per capture on real devices.
    */
-  suspend fun captureScreenState(includeScreenshot: Boolean = true): ScreenState? {
+  suspend fun captureScreenState(includeScreenshot: Boolean = true): ScreenState? =
+    TrailblazeTracer.traceSuspend("captureScreenState", SCREEN_STATE_TRACE_CAT) {
+      captureScreenStateUntraced(includeScreenshot)
+    }
+
+  /**
+   * [captureScreenState] without the span, so the traced wrapper can enclose a body with several
+   * early returns.
+   */
+  private suspend fun captureScreenStateUntraced(includeScreenshot: Boolean): ScreenState? {
     // Forward the host's effective screenshot scaling config (driven by
     // `trailblaze config screenshot-*` and the desktop Settings panel) so the on-device
     // agent scales/encodes screenshots the way the user asked. Skipped when the request
@@ -205,7 +231,7 @@ class HostOnDeviceRpcTrailblazeAgent(
       if (deviceScreenshot) it.withScreenshotScalingConfig(EffectiveScreenshotScalingConfig.effective)
       else it
     }
-    when (val first = rpcClient.rpcCall(request)) {
+    when (val first = TrailblazeTracer.traceDetailSuspend("getScreenState.rpc", SCREEN_STATE_TRACE_CAT) { rpcClient.rpcCall(request) }) {
       is RpcResult.Success -> {
         consecutiveDeviceWedgeFailures.set(0)
         lastCaptureFailure = null
@@ -234,7 +260,7 @@ class HostOnDeviceRpcTrailblazeAgent(
       tripCircuitBreakerIfDeviceWedged()
       return null
     }
-    return when (val retry = rpcClient.rpcCall(request)) {
+    return when (val retry = TrailblazeTracer.traceDetailSuspend("getScreenState.rpc.retry", SCREEN_STATE_TRACE_CAT) { rpcClient.rpcCall(request) }) {
       is RpcResult.Success -> {
         consecutiveDeviceWedgeFailures.set(0)
         lastCaptureFailure = null
@@ -265,7 +291,11 @@ class HostOnDeviceRpcTrailblazeAgent(
     data: GetScreenStateResponse,
     includeScreenshot: Boolean,
   ): ScreenState {
-    val base = RpcScreenStateAdapter.from(data)
+    // Before any of the screenshot-source branching below, which can return early.
+    onScreenStateObserved(data)
+    val base = TrailblazeTracer.traceDetail("adaptScreenState", SCREEN_STATE_TRACE_CAT) {
+      RpcScreenStateAdapter.from(data)
+    }
     if (!includeScreenshot || streamScreenshotMode == StreamScreenshotMode.OFF) return base
 
     val existing = streamScreenshotSource
@@ -291,10 +321,12 @@ class HostOnDeviceRpcTrailblazeAgent(
       created
     }
 
-    val result = source.awaitFrameMatching(
-      treeCapturedAtMs = data.capturedAtDeviceMs,
-      timeoutMs = STREAM_FRAME_TIMEOUT_MS,
-    )
+    val result = TrailblazeTracer.traceDetailSuspend("awaitStreamFrame", SCREEN_STATE_TRACE_CAT) {
+      source.awaitFrameMatching(
+        treeCapturedAtMs = data.capturedAtDeviceMs,
+        timeoutMs = STREAM_FRAME_TIMEOUT_MS,
+      )
+    }
     return when (streamScreenshotMode) {
       StreamScreenshotMode.AB_COMPARE -> {
         // On-device screenshot stays authoritative; log enough per capture to judge the
@@ -385,6 +417,12 @@ class HostOnDeviceRpcTrailblazeAgent(
   }
 
   companion object {
+    /** Trace category for the host's view of a device screen capture. */
+    private const val SCREEN_STATE_TRACE_CAT = "screenState"
+
+    /** Trace category for the host's round trips to the on-device runner. */
+    private const val RPC_TRACE_CAT = "rpc"
+
     private const val MAX_CONSECUTIVE_DEVICE_WEDGE_FAILURES = 3
 
     /** Substrings identifying a wedged-device failure vs a recoverable transient.
@@ -628,7 +666,15 @@ class HostOnDeviceRpcTrailblazeAgent(
     return result
   }
 
-  private fun executeToolViaRpc(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult {
+  private fun executeToolViaRpc(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult =
+    // Detail rather than normal: the enclosing tool span already covers this call end to end, so
+    // this only earns its place when you are asking where inside a tool the time went — how much of
+    // it is the round trip to the device versus the host's own work around it.
+    TrailblazeTracer.traceDetail("executeToolViaRpc", RPC_TRACE_CAT) {
+      executeToolViaRpcUntraced(tool, traceId)
+    }
+
+  private fun executeToolViaRpcUntraced(tool: TrailblazeTool, traceId: TraceId?): TrailblazeToolResult {
     val timeBeforeExecution = Clock.System.now()
     // How many `TrailblazeToolLog`s the on-device dispatch emitted for this tool. Set from the
     // RPC response on the success path; stays 0 on any failure path (no device log to defer to,
@@ -637,6 +683,10 @@ class HostOnDeviceRpcTrailblazeAgent(
     // continuation happens to resume on the caller thread today, but a future `withContext` in
     // the block must not be able to silently break the cross-thread visibility of the count.
     val onDeviceToolLogCount = AtomicInteger(0)
+    // The span the device's work belongs under, read on the dispatching thread. Null when the host
+    // is not recording, and the device then records a trace of its own — the behavior that predates
+    // the field.
+    val dispatchTraceParent = TrailblazeTracer.currentTraceContext()?.toTraceParent()
     val result: TrailblazeToolResult = runBlocking {
       try {
         // The tool is encoded AS AUTHORED (memory tokens intact) — the device's dispatch loop
@@ -673,6 +723,7 @@ class HostOnDeviceRpcTrailblazeAgent(
           // round-trip back). The device rehydrates them verbatim to resolve {{args.x}} tokens.
           argsSnapshot = TrailArgBinder.encodeProvided(memory.args),
           sensitiveArgNames = memory.sensitiveArgNames.toList(),
+          traceParent = dispatchTraceParent,
         )
 
         val name = tool::class.simpleName ?: "unknown"

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.rules
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
@@ -48,6 +49,7 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
+import java.io.File
 import kotlin.reflect.KClass
 
 /**
@@ -68,6 +70,12 @@ class BasePlaywrightElectronTest(
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   appTarget: TrailblazeHostAppTarget? = null,
   val trailblazeDeviceId: TrailblazeDeviceId,
+  /**
+   * The Electron device as device discovery advertises it — see
+   * [TrailblazeDeviceInfo.advertisedInstanceId]. Null is right for callers that already pass an
+   * un-suffixed [trailblazeDeviceId] (the JUnit eval path).
+   */
+  val advertisedDeviceInstanceId: String? = null,
   val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
   /** Per-objective LLM call cap. See [BasePlaywrightNativeTest.maxLlmCalls] for semantics. */
@@ -76,9 +84,21 @@ class BasePlaywrightElectronTest(
    * Whether to self-instrument session-video capture. Electron has no outer capture coordinator
    * (WEB is skipped there), so this rule is the only thing that can record its session video —
    * and this flag gates that self-instrumented recording, which is how the CLI's
-   * `--no-capture-video` opt-out is honored on Electron. Defaults to true.
+   * `--capture-video` opt-in is honored on Electron. Defaults to false — video is opt-in.
    */
-  val captureVideo: Boolean = true,
+  val captureVideo: Boolean = false,
+  /**
+   * Directory session logs are written to. Null lets [HostTrailblazeLoggingRule] use its own
+   * default resolution; the host runner passes the configured `logsDirectory` so this rule's own
+   * disk writes, and the recording generation that reads them back, agree with the setting.
+   */
+  logsDir: File? = null,
+  /**
+   * When true, this rule installs the no-op logger and a read-only [xyz.block.trailblaze.report.utils.LogsRepo],
+   * so the run writes no session files to disk. False lets the JUnit-eval path log normally; the host
+   * runner passes the run's `--no-logging` flag.
+   */
+  noLogging: Boolean = false,
 ) {
 
   /** Manages the Electron app process (if we launched it). */
@@ -110,10 +130,13 @@ class BasePlaywrightElectronTest(
       widthPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_WIDTH,
       heightPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_HEIGHT,
       classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
+      advertisedInstanceId = advertisedDeviceInstanceId,
     )
 
   val loggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+    logsDir = logsDir,
+    noLogging = noLogging,
   )
 
   private val playwrightAgent by lazy {
@@ -273,6 +296,19 @@ class BasePlaywrightElectronTest(
     }
   }
 
+  /**
+   * Dedicated single thread for the trail/agent loop — see
+   * [BasePlaywrightNativeTest.trailLoopExecutor] for the full rationale. The loop needs a
+   * stable thread for thread-scoped tool state, but running it ON the Playwright thread
+   * deadlocks any `runtime: subprocess` tool whose `/scripting/callback` composition
+   * bridges a Playwright tool back onto that (then-parked) thread.
+   */
+  private val trailLoopExecutor: java.util.concurrent.ExecutorService =
+    java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, "playwright-trail-loop").apply { isDaemon = true }
+    }
+  private val trailLoopDispatcher = trailLoopExecutor.asCoroutineDispatcher()
+
   suspend fun runTrailblazeYamlSuspend(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId,
@@ -295,7 +331,9 @@ class BasePlaywrightElectronTest(
      */
     initialArgs: Map<String, String> = emptyMap(),
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
-  ): SessionId = withContext(browserManager.playwrightDispatcher) {
+  ): SessionId = withContext(trailLoopDispatcher) {
+    // Stable loop thread, NOT the Playwright thread — see [trailLoopDispatcher]. Playwright
+    // API calls bridge onto the Playwright thread per-call.
     playwrightAgent.workingDirectory = trailFilePath?.let { java.io.File(it).absoluteFile.parentFile }
 
     // Record session video from the Electron renderer's live CDP screencast. This is the only
@@ -393,6 +431,9 @@ class BasePlaywrightElectronTest(
    * no-ops. A start failure is logged and never tears the trail down.
    */
   private fun ensureElectronVideoCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     if (!captureVideo) return
     if (ownedCaptureSession != null) return
     val session = loggingRule.session ?: return
@@ -426,16 +467,23 @@ class BasePlaywrightElectronTest(
    * exercising an Electron app can capture network traffic the same way.
    */
   private fun ensureWebNetworkCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     if (!config.captureNetworkTraffic) return
     val session = loggingRule.session ?: return
     val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
     try {
-      WebNetworkCapture.start(
-        ctx = browserManager.currentPage.context(),
-        sessionId = session.sessionId.value,
-        sessionDir = sessionDir,
-        tracker = playwrightAgent.inflightRequestTracker,
-      )
+      // Bridged: `currentPage` and listener registration are Playwright API touches, and
+      // the trail loop no longer runs on the Playwright thread.
+      browserManager.onPlaywrightThread {
+        WebNetworkCapture.start(
+          ctx = browserManager.currentPage.context(),
+          sessionId = session.sessionId.value,
+          sessionDir = sessionDir,
+          tracker = playwrightAgent.inflightRequestTracker,
+        )
+      }
     } catch (e: Exception) {
       Console.log("Auto-start of web network capture failed: ${e.message}")
     }
@@ -448,14 +496,20 @@ class BasePlaywrightElectronTest(
    * `device.log` the same way.
    */
   private fun ensureWebConsoleCaptureStarted() {
+    // A `--no-logging` run has nowhere to put capture artifacts: these writers create the session
+    // directory themselves, bypassing the read-only repo that suppresses every other write.
+    if (loggingRule.logsRepo.readOnly) return
     val session = loggingRule.session ?: return
     val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
     try {
-      WebConsoleCapture.start(
-        ctx = browserManager.currentPage.context(),
-        sessionId = session.sessionId.value,
-        sessionDir = sessionDir,
-      )
+      // Bridged for the same reason as ensureWebNetworkCaptureStarted.
+      browserManager.onPlaywrightThread {
+        WebConsoleCapture.start(
+          ctx = browserManager.currentPage.context(),
+          sessionId = session.sessionId.value,
+          sessionDir = sessionDir,
+        )
+      }
     } catch (e: Exception) {
       Console.log("Auto-start of web console capture failed: ${e.message}")
     }
@@ -464,12 +518,16 @@ class BasePlaywrightElectronTest(
   fun close() {
     // Detach the screencast-sourced screenshot subscription (no-op when never engaged).
     runCatching { webStreamScreenshots.close() }
-    runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
-    runCatching { WebConsoleCapture.stop(browserManager.currentPage.context()) }
+    // Bridged like the matching starts: `currentPage.context()` touches Page objects, and
+    // close() runs on the JUnit thread.
+    runCatching { browserManager.onPlaywrightThread { WebNetworkCapture.stop(browserManager.currentPage.context()) } }
+    runCatching { browserManager.onPlaywrightThread { WebConsoleCapture.stop(browserManager.currentPage.context()) } }
     // Stop + mux the session video before the browser (and its screencast feed) tears down.
     runCatching { stopOwnedVideoCapture() }
     browserManager.close()
     electronAppManager.close()
+    // Closing the dispatcher shuts down the executor it wraps.
+    trailLoopDispatcher.close()
   }
 
   companion object {

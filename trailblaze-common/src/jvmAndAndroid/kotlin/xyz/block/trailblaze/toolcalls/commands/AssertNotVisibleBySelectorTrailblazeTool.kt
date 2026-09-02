@@ -106,12 +106,15 @@ data class AssertNotVisibleBySelectorTrailblazeTool(
       // accessibility/content-description → resource id.
       val desc = nodeSelector.androidAccessibility?.textRegex
         ?: nodeSelector.androidMaestro?.textRegex
+        ?: nodeSelector.androidView?.textRegex
         ?: nodeSelector.iosMaestro?.textRegex
         ?: nodeSelector.androidAccessibility?.contentDescriptionRegex
         ?: nodeSelector.androidMaestro?.accessibilityTextRegex
+        ?: nodeSelector.androidView?.contentDescriptionRegex
         ?: nodeSelector.iosMaestro?.accessibilityTextRegex
         ?: nodeSelector.androidAccessibility?.resourceIdRegex
         ?: nodeSelector.androidMaestro?.resourceIdRegex
+        ?: nodeSelector.androidView?.resourceIdRegex
         ?: nodeSelector.iosMaestro?.resourceIdRegex
         ?: "element"
       return TrailblazeToolResult.Success(message = "Verified '$desc' not visible")

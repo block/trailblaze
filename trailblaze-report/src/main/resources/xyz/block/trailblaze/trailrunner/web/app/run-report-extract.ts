@@ -219,6 +219,40 @@ function mergeWebHierarchyBounds(nodeTree: unknown, legacyTree: unknown): unknow
 // timeline quote without making a field appear that the runtime never emitted.
 const timelineReasoningByLog = new WeakMap<TrailblazeLogRecord, string>();
 
+/**
+ * The instant a folded driver dispatch's cues (its capture, its interaction mark) belong at — or
+ * null to keep the enclosing tool row's own `ts`.
+ *
+ * A `MaestroDriverLog` is written wherever the driver ran, so its timestamp is on the HOST clock
+ * for a host-driven session and on the DEVICE clock for an on-device one, with no field saying
+ * which. Those clocks routinely differ by seconds (`extractPerfSession` excludes these timestamps
+ * from the profile's window bounds for exactly this reason), and a cue placed across the domains is
+ * not merely imprecise: Replay's axis takes the maximum of every step end AND every capture
+ * offset, so one capture stamped by a clock minutes ahead stretches the whole replay and squeezes
+ * the run into its first fraction. A negative skew pushes cues before zero.
+ *
+ * The row's host-clock span is the evidence available: the dispatch ran while its tool ran, so an
+ * instant inside `[spanStart, spanEnd]` is consistent with the host clock and worth believing —
+ * that is the case the cue timing exists for, a tool that spent seconds resolving a selector before
+ * it acted. An instant outside the span says the clocks disagree by more than the row lasted, and
+ * there is no skew estimate to correct it with, so the cue falls back to the row's start rather
+ * than being pinned to a boundary that would read as a real measurement.
+ *
+ * The span is the whole batch's, not the first tool's: a turn's tools fold into one row and keep
+ * the first tool's `ms`, so testing against that alone would reject a later tool's honest cue.
+ *
+ * A row with no span to test against (no timestamp, or no recorded duration anywhere in the batch)
+ * is no evidence either way, so it also keeps the row's instant.
+ */
+const sameClockCueTs = (
+  spanStart: number | null | undefined,
+  spanEnd: number | null | undefined,
+  driverTs: number | null,
+): number | null => {
+  if (driverTs == null || spanStart == null || spanEnd == null || !(spanEnd > spanStart)) return null;
+  return driverTs >= spanStart && driverTs <= spanEnd ? driverTs : null;
+};
+
 function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
   // Trailblaze writes several log records per logical step; the timeline collapses
   // them so each user-meaningful step shows once:
@@ -365,6 +399,12 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       asserts = new Map();
       if (group && traceId && group._trace === traceId) {
         correlateToolReasoning(log);
+        // The row keeps the first tool's label and duration, but a later tool in the batch is still
+        // running on the same clock, so its span counts when judging that batch's driver cues.
+        if (ts != null) {
+          const end = ts + (log.durationMs || 0);
+          if (group._cueEnd == null || end > group._cueEnd) group._cueEnd = end;
+        }
         if (!group.screenshotFile && screenshotFile) group.screenshotFile = screenshotFile;
         if (!group.viewHierarchy && viewHierarchy) group.viewHierarchy = viewHierarchy;
         if (!group.viewport && viewport) group.viewport = viewport;
@@ -375,7 +415,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
       closeGroup();
       const ok = log.successful !== false && !err;
       const correlated = correlateToolReasoning(log);
-      group = { _trace: traceId, _logs: [log], label: toolName, tool: correlated.detail.summary, note: correlated.note, args: toolArgsYaml(toolName, log.trailblazeTool && log.trailblazeTool.raw), ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts };
+      group = { _trace: traceId, _logs: [log], label: toolName, tool: correlated.detail.summary, note: correlated.note, args: toolArgsYaml(toolName, log.trailblazeTool && log.trailblazeTool.raw), ms: log.durationMs || 0, ok, err: ok ? null : (err || truncate(log.resultSummary)), screenshotFile, viewHierarchy, viewport, ts, _cueEnd: ts == null ? null : ts + (log.durationMs || 0) };
       if (!traceId) closeGroup();
       continue;
     }
@@ -383,12 +423,21 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     // A driver action belongs to an open tool only when it came from the same agent turn. Older
     // logs omitted one or both trace ids, so retain the legacy adjacency fallback for those rows.
     if (action && group && (!traceId || !group._trace || group._trace === traceId)) {
-      if (!group.screenshotFile && screenshotFile) group.screenshotFile = screenshotFile;
+      // The capture and the mark this action contributes carry the action's OWN instant, not the
+      // group's. A tool log's `ts` is timeBeforeExecution, so a tool that spent time resolving a
+      // selector before it acted would otherwise place both cues seconds early — invisible in the
+      // timeline, but Replay draws them over a synchronized recording where early is simply wrong.
+      // sameClockCueTs decides whether this driver log's instant can be believed at all.
+      const cueTs = sameClockCueTs(group.ts, group._cueEnd, ts);
+      if (!group.screenshotFile && screenshotFile) { group.screenshotFile = screenshotFile; group.shotTs = cueTs; }
       if (!group.viewHierarchy && viewHierarchy) group.viewHierarchy = viewHierarchy;
       if (!group.viewport && viewport) group.viewport = viewport;
+      // Not a cross-clock path in practice: `timestamp` is a non-null `Instant` on every
+      // `TrailblazeLog` variant, so a tool row only lacks one in a hand-written payload — where the
+      // driver instant is the only instant there is, and no span exists to judge it against anyway.
       if (group.ts == null) group.ts = ts;
       if (!group.tool) group.tool = describeAction(action);
-      if (!group.mark) { const mk = actionMark(action, log); if (mk) group.mark = mk; }
+      if (!group.mark) { const mk = actionMark(action, log); if (mk) { group.mark = mk; group.markTs = cueTs; } }
       group._logs.push(log);
       continue;
     }
@@ -479,6 +528,7 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     }
   }
   closeGroup();
+  assignTraceDevices(out);
 
   return out.map((r, idx) => {
     const { _sig, _trace, count, note, ...rest } = r;
@@ -489,6 +539,67 @@ function extractTrace(logs: TrailblazeLogRecord[]): RawTraceRow[] {
     const withCount = count > 1 ? { ...withTrace, count } : withTrace;
     return note != null ? { ...withCount, note, i: idx + 1 } : { ...withCount, i: idx + 1 };
   });
+}
+
+// Stamps each row of a multi-device session with the binding name of the device it acted on
+// (TraceStep.device). Two signals exist in the folded log stream and neither alone covers it:
+//  - a log's own `deviceName` — the binding name the host stamps when IT emits the log. Ground
+//    truth where present, but most device-dispatched tool logs are written by the device, which
+//    never learns its binding name, so they arrive null (TrailblazeToolLog.deviceName's KDoc).
+//  - `switchDevice` handover rows — host-local by construction, so always logged, and stamped
+//    with the DESTINATION binding (the log is written after the switch).
+// Execution within a session is strictly sequential — one device is active at a time, and every
+// change of active device is a switchDevice call — so walking rows in order attributes the rest:
+// a row belongs to whichever device was active when it ran, and a handover row to its destination
+// (the moment that device becomes active). A stamped name resynchronizes the walk wherever one
+// appears, covering handovers that themselves went unlogged (the direct-MCP switch path).
+// Rows before the first signal ran on the start device. They get the first name stamped before
+// any handover (pre-handover, a stamp can only name the start device); failing that, in a
+// two-device session, the name that is not the first handover's destination. A prefix neither
+// rule can name stays unstamped, and a session with no signal at all is single-device: untouched.
+function assignTraceDevices(rows: any[]): void {
+  // A handover that failed never moved the session, and its log names a device that never became
+  // active — so it carries no usable signal in either direction and is skipped outright.
+  const failedSwitch = (l: any): boolean => l.toolName === 'switchDevice' && l.successful === false;
+  const switchDestOf = (logs: any[]): string | null => {
+    let dest: string | null = null;
+    for (const l of logs) {
+      if (!l || l.toolName !== 'switchDevice' || failedSwitch(l)) continue;
+      const raw = l.trailblazeTool && l.trailblazeTool.raw;
+      dest = (raw && typeof raw.name === 'string' && raw.name) || (typeof l.deviceName === 'string' && l.deviceName) || dest;
+    }
+    return dest;
+  };
+  const stampOf = (logs: any[]): string | null => {
+    for (const l of logs) if (l && typeof l.deviceName === 'string' && l.deviceName && !failedSwitch(l)) return l.deviceName;
+    return null;
+  };
+  let active: string | null = null;
+  let firstSwitchDest: string | null = null;
+  let preSwitchStamp: string | null = null;
+  const names: string[] = [];
+  for (const r of rows) {
+    const logs = r._logs || [];
+    const dest = switchDestOf(logs);
+    const stamped = dest || stampOf(logs);
+    if (dest && !firstSwitchDest) firstSwitchDest = dest;
+    if (stamped) {
+      if (!firstSwitchDest && !preSwitchStamp) preSwitchStamp = stamped;
+      active = stamped;
+    }
+    if (active != null) {
+      r.device = active;
+      if (names.indexOf(active) < 0) names.push(active);
+    }
+  }
+  if (!names.length) return;
+  const startName = preSwitchStamp
+    || (names.length === 2 && firstSwitchDest ? names.filter((n) => n !== firstSwitchDest)[0] || null : null);
+  if (!startName) return;
+  for (const r of rows) {
+    if (r.device != null) break;
+    r.device = startName;
+  }
 }
 
 // Every parameter of a composite tool call, unabridged. A composite (a scripted trailhead) is
@@ -942,7 +1053,7 @@ function summarizeToolArgs(raw: any, delegated: any): string {
 // object passes through as-is (a hand-authored flat bag).
 function nodeSelectorMatch(ns: any): any {
   if (!ns || typeof ns !== 'object') return null;
-  for (const dialect of ['androidAccessibility', 'androidMaestro', 'web', 'compose', 'iosMaestro', 'iosAxe']) {
+  for (const dialect of ['androidAccessibility', 'androidView', 'androidMaestro', 'web', 'compose', 'iosMaestro', 'iosAxe']) {
     if (ns[dialect] && typeof ns[dialect] === 'object') return ns[dialect];
   }
   return ns;
@@ -1011,6 +1122,11 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     terminal: !!t.terminal,
     count: t.count || null,
     mark: t.mark || null,
+    // When a folded driver action supplied the row's capture or mark, the instant IT ran (see the
+    // fold branch in extractTrace). Carried only when it actually differs from the row's own start,
+    // so the common case where the row and its cue share a timestamp costs nothing.
+    ...(t.shotTs != null && t.shotTs !== t.ts ? { shotTs: t.shotTs } : {}),
+    ...(t.markTs != null && t.markTs !== t.ts ? { markTs: t.markTs } : {}),
     // Full call content for the selected row's expanded detail (WASM-report parity).
     ...(t.args ? { args: t.args } : {}),
     // The row's index into the session's llm call list (extractLlmLogs order) — how the viewer
@@ -1025,6 +1141,9 @@ function slimTraceForShare(trace: RawTraceRow[] | null | undefined): TraceStep[]
     ...(t.children && t.children.length ? { children: t.children.map((c: any) => ({ label: c.label, tool: c.tool || '', ...(c.note ? { note: c.note } : {}), ...(c.ms != null ? { ms: c.ms } : {}), ...(c.ts != null ? { ts: c.ts } : {}), ...(c.ok === false ? { ok: false } : {}), ...(c.ok === false && c.err ? { err: c.err } : {}), ...(c.ok === false && c.code ? { code: c.code } : {}), ...(c.result ? { result: c.result } : {}), ...(c.resultVaries ? { resultVaries: true } : {}), ...((c.count || 1) > 1 ? { count: c.count } : {}), ...(c.args ? { args: c.args } : {}), ...(c.screenshotFile ? { screenshotFile: c.screenshotFile } : {}), ...(c.mark ? { mark: c.mark } : {}) })) } : {}),
     // The composite call's full argument list (see toolParams). Only present beside children.
     ...(t.params && t.params.length ? { params: t.params } : {}),
+    // Which device this row acted on (see assignTraceDevices). Only stamped on multi-device
+    // sessions, so the single-device common case carries nothing.
+    ...(t.device ? { device: t.device } : {}),
   }));
 }
 
@@ -1239,6 +1358,12 @@ function toSessionPayloads({ generatedAt, sessions }: { generatedAt?: string; se
       hierarchies,
       hierarchiesGz: s.hierarchiesGz || null,
       video: s.video || null,
+      // Runtime-only: the archive loader's object URL over bytes THIS page holds. Both standalone
+      // serialization paths null it out (buildMultiReportHtml, and the viewer's own export), since a
+      // blob: URL means nothing in a reopened file — which is why nothing may depend on a clip
+      // being present.
+      videoClip: s.videoClip || null,
+      attachments: s.attachments || null,
     };
   });
 }

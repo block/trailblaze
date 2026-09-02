@@ -61,7 +61,16 @@ class OnDeviceRpcProtoSchemaParityTest {
       aliases = mapOf(
         "trailblazeDeviceId" to setOf("device_id"),
         "trailblazeLlmModel" to setOf("llm_model"),
+        // One word, not two: the wire field keeps the W3C spelling of the header it carries.
+        "traceParent" to setOf("traceparent"),
       ),
+      // Host-side orchestration, not run payload. The host resolves the whole device set before any
+      // RPC and then talks to each device over its own connection, so a per-device request already
+      // carries the only device identity that device could act on (`device_id`). Nothing on the
+      // device has a concept of a companion or a configuration name. A multi-device trail cannot
+      // reach this transport in the first place — dispatch requires `preferHostAgent`, and
+      // DesktopYamlRunner refuses a declared configuration on every other path.
+      ignoredModelFields = setOf("deviceConfiguration", "deviceBindings"),
     )
     assertParity(
       ModelRunYamlResponse.serializer(),

@@ -1,0 +1,2 @@
+id: androidTest_tap
+class: xyz.block.trailblaze.android.test.tools.AndroidTestTapTool

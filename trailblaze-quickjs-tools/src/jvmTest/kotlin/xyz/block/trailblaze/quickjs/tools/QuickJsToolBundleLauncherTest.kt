@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.quickjs.tools
 
+import java.io.File
+import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -594,6 +597,188 @@ class QuickJsToolBundleLauncherTest {
 
     assertTrue("expected the same-bundle re-entry guard to fire; got: $result") {
       result.toString().contains("same bundle")
+    }
+  }
+
+  @Test
+  fun `colliding exports across bundles fail with every collision and its owning bundles named`() = runBlocking {
+    // Two tool modules that each export the same generically-named helpers alongside their real
+    // tool — the shape that killed every session of a real target at startup when a second repo's
+    // bundles arrived: `addDynamicTools` died on the FIRST duplicate with a message naming
+    // neither bundle. The launcher must instead report ALL colliding names at once, each with the
+    // bundle filenames that own it, and register nothing.
+    val speakBundle = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["speakTool"] = { handler: async () => ({ content: [] }) };
+      tools["requireNonBlankString"] = { handler: async () => ({ content: [] }) };
+      tools["resolveTimeoutMs"] = { handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val listenBundle = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["listenTool"] = { handler: async () => ({ content: [] }) };
+      tools["requireNonBlankString"] = { handler: async () => ({ content: [] }) };
+      tools["resolveTimeoutMs"] = { handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val err = runCatching {
+      QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(
+          McpServerConfig(script = "speak.bundle.js"),
+          McpServerConfig(script = "listen.bundle.js"),
+        ),
+        deviceInfo = deviceInfo,
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        bundleSourceResolver = { entry ->
+          when (entry.script) {
+            "speak.bundle.js" -> InlineBundleSource(speakBundle, filename = "speak.bundle.js")
+            else -> InlineBundleSource(listenBundle, filename = "listen.bundle.js")
+          }
+        },
+      )
+    }.exceptionOrNull()
+    assertNotNull(err, "expected the colliding exports to abort the launch")
+    val message = err.message.orEmpty()
+    // BOTH collisions are in the one failure, not just the first one hit.
+    assertTrue("expected 'requireNonBlankString' in: $message") { "'requireNonBlankString'" in message }
+    assertTrue("expected 'resolveTimeoutMs' in: $message") { "'resolveTimeoutMs'" in message }
+    // EACH collision names every owning bundle — not just the first one hit — so the author
+    // knows which two files to reconcile for every colliding name.
+    assertTrue("expected both owning bundle filenames per collision in: $message") {
+      Regex("'requireNonBlankString' exported by: speak\\.bundle\\.js, listen\\.bundle\\.js").containsMatchIn(message) &&
+        Regex("'resolveTimeoutMs' exported by: speak\\.bundle\\.js, listen\\.bundle\\.js").containsMatchIn(message)
+    }
+    // Nothing registered — the failure is atomic.
+    assertTrue("no dynamic tools should be registered after a collision, got ${toolRepo.getRegisteredDynamicTools().keys}") {
+      toolRepo.getRegisteredDynamicTools().isEmpty()
+    }
+  }
+
+  @Test
+  fun `the same bundle loaded twice is reported as a duplicate declaration not a rename problem`() = runBlocking {
+    // A repeated mcp_servers entry loads the same bundle into two hosts, so every export
+    // "collides" with itself. Advising a rename would be unactionable — it's one file — so the
+    // failure must instead say the bundle is loaded twice.
+    val bundleJs = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["someTool"] = { handler: async () => ({ content: [] }) };
+      tools["someHelper"] = { handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val err = runCatching {
+      QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(
+          McpServerConfig(script = "shared.bundle.js"),
+          McpServerConfig(script = "shared.bundle.js"),
+        ),
+        deviceInfo = deviceInfo,
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        bundleSourceResolver = { InlineBundleSource(bundleJs, filename = "shared.bundle.js") },
+      )
+    }.exceptionOrNull()
+    assertNotNull(err, "expected the twice-loaded bundle to abort the launch")
+    val message = err.message.orEmpty()
+    assertTrue("expected the duplicate declaration to be named in: $message") {
+      "'shared.bundle.js' is loaded 2 times" in message
+    }
+    // No self-collision noise: `exported by: shared.bundle.js, shared.bundle.js` plus rename
+    // advice is the unactionable shape this case exists to avoid.
+    assertFalse("self-collisions must not be reported as cross-bundle collisions: $message") {
+      "exported by:" in message
+    }
+    assertTrue("no dynamic tools should be registered after a duplicate declaration, got ${toolRepo.getRegisteredDynamicTools().keys}") {
+      toolRepo.getRegisteredDynamicTools().isEmpty()
+    }
+  }
+
+  @Test
+  fun `two spellings of one bundle path are one bundle loaded twice not two colliding bundles`() = runBlocking {
+    // `dir/shared.bundle.js` and `dir/./shared.bundle.js` are the same file. Keying the report off
+    // the display filename would call this a collision between two bundles and tell the author to
+    // rename an export "in one of the bundles" — there is only one file to rename in.
+    val dir = Files.createTempDirectory("quickjs-bundle-identity").toFile()
+    File(dir, "shared.bundle.js").writeText(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["someTool"] = { handler: async () => ({ content: [] }) };
+      """.trimIndent(),
+    )
+    val plainPath = "${dir.path}/shared.bundle.js"
+    val dottedPath = "${dir.path}/./shared.bundle.js"
+    // Guard the premise: if these ever stop differing as strings, the test proves nothing.
+    assertNotEquals(plainPath, dottedPath)
+    val err = runCatching {
+      QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(McpServerConfig(script = plainPath), McpServerConfig(script = dottedPath)),
+        deviceInfo = deviceInfo,
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        bundleSourceResolver = { entry -> BundleSource.FromFile(entry.script!!) },
+      )
+    }.exceptionOrNull()
+    dir.deleteRecursively()
+    assertNotNull(err, "expected the twice-declared bundle to abort the launch")
+    val message = err.message.orEmpty()
+    assertTrue("expected a duplicate-declaration report in: $message") {
+      "is loaded 2 times" in message
+    }
+    // Both spellings are named, so the author can find the entry to delete.
+    assertTrue("expected the alias spelling to be named in: $message") {
+      "also declared as" in message && "./shared.bundle.js" in message
+    }
+    assertFalse("one file must not be reported as colliding bundles: $message") {
+      "exported by:" in message
+    }
+    assertTrue("nothing should register, got ${toolRepo.getRegisteredDynamicTools().keys}") {
+      toolRepo.getRegisteredDynamicTools().isEmpty()
+    }
+  }
+
+  @Test
+  fun `two different bundles sharing a display filename are reported as a collision`() = runBlocking {
+    // A filename is a stack-trace label, not identity — nothing stops two unrelated sources from
+    // carrying the same one. Reading a shared label as "one bundle staged twice" would tell the
+    // author to delete an `mcp_servers` entry that legitimately belongs there, and the real fix
+    // (rename the shared export) would never be offered.
+    val speakBundle = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["speakTool"] = { handler: async () => ({ content: [] }) };
+      tools["sharedHelper"] = { handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val listenBundle = """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["listenTool"] = { handler: async () => ({ content: [] }) };
+      tools["sharedHelper"] = { handler: async () => ({ content: [] }) };
+    """.trimIndent()
+    val err = runCatching {
+      QuickJsToolBundleLauncher.launchAll(
+        bundles = listOf(
+          McpServerConfig(script = "speak"),
+          McpServerConfig(script = "listen"),
+        ),
+        deviceInfo = deviceInfo,
+        sessionId = sessionId,
+        toolRepo = toolRepo,
+        bundleSourceResolver = { entry ->
+          // Same label on purpose: two distinct bundles, one display filename.
+          val js = if (entry.script == "speak") speakBundle else listenBundle
+          InlineBundleSource(js, filename = "bundle.js")
+        },
+      )
+    }.exceptionOrNull()
+    assertNotNull(err, "expected the shared export to abort the launch")
+    val message = err.message.orEmpty()
+    assertTrue("expected collision framing for two distinct bundles in: $message") {
+      "'sharedHelper' exported by:" in message && "Rename the colliding export" in message
+    }
+    // Numbered so two same-labelled bundles don't read as one file colliding with itself.
+    assertTrue("expected the shared label to be disambiguated in: $message") {
+      "bundle.js #1, bundle.js #2" in message
+    }
+    assertFalse("two distinct bundles must not be reported as one loaded twice: $message") {
+      "is loaded" in message
+    }
+    assertTrue("nothing should register, got ${toolRepo.getRegisteredDynamicTools().keys}") {
+      toolRepo.getRegisteredDynamicTools().isEmpty()
     }
   }
 

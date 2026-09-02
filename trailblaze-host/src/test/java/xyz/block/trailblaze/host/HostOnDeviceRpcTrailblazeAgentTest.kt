@@ -24,6 +24,10 @@ import org.junit.After
 import org.junit.Before
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
+import xyz.block.trailblaze.host.devices.HostDeviceProfile
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mobile.tools.AdbShellTrailblazeTool
 import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
@@ -135,6 +139,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     trailblazeToolRepo: xyz.block.trailblaze.toolcalls.TrailblazeToolRepo? = null,
     reWarmTimeoutMs: Long = 50L,
     reWarmPollIntervalMs: Long = 1L,
+    onScreenStateObserved: (GetScreenStateResponse) -> Unit = {},
   ): HostOnDeviceRpcTrailblazeAgent {
     return HostOnDeviceRpcTrailblazeAgent(
       rpcClient = rpcClient,
@@ -163,6 +168,7 @@ class HostOnDeviceRpcTrailblazeAgentTest {
       // delays. Production callers keep the defaults from the constructor.
       reWarmTimeoutMs = reWarmTimeoutMs,
       reWarmPollIntervalMs = reWarmPollIntervalMs,
+      onScreenStateObserved = onScreenStateObserved,
     )
   }
 
@@ -791,6 +797,62 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     assertThat(failure).messageContains("Device unhealthy")
     assertThat(failure).messageContains("Error while disconnecting UiAutomation")
   }
+
+  @Test
+  fun `a rotation mid-run changes the size the session reports for this device`() {
+    // Wired the way the runner wires it: the session holds ONE profile reference per device and the
+    // agent refreshes it from every screen state that device reports. Holding the start-of-session
+    // value instead would describe every later log and `ctx.device` read in the orientation the run
+    // began in, because orientation is derived from width vs height.
+    val rotated = AtomicBoolean(false)
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      val size = if (rotated.get()) """"deviceWidth":1920,"deviceHeight":1200"""
+      else """"deviceWidth":1200,"deviceHeight":1920"""
+      HttpStatusCode.OK to """{"viewHierarchy":{},"screenshotBase64":null,$size}"""
+    }
+    val profile = AtomicReference(
+      HostDeviceProfile(classifiers = emptyList(), widthPixels = 1200, heightPixels = 1920),
+    )
+    val agent = createAgent(
+      onScreenStateObserved = { response ->
+        profile.updateAndGet { it.withMeasuredSizeFrom(response) }
+      },
+    )
+
+    runBlocking {
+      assertThat(agent.captureScreenState()).isNotNull()
+      assertThat(orientationOf(profile.get())).isEqualTo(TrailblazeDeviceOrientation.PORTRAIT)
+
+      rotated.set(true)
+      assertThat(agent.captureScreenState()).isNotNull()
+    }
+
+    assertThat(orientationOf(profile.get())).isEqualTo(TrailblazeDeviceOrientation.LANDSCAPE)
+  }
+
+  @Test
+  fun `a capture that never reaches the device reports no size`() {
+    // The observer fires off a device's own report, not off the attempt. A failed capture that
+    // still notified would let a caller refresh from nothing.
+    mockServer.onPost("/rpc/GetScreenStateRequest") {
+      HttpStatusCode.InternalServerError to
+        """{"errorType":"NETWORK_ERROR","message":"Network error during RPC call"}"""
+    }
+    val observed = AtomicInteger(0)
+    val agent = createAgent(onScreenStateObserved = { observed.incrementAndGet() })
+
+    runBlocking { assertThat(agent.captureScreenState()).isNull() }
+
+    assertThat(observed.get()).isEqualTo(0)
+  }
+
+  /** What a session's device info makes of a profile — the only consumer of the dimensions. */
+  private fun orientationOf(profile: HostDeviceProfile) = TrailblazeDeviceInfo(
+    trailblazeDeviceId = testDeviceId,
+    trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    widthPixels = profile.widthPixels,
+    heightPixels = profile.heightPixels,
+  ).orientation
 
   /** Reset on any successful capture: an unbroken streak of wedge-signature failures
    *  trips the breaker, but a clean success in between resets the counter. */

@@ -534,7 +534,7 @@
         minimap: { enabled: false },
         fontSize: 12.5,
         lineNumbers: 'on',
-        glyphMargin: !!opts.onRunTool,
+        glyphMargin: !!opts.onRunMarker,
         scrollBeyondLastLine: false,
         tabSize: 2,
         insertSpaces: true,
@@ -571,28 +571,28 @@
         if (client && client.isReady()) client.changeDocument(uriStr, text);
       });
       var focusSub = editor.onDidFocusEditorText(function () { if (client) activeClient = client; });
-      var toolRunMarkers = [];
-      var toolRunDecorations = [];
-      var toolAtLine = function (line0) {
-        return toolRunMarkers.find(function (m) { return line0 >= m.line0 && line0 <= m.endLine0; });
+      var runMarkers = [];
+      var runDecorations = [];
+      var markerAtLine = function (line0) {
+        return runMarkers.find(function (m) { return line0 >= m.line0 && line0 <= m.endLine0; });
       };
       var gutterSub = editor.onMouseDown(function (event) {
-        if (!opts.onRunTool || !event || !event.target
+        if (!opts.onRunMarker || !event || !event.target
             || event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
         var line0 = event.target.position ? event.target.position.lineNumber - 1 : -1;
-        var marker = toolRunMarkers.find(function (m) { return m.line0 === line0; });
-        if (marker && !marker.disabled) opts.onRunTool(marker);
+        var marker = runMarkers.find(function (m) { return m.line0 === line0; });
+        if (marker) opts.onRunMarker(marker);
       });
-      var toolAction = opts.onRunTool ? editor.addAction({
-        id: 'trailrunner.test-tool-at-cursor',
-        label: 'Test tool call at cursor',
+      var runAction = opts.onRunMarker ? editor.addAction({
+        id: 'trailrunner.run-from-step-at-cursor',
+        label: 'Run from the step at the cursor',
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
         contextMenuGroupId: 'navigation',
         contextMenuOrder: 1,
         run: function () {
           var position = editor.getPosition();
-          var marker = position ? toolAtLine(position.lineNumber - 1) : null;
-          if (marker && !marker.disabled) opts.onRunTool(marker);
+          var marker = position ? markerAtLine(position.lineNumber - 1) : null;
+          if (marker) opts.onRunMarker(marker);
         },
       }) : null;
 
@@ -610,23 +610,18 @@
         getCursorLine: function () { var p = editor.getPosition(); return p ? p.lineNumber - 1 : 0; },
         // Toggle soft-wrap — carries over the trail editor's wrap toggle to the Monaco path.
         setWrap: function (on) { editor.updateOptions({ wordWrap: on ? 'on' : 'off' }); },
-        // Executable-tool controls live in Monaco's native glyph margin so they stay aligned while
+        // Run controls live in Monaco's native glyph margin so they stay aligned while
         // scrolling/wrapping. The React caller reparses the current YAML after every edit and hands
-        // us the exact tool object represented by each line.
-        setToolRunMarkers: function (list) {
-          toolRunMarkers = list || [];
-          toolRunDecorations = editor.deltaDecorations(toolRunDecorations, toolRunMarkers.map(function (m) {
+        // us one marker per line that can start a run, with the hover text already written.
+        setRunMarkers: function (list) {
+          runMarkers = list || [];
+          runDecorations = editor.deltaDecorations(runDecorations, runMarkers.map(function (m) {
             return {
               range: new monaco.Range((m.line0 || 0) + 1, 1, (m.line0 || 0) + 1, 1),
               options: {
                 isWholeLine: false,
-                glyphMarginClassName: 'tb-tool-run-glyph' + (m.running ? ' is-running' : (m.disabled ? ' is-disabled' : '')),
-                // Just the verb and the tool. The verb stays `Test`, matching the aria-label and the
-                // Tools tab this button belongs to (`Run` is what a whole trail does). A tool name is
-                // an unbreakable token long enough on its own that any trailing phrase ("… on the
-                // connected device") wrapped the widget over most of the step it points at: measured
-                // at 504x61px in a 557px-wide pane, against 246x37px for this wording.
-                glyphMarginHoverMessage: { value: m.running ? ('Running `' + m.name + '`…') : (m.disabled ? 'Wait for the running tool to finish' : ('Test `' + m.name + '`')) },
+                glyphMarginClassName: 'tb-step-run-glyph',
+                glyphMarginHoverMessage: { value: m.hover },
               },
             };
           }));
@@ -674,8 +669,8 @@
           changeSub.dispose();
           focusSub.dispose();
           gutterSub.dispose();
-          if (toolAction) toolAction.dispose();
-          if (toolRunDecorations.length) editor.deltaDecorations(toolRunDecorations, []);
+          if (runAction) runAction.dispose();
+          if (runDecorations.length) editor.deltaDecorations(runDecorations, []);
           if (client) {
             if (uriStr) { client.closeDocument(uriStr); clientsByUri.delete(uriStr); }
             if (activeClient === client) activeClient = null;

@@ -46,6 +46,14 @@ class MatcherParityFixturesTest {
   )
 
   @Serializable
+  private data class AndroidViewCase(
+    val name: String,
+    val match: DriverNodeMatch.AndroidView,
+    val detail: DriverNodeDetail,
+    val matches: Boolean,
+  )
+
+  @Serializable
   private data class HitTestCase(
     val name: String,
     val tree: TrailblazeNode,
@@ -57,6 +65,7 @@ class MatcherParityFixturesTest {
   @Serializable
   private data class ParityFixtures(
     val cases: List<ParityCase>,
+    val androidViewCases: List<AndroidViewCase> = emptyList(),
     val iosMaestroHintBridgeCases: List<HintBridgeCase> = emptyList(),
     val hitTestCases: List<HitTestCase> = emptyList(),
   )
@@ -85,6 +94,16 @@ class MatcherParityFixturesTest {
         { case ->
           DriverNodeDetail.AndroidAccessibility(contentDescription = case.text) to
             DriverNodeMatch.AndroidAccessibility(contentDescriptionRegex = case.pattern)
+        },
+        { it.nativeMatches },
+      ),
+      // androidView is the other native-dialect shape — swept here so its strictness can't
+      // silently relax to the Maestro dialect while the androidAccessibility rows stay green.
+      Triple(
+        "native/androidView.textRegex",
+        { case ->
+          DriverNodeDetail.AndroidView(text = case.text) to
+            DriverNodeMatch.AndroidView(textRegex = case.pattern)
         },
         { it.nativeMatches },
       ),
@@ -149,6 +168,57 @@ class MatcherParityFixturesTest {
           append(
             "Either the resolver's matching semantics drifted, or the fixture was changed without " +
               "updating this implementation. Fix the resolver (or the fixture) and keep the TS mirror " +
+              "(sdks/typescript/src/matcher/resolver.ts) in lockstep.",
+          )
+        },
+      )
+    }
+  }
+
+  // Node-shaped contract for the androidView shape: which node shapes an androidView match may
+  // cross into, and the three-state isChecked encoding (null = the view is not Checkable at
+  // all). Same source of truth and drift guarantee as `cases` — the TS mirror is
+  // matcher-parity.test.ts.
+  @Test
+  fun `androidView behavior agrees with the shared parity fixtures`() {
+    val fixtureFile = locate("sdks/typescript/src/matcher/matcher-parity-fixtures.json")
+    val fixtures = fixtureJson.decodeFromString<ParityFixtures>(fixtureFile.readText())
+    check(fixtures.androidViewCases.isNotEmpty()) { "androidView parity section is empty: $fixtureFile" }
+
+    val failures = fixtures.androidViewCases.mapNotNull { case ->
+      val target = TrailblazeNode(
+        nodeId = 2,
+        bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+        driverDetail = case.detail,
+      )
+      // A root of a different shape, so only the case's own node can ever match: an
+      // androidView root would itself satisfy a widened predicate (its isChecked is null
+      // too) and turn a false-expecting row green for the wrong reason.
+      val root = TrailblazeNode(
+        nodeId = 1,
+        bounds = TrailblazeNode.Bounds(0, 0, 200, 100),
+        children = listOf(target),
+        driverDetail = DriverNodeDetail.AndroidAccessibility(),
+      )
+      val selector = TrailblazeNodeSelector.withMatch(case.match)
+      val matched =
+        TrailblazeNodeSelectorResolver.resolve(root, selector) is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch
+      if (matched != case.matches) {
+        "  ${case.name}: match=[${case.match.description()}] detail=[${case.detail}] " +
+          "expected matches=${case.matches}, got $matched"
+      } else {
+        null
+      }
+    }
+
+    if (failures.isNotEmpty()) {
+      fail(
+        buildString {
+          appendLine("${failures.size} androidView parity fixture case(s) disagree with the Kotlin resolver:")
+          failures.forEach { appendLine(it) }
+          append(
+            "Either matchesAndroidView drifted, or the fixture was changed without updating this " +
+              "implementation. Fix the resolver (or the fixture) and keep the TS mirror " +
               "(sdks/typescript/src/matcher/resolver.ts) in lockstep.",
           )
         },

@@ -1,6 +1,7 @@
 config:
   devices:
-    web: PLAYWRIGHT_ELECTRON
+    web:
+      driver: PLAYWRIGHT_ELECTRON
   title: Electron Navigation Test
 
 trail:

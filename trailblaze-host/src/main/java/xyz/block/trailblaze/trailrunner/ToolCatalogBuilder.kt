@@ -316,7 +316,7 @@ object ToolCatalogBuilder {
   private val scriptedAnalyzer: ScriptedToolDefinitionAnalyzer? by lazy {
     runCatching {
       val bun = BunBinaryResolver.resolveBunBinary() ?: return@runCatching null
-      val sdkDir = ScriptedToolDefinitionAnalyzer.resolveSdkDir() ?: return@runCatching null
+      val sdkDir = ScriptedToolDefinitionAnalyzer.resolveAnalyzerSdkDir() ?: return@runCatching null
       val shim = ScriptedToolDefinitionAnalyzer.resolveExtractorShim(sdkDir) ?: return@runCatching null
       if (!ScriptedToolDefinitionAnalyzer.analyzerToolingAvailable(sdkDir)) return@runCatching null
       ScriptedToolDefinitionAnalyzer(

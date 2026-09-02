@@ -1,7 +1,8 @@
 config:
   target: wikipedia
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'Wikipedia: First paragraph of an article is readable'
 
 trail:

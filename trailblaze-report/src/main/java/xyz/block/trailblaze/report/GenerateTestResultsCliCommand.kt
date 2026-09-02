@@ -21,6 +21,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.capture.logcat.LogcatParser
+import xyz.block.trailblaze.devices.TrailblazeClassifierLineage
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
@@ -204,7 +205,14 @@ open class GenerateTestResultsCliCommand(
       .filterNot(::isMcpHelperSession)
       .associateBy { it.sessionId }
 
-    if (sessionInfos.isEmpty()) {
+    // Trails the runner declined to run. They have no session - that's what makes them invisible
+    // here without this - so they come from the runner's own records in the logs dir.
+    val skippedResults = SkippedTrails.read(logsDir).map { it.toSessionResult() }
+
+    // A run whose every trail was skipped is a legitimate report, not an empty one: "all of these
+    // were held back, here's why" is exactly the answer a reader needs. Only bail when there is
+    // nothing of either kind.
+    if (sessionInfos.isEmpty() && skippedResults.isEmpty()) {
       if (ownsLogsRepo) logsRepo.close()
       Console.log("⚠️  No sessions found in: ${logsDir.absolutePath}")
       return
@@ -259,7 +267,12 @@ open class GenerateTestResultsCliCommand(
         val hostCiContext = readHostCiContext(logsRepo, sessionId)
         val healedYaml =
           if (selfHealRan && outcome == Outcome.PASSED) {
-            runCatching { logs.generateUnifiedRecordedYaml(createTrailblazeYaml()) }
+            runCatching {
+                logs.generateUnifiedRecordedYaml(
+                  createTrailblazeYaml(),
+                  successfulObjectivesOnly = true,
+                )
+              }
               .getOrNull()
               ?.takeIf { it.isNotBlank() }
           } else {
@@ -276,12 +289,19 @@ open class GenerateTestResultsCliCommand(
                 deviceClassifier =
                   sessionInfo.trailblazeDeviceInfo?.classifiers
                     ?.joinToString("-") { it.classifier },
+                selectedDeviceConfiguration = sessionInfo.selectedDeviceConfiguration,
+                recordingResolutionChain =
+                  listOfNotNull(sessionInfo.selectedDeviceConfiguration?.takeIf { it.isNotBlank() }) +
+                    TrailblazeClassifierLineage
+                      .resolutionChain(sessionInfo.trailblazeDeviceInfo?.classifiers.orEmpty())
+                      .map { it.classifier },
                 appVersionName = sessionInfo.targetAppInfo?.versionName,
                 appVersionCode = sessionInfo.targetAppInfo?.versionCode,
                 appBuildNumber = sessionInfo.targetAppInfo?.buildNumber,
                 trailSourceRepo = metadata.trail_source_repo,
                 trailSourceRef = metadata.trail_source_ref,
                 ciBuildNumber = metadata.ci_build_number,
+                sourceJobId = hostCiContext.ci_job_id,
                 baselineOutcome = outcome,
                 selfHealRan = selfHealRan,
               ),
@@ -296,6 +316,11 @@ open class GenerateTestResultsCliCommand(
             title = title,
             test_key = testKey,
             metadata = sessionInfo.trailConfig?.metadata,
+            // Blank normalizes to null, as it does for `test_class`/`test_name` below and for
+            // `SessionInfo.displayName`: a consumer reads null as "named no trail", and an empty
+            // string that survived to the report would answer that question two different ways
+            // depending on whether it was checked for null or for emptiness.
+            trail_file_path = sessionInfo.trailFilePath?.takeIf { it.isNotBlank() },
             test_class = sessionInfo.testClass?.takeIf { it.isNotBlank() },
             test_name = sessionInfo.testName?.takeIf { it.isNotBlank() },
             platform = platform,
@@ -347,7 +372,11 @@ open class GenerateTestResultsCliCommand(
     // (attempt, total_attempts, replaced_session_ids, replaced_failure_reasons,
     // replaced_failure_kinds, replaced_outcomes) so nothing is lost.
     val deduplicated = deduplicateRetries(sessionResults)
-    val finalResults = deduplicated.finalResults
+    // Skips join AFTER dedup, and are kept separately from [ranResults]. Not through dedup because
+    // a skip has no attempts to collapse, and separate because every failure-oriented aggregation
+    // below reads "not passed" as "failed" - a skip must not be counted as either.
+    val ranResults = deduplicated.finalResults
+    val finalResults = ranResults + skippedResults
 
     // Print summary to console
     printSummary(finalResults, errors)
@@ -390,7 +419,7 @@ open class GenerateTestResultsCliCommand(
     // so the combined-report scripts opt in and the per-shard ones don't. The work itself is a
     // pure in-memory pass over the already-deduplicated results.
     if (triageMode) {
-      val triageReport = buildTriageReport(metadata, sessionResults, finalResults)
+      val triageReport = buildTriageReport(metadata, sessionResults, ranResults)
       val triageOutput = File(logsDir, "trailblaze_triage_report.json")
       triageOutput.writeText(jsonSerializer.encodeToString(value = triageReport))
       Console.log("🔍 Triage report written to: ${triageOutput.absolutePath}")
@@ -398,6 +427,10 @@ open class GenerateTestResultsCliCommand(
 
     // Store the generated report for subclasses to access
     generatedReport = summaryReport
+    // Attempts only - no skips. This projection is every attempt a run actually made, including
+    // the ones a retry superseded, and it is what the Block subclass uploads to CDP. A skip made
+    // no attempt, so a synthetic row here would send an external results sink a test execution
+    // that never happened. The report on disk still lists it.
     generatedAttemptReport = summaryReport.copy(results = deduplicated.attemptResults)
 
     // Clean up file watchers to allow JVM to exit
@@ -497,6 +530,9 @@ open class GenerateTestResultsCliCommand(
       getEnv("TRAIL_SOURCE_TYPE") ?: if (trailSourceRepo != null) "git" else null
 
     return CiRunMetadata(
+      // Un-namespaced, like TRAIL_SOURCE_* above. Null off-CI rather than a placeholder, so a run
+      // with no config doesn't read as a config named "unknown".
+      config_id = getEnv("CONFIG_ID"),
       target_app = getEnv("TRAILBLAZE_TARGET_APP") ?: "",
       build_type = getEnv("TRAILBLAZE_BUILD_TYPE") ?: "",
       devices = getEnvList("TRAILBLAZE_DEVICES"),
@@ -988,10 +1024,18 @@ open class GenerateTestResultsCliCommand(
           appendLine()
           appendLine("$outcomeIcon ${result.title}")
           appendLine("   Platform: $platformIcon ${result.platform}")
-          appendLine("   Duration: ${formatDuration(result.duration_ms)}")
+          // A skip has no duration to print. Its `duration_ms` is 0 because nothing ran, and
+          // "Duration: 0ms" reads as a run that finished instantly rather than one that never
+          // started - the one thing a reader most needs this line NOT to say about a skip.
+          if (result.outcome != Outcome.SKIPPED) {
+            appendLine("   Duration: ${formatDuration(result.duration_ms)}")
+          }
           if (result.failure_reason != null) {
             val reason = result.failure_reason.take(100)
-            appendLine("   Failure: $reason${if (result.failure_reason.length > 100) "..." else ""}")
+            // A skip carries its reason in the same field every other row uses, but it is not a
+            // failure, so it must not be labelled as one here either.
+            val label = if (result.outcome == Outcome.SKIPPED) "Skipped" else "Failure"
+            appendLine("   $label: $reason${if (result.failure_reason.length > 100) "..." else ""}")
           }
           appendLine("   Session: ${result.session_id}")
         }
@@ -1022,8 +1066,11 @@ open class GenerateTestResultsCliCommand(
     val cancelled = results.count { it.outcome == Outcome.CANCELLED }
     val timeout = results.count { it.outcome == Outcome.TIMEOUT }
     val maxCallsReached = results.count { it.outcome == Outcome.MAX_CALLS_REACHED }
-    val total = results.size
-    val passRate = if (total > 0) (passed.toDouble() / total) * 100 else 0.0
+    // The total, and every bar drawn against it, describes the trails that RAN. A skip gets its own
+    // line below and stays out of this, so holding a trail back can't shrink the pass bar or
+    // contradict the pass rate, which already excludes it.
+    val total = results.count { it.outcome != Outcome.SKIPPED }
+    val passRate = passRatePercent(results)
     val totalFailed = failed + timeout + maxCallsReached
 
     val output = buildString {
@@ -1035,8 +1082,14 @@ open class GenerateTestResultsCliCommand(
       appendLine("📁 Source: ${logsDir.absolutePath}")
       appendLine()
 
-      // Overall results
-      val passIcon = if (totalFailed == 0) "✅" else "❌"
+      // Overall results. "Nothing failed" is not the same claim as "everything passed", and with
+      // every trail held back the two come apart: `total` is 0, the pass rate is 0.0%, and a green
+      // check would be this summary vouching for work it never saw.
+      val passIcon = when {
+        totalFailed > 0 -> "❌"
+        total == 0 -> "⏭️"
+        else -> "✅"
+      }
       appendLine("$passIcon RESULTS")
       appendLine("   ├── Total:   $total")
       appendLine("   ├── Passed:  $passed ${passBar(passed, total, "🟢")}")
@@ -1044,19 +1097,26 @@ open class GenerateTestResultsCliCommand(
       if (timeout > 0) appendLine("   ├── Timeout: $timeout ${passBar(timeout, total, "🟠")}")
       if (maxCallsReached > 0) appendLine("   ├── Max Calls: $maxCallsReached ${passBar(maxCallsReached, total, "🟠")}")
       if (cancelled > 0) appendLine("   ├── Cancelled: $cancelled ${passBar(cancelled, total, "⚪")}")
-      appendLine("   ├── Skipped: $skipped ${passBar(skipped, total, "⚪")}")
+      // Denominated on every trail in scope, not on `total`. `total` counts what RAN, so a skip is
+      // not one of its parts: 1 pass beside 3 skips would draw a full 20-icon skipped bar with only
+      // `passBar`'s clamp hiding the overflow, and an all-skipped report would draw none at all.
+      // The share this bar answers is "how much of the work was held back", so its whole is the
+      // work, held back or not.
+      appendLine("   ├── Skipped: $skipped ${passBar(skipped, total + skipped, "⚪")}")
       appendLine("   └── Pass Rate: ${"%.1f".format(passRate)}%")
       appendLine()
 
       // Platform breakdown
-      val byPlatform = results.groupBy { it.platform }
+      // Grouped over what ran, so a platform on which every trail was skipped is absent rather than
+      // reported as 0/0 (0%) - which reads as a platform that failed everything.
+      val byPlatform = results.filter { it.outcome != Outcome.SKIPPED }.groupBy { it.platform }
       if (byPlatform.size > 1) {
         appendLine("📱 BY PLATFORM")
         byPlatform.forEach { (platform, platformResults) ->
           val platformIcon = getPlatformIcon(platform)
           val platformPassed = platformResults.count { it.outcome == Outcome.PASSED }
           val platformTotal = platformResults.size
-          val platformRate = if (platformTotal > 0) (platformPassed.toDouble() / platformTotal) * 100 else 0.0
+          val platformRate = (platformPassed.toDouble() / platformTotal) * 100
           appendLine("   ├── $platformIcon $platform: $platformPassed/$platformTotal (${"%.0f".format(platformRate)}%)")
         }
         appendLine()
@@ -1276,6 +1336,19 @@ open class GenerateTestResultsCliCommand(
       .trim()
       .take(200)
   }
+}
+
+/**
+ * Share of the trails that RAN which passed, as a percentage. Zero when nothing ran.
+ *
+ * Skipped rows are listed in the report but excluded from the denominator: a skip never ran, so it
+ * can neither pass nor fail, and counting it would make adding a `skip:` to one trail read as a
+ * regression in the pass rate of all the others.
+ */
+internal fun passRatePercent(results: List<SessionResult>): Double {
+  val ran = results.count { it.outcome != Outcome.SKIPPED }
+  if (ran == 0) return 0.0
+  return (results.count { it.outcome == Outcome.PASSED }.toDouble() / ran) * 100
 }
 
 // MCP helper sessions are the side-sessions the MCP server opens to take a snapshot /

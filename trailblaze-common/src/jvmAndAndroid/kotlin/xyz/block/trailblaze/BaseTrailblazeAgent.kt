@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReadOnlyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.SessionDeviceBindings
 import xyz.block.trailblaze.toolcalls.SnapshotCache
@@ -23,13 +24,31 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.interpolateMemoryInTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.toolcalls.withAuthoredFailureContent
 import xyz.block.trailblaze.toolcalls.isVerificationToolInstance
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.NoOpElementComparator
+
+/** Trace category for tool dispatch — one span per tool call, on every driver. */
+private const val TOOL_TRACE_CAT = "tool"
+
+/**
+ * The name this tool's dispatch span carries.
+ *
+ * An instance that names itself wins over its class annotation. Every `tools:`-authored tool is a
+ * `YamlDefinedTrailblazeTool`, so the annotation is the shared reserved `_yaml_defined` for all of
+ * them — going by it alone collapses every YAML-defined tool in the trail into one span name, and
+ * the trace can no longer say which of them was slow. Same rule the session log already applies in
+ * `toOtherTrailblazeToolPayload`.
+ */
+private fun TrailblazeTool.traceSpanName(): String =
+  (this as? InstanceNamedTrailblazeTool)?.instanceToolName?.takeIf { it.isNotBlank() }
+    ?: getToolNameFromAnnotation()
 
 /**
  * Shared base for [TrailblazeAgent] implementations.
@@ -76,6 +95,13 @@ abstract class BaseTrailblazeAgent(
    * active device — the runner reads the SAME shared instance to route capture and dispatch.
    */
   var deviceBindings: SessionDeviceBindings? = null
+
+  /**
+   * Read through the shared bindings, not captured at construction: every bound device gets its
+   * own agent, but they all share one [SessionDeviceBindings], so this follows `switchDevice`
+   * instead of naming whichever device this agent was built for.
+   */
+  override val activeDeviceName: String? get() = deviceBindings?.activeName
 
   /** Build the agent-specific [TrailblazeToolExecutionContext]. Called once per run. */
   protected abstract fun buildExecutionContext(
@@ -152,6 +178,13 @@ abstract class BaseTrailblazeAgent(
         buildExecutionContext(resolvedTraceId, screenState, screenStateProvider)
       }
       context.screenState = screenState
+      // Same reassign-per-dispatch rule as `screenState`, and for the same reason: the context is
+      // shared for its IDENTITY, but each call into the batch is a separate dispatch and gets its
+      // own trace. Keeping the first tool's traceId for the whole batch stamps every log of a
+      // recorded step with one trace, and readers that group by trace (the session report folds a
+      // trace into one timeline row) then show a 20-tool step as a single row with 19 nested
+      // dispatches instead of one row per recorded command.
+      context.traceId = resolvedTraceId
       return dispatchTools(tools, context, elementComparator)
     }
 
@@ -198,7 +231,15 @@ abstract class BaseTrailblazeAgent(
     var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
     for (tool in tools) {
       val resolved = resolveDynamicTool(tool)
-      val result =
+      // The one span every driver shares. Tool dispatch is the boundary between "the agent decided
+      // to do something" and the device work that decision costs, and it is the same boundary for
+      // the Android RPC, Playwright, Maestro and iOS agents — so instrumenting it here is what
+      // stops an agent phase reading as one opaque block of seconds. Recorded at NORMAL: one span
+      // per tool call, each wrapping work measured in hundreds of milliseconds.
+      val result = TrailblazeTracer.trace(
+        name = resolved.traceSpanName(),
+        cat = TOOL_TRACE_CAT,
+      ) {
         when (resolved) {
           // Memory tools execute in-process wherever this loop runs (host loop for host agents,
           // device loop for on-device agents) — so this loop IS their memory-interpolation
@@ -285,6 +326,7 @@ abstract class BaseTrailblazeAgent(
           // secrets) in LLM-facing error content — both in the command and in any resolved value
           // the tool spliced into its error message, so scrub both.
         }.withAuthoredFailureContent(resolved, memory)
+      }
       if (!result.isSuccess()) {
         return RunTrailblazeToolsResult(
           inputTools = tools,

@@ -50,6 +50,16 @@ abstract class TrailblazeLoggingRule(
   protected open val useBinaryLogTransport: Boolean = false
 
   /**
+   * Whether this rule's spans are stamped on a device's clock rather than the host's. On-device
+   * runners override it; a host runner records against the same clock the report is drawn on.
+   *
+   * Declared here because the upload has to carry it: the host uploads its own trace through the
+   * same endpoint a device does, so a receiver that assumed "an upload is a device upload" would
+   * take the host's spans off the timeline.
+   */
+  protected open val tracesUseDeviceClock: Boolean = false
+
+  /**
    * Current session for this test.
    * Updated automatically during test lifecycle (ruleCreation, afterTestExecution).
    * Can also be set externally via [setSession] for non-JUnit usage.
@@ -365,6 +375,7 @@ abstract class TrailblazeLoggingRule(
         client = trailblazeLogServerClient,
         isServerAvailable = isServerAvailable,
         writeToDisk = { traceJson -> writeTraceToDisk(sessionId, traceJson) },
+        onDeviceClock = tracesUseDeviceClock,
       )
     }
   }

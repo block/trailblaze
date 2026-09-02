@@ -29,6 +29,7 @@ import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.failureCodeOf
 import xyz.block.trailblaze.report.models.failurePayloadOf
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
+import xyz.block.trailblaze.report.models.SkippedTrail
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.BunBinaryResolver
 import xyz.block.trailblaze.util.Console
@@ -42,18 +43,17 @@ import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
  * ([run-report-core.js][CORE_RESOURCE], the build-time bundle of the run-report-*.ts modules) under
  * a thin bun driver ([run-report-cli.ts][DRIVER_RESOURCE]).
  *
- * `trailblaze report` (and the after-run report) generate this artifact ALONGSIDE the legacy WASM
- * report ([WasmReport]) — every run emits both. When this generator can't run (`bun` unavailable,
- * subprocess failure) callers still have the legacy artifact.
+ * This is the ONLY report Trailblaze emits — `trailblaze report`, the after-run report, and the CI
+ * report step all land this artifact, and the hosted viewer shell is the same renderer with no data
+ * baked in.
  *
  * One report can cover one OR many sessions: a single session opens straight on its detail; several
- * open on a pass/fail session index that drills into each run (parity with the old multi-session
- * WASM index). Per-session it carries the step timeline, the LLM transcript, the recorded
- * `.trail.yaml`, and the run metadata.
+ * open on a pass/fail session index that drills into each run. Per-session it carries the step
+ * timeline, the LLM transcript, the recorded `.trail.yaml`, and the run metadata.
  *
  * Requires `bun` on PATH (the same hard prerequisite the scripted-tool analyzer already imposes).
- * When bun can't be resolved, or the subprocess fails, [generate] returns null so the caller can
- * fall back to the legacy report rather than leaving the user with no artifact.
+ * When bun can't be resolved, or the subprocess fails, [generate] returns null — there is no
+ * fallback artifact, so callers surface that as an error rather than a degraded mode.
  */
 class RunReportGenerator(
   private val bunBinary: File? = BunBinaryResolver.resolveBunBinary(),
@@ -85,6 +85,7 @@ class RunReportGenerator(
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
+    skips: List<SkippedTrail> = emptyList(),
   ): File? {
     if (sessionIds.isEmpty()) return null
     if (bunBinary == null) {
@@ -97,6 +98,7 @@ class RunReportGenerator(
       shareUrl,
       fullEventPayloads,
       imageBaseUrl,
+      skips,
     )
   }
 
@@ -119,6 +121,12 @@ class RunReportGenerator(
    *   portable single file; a report generated with a base URL only renders where that base
    *   resolves. Screenshots that are already absolute URLs (device-farm legs) are referenced
    *   either way and are unaffected by this.
+   * @param skips trails the runner declined to run, which the caller has scoped to the same work
+   *   this report covers. The logs directory outlives any one run and accumulates skip records
+   *   from every run before it, so this is a parameter rather than a read of that directory:
+   *   a report over ten sessions must not list a trail some earlier invocation held back. Only a
+   *   caller reporting on a WHOLE logs directory (CI's `ReportMain`, `trailblaze report` with no
+   *   `--id`) passes `SkippedTrails.read(...)`.
    */
   @JvmOverloads
   fun generateFromSnapshots(
@@ -127,6 +135,7 @@ class RunReportGenerator(
     shareUrl: String? = null,
     fullEventPayloads: Boolean = false,
     imageBaseUrl: String? = null,
+    skips: List<SkippedTrail> = emptyList(),
   ): File? {
     if (snapshots.isEmpty()) return null
     if (bunBinary == null) {
@@ -139,6 +148,12 @@ class RunReportGenerator(
         for (snapshot in snapshots) {
           val sessionObj = buildSessionJson(logsRepo, snapshot) ?: continue
           add(sessionObj)
+        }
+        // Trails the runner held back. They opened no session, so they have no snapshot to build
+        // from; without these entries the report shows a run's passing trails and silently omits
+        // the ones a `config.skip:` disabled, which reads as "that trail doesn't exist here".
+        for (skip in skips) {
+          add(skipSessionJson(skip))
         }
       }
     }
@@ -507,6 +522,52 @@ class RunReportGenerator(
      * rerun command). Pure over [SessionInfo]/[SessionStatus] so it's unit-testable without a device
      * or a logs dir. `steps` is intentionally omitted — the renderer derives it from the trace length.
      */
+    /**
+     * A held-back trail as a driver-input session: metadata only, no logs.
+     *
+     * Same link-out stub shape [RunIndexGenerator] uses for a run whose evidence lives elsewhere -
+     * `linkOut` with no `reportUrl` is what tells the viewer this row has nothing to open, so it
+     * renders inert instead of offering a detail view that is empty by construction. Here the reason
+     * is stronger than "elsewhere": there is no run at all.
+     */
+    internal fun skipSessionJson(skip: SkippedTrail): JsonObject = buildJsonObject {
+      put(
+        "meta",
+        buildJsonObject {
+          put("title", skip.title)
+          put("status", "skipped")
+          put("linkOut", true)
+          // The viewer keys a matrix row on `trailId` + `target` and gives a session carrying no
+          // trailId a row of its own. Both are emitted under exactly the rules [sessionMetaJson]
+          // applies to a session that ran - the declared `config.id`, never a short-name fallback -
+          // so a skipped device's cell lands on the same row as the devices that ran the trail
+          // instead of in a parallel row beside it.
+          skip.trail_id?.takeIf { it.isNotBlank() }?.let { put("trailId", it) }
+          skip.target?.takeIf { it.isNotBlank() }?.let { put("target", it) }
+          skip.platform?.takeIf { it.isNotBlank() }?.let { put("platform", it) }
+          skip.device_classifier?.takeIf { it.isNotBlank() }?.let { put("deviceClassifier", it) }
+          put("skipReason", skip.reason)
+          // Same `config.metadata` passthrough [sessionMetaJson] gives a session that ran: the
+          // report renders these as Info rows and folds them into the index search text, and
+          // `owner` gets first-class index treatment. A skipped row omitting them would drop out
+          // of a search for its own owner while the same trail's runs still matched.
+          skip.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->
+            put("metadata", buildJsonObject { metadata.forEach { (key, value) -> put(key, value) } })
+          }
+          put(
+            "ranAt",
+            LocalDateTime.ofInstant(
+              java.time.Instant.ofEpochMilli(skip.recorded_at_epoch_ms),
+              ZoneId.systemDefault(),
+            ).format(HUMAN_TS),
+          )
+          put("cmd", "./trailblaze run ${skip.trail_path}")
+        },
+      )
+      put("sessionDir", RunIndexGenerator.stubSessionDir(SkippedTrails.syntheticSessionId(skip).value))
+      put("logs", JsonArray(emptyList()))
+    }
+
     internal fun sessionMetaJson(
       sessionInfo: xyz.block.trailblaze.logs.model.SessionInfo,
       status: SessionStatus,

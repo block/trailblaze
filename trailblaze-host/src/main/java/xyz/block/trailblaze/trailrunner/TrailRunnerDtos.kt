@@ -6,6 +6,7 @@ import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
+import java.io.File
 
 @Serializable
 data class IntegrationsResponse(val integrations: List<IntegrationDto>)
@@ -520,6 +521,17 @@ data class SessionSummary(
   val timestampMs: Long,
   val platform: String? = null,
   val device: String? = null,
+  /**
+   * The id of the device instance this run actually used (`adb devices` name / simulator id), when
+   * captured. [device] is a list of classifiers, which several connected devices can share, so it
+   * cannot pick one out again; a retry that wants the SAME device needs this.
+   *
+   * Not every run reports an id a caller can dial back. A fresh Playwright-native run is stamped
+   * with a per-session `playwright-native-<suffix>` for browser-cache isolation, while the device
+   * list advertises the stable slot id, so the two never match and a web retry falls back to
+   * picking any connected browser — the same thing it did before this field existed.
+   */
+  val deviceInstanceId: String? = null,
   val target: String? = null,
   /** Resolved package name (Android) / bundle id (iOS) of the app under test, when captured. */
   val appId: String? = null,
@@ -805,6 +817,16 @@ data class RunRequest(
   // presence IS the authorization checked by [maybeWriteBundleVariant].
   @Transient val bundleId: String? = null,
   @Transient val variant: String? = null,
+  // When set, this run is recording INTO an existing unified trail file: on objective-complete the
+  // daemon merges the recording back into [recordTrailFile] under the recording device's classifier.
+  // [recordStepRange] is the 0-based inclusive `first..last` span of that file's steps the run
+  // covered, so a partial run ("record from step 6") replaces only those steps. It is null when the
+  // run covered the trail whole, which merges as an ordinary whole-trail save-back - trailhead
+  // included, and held to the same drift check as the steps. `@Transient` for
+  // exactly the reason above: an absolute path a client could set would be an arbitrary-file write.
+  // Only `/api/trail/record-range` sets them, in-process.
+  @Transient val recordTrailFile: File? = null,
+  @Transient val recordStepRange: IntRange? = null,
 ) : RpcRequest<RunResponse>
 
 @Serializable
@@ -1291,6 +1313,39 @@ data class RecordBundleRequest(
 
 @Serializable
 data class RecordBundleResponse(val sessionIds: List<String> = emptyList(), val error: String? = null)
+
+/**
+ * Record a contiguous span of an existing unified trail's steps ("record from step N"), one run per
+ * selected device, merging each result back into that trail's own file.
+ *
+ * [from] and [to] are 0-based inclusive step indices into the trail as the client currently sees it.
+ * The server re-reads the file and slices it itself rather than accepting a YAML fragment: the same
+ * window has to scope both the slice that runs and the merge that writes it back, and a
+ * client-supplied fragment could not be checked against the file the merge will touch.
+ */
+@Serializable
+data class RecordTrailRangeRequest(
+  /** The indexed trail id (`<rootIdx>/<relative path>`), as the trails index and detail routes use. */
+  val id: String,
+  val deviceIds: List<TrailblazeDeviceId>,
+  val from: Int,
+  val to: Int,
+  // Optional run properties, forwarded to each dispatch. The capture set is the whole one the Run
+  // dialog offers, not just video: the dialog's controls are shared between Play and Record, so a
+  // toggle Record dropped would read as a control that does nothing.
+  val maxLlmCalls: Int? = null,
+  val agent: String? = null,
+  val selfHeal: Boolean? = null,
+  val captureVideo: Boolean? = null,
+  val captureLogcat: Boolean? = null,
+  val captureNetworkTraffic: Boolean? = null,
+  val captureIosLogs: Boolean? = null,
+  val captureAnalytics: Boolean? = null,
+  val captureEvents: Boolean? = null,
+)
+
+@Serializable
+data class RecordTrailRangeResponse(val sessionIds: List<String> = emptyList(), val error: String? = null)
 
 @Serializable
 data class UpdateBundleFileRequest(

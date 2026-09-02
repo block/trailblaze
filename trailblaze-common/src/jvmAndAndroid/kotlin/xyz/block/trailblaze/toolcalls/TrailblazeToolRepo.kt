@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.prompt.message.MessagePart
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.JsonObject
@@ -18,6 +19,7 @@ import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogToolsWithExecutor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.RequestDetailedViewHierarchyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -467,6 +469,9 @@ class TrailblazeToolRepo(
    *
    * Returns null instead of throwing on a missing tool name — composition callers handle the
    * miss by returning a structured error envelope to JS rather than propagating an exception.
+   * Null therefore implies [toolCallToTrailblazeTool] already threw its rich unknown-tool
+   * error and both global tiers missed; a caller that wants that message (did-you-mean
+   * suggestions, registered-tool listing) has to re-run the filtered lookup to obtain it.
    */
   fun toolCallToTrailblazeToolUnfiltered(
     toolName: String,
@@ -474,6 +479,13 @@ class TrailblazeToolRepo(
   ): TrailblazeTool? {
     return try {
       toolCallToTrailblazeTool(toolName, toolContent)
+    } catch (e: CancellationException) {
+      // MUST precede the IllegalStateException catch: kotlinx's CancellationException
+      // typealiases java.util.concurrent.CancellationException, which extends
+      // IllegalStateException. Without this branch a cancellation arriving during the
+      // filtered lookup would be read as "tool not found" and resolution would silently
+      // continue into the global tiers instead of unwinding the session.
+      throw e
     } catch (_: IllegalStateException) {
       // Fall through to the unfiltered global lookups below — first global YAML, then
       // global class registry. Both extend the bypass to tools that exist on the classpath
@@ -764,7 +776,14 @@ class TrailblazeToolRepo(
       // added complexity). The scope is [toolSetIds] when the caller knows the target's trailmap
       // declarations, and every catalog id otherwise; either way `resolveForSession` adds the
       // `always_enabled` entries and drops entries the driver can't run.
-      val scopedIds = toolSetIds ?: catalog.map { it.id }
+      // The implicit scope drops SESSION-BOUND toolsets. `multi_device` is meaningful only when the
+      // RUNNER bound a cast, and it declares no `drivers:`, so "every catalog id" would otherwise
+      // hand a target-less single-device session a `switchDevice` whose every call returns "this
+      // session has no device bindings". The carve-out is on the implicit branch only: a caller that
+      // names the toolset in [toolSetIds] asked for it, and the runner's own contribution arrives
+      // through [customToolClasses], which is how a real multi-device session gets the tool.
+      val scopedIds = toolSetIds
+        ?: (catalog.map { it.id } - TrailblazeToolSetCatalog.SESSION_BOUND_TOOLSET_IDS)
       val scopedTools = TrailblazeToolSetCatalog.resolveForSession(driverType, scopedIds, catalog)
       return TrailblazeToolRepo(
         trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
@@ -831,20 +850,64 @@ class TrailblazeToolRepo(
    * every verification toolset compatible with this repo's [driverType].
    *
    * objectiveStatus is always included: without it the agent can't end a verify step.
+   *
+   * `switchDevice` joins the surface in a multi-device session — see [handoverVerifyTools] for why a
+   * device handover belongs on a verify step even though nothing else that leaves the verification
+   * toolsets does. It only ever tops up a surface that can already verify, never carries one on its
+   * own: `verifyScopedAdvertisedTools` decides whether to scope by asking whether this list holds
+   * anything but objectiveStatus, and falls back to the full registry when it does not, precisely so
+   * a session with no compatible verification toolset isn't stranded under `ToolChoice.Required`.
+   * Adding the handover unconditionally would satisfy that check with a tool that can neither assert
+   * nor observe, and suppress the fallback that exists for exactly this case.
    */
   private fun verifyStepToolDescriptors(): List<ToolDescriptor> {
     val verifyEntries = verificationToolsetEntries()
-    val classDescriptors = verifyEntries
-      .flatMap { it.toolClasses }
-      .toSet()
+    val classDescriptors = verifyEntries.flatMap { it.toolClasses }.toSet()
       .mapNotNull { it.toKoogToolDescriptor() }
     val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
       verifyEntries.flatMap { it.yamlToolNames }.toSet(),
     )
+    val handoverDescriptors = if (classDescriptors.isEmpty() && yamlDescriptors.isEmpty()) {
+      emptyList()
+    } else {
+      handoverVerifyTools().mapNotNull { it.toKoogToolDescriptor() }
+    }
     val objectiveStatusDescriptor = ObjectiveStatusTrailblazeTool::class.toKoogToolDescriptor()
-    return (classDescriptors + yamlDescriptors + listOfNotNull(objectiveStatusDescriptor))
+    return (classDescriptors + yamlDescriptors + handoverDescriptors + listOfNotNull(objectiveStatusDescriptor))
       .distinctBy { it.name }
   }
+
+  /**
+   * `switchDevice` when this session registered it, empty otherwise — the one tool a `verify:` step
+   * gets from outside the verification toolsets.
+   *
+   * "On the buyer display, the welcome screen is idle" is the natural way to write a cross-device
+   * check, and it replays fine as a recording; without this, an agent could never author one,
+   * because a verify step is scoped to the verification toolsets and would strand the model on the
+   * wrong device with no verb to reach the right one.
+   *
+   * It does not reopen what verify scoping closes. That scoping exists so a verify step cannot
+   * scroll or tap the screen it is asserting on and leave a following recorded step looking at
+   * different state (see `verifyScopedAdvertisedTools`). A handover mutates SESSION state — which
+   * device is observed — and never touches either device's UI, so it cannot cause the class of
+   * failure verify scoping prevents.
+   *
+   * Keyed on actual registration rather than a "is multi-device" flag so it cannot claim a tool the
+   * repo does not hold: the registered set is the same source of truth
+   * [xyz.block.trailblaze.host.yaml.MultiDeviceTargetBinding.handoverToolSurface] contributes to,
+   * and a target's `excluded_tools:` opting `switchDevice` out lands here too. Registration happens
+   * at repo construction, so this is stable for the session; read live rather than cached because
+   * [addTrailblazeToolSet] can register tools later.
+   *
+   * Dispatch needs no equivalent top-up: both `asToolRegistry` overloads register every tool in
+   * [snapshotRegisteredTools], so a registered `switchDevice` is already executable on any step.
+   */
+  private fun handoverVerifyTools(): Set<KClass<out TrailblazeTool>> =
+    if (SwitchDeviceTrailblazeTool::class in getRegisteredTrailblazeTools()) {
+      setOf(SwitchDeviceTrailblazeTool::class)
+    } else {
+      emptySet()
+    }
 
   // On-demand "full screen" inspection for the in-process Koog agent loops (the
   // [xyz.block.trailblaze.mcp.AgentImplementation.KOOG_STRATEGY_GRAPH] path). The screen view the

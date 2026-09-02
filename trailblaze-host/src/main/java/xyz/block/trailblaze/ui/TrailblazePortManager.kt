@@ -65,6 +65,24 @@ class TrailblazePortManager(
   fun setRuntimeOverrides(httpPort: Int, httpsPort: Int) {
     runtimePorts = PortOverrides(httpPort, httpsPort)
   }
+
+  /**
+   * Freezes both getters at the ports the server actually bound, for the rest of the process.
+   *
+   * Without this the persisted fallback stays live: `PUT /api/settings` writes `serverHttpsPort`
+   * immediately, while the Settings UI states the change applies after restart. In a daemon with
+   * no runtime override the getter would start returning that not-yet-bound port, and callers
+   * that route live traffic by it — `adb reverse` and the `trailblaze.httpsPort` instrumentation
+   * arg — would point the device at a port nothing listens on. Pinning at bind makes the getters
+   * mean "what this process is serving on", which is the only thing a live route can use, and
+   * matches the restart-to-apply contract the UI already advertises.
+   *
+   * Uses the same transient holder as [setRuntimeOverrides] (highest precedence, never persisted),
+   * so a CLI `-p` override applied earlier is simply re-pinned to the value it produced.
+   */
+  fun pinBoundPorts(httpPort: Int, httpsPort: Int) {
+    runtimePorts = PortOverrides(httpPort, httpsPort)
+  }
  
   companion object {
     const val HTTP_PORT_ENV_VAR = "TRAILBLAZE_PORT"

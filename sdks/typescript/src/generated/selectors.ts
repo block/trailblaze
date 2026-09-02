@@ -49,6 +49,43 @@ export interface DriverNodeMatchAndroidAccessibility {
 }
 
 /**
+ * Matches against [DriverNodeDetail.AndroidView] nodes.
+ *
+ * Only properties from [DriverNodeDetail.AndroidView.MATCHABLE_PROPERTIES] are exposed. All
+ * fields are optional — only non-null fields act as predicates.
+ *
+ * `*Regex` fields are matched with **strict, case-sensitive** semantics (regex-OR-exact-literal,
+ * see [DriverNodeMatch]), not the lenient Maestro dialect that [AndroidMaestro] carries. This is
+ * a native shape authored against a native tree, so `textRegex: "cancel"` does not match
+ * "Cancel"; opt into case-insensitivity with a leading `(?i)`.
+ */
+export interface DriverNodeMatchAndroidView {
+  /** **Matchable.** The view's real runtime class, un-sanitized (custom classes included). */
+  classNameRegex?: string | null;
+  /** **Matchable.** Resource name of `view.id`, e.g. `com.example:id/btn_continue`. */
+  resourceIdRegex?: string | null;
+  /** **Matchable.** `view.tag` as a string — View-only, invisible to the a11y tree. */
+  tagRegex?: string | null;
+  /** **Matchable.** Matched against `resolveText()`: text > hintText > contentDescription. */
+  textRegex?: string | null;
+  contentDescriptionRegex?: string | null;
+  hintTextRegex?: string | null;
+  stateDescriptionRegex?: string | null;
+  /** **Matchable.** `TextView.error` — assert that a field shows a specific validation error. */
+  errorTextRegex?: string | null;
+  isEnabled?: boolean | null;
+  isClickable?: boolean | null;
+  /** **Matchable.** Only matches views that are [android.widget.Checkable] at all. */
+  isChecked?: boolean | null;
+  isSelected?: boolean | null;
+  isFocused?: boolean | null;
+  isEditable?: boolean | null;
+  isPassword?: boolean | null;
+  /** **Matchable.** `TextView.inputType`, using Android's `InputType` constants. */
+  inputType?: number | null;
+}
+
+/**
  * Matches against [DriverNodeDetail.AndroidMaestro] nodes.
  *
  * This mirrors [TrailblazeElementSelector]'s matching capabilities but operates
@@ -94,6 +131,19 @@ export interface DriverNodeMatchCompose {
   isFocused?: boolean | null;
   isSelected?: boolean | null;
   isPassword?: boolean | null;
+  /** **Matchable.** Row index within a `LazyColumn`/grid — the stable list disambiguator. */
+  collectionItemRowIndex?: number | null;
+  /** **Matchable.** Column index within a collection. */
+  collectionItemColumnIndex?: number | null;
+  stateDescriptionRegex?: string | null;
+  isHeading?: boolean | null;
+  paneTitleRegex?: string | null;
+  /** **Matchable.** Anchor "inside the dialog" without guessing at layout. */
+  isDialog?: boolean | null;
+  isPopup?: boolean | null;
+  errorTextRegex?: string | null;
+  /** **Matchable.** Whether the node accepts typed text (`SemanticsActions.SetText`). */
+  hasSetTextAction?: boolean | null;
 }
 
 /**
@@ -182,6 +232,11 @@ export interface TrailblazeNodeSelector {
    * [DriverNodeDetail.AndroidAccessibility] nodes.
    */
   androidAccessibility?: DriverNodeMatchAndroidAccessibility | null;
+  /**
+   * Classic Android View matcher, for [DriverNodeDetail.AndroidView] nodes captured in-process
+   * from the live view objects. Strict (case-sensitive) matching, unlike [androidMaestro].
+   */
+  androidView?: DriverNodeMatchAndroidView | null;
   /** Android Maestro driver matcher. */
   androidMaestro?: DriverNodeMatchAndroidMaestro | null;
   /** Web (Playwright) driver matcher. */
@@ -403,6 +458,7 @@ export interface TrailblazeSelectorResolution {
  */
 export const selectors = {
   androidAccessibility: (args: DriverNodeMatchAndroidAccessibility): TrailblazeNodeSelector => ({ androidAccessibility: args }),
+  androidView: (args: DriverNodeMatchAndroidView): TrailblazeNodeSelector => ({ androidView: args }),
   androidMaestro: (args: DriverNodeMatchAndroidMaestro): TrailblazeNodeSelector => ({ androidMaestro: args }),
   web: (args: DriverNodeMatchWeb): TrailblazeNodeSelector => ({ web: args }),
   compose: (args: DriverNodeMatchCompose): TrailblazeNodeSelector => ({ compose: args }),

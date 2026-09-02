@@ -1,0 +1,79 @@
+config:
+  id: sample-app/android-test/taps/tap-counter
+  title: Tap counter, replayed in-process
+  description: >-
+    The ANDROID_TEST driver on the device farm. Replay is deterministic — every step carries a
+    recording — and the app is launched by the test harness, not by a trailhead, because this
+    driver runs inside the app's own process rather than driving it from outside.
+  devices:
+    android:
+      driver: ANDROID_TEST
+
+trail:
+  - verify: The Taps screen opens with the counter at zero
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 0"
+
+  - step: Tap the "Tap Me" button
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                textRegex: Tap Me
+
+  - verify: The counter reaches one
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 1"
+
+  - step: Tap the button that only exposes a content description
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                contentDescriptionRegex: accessibility_tap_button
+
+  - verify: The counter reaches two
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 2"
+
+  - step: Tap the button nested inside the parent container
+    recording:
+      android:
+        - androidTest_tap:
+            nodeSelector:
+              compose:
+                testTag: child_button
+
+  - verify: The counter reaches three
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                testTag: tv_tap_count
+                textRegex: "Tap Count: 3"
+
+  - verify: The three-tap gate has unlocked its button
+    recording:
+      android:
+        - androidTest_assertVisible:
+            nodeSelector:
+              compose:
+                textRegex: Now Enabled!

@@ -85,7 +85,120 @@ object PlaywrightAriaSnapshot {
    * - Quoted: `button "Submit"`, `textbox "Email or phone number"`
    * - Unquoted: `button Submit`, `textbox Email or phone number`
    * - Role-only: `navigation`, `banner`
+   *
+   * **Do not mechanically convert the fallback chain below to [Locator.or].** The chain
+   * is a *preference ladder*, not a race: role beats label beats text. `Locator.or()`
+   * flattens preference into DOM order — the union's `.first()` is whichever match
+   * appears first in the document, not the sturdiest strategy. Concretely: for
+   * `textbox "Email"`, a `<label>Email</label>` preceding the input matches the
+   * getByLabel/getByText tiers, so an or()-union would fill the `<label>` instead of the
+   * input whenever the label sits earlier in the DOM. The count()-probe fail-fast per
+   * tier is the cost of keeping the preference semantics; a rework needs a design that
+   * preserves tier ordering (e.g. per-tier bounded waits), not an or() union.
    */
+  /**
+   * Resolves an ARIA role plus a recorded [ariaNameRegex], honoring that field's REGEX contract.
+   *
+   * `DriverNodeMatch.Web.ariaNameRegex` is matched as a pattern everywhere else — see
+   * `TrailblazeNodeSelectorResolver.matchesWeb`, which routes it through `requirePattern` — so
+   * `Save.*` has to match a button named "Save changes". Handing that string to
+   * [Page.GetByRoleOptions.setExact] instead searches for a control literally named `Save.*`
+   * and matches nothing.
+   *
+   * Literals stay on the exact path: that is what the recorder emits, and exact is both cheaper
+   * and stricter for them.
+   *
+   * A genuine pattern gets the shared matcher's full contract, which is two alternatives and not
+   * one — `matchesPattern` is a whole-string regex match OR literal string equality:
+   *
+   *  - **Anchored**, because Playwright matches a regex name as a SUBSTRING search while every
+   *    other driver full-matches. Unanchored, `Save.*` also matches "AutoSave draft", and replay
+   *    narrows with `.first()` — so it would type into whichever came first in the DOM.
+   *  - **Unioned with the exact literal**, because a valid pattern can be unmatchable: in `$5.00`
+   *    the bare `$` is an end-of-input anchor, so nothing can follow it. The shared matcher falls
+   *    back to equality for exactly this, which is what lets a price be recorded without escaping.
+   */
+  fun resolveRoleAndName(page: Page, role: String, ariaNameRegex: String): Locator {
+    val ariaRole = ariaRoleFromString(role)
+    val exactName = { name: String ->
+      page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
+    }
+    val literal = literalAriaName(ariaNameRegex)
+    if (literal != null) {
+      return exactName(literal)
+    }
+    // Never a `\Q...\E` value here — [literalAriaName] claims those. It matters: Playwright
+    // hands the pattern to a JS RegExp, which has no `\Q` support and would misread it.
+    val translated = translateLeadingInlineFlags(ariaNameRegex)
+    val anchored = page.getByRole(
+      ariaRole,
+      Page.GetByRoleOptions().setName(
+        java.util.regex.Pattern.compile("^(?:${translated.source})$", translated.flags),
+      ),
+    )
+    // `or()` is the union, evaluated per element, which is what the shared matcher's two-legged
+    // predicate is. The tiered ladder's objection to or() does not apply: those tiers express a
+    // PREFERENCE between identifiers, and unioning them would lose it — these two are one
+    // identifier's two spellings, and either match is equally correct.
+    return anchored.or(exactName(ariaNameRegex))
+  }
+
+  /** A pattern split into the source Playwright can forward and the flags it can translate. */
+  internal class TranslatedAriaPattern(val source: String, val flags: Int)
+
+  // `(?` + on-flags + optional `-` + off-flags + `)`, at start only. The `[a-z]` classes cannot
+  // match `(?:` / `(?=` / `(?!` group syntax.
+  private val LEADING_INLINE_FLAGS = Regex("""^\(\?([a-z]*)(?:-([a-z]+))?\)""")
+
+  private val JAVA_FLAG_BY_LETTER = mapOf(
+    'i' to java.util.regex.Pattern.CASE_INSENSITIVE,
+    's' to java.util.regex.Pattern.DOTALL,
+    'm' to java.util.regex.Pattern.MULTILINE,
+  )
+
+  /**
+   * Moves a leading Java inline-flag group — `(?i)`, `(?is)`, `(?s-i)` — out of the pattern source
+   * and into [java.util.regex.Pattern] flags.
+   *
+   * Java honors inline flags natively, so this looks redundant on the JVM. It is not: Playwright
+   * forwards the pattern's SOURCE to the page's JavaScript and translates only `Pattern.flags()`
+   * (`Utils.toJsRegexFlags`), and a JS `RegExp` rejects `(?i)` outright — the selector fails to
+   * parse rather than matching nothing. `(?i)` is the case-insensitivity escape hatch the NATIVE
+   * dialect documents on `matchesPattern`, so leaving it untranslated makes a documented selector
+   * form unreplayable, and the ARIA tier returns before any CSS fallback could rescue it.
+   *
+   * This is the same translation the shared matcher's own Kotlin/JS actual performs
+   * (`SelectorPatternRegex.js.kt`) for the same reason, with the same limits: only `i`/`s`/`m` have
+   * a JS equivalent, so any other flag letter is dropped, and only a LEADING group is translated.
+   */
+  internal fun translateLeadingInlineFlags(value: String): TranslatedAriaPattern {
+    val match = LEADING_INLINE_FLAGS.find(value)
+    val on = match?.groupValues?.get(1).orEmpty()
+    val off = match?.groupValues?.get(2).orEmpty()
+    if (match == null || (on.isEmpty() && off.isEmpty())) {
+      return TranslatedAriaPattern(value, 0)
+    }
+    var flags = 0
+    on.forEach { letter -> JAVA_FLAG_BY_LETTER[letter]?.let { flags = flags or it } }
+    off.forEach { letter -> JAVA_FLAG_BY_LETTER[letter]?.let { flags = flags and it.inv() } }
+    return TranslatedAriaPattern(value.substring(match.value.length), flags)
+  }
+
+  /**
+   * The plain name a recorded selector value stands for, or null when it is a genuine pattern.
+   *
+   * Covers the two literal shapes `escapeForSelector` and the selector generators produce: a
+   * whole-string `\Q...\E` quote, and a metacharacter-free string with optional `^`/`$` anchors
+   * (anchored-literal IS an exact match, so it belongs here rather than on the pattern path).
+   */
+  internal fun literalAriaName(value: String): String? {
+    xyz.block.trailblaze.util.unescapeForSelector(value)?.let { return it }
+    val unanchored = value.removePrefix("^").removeSuffix("$")
+    return unanchored.takeIf { candidate ->
+      candidate.none { it in xyz.block.trailblaze.util.REGEX_METACHARACTERS }
+    }
+  }
+
   private fun resolveByRoleName(page: Page, descriptor: String): Locator {
     val sanitized = descriptor.trim().replace(TRAILING_ATTRS_PATTERN, "")
 

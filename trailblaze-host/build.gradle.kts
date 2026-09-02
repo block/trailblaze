@@ -348,6 +348,10 @@ dependencies {
   // bundler is otherwise build-time-only — this is the only runtime consumer today;
   // future `trailblaze bundle` CLI will be the second.
   implementation(project(":trailblaze-trailmap-bundler"))
+  // Backs `trailblaze inprocess probe-apk`. Deliberately a separate module rather than code here:
+  // the farm's install-time pre-flight runs the same probe through that module's own lean entry
+  // point, without building the CLI. See its build file for why the split is load-bearing.
+  implementation(project(":trailblaze-inprocess-apk"))
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-scripting-subprocess"))
@@ -367,6 +371,12 @@ dependencies {
   implementation(project(":trailblaze-server"))
   implementation(project(":trailblaze-ui"))
   implementation(libs.jna)
+
+  // APK signing and verification for `trailblaze inprocess make-test-apk`, which retargets a
+  // prebuilt in-process shell test APK at another app. `apksig` is the same library `apksigner` and
+  // AGP use, published as a plain JVM artifact — the reason the whole post-processing path needs no
+  // Android SDK, no `aapt2` and no `zipalign`.
+  implementation(libs.android.apksig)
 
   // Compose dependencies for JVM UI code moved from trailblaze-ui
   implementation(compose.desktop.currentOs)
@@ -740,18 +750,20 @@ dependencyGuard {
 // xyz.block.trailblaze.trailrunner.codegen.TrailRunnerDtoTsBindings; the generate/verify task
 // wiring (verify into check) comes from the trailblaze.dto-ts-codegen build-logic plugin.
 trailblazeDtoTsCodegen {
-  mainClass.set("xyz.block.trailblaze.trailrunner.codegen.TrailRunnerDtoTsBindingsKt")
-  val mainCompilation = kotlin.target.compilations.getByName("main")
-  codegenClasspath.from(
-    mainCompilation.output.allOutputs,
-    mainCompilation.runtimeDependencyFiles,
-  )
-  // Lands in the OSS scripting SDK's generated/ dir alongside selectors.ts so it's OSS-available
-  // and importable by a TypeScript UI. Resolved relative to this module dir (`../sdks/...`) so the
-  // same path works from either build root that includes this module.
-  generatedTsFile.set(
-    layout.projectDirectory.file("../sdks/typescript/src/generated/trailrunner-dtos.ts"),
-  )
+  bindings.register("trailRunner") {
+    mainClass.set("xyz.block.trailblaze.trailrunner.codegen.TrailRunnerDtoTsBindingsKt")
+    val mainCompilation = kotlin.target.compilations.getByName("main")
+    codegenClasspath.from(
+      mainCompilation.output.allOutputs,
+      mainCompilation.runtimeDependencyFiles,
+    )
+    // Lands in the OSS scripting SDK's generated/ dir alongside selectors.ts so it's OSS-available
+    // and importable by a TypeScript UI. Resolved relative to this module dir (`../sdks/...`) so the
+    // same path works from either build root that includes this module.
+    generatedTsFile.set(
+      layout.projectDirectory.file("../sdks/typescript/src/generated/trailrunner-dtos.ts"),
+    )
+  }
 }
 
 // ─── Trail Runner web RPC client bundle ──────────────────────────────────────

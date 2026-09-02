@@ -38,6 +38,7 @@ import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
+import xyz.block.trailblaze.recording.InputTarget
 import xyz.block.trailblaze.recording.InteractionToolFactory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
@@ -335,7 +336,7 @@ private object NoOpToolFactory : InteractionToolFactory {
   override fun createSwipeTool(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long?) =
     NoOpTool("swipe") to "swipe"
 
-  override fun createInputTextTool(text: String) = NoOpTool("inputText") to "inputText"
+  override fun createInputTextTool(text: String, target: InputTarget?) = NoOpTool("inputText") to "inputText"
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>? = NoOpTool("pressKey") to "pressKey"
 }

@@ -9,19 +9,27 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import kotlinx.coroutines.Dispatchers
+import kotlinx.datetime.Clock
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.device.InstalledApp
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.cli.RECORDING_LOG_STABILITY_MAX_WAIT_MS
+import xyz.block.trailblaze.cli.RECORDING_LOG_STABILITY_POLL_MS
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
+import xyz.block.trailblaze.recordings.UnifiedRecordingWriter
 import xyz.block.trailblaze.ui.getVersionInfo
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedTrailItems
 import xyz.block.trailblaze.yaml.generateUnifiedRecordedYaml
 
 /**
@@ -247,6 +255,10 @@ internal suspend fun buildRunDispatchResult(deps: TrailRunnerDeps, body: RunRequ
           )
         }
         releaseUnstartedRun(deps, id, resolution.sessionId)
+        // When it was a unified-trail recording (recordTrailFile set), merge the recording back into
+        // that file's classifier slot. A no-op for ordinary runs, and last because it waits for the
+        // device to finish flushing its tool logs - nothing else here should wait behind that.
+        maybeMergeIntoUnifiedTrail(deps, body, sessionId)
       },
     )
     // Companion sessions watching this trail's folder hear the dispatch. Only after runYaml
@@ -371,4 +383,333 @@ private fun maybeWriteBundleVariant(deps: TrailRunnerDeps, body: RunRequest, ses
       )
     }
   }.onFailure { Console.log("[BlazeRoutes] bundle variant write failed: ${it.message}") }
+}
+
+/**
+ * Records what the save-back did in the run's OWN log, so the outcome is part of the run rather than
+ * a line in whichever console started the daemon. Both verdicts land here: a merge that wrote the
+ * file, and every refusal that left it alone.
+ *
+ * A [TrailblazeLog.TrailblazeProgressLog] because it is a run-scoped note rather than a step - the
+ * same shape [xyz.block.trailblaze.host.yaml.PendingSessionStartAdvisories] uses for pre-run
+ * warnings, and one the session views already render.
+ */
+private fun logSaveBackOutcome(
+  deps: TrailRunnerDeps,
+  sessionId: String,
+  message: String,
+  ok: Boolean?,
+  eventType: String = RECORDING_SAVE_BACK_EVENT_TYPE,
+) {
+  runCatching {
+    deps.logsRepo.saveLogToDisk(
+      TrailblazeLog.TrailblazeProgressLog(
+        eventType = eventType,
+        description = message,
+        success = ok,
+        session = SessionId(sessionId),
+        timestamp = Clock.System.now(),
+      ),
+    )
+  }.onFailure { Console.log("[TrailRunnerEndpoint] could not log the save-back outcome: ${it.message}") }
+}
+
+/** Marks the save-back note in a session's log; a reader filtering the timeline can key on it. */
+internal const val RECORDING_SAVE_BACK_EVENT_TYPE = "RecordingSavedBack"
+
+/**
+ * Marks that a save-back is under way, written before the wait for the device's tool logs - which can
+ * take up to [RECORDING_LOG_STABILITY_MAX_WAIT_MS].
+ *
+ * It exists so a reader can tell "this run is still deciding" from "this run never recorded". Only
+ * the daemon knows a run carried a trail file, so without this note a surface watching for a verdict
+ * would have to poll every finished run on the chance that one is coming.
+ */
+internal const val RECORDING_SAVE_BACK_PENDING_EVENT_TYPE = "RecordingSaveBackPending"
+
+/**
+ * Why this run's recording must NOT be written back into [trailFile], or null when it may be.
+ *
+ * Both reasons are facts about the run and the file, not about the recording - the writer's refusals
+ * already cover everything the recording itself can get wrong.
+ *
+ * - A run that didn't pass has an agent's flailing in it, not a recording. Saving it would replace a
+ *   working recording with a failed attempt, and the CLI's save-back has always been success-gated.
+ *   [status] is the session's own terminal status rather than the run callback's result, because the
+ *   callback reports success for an on-device run the moment the RPC returns - the same reason the
+ *   CLI reconciles its exit code against the session logs.
+ * - A file renamed or deleted mid-run would fall through the writer's directory resolution and land
+ *   in the folder's shared `trail.yaml` as a greenfield write - a different file than the one the
+ *   run was dispatched against. (The writer refuses that write too, under its lock, since a trail
+ *   this run never ran can't hold the steps it recorded; this just says so in the run's own terms.)
+ */
+internal fun saveBackRefusal(status: SessionStatus, trailFile: File): String? = when {
+  status !is SessionStatus.Ended ->
+    "Recording not saved back into ${trailFile.name}: this run never reported a finished status, so there " +
+      "is no recording to trust."
+
+  status !is SessionStatus.Ended.Succeeded && status !is SessionStatus.Ended.SucceededWithSelfHeal ->
+    "Recording not saved back into ${trailFile.name}: the run ended as " +
+      "${status::class.simpleName?.lowercase() ?: "unsuccessful"}, so nothing was written. Re-record once it passes."
+
+  !trailFile.isFile ->
+    "Recording not saved back into ${trailFile.name}: that file was renamed or deleted while the run was going."
+
+  else -> null
+}
+
+/**
+ * The tool logs a recording is actually built from: the same `isRecordable` population
+ * [xyz.block.trailblaze.yaml.generateRecordedTrailItems] keeps. Counting the rest would let a run
+ * whose only tool calls are non-recordable author utilities look like it recorded something.
+ */
+internal fun List<TrailblazeLog>.recordableToolLogs(): List<TrailblazeLog.TrailblazeToolLog> =
+  filterIsInstance<TrailblazeLog.TrailblazeToolLog>().filter { it.isRecordable }
+
+/**
+ * True once [this] session's logs hold everything a recording is built from.
+ *
+ * An on-device run logs each tool twice: the nodeId-keyed `DelegatingTrailblazeToolLog` immediately,
+ * and the selector-keyed `TrailblazeToolLog` the recording is actually made of when the device gets
+ * around to flushing it - sometimes tens of seconds after the run ended. Merging before then writes
+ * a recording that is missing the steps that hadn't landed yet, over one that was complete.
+ *
+ * The same traced-tool-for-traced-tool wait the CLI's own save-back does, counted per trace rather
+ * than set-compared: one delegating tool expands into several executable ones under a single trace,
+ * and the first child landing doesn't mean its siblings have. Each parent advertises how many it
+ * delegated to, so that is what's counted.
+ *
+ * A trace is also done when one of its tools FAILED. Execution abandons an expansion at its first
+ * failing child, so the tools after it never run and never log - waiting for the advertised count
+ * would burn the whole budget and then refuse a save-back the run had earned, which is exactly the
+ * self-healed re-record this feature exists for.
+ *
+ * Two populations, deliberately: per-trace completeness counts every executed tool (that is what a
+ * parent's advertised count is a count of), while "did this run record anything, and has it stopped
+ * arriving" counts only the logs a recording is built from.
+ *
+ * The per-trace count alone would settle a run that has no delegating parent to count against.
+ * Most tools an agent picks are executed directly, and a directly-executed tool logs no parent at
+ * all - so its expectation set is empty and every count is trivially satisfied while the device is
+ * still flushing. Hence [previousRecordableCount]: the recording's own logs have to be non-empty and
+ * have to have stopped arriving since the last look. A burst in progress is not a stable count, and
+ * the device sends no "that was all of them" to wait for instead.
+ *
+ * One residual limit, accepted rather than papered over: several tool calls from one LLM response
+ * share a trace, so an independent call landing on the same trace as a delegated expansion can
+ * satisfy that trace's count while a sibling is still in flight. Telling them apart needs a batch
+ * identity the logs do not carry. The stable-count requirement is what stands in for it - a sibling
+ * that lands late moves the count and unsettles the run - and the caller refuses to write when this
+ * never becomes true rather than treating the timeout as permission.
+ */
+internal fun List<TrailblazeLog>.recordableLogsSettled(previousRecordableCount: Int): Boolean {
+  if (getSessionStatus() !is SessionStatus.Ended) return false
+  val expectedPerTrace = filterIsInstance<TrailblazeLog.DelegatingTrailblazeToolLog>()
+    .mapNotNull { log -> log.traceId?.let { it to log.executableTools.size.coerceAtLeast(1) } }
+    .groupBy({ it.first }, { it.second })
+    .mapValues { (_, counts) -> counts.sum() }
+  val recordable = recordableToolLogs()
+  if (recordable.isEmpty() || recordable.size != previousRecordableCount) return false
+  // Per-trace completeness counts EVERY executed tool, not just the recordable ones: what it is
+  // compared against is `executableTools`, which is every tool the parent delegated to. Counting
+  // only the recordable half against that total never reaches it, and a batch holding one
+  // non-recordable tool would wait out the whole budget and then refuse a save-back it earned.
+  val recorded = filterIsInstance<TrailblazeLog.TrailblazeToolLog>().filter { it.traceId != null }
+  val recordedPerTrace = recorded.groupingBy { it.traceId!! }.eachCount()
+  val abandonedTraces = recorded.filterNot { it.successful }.mapNotNull { it.traceId }.toSet()
+  return expectedPerTrace.all { (traceId, expected) ->
+    traceId in abandonedTraces || (recordedPerTrace[traceId] ?: 0) >= expected
+  }
+}
+
+/**
+ * How long the recording's own log count has to hold still before a save-back believes the device is
+ * done sending. Deliberately several poll intervals: a device flushes selector logs in bursts, and a
+ * single unchanged look lands inside a gap between two of them as easily as after the last one.
+ */
+private const val RECORDING_LOG_STABILITY_QUIET_MS = 10_000L
+
+/**
+ * Merge a finished recording run back into the unified trail file it was recorded against. No-op
+ * unless the run carried [RunRequest.recordTrailFile] - a @Transient field only the server-side
+ * `/api/trail/record-range` dispatch can set, so no REST/RPC caller can name a file to write.
+ *
+ * The counterpart to [maybeWriteBundleVariant] for the single-file layout: a bundle's recording is a
+ * whole sibling file to replace, while a unified trail's recording is one classifier's legs to merge
+ * into the file that is already there. [RunRequest.recordStepRange] scopes the merge to the steps the
+ * run actually covered, so recording from step 6 does not touch steps 1-5.
+ *
+ * Every refusal is logged rather than thrown: the run itself already succeeded, and the recording is
+ * still readable from the session, so a merge the writer declines must not look like a failed run.
+ */
+private fun maybeMergeIntoUnifiedTrail(deps: TrailRunnerDeps, body: RunRequest, sessionId: String) {
+  val trailFile = body.recordTrailFile ?: return
+  runCatching {
+    var logs = deps.logsRepo.getLogsForSession(SessionId(sessionId))
+    if (logs.isEmpty()) {
+      // A dispatch that died before opening a session has nothing to annotate, and writing a log
+      // here would MAKE a session out of it - one holding a progress note and no status, which
+      // every reader derives as a run stuck at "unknown". Console only.
+      return Console.log("[TrailRunnerEndpoint] no logs for session $sessionId; nothing merged into ${trailFile.name}")
+    }
+    // A run that has already ended badly is refused before the wait rather than after it: nothing
+    // arriving in the next two minutes can make a cancelled run's recording savable, and the reader
+    // would sit in front of a "saving..." note the whole time.
+    val statusBeforeWaiting = logs.getSessionStatus()
+    if (statusBeforeWaiting is SessionStatus.Ended) {
+      saveBackRefusal(statusBeforeWaiting, trailFile)?.let { refusal ->
+        Console.info(refusal)
+        return logSaveBackOutcome(deps, sessionId, refusal, false)
+      }
+    }
+    // Announced before the wait, not after it: everything below can take two minutes, and a reader
+    // that arrives in the meantime should see that a verdict is coming.
+    logSaveBackOutcome(
+      deps,
+      sessionId,
+      "Saving this run's recording back into ${trailFile.name}...",
+      null,
+      RECORDING_SAVE_BACK_PENDING_EVENT_TYPE,
+    )
+    // Same wait, and the same budget, as the CLI's own save-back path. The count from the previous
+    // look is what makes "the device has stopped sending" answerable at all, so it is carried across
+    // iterations rather than recomputed inside the gate.
+    //
+    // One unchanged look is not a quiet period. A device flushes selector logs in bursts with gaps
+    // between them, so the gate has to hold across [RECORDING_LOG_STABILITY_QUIET_MS] before this
+    // accepts it - otherwise a run whose tools all executed directly (no advertised count to satisfy)
+    // settles in the first gap and merges half its recording.
+    val deadline = System.currentTimeMillis() + RECORDING_LOG_STABILITY_MAX_WAIT_MS
+    val requiredQuietChecks = (RECORDING_LOG_STABILITY_QUIET_MS / RECORDING_LOG_STABILITY_POLL_MS).toInt()
+    var previousRecordableCount = -1
+    var quietChecks = 0
+    var settled = false
+    while (true) {
+      quietChecks = if (logs.recordableLogsSettled(previousRecordableCount)) quietChecks + 1 else 0
+      settled = quietChecks >= requiredQuietChecks
+      if (settled || System.currentTimeMillis() >= deadline) break
+      previousRecordableCount = logs.recordableToolLogs().size
+      Thread.sleep(RECORDING_LOG_STABILITY_POLL_MS)
+      logs = deps.logsRepo.getLogsForSession(SessionId(sessionId))
+    }
+    saveBackRefusal(logs.getSessionStatus(), trailFile)?.let { refusal ->
+      Console.info(refusal)
+      return logSaveBackOutcome(deps, sessionId, refusal, false)
+    }
+    if (!settled) {
+      // Waited the full budget. Either the run logged no tool calls to record, or the device is still
+      // holding some: writing either way replaces a complete recording with a partial or empty one,
+      // and every count guard would pass while it did.
+      val message = if (logs.recordableToolLogs().isEmpty()) {
+        "Recording not saved back into ${trailFile.name}: this run logged no tool calls to record, so there " +
+          "was nothing to save into those steps."
+      } else {
+        "Recording not saved back into ${trailFile.name}: the device was still sending this run's " +
+          "tool calls after ${RECORDING_LOG_STABILITY_MAX_WAIT_MS / 1_000}s, so saving now would drop the ones " +
+          "still in flight. Re-record when the device is responsive."
+      }
+      Console.info(message)
+      return logSaveBackOutcome(deps, sessionId, message, false)
+    }
+    // The recording device's own classifier chain keys the slot - the same key the CLI's save-back
+    // and the desktop's Save use. This path is single-device by construction (the record-range route
+    // dispatches one run per selected device), so there is no configuration name to key by. A trail
+    // that declares a multi-device cast is refused by the writer with a message rather than having a
+    // member's run written into the cast's leg: recording a cast is one run of the whole cast, which
+    // per-device dispatch is not.
+    val deviceInfo = logs
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .map { it.sessionStatus }
+      .filterIsInstance<SessionStatus.Started>()
+      .firstOrNull()
+      ?.trailblazeDeviceInfo
+    val classifier = deviceInfo?.classifiers.orEmpty().joinToString("-") { it.classifier }
+    if (classifier.isBlank()) {
+      val message = "Recording not saved back into ${trailFile.name}: this run reported no device classifier to key its recording by."
+      Console.log("[TrailRunnerEndpoint] $message")
+      return logSaveBackOutcome(deps, sessionId, message, false)
+    }
+    // The document this run executed IS the expectation the merge is held to, passed whole rather
+    // than field by field: for a step range it is the slice (its steps, no trailhead), for a
+    // whole-trail recording the trail as authored. The writer compares it under the same lock it
+    // writes with, so a trail edited - reworded, retargeted at another app, given a trailhead -
+    // while the run was in flight is refused rather than handed these tool calls under someone
+    // else's prose.
+    //
+    // A document that won't decode is a refusal, not a merge with the check switched off: passing
+    // null here would turn the drift comparison off entirely, so the one case where we can't say
+    // what the run executed would also be the case where nothing checks the file it lands in.
+    val dispatched = runCatching { createTrailblazeYaml().decodeUnifiedTrail(body.yaml) }.getOrElse {
+      val message = "Recording not saved back into ${trailFile.name}: the trail this run executed " +
+        "could not be read back (${it.message ?: it::class.simpleName}), so there is nothing to hold " +
+        "the merge to. The trail was left unchanged."
+      Console.info(message)
+      return logSaveBackOutcome(deps, sessionId, message, false)
+    }
+    val outcome = UnifiedRecordingWriter.mergeIntoUnified(
+      trailFileOrDir = trailFile,
+      recordedItems = logs.generateRecordedTrailItems(createTrailblazeYaml()),
+      classifier = classifier,
+      stepWindow = body.recordStepRange,
+      expectedDispatched = dispatched,
+    )
+    val verdict = when (outcome) {
+      is UnifiedRecordingWriter.MergeOutcome.Merged ->
+        "Recording saved back into ${outcome.target.name} (classifier `$classifier`)." to true
+
+      is UnifiedRecordingWriter.MergeOutcome.StepWindowMismatch ->
+        UnifiedRecordingWriter.stepWindowMismatchMessage(
+          outcome.target,
+          outcome.window,
+          outcome.expectedStepCount,
+          outcome.recordedStepCount,
+        ) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.StepWindowOutOfRange ->
+        UnifiedRecordingWriter.stepWindowOutOfRangeMessage(
+          outcome.target,
+          outcome.window,
+          outcome.existingStepCount,
+        ) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.RefusedCorrupt ->
+        UnifiedRecordingWriter.corruptRefusalMessage(outcome.target, outcome.reason) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.SkippedMultiDeviceTrail ->
+        UnifiedRecordingWriter.multiDeviceMergeSkippedMessage(outcome.target, outcome.configurationNames) to false
+
+      // A save-back passes no cast to declare, so this can't fire here. Reported rather than
+      // swallowed, so a future caller that does pass one gets the refusal on the banner instead of a
+      // silent no-write.
+      is UnifiedRecordingWriter.MergeOutcome.SynthesizedCastWouldBeShadowed ->
+        UnifiedRecordingWriter.synthesizedCastShadowedMessage(outcome.target, outcome.siblingFileNames) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.ConfigurationNotDeclared ->
+        UnifiedRecordingWriter.configurationNotDeclaredMessage(
+          outcome.target,
+          outcome.configurationName,
+          outcome.declaredConfigurationNames,
+        ) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.SteplessIntoExistingTrail ->
+        UnifiedRecordingWriter.STEPLESS_INTO_EXISTING_MESSAGE to false
+
+      is UnifiedRecordingWriter.MergeOutcome.SkippedEmpty ->
+        UnifiedRecordingWriter.EMPTY_MERGE_MESSAGE to false
+
+      is UnifiedRecordingWriter.MergeOutcome.TrailChangedUnderRun ->
+        UnifiedRecordingWriter.trailChangedUnderRunMessage(outcome.target, outcome.changed) to false
+
+      is UnifiedRecordingWriter.MergeOutcome.NoTarget ->
+        "Recording not merged: no unified trail resolved for ${trailFile.absolutePath}." to false
+    }
+    Console.info(verdict.first)
+    logSaveBackOutcome(deps, sessionId, verdict.first, verdict.second)
+  }.onFailure {
+    // The banner is the only surface this run has, so an unexpected merge failure has to reach it
+    // too - a silent console line reads exactly like a save-back that never ran.
+    val message = "Recording not saved back into ${trailFile.name}: the merge failed (${it.message ?: it::class.simpleName})."
+    Console.log("[TrailRunnerEndpoint] $message")
+    logSaveBackOutcome(deps, sessionId, message, false)
+  }
 }

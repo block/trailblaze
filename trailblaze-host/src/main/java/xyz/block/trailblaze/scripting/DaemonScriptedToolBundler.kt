@@ -166,7 +166,7 @@ class DaemonScriptedToolBundler(
         // Bundle once per (script, name) pair. The cache is content-addressed on the script
         // bytes + tool name, so two `target.tools:` entries pointing at the same script via
         // a multi-tool descriptor produce distinct bundles for distinct names.
-        val bundledFile = bundleOneInternal(scriptFile, toolName)
+        val bundledFile = bundleOneInternal(scriptFile, toolName, multiExport = false)
         // Fail loudly on duplicate tool names across trailmaps. A LinkedHashMap put would silently
         // overwrite the earlier entry, and the per-tool dispatch downstream would route to
         // whichever bundle won the race — confusing at best, broken at worst when the two tools
@@ -377,10 +377,27 @@ class DaemonScriptedToolBundler(
    *   function whose name matches `toolName`.
    */
   suspend fun bundleOne(scriptPath: File, toolName: String): File = withContext(Dispatchers.IO) {
-    bundleOneInternal(scriptPath, toolName)
+    bundleOneInternal(scriptPath, toolName, multiExport = false)
   }
 
-  private fun bundleOneInternal(scriptPath: File, toolName: String): File {
+  /**
+   * Bundles a source file registering **every** function-valued export under its own export name,
+   * rather than one named export the caller already knows.
+   *
+   * This is what an in-process APK's assets need: a `.ts` may declare several
+   * `export const <name> = trailblaze.tool(...)` in one file (the committed
+   * `quickjs-tools/typed.ts` example does), and there is no YAML descriptor naming them at
+   * packaging time. [bundleOne]'s single-export wrapper would look up an export named after the
+   * file and throw at load for exactly that shape.
+   *
+   * Same registration form the Gradle in-process bundler emits — the two feed the same on-device
+   * resolver, so they have to agree. SISTER-IMPL-TAG: in-process-multi-export-registration.
+   */
+  suspend fun bundleEveryExport(scriptPath: File): File = withContext(Dispatchers.IO) {
+    bundleOneInternal(scriptPath, scriptPath.name.substringBeforeLast('.'), multiExport = true)
+  }
+
+  private fun bundleOneInternal(scriptPath: File, toolName: String, multiExport: Boolean): File {
     if (!scriptPath.isFile) {
       throw IOException("Scripted-tool source not found: ${scriptPath.absolutePath}")
     }
@@ -390,7 +407,10 @@ class DaemonScriptedToolBundler(
     // construction site, so re-checking here keeps the wrapper synthesis below safe in
     // isolation. Source-of-truth pattern lives on `InlineScriptToolConfig.TOOL_NAME_PATTERN`
     // so any future tightening is a one-place change.
-    require(InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(toolName)) {
+    // Only meaningful on the single-export path: there `toolName` IS the export key the wrapper
+    // bracket-accesses. The multi-export form derives every key from the file's own exports, so
+    // `toolName` is just a cache-key / header stem and the pattern does not apply to it.
+    require(multiExport || InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(toolName)) {
       "Invalid scripted-tool name '$toolName' for ${scriptPath.absolutePath}: must match " +
         "${InlineScriptToolConfig.TOOL_NAME_PATTERN} (letters, digits, _, -, ., starting with a " +
         "letter or _). Update the per-tool YAML descriptor's `name:` field to use a supported " +
@@ -417,7 +437,11 @@ class DaemonScriptedToolBundler(
     //    busts when a shared imported module changes even though the importing tool's own bytes
     //    didn't. A self-contained tool has an empty dep set → fullKey is a pure function of cheapKey.
     val sourceBytes = scriptPath.readBytes()
-    val cheapKey = sha256Hex(sourceBytes + toolName.toByteArray(Charsets.UTF_8) + bundlerProfileFingerprint)
+    val wrapperForm = if (multiExport) "multi-export" else "single-export"
+    val cheapKey = sha256Hex(
+      sourceBytes + toolName.toByteArray(Charsets.UTF_8) +
+        wrapperForm.toByteArray(Charsets.UTF_8) + bundlerProfileFingerprint,
+    )
     val depManifestFile = File(cacheDir, "$cheapKey.deps")
     // Cache hit: if we know this entry's dep set from a prior build, re-derive the fullKey from those
     // files' current bytes and return the artifact if it's present. A changed dep → different
@@ -537,7 +561,7 @@ class DaemonScriptedToolBundler(
     // "could not resolve" or partial-read failures. Co-located with the user's script so
     // esbuild's relative-import resolution finds the named export.
     val wrapperFile = File.createTempFile("$WRAPPER_FILENAME_PREFIX$cheapKey-", ".ts", scriptPath.parentFile)
-    wrapperFile.writeText(synthesizeWrapper(scriptPath, toolName))
+    wrapperFile.writeText(synthesizeWrapper(scriptPath, toolName, multiExport))
     val tmpFile = File.createTempFile("$cheapKey.", ".bundle.js.tmp", cacheDir)
     // esbuild writes the exact set of files it bundled here (`--metafile`); we read it to fingerprint
     // the dependency closure (and persist it as the manifest) instead of re-deriving imports ourselves.
@@ -613,9 +637,28 @@ class DaemonScriptedToolBundler(
    * authors get the fetch/`await`-style try/catch contract instead of silently proceeding
    * against state an unchecked error envelope never produced.
    */
-  internal fun synthesizeWrapper(scriptPath: File, toolName: String): String {
+  internal fun synthesizeWrapper(
+    scriptPath: File,
+    toolName: String,
+    multiExport: Boolean = false,
+  ): String {
     val fileName = scriptPath.name
     val toolNameLiteral = jsStringLiteral(toolName)
+    if (multiExport) {
+      return InProcessScriptedToolWrapperTemplate.render(
+        header = buildString {
+          appendLine("// Synthetic entry generated by DaemonScriptedToolBundler.")
+          appendLine("// Imports every typed-tool export from `$fileName`, builds a `client`")
+          appendLine("// shim over the host's `__trailblazeCall` binding, and registers each export")
+          appendLine("// on `globalThis.__trailblazeTools[<exportName>]` so QuickJsToolHost.callTool")
+          appendLine("// can dispatch it.")
+        },
+        importSource = "./$fileName",
+        // No single-export prelude: the empty replacement removes the whole token line.
+        prelude = "",
+        registration = InProcessScriptedToolWrapperTemplate.multiExportRegistration(),
+      )
+    }
     val header = buildString {
       appendLine("// Synthetic entry generated by DaemonScriptedToolBundler.")
       appendLine("// Imports the author's `$toolName` named export from `$fileName`,")
@@ -922,13 +965,30 @@ class DaemonScriptedToolBundler(
       // Slim in-process profile: resolve `@trailblaze/scripting` to the typed-only slim entry so a
       // tool importing it doesn't drag the full ~1.2 MB MCP SDK into its on-device bundle. Omitted
       // (→ node_modules full-SDK resolution) only when the slim entry can't be located.
-      inProcessSdkEntry?.let { add("--alias:@trailblaze/scripting=${it.absolutePath}") }
+      inProcessSdkEntry?.let { sdkEntry ->
+        // esbuild's `--alias` is a PACKAGE alias: it rewrites subpaths too. Without a more specific
+        // alias, `@trailblaze/scripting/matcher` becomes `<…>/src/in-process.ts/matcher` and the
+        // bundle fails to resolve — so a tool that imports the selector matcher cannot be bundled
+        // in-process at all. esbuild prefers the longest matching alias regardless of argument
+        // order. The subpath's own entry re-exports three sibling modules and imports types only,
+        // so aliasing it adds ~30 KB and pulls in nothing else.
+        matcherAliasTargetFor(sdkEntry)?.let {
+          add("--alias:@trailblaze/scripting/matcher=${it.absolutePath}")
+        }
+        add("--alias:@trailblaze/scripting=${sdkEntry.absolutePath}")
+      }
       add("--alias:@modelcontextprotocol/sdk/server/stdio.js=${onDeviceStdioStubFile.absolutePath}")
       add("--outfile=${output.absolutePath}")
     }
     val proc = ProcessBuilder(argv)
       .directory(entry.parentFile)
       .redirectErrorStream(true)
+      .apply {
+        // esbuild is handed author-written TypeScript and runs plugins from it. It has no use for
+        // the signing passwords `make-test-apk` reads out of the environment, and a child process
+        // that never sees a secret cannot leak one — through a plugin, a crash dump, or `ps -E`.
+        environment().keys.removeAll(SECRETS_WITHHELD_FROM_ESBUILD)
+      }
       .start()
     // 2 minutes mirrors `BundleAuthorToolsTask` — esbuild itself is fast on a typical
     // single-tool entry but we keep the same upper bound for parity.
@@ -1025,6 +1085,42 @@ class DaemonScriptedToolBundler(
 
   companion object {
     private val yaml = Yaml(configuration = YamlConfiguration(strictMode = false))
+
+    /**
+     * What `@trailblaze/scripting/matcher` must alias to, given the file `@trailblaze/scripting`
+     * itself aliases to — or null when that layout ships no matcher sibling.
+     *
+     * Two layouts reach this and they name the file differently:
+     *  - **SDK source tree** — entry `src/in-process.ts`, matcher at `src/matcher/index.ts`.
+     *  - **Extracted runtime bundle** — entry `dist/index.js`, matcher at the FLAT sibling
+     *    `dist/matcher.js`, because the shipped bundles are per-subpath esbuild outputs rather
+     *    than a mirror of the source directories.
+     *
+     * The second is not a corner case: `UsagesCommand.resolveSdkAliasTarget` reaches for it on
+     * purpose whenever no SDK source tree exists — a fresh worktree (`.trailblaze/` is gitignored)
+     * and any workspace consuming the SDK as a framework artifact. Probing only the source layout
+     * left the subpath un-aliased there, the package alias rewrote the import to
+     * `<…>/index.js/matcher`, and every tool importing the matcher failed to bundle — which
+     * `usages --changed-since` absorbs into a bytes-only fingerprint, so edits to the files such a
+     * tool imports silently stop flagging it.
+     */
+    internal fun matcherAliasTargetFor(sdkEntry: File): File? {
+      val sdkDir = sdkEntry.parentFile ?: return null
+      File(sdkDir, "matcher/index.ts").takeIf { it.isFile }?.let { return it }
+      val entryExtension = sdkEntry.name.substringAfterLast('.', missingDelimiterValue = "")
+      val flatSibling = if (entryExtension.isEmpty()) "matcher" else "matcher.$entryExtension"
+      return File(sdkDir, flatSibling).takeIf { it.isFile }
+    }
+
+    /**
+     * Environment variables stripped from the esbuild child. Named here rather than referencing
+     * `MakeTestApkCommand`, which lives in the CLI layer this module must not depend on.
+     */
+    private val SECRETS_WITHHELD_FROM_ESBUILD = setOf(
+      "TRAILBLAZE_INPROCESS_KEYSTORE_PASSWORD",
+      "TRAILBLAZE_INPROCESS_KEY_PASSWORD",
+    )
+
 
     /** Lenient JSON reader for esbuild's `--metafile` output — see [parseMetafileDepPaths]. */
     private val JSON_LENIENT = Json { ignoreUnknownKeys = true }

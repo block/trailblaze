@@ -15,6 +15,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
@@ -288,6 +289,22 @@ class KoogStrategyGraphHostRunnerTest {
       catalog = coreOnlyCatalog,
       driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
     )
+    assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "x")), repo)).isNull()
+  }
+
+  @Test
+  fun `the multi-device handover does not suppress that fallback`() {
+    // Same catalog as above, on a session that registered `switchDevice`. The handover joins a
+    // verify surface, so it could make the objectiveStatus-only test above pass with a tool that
+    // can neither assert nor observe — scoping to `switchDevice` + objectiveStatus and stranding
+    // the agent under ToolChoice.Required on the one path built to avoid exactly that.
+    val coreOnlyCatalog = verifyScopingCatalog().filterNot { it.id.endsWith("verification") }
+    val repo = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = setOf(SwitchDeviceTrailblazeTool::class),
+      catalog = coreOnlyCatalog,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+    )
+
     assertThat(verifyScopedAdvertisedTools(listOf(VerificationStep(verify = "x")), repo)).isNull()
   }
 

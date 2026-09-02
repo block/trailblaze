@@ -20,11 +20,23 @@ function ZipReportScreen({ initZipUrl }) {
   const [html, setHtml] = React.useState(null);
   const [stats, setStats] = React.useState(null);
   const runIdRef = React.useRef(0);
+  // The object URLs the rendered report resolves its attachments (and recording clip) through. They
+  // are minted over THIS archive's bytes and pin them for the life of the document, so reading one
+  // archive after another would stack every archive ever opened in memory until the tab is closed.
+  // Revoked whenever the report they belong to goes away: a replacement load, a load cancelled by a
+  // newer one, and unmount.
+  const objectUrlsRef = React.useRef([]);
+  const revokeObjectUrls = (urls) => {
+    (urls || []).forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) { /* already revoked */ } });
+  };
 
   const load = async (zipUrl) => {
     const target = String(zipUrl || '').trim();
     if (!target) return;
     const runId = ++runIdRef.current;
+    // The iframe holding the previous report goes away with setHtml(null) below, so its URLs are
+    // dead the moment this load starts — not when this one succeeds, which it may never do.
+    revokeObjectUrls(objectUrlsRef.current); objectUrlsRef.current = [];
     setPhase('loading'); setErr(null); setHtml(null); setStats(null);
     setStage('Downloading archive…');
     try {
@@ -42,8 +54,16 @@ function ZipReportScreen({ initZipUrl }) {
       setStage('Reading sessions…');
       const built = await TbZipReport.buildReportHtmlFromZipBytes(bytes, {
         onStage: (s) => { if (runId === runIdRef.current) setStage(s); },
+        // The HTML goes straight into a same-origin iframe below and is never downloaded, so the
+        // attachment object URLs minted over this archive's bytes still resolve. Without this the
+        // assembler strips them and every Open reports the bytes as not embedded.
+        keepAttachmentObjectUrls: true,
       });
-      if (runId !== runIdRef.current) return;
+      const minted = TbZipReport.sessionObjectUrls(built.sessions);
+      // A load a newer one overtook still minted its URLs — nothing will ever render them, so they
+      // are freed here rather than left pinning an archive nobody asked for anymore.
+      if (runId !== runIdRef.current) { revokeObjectUrls(minted); return; }
+      objectUrlsRef.current = minted;
       setStats({
         sessions: built.sessions.length,
         steps: built.sessions.reduce((n, s) => n + s.trace.length, 0),
@@ -58,7 +78,15 @@ function ZipReportScreen({ initZipUrl }) {
     }
   };
 
-  React.useEffect(() => { if (initZipUrl) load(initZipUrl); }, []);
+  React.useEffect(() => {
+    if (initZipUrl) load(initZipUrl);
+    // Leaving this screen tears down the iframe, so its URLs are dead too. Bumping the run id also
+    // cancels a load still in flight, which frees whatever it minted on its own way out.
+    return () => {
+      runIdRef.current++;
+      revokeObjectUrls(objectUrlsRef.current); objectUrlsRef.current = [];
+    };
+  }, []);
 
   const fmtSize = (n) => n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 

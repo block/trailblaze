@@ -1,17 +1,16 @@
 package xyz.block.trailblaze.mcp.handlers
 
 import io.ktor.util.encodeBase64
-import xyz.block.trailblaze.android.InstrumentationArgUtil
-import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
-import xyz.block.trailblaze.android.accessibility.MigrationTreeCapture
-import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
-import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
+import kotlinx.coroutines.CancellationException
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceCapturedScreenState
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateCaptor
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceScreenStateNotReadyException
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
@@ -19,17 +18,20 @@ import xyz.block.trailblaze.util.Console
 /**
  * RPC handler for getting the current screen state on-device.
  *
- * Chooses the capture method based on the active driver:
- * - **Accessibility driver**: Uses [AccessibilityServiceScreenState] which provides a rich
- *   [TrailblazeNode] tree with [DriverNodeDetail.AndroidAccessibility] detail (isClickable,
- *   isEditable, etc.) — essential for accurate screen summaries.
- * - **UiAutomator/Instrumentation**: Falls back to [AndroidOnDeviceUiAutomatorScreenState].
+ * HOW a frame is captured is the driver's business — injected as [captor] (the accessibility
+ * runner passes `AccessibilityScreenStateCaptor` from trailblaze-android; the in-process
+ * ANDROID_TEST driver captures through its own instrumentation-side hierarchy). This handler owns
+ * what is driver-independent: the wire shaping (base64 vs binary, which screenshot variants to
+ * render) and the mapping of a captor throw onto the [RpcResult.Failure] the host's readiness
+ * polling consumes — quietly for the expected [OnDeviceScreenStateNotReadyException], with a
+ * logged stack trace for anything else.
  *
  * @param deviceClassifiers Device classifiers to include in the response so the host
  *   can learn the actual device type without a separate RPC call.
  */
 class GetScreenStateRequestHandler(
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val captor: OnDeviceScreenStateCaptor,
 ) : RpcHandler<GetScreenStateRequest, GetScreenStateResponse> {
 
   override suspend fun handle(request: GetScreenStateRequest): RpcResult<GetScreenStateResponse> {
@@ -63,83 +65,26 @@ class GetScreenStateRequestHandler(
     }
   }
 
-  private suspend fun capture(request: GetScreenStateRequest): RpcResult<CapturedScreenState> {
+  private suspend fun capture(request: GetScreenStateRequest): RpcResult<OnDeviceCapturedScreenState> {
     return try {
-      val useAccessibility = TrailblazeAccessibilityService.isServiceRunning()
-      if (request.requireAndroidAccessibilityService && !useAccessibility) {
-        // Readiness polling for accessibility-driver flows must not accept a UiAutomator-fallback
-        // success. Surface this as a Failure so `waitForReady` keeps polling until the service
-        // actually binds.
-        return RpcResult.Failure(
-          errorType = RpcResult.ErrorType.UNKNOWN_ERROR,
-          message = "Accessibility service not yet bound",
-          details = "requireAndroidAccessibilityService=true but TrailblazeAccessibilityService.isServiceRunning() is false",
-        )
-      }
-      Console.log("📱 GetScreenStateRequestHandler: Capturing screen state (accessibility=$useAccessibility, screenshot=${request.includeScreenshot}, scale=${request.screenshotMaxDimension1}x${request.screenshotMaxDimension2})")
-
-      // Build scaling config from request parameters
-      val scalingConfig = ScreenshotScalingConfig(
-        maxDimension1 = request.screenshotMaxDimension1,
-        maxDimension2 = request.screenshotMaxDimension2,
-        imageFormat = request.screenshotImageFormat,
-        compressionQuality = request.screenshotCompressionQuality,
+      RpcResult.Success(captor.capture(request))
+    } catch (e: OnDeviceScreenStateNotReadyException) {
+      // Not an error: the capture path is still coming up, and the host's `waitForReady` polls
+      // this same request up to 120 times waiting for exactly that. Answer with the captor's
+      // message alone — no stack trace to logcat, none on the wire — so a normal cold start
+      // stays quiet and the host's retained failure string stays a single line.
+      RpcResult.Failure(
+        errorType = RpcResult.ErrorType.UNKNOWN_ERROR,
+        message = e.message ?: "Screen state capture is not ready yet",
+        details = null,
       )
-
-      // Use the accessibility driver's screen state when available — it provides a rich
-      // TrailblazeNode tree. Fall back to UiAutomator for instrumentation mode.
-      // Wait for the UI to settle first so we capture a stable screen (e.g., after
-      // navigation or data loading), not a mid-transition state.
-      val screenState: ScreenState = if (useAccessibility) {
-        // Skip the accessibility-event settle wait on the mirror-only fast path — that wait
-        // exists to give the tree a stable window to read from, and we're not reading the
-        // tree. Saves ~200-500 ms per frame on top of the tree-skip itself.
-        if (request.includeTree) {
-          TrailblazeAccessibilityService.waitForSettled()
-        }
-        AccessibilityServiceScreenState(
-          screenshotScalingConfig = scalingConfig,
-          includeScreenshot = request.includeScreenshot,
-          includeAllElements = request.includeAllElements,
-          // Forward the migration-mode flag so the on-device capture replaces the
-          // accessibility-derived viewHierarchy with a real UiAutomator dump when set.
-          // Without this propagation, host-side `captureScreenState()` calls would always
-          // get the accessibility-shape projection even when the migration capture is
-          // requested via instrumentation args, breaking 100% Maestro-fidelity migration.
-          captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
-          includeTree = request.includeTree,
-        )
-      } else {
-        AndroidOnDeviceUiAutomatorScreenState(
-          screenshotScalingConfig = scalingConfig,
-          includeScreenshot = request.includeScreenshot,
-          includeTree = request.includeTree,
-        )
-      }
-
-      // Stamped as soon as the ScreenState constructor returns — i.e. when the (screenshot,
-      // tree) pair is final. Device epoch, same clock as on-device session logs, so the host
-      // can correlate this capture against other device-clock timestamps.
-      val capturedAtDeviceMs = System.currentTimeMillis()
-
-      Console.log("📱 GetScreenStateRequestHandler: Screen captured (${screenState.deviceWidth}x${screenState.deviceHeight})")
-
-      // Side-channel migration tree. Captured separately from [screenState] so the primary
-      // tree shape stays canonical for runtime tools/reports — the migration tree rides on
-      // the wire response in its own field and is reassembled host-side via
-      // [MigrationScreenState] before being persisted on the snapshot log. On the
-      // accessibility driver, the primary `trailblazeNodeTree` is already the right shape;
-      // we still re-capture (cheap) to keep both code paths uniform and avoid divergence
-      // if the primary tree's filtering policy changes.
-      val driverMigrationTreeNode: TrailblazeNode? =
-        if (InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
-          MigrationTreeCapture.captureOrNull()
-        } else {
-          null
-        }
-
-      RpcResult.Success(CapturedScreenState(screenState, driverMigrationTreeNode, capturedAtDeviceMs))
-    } catch (e: Exception) {
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      // A real capture failure. These are rare and worth the full trace on both surfaces.
+      // Throwable, not Exception: a captor built on Espresso/Compose assertions fails with
+      // AssertionError, which would otherwise escape past this handler into Ktor and answer the
+      // host with a transport-level error instead of an RpcResult it can report.
       Console.log("❌ GetScreenStateRequestHandler: Failed to capture screen state: ${e.message}")
       e.printStackTrace()
       RpcResult.Failure(
@@ -150,13 +95,6 @@ class GetScreenStateRequestHandler(
     }
   }
 
-  private data class CapturedScreenState(
-    val screenState: ScreenState,
-    val driverMigrationTreeNode: TrailblazeNode?,
-    /** Device-epoch stamp taken when the (screenshot, tree) pair was final. */
-    val capturedAtDeviceMs: Long,
-  )
-
   companion object {
     /**
      * Builds the wire response from a captured [ScreenState] and the incoming
@@ -165,6 +103,17 @@ class GetScreenStateRequestHandler(
      * explicitly asks for it — LLM paths need it, CLI snapshots and disk
      * logging don't. Pure so it can be unit-tested without the Android
      * framework.
+     *
+     * The [ScreenState]-derived tree fields ([ScreenState.viewHierarchy],
+     * [ScreenState.trailblazeNodeTree], [ScreenState.pageContextSummary]) are likewise only read
+     * when the request asked for a tree — the same belt-and-braces this function already applies
+     * to `includeScreenshot`, which the captors also honor. The guarantee is about the WIRE, not
+     * the device: every captor today builds its hierarchy eagerly, so this cannot save a walk,
+     * only the serialization of a tree the caller said it did not want.
+     *
+     * [driverMigrationTreeNode] is deliberately NOT gated. It is a captor-supplied comparison
+     * tree rather than a view of this [screenState], and the dual-tree migration path that reads
+     * it asks for it explicitly.
      */
     internal fun buildResponse(
       request: GetScreenStateRequest,
@@ -188,14 +137,14 @@ class GetScreenStateRequestHandler(
         .map { it.classifier }
         .takeIf { it.isNotEmpty() }
       return GetScreenStateResponse(
-        viewHierarchy = screenState.viewHierarchy,
+        viewHierarchy = if (request.includeTree) screenState.viewHierarchy else ViewHierarchyTreeNode(),
         screenshotBase64 = screenshotBase64,
         annotatedScreenshotBase64 = annotatedScreenshotBase64,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
-        trailblazeNodeTree = screenState.trailblazeNodeTree,
+        trailblazeNodeTree = if (request.includeTree) screenState.trailblazeNodeTree else null,
         driverMigrationTreeNode = driverMigrationTreeNode,
-        pageContextSummary = screenState.pageContextSummary,
+        pageContextSummary = if (request.includeTree) screenState.pageContextSummary else null,
         deviceClassifiers = classifierStrings,
         capturedAtDeviceMs = capturedAtDeviceMs,
       )
@@ -217,14 +166,14 @@ class GetScreenStateRequestHandler(
           null
         }
       return GetScreenStateResponse(
-        viewHierarchy = screenState.viewHierarchy,
+        viewHierarchy = if (request.includeTree) screenState.viewHierarchy else ViewHierarchyTreeNode(),
         screenshotBase64 = null,
         annotatedScreenshotBase64 = null,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
-        trailblazeNodeTree = screenState.trailblazeNodeTree,
+        trailblazeNodeTree = if (request.includeTree) screenState.trailblazeNodeTree else null,
         driverMigrationTreeNode = driverMigrationTreeNode,
-        pageContextSummary = screenState.pageContextSummary,
+        pageContextSummary = if (request.includeTree) screenState.pageContextSummary else null,
         deviceClassifiers = deviceClassifiers.map { it.classifier }.takeIf { it.isNotEmpty() },
         capturedAtDeviceMs = capturedAtDeviceMs,
       ).apply {

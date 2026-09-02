@@ -486,50 +486,125 @@ open class ScriptedToolDefinitionAnalyzer(
     /** Truncate cap for stderr/stdout spans embedded in exception messages. */
     private const val MAX_STREAM_IN_MESSAGE = 2_000
 
+    /** Path of the extractor shim relative to an SDK root (source tree or bundled cache dir).
+     *  Its presence is what identifies a directory as an SDK root at all. */
+    internal const val EXTRACTOR_SHIM_RELPATH: String = "tools/extract-tool-defs.mjs"
+
     /**
-     * Walk ancestors of CWD looking for the SDK directory that carries both the
-     * shim script and the installed `ts-json-schema-generator` node_modules tree.
-     * The "marker" is the shim file itself — its presence under
-     * `<candidate>/tools/extract-tool-defs.mjs` is the proof that the SDK tree
-     * is intact.
+     * Resolve the SDK PROJECT root: the nearest tree carrying the extractor shim, with no
+     * requirement that its `node_modules` are installed. For consumers that need the SDK's
+     * project files themselves — e.g. the LSP launcher, which runs `bun x` from the SDK's
+     * `package.json`. Precedence: `TRAILBLAZE_SDK_DIR`, then a walk-up from CWD probing
+     * `sdks/typescript` and `opensource/sdks/typescript` per ancestor.
      *
-     * Per ancestor, two candidate sub-paths are probed:
-     *  - `sdks/typescript` — the canonical layout (the repo's root has
-     *    `sdks/typescript/` directly).
-     *  - `opensource/sdks/typescript` — a nested layout, where the SDK lives
-     *    under an `opensource/` sub-directory. Without this
-     *    fallback, every walk-up from inside an `opensource/examples/<trailmap>/`
-     *    workspace would have to be backstopped by `TRAILBLAZE_SDK_DIR` to
-     *    work, which is brittle in CI and counterintuitive in IDEs.
+     * There is deliberately NO bundled-shim fallback here. The bundle's cache dir holds the
+     * shim, the TypeScript libs and a marker — no `package.json` — so handing it to `bun x`
+     * would resolve an unpinned download instead of the SDK's pinned version, or fail
+     * offline. Null (LSP unavailable) is the honest answer when no SDK project exists.
      *
-     * `TRAILBLAZE_SDK_DIR` env var overrides the walk-up when set — useful for
-     * environments where the SDK doesn't sit directly above CWD (e.g. an
-     * installed CLI whose source tree lives elsewhere on disk). The env var
-     * also wins over a successful walk-up, so an explicit override always
-     * takes precedence.
+     * To RUN the analyzer shim, use [resolveAnalyzerSdkDir] instead: a source tree whose
+     * deps were never installed can't run it, and returning that tree would shadow the
+     * bundled shim that can.
      */
-    fun resolveSdkDir(): File? {
-      System.getenv("TRAILBLAZE_SDK_DIR")?.takeIf { it.isNotBlank() }?.let { explicit ->
+    fun resolveSdkDir(): File? = resolveSdkDir(
+      explicitSdkDir = System.getenv("TRAILBLAZE_SDK_DIR"),
+      startDir = File(System.getProperty("user.dir") ?: "."),
+      requireAnalyzerTooling = false,
+      bundledFallback = { resolveBundledAnalyzerSdkDir() },
+    )
+
+    /**
+     * Resolve a directory the analyzer shim can actually RUN from. Same precedence as
+     * [resolveSdkDir], but a walk-up candidate must also pass [analyzerToolingAvailable]:
+     * the shim `.mjs` is COMMITTED source — present in every checkout — yet only runnable
+     * with `node_modules/ts-json-schema-generator` installed beside it, a step CI agents
+     * and fresh clones have usually not run. Such a tree falls through to the JAR-bundled
+     * self-contained shim, which needs no `node_modules` at all.
+     *
+     * An explicit `TRAILBLAZE_SDK_DIR` is honored WITHOUT the availability gate — an
+     * override naming a dep-less tree degrades to "analyzer unavailable" at the call
+     * site's own [analyzerToolingAvailable] check rather than being silently swapped for
+     * the bundle. An override with no shim at all is logged and ignored.
+     */
+    fun resolveAnalyzerSdkDir(): File? = resolveSdkDir(
+      explicitSdkDir = System.getenv("TRAILBLAZE_SDK_DIR"),
+      startDir = File(System.getProperty("user.dir") ?: "."),
+      requireAnalyzerTooling = true,
+      bundledFallback = { resolveBundledAnalyzerSdkDir() },
+    )
+
+    /**
+     * Composable form of [resolveSdkDir] / [resolveAnalyzerSdkDir] so the precedence chain
+     * is unit-testable without mutating process env or depending on the host repo's
+     * `node_modules` state. The public forms feed this the live env var, CWD, and
+     * JAR-bundle extractor.
+     *
+     * [bundledFallback] is consulted ONLY when [requireAnalyzerTooling] is set: the bundle's
+     * cache dir can run the shim but is not an SDK project (no `package.json`), so it can
+     * never answer the project-root question [resolveSdkDir] asks.
+     */
+    internal fun resolveSdkDir(
+      explicitSdkDir: String?,
+      startDir: File,
+      requireAnalyzerTooling: Boolean,
+      bundledFallback: () -> File?,
+    ): File? {
+      explicitSdkDir?.trim()?.takeIf { it.isNotEmpty() }?.let { explicit ->
         val candidate = File(explicit)
-        val shim = File(candidate, "tools/extract-tool-defs.mjs")
-        if (shim.isFile) return candidate
+        if (File(candidate, EXTRACTOR_SHIM_RELPATH).isFile) return candidate
+        Console.info(
+          "[ScriptedToolDefinitionAnalyzer] TRAILBLAZE_SDK_DIR=$explicit has no " +
+            "$EXTRACTOR_SHIM_RELPATH — ignoring the override and resolving normally.",
+        )
       }
       val subPaths = listOf("sdks/typescript", "opensource/sdks/typescript")
-      var current: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+      var current: File? = startDir.absoluteFile
       while (current != null) {
         for (subPath in subPaths) {
           val candidate = File(current, subPath)
-          val shim = File(candidate, "tools/extract-tool-defs.mjs")
-          if (shim.isFile) return candidate
+          if (!File(candidate, EXTRACTOR_SHIM_RELPATH).isFile) continue
+          if (!requireAnalyzerTooling || analyzerToolingAvailable(candidate)) return candidate
+          // The NEAREST shim-bearing tree decides — don't walk past it. An outer
+          // checkout is a DIFFERENT copy of the SDK (a worktree's parent, a sibling
+          // clone), and analyzing this tree's tools against that copy's version is
+          // worse than the version-matched bundle shipped with this build.
+          val bundled = bundledFallback()
+          reportUnusableSourceTree(candidate, bundled)
+          return bundled
         }
         current = current.parentFile
       }
-      // No SDK source tree on disk — the common case for an installed CLI. Fall back to the
-      // self-contained analyzer shim bundled into the framework JAR, extracted to a stable
-      // cache dir. Returns null only when the JAR didn't ship the bundle (a dev build that
-      // skipped `bundleScriptedToolAnalyzerShim`), preserving the prior "analyzer
-      // unavailable" degradation.
-      return resolveBundledAnalyzerSdkDir()
+      // No shim-bearing tree above CWD — the common case for an installed CLI. In analyzer
+      // mode the bundle answers that; null only when the JAR didn't ship one (a dev build
+      // that skipped `bundleScriptedToolAnalyzerShim`), preserving the "analyzer
+      // unavailable" degradation. Project-root mode has no such substitute and says so.
+      return if (requireAnalyzerTooling) bundledFallback() else null
+    }
+
+    /** Source trees already reported by [reportUnusableSourceTree], so a workspace with N
+     *  trailmaps and several analyzer call sites logs the decision once instead of once per
+     *  resolution — the resolver re-walks on every call. */
+    private val reportedUnusableSourceTrees =
+      java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Explain, once per tree, why a shim-bearing SDK source tree was passed over. Reported
+     * AFTER the fallback resolves so the message states what actually happened: on a dev
+     * build with no bundle staged, [bundled] is null and nothing was substituted — claiming
+     * otherwise would misdescribe the exact case this breadcrumb exists to explain.
+     */
+    private fun reportUnusableSourceTree(candidate: File, bundled: File?) {
+      if (!reportedUnusableSourceTrees.add(candidate.path)) return
+      val prefix = "[ScriptedToolDefinitionAnalyzer] SDK source tree at $candidate has no " +
+        "installed analyzer deps (`bun install` never ran there)"
+      Console.info(
+        if (bundled != null) {
+          "$prefix — using the JAR-bundled analyzer shim at $bundled instead."
+        } else {
+          "$prefix, and this build ships no bundled analyzer shim — typed-tool analysis " +
+            "unavailable. Run `bun install` in that tree to enable it."
+        },
+      )
     }
 
     /**
@@ -571,29 +646,37 @@ open class ScriptedToolDefinitionAnalyzer(
     /** Directory under a bundled-shim cache root holding the unpacked TypeScript libs. */
     internal fun bundledTsLibRoot(cacheRoot: File): File = File(cacheRoot, "ts-lib")
 
-    /** Per-process memo of the extracted bundled-shim dir. The bundle is fixed for a given
-     *  CLI build, so the ~7 MB resource is read + validated at most once per JVM (a CLI
-     *  upgrade is a new process, which re-validates). `@Volatile` + idempotent extraction
-     *  make a benign double-extract under a thread race harmless. */
+    /** Outcome of the one-time bundle extraction, including a null [dir] for "this JAR ships
+     *  no bundle". Wrapping the result rather than pairing a memo field with an
+     *  attempted flag is what makes the memo a SINGLE volatile read: with two fields a
+     *  reader can see the flag set by another thread while still reading a stale null
+     *  result, and return "analyzer unavailable" for a bundle that was already extracted —
+     *  which `ToolCatalogBuilder`'s `by lazy` then caches for that component's lifetime. */
+    private class BundledAnalyzerResolution(val dir: File?)
+
+    /** Per-process memo of the bundle extraction. The bundle is fixed for a given CLI build,
+     *  so the ~7 MB resource is read + validated at most once per JVM (a CLI upgrade is a new
+     *  process, which re-validates). `@Volatile` + idempotent extraction make a benign
+     *  double-extract under a thread race harmless. */
     @Volatile
-    private var bundledAnalyzerSdkDirMemo: File? = null
+    private var bundledAnalyzerResolution: BundledAnalyzerResolution? = null
 
     /**
-     * Final fallback for [resolveSdkDir]: extract the framework-bundled, self-contained
-     * analyzer shim from the JAR to the per-user cache dir and return it. The bundle inlines
-     * all of its npm deps, so the extracted shim runs under `bun` with no `node_modules` —
-     * which is what lets an installed CLI (no SDK source tree) analyze typed tools out of the
-     * box. Memoized per process.
+     * Final fallback for [resolveSdkDir] / [resolveAnalyzerSdkDir]: extract the
+     * framework-bundled, self-contained analyzer shim from the JAR to the per-user cache dir
+     * and return it. The bundle inlines all of its npm deps, so the extracted shim runs under
+     * `bun` with no `node_modules` — which is what lets an installed CLI (no SDK source tree)
+     * analyze typed tools out of the box. Memoized per process, success or failure.
      *
      * Returns null when the JAR doesn't carry the bundle (dev build), so callers degrade to
      * the "analyzer unavailable" message rather than crashing.
      */
     internal fun resolveBundledAnalyzerSdkDir(): File? {
-      bundledAnalyzerSdkDirMemo?.let { return it }
+      bundledAnalyzerResolution?.let { return it.dir }
       val dir = extractBundledAnalyzerShim(
         File(System.getProperty("user.home") ?: ".", ".trailblaze/analyzer"),
       )
-      if (dir != null) bundledAnalyzerSdkDirMemo = dir
+      bundledAnalyzerResolution = BundledAnalyzerResolution(dir)
       return dir
     }
 
@@ -675,7 +758,7 @@ open class ScriptedToolDefinitionAnalyzer(
         shimBytes
       }
 
-      val shimFile = File(cacheRoot, "tools/extract-tool-defs.mjs")
+      val shimFile = File(cacheRoot, EXTRACTOR_SHIM_RELPATH)
       val stale = !shimFile.isFile ||
         shimFile.length() != resolvedBytes.size.toLong() ||
         !shimFile.readBytes().contentEquals(resolvedBytes)
@@ -817,8 +900,8 @@ open class ScriptedToolDefinitionAnalyzer(
      * [explicitSdkDir] when the caller already knows the SDK root).
      */
     fun resolveExtractorShim(explicitSdkDir: File? = null): File? {
-      val sdk = explicitSdkDir ?: resolveSdkDir() ?: return null
-      val shim = File(sdk, "tools/extract-tool-defs.mjs")
+      val sdk = explicitSdkDir ?: resolveAnalyzerSdkDir() ?: return null
+      val shim = File(sdk, EXTRACTOR_SHIM_RELPATH)
       return shim.takeIf { it.isFile }
     }
   }

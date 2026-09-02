@@ -800,20 +800,22 @@ class PlaywrightScreenStateBoundsTest {
   }
 
   /**
-   * Real-world reproduction of the Square Dashboard Managerbot popup case:
-   * a popup container with `pointer-events: none` sits visually on top of
-   * page elements, while the page remains interactive underneath because
-   * clicks pass through. Set-of-mark uses VISUAL occlusion (paint stack
-   * via `elementsFromPoint`), not click occlusion (`elementFromPoint`),
-   * so this case correctly flags the underlying button — the LLM looking
-   * at the screenshot cannot see the button regardless of whether
-   * Playwright could technically click it through the popup.
+   * Real-world reproduction of a non-modal chat-popup overlay: a container with
+   * `pointer-events: none` sits visually on top of page elements while the page
+   * stays interactive underneath, because clicks pass straight through.
    *
-   * Why we accept this trade-off: drawing a labeled box on the screenshot
-   * at a position the LLM can't see is misleading. Listing the underlying
-   * button in the text view while the screenshot shows it covered is also
-   * misleading. The LLM can always request OCCLUDED_ELEMENTS detail to
-   * surface what's behind the overlay if needed.
+   * Occlusion is decided by CLICK hit-testing — our port of Playwright's
+   * `expectHitTarget` — so the underlying button is correctly reported as
+   * visible: a `web_click` on it would succeed.
+   *
+   * Why click semantics and not visual paint order: an earlier version forced
+   * `pointer-events: auto` before hit-testing so click-through wrappers would
+   * count as occluders. That diverged from Playwright and produced systematic
+   * false positives — every transparent full-viewport wrapper (focus traps,
+   * drawer roots, route transitions, ambient layers) hid the entire page from
+   * the LLM. It was reverted in PR #2917. A false "occluded" verdict costs a
+   * whole page of actionable elements; the residual cost here is only that a
+   * set-of-mark box may be drawn under a translucent overlay.
    */
   @Test
   fun `pointer-events none overlay does not occlude clickable underlying element`() {

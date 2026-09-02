@@ -407,6 +407,13 @@ class TrailblazeYaml internal constructor(
    * device's default driver. Still routes through [decodeTrailDocument] (never the recordings
    * guard), so it is safe for any classifier list including empty (empty → null driver, same
    * as the no-classifier overload). v1 configs carry their scalar `driver:` unchanged.
+   *
+   * The caller here is pre-flight — it has classifiers but no bound session — so the skip lookup
+   * assumes the trail's sole declared configuration
+   * ([UnifiedTrailConfig.soleMultiDeviceConfigurationName]). Without it a `skip:` keyed by a
+   * configuration name is invisible to the device's chain and the CLI planner runs a trail its
+   * author disabled. `devices:` needs no such treatment: a configuration entry never pins the run
+   * driver — per-device drivers live on its named devices.
    */
   fun extractTrailConfig(
     yaml: String,
@@ -415,7 +422,11 @@ class TrailblazeYaml internal constructor(
     is TrailDocument.Unified -> UnifiedTrailAdapter.lowerConfig(
       doc.trail.config,
       resolvedDriver = UnifiedTrailAdapter.resolveDriver(doc.trail.config, deviceClassifiers),
-      resolvedSkip = UnifiedTrailAdapter.resolveSkip(doc.trail.config, deviceClassifiers),
+      resolvedSkip = UnifiedTrailAdapter.resolveSkip(
+        doc.trail.config,
+        deviceClassifiers,
+        doc.trail.config.soleMultiDeviceConfigurationName,
+      ),
     )
   }
 

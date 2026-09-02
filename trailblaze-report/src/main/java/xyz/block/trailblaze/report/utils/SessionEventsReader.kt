@@ -65,7 +65,13 @@ class SessionEventsReader(
       .mapNotNull { (file, name) -> readStream(file, name) }
   }
 
-  private fun readStream(file: File, name: String): EventStream? {
+  /**
+   * Read one NDJSON file as a named stream, under the same per-line and per-stream bounds [read]
+   * applies. Null when the file yielded no well-formed records. Public so callers holding a single
+   * file — a root-level capture such as `network.ndjson`, which lives outside `events/` — decode it
+   * through this reader rather than re-implementing the line contract.
+   */
+  fun readStream(file: File, name: String): EventStream? {
     val events = ArrayList<EventEntry>()
     var truncated = false
     file.bufferedReader(Charsets.UTF_8).use { reader ->

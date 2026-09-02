@@ -70,6 +70,13 @@ private fun TrailblazeNodeSelector.driverMatchHasSemanticIdentifier(): Boolean {
         match.hintTextRegex != null ||
         match.labeledByTextRegex != null ||
         match.paneTitleRegex != null
+    is DriverNodeMatch.AndroidView ->
+      match.resourceIdRegex != null ||
+        match.tagRegex != null ||
+        match.textRegex != null ||
+        match.contentDescriptionRegex != null ||
+        match.hintTextRegex != null ||
+        match.stateDescriptionRegex != null
     is DriverNodeMatch.AndroidMaestro ->
       match.resourceIdRegex != null ||
         match.textRegex != null ||
@@ -84,7 +91,9 @@ private fun TrailblazeNodeSelector.driverMatchHasSemanticIdentifier(): Boolean {
       match.testTag != null ||
         match.textRegex != null ||
         match.editableTextRegex != null ||
-        match.contentDescriptionRegex != null
+        match.contentDescriptionRegex != null ||
+        match.stateDescriptionRegex != null ||
+        match.paneTitleRegex != null
     is DriverNodeMatch.IosMaestro ->
       match.textRegex != null ||
         match.resourceIdRegex != null ||

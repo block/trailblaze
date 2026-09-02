@@ -5,7 +5,7 @@ import xyz.block.trailblaze.api.ScreenState
 /**
  * Driver-neutral contract for a host-native iOS device manager — the single interface a new
  * iOS driver implements to plug into Trailblaze (see
- * [xyz.block.trailblaze.devices.TrailblazeDriverType.Companion.IOS_HOST_NATIVE_DRIVER_TYPES]).
+ * [xyz.block.trailblaze.devices.TrailblazeDriverType.hostNativeSimulatorDriver]).
  * [xyz.block.trailblaze.host.axe.AxeDeviceManager] is the reference implementation; everything above this seam (the
  * Maestro-command converter, [IosDriverTrailRunner], [IosDriverTrailblazeAgent], selector resolution,
  * toolsets) is transport-agnostic and reused as-is.

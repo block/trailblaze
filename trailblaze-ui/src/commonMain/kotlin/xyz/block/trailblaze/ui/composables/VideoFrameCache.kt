@@ -30,10 +30,9 @@ interface VideoFrameCache {
  * Creates a platform-specific [VideoFrameCache].
  *
  * On JVM: loads a sprite sheet image and crops individual frames on demand.
- * On WASM: lazily loads pre-extracted frames from embedded report data.
  *
  * @param spriteInfo Pre-parsed sprite sheet metadata. On JVM this avoids re-reading the companion
- *   metadata file from disk. Ignored on WASM.
+ *   metadata file from disk.
  */
 expect fun createVideoFrameCache(
   videoPath: String,

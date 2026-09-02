@@ -37,6 +37,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 
 /**
  * Round-trip tests for [SessionScopedHostBinding] — the live `HostBinding` that lets a
@@ -324,6 +325,57 @@ class SessionScopedHostBindingTest {
       assertTrue(
         errorMessage.contains("not_registered_anywhere"),
         "expected error message to name the missing tool; got '$errorMessage'",
+      )
+    } finally {
+      SessionScopedHostBinding.clearContext()
+    }
+  }
+
+  // ---- Test 5b: global-registry (unfiltered) tier is reachable — cross-transport parity ----
+
+  @Test
+  fun `callFromBundle resolves a class-backed tool missing from the session toolset`() = runBlocking {
+    // Counterpart to `JsScriptingCallbackDispatcherTest`'s
+    // "class-backed tool missing from the session toolset resolves via the global registry".
+    // Both scripted-tool transports must resolve through the unfiltered tier, or an author
+    // sees a tool work under `trailblaze run` (this binding) and fail under `trailblaze tool`
+    // (the subprocess dispatcher) — the asymmetry that motivated that fix. Every other test
+    // here registers its tool in the session repo, so without this case the parity claim is
+    // only asserted on the dispatcher side.
+    //
+    // `inputText` is globally registered via @TrailblazeToolClass but absent from this EMPTY
+    // session repo, so resolution can only come from the global class registry.
+    val repo = newRepoWith() // deliberately empty — no session-registered tools
+    val binding = SessionScopedHostBinding(repo, sessionId)
+    val dispatched = mutableListOf<TrailblazeTool>()
+    val ctx = buildContext(
+      nestedToolExecutor = { tool ->
+        dispatched += tool
+        TrailblazeToolResult.Success(message = "intercepted")
+      },
+    )
+    SessionScopedHostBinding.installContext(ctx)
+    try {
+      val resultJson = binding.callFromBundle("inputText", """{"text":"hi"}""")
+      val parsed = Json.parseToJsonElement(resultJson) as JsonObject
+      assertEquals(
+        null,
+        parsed["isError"],
+        "expected the global-registry tier to resolve `inputText`; got $resultJson",
+      )
+      assertEquals(
+        1,
+        dispatched.size,
+        "expected exactly one dispatch through the nested executor; got $dispatched",
+      )
+      assertTrue(
+        dispatched.single() is InputTextTrailblazeTool,
+        "expected the decoded tool to be InputTextTrailblazeTool; got ${dispatched.single()::class}",
+      )
+      assertEquals(
+        "hi",
+        (dispatched.single() as InputTextTrailblazeTool).text,
+        "expected the args to decode onto the global class-backed tool",
       )
     } finally {
       SessionScopedHostBinding.clearContext()

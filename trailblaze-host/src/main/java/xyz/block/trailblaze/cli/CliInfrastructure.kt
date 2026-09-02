@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.cli
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.cli.TrailblazeExitCode.INFRA_FAILED
@@ -1130,15 +1131,22 @@ internal sealed class StopBoundSessionResult {
  *    violation, not a runtime case to handle.
  *  - [extraStopArgs] lets `session stop --save` pass additional arguments
  *    (e.g. `save = true`, `title = "..."`); empty for `device disconnect`.
+ *  - [sessionDevices] is the cast this MCP session addresses by name, empty for a single-device
+ *    session. The daemon reports ONE current device, and a `switchDevice` handover makes that a
+ *    companion — so on a bound session the reported device is evidence about which member is
+ *    ACTIVE, not about which session owns [expectedDevice]. Any member of the cast identifies
+ *    this session, so a handover must not turn the documented `session stop -d <startDevice>`
+ *    into a refusal. `device disconnect` passes nothing and keeps today's strict check.
  */
 internal suspend fun stopBoundSessionIfMatches(
   client: CliMcpClient,
   expectedDevice: String,
   extraStopArgs: Map<String, Any?> = emptyMap(),
+  sessionDevices: List<String> = emptyList(),
 ): StopBoundSessionResult {
   val bound = client.getBoundDeviceId()
     ?: return StopBoundSessionResult.NoActiveSession
-  if (!deviceArgMatches(expectedDevice, bound)) {
+  if (!sessionOwnsDevice(expectedDevice, bound, sessionDevices)) {
     return StopBoundSessionResult.DeviceMismatch(bound)
   }
   val args = buildMap<String, Any?> {
@@ -1157,6 +1165,186 @@ internal suspend fun stopBoundSessionIfMatches(
       ?.content
   }.getOrNull()
   return StopBoundSessionResult.Stopped(message)
+}
+
+/**
+ * Whether the MCP session that reported [reportedDevice] as current is the one that owns
+ * [expectedDevice], given the cast it addresses by name ([sessionDevices], empty for a
+ * single-device session).
+ *
+ * On a single-device session the reported device IS the session's identity, so this is
+ * [deviceArgMatches] unchanged. On a bound session it is only the ACTIVE member: a
+ * `switchDevice` handover moves it to a companion while every member still belongs to this one
+ * session, so refusing on the reported device alone would break the lifecycle contract the start
+ * prints — `session stop -d <startDevice>` — the moment a handover happens.
+ */
+internal fun sessionOwnsDevice(
+  expectedDevice: String,
+  reportedDevice: xyz.block.trailblaze.devices.TrailblazeDeviceId,
+  sessionDevices: List<String>,
+): Boolean = deviceArgMatches(expectedDevice, reportedDevice) ||
+  sessionDevices.any { sameBoundDevice(it, expectedDevice) }
+
+/**
+ * The MCP session a lifecycle command should act through, plus the scope it came from (null for
+ * the unscoped session) so the caller clears the right pointer once the session ends.
+ *
+ * [rosterDevices] is the cast that session addresses by name, empty for a single-device session.
+ * Lifecycle commands need it because the daemon reports ONE current device per session and a
+ * `switchDevice` handover moves that to a companion — so the device the user names is not
+ * necessarily the one the daemon answers with. See [stopBoundSessionIfMatches].
+ */
+internal class SessionLifecycleClient(
+  val client: CliMcpClient,
+  val sessionScope: String?,
+  val rosterDevices: List<String> = emptyList(),
+) {
+  /**
+   * True when the session this opened addresses devices BY NAME.
+   *
+   * [rosterDevices] answers it for the scoped path, which read the roster to choose that scope in
+   * the first place. The unscoped path never looked, and a raw MCP `device(action=BIND)` can leave a
+   * roster on the unscoped session, so that case falls back to the INFO block `connectReusable`
+   * already fetched — no extra round trip either way.
+   */
+  fun holdsNamedRoster(): Boolean = rosterDevices.isNotEmpty() ||
+    extractNamedDeviceRoster(client.reusedSessionProbeContent.orEmpty()).isNotEmpty()
+}
+
+/**
+ * Opens the MCP session that owns [device]'s CLI session, for the commands that act on "the
+ * current session" — `session stop` and `session end`.
+ *
+ * Which session that is depends on how it was started, so this mirrors the choice `session start`
+ * made rather than picking one unconditionally:
+ *
+ *  - `session start --bind …` attaches to the per-device scope, because the named roster lives on
+ *    the daemon-side MCP session context and `step` / `verify` / `tool` have to reach it. Its
+ *    lifecycle has to be driven from there too: the stop-capture callback is per-context, so a
+ *    STOP sent from any other session ends the recording while leaving video and log capture
+ *    unfinalized and the roster's device claims held.
+ *  - A plain `session start` opens the unscoped session and leaves its capture callback there, so
+ *    routing every stop through the device scope would break the single-device flow the same way.
+ *
+ * The named roster is what distinguishes them, and only a bound session has one — a scope created
+ * by `step` holds a session with no bindings and is left alone.
+ *
+ * Costs no round trip beyond the connect it already needs when [device] has its own scope. The
+ * scope's session file is checked first, so a device that never had a scope is decided locally;
+ * when it did, the roster is read off [CliMcpClient.reusedSessionProbeContent] — the INFO block
+ * `connectReusable` already fetched to verify the session. `createIfMissing = false` keeps the
+ * probe read-only: a stale pointer must not be answered by minting a session, which would leave an
+ * orphan on the daemon and overwrite the scope's stored target app.
+ *
+ * A device with NO scope of its own may still belong to a cast — every member but the start device
+ * is in exactly that state — so [sessionOwningBoundDevice] asks the scopes that do exist before the
+ * unscoped fallback is taken.
+ *
+ * Falling back is reported rather than silent, because for a bound session it IS the
+ * unfinalized-capture failure described above and the exit code alone would say nothing.
+ */
+internal suspend fun openSessionLifecycleClient(
+  port: Int,
+  device: String,
+): SessionLifecycleClient {
+  val scope = cliDeviceSessionScope(device)
+  if (CliMcpClient.sessionFile(port, scope).exists()) {
+    val scoped = try {
+      CliMcpClient.connectReusable(port, sessionScope = scope, createIfMissing = false)
+    } catch (e: Exception) {
+      Console.error(
+        "Note: could not reach the '$scope' MCP session (${e.message}); acting through the " +
+          "unscoped session. If this device was started with `session start --bind`, its video " +
+          "and log capture may not finalize.",
+      )
+      null
+    }
+    if (scoped != null) {
+      val roster = extractNamedDeviceRoster(scoped.reusedSessionProbeContent.orEmpty())
+      if (roster.isNotEmpty()) {
+        return SessionLifecycleClient(scoped, scope, rosterDevices = rosterDeviceIds(roster))
+      }
+      scoped.close()
+    }
+  }
+  sessionOwningBoundDevice(port, device)?.let { return it }
+  return SessionLifecycleClient(CliMcpClient.connectReusable(port), null)
+}
+
+/**
+ * The bound session whose roster names [device], found by probing the scopes that do have a pointer
+ * on [port]. Null when none does.
+ *
+ * Reached whenever [device]'s own scope did not produce a bound session — it has no pointer, its
+ * pointer could not be reached, or the session it names carries no roster (a scope created by
+ * `step`). The case that matters is a cast companion, which is in exactly the first state: only the
+ * start device's scope (and the alias `session start` publishes for its resolved spelling) point at
+ * the roster-owning session. Falling straight through to the unscoped session is not harmless there:
+ * `getBoundDeviceId()` reads the PROCESS-WIDE selected device, which during a live cast is a cast
+ * member, so a `session stop -d <companion>` can pass its ownership check and issue STOP through a
+ * context whose `stopCaptureCallback` is empty — reporting success while video and log capture never
+ * finalize and the roster keeps its device claims.
+ *
+ * Deliberately not solved by publishing an alias per bound device at start. A pointer is shared by
+ * every command that resolves a scope, so aliasing `cli-<companion>` onto the cast session would
+ * also redirect `step -d <companion>`, which would then act on whichever member is ACTIVE rather
+ * than the one named — trading a lifecycle inconvenience for a silent wrong-device action.
+ *
+ * Costs one connect-and-probe per existing pointer on this port, and runs only on `session stop` /
+ * `session end` (never on a device-driving command) and only after the direct scope lookup missed.
+ * Read-only throughout: `createIfMissing = false`, so a stale pointer is skipped rather than
+ * answered by minting a session. Scopes are searched in [CliMcpClient.scopesWithSessionFiles]'
+ * sorted order, so which session a device resolves to does not vary between runs.
+ *
+ * Every candidate is isolated: the scopes walked belong to other commands and other terminals, so a
+ * candidate this CLI version cannot read is skipped the way a failed connect is. Aborting here would
+ * fail the lookup for the device the user actually named.
+ *
+ * The close sits in a `finally` because the guarantee it makes is "every exit path that does not
+ * hand the client to the caller closes it", and `catch (Exception)` cannot make that: an `Error`
+ * would leave the loop with the client still open, which is the leak this is here to prevent.
+ * Cancellation propagates for the same reason it is not degraded to "no session" anywhere else in
+ * this file — a cancelled CLI is not a device without a session.
+ */
+private suspend fun sessionOwningBoundDevice(port: Int, device: String): SessionLifecycleClient? {
+  for (candidate in CliMcpClient.scopesWithSessionFiles(port)) {
+    val client = connectReusableOrNull(port, sessionScope = candidate, createIfMissing = false)
+      ?: continue
+    var owner: SessionLifecycleClient? = null
+    try {
+      val rosterIds = rosterDeviceIds(extractNamedDeviceRoster(client.reusedSessionProbeContent.orEmpty()))
+      if (rosterIds.any { sameBoundDevice(it, device) }) {
+        owner = SessionLifecycleClient(client, candidate, rosterDevices = rosterIds)
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      // An unreadable foreign scope is not this lookup's problem — try the next one.
+    } finally {
+      if (owner == null) client.close()
+    }
+    if (owner != null) return owner
+  }
+  return null
+}
+
+/**
+ * [CliMcpClient.connectReusable], or null when the scope holds no live session.
+ *
+ * Cancellation is rethrown rather than reported as "no session": on the JVM
+ * [CancellationException] is a `RuntimeException`, so a bare `catch (Exception)` swallows it and
+ * leaves a cancelled CLI probing the next scope or quietly opening a different session.
+ */
+internal suspend fun connectReusableOrNull(
+  port: Int,
+  sessionScope: String?,
+  createIfMissing: Boolean,
+): CliMcpClient? = try {
+  CliMcpClient.connectReusable(port, sessionScope = sessionScope, createIfMissing = createIfMissing)
+} catch (e: CancellationException) {
+  throw e
+} catch (_: Exception) {
+  null
 }
 
 // ---------------------------------------------------------------------------
@@ -1469,10 +1657,24 @@ internal suspend fun runActionWithIoEnvelope(
 }
 
 /**
+ * Refuses a daemon port a device could be allocated, before anything probes it.
+ *
+ * Every caller today gets its port from [CliConfigHelper.resolveEffectiveHttpPort], which already
+ * rejects one, so this cannot fire in production as written. It is here as a contract on the two
+ * entry points every auto-start path funnels through, because the failure it prevents is silent: a
+ * device's `adb forward` answers the health probe, so the auto-start path below would report a
+ * healthy daemon and then fail when MCP initialization hit a device RPC server.
+ */
+private fun requireConnectablePort(port: Int) {
+  TrailblazeDevicePort.requirePortOutsideDeviceAllocationRange(port, "The daemon HTTP port")
+}
+
+/**
  * Connect to the daemon for a one-shot command, auto-starting it if missing.
  * Never reads or writes the persisted session file.
  */
 internal suspend fun connectOrStartDaemonOneShot(port: Int): CliMcpClient? {
+  requireConnectablePort(port)
   if (!checkAndRestartStaleDaemon(port)) {
     reportDaemonUnreachable(
       "stale daemon (wrong version) did not stop on shutdown request",
@@ -1509,6 +1711,7 @@ internal suspend fun connectOrStartDaemonReusable(
   targetAppId: String? = null,
   sessionScope: String? = null,
 ): CliMcpClient? {
+  requireConnectablePort(port)
   if (!checkAndRestartStaleDaemon(port)) {
     reportDaemonUnreachable(
       "stale daemon (wrong version) did not stop on shutdown request",

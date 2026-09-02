@@ -50,6 +50,23 @@ kotlin {
       implementation(libs.kotlinx.serialization.core)
     }
 
+    // Shared by the JVM and Android actuals, which are the same code: both read system properties
+    // and the environment, both use java.lang.ThreadLocal, both have a coroutines thread-context
+    // element. Without an intermediate source set each one is a copy, and a change to the level
+    // precedence or the warning text can land in only one of them with nothing here failing.
+    // PlatformIds stays per-target — Android reads android.os.Process, the JVM reads RuntimeMXBean.
+    val jvmAndAndroid by creating {
+      dependsOn(commonMain.get())
+    }
+
+    jvmMain {
+      dependsOn(jvmAndAndroid)
+    }
+
+    androidMain {
+      dependsOn(jvmAndAndroid)
+    }
+
     jvmMain.dependencies {
       // Align kotlin-reflect with the rest of the Kotlin toolchain (2.4.0). Koog pulls
       // kotlin-bom:2.3.10, whose constraint otherwise pins kotlin-reflect to 2.3.10 on the JVM

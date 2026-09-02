@@ -4,6 +4,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.hasSemanticIdentifier
+import xyz.block.trailblaze.recording.InputTarget
 import xyz.block.trailblaze.recording.InteractionToolFactory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -102,7 +103,7 @@ class MaestroInteractionToolFactory(
     ) to SwipeWithRelativeCoordinatesTool::class.toolName().toolName
   }
 
-  override fun createInputTextTool(text: String): Pair<TrailblazeTool, String> {
+  override fun createInputTextTool(text: String, target: InputTarget?): Pair<TrailblazeTool, String> {
     return InputTextTrailblazeTool(text = text) to InputTextTrailblazeTool::class.toolName().toolName
   }
 

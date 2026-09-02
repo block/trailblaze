@@ -104,6 +104,9 @@ dependencies {
   // self-signed HTTPS server on the device — the shape of every Trailblaze endpoint an on-device
   // `fetch` reaches.
   androidTestImplementation(libs.okhttp.tls)
+  // `TrailblazeTracer` / `TraceLevel`, for AccessibilityTracingOnDeviceTest. The `implementation`
+  // declaration above does not reach the androidTest compile classpath.
+  androidTestImplementation(project(":trailblaze-tracing"))
 }
 
 dependencyGuard {

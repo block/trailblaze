@@ -5,7 +5,10 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.ResolvedTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ResolvedAgentToolbox
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.resolveToolScopeForDriver
 import kotlin.reflect.KClass
 
@@ -82,6 +85,45 @@ object MultiDeviceTargetBinding {
       toolClasses = companionScopes.flatMapTo(mutableSetOf()) { it.toolClasses },
       yamlToolNames = companionScopes.flatMapTo(mutableSetOf()) { it.yamlToolNames },
       scriptedToolNames = companionScopes.flatMapTo(mutableSetOf()) { it.scriptedToolNames },
+    )
+  }
+
+  /**
+   * The handover tool a multi-device session adds to its own tool surface: `switchDevice`, read from
+   * the `multi_device` catalog entry so the YAML toolset stays the source of truth for what the
+   * toolset contains.
+   *
+   * Session-bound rather than target-declared, and that asymmetry is deliberate: no app's trailmap
+   * can know whether the session that runs its trails bound a second device, and advertising a
+   * handover tool to a session with nothing to hand over to would offer the LLM a tool whose every
+   * call fails. So the condition is the binding itself — [isMultiDeviceSession].
+   *
+   * Empty for a single-device session, which is what keeps single-device tool surfaces byte-identical
+   * to what they were before multi-device existed.
+   */
+  fun handoverToolSurface(
+    isMultiDeviceSession: Boolean,
+    catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
+  ): ResolvedAgentToolbox = if (!isMultiDeviceSession) {
+    ResolvedAgentToolbox(toolClasses = emptySet(), yamlToolNames = emptySet())
+  } else {
+    // All three name kinds, even though `multi_device.yaml` declares only a class-backed tool
+    // today: reading two of three would make "the catalog is the source of truth" false the first
+    // time the toolset gains a scripted tool, and silently — a missing scripted name doesn't fail
+    // the session, it just never advertises.
+    ResolvedAgentToolbox(
+      toolClasses = TrailblazeToolSetCatalog.entryToolClasses(
+        SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+        catalog,
+      ),
+      yamlToolNames = TrailblazeToolSetCatalog.entryYamlToolNames(
+        SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+        catalog,
+      ),
+      scriptedToolNames = TrailblazeToolSetCatalog.entryScriptedToolNames(
+        SwitchDeviceTrailblazeTool.MULTI_DEVICE_TOOLSET_ID,
+        catalog,
+      ),
     )
   }
 

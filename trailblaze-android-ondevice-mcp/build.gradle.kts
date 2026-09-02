@@ -41,30 +41,37 @@ android {
 }
 
 dependencies {
+  // NO driver module here, deliberately. This module is the driver-agnostic on-device RPC
+  // server: the driver-specific pieces (screen-state capture, the pre-tool settle gate) are
+  // injected through [OnDeviceRpcServer]'s constructor seams, so the accessibility runner and
+  // the in-process ANDROID_TEST driver can host the same server without this module dragging
+  // either driver's dependency tree into the other's APK.
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-ondevice-rpc-proto"))
-  implementation(project(":trailblaze-android"))
+  implementation(project(":trailblaze-tracing"))
   implementation(project(":trailblaze-agent"))
 
   implementation(libs.ktor.server.core.jvm)
-  implementation(libs.mcp.sdk)
   implementation(libs.coroutines)
-  implementation(libs.okhttp)
   implementation(libs.ktor.server.cio)
   implementation(libs.ktor.server.websockets)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.ktor.server.content.negotiation)
-  implementation(libs.koog.prompt.executor.anthropic)
-  implementation(libs.koog.prompt.executor.openai)
-  implementation(libs.koog.prompt.executor.ollama)
+  implementation(libs.androidx.test.monitor)
+
+  // The androidTest runner (AndroidStandaloneServerTest) is the ACCESSIBILITY-driver harness:
+  // it wires the trailblaze-android captor/settle implementations into the server and builds
+  // real LLM clients. Test-scoped so no consumer of this module inherits them.
+  androidTestImplementation(project(":trailblaze-android"))
+  androidTestImplementation(libs.koog.prompt.executor.anthropic)
+  androidTestImplementation(libs.koog.prompt.executor.openai)
+  androidTestImplementation(libs.koog.prompt.executor.ollama)
   // Koog 1.0.0: LLM clients no longer accept a raw Ktor `HttpClient`; the androidTest source
   // wraps the cached client in `KtorKoogHttpClient.Factory` so its config flows through.
   androidTestImplementation(libs.koog.http.client.ktor)
-  implementation(libs.androidx.test.monitor)
-
   androidTestImplementation(libs.androidx.test.runner)
 
   testImplementation(libs.kotlin.test)

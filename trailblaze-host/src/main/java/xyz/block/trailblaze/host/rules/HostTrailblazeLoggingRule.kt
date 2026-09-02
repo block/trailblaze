@@ -13,6 +13,8 @@ import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.GitUtils
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.report.otel.SessionOtelExport
+import xyz.block.trailblaze.report.trace.SessionTraceFile
 
 class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
@@ -42,7 +44,8 @@ class HostTrailblazeLoggingRule(
   },
   writeTraceToDisk = { sessionId: SessionId, json: String ->
     val sessionDir = logsRepo.getSessionDir(sessionId)
-    File(sessionDir, "trace.json").writeText(json)
+    SessionTraceFile.merge(File(sessionDir, SessionTraceFile.FILE_NAME), json)
+    SessionOtelExport.pushIfConfigured(sessionId.value, json)
   },
 ) {
 

@@ -122,6 +122,12 @@ private fun pinnedTextField(detail: DriverNodeDetail, match: DriverNodeMatch?): 
     match.contentDescriptionRegex?.let { detail.contentDescription },
   )
 
+  match is DriverNodeMatch.AndroidView && detail is DriverNodeDetail.AndroidView -> listOfNotNull(
+    match.textRegex?.let { detail.resolveText() },
+    match.hintTextRegex?.let { detail.hintText },
+    match.contentDescriptionRegex?.let { detail.contentDescription },
+  )
+
   match is DriverNodeMatch.Compose && detail is DriverNodeDetail.Compose -> listOfNotNull(
     match.textRegex?.let { detail.resolveText() },
     match.editableTextRegex?.let { detail.editableText },

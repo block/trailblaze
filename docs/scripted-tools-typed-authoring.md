@@ -406,6 +406,12 @@ The proxy throws on failure — if the inner call fails, `ctx.tools.<name>(...)`
 `Error` you can `try`/`catch`. An unknown name is a `tsc` compile error (the typed
 surface deliberately omits a generic `callTool` so authors can't bypass type-checking).
 
+The three bullets above describe the **typed** surface — what the generated
+`trailblaze-client.d.ts` will let you write. Dispatch at runtime resolves against the
+wider global tool registry, so a framework tool that exists on the classpath but is in no
+toolset (a hidden selector tool, `runCommand`) is dispatchable even though it won't
+autocomplete. Prefer listing what you use so the types match what runs.
+
 ### Worked composition example
 
 [`contacts_ios_searchAndVerify`](https://github.com/block/trailblaze/blob/main/examples/ios-contacts/trails/config/trailmaps/contacts/tools/contacts_ios_searchAndVerify.ts)
@@ -631,6 +637,40 @@ device-aware command, and the committed workspace `package.json` re-runs it on
 `npm install` / `bun install`. **For the workspace layout (what you write vs. what's
 generated), what each generated file is for, and which ones to commit, see
 [Scripted Tools — Project Layout & Generated Files](scripted-tools-project-layout.md).**
+
+## Matching selectors yourself — `@trailblaze/scripting/matcher`
+
+Most tools let the framework resolve selectors for them (`ctx.tools.tapOn({ ... })`). A tool
+that captures a view hierarchy and then decides *which* node to act on can run the same
+resolver the framework uses:
+
+```ts
+import { resolve, resolveText } from "@trailblaze/scripting/matcher";
+import type { TrailblazeNode, TrailblazeNodeSelector } from "@trailblaze/scripting/matcher";
+
+const ADD_ITEM: TrailblazeNodeSelector = { androidAccessibility: { textRegex: "Add item" } };
+
+// `root` is the view-hierarchy root your tool captured. Not exported: every exported symbol in
+// a tool file is registered as a tool, so keep helpers module-private.
+function addItemLabel(root: TrailblazeNode): string | null {
+  const result = resolve(root, ADD_ITEM);
+  return result.kind === "singleMatch" ? resolveText(result.node.driverDetail) : null;
+}
+```
+
+The subpath carries the resolver (`resolve`, `resolveToCenter`), the per-driver node-detail
+types and their accessors (`resolveText`, `isInteractive`, `hasIdentifiableProperties`), the
+tree/bounds helpers (`aggregate`, `findFirst`, `hitTest`, `boundsContains`, …), and the
+selector-grammar types. It is a TypeScript port of Kotlin's
+`TrailblazeNodeSelectorResolver`, kept in parity with it.
+
+**Always import it as `@trailblaze/scripting/matcher`, never by a relative path into the SDK
+source tree.** A relative import only resolves at the exact directory depth it was written
+at, so the moment the trailmap is vendored into another repo — where trailmaps sit at
+`trailblaze-config/trailmaps/<id>/tools/` rather than `trails/config/trailmaps/<id>/tools/`
+— the same import points above that repo's root and `trailblaze check` fails with
+`Cannot find module`. The package specifier is depth-independent: `trailblaze check`
+re-derives the `paths` mapping for the trailmap's actual location every time it runs.
 
 ## Testing your tool
 

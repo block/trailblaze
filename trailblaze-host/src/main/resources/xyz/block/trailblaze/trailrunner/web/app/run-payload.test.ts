@@ -14,6 +14,20 @@ const traceScreenshotFiles = (trace: any[]) => [...new Set((trace || [])
   .flatMap((t) => [t.screenshotFile, ...(t.children || []).map((c: any) => c.screenshotFile)])
   .filter(Boolean))];
 
+// The attachment resolution policy reaches run-payload.js the same way the detector does: as
+// run-report-core globals the browser has already set, defined once in run-report-events.ts. These
+// two source trees are separate packages with no path mapping, so the values are restated here for
+// the same reason traceScreenshotFiles above is — the module remains the single home, and a
+// run-report-core too old to publish them is covered by its own case rather than by a fallback.
+const ATTACHMENT_POLICY = {
+  ATTACHMENT_INLINE_MAX_BYTES: 512 * 1024,
+  MAX_ATTACHMENTS_PER_SESSION: 200,
+  ATTACHMENT_EMBED_MAX_TOTAL_BYTES: 32 * 1024 * 1024,
+  ATTACHMENT_MIME: /^(audio|video|image)\/[a-z0-9][a-z0-9.+-]*$/i,
+  isSafeSessionRelativePath: (path: string) => !!path && !path.startsWith('/') && !path.includes('\\')
+    && !path.includes('\0') && path.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..'),
+};
+
 const TRACE = [
   { i: 0, screenshotFile: 'a.png', children: [{ screenshotFile: 'a-child.png' }, { screenshotFile: null }] },
   { i: 1, screenshotFile: 'b.png' },
@@ -124,6 +138,175 @@ describe('collectShots — embed mode', () => {
     });
     expect('b.png' in shots).toBe(false);
     expect(Object.keys(shots).sort()).toEqual(['a-child.png', 'a.png', 'c.png']);
+  });
+});
+
+// Attachment refs (AttachmentRef, trailblaze-models) resolved into the payload's `attachments` map.
+// Detection lives — and is contract-tested — in run-report-core's collectStreamAttachmentRefs; here
+// it is an injected collaborator, so these tests pin the resolution rules only.
+describe('collectAttachments', () => {
+  const STREAMS = [{ name: 'demo', total: 1, truncated: false, events: [{ t: 1, d: '{}' }] }];
+  const refsDep = (refs: unknown[]) => ({ ...ATTACHMENT_POLICY, collectStreamAttachmentRefs: () => refs });
+  const wavRef = { path: 'attachments/tone.wav', mimeType: 'audio/wav', sizeBytes: 3, label: 'tone' };
+
+  test('link mode points each ref at /static with its separators intact, fetching nothing', async () => {
+    const net = forbiddenFetch();
+    const attachments = await Payload.collectAttachments(STREAMS, "sam's run", 'link', {
+      fetch: net.fetch,
+      ...refsDep([wavRef, { path: "att/steven's take.wav", mimeType: 'audio/wav', sizeBytes: 1 }]),
+    });
+    // Per-SEGMENT encoding: the path's separators must stay separators for the daemon's /static
+    // tree to resolve the nested file, while each segment gets the same quote-safe encoding as a
+    // screenshot name.
+    expect(attachments).toEqual({
+      'attachments/tone.wav': '/static/sam%27s%20run/attachments/tone.wav',
+      "att/steven's take.wav": "/static/sam%27s%20run/att/steven%27s%20take.wav",
+    });
+    expect(net.calls).toEqual([]);
+  });
+
+  test('embed mode inlines a media ref as a data URI carrying its DECLARED type', async () => {
+    // The static route guesses application/octet-stream for a .wav — the ref's own MIME must win,
+    // or the report-side src check refuses the URI and the attachment silently degrades to a note.
+    const net = imageFetch('application/octet-stream');
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: net.fetch,
+      ...refsDep([wavRef]),
+    });
+    expect(attachments['attachments/tone.wav']).toBe(`data:audio/wav;base64,${btoa('\x01\x02\x03')}`);
+    expect(net.calls).toEqual(['/static/s1/attachments/tone.wav']);
+  });
+
+  test('embed mode leaves out non-media types and anything past the inline cap', async () => {
+    const net = imageFetch();
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: net.fetch,
+      ...refsDep([
+        { path: 'attachments/report.pdf', mimeType: 'application/pdf', sizeBytes: 3 },
+        { path: 'attachments/huge.wav', mimeType: 'audio/wav', sizeBytes: 512 * 1024 + 1 },
+      ]),
+    });
+    // Neither ref is even fetched: the exported file must not download what it will not carry.
+    expect(attachments).toBeNull();
+    expect(net.calls).toEqual([]);
+  });
+
+  test('a body larger than its declared size is still held to the cap after download', async () => {
+    const big = new Uint8Array(512 * 1024 + 1);
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: async () => ({ ok: true, headers: { get: () => 'audio/wav' }, arrayBuffer: async () => big.buffer }),
+      ...refsDep([wavRef]), // declares 3 bytes
+    });
+    expect(attachments).toBeNull();
+  });
+
+  test('an over-cap body is refused before it is read, not after it is all in memory', async () => {
+    // A ref that under-declares its size is exactly what the cap is for, so the cap cannot be
+    // enforced by buffering first: the declared length is refused up front, and a response that
+    // does not declare one is measured as it streams and cancelled the moment it goes past.
+    const headers = (length: string | null) => ({
+      get: (name: string) => (name.toLowerCase() === 'content-length' ? length : 'audio/wav'),
+    });
+    const declared = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: async () => ({
+        ok: true,
+        headers: headers(String(512 * 1024 + 1)),
+        arrayBuffer: async () => { throw new Error('the body must not be read once the length is over the cap'); },
+      }),
+      ...refsDep([wavRef]),
+    });
+    expect(declared).toBeNull();
+
+    let cancelled = false;
+    let chunksRead = 0;
+    const chunk = new Uint8Array(256 * 1024);
+    const streamed = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: async () => ({
+        ok: true,
+        headers: headers(null),
+        // Endless: only a reader that stops at the cap ever finishes this.
+        body: { getReader: () => ({ read: async () => { chunksRead++; return { done: false, value: chunk }; }, cancel: async () => { cancelled = true; } }) },
+        arrayBuffer: async () => { throw new Error('a streaming body must not be buffered whole'); },
+      }),
+      ...refsDep([wavRef]),
+    });
+    expect(streamed).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(chunksRead).toBe(3); // 512KB cap: two chunks fit, the third crosses it and ends the read
+  });
+
+  test('a traversal-shaped path never reaches the static tree, and duplicates resolve once', async () => {
+    const net = forbiddenFetch();
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'link', {
+      fetch: net.fetch,
+      ...refsDep([
+        { path: '../other-session/secret.wav', mimeType: 'audio/wav', sizeBytes: 1 },
+        { path: '/etc/passwd', mimeType: 'audio/wav', sizeBytes: 1 },
+        { path: 'attachments/../../x.wav', mimeType: 'audio/wav', sizeBytes: 1 },
+        wavRef,
+        { ...wavRef, label: 'same file, second ref' },
+      ]),
+    });
+    expect(Object.keys(attachments!)).toEqual(['attachments/tone.wav']);
+  });
+
+  test('no streams, no refs, no detector, or no policy all yield null rather than an empty map', async () => {
+    expect(await Payload.collectAttachments(null, 's1', 'link', refsDep([wavRef]))).toBeNull();
+    expect(await Payload.collectAttachments(STREAMS, 's1', 'link', refsDep([]))).toBeNull();
+    // An older run-report-core without the detector degrades to an attachment-less payload.
+    expect(await Payload.collectAttachments(STREAMS, 's1', 'link', {})).toBeNull();
+    // Same for one that detects but doesn't publish the policy: resolving with a second, local copy
+    // of the limits is exactly the drift this surface stopped carrying. Every key, not just the two
+    // whose absence would throw — a missing CEILING degrades to no ceiling (`n > undefined` is
+    // false, and an unbounded body read), which is the worse of the two failures.
+    for (const key of Object.keys(ATTACHMENT_POLICY)) {
+      const partial: Record<string, unknown> = { ...refsDep([wavRef]) };
+      delete partial[key];
+      expect(await Payload.collectAttachments(STREAMS, 's1', 'link', partial)).toBeNull();
+    }
+  });
+
+  test('an attachment named like an Object.prototype member still resolves', async () => {
+    // The shared path rule accepts any single segment, so these are legal attachment names. On a
+    // plain object they are not: the dedupe set reports `constructor` as seen before it has seen
+    // anything, and assigning the URI to `attachments['__proto__']` sets nothing at all.
+    const net = forbiddenFetch();
+    const refs = [
+      { path: '__proto__', mimeType: 'audio/wav', sizeBytes: 2 },
+      { path: 'constructor', mimeType: 'audio/wav', sizeBytes: 2 },
+    ];
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'link', { fetch: net.fetch, ...refsDep(refs) });
+    expect(Object.keys(attachments).sort()).toEqual(['__proto__', 'constructor']);
+    expect(attachments['__proto__']).toBe('/static/s1/__proto__');
+  });
+
+  test('embed mode stops at the aggregate budget and leaves the rest as bundle-only notes', async () => {
+    // The per-file cap and the count ceiling together still permit ~137 MiB of base64, which the
+    // daemon's share route refuses outright — so the aggregate budget is what keeps a session inside
+    // every other limit saveable. Charged in ENCODED bytes, since that is what the HTML carries.
+    const net = imageFetch(); // 3 bytes each → a 27-char data URI
+    const refs = Array.from({ length: 4 }, (_, i) => ({ path: `attachments/${i}.wav`, mimeType: 'audio/wav', sizeBytes: 3 }));
+    const attachments = await Payload.collectAttachments(STREAMS, 's1', 'embed', {
+      fetch: net.fetch,
+      ...refsDep(refs),
+      ATTACHMENT_EMBED_MAX_TOTAL_BYTES: `data:audio/wav;base64,${btoa('\x01\x02\x03')}`.length * 2,
+    });
+    // First two fit exactly; the rest keep the viewer's in-bundle note.
+    expect(Object.keys(attachments)).toEqual(['attachments/0.wav', 'attachments/1.wav']);
+  });
+
+  test('a bundle missing only the per-session ceiling resolves nothing rather than everything', async () => {
+    // The named half of the loop above, kept explicit because the failure it guards is silent: with
+    // no ceiling the cap comparison is `n > undefined`, so a session referencing thousands of files
+    // would resolve every one of them, and in embed mode fetch every one with no byte limit.
+    const net = forbiddenFetch();
+    const many = Array.from({ length: 250 }, (_, i) => ({ path: `attachments/${i}.wav`, mimeType: 'audio/wav', sizeBytes: 3 }));
+    const { MAX_ATTACHMENTS_PER_SESSION: _cap, ...noCap } = refsDep(many);
+    expect(await Payload.collectAttachments(STREAMS, 's1', 'link', { fetch: net.fetch, ...noCap })).toBeNull();
+    // With the ceiling present the same input resolves, capped — so the null above is the guard,
+    // not an unrelated rejection of the input.
+    const capped = await Payload.collectAttachments(STREAMS, 's1', 'link', { fetch: net.fetch, ...refsDep(many) });
+    expect(Object.keys(capped).length).toBe(ATTACHMENT_POLICY.MAX_ATTACHMENTS_PER_SESSION);
   });
 });
 
@@ -504,6 +687,37 @@ describe('buildSessionInput', () => {
     expect(input.trace).toBe(TRACE);
     expect(input.llmLogs).toEqual([{ i: 0 }]);
     expect(input.events).toBeNull();
+    expect(input.attachments).toBeNull();
+  });
+
+  test('attachments referenced by the event streams land on the input, resolved per the mode', async () => {
+    const input = await Payload.buildSessionInput({
+      s: summary,
+      trace: [],
+      llmLogs: [],
+      sessionId: 'sess_1',
+      mode: 'link',
+      logs: [],
+      deps: {
+        fetch: async (url: string) => {
+          if (url.endsWith('/export')) return { ok: false, status: 404 };
+          if (url.endsWith('/events')) {
+            return {
+              ok: true,
+              json: async () => ({
+                streams: [{ streamId: 'speech', label: 'speech', count: 1, events: [{ timeMs: 5, data: { x: 1 } }] }],
+              }),
+            };
+          }
+          return { ok: true, json: async () => [] };
+        },
+        traceScreenshotFiles,
+        originalYamlFromLogs: () => null,
+        collectStreamAttachmentRefs: () => [{ path: 'attachments/tone.wav', mimeType: 'audio/wav', sizeBytes: 3 }],
+        ...ATTACHMENT_POLICY,
+      },
+    });
+    expect(input.attachments).toEqual({ 'attachments/tone.wav': '/static/sess_1/attachments/tone.wav' });
   });
 
   test('embed mode inlines the frames and hands the input to the hierarchy packer', async () => {

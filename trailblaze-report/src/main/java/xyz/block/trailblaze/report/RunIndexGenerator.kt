@@ -101,11 +101,22 @@ class RunIndexGenerator(
       report.metadata.target_app.takeIf { it.isNotBlank() }?.let { put("target", it) }
       put("platform", result.platform)
       result.device_classifier?.takeIf { it.isNotBlank() }?.let { put("deviceClassifier", it) }
-      put("duration", RunReportGenerator.formatDuration(result.duration_ms))
+      // Omitted for a skip rather than formatted: `duration_ms` is 0 there because nothing ran, and
+      // "0ms" reads as a run that finished instantly. The viewer renders an absent duration as
+      // unknown, which is the truth. `RunReportGenerator.skipSessionJson` omits it for the same
+      // reason, so the two generators agree on what a skipped cell shows.
+      if (result.outcome != Outcome.SKIPPED) {
+        put("duration", RunReportGenerator.formatDuration(result.duration_ms))
+      }
       ranAt(result)?.let { put("ranAt", it) }
       result.app_id?.takeIf { it.isNotBlank() }?.let { put("appId", it) }
       appVersion(result)?.let { put("appVersion", it) }
-      result.failure_reason?.takeIf { it.isNotBlank() }?.let { put("error", it) }
+      // A skipped row carries its reason in the same field a failure uses (see
+      // `SkippedTrail.toSessionResult`), but it isn't an error and must not read as one - the
+      // viewer styles `error` in the failure vocabulary.
+      result.failure_reason?.takeIf { it.isNotBlank() }?.let {
+        put(if (result.outcome == Outcome.SKIPPED) "skipReason" else "error", it)
+      }
       result.failure_code?.takeIf { it.isNotBlank() }?.let { put("failureCode", it) }
       if (result.self_heal_ran) put("selfHeal", true)
       result.metadata?.takeIf { it.isNotEmpty() }?.let { metadata ->

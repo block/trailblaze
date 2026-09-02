@@ -4,7 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TargetTemplateContext
-import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -28,16 +28,23 @@ import xyz.block.trailblaze.waypoint.WaypointRegistryResolver
  *
  * ## Host-backed
  *
- * The waypoint registry and matcher live host-side, so this tool is `requiresHost = true`: on
- * host-orchestrated runs of any driver it executes on the host JVM (where the registry resolves);
- * pure on-device agents, which can't reach the registry, don't advertise it. Screen state and the
- * session's resolved target are read from the [TrailblazeToolExecutionContext].
+ * The waypoint registry and matcher live host-side — only `TrailblazeHostYamlRunner` installs
+ * `WaypointRegistryResolver`'s providers — so this tool declares both halves of that, which are
+ * separate facts:
+ * - `requiresHost = true`: it cannot run anywhere but a host machine. An on-device session has no
+ *   registry to resolve against, so the assertion has no meaning there.
+ * - [HostLocalExecutableTrailblazeTool]: `BaseTrailblazeAgent` executes it in the JVM holding the
+ *   session rather than routing it to the device, on any driver.
+ *
+ * Screen state and the session's resolved target are read from the
+ * [TrailblazeToolExecutionContext]; a run path that supplies no screen-state provider is refused
+ * below rather than silently passing.
  */
 @Serializable
 @TrailblazeToolClass(
   name = "assertWaypoint",
-  requiresHost = true,
   isVerification = true,
+  requiresHost = true,
 )
 @LLMDescription(
   """
@@ -61,13 +68,15 @@ data class AssertWaypointTrailblazeTool(
     "Milliseconds between waypoint re-evaluations while waiting. Default 250.",
   )
   val pollIntervalMs: Long = WaypointAssertion.DEFAULT_POLL_INTERVAL_MS,
-) : ExecutableTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool {
 
   init {
     require(waypoint.isNotBlank()) { "assertWaypoint.waypoint must be a non-blank waypoint id" }
     require(timeoutMs > 0) { "assertWaypoint.timeoutMs must be > 0 (got $timeoutMs)" }
     require(pollIntervalMs > 0) { "assertWaypoint.pollIntervalMs must be > 0 (got $pollIntervalMs)" }
   }
+
+  override val advertisedToolName: String get() = "assertWaypoint"
 
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,

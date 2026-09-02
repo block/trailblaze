@@ -159,14 +159,16 @@ class ExecTrailblazeToolTest {
   }
 
   /**
-   * Pin the host-only contract. `ExecTrailblazeTool` MUST stay
-   * [HostLocalExecutableTrailblazeTool] + `requiresHost = true` — flipping either
-   * would break the routing in `HostAccessibilityRpcClient` (which short-circuits
-   * host-locals to in-process dispatch instead of trying to RPC them to a device that
-   * has no JVM to fork from).
+   * Pin both halves of the host contract, which are separate facts:
+   * - [HostLocalExecutableTrailblazeTool] — dropping the marker would break the routing in
+   *   `HostAccessibilityRpcClient` (which short-circuits host-locals to in-process dispatch instead
+   *   of trying to RPC them to a device that has no JVM to fork from).
+   * - `requiresHost = true` — forking a subprocess has no on-device meaning at all, so the tool
+   *   cannot run off a host machine. This is what the generated contract page reports as
+   *   `Host-only: yes`, and it's the half the marker does not carry.
    */
   @Test
-  fun `is host-local executable and annotated requiresHost true`() {
+  fun `is host-local executable and declares itself host-only`() {
     val tool = ExecTrailblazeTool(argv = listOf("echo", "x"))
     assertThat(tool).isInstanceOf(HostLocalExecutableTrailblazeTool::class)
 

@@ -22,7 +22,11 @@ import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.model.TapRouteOverride
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
+
+/** Category for every span this file records — the driver's own operations. */
+private const val DRIVER_TRACE_CAT = "driver"
 
 /**
  * Manages device interaction purely through the Android accessibility framework.
@@ -155,9 +159,9 @@ class AccessibilityDeviceManager(
    * Follows the same pattern as `PlaywrightBrowserManager.getScreenState()` — calls
    * [waitForReady] before capturing to ensure the snapshot reflects a stable UI.
    */
-  fun getScreenState(): ScreenState {
+  fun getScreenState(): ScreenState = TrailblazeTracer.traceDetail("getScreenState", DRIVER_TRACE_CAT) {
     waitForReady()
-    return AccessibilityServiceScreenState(
+    AccessibilityServiceScreenState(
       deviceClassifiers = deviceClassifiers,
       captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
     )
@@ -167,8 +171,11 @@ class AccessibilityDeviceManager(
    * Captures screen state for logging without waiting for settle. Useful for recording the
    * immediate state after an action without the settle overhead.
    */
-  fun captureScreenStateForLogging(): ScreenState {
-    return AccessibilityServiceScreenState(
+  fun captureScreenStateForLogging(): ScreenState = TrailblazeTracer.traceDetail(
+    "captureScreenStateForLogging",
+    DRIVER_TRACE_CAT,
+  ) {
+    AccessibilityServiceScreenState(
       deviceClassifiers = deviceClassifiers,
       captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
       // EXPERIMENTAL (inprocess-idle mode only): honor this method's "immediate state, no settle
@@ -189,16 +196,18 @@ class AccessibilityDeviceManager(
    * accessibility events rather than DOM mutations.
    */
   fun waitForReady(timeoutMs: Long = 5_000L) {
-    // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever
-    // answers first — true main-thread idle or the standard event-quiet wait.
-    if (InProcessIdleSettleClient.isEnabled()) {
-      val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(timeoutMs) { earlyExit ->
-        TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs, earlyExit = earlyExit)
+    TrailblazeTracer.traceDetail("waitForReady", DRIVER_TRACE_CAT) {
+      // EXPERIMENTAL inprocess-idle race (see [InProcessIdleSettleClient]): settle on whichever
+      // answers first — true main-thread idle or the standard event-quiet wait.
+      if (InProcessIdleSettleClient.isEnabled()) {
+        val winner = InProcessIdleSettleClient.raceIdleAgainstHeuristic(timeoutMs) { earlyExit ->
+          TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs, earlyExit = earlyExit)
+        }
+        Console.log("[settle] waitForReady via $winner")
+        return@traceDetail
       }
-      Console.log("[settle] waitForReady via $winner")
-      return
+      TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs)
     }
-    TrailblazeAccessibilityService.waitForSettled(timeoutMs = timeoutMs)
   }
 
   /**
@@ -239,7 +248,34 @@ class AccessibilityDeviceManager(
    */
   fun execute(action: AccessibilityAction): ExecutionResult {
     Console.log("Executing: ${action.description}")
-    return when (action) {
+    // The TYPE, deliberately, not `action.description`. `InputText` and `SetClipboard` embed their
+    // payload in the description, so recording it here would write a typed password or a
+    // `rememberSensitive` value into `trace.json` — which is uploaded to the host, packaged into
+    // report artifacts, and exported as an OpenTelemetry attribute. Type-only is also fail-safe: a
+    // new action that embeds a payload cannot leak through a span that never reads its text.
+    //
+    // No loss for profiling either way. A profile aggregates by argument value, and a description
+    // like "Tap on (417, 1203)" is unique per call, so it groups nothing; "Tap" is the answer to
+    // "which kind of action is slow".
+    return TrailblazeTracer.traceDetail(
+      name = "executeAction",
+      cat = DRIVER_TRACE_CAT,
+      args = if (TrailblazeTracer.isVerbose) {
+        mapOf("action" to (action::class.simpleName ?: "unknown"))
+      } else {
+        emptyMap()
+      },
+    ) {
+      dispatchAction(action)
+    }
+  }
+
+  /**
+   * The dispatch table for [execute], separate only so that wrapping the dispatch in a span
+   * does not reindent every branch.
+   */
+  private fun dispatchAction(action: AccessibilityAction): ExecutionResult =
+    when (action) {
       is AccessibilityAction.Tap -> {
         tap(action.x, action.y)
         ExecutionResult(resolvedX = action.x, resolvedY = action.y)
@@ -347,7 +383,6 @@ class AccessibilityDeviceManager(
       is AccessibilityAction.AssertVisible -> executeAssertVisible(action)
       is AccessibilityAction.AssertNotVisible -> executeAssertNotVisible(action)
     }
-  }
 
   // --- Gestures ---
 
@@ -364,7 +399,7 @@ class AccessibilityDeviceManager(
   override suspend fun <R> dispatchAndAwaitSettle(action: suspend () -> R): R = try {
     action()
   } finally {
-    awaitSettle()
+    TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
   }
 
   /**
@@ -384,7 +419,7 @@ class AccessibilityDeviceManager(
     return try {
       action()
     } finally {
-      awaitSettle()
+      TrailblazeTracer.traceDetail("awaitSettle", DRIVER_TRACE_CAT) { awaitSettle() }
     }
   }
 
@@ -721,22 +756,24 @@ class AccessibilityDeviceManager(
    * housekeeping that came before it.
    */
   fun hideKeyboard() {
-    val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
-    if (!dispatched) {
-      error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
-    }
-    // Post-check polls the cheap in-process windows enumeration for fast-fail, then
-    // gates the final answer on the authoritative `dumpsys input_method` signal —
-    // closes both the dismissal-animation race (enumeration stale right after BACK)
-    // and the windows-null bypass (getServiceWindows() returning null under
-    // FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES would otherwise let a stuck keyboard
-    // pass the post-check). See `waitForImeDismissed` for the full rationale.
-    if (!TrailblazeAccessibilityService.waitForImeDismissed(timeoutMs = HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS)) {
-      Console.log(
-        "[hideKeyboard] IME window still present after dismissal attempt — proceeding. " +
-          "If a subsequent tap target falls inside the IME's window bounds, the pre-tap " +
-          "occlusion check will fail there with a clear error.",
-      )
+    TrailblazeTracer.traceDetail("hideKeyboard", DRIVER_TRACE_CAT) {
+      val dispatched = dispatchAndAwaitSettleBlocking { TrailblazeAccessibilityService.hideKeyboard() }
+      if (!dispatched) {
+        error("hideKeyboard failed: GLOBAL_ACTION_BACK was rejected by the accessibility service")
+      }
+      // Post-check polls the cheap in-process windows enumeration for fast-fail, then
+      // gates the final answer on the authoritative `dumpsys input_method` signal —
+      // closes both the dismissal-animation race (enumeration stale right after BACK)
+      // and the windows-null bypass (getServiceWindows() returning null under
+      // FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES would otherwise let a stuck keyboard
+      // pass the post-check). See `waitForImeDismissed` for the full rationale.
+      if (!TrailblazeAccessibilityService.waitForImeDismissed(timeoutMs = HIDE_KEYBOARD_POST_CHECK_TIMEOUT_MS)) {
+        Console.log(
+          "[hideKeyboard] IME window still present after dismissal attempt — proceeding. " +
+            "If a subsequent tap target falls inside the IME's window bounds, the pre-tap " +
+            "occlusion check will fail there with a clear error.",
+        )
+      }
     }
   }
 
@@ -755,7 +792,12 @@ class AccessibilityDeviceManager(
    * This bypasses Maestro's `TreeNode` and captures the full richness of `AccessibilityNodeInfo`.
    */
   fun getAccessibilityTree(): AccessibilityNode? =
-    TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode
+    // Spanned because this is what a poll loop pays per iteration: every `executeTapOnElement` /
+    // `executeAssertVisible` / `focusOnElement` pass re-captures the whole tree, so a step that
+    // spends seconds waiting for a selector spends them here.
+    TrailblazeTracer.traceDetail("getAccessibilityTree", DRIVER_TRACE_CAT) {
+      TrailblazeAccessibilityService.captureMergedScreenTrees().accessibilityNode
+    }
 
   /**
    * Resolves a [TrailblazeNodeSelector] against the live accessibility tree using a
@@ -778,16 +820,22 @@ class AccessibilityDeviceManager(
   private fun resolveSelectorWithFallback(
     baseTree: TrailblazeNode,
     selector: TrailblazeNodeSelector,
-  ): TrailblazeNodeSelectorResolver.ResolveResult {
+  ): TrailblazeNodeSelectorResolver.ResolveResult = TrailblazeTracer.traceDetail(
+    name = "resolveSelector",
+    cat = DRIVER_TRACE_CAT,
+    // `description()` builds a string, so it is only paid when the span is actually recorded.
+    // Which selector a five-second poll was chasing is the first thing you want from the profile.
+    args = if (TrailblazeTracer.isVerbose) mapOf("selector" to selector.description()) else emptyMap(),
+  ) {
     val filtered = baseTree.filterImportantForAccessibility()
     val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector, templateContext)
     if (filteredResult !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
-      return filteredResult
+      return@traceDetail filteredResult
     }
     // Selector did not match in the default (filtered) tree shape. Try the unfiltered
     // tree to support [SnapshotDetail.ALL_ELEMENTS]-generated selectors that target
     // non-important nodes.
-    return TrailblazeNodeSelectorResolver.resolve(baseTree, selector, templateContext)
+    TrailblazeNodeSelectorResolver.resolve(baseTree, selector, templateContext)
   }
 
   // --- Private helpers ---

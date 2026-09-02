@@ -26,6 +26,23 @@ object TrailblazeYamlSessionRecording {
     customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
     classifierOverride: String? = null,
     selectedDeviceConfiguration: String? = null,
+  ): String = generateUnifiedRecordedYaml(
+    sessionTrailConfig = sessionTrailConfig,
+    customToolClasses = customToolClasses,
+    classifierOverride = classifierOverride,
+    selectedDeviceConfiguration = selectedDeviceConfiguration,
+    successfulObjectivesOnly = false,
+  )
+
+  /**
+   * Category 2 evidence variant that preserves the original JVM overload above for binary clients.
+   */
+  fun List<TrailblazeLog>.generateUnifiedRecordedYaml(
+    sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null,
+    customToolClasses: Set<kotlin.reflect.KClass<out TrailblazeTool>> = emptySet(),
+    classifierOverride: String? = null,
+    selectedDeviceConfiguration: String? = null,
+    successfulObjectivesOnly: Boolean,
   ): String {
     val trailblazeYaml = createTrailblazeYaml(
       customTrailblazeToolClasses = customToolClasses,
@@ -35,6 +52,7 @@ object TrailblazeYamlSessionRecording {
       sessionTrailConfig = sessionTrailConfig,
       classifierOverride = classifierOverride,
       selectedDeviceConfiguration = selectedDeviceConfiguration,
+      successfulObjectivesOnly = successfulObjectivesOnly,
     )
   }
 

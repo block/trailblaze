@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
@@ -590,6 +591,87 @@ class ReportStoryboardExporterTest {
     assertFalse(cell.aiGenerated, "Non-matching traceId must leave the cell as REC")
   }
 
+  // ---------------------------------------------------------------------------
+  // buildSections / buildHtml — multi-device attribution via TrailblazeToolLog.deviceName
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `buildSections names the device a multi-device action ran on`() {
+    val png = writeTinyPng("frame.png")
+    val sharedTrace = "buyer-trace"
+    val logs = listOf(
+      makeAgentDriverLog(screenshot = "a.png", traceId = sharedTrace),
+      makeToolLog(toolName = "tapOn", traceId = sharedTrace, deviceName = "buyer"),
+    )
+
+    val cell = StoryboardHtmlBuilder.buildSections(
+      logs = logs,
+      resolveScreenshotFile = { png },
+    ).single().cells.single()
+
+    assertEquals("buyer", cell.deviceName)
+  }
+
+  @Test
+  fun `buildSections names the device even when YAML was not requested`() {
+    // The YAML index is only built for includeYaml=true. Device attribution has to
+    // survive `--storyboard-yaml` being off, so it needs an index of its own.
+    val png = writeTinyPng("frame.png")
+    val sharedTrace = "seller-trace"
+    val logs = listOf(
+      makeAgentDriverLog(screenshot = "a.png", traceId = sharedTrace),
+      makeToolLog(toolName = "tapOn", traceId = sharedTrace, deviceName = "seller"),
+    )
+
+    val cell = StoryboardHtmlBuilder.buildSections(
+      logs = logs,
+      resolveScreenshotFile = { png },
+      includeYaml = false,
+    ).single().cells.single()
+
+    assertEquals("seller", cell.deviceName)
+    assertNull(cell.yamlSnippet, "guards against passing this test by accident via the YAML index")
+  }
+
+  @Test
+  fun `buildSections leaves deviceName null for a single-device session`() {
+    val png = writeTinyPng("frame.png")
+    val sharedTrace = "solo-trace"
+    val logs = listOf(
+      makeAgentDriverLog(screenshot = "a.png", traceId = sharedTrace),
+      makeToolLog(toolName = "tapOn", traceId = sharedTrace, deviceName = null),
+    )
+
+    val cell = StoryboardHtmlBuilder.buildSections(
+      logs = logs,
+      resolveScreenshotFile = { png },
+    ).single().cells.single()
+
+    assertNull(cell.deviceName, "a single-device storyboard must render no device chip at all")
+  }
+
+  @Test
+  fun `buildHtml renders a device chip only for cells that name a device`() {
+    val html = StoryboardHtmlBuilder.buildHtml(
+      sections = listOf(
+        StoryboardHtmlBuilder.StoryboardSection(
+          "Objective",
+          listOf(
+            makeCell(index = 1, deviceName = "buyer"),
+            makeCell(index = 2, deviceName = null),
+          ),
+        ),
+      ),
+      columns = 2,
+      cellWidthPx = 200,
+      pageWidthPx = 448,
+      includeYaml = false,
+    )
+
+    assertEquals(1, Regex("class=\"device-chip\"").findAll(html).count(), "exactly one cell names a device")
+    assertContains(html, ">buyer</span>")
+  }
+
   @Test
   fun `buildSections groups cells under the LATEST ObjectiveStartLog seen in chronological stream order`() {
     // Stream order is the contract — clock-skewed sessions where an ObjectiveStartLog
@@ -947,7 +1029,11 @@ class ReportStoryboardExporterTest {
       timestamp = Clock.System.now(),
     )
 
-  private fun makeToolLog(toolName: String, traceId: String): TrailblazeLog.TrailblazeToolLog =
+  private fun makeToolLog(
+    toolName: String,
+    traceId: String,
+    deviceName: String? = null,
+  ): TrailblazeLog.TrailblazeToolLog =
     TrailblazeLog.TrailblazeToolLog(
       trailblazeTool = OtherTrailblazeTool(
         toolName = toolName,
@@ -959,6 +1045,7 @@ class ReportStoryboardExporterTest {
       durationMs = 0L,
       session = SessionId("test-session"),
       timestamp = Clock.System.now(),
+      deviceName = deviceName,
     )
 
   /**
@@ -974,6 +1061,7 @@ class ReportStoryboardExporterTest {
     aiGenerated: Boolean = false,
     deviceWidth: Int = 402,
     deviceHeight: Int = 874,
+    deviceName: String? = null,
   ): StoryboardHtmlBuilder.StoryboardCell {
     val png = if (!File(tmp.root, "fixture.png").exists()) writeTinyPng("fixture.png") else File(tmp.root, "fixture.png")
     return StoryboardHtmlBuilder.StoryboardCell(
@@ -985,6 +1073,7 @@ class ReportStoryboardExporterTest {
       deviceHeight = deviceHeight,
       yamlSnippet = yamlSnippet,
       aiGenerated = aiGenerated,
+      deviceName = deviceName,
     )
   }
 }

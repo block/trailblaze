@@ -6,13 +6,19 @@
 // as monolithic fallbacks for older files and in-app embedders).
 // Shared contract types come from the ambient run-report-types.d.ts (see its header for why it
 // stays ambient rather than becoming module exports).
+import { alignedScenes, compareEventStreams, compareToolTimelines, defaultComparePair as comparePairDefault, diffPixels, SCENE_DIFF_THRESHOLD_PERCENT, type CompareScene } from './run-report-compare-model';
 import { declaredTrailSteps, isLlmTurnRow, localRunAgentPrompt, rowToolCallCount, traceStepCount, traceToolCallCount, transcriptCallMessages, yamlRootSection } from './run-report-extract';
 import { hitTestNode, inspectorDetailsHtml, inspectorModel, inspectorRectsHtml, inspectorTreeHtml } from './run-report-inspector';
-import { eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay } from './run-report-payload';
+import { chunkJsonWithoutRuntimeAttachments, eventPrettyText, eventValueText, inflateEventsGz, inflateGzJsonArray, inflateGzJsonRecord, inflateGzText, inflateLlmMessagesGz, normalizeEventPayload, parseEventJsonish, rawPrettyText, rekeySprites, tbBootLoaderHtml, jsonToYaml, toInertJson, transcriptToolCallYaml, transcriptToolResultDisplay, withoutRuntimeAttachments } from './run-report-payload';
 import { buildExportSchedule, buildPlaybackSchedule, playbackGapMs, playbackPositionAt, spriteFrameCss, videoEndMs, videoFrameAt, videoLoopFrame } from './run-report-playback';
+import { VIEWER_ROUTE_KEYS } from './run-report-route';
 import { inspectorKeyForNodeId, isSelectorAnalyzableTree, loadSelectorEngine, loadSelectorEngineFromChunk, mismatchVizHtml, nodeIdForInspectorKey, selectorSuggestionsHtml } from './run-report-selectors';
-import { createReportTraceModelResolver, type ReportTraceGroup } from './run-report-trace-model';
+import { buildReportTraceModel, createReportTraceModelResolver, failureAnchorIndex as traceFailureAnchorIndex, type ReportTraceGroup, type ReportTraceModel } from './run-report-trace-model';
+import { fitCamera, focusCamera, hubCounterScale, tweenCamera, unionBox, wirePlan, zoomedCamera, type TrailCamera, type WireBox, type WireHub } from './run-report-trail-camera';
+import { buildTrailMatrix, pruneIdleTrailCells, traceDeviceLanes, trailIdentity, trailJoinFor, trailViewScopes, type DeviceLaneTrace, type TrailCell, type TrailJoin, type TrailRow } from './run-report-trail-model';
+import { aspectHeld, buildReplayTimeline, clampTime, fmtReplayClock, laneMarksAt, laneStateAt, laneStops, markWindowMs, nextStop, replayable, replayTickSeconds, videoClipRate, videoClipTimeAt, type ReplayLane, type ReplayLaneFailure, type ReplayTimeline } from './run-report-trail-replay';
 import { formatUsd } from './report-format';
+import { findAttachmentRefs } from '../../../report/run-report-events';
 
 // Run `fn` once the document has finished streaming (immediately when it already has). A chunked
 // report's UI is interactive while the document tail — later sessions' #tb-session-<i> /
@@ -104,6 +110,46 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     try { const url = new URL(String(value || '')); return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null; }
     catch (e) { return null; }
   };
+  // safeHref for the lightbox's attachment link, whose value is ROOT-RELATIVE. Link mode stores
+  // `/static/<id>/<path>` for every attachment MIME (run-payload.js), and non-media types are
+  // exactly the ones that reach that branch — so without a base it is dead for its only real
+  // producers: one-argument `new URL('/static/…')` throws and it falls through to the path-only
+  // note. In a standalone file:// report the base resolves to file:, correctly refused.
+  //
+  // Same-origin is REQUIRED, not incidental: that link downloads rather than navigates (see
+  // attachmentBodyHtml), and `download` is ignored cross-origin — so an absolute off-origin URL
+  // in a crafted bundle would silently become the navigation this is here to prevent.
+  const sameOriginAttachmentHref = (value: unknown) => {
+    const uri = String(value || '');
+    if (!uri) return null;
+    const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : null;
+    if (!base) return null;
+    try {
+      const url = new URL(uri, base);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+      return url.origin === new URL(base).origin ? url.href : null;
+    } catch (e) { return null; }
+  };
+  // safeImageSrc's contract for the attachment lightbox's media elements (<audio>/<video>/<img>
+  // src). Two additions match how attachment bytes actually arrive: a data: URI may carry any
+  // audio/video/image subtype (attribute-safe spelling enforced), and blob: is allowed — the zip
+  // pipeline resolves attachment bytes as object URLs over the archive's own entries, which is the
+  // one producer of blob: values here (they never serialize into a document — export strips them).
+  const safeAttachmentSrc = (value: unknown) => {
+    const uri = String(value || '');
+    if (/[\u0000-\u001F\u007F]/.test(uri.replace(/[\r\n]/g, ''))) return '';
+    if (/^data:/i.test(uri)) return /^data:(audio|video|image)\/[a-z0-9][a-z0-9.+-]*;base64,[a-z0-9+/=\r\n]*$/i.test(uri) ? uri : '';
+    if (/["'<>`\\\s]/.test(uri) || uri.startsWith('//')) return '';
+    return !/^[a-z][a-z0-9+.-]*:/i.test(uri) || /^https?:\/\//i.test(uri) || /^blob:/i.test(uri) ? uri : '';
+  };
+  const humanBytes = (n: unknown) => {
+    const bytes = Number(n);
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    if (bytes < 1024) return `${Math.round(bytes)} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
 
   // A LINK-OUT run: one whose evidence lives in ANOTHER report rather than in this document. The
   // `generate-run-index` command emits a whole document of these — a CI build's per-session
@@ -134,6 +180,148 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // INTO the existing stub (object identity preserved — the inflater caches and `D` hold object
   // references) and removes the entry. Empty for monolithic payloads (everything starts hydrated).
   const unhydrated = new Set<number>(INDEX_PAYLOAD && RAW.sessions && RAW.sessions.length ? SESSIONS.map((_, i) => i) : []);
+  // The Trail view compares the SAME authored trail across runs — one lane per device, joined on
+  // the authored step — so it exists only when every session names one trail (by trailId when
+  // present, title otherwise), carries its own payload (a link-out stub has no trace to align),
+  // and is already hydrated (aligning lanes needs every trace, and chunked documents hydrate
+  // per-open — the archive-shell path arrives fully hydrated, which is the path that loads several
+  // device zips into one document).
+  // An unnamed run has no trail identity to match on — runs that all lack one are not "the same
+  // trail", they are unidentified, so the view is not offered for them.
+  const trailKey = (s: SessionPayload) => trailIdentity(s.meta);
+  // Every trail this document can open the view for, keyed by trail identity (see trailViewScopes
+  // for the rule). Recomputed per call rather than cached: hydration fills traces in place, so a
+  // trail that could not align its lanes a moment ago can become comparable without any state of
+  // ours changing.
+  const trailScopes = () => trailViewScopes(SESSIONS.map((s, i) => ({
+    key: trailKey(s),
+    skipped: isSkipped(s),
+    linkOut: isLinkOut(s),
+    hydrated: !unhydrated.has(i),
+    hasTrace: (s.trace || []).length > 0,
+  })));
+  // Whether a specific trail can be compared. `null` asks about the trail currently scoped in.
+  const trailViewAvailableFor = (key: string | null) => {
+    const scopeKey = key == null ? st.trailScope : key;
+    return scopeKey != null && scopeKey !== '' && trailScopes().has(scopeKey);
+  };
+  const trailViewAvailable = () => trailViewAvailableFor(null);
+  // What the entry point promises, by how many lanes the trail actually has. A trail that ran once
+  // is still offered — in the common CI report (many trails, one device each) that is EVERY row —
+  // so a blanket "compare across devices" would promise a comparison that cannot exist.
+  const trailEntryTitle = (key: string) => (trailScopes().get(key) || []).length > 1
+    ? 'Compare this trail across devices, step by step'
+    : 'See this run as a trail — map, grid, and replay';
+  // The scoped trail's own name, for every surface that labels the stage. SESSIONS[0] is some other
+  // trail entirely in a many-trail report.
+  const trailScopeTitle = () => {
+    // A pick spanning trails has no single name to take, so it is titled by what it IS. A pick that
+    // happens to be one trail's runs still reads as that trail.
+    // Always more than one: a single picked run joins by its own spine, so it takes the branch
+    // below and is titled by its trail.
+    if (st.trailPick && trailScopeJoin() === 'position') return `${trailPickSessions().length} selected runs`;
+    return ((SESSIONS[trailScopeSessions()[0]] || {}).meta || {}).title || 'Trail';
+  };
+  // The one trail a whole-document entry point can mean. A report holding several trails has no
+  // such thing — its entry points are per trail (an index row, a run's own header) — so the index
+  // header button is simply absent there rather than picking one arbitrarily.
+  const documentTrailScope = () => {
+    const scopes = trailScopes();
+    if (scopes.size !== 1) return null;
+    const [key, sessions] = Array.from(scopes.entries())[0];
+    const comparable = SESSIONS.filter((s) => !isSkipped(s)).length;
+    return sessions.length === comparable ? key : null;
+  };
+  // A trail's runs by IDENTITY only. Available pre-hydration (a chunked document's stubs still
+  // carry meta), which is what lets a Trail-view deep link know which chunks to wait for.
+  const trailRuns = (key: string) => SESSIONS
+    .map((_, i) => i)
+    .filter((i) => trailKey(SESSIONS[i]) === key && !isSkipped(SESSIONS[i]));
+  // A run this document can put on a stage: its trace is here (a link-out stub's lives in another
+  // report) and it actually ran (a skip has nothing to lane). The one predicate behind both the
+  // checkboxes the index offers and the runs a picked stage accepts, so the reader is never offered
+  // a run that would then be dropped.
+  // Hoisted above its other callers because `stageable` runs while the route is applied, which is
+  // before the index's own helpers below have initialized.
+  //
+  // A trail the runner declined to run (`config.skip:`) gets its own outcome rather than falling
+  // into 'other' because it is the one index entry that is not a verdict at all: it must stay
+  // visible, and it must never be tallied as a pass or a failure.
+  const isSkipped = (s) => String((s.meta && s.meta.status) || '').toLowerCase() === 'skipped';
+  const stageable = (s: SessionPayload | undefined) => Boolean(s) && !isLinkOut(s) && !isSkipped(s);
+  // A hand-picked set of runs, staged as lanes. Independent of trail identity — the reader chose
+  // these — so it is kept as session indices rather than a key, and it outranks a trail scope.
+  // Filtered against the document on every read: a `?pick=` link can name an index this report
+  // doesn't have.
+  const trailPickSessions = () => (st.trailPick || []).filter((i) => stageable(SESSIONS[i]));
+  // The sessions on stage. Scoped in: that trail's runs — and while its chunks are still streaming
+  // `trailScopes()` doesn't list it yet, so fall back to the trail's own runs by identity, never to
+  // every session. Widening to the document there would draw unrelated trails as lanes of this one.
+  // Only a view that never scoped in at all (a single-trail report opened straight into it) takes
+  // every session, which is what the view did before it learned to scope.
+  const trailScopeSessions = () => {
+    if (st.trailPick) return trailPickSessions();
+    if (!st.trailScope) return SESSIONS.map((_, i) => i);
+    return trailScopes().get(st.trailScope) || trailRuns(st.trailScope);
+  };
+  // What a row MEANS on the current stage. Runs of ONE trail share the authored step spine, so they
+  // join by step and comparing across a row is the whole point. A pick spanning trails has no such
+  // spine — joining by number would put one trail's step 3 beside another's — so those rows are
+  // positional neighbours and carry no shared label. See TrailJoin.
+  const trailScopeJoin = (): TrailJoin => joinFor(st.trailPick ? trailPickSessions() : null);
+  // The rule itself, over any candidate set — the pick bar has to answer it for what is TICKED,
+  // before that set is staged, and its note would drift from the stage it opens if it asked
+  // differently. `null` means a trail scope, whose runs share a spine by construction. The rule
+  // lives in the model beside the scope rule it mirrors, so the two can't drift.
+  const joinFor = (runs: number[] | null): TrailJoin => runs ? trailJoinFor(runs.map((i) => trailKey(SESSIONS[i]))) : 'step';
+  // The chunk-hydration token for a picked stage. Built in one place because `ensureScopeChunks`
+  // compares the token it was given against a freshly-built one to decide whether the reader is
+  // still on the same stage — two spellings would never match, and the stage would never resolve.
+  const pickToken = (runs: number[]) => `pick:${runs.join(',')}`;
+  // Which stage a set of lanes IS, for the "did the reader move to a different one?" question that
+  // per-stage state (lane visibility) has to ask.
+  const stageId = (pick: number[] | null, key: string | null) => pick && pick.length ? pickToken(pick) : `scope:${key || ''}`;
+  // The Map draws lanes leaving one shared step, a claim an unjoined stage cannot make, so it isn't
+  // offered there — and a link asking for it by name doesn't get it either.
+  const demoteMapForJoin = () => { if (trailScopeJoin() === 'position' && st.trailMode === 'map') st.trailMode = 'steps'; };
+  // Pull in the traces a scoped trail needs. A chunked document parses a run's trace on first open,
+  // so a trail can be entered — deep-linked or clicked into — before any of its lanes exist; the
+  // loading shell stands in until this resolves. Without it, a reloaded or shared Trail-view URL
+  // read a download still in flight as a broken link and dropped the reader on the run index.
+  const trailChunksPending = new Set<string>();
+  const ensureScopeChunks = (runs: number[], token: string) => {
+    const waiting = runs.filter((i) => unhydrated.has(i));
+    if (!waiting.length || trailChunksPending.has(token)) return;
+    trailChunksPending.add(token);
+    Promise.all(waiting.map(awaitSessionChunk)).then(() => {
+      trailChunksPending.delete(token);
+      // Only if the reader is still waiting on this same stage — they may have navigated away.
+      if (st.view !== 'trail') return;
+      const scope = st.trailScope;
+      if (st.trailPick ? pickToken(st.trailPick) !== token : scope !== token) return;
+      // Hydration can also disqualify: a run whose chunk turns out to hold no trace at all. A pick
+      // is the reader's own choice of runs, so it is never taken away from them — only a trail
+      // scope, whose whole claim is that its lanes align, can stop being true.
+      if (!st.trailPick && !trailViewAvailableFor(scope)) { st.view = MULTI ? 'index' : 'detail'; st.trailScope = null; }
+      writeRoute(true);
+      render();
+    });
+  };
+  // The Compare view diffs any two runs' tool timelines and event streams — deliberately NOT
+  // gated on same-trail like the Trail view: the same test on two device types is exactly the
+  // pair whose event capture differences matter (tablet-only hardware streams, phone-only
+  // attestation), and those runs may carry per-device trail files. Not gated on hydration either —
+  // chunked documents (the big CI aggregates, i.e. the common multi-run case) hydrate the two
+  // picked runs when the view opens, exactly as a detail open does.
+  //
+  // Link-out stubs carry no payload to diff, so they are filtered OUT of the pickers rather than
+  // disqualifying the report: a run index that lists skipped rows as stubs alongside real runs is
+  // ordinary, and the usable pair is exactly what the reader wants compared.
+  const comparableRuns = () => SESSIONS.map((_, i) => i).filter((i) => !isLinkOut(SESSIONS[i]));
+  const compareViewAvailable = () => comparableRuns().length > 1;
+  // Which pair the view opens on. The rule is in the compare model (pure, bun-tested); this only
+  // supplies the document's comparable runs and their trail identities.
+  const defaultComparePair = () => comparePairDefault(comparableRuns().map((i) => ({ index: i, trailKey: trailKey(SESSIONS[i]) })));
   // What a live push has delivered for a run whose chunk is still unparsed. Hydration assigns the
   // chunk over the stub, and that chunk is the run as it stood when the document was written — so
   // without this a `deviceLog` or `events` stream a push had already merged in would silently roll
@@ -334,6 +522,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           else el.remove();
         });
       }
+      // The chunked clone ships its #tb-session-<i> payloads verbatim, so the blob: rule the legacy
+      // branch below applies has to be applied to them too: a report rendered with the object URLs
+      // kept (the zip viewer's in-page iframe) carries them inside these chunks, and downloading it
+      // would save a file whose every Open resolves to nothing.
+      clone.querySelectorAll('[id^="tb-session-"]').forEach((el) => {
+        const stripped = chunkJsonWithoutRuntimeAttachments(el.textContent || '');
+        if (stripped != null) el.textContent = stripped;
+      });
       downloadBlob(['<!doctype html>\n' + clone.outerHTML], 'text/html;charset=utf-8', filename);
       return;
     }
@@ -343,7 +539,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // share URL only survives a FULL export: a single-run export out of a multi-run report
     // renumbers sessions (the exported run becomes run=0), so a grafted deep link would point at
     // a different run in the hosted original.
-    data.textContent = toInertJson({ generatedAt, ...(SHARE_URL && sessions.length === SESSIONS.length ? { shareUrl: SHARE_URL } : {}), sessions });
+    // A recording clip is an object URL over bytes only THIS page holds, so it must not travel into
+    // the download: a blob: reference resolves to nothing in a reopened file, and Replay would badge
+    // the lane REC and then fail to play it. Today only a global-payload document can hold a clip,
+    // and those are withheld from exporting entirely — this keeps the guarantee at the serialization
+    // boundary rather than resting on that gate. Copies, not in-place edits: the live page keeps
+    // playing its recording after an export.
+    // blob: attachment values (the zip pipeline's object URLs) are page-lifetime references, so
+    // they get the same treatment: stripped from the download, kept on the live page.
+    const exported = sessions.map((s) => {
+      const att = withoutRuntimeAttachments(s.attachments);
+      return (s.videoClip || att.changed) ? { ...s, videoClip: null, attachments: att.attachments } : s;
+    });
+    data.textContent = toInertJson({ generatedAt, ...(SHARE_URL && sessions.length === SESSIONS.length ? { shareUrl: SHARE_URL } : {}), sessions: exported });
     // Re-key the hoisted sprite chunk for the exported subset (session indices shift when a single
     // run is exported out of a multi-run report).
     const spriteData = clone.querySelector('#tb-sprites');
@@ -409,7 +617,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       inflight.set(session, done);
       return done;
     };
-    return { cache, inflight, ensure };
+    // Inflation is FINISHED — distinct from "produced data". A failed inflate caches null, so a
+    // caller that infers pending-ness from a null accessor would re-arm ensure() forever; the
+    // promise resolves from the cache immediately and its completion callback renders again.
+    const settled = (session) => !needsInflate(session) || cache.has(session);
+    return { cache, inflight, ensure, settled };
   };
   const eventsInflater = makeInflater(
     (session) => session.eventsGz && !session.events,
@@ -485,6 +697,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   let D: SessionPayload = SESSIONS[0];
   const resolveTraceModel = createReportTraceModelResolver();
   const traceModel = () => resolveTraceModel(D);
+  const traceRowById = (stepId) => {
+    const index = traceModel().indexById.get(stepId);
+    return index == null ? null : D.trace[index] || null;
+  };
   const TIMELINE_EVENT_KINDS = ['tool', 'llm', 'assert', 'fail'];
   const stepCat = (t) => {
     if (!t.ok) return 'fail';
@@ -494,10 +710,31 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return 'tool';
   };
   const allTimelineEventKinds = () => [...TIMELINE_EVENT_KINDS];
+  // The trail projections, in toolbar order. `map` is the default and so goes unwritten in the
+  // route; the rest round-trip through `?mode=`.
+  // 'time' was a projection once; Replay superseded it (same per-lane timing, plus the playback),
+  // so an old mode=time link now lands on the map like any other unknown mode.
+  const TRAIL_MODES = ['map', 'steps', 'replay'];
+  // Replay speeds, and the default. A trail runs for minutes, so 1× is a documentary: the useful
+  // default is fast enough to watch a whole run and slow enough to see the devices diverge. The top
+  // speed stops at 10× because a lane playing its recording drives a real media element, and
+  // browsers refuse playbackRate past 16× — a faster ring would make video lanes fall back to
+  // step-seeking while the screenshot lanes kept gliding.
+  const TRAIL_SPEEDS = [1, 2, 5, 10];
+  // How long an interaction's mark stays on screen, in the WATCHER's time rather than the run's.
+  // Marks are events: they have to linger to be seen, and a run-clock constant would vanish at 10×
+  // (800ms of run time is 80ms of real time) exactly when the reader most needs the cue.
+  const TRAIL_MARK_LINGER_MS = 700;
+  // Most marks a pane draws at once. Reading four dots on one screen is guesswork about which one
+  // just happened; three is a legible trail of "here, then here, then here".
+  const TRAIL_MARK_MAX = 3;
   // `kid` narrows the step selection to one folded child dispatch (index into the row's children):
   // the preview pane shows that dispatch's own frame and its args panel expands — how a batched
   // step's every interaction is reachable (WASM-report parity). Null selects the row itself.
-  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '' };
+  const st = { view: MULTI ? 'index' : 'detail', session: 0, tab: 'timeline', step: 0, kid: null, llmSel: 0, tlStreams: [], tlEventKinds: allTimelineEventKinds(), tlMenuOpen: false, tlEventMenuOpen: false, trailheadOpen: true, trailOpen: true, stepsOpen: {}, kidsOpen: {}, lightboxAll: false, lightboxZoom: 1, runGroup: 'status', runSort: 'original', runSearch: '', idxOpen: [], playing: false, vSpeed: 1, pageTransition: '', trailMode: 'map', trailDir: 'v', trailAll: false, trailRowsOpen: {}, trailCam: null, trailT: -1, trailLane: null, trailSpeed: 10, trailLanesOff: {}, trailScope: null as string | null, trailPick: null as number[] | null, pick: [] as number[], backTo: '', cmpBase: defaultComparePair()[0] || 0, cmpVs: defaultComparePair()[1] || 1, cmpGapsOpen: {}, cmpEventsOpen: {} as Record<string, boolean>, cmpStreamsOpen: {} as Record<string, boolean>, cmpJumpAt: {} as Record<string, number>, cmpLane: null as string | null, cmpStream: null as string | null };
+  // Hover previews are transient and never enter the route. Selection still owns focus, expansion,
+  // and keyboard navigation; this only changes the device preview pane until the pointer leaves.
+  let timelinePreview: { step: number; kid: number | null } | null = null;
   // Timeline playback stop handle (the active rAF engine run's stop function). Declared up here
   // (before openSession, which stops it) so the init-time openSession() call for a single-session
   // report doesn't hit a temporal-dead-zone ref.
@@ -537,7 +774,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // behavior as their controls evolve.
   const trapModalTab = (container, e) => {
     if (e.key !== 'Tab' || !container || typeof container.querySelectorAll !== 'function') return false;
-    const focusables = Array.from(container.querySelectorAll('button, [href], summary, [tabindex]:not([tabindex="-1"])'))
+    // Native media players are focus stops the reader tabs to like any control (the attachment
+    // dialog's whole body is one), so the cycle has to include them or Tab skips straight past the
+    // audio the dialog exists to play.
+    const focusables = Array.from(container.querySelectorAll('button, [href], summary, audio[controls], video[controls], [tabindex]:not([tabindex="-1"])'))
       .filter((el: any) => !el.disabled && (el.offsetParent !== undefined ? el.offsetParent !== null || el === document.activeElement : true));
     if (!focusables.length) { e.preventDefault(); return true; }
     const first = focusables[0] as any; const last = focusables[focusables.length - 1] as any;
@@ -592,23 +832,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (Number.isFinite(fw) && fw > 0 && v.frameHeight > 0) spriteAspect = `${fw} / ${v.frameHeight}`;
   };
 
-  // Anchor a failed run to its actionable row. The failure belongs to the first FAILED objective's
-  // step (the Complete bookend marks that row): within it the first failed tool row wins, and a
-  // step with no failed tool row anchors on the objective itself. Tolerated tool failures inside a
-  // step that ultimately passed (retry polling, a trailhead's internal recovery loops) never anchor
-  // the failure. Only when no objective recorded a failure (a run-level error, or a crash without a
-  // Complete bookend) does the first failed row in the trace anchor it.
-  const failureAnchorIndex = () => {
-    const objIdx = D.trace.findIndex((t) => t.objective && !t.ok);
-    if (objIdx < 0) {
-      const toolIdx = D.trace.findIndex((t) => !t.objective && !t.ok);
-      return toolIdx >= 0 ? toolIdx : D.trace.findIndex((t) => !t.ok);
-    }
-    for (let k = objIdx + 1; k < D.trace.length && !D.trace[k].objective; k++) {
-      if (!D.trace[k].ok) return k;
-    }
-    return objIdx;
-  };
+  // Anchor the open run's failure to its actionable row (traceFailureAnchorIndex owns the rule; the
+  // trail matrix anchors every lane's failure with the same one).
+  const failureAnchorIndex = () => traceFailureAnchorIndex(D.trace);
 
   // Objective and terminal rows describe structure; the spatial selection belongs to a tool-call
   // row. Old links may still name an objective, so resolve those to the first actionable row inside
@@ -726,8 +952,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // scanning back for the nearest objective, because a self-heal retry is itself an objective row
   // that the model MERGES into the group it retried — its own id names no rendered header.
   const groupHeaderIdOf = (stepId) => {
-    const index = traceModel().indexById.get(stepId);
-    const row = index == null ? null : D.trace[index];
+    const row = traceRowById(stepId);
     const group = row ? traceModel().groupByRow.get(row) : null;
     return group && group.header ? group.header.i : null;
   };
@@ -790,15 +1015,20 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Report state lives in query parameters so copied URLs communicate their selected run, view,
   // and step. Only these owned keys are changed: signed-artifact parameters such as `jwt` survive
   // every navigation. Legacy hash routes remain readable and are canonicalized on initial load.
-  const routeKeys = ['view', 'runs', 'run', 'tab', 'step', 'kid', 'streams', 'types', 'llm', 'inspect', 'stream', 'group', 'sort', 'search', 'filter'];
-  // 'stream' (the retired Events tab's selected-stream index) and 'filter' (the retired
-  // Self-healed index filter) stay in routeKeys so legacy URLs that carry them are still
-  // canonicalized away, but they are no longer read or written.
+  // Shared with the viewer shell, which strips the same set (see run-report-route).
+  const routeKeys = VIEWER_ROUTE_KEYS;
   const readRoute = () => {
     if (typeof location === 'undefined') return null;
     const query = new URLSearchParams(String(location.search || ''));
     const hasQueryRoute = routeKeys.some((key) => query.has(key));
     const p = hasQueryRoute ? query : new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
+    if (p.get('view') === 'trail') return { view: 'trail', trail: p.get('trail') || '', pick: p.get('pick') || '', mode: p.get('mode') || 'map', dir: p.get('dir') || 'v', all: p.get('all') === '1' };
+    // Absent stays absent — substituting 0 and 1 here would make "the address named no pair" look
+    // identical to "the address named runs 0 and 1", and the default-pair rule could never run.
+    if (p.get('view') === 'compare') {
+      const side = (key: string) => (p.get(key) == null ? null : Number(p.get(key)));
+      return { view: 'compare', base: side('base'), vs: side('vs'), lane: p.get('lane') || null, stream: p.get('stream') || null };
+    }
     if (p.get('view') === 'runs' || p.has('runs')) {
       // `sort=grouped|owner` came from the original overloaded menu. Read those links as their
       // equivalent independent grouping + ordering pair, then let writeRoute canonicalize them.
@@ -858,6 +1088,65 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const applyRoute = (fromHistory = false) => {
     const r = readRoute();
     if (!r) return;
+    if (r.view === 'trail') {
+      stopTimeline();
+      // A trail link into a document that can't align that trail's lanes (link-out stubs, a run
+      // that isn't in this report) still has to land somewhere useful: the run index when there is
+      // one, the lone detail otherwise. A link with no `trail` predates per-trail scoping — read it
+      // as the document's own trail, which is the only thing it could have meant.
+      const scope = r.trail || documentTrailScope();
+      const applyTrailRoute = (pick: number[] | null) => {
+        // Lane visibility belongs to the stage it was set on, and these keys are session indices:
+        // walking Back and forward between two stages that both hold run 3 would otherwise start
+        // the second one with run 3 already hidden. Both click paths reset the same way.
+        if (stageId(pick, scope) !== stageId(st.trailPick, st.trailScope)) st.trailLanesOff = {};
+        st.trailPick = pick;
+        st.trailScope = pick ? null : scope;
+        // The checkboxes too, not just the stage: without this, Back out of a `?pick=` link lands on
+        // an index with nothing ticked and no pick bar, and the reader re-picks what they just came
+        // from.
+        if (pick) st.pick = pick.slice();
+        st.view = 'trail';
+        st.trailMode = TRAIL_MODES.indexOf(r.mode) >= 0 ? r.mode : 'map';
+        demoteMapForJoin();
+        st.trailDir = r.dir === 'h' ? 'h' : 'v';
+        st.trailAll = !!r.all;
+      };
+      // A hand-picked stage. Indices this document can't stage are dropped rather than failing the
+      // whole link — a report regenerated with fewer runs still opens on the ones it kept — and the
+      // filter is `stageable`, the same predicate the checkboxes use, so a link naming only skipped
+      // or link-out runs falls through to the trail scope instead of opening a stage with no lanes.
+      // Deduped and sorted to match what clicking the same set produces: `?pick=2,2` is one lane,
+      // and lane chips are keyed by session, so two lanes for one run would share one chip.
+      const pick = [...new Set(String(r.pick || '').split(',')
+        .filter((n) => n.trim() !== '')
+        .map((n) => Number(n))
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < SESSIONS.length && stageable(SESSIONS[i])))]
+        .sort((a, b) => a - b);
+      if (pick.length) { applyTrailRoute(pick); ensureScopeChunks(pick, pickToken(pick)); return; }
+      if (scope && trailViewAvailableFor(scope)) { applyTrailRoute(null); ensureScopeChunks(trailRuns(scope), scope); return; }
+      if (MULTI) st.view = 'index';
+      return;
+    }
+    if (r.view === 'compare') {
+      stopTimeline();
+      // A compare link into a document that can't diff (one run, link-out stubs) lands on the run
+      // index when there is one, the lone detail otherwise — same fallback rule as a trail link.
+      if (compareViewAvailable()) {
+        st.view = 'compare';
+        // Both sides must name a diffable run: a link-out index, or one past the end, snaps to the
+        // nearest comparable run rather than rendering a pane with no payload.
+        const runs = comparableRuns();
+        const fallback = defaultComparePair();
+        const pickRun = (value, fallbackIndex) => (runs.indexOf(value) >= 0 ? value : fallbackIndex);
+        st.cmpBase = pickRun(r.base, fallback[0]);
+        st.cmpVs = pickRun(r.vs, fallback[1]);
+        if (st.cmpVs === st.cmpBase) st.cmpVs = runs.find((i) => i !== st.cmpBase);
+        st.cmpLane = ['tools', 'events', 'screens'].indexOf(r.lane) >= 0 ? r.lane : null;
+        st.cmpStream = r.stream || null;
+      } else if (MULTI) st.view = 'index';
+      return;
+    }
     if (r.view === 'index' && MULTI) {
       stopTimeline(); st.view = 'index';
       if (['status', 'owner'].indexOf(r.group) >= 0) st.runGroup = r.group;
@@ -875,7 +1164,25 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // sandboxed embed, where writeRoute's history write is refused (see below).
   const routeParams = () => {
     const params = new URLSearchParams();
-    if (st.view === 'index') {
+    if (st.view === 'trail') {
+      params.set('view', 'trail');
+      // Which trail, so a copied link opens the comparison the sender was looking at rather than
+      // whichever trail the document happens to lead with.
+      // A hand-picked stage is the runs themselves — there is no trail identity that names it, so
+      // the link carries the session indices. It outranks `trail` for the same reason it does in
+      // trailScopeSessions: the reader chose these.
+      if (st.trailPick) params.set('pick', st.trailPick.join(','));
+      else if (st.trailScope) params.set('trail', st.trailScope);
+      if (st.trailMode !== 'map') params.set('mode', st.trailMode);
+      if (st.trailDir === 'h') params.set('dir', 'h');
+      if (st.trailAll) params.set('all', '1');
+    } else if (st.view === 'compare') {
+      params.set('view', 'compare');
+      params.set('base', String(st.cmpBase));
+      params.set('vs', String(st.cmpVs));
+      if (st.cmpLane) params.set('lane', st.cmpLane);
+      if (st.cmpStream) params.set('stream', st.cmpStream);
+    } else if (st.view === 'index') {
       params.set('view', 'runs');
       if (st.runGroup !== 'status') params.set('group', st.runGroup);
       if (st.runSort !== 'original') params.set('sort', st.runSort);
@@ -987,7 +1294,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const assertion = label.indexOf('assert') === 0 || label.indexOf('verify') === 0 || tool.indexOf('assert') >= 0;
     const tap = label.indexOf('tap') === 0 || label.indexOf('longpress') === 0 || label.indexOf('long press') === 0;
     const llm = t.llm != null || tool === 'agent step' || tool.indexOf('llm') === 0;
+    // A device handover is the hinge a multi-device timeline turns on — worth its own glyph so the
+    // eye can find where focus moved without reading every row label.
+    const handover = label.indexOf('switchdevice') === 0 || label.indexOf('switch device') === 0;
     if (!t.ok) return { cls: 'failure', glyph: '×' };
+    if (handover) return { cls: 'switch', glyph: '⇄' };
     if (llm) return { cls: 'llm', glyph: llmStepIcon };
     if (assertion) return { cls: 'verify', glyph: '✓' };
     if (tap) return { cls: 'tap', glyph: '◉' };
@@ -1166,7 +1477,8 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // selection (kid null) previews the row's own frame: a folded row stands for its FIRST dispatch,
   // and every dispatch it absorbed is its own timeline entry the transport and playback walk
   // through, so the row has no reason to jump ahead to the batch's last interaction.
-  const selectedChild = (row) => (st.kid != null && row && row.children) ? row.children[st.kid] || null : null;
+  const childAt = (row, kid) => (kid != null && row && row.children) ? row.children[kid] || null : null;
+  const selectedChild = (row) => childAt(row, st.kid);
 
   // The session's video, but only when it can be mapped onto the run clock (its capture-start
   // timestamp and at least one step timestamp exist). Otherwise the timeline keeps screenshots.
@@ -1215,6 +1527,71 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `<div class="mark ${cls}" style="left:${esc(left)}%;top:${esc(top)}%"></div>`;
   };
 
+  const timelinePaneSubject = () => {
+    const selection = timelinePreview || { step: st.step, kid: st.kid };
+    const row = traceRowById(selection.step) || D.trace[0] || null;
+    const kid = row ? selection.kid : null;
+    return {
+      row,
+      kid,
+      child: childAt(row, kid),
+      pos: row ? entryIndexFor(row.i, kid) : 0,
+      previewing: timelinePreview != null,
+    };
+  };
+  const timelinePaneView = (allowVideo = true) => {
+    const subject = timelinePaneSubject();
+    const cur = subject.row;
+    if (!cur) return {
+      cur,
+      kid: null,
+      shot: null,
+      cell: null,
+      pane: '<div class="noshot">No screenshot captured before this step.</div>',
+      paneLabel: '',
+      paneMark: '',
+      capture: null,
+      captureShot: null,
+      captureMark: null,
+      pos: 0,
+      inspectable: false,
+      mode: 'none',
+    };
+    const paneCapture = subject.child;
+    const captureShot = paneCapture && paneCapture.screenshotFile ? safeImageSrc(D.shots[paneCapture.screenshotFile]) || null : null;
+    const shot = captureShot || shotForStep(cur.i);
+    const paneLabel = paneCapture ? `${cur.label} · ${paneCapture.label}` : cur.label;
+    const captureMark = paneCapture
+      ? (paneCapture.mark ? markHtml({ i: `${cur.i}k${subject.kid}`, mark: paneCapture.mark }) : '')
+      : null;
+    const paneMark = captureShot ? captureMark : (cur.screenshotFile ? markHtml(cur) : '');
+    const inspectable = stepInspectable(cur);
+    const v = allowVideo ? tlVideo() : null;
+    const clockAtStep = v && (st.playing || !captureShot) ? clockMsFor(cur.i, subject.kid) : null;
+    const cell = v && clockAtStep != null ? spriteFrameCss(v, videoFrameAt(v, clockAtStep)) : null;
+    const mode = ((inspectable && shot && !st.playing) || (shot && !cell)) ? 'shot' : cell ? 'frame' : shot ? 'shot' : 'none';
+    const pane = mode === 'shot'
+      ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${subject.pos + 1}" />${paneMark}</div>`
+      : mode === 'frame'
+      ? `<div class="shotwrap"><div class="tlvframe" id="tlvframe" role="img" aria-label="Video frame at ${esc(paneLabel)}, step ${subject.pos + 1}" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-size:${cell.size};background-position:${cell.position}"></div>${captureMark ?? markHtml(cur)}</div>`
+      : `<div class="noshot">No screenshot captured before this step.</div>`;
+    return {
+      cur,
+      kid: subject.kid,
+      shot,
+      cell,
+      pane,
+      paneLabel,
+      paneMark: mode === 'frame' ? (captureMark ?? markHtml(cur)) : paneMark,
+      capture: paneCapture,
+      captureShot,
+      captureMark,
+      pos: subject.pos,
+      inspectable,
+      mode,
+    };
+  };
+
   // Group flat trace under objective rows -> { header, num, items }. The trailhead (step 0) keeps
   // num 0 so the trail steps still read STEP 1..N.
   // A failed recorded objective followed by the same objective is the recovery retry emitted by
@@ -1234,26 +1611,28 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // two of them: resolve that to the nearest entry BEFORE it, never the row's own. Falling back to
   // the row would put the rail behind the reader's selection and make Next walk backwards, onto a
   // dispatch they already passed.
-  const selectedEntryIndex = () => {
+  const entryIndexFor = (stepId, kid) => {
     const entries = timelineEntries();
-    const at = entryIndexOfRow(st.step);
+    const at = entryIndexOfRow(stepId);
     let preceding = at;
-    for (let k = at; k < entries.length && entries[k].row.i === st.step; k++) {
-      if (entries[k].kid === st.kid) return k;
-      if (st.kid != null && entries[k].kid != null && entries[k].kid < st.kid) preceding = k;
+    for (let k = at; k < entries.length && entries[k].row.i === stepId; k++) {
+      if (entries[k].kid === kid) return k;
+      if (kid != null && entries[k].kid != null && entries[k].kid < kid) preceding = k;
     }
     return preceding;
   };
+  const selectedEntryIndex = () => entryIndexFor(st.step, st.kid);
   // The run-clock instant the current selection describes, which is what the video frame under it
   // must show. A selected dispatch has an instant of its own - its entry carries one even when the
   // log had none - and a fold can span seconds, so falling back to the row's clock here would draw
   // that dispatch's mark over a screen from a different interaction.
-  const selectedClockMs = () => {
-    const entry = timelineEntries()[selectedEntryIndex()];
-    if (entry && entry.kid === st.kid && entry.ts != null) return entry.ts;
-    const child = selectedChild(D.trace.find((t) => t.i === st.step));
-    return (child && child.ts != null) ? child.ts : stepClockMs(st.step);
+  const clockMsFor = (stepId, kid) => {
+    const entry = timelineEntries()[entryIndexFor(stepId, kid)];
+    if (entry && entry.row.i === stepId && entry.kid === kid && entry.ts != null) return entry.ts;
+    const child = childAt(traceRowById(stepId), kid);
+    return (child && child.ts != null) ? child.ts : stepClockMs(stepId);
   };
+  const selectedClockMs = () => clockMsFor(st.step, st.kid);
 
   // First wall-clock timestamp in the trace — the run-clock zero every row's elapsed offset is
   // measured from (parity with the legacy report's elapsed-from-session-start gutter).
@@ -1355,23 +1734,184 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return `${fields}${raw}`;
   };
 
+  // ── Attachments embedded in event payloads ─────────────────────────────────────────────────
+  // Any event payload may embed attachment refs (the framework's generic media primitive —
+  // detected by the exact `$attachment` marker dispatch in run-report-events.ts, mirroring the
+  // Kotlin AttachmentRef). Each ref renders as a row inside the expanded event body — label · MIME
+  // type · human size · Open — and Open pushes a full-page lightbox whose body is a switch on the
+  // MIME prefix: browser-native <audio>/<video>/<img>, no custom players. Bytes resolve through
+  // the session's `attachments` map (data: embed / static link / zip object URL per surface); a
+  // path absent from the map renders the honest "in the session bundle, not embedded" note.
+  // In-page rather than window.open or <a download>: the desktop shell's webview drops both (see
+  // the share-html route comment in SessionRoutes.kt).
+  const attachRefByKey = new Map();
+  let attachKeySeq = 0;
+  const attachmentDisplayName = (ref) => ref.label || String(ref.path || '').split('/').pop() || 'attachment';
+  const attachmentRowsHtml = (refs) => {
+    if (!refs.length) return '';
+    return `<div class="attachrows">${refs.map((ref) => {
+      const key = String(attachKeySeq++);
+      attachRefByKey.set(key, ref);
+      const size = humanBytes(ref.sizeBytes);
+      return `<div class="attachrow"><span class="attachname">${esc(attachmentDisplayName(ref))}</span><span class="attachmeta">${esc(ref.mimeType)}${size ? ` · ${esc(size)}` : ''}</span><button type="button" class="btn attachopen" data-attach="${esc(key)}">Open</button></div>`;
+    }).join('')}</div>`;
+  };
+  const wireAttachmentRows = (el) => {
+    Array.from(el.querySelectorAll('[data-attach]')).forEach((btn: any) => {
+      btn.onclick = (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        const ref = attachRefByKey.get(btn.dataset.attach);
+        if (ref) openAttachment(ref, btn);
+      };
+    });
+  };
+  // Exact JSON only (the embedded `d` is JSON.stringify of the decoded payload) — deliberately not
+  // the jsonish multi-decode: a ref hidden inside a further JSON-encoded string is one no producer
+  // wrote through the events contract, and its bytes were never resolved into the map anyway.
+  const eventAttachmentRefs = (event) => {
+    try { return findAttachmentRefs(JSON.parse(String(event.d))); } catch (e) { return []; }
+  };
+  const rowAttachmentRefs = (row) => (row.raw || []).flatMap((r) => findAttachmentRefs(r));
+
+  let attachEl = null;
+  let attachReturnFocus = null;
+  // No animateReportReturn here, unlike the pushed destinations: this dialog sits OVER the report
+  // rather than replacing it, so the page beneath was never animated away to bring back.
+  const closeAttachment = () => {
+    if (!attachEl) return;
+    attachEl.remove(); attachEl = null;
+    const back = attachReturnFocus; attachReturnFocus = null;
+    if (back && back.focus) back.focus();
+  };
+  // The href an attachment's Download control may carry. `download` never gives the bytes a
+  // browsing context, which is the security boundary here (see attachmentBodyHtml) — so unlike
+  // the media-src gate this accepts a base64 data: URI of ANY type, plus the zip pipeline's
+  // page-lifetime blob: values, plus a same-origin URL. Everything else gets no link.
+  const attachmentDownloadHref = (value: unknown) => {
+    const uri = String(value || '');
+    if (/[\u0000-\u001F\u007F]/.test(uri.replace(/[\r\n]/g, ''))) return null;
+    if (/^data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]*$/i.test(uri)) return uri;
+    // A blob: URL only ever resolves in the page that minted it, and the zip pipeline mints them
+    // on this origin — so require the inner origin to match. Map values are bundle-authored and
+    // reach this helper unfiltered, and a `blob:https://elsewhere/...` value would otherwise
+    // render a Download control that can never resolve.
+    if (/^blob:/i.test(uri)) {
+      if (/["'<>`\\\s]/.test(uri)) return null;
+      // Origin comes from document.baseURI, the same source sameOriginAttachmentHref uses.
+      const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : null;
+      if (!base) return null;
+      // Parse the WHOLE blob: URL, not its inner half. `trailblaze viewer` opens the standalone
+      // HTML over file://, where createObjectURL mints `blob:null/<uuid>` — and `null/<uuid>` is
+      // not a URL, so slicing the scheme off throws and drops Download on the one surface that
+      // has no other way to reach the bytes. Both origins come out opaque ("null") there, which
+      // still rejects a foreign `blob:https://elsewhere/...`.
+      try { return new URL(uri).origin === new URL(base).origin ? uri : null; } catch (e) { return null; }
+    }
+    return sameOriginAttachmentHref(uri);
+  };
+  const attachmentBodyHtml = (ref) => {
+    // Own properties only: a path like `constructor` would otherwise read Object.prototype's own
+    // member off the empty fallback and hand a function to the src check.
+    const map = (D && D.attachments) || null;
+    const raw = map && Object.prototype.hasOwnProperty.call(map, ref.path) ? map[ref.path] : '';
+    const uri = safeAttachmentSrc(raw);
+    const kind = String(ref.mimeType || '').toLowerCase();
+    const filename = String(ref.path || '').split('/').pop() || 'attachment';
+    // Every attachment whose bytes are reachable offers Download beside whatever inline view it
+    // has: the media elements are best-effort (a browser that can't demux this particular file
+    // shows a dead player), and the file itself is the evidence the reader came for.
+    const href = attachmentDownloadHref(raw);
+    const downloadHtml = href ? `<div class="attachactions"><a class="quietlink" href="${esc(href)}" download="${esc(filename)}" rel="noopener">Download ${esc(filename)} ↓</a></div>` : '';
+    // Autoplay: opening an attachment is an explicit click on Open, so playing on arrival is what
+    // the reader asked for. `autoplay` alone is enough in a browser that counts that click as the
+    // page's activation gesture; the explicit play() in openAttachment covers the rest, and a
+    // refusal is silent (the controls are right there).
+    // The blocked-playback note ships hidden; openAttachment reveals it AND hides the player on
+    // the error event. A refused load leaves the native element sitting at a dead 0:00 with no
+    // message of its own, which reads as "the recording is empty" — and a transport control that
+    // cannot transport anything is worse than no control at all, so the failed player is hidden
+    // rather than annotated. Two causes land here and the note names both: a host serving
+    // this report under a CSP whose `default-src` lists only network schemes refuses data:/blob:
+    // media (the SAME report plays fine elsewhere), and a browser may simply not decode the
+    // format. Download is exempt from that CSP — saving a file never gives the bytes a browsing
+    // context — so it stays the way out.
+    const blockedNote = `<div class="attachnote attachblockednote" hidden>Inline playback isn't available on this page — its host may block embedded media, or this browser may not support this format.${href ? ' Download the file below to play it.' : ''}</div>`;
+    if (uri && kind.indexOf('audio/') === 0) return `<div class="attachmedia"><audio controls autoplay src="${esc(uri)}"></audio>${blockedNote}${downloadHtml}</div>`;
+    if (uri && kind.indexOf('video/') === 0) return `<div class="attachmedia"><video controls autoplay src="${esc(uri)}"></video>${blockedNote}${downloadHtml}</div>`;
+    if (uri && kind.indexOf('image/') === 0) return `<div class="attachmedia"><img src="${esc(uri)}" alt="${esc(attachmentDisplayName(ref))}">${downloadHtml}</div>`;
+    // No inline view: either a type with no native element, or bytes the media-src gate refused
+    // (a non-media data: embed reaches here with its Download intact). Downloading rather than
+    // opening a tab is the security boundary — a session bundle can carry an .html or .svg
+    // attachment, and `/static` is served by the daemon on the same origin as the app, so
+    // navigating to one would run it with everything that origin has. The gate is deliberately
+    // "never give these bytes a browsing context" rather than an allowlist of safe-looking types:
+    // `ref.mimeType` is bundle-authored data, while what a navigation would actually render is
+    // decided by the daemon's own Content-Type.
+    if (href) return `<div class="attachnote">No inline view for this type.${downloadHtml}</div>`;
+    return uri
+      ? `<div class="attachnote">No inline view for this type.<div class="attachpath mono">${esc(ref.path)}</div></div>`
+      : `<div class="attachnote">This attachment is in the session bundle, not embedded in this report.<div class="attachpath mono">${esc(ref.path)}</div></div>`;
+  };
+  const openAttachment = (ref, opener) => {
+    closeAttachment();
+    attachReturnFocus = opener || document.activeElement;
+    attachEl = document.createElement('div');
+    attachEl.className = 'attachoverlay';
+    attachEl.setAttribute('role', 'dialog'); attachEl.setAttribute('aria-modal', 'true');
+    attachEl.setAttribute('aria-label', `Attachment: ${attachmentDisplayName(ref)}`);
+    attachEl.tabIndex = -1;
+    const size = humanBytes(ref.sizeBytes);
+    attachEl.innerHTML = `<div class="txpanel attachpanel"><div class="txpanelhead"><div class="txpaneltitle"><div class="h">${esc(attachmentDisplayName(ref))}</div><div class="txpanelmeta"><span>${esc(ref.mimeType)}</span>${size ? `<span>${esc(size)}</span>` : ''}<span class="attachpath">${esc(ref.path)}</span></div></div><button type="button" class="btn" data-attach-close>Close</button></div><div class="attachbody">${attachmentBodyHtml(ref)}</div></div>`;
+    attachEl.onclick = (e) => {
+      const target = e && (e.target as any);
+      if (target && target.closest && target.closest('[data-attach-close]')) closeAttachment();
+      // The scrim itself, never a click that landed inside the panel: dismissing by clicking away
+      // is what the surrounding dim promises, and it matches the screenshot zoom.
+      else if (target === attachEl) closeAttachment();
+      if (e && e.stopPropagation) e.stopPropagation();
+    };
+    // Same keyboard contract as the transcript/inspector destinations.
+    attachEl.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAttachment(); return; }
+      trapModalTab(attachEl, e);
+    };
+    document.body.appendChild(attachEl);
+    attachEl.focus();
+    // The `autoplay` attribute covers the common case; this covers a player that was mounted before
+    // the attribute could take effect. Both are best-effort — a browser that refuses leaves the
+    // controls sitting there, which is the honest fallback.
+    const player: any = attachEl.querySelector && attachEl.querySelector('audio, video');
+    // A load failure leaves the native player sitting at a dead 0:00 with no message of its own,
+    // so swap it for the pre-rendered note (see attachmentBodyHtml) instead of leaving the reader
+    // to conclude the recording is empty — or to keep pressing a play button that cannot work.
+    if (player && player.addEventListener) {
+      player.addEventListener('error', () => {
+        player.hidden = true;
+        const note: any = attachEl && attachEl.querySelector && attachEl.querySelector('.attachblockednote');
+        if (note) note.hidden = false;
+      });
+    }
+    if (player && player.play) { try { const p = player.play(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* autoplay refused */ } }
+  };
+
   // Timeline event bodies are lazy (payloads are untruncated): each rendered <details> carries a
   // data-lazykey resolved through this map by wireLazyTimelineBodies. Rebuilt on every timeline
   // render (streamGroupHtml runs per step bucket within one render pass).
   const tlEventByKey = new Map();
-  const streamGroupHtml = (events) => {
+  const streamGroupHtml = (events, owner = null) => {
     if (!events.length) return '';
     return `<div class="streamitems timelineeventitems">${events.map((e) => {
       tlEventByKey.set(e.key, e);
       const producer = streamDisplayName(e.stream);
+      const previewAttr = owner ? ` data-tlevent-step="${esc(owner.i)}"` : '';
       if (e.row) {
         const badges = rowBadgesHtml(e.row);
         const tone = e.row.tone === 'error' ? ' e' : e.row.tone === 'warn' ? ' w' : '';
-        return `<details class="timelineevent${tone}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(e.row.label)}</span>${badges ? `<span class="fmtbadges">${badges}</span>` : '<span></span>'}<span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tlbody"></div></details>`;
+        return `<details class="timelineevent${tone}" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(e.row.label)}</span>${badges ? `<span class="fmtbadges">${badges}</span>` : '<span></span>'}<span class="timelineeventchev" aria-hidden="true"></span></summary><div class="fmtbody tlbody"></div></details>`;
       }
       const { semanticLabel } = normalizeEventPayload(e);
       const label = semanticLabel || 'Event';
-      return `<details class="timelineevent" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
+      return `<details class="timelineevent" style="--stream-color:${streamColor(e.streamIndex)}" data-lazykey="${esc(e.key)}"${previewAttr}><summary title="${esc(e.stream)}"><span class="streamdot" aria-hidden="true"></span><span class="streamtype">${esc(producer)}</span><span class="timelineeventlabel">${esc(label)}</span><span></span><span class="timelineeventchev" aria-hidden="true"></span></summary><pre class="mono"></pre></details>`;
     }).join('')}</div>`;
   };
 
@@ -1453,6 +1993,40 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // failed and recovered objectives reuse the same semantic status as their cards. This makes a
     // recovery or terminal failure visible on the rail without mistaking every objective for AI.
     const scrubModel = scrubTimelineModel(axis);
+    // Multi-device sessions split the one track into stacked per-device bands — the scrubber IS
+    // the timeline-in-miniature, so it is where "this run drove two devices" must be visible
+    // without scrolling a single row. Each device gets a named band in its lane color, its active
+    // stretches filled solid, and its action dots repositioned into its band; objective bars and
+    // the playhead still span the full track because steps and the clock belong to the whole run.
+    // Interaction is untouched: one slider, one playhead, same seek math.
+    const laneNames = detailDevices(D.trace);
+    const laneCount = laneNames.length;
+    const laneEntries = timelineEntries();
+    const entryLane = laneEntries.map(() => -1);
+    let deviceBands = '';
+    if (laneCount) {
+      // Activity segments on the fraction axis: execution is sequential, so the active device
+      // carries forward between attributed rows and every device change closes a segment.
+      const segs: Array<{ lane: number; start: number; end: number }> = [];
+      let curLane = -1; let segStart = 0;
+      laneEntries.forEach((e, i) => {
+        const lane = e.row.device ? laneNames.indexOf(e.row.device) : curLane;
+        entryLane[i] = lane;
+        if (lane !== curLane) {
+          const f = axis.stepFrac[i] || 0;
+          if (curLane >= 0) segs.push({ lane: curLane, start: segStart, end: f });
+          curLane = lane; segStart = f;
+        }
+      });
+      if (curLane >= 0) segs.push({ lane: curLane, start: segStart, end: 1 });
+      const bandTop = (lane: number, inset: number) => `calc(${((lane / laneCount) * 100).toFixed(2)}% + ${inset}px)`;
+      const bandHeight = (inset: number) => `calc(${(100 / laneCount).toFixed(2)}% - ${inset * 2}px)`;
+      deviceBands = laneNames.map((name, i) =>
+        `<span class="scrublane" aria-hidden="true" style="--lane-color:${laneColor(i)};top:${bandTop(i, 3)};height:${bandHeight(3)}"></span>`
+        + `<span class="scrublanename" aria-hidden="true" style="--lane-color:${laneColor(i)};top:${(((i + 0.5) / laneCount) * 100).toFixed(2)}%">${esc(name)}</span>`).join('')
+        + segs.filter((s) => s.end > s.start).map((s) =>
+          `<span class="scrublaneseg" aria-hidden="true" style="--lane-color:${laneColor(s.lane)};left:${(s.start * 100).toFixed(3)}%;right:${((1 - s.end) * 100).toFixed(3)}%;top:${bandTop(s.lane, 4)};height:${bandHeight(4)}"></span>`).join('');
+    }
     const ticks = timelineEntries().map((entry, i) => {
       const t = entry.row;
       // A dispatch entry marks one interaction inside a folded row: it earns its own tick only when
@@ -1474,7 +2048,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // this avoids duplicating its status at both boundaries.
       if (t.objective && (objectiveTone === 'selfhealed' || objectiveTone === 'failed')) return '';
       const fraction = axis.stepFrac[i] || 0;
-      return `<span class="scrubtick ${t.objective ? `objective${objectiveTone ? ` ${objectiveTone}` : ''}` : `event ${cat}`}" data-scrub-step="${esc(currentStep)}" data-scrub-kind="${esc(kind)}" aria-hidden="true" style="left:calc(${fraction * 100}% - 1px);background:${color};--tick-color:${color}"></span>`;
+      // In device-band mode an action dot sits vertically inside its device's band; objective
+      // bars keep spanning the full track because authored steps belong to the whole run.
+      const laneTop = laneCount && !t.objective && entryLane[i] >= 0
+        ? `;top:${(((entryLane[i] + 0.5) / laneCount) * 100).toFixed(2)}%` : '';
+      return `<span class="scrubtick ${t.objective ? `objective${objectiveTone ? ` ${objectiveTone}` : ''}` : `event ${cat}`}" data-scrub-step="${esc(currentStep)}" data-scrub-kind="${esc(kind)}" aria-hidden="true" style="left:calc(${fraction * 100}% - 1px);background:${color};--tick-color:${color}${laneTop}"></span>`;
     }).join('');
     const statusRanges = scrubModel.ranges.map((range) => {
       const tone = range.tone;
@@ -1500,9 +2078,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : hasTrailhead
       ? `<div class="scrubphasebox" style="width:${trailFrac * 100}%"></div><div class="scrubline trail" style="left:${trailFrac * 100}%"></div>`
       : `<div class="scrubline trail" style="left:0"></div>`;
-    const phaseLabel = hasTrailhead && trailStart < 0 ? 'Timeline for Trailhead setup. The dashed box encloses Trailhead activity.'
+    // Device names are configuration map keys with no reserved-name rule, so they reach this
+    // attribute as untrusted text — escape before interpolating.
+    const laneLabel = laneCount ? esc(` One band per device: ${laneNames.join(', ')}.`) : '';
+    const phaseLabel = (hasTrailhead && trailStart < 0 ? 'Timeline for Trailhead setup. The dashed box encloses Trailhead activity.'
       : hasTrailhead ? 'Timeline. Dashed box encloses Trailhead activity; solid rail marks the authored Trail.'
-      : 'Timeline for the authored Trail.';
+      : 'Timeline for the authored Trail.') + laneLabel;
     const playbackLabel = st.playing ? 'Stop' : 'Play';
     const previousAction = adjacentSelectableIndex(pos, -1);
     const nextAction = adjacentSelectableIndex(pos, 1);
@@ -1511,7 +2092,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <button type="button" class="timelinecontrol play" id="tlplay" aria-label="${playbackLabel} timeline" title="${playbackLabel} timeline">${st.playing ? '<span class="transporticon stopicon" aria-hidden="true"></span>' : '<svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5v17L20 12Z" fill="currentColor"/></svg>'}</button>
       <button type="button" class="timelinecontrol" id="next" aria-label="Next tool call" title="Next tool call"${nextAction < 0 ? ' disabled' : ''}><span class="transporticon direction" aria-hidden="true"></span></button>
     </div>`;
-    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack" data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}</div>`;
+    return `<div class="scrub"><div class="scrubclock">0:00</div><div class="scrubtrack${laneCount ? ' devlanes' : ''}"${laneCount ? ` style="--scrub-lanes:${laneCount}"` : ''} data-scrub role="slider" tabindex="0" aria-label="${phaseLabel}" aria-valuemin="1" aria-valuemax="${timelineEntries().length}" aria-valuenow="${pos + 1}" aria-valuetext="${esc(scrubValueText(pos))}">${rail}${deviceBands}<span class="scrubhoverstep" data-scrubhover-range aria-hidden="true"></span>${statusRanges}${ticks}${eventTicks}<span class="scrubtooltip scrubtracktooltip" data-scrubhover aria-hidden="true" style="--tick-color:var(--timeline-objective-mark)"><span class="scrubtooltipmeta"><span class="scrubtooltiptag scrubtooltipstep" data-scrubhover-step></span><span class="scrubtooltiptag scrubtooltipkind" data-scrubhover-kind></span></span></span><div class="scrubhead" style="left:${frac * 100}%"></div></div><div class="scrubclock">${fmtClock(axis.totalMs)}</div>${transport}</div>`;
   };
 
   // Chat glyph for every "open this call's transcript" affordance (timeline rows, LLM tab rows) —
@@ -1531,6 +2112,36 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   const INSPECTOR_CODE_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4-4 4 4 4M10 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const INSPECTOR_TREE_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h3v3H3zM10 3.5h3v3h-3zM10 10h3v3h-3zM6 5h2.25A1.75 1.75 0 0 1 10 6.75v4.75M8.25 8.25H10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const INSPECTOR_COPY_ICON_SVG = '<svg class="inspactionicon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 11V4.5A1.5 1.5 0 0 1 4.5 3H11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+  // The devices a trace drove (TraceStep.device), in first-appearance order — the same lane order
+  // the Trail view derives, so the timeline's colors and the Trail view's columns agree. EMPTY for
+  // a single-device trace: on the overwhelmingly common single-device run, per-row device dressing
+  // would be noise repeating the run header, so every consumer gates on length. Memoized because
+  // stepRowHtml asks once per row — keyed on identity AND length, like the trace-model resolver,
+  // since a live run appends to its trace array in place and a second device can arrive late.
+  const detailDevicesMemo = new WeakMap<object, { length: number; names: string[] }>();
+  const detailDevices = (trace: TraceStep[]): string[] => {
+    const prior = detailDevicesMemo.get(trace);
+    if (prior && prior.length === trace.length) return prior.names;
+    let names: string[] = [];
+    for (const t of trace) { if (t.device && names.indexOf(t.device) < 0) names.push(t.device); }
+    if (names.length < 2) names = [];
+    detailDevicesMemo.set(trace, { length: trace.length, names });
+    return names;
+  };
+  const traceShowsDevices = (trace: TraceStep[]): boolean => detailDevices(trace).length > 0;
+  // Fixed, deliberately-spaced hues (not streamColor's golden-angle walk): lane 0 and 1 sit on
+  // opposite sides of the wheel so the two-device case — nearly every multi-device trail — reads
+  // instantly. Sessions somehow past three devices fall back to the stream generator.
+  const laneColor = (index: number) => ['oklch(60% .14 250)', 'oklch(62% .15 45)', 'oklch(58% .15 310)'][index] || streamColor(index);
+  // A multi-device session announces itself where everyone lands: the legend names each device in
+  // its lane color, so nobody has to notice the per-row or per-frame chips to realize a run drove
+  // two screens. Empty (and free) on a single-device run.
+  const deviceLegendHtml = (): string => {
+    const names = detailDevices(D.trace);
+    if (!names.length) return '';
+    return `<span class="devlegend" role="note" aria-label="Multi-device session: ${esc(names.join(', '))}"><span class="devlegendtitle">${names.length} devices</span>${names.map((name, i) => `<span class="devlegenditem" style="--lane-color:${laneColor(i)}"><span class="devlegenddot" aria-hidden="true"></span>${esc(name)}</span>`).join('')}</span>`;
+  };
 
   const stepRowHtml = (t, child) => {
     const cat = stepCat(t); const sel = t.i === st.step;
@@ -1577,13 +2188,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const detail = llmCall
       ? `${llmCall.model || ''}${llmCall.inputTokens != null ? ` · in ${fmtN(llmCall.inputTokens)}` : ''}${llmCall.outputTokens != null ? ` · out ${fmtN(llmCall.outputTokens)}` : ''}`
       : t.tool;
-    const row = `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}${llmCall ? ' llmturn' : ''}" data-step="${stepId}" role="button" tabindex="${sel ? 0 : -1}"${sel ? ' aria-current="step"' : ''}>
+    // Multi-device dressing: the row indents to its device's lane, carries the lane's color, and a
+    // handover row bridges the lanes full-width — so the default timeline reads as two (or three)
+    // interleaved device columns without the reader ever opening the Trail view.
+    const lane = t.device ? detailDevices(D.trace).indexOf(t.device) : -1;
+    const laneCls = lane >= 0 ? ` devlane devlane-${lane}${icon.cls === 'switch' ? ' handover' : ''}` : '';
+    // The handover row bridges the lanes, so it keeps lane 0's indent while wearing its
+    // destination's color.
+    const laneStyle = lane >= 0 ? ` style="--lane-color:${laneColor(lane)};--lane-index:${icon.cls === 'switch' ? 0 : lane}"` : '';
+    const row = `<div class="step${sel ? ' sel' : ''}${child ? ' child' : ''}${t.selfHealSource ? ' selfheal' : ''}${llmCall ? ' llmturn' : ''}${laneCls}" data-step="${stepId}"${laneStyle} role="button" tabindex="${sel ? 0 : -1}"${sel ? ' aria-current="step"' : ''}>
 
       ${child ? '' : `<span class="num">${stepId}</span>`}
       <span class="ic ${icon.cls}"${icon.cls === 'dot' ? ` style="--icon-color:${catColor[cat]}"` : ''} aria-hidden="true">${icon.glyph}</span>
       <div style="flex:1;min-width:0">
         ${t.note ? `<blockquote class="stepreason">“${esc(t.note)}”</blockquote>` : ''}
-        <div class="lbl">${esc(rowLabel)}${count}</div>
+        <div class="lbl">${esc(rowLabel)}${count}${t.device && traceShowsDevices(D.trace) ? ` <span class="devchip" title="Ran on the ${esc(t.device)} device">${esc(t.device)}</span>` : ''}</div>
         ${t.params && t.params.length ? t.params.map((p) => `<div class="tl-tool mono">${esc(p)}</div>`).join('') : detail ? `<div class="tl-tool mono">${esc(detail)}</div>` : ''}
         ${sel && st.kid == null && t.args ? `<pre class="toolargs mono">${esc(t.args)}</pre>` : ''}
       </div>
@@ -1609,6 +2228,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       || healedGroup.header);
     const streams = sessionEvents(D) || [];
     tlEventByKey.clear();
+    // Same lifetime as tlEventByKey: the rows these keys index are re-rendered from scratch here,
+    // and fillLazyBody mints a fresh key for every attachment row it fills. Without the clear the
+    // map keeps one entry per attachment row per render for the life of the tab. Safe here because
+    // every lookup comes from a data-attach button in the DOM this render is about to replace.
+    attachRefByKey.clear();
     const events = streamEvents();
     const kindCounts = Object.fromEntries(TIMELINE_EVENT_KINDS.map((kind) => [kind, D.trace.filter((t) => !t.objective && !t.terminal && stepCat(t) === kind).length]));
     const eventChooser = `<details class="streamselect eventselect" data-eventselect${st.tlEventMenuOpen ? ' open' : ''}><summary aria-label="Events, ${st.tlEventKinds.length} of ${TIMELINE_EVENT_KINDS.length} selected">${TIMELINE_FILTER_ICON_SVG}<span>Events</span><span class="streamselectcount">${st.tlEventKinds.length}/${TIMELINE_EVENT_KINDS.length}</span></summary><div class="streammenu"><div class="streammenuhead"><span>Events · ${st.tlEventKinds.length}/${TIMELINE_EVENT_KINDS.length}</span><span class="streammenuactions"><button type="button" data-tlkinds="all">All</button><button type="button" data-tlkinds="none">None</button></span></div>${TIMELINE_EVENT_KINDS.map((kind) => { const meta = timelineEventKindMeta[kind]; return `<label class="streamoption" style="--stream-color:${meta.color}"><input type="checkbox" data-tlkind="${kind}"${st.tlEventKinds.indexOf(kind) >= 0 ? ' checked' : ''}><span class="streamoptiondot" aria-hidden="true"></span><span class="streamname">${meta.label}</span><span class="streamcount">${kindCounts[kind]}</span>${TIMELINE_CHECK_ICON_SVG}</label>`; }).join('')}</div></details>`;
@@ -1624,14 +2248,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : outcome === 'selfheal' && selfHealAnchor
       ? `<button type="button" class="statusjump selfhealjump" data-selfheal-step="${esc(selfHealAnchor.i)}" title="Go to self-healed ${esc(selfHealStepToken.toLowerCase())}" aria-label="Go to self-healed ${esc(selfHealStepToken.toLowerCase())}"><span class="statusjumplabel">Self-healed</span><span class="statusjumptoken">${esc(selfHealStepToken)}</span></button>`
       : `<span class="badge ${esc(outcome)}">${esc(outcome === 'passed' ? 'PASSED' : outcomeLabel)}</span>`;
-    const controls = `<div class="timelinecontrols">${outcomeControl}<span class="timelinefilters">${eventChooser}${streamChooser}</span></div>`;
+    const controls = `<div class="timelinecontrols">${outcomeControl}${deviceLegendHtml()}<span class="timelinefilters">${eventChooser}${streamChooser}</span></div>`;
     // An event-only session (e.g. a run that failed before its first step) still gets its streams:
     // the chooser plus a flat stream list — there are no steps to bucket the events under.
     if (!D.trace.length) return `<div class="timeline-list">${controls}<div class="timelinescroll">${failureSummary}${selfHealSummary}<div class="empty">This run didn't emit any agent-task steps.</div>${streamGroupHtml(events)}</div></div>`;
     const buckets = eventBuckets(events);
     const withEvents = (t, child) => {
       const at = idxOf(t.i);
-      return stepRowHtml(t, child) + streamGroupHtml(buckets[at] || []);
+      return stepRowHtml(t, child) + streamGroupHtml(buckets[at] || [], t);
     };
     const hasSteps = groups.some((g) => g.header);
     let stepsHtml;
@@ -1665,12 +2289,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
           fmtDur(durationMs),
         ].filter(Boolean).join(' · ');
         const hdr = g.header ? `<button type="button" class="grphdr${isTrailhead ? ' trailhead' : ''}" data-group="${g.header.i}" aria-expanded="${open}" data-group-leads="${leads}">
-            ${STEP_DISCLOSURE_SVG}
-            <span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span>
+            <span class="stepheaderrail"><span class="chip ${mood}">${isTrailhead ? 'TRAILHEAD' : `STEP ${g.num}`}</span><span class="grpdisclosure">${STEP_DISCLOSURE_SVG}</span></span>
             <span class="lbl">${esc(g.header.label)}</span>
             <span class="grpstatus ${mood}">${STEP_STATUS_ICON_SVG[mood]}${esc(status)}</span>
           </button>` : '';
-        const headerEvents = g.header ? streamGroupHtml(buckets[idxOf(g.header.i)] || []) : '';
+        const headerEvents = g.header ? streamGroupHtml(buckets[idxOf(g.header.i)] || [], g.header) : '';
         const inlineHeaderFailure = failureSummary && g === failureGroup && (!anchorRow || g.header === anchorRow) ? failureSummary : '';
         const inlineHeaderSelfHeal = selfHealSummary && g === healedGroup && selfHealAnchor === g.header ? selfHealSummary : '';
         const items = g.items.map((t, itemIndex) => `${g.retryAt.indexOf(itemIndex) >= 0 ? `<div class="retrydivider"><span>Retry ${g.retryAt.indexOf(itemIndex) + 1}</span></div>` : ''}${withEvents(t, hasSteps)}${failureSummary && g === failureGroup && t === anchorRow ? failureSummary : ''}${selfHealSummary && g === healedGroup && t === selfHealAnchor ? selfHealSummary : ''}`).join('');
@@ -1701,7 +2324,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       // behind these, so every affordance the timeline offers a step would dead-end.
       const skippedHtml = skippedSteps.map((label, i) => `<div class="stepgroup skipped">
           <div class="grphdr">
-            <span class="chip skip">STEP ${trailStepCount + i + 1}</span>
+            <span class="stepheaderrail"><span class="chip skip">STEP ${trailStepCount + i + 1}</span></span>
             <span class="lbl">${esc(label)}</span>
             <span class="grpstatus skip">${STEP_STATUS_ICON_SVG.skip}Not run</span>
           </div>
@@ -1719,53 +2342,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         ${trailGroups.length || skippedSteps.length ? `<section class="tlphase" aria-labelledby="trail-heading"><div class="tlphasehead"><button type="button" class="phasecontrol" data-phase="trail" aria-expanded="${st.trailOpen}">${phaseDisclosure}<span class="name" id="trail-heading">Trail</span><span class="counttoken">${trailStepCount}${skippedSteps.length ? `/${trailStepCount + skippedSteps.length}` : ''}</span><span class="desc">${trailStats.actions}</span>${trailStats.duration ? `<span class="phaseduration">${trailStats.duration}</span>` : ''}</button></div><div class="tlphasebody"${st.trailOpen ? '' : ' hidden'}><div class="steps">${groupsHtml(trailGroups)}${skippedHtml}</div></div></section>` : ''}
       </div>`;
     }
-    const cur = D.trace.find((t) => t.i === st.step) || D.trace[0];
-    // A selected child dispatch previews ITS own frame + tap/swipe mark (falling back to the
-    // row's frame when the dispatch captured none) — how a folded batch's every interaction is
-    // visible, not just the row's first frame. The explicit child selection also wins over the
-    // run-clock video frame: the reader asked for that dispatch, and the row's clock can't
-    // address one dispatch inside the fold.
-    const paneCapture = selectedChild(cur);
-    const captureShot = paneCapture && paneCapture.screenshotFile ? safeImageSrc(D.shots[paneCapture.screenshotFile]) || null : null;
-    const shot = captureShot || shotForStep(st.step);
-    const paneLabel = paneCapture ? `${cur.label} · ${paneCapture.label}` : cur.label;
-    // The mark for a selected dispatch's own frame — its screenshot here, or the video frame at its
-    // instant below. A dispatch owns that frame, so the row's mark must never be drawn over it: it
-    // would circle a point from a different interaction than the one on screen. Null when the
-    // selection is the row itself.
-    const captureMark = paneCapture
-      ? (paneCapture.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: paneCapture.mark }) : '')
-      : null;
-    const paneMark = captureShot ? captureMark : (cur.screenshotFile ? markHtml(cur) : '');
-    const pos = selectedEntryIndex();
-    const inspectable = stepInspectable(cur);
-    // An inspectable row's hierarchy and screenshot are one capture and must remain paired. A
-    // nearby video frame can show a different screen for a long-running composite tool (notably a
-    // Trailhead), which makes the inspector look corrupt even though its tree matches its own
-    // capture. Keep that exact screenshot in the static preview; playback still uses the video,
-    // and video remains the fallback for rows without an inspectable capture.
-    const v = tlVideo();
-    // Playback paints frames into `#tlvframe` and nothing else, so a capture that displaces the
-    // frame box would freeze the preview on one screenshot for the whole run. While playing, the
-    // video always wins.
-    const clockAtStep = v && (st.playing || !captureShot) ? selectedClockMs() : null;
-    const cell = v && clockAtStep != null ? spriteFrameCss(v, videoFrameAt(v, clockAtStep)) : null;
-    const pane = inspectable && shot && !st.playing
-      ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${pos + 1}" />${paneMark}</div>`
-      : cell
-      ? `<div class="shotwrap"><div class="tlvframe" id="tlvframe" role="img" aria-label="Video frame at ${esc(paneLabel)}, step ${pos + 1}" style="${spriteAspect ? `aspect-ratio:${spriteAspect};` : ''}background-size:${cell.size};background-position:${cell.position}"></div>${captureMark ?? markHtml(cur)}</div>`
-      : shot
-      ? `<div class="shotwrap"><img class="shot" id="shot" role="button" tabindex="0" alt="${esc(paneLabel)} at step ${pos + 1}" />${paneMark}</div>`
-      : `<div class="noshot">No screenshot captured before this step.</div>`;
+    const paneView = timelinePaneView(true);
+    const cur = paneView.cur;
     return `<div class="tl">
       <div class="timeline-list">${controls}<div class="timelinescroll">${failureSummary && !failureGroup ? failureSummary : ''}${hasSteps ? stepsHtml : `<div class="steps">${stepsHtml}</div>`}</div></div>
       <div class="preview">
         <div class="devicecolumn hasinspect">
-          <div class="deviceplayer${String((D.meta || {}).platform || '').toLowerCase() === 'ios' ? ' device-ios' : ''}${(cell || shot) ? '' : ' empty'}">
-            ${pane}
+          <div class="deviceplayer${String((D.meta || {}).platform || '').toLowerCase() === 'ios' ? ' device-ios' : ''}${(paneView.cell || paneView.shot) ? '' : ' empty'}">
+            ${paneView.pane}
           </div>
           <div class="previewactions">
-            <button type="button" class="btn previewinspect" data-preview-inspect${inspectable ? ` data-inspect="${esc(cur.i)}"` : ' disabled'} title="${inspectable ? 'Inspect the selected step\'s UI hierarchy' : 'No UI hierarchy captured for this step'}" aria-label="${inspectable ? `Inspect UI for: ${esc(cur.label)}` : `Inspect UI unavailable for: ${esc(cur.label)}`}"><svg class="previewinspecticon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>Inspect UI</span></button>
+            <button type="button" class="btn previewinspect" data-preview-inspect${paneView.inspectable ? ` data-inspect="${esc(cur.i)}"` : ' disabled'} title="${paneView.inspectable ? 'Inspect the selected step\'s UI hierarchy' : 'No UI hierarchy captured for this step'}" aria-label="${paneView.inspectable ? `Inspect UI for: ${esc(cur.label)}` : `Inspect UI unavailable for: ${esc(cur ? cur.label : '')}`}"><svg class="previewinspecticon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>Inspect UI</span></button>
           </div>
         </div>
       </div>
@@ -2057,54 +2644,82 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // across the whole page.
   const GAL_ZOOM_SIZES = [140, 190, 260, 360, 500];
 
+  type LightboxEntry = { trace: TraceStep; group: ReportTraceGroup; kid?: TraceChild; kidIndex?: number };
+  const lightboxShotAvailable = (file) => !!(file && safeImageSrc(D.shots[file]));
+  // A step's closing frames — one PER DEVICE, not one per step. A single step can act on more than
+  // one device ("check that both screens show $25"), and keeping only the last frame would drop the
+  // other device's evidence entirely. Single-device steps are unchanged: every row keys to the same
+  // device, so exactly one frame survives. Chronological, so the last entry is the step's last frame.
+  const lightboxStepFrames = (group: ReportTraceGroup): LightboxEntry[] => {
+    const rows = [group.header, ...group.items].filter((row): row is TraceStep => Boolean(row));
+    // Candidates span row captures AND folded-dispatch captures, in wall-clock order. A device
+    // whose work in this step was batched into one folded row has its only frame on a child, so
+    // considering rows first and children only as a whole-group fallback would drop that device.
+    const candidates: LightboxEntry[] = rows.flatMap((trace) => [
+      // Children first: a folded dispatch runs DURING its row, so the row's own capture is the
+      // later — and still the one that represents the step when both exist.
+      ...(trace.children || []).flatMap((kid, kidIndex) =>
+        lightboxShotAvailable(kid.screenshotFile) ? [{ trace, group, kid, kidIndex }] : []),
+      ...(lightboxShotAvailable(trace.screenshotFile) ? [{ trace, group }] : []),
+    ]);
+    const last = new Map<string | null, LightboxEntry>();
+    for (const entry of candidates) last.set(entry.trace.device || null, entry);
+    return candidates.filter((entry) => last.get(entry.trace.device || null) === entry);
+  };
+  // The one frame that stands for a step (the hover preview's target): its last screen, whichever
+  // device that landed on.
+  const lightboxStepFrame = (group: ReportTraceGroup): LightboxEntry | null => {
+    const frames = lightboxStepFrames(group);
+    return frames.length ? frames[frames.length - 1] : null;
+  };
+
   // Screenshot lightbox: default to the final captured frame for each authored step so the view is
   // a concise visual summary. The optional expanded mode preserves access to every tool-level frame
   // — including each folded child dispatch's own capture, so a batched step's interactions are all
   // present (frames the row's fold would otherwise hide; duplicates within a row are skipped).
   const renderLightbox = () => {
-    type LightboxEntry = { trace: TraceStep; group: ReportTraceGroup; kid?: TraceChild; kidIndex?: number };
     const entries: LightboxEntry[] = groupTrace().flatMap((group): LightboxEntry[] => {
+      if (!st.lightboxAll) return lightboxStepFrames(group);
       const rows = [group.header, ...group.items].filter((row): row is TraceStep => Boolean(row));
-      const has = (f) => f && safeImageSrc(D.shots[f]);
-      if (!st.lightboxAll) {
-        const shots = rows.filter((t) => has(t.screenshotFile));
-        if (shots.length) return shots.slice(-1).map((trace) => ({ trace, group }));
-        // Every frame in this group sits on folded dispatches (row screenshotFile null, children
-        // captured): fall back to the group's last child frame so the default view still shows
-        // the step's final screen instead of skipping the step.
-        for (let r = rows.length - 1; r >= 0; r--) {
-          const kidList = rows[r].children || [];
-          for (let k = kidList.length - 1; k >= 0; k--) {
-            if (has(kidList[k].screenshotFile)) return [{ trace: rows[r], group, kid: kidList[k], kidIndex: k }];
-          }
-        }
-        return [];
-      }
       return rows.flatMap((trace) => {
         const seen = new Set([trace.screenshotFile]);
         return [
-          ...(has(trace.screenshotFile) ? [{ trace, group }] : []),
+          ...(lightboxShotAvailable(trace.screenshotFile) ? [{ trace, group }] : []),
           ...(trace.children || []).flatMap((c, k) => {
-            if (!has(c.screenshotFile) || seen.has(c.screenshotFile)) return [];
+            if (!lightboxShotAvailable(c.screenshotFile) || seen.has(c.screenshotFile)) return [];
             seen.add(c.screenshotFile);
             return [{ trace, group, kid: c, kidIndex: k }];
           }),
         ];
       });
     });
+    // A wall of screenshots from two devices is unreadable unless every frame says which screen it
+    // is. Each cell carries its device's name and lane color — the same lanes as the timeline — so
+    // a step that captured both devices reads as two labeled frames rather than two similar shots.
+    const galLanes = detailDevices(D.trace);
     const cells = entries.map(({ trace, group, kid, kidIndex }) => {
       const trailhead = Boolean(group.header && group.header.trailhead);
       const token = trailhead ? 'TRAILHEAD' : (group.num ? `STEP ${group.num}` : 'RUN');
       const label = (group.header && group.header.label) || trace.label;
       const tool = kid ? `${trace.label} · ${kid.label}` : (trace !== group.header ? trace.label : '');
       const file = kid ? kid.screenshotFile : trace.screenshotFile;
-      return `<button type="button" class="galcell" data-lightbox-step="${trace.i}"${kid ? ` data-lightbox-kid="${kidIndex}"` : ''}>
-        <div class="galshot" data-shot="${esc(file)}" data-shot-token="${esc(token)}" data-shot-label="${esc(label)}"${tool ? ` data-shot-tool="${esc(tool)}"` : ''} role="button" tabindex="0"><img alt="${esc(label)}" /></div>
+      const lane = trace.device ? galLanes.indexOf(trace.device) : -1;
+      const device = lane >= 0 ? trace.device : '';
+      const alt = device ? `${label} on the ${device} device` : label;
+      // The device name rides ABOVE the frame as a title bar, not below with the caption: reading
+      // a screenshot happens top-down, and a label under the image arrives after you have already
+      // tried to work out which screen you are looking at. Flush against the top edge so it reads
+      // as this frame's header without covering any of the captured screen.
+      const deviceBar = device
+        ? `<div class="galdevbar" title="Captured on the ${esc(device)} device"><span class="galdevdot" aria-hidden="true"></span>${esc(device)}</div>`
+        : '';
+      return `<button type="button" class="galcell${lane >= 0 ? ` devlane devlane-${lane}` : ''}"${lane >= 0 ? ` style="--lane-color:${laneColor(lane)}"` : ''} data-lightbox-step="${trace.i}"${kid ? ` data-lightbox-kid="${kidIndex}"` : ''}>
+        ${deviceBar}<div class="galshot" data-shot="${esc(file)}" data-shot-token="${esc(token)}" data-shot-label="${esc(label)}"${tool ? ` data-shot-tool="${esc(tool)}"` : ''}${device ? ` data-shot-device="${esc(device)}"` : ''} role="button" tabindex="0" aria-label="${esc(alt)}"><img alt="${esc(alt)}" /></div>
         <div class="cap"><span class="galchip${trailhead ? ' trailhead' : ''}">${token}</span><span class="gallabel">${esc(label)}</span>${tool ? `<span class="galtool">${esc(tool)}</span>` : ''}</div>
       </button>`;
     }).join('');
     const zoom = `<div class="lightboxzoom" role="group" aria-label="Thumbnail size"><button type="button" class="lightboxzoombtn" data-gal-zoom="-1" aria-label="Smaller thumbnails" title="Smaller thumbnails"${st.lightboxZoom <= 0 ? ' disabled' : ''}>−</button><button type="button" class="lightboxzoombtn" data-gal-zoom="1" aria-label="Larger thumbnails" title="Larger thumbnails"${st.lightboxZoom >= GAL_ZOOM_SIZES.length - 1 ? ' disabled' : ''}>+</button></div>`;
-    const toggle = `<div class="lightboxtoolbar"><button class="lightboxtoggle" type="button" role="switch" id="lightboxmode" aria-checked="${st.lightboxAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>Show all</span></button>${zoom}</div>`;
+    const toggle = `<div class="lightboxtoolbar"><button class="lightboxtoggle" type="button" role="switch" id="lightboxmode" aria-checked="${st.lightboxAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>Show all</span></button>${deviceLegendHtml()}${zoom}</div>`;
     const meta = entries.length ? `${entries.length} ${st.lightboxAll ? 'screenshots' : `step frame${entries.length === 1 ? '' : 's'}`}` : '';
     return viewPage('Lightbox', meta, `${toggle}${cells ? `<div class="gal" style="--galsize:${GAL_ZOOM_SIZES[st.lightboxZoom]}px">${cells}</div>` : `<div class="empty">No screenshots captured for this run.</div>`}`, 'lightboxpage');
   };
@@ -2200,11 +2815,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (row) {
       const body = el.querySelector('.fmtbody');
       if (!body) return;
-      body.innerHTML = formattedRowBody(row);
+      body.innerHTML = attachmentRowsHtml(rowAttachmentRefs(row)) + formattedRowBody(row);
+      wireAttachmentRows(body);
     } else if (event) {
       const pre = el.querySelector('pre');
       if (!pre) return;
       pre.textContent = eventPrettyText(event);
+      const refs = eventAttachmentRefs(event);
+      if (refs.length) {
+        pre.insertAdjacentHTML('beforebegin', attachmentRowsHtml(refs));
+        wireAttachmentRows(el);
+      }
     } else {
       return;
     }
@@ -2342,8 +2963,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
 
   const isPass = (s) => { const v = String((s.meta && s.meta.status) || '').toLowerCase(); return v === 'passed' || v === 'success'; };
   const isFail = (s) => { const v = String((s.meta && s.meta.status) || '').toLowerCase(); return v === 'failed' || v === 'error'; };
-  const indexOutcome = (s) => isFail(s) ? 'failed' : (s.meta && s.meta.selfHeal) ? 'selfheal' : isPass(s) ? 'passed' : 'other';
+  // Why the runner declined to run a trail, when it said.
+  const skipReason = (s) => String((s.meta && s.meta.skipReason) || '').trim();
+  const indexOutcome = (s) => isSkipped(s) ? 'skipped' : isFail(s) ? 'failed' : (s.meta && s.meta.selfHeal) ? 'selfheal' : isPass(s) ? 'passed' : 'other';
   const indexOutcomeLabel = (outcome) => outcome === 'selfheal' ? 'self-healed' : outcome;
+  // Everything the report MEASURES is measured over these, not over SESSIONS: a skipped trail
+  // consumed no time, no tokens and no money, and its row is a stub with none of those fields and
+  // none of the app/build provenance a real session carries. Every aggregate here reports "unknown"
+  // as soon as ONE input is missing, so leaving skips in doesn't just add a zero - it blanks the
+  // figure for the whole report the moment a single trail is held back.
+  const ranSessions = () => SESSIONS.filter((s) => !isSkipped(s));
   // The well-known `owner` metadata key: a run's owning group, rendered as the row subtitle and
   // the section key for the "Owner" sort.
   const runOwner = (s) => String((s.meta && s.meta.metadata && s.meta.metadata.owner) || '').trim();
@@ -2406,6 +3035,25 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     return href
       ? { tag: 'a', attrs: `href="${esc(href)}" target="_blank" rel="noopener noreferrer"`, interactive: true }
       : { tag: 'span', attrs: 'aria-disabled="true"', interactive: false };
+  };
+  // The checkbox that puts a run on a hand-picked stage. Rendered beside every run this document
+  // can stage, at row, attempt and matrix-cell level alike, so "these three" is expressible however
+  // the index happens to be grouped.
+  //
+  // A real <input type="checkbox"> because the row around it is already a click target: the native
+  // control brings its own keyboard activation and accessible checked state, and the handler stops
+  // propagation so ticking a run never also opens it.
+  //
+  // A run this document can't stage still gets the empty slot: it holds the gutter open so the rows
+  // beside it don't step sideways, and every layout below can count on the slot being there.
+  const EMPTY_PICK_SLOT = '<span class="idxpick idxpickempty" aria-hidden="true"></span>';
+  // A flat row's attempt history, in the same `st.idxOpen` set a matrix cell's history uses. Keyed
+  // by the latest attempt's session, which is what identifies that row.
+  const retryOpenKey = (session: number) => `retry:${session}`;
+  const pickControl = (s: SessionPayload, session: number, label: string) => {
+    if (!stageable(s)) return EMPTY_PICK_SLOT;
+    const on = st.pick.indexOf(session) >= 0;
+    return `<label class="idxpick${on ? ' on' : ''}" title="${esc(on ? `Remove ${label} from the selection` : `Select ${label} to compare`)}"><input type="checkbox" data-pick="${session}"${on ? ' checked' : ''} aria-label="${esc(`Select ${label} to compare`)}" /></label>`;
   };
   // Counts a link-out run can't derive from an absent payload come from the generator; null when it
   // supplied none, which renders blank rather than as a confident zero.
@@ -2510,10 +3158,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const needed = CELLS_LEFT_OF_ROW + inline * cell + (inline - 1) * CELL_GAP;
     return ` style="--idxcell-w: ${cell}px; --content-wide: ${Math.max(DEFAULT_CONTENT_WIDE, needed)}px"`;
   };
+  // Over the runs only. This asks "did every session agree on this value", and a skip stub agrees
+  // with nothing — it carries no appId, appVersion, buildNumber or commitSha, because there was no
+  // run to read them from. Counted, a single held-back trail would strip App version, Bundle ID,
+  // Build and Commit off the header of an otherwise uniform report.
   const sharedMeta = (key) => {
-    const first = SESSIONS[0] && SESSIONS[0].meta && SESSIONS[0].meta[key];
+    const ran = ranSessions();
+    const first = ran[0] && ran[0].meta && ran[0].meta[key];
     if (first == null || first === '') return null;
-    return SESSIONS.every((s) => s.meta && String(s.meta[key] || '') === String(first)) ? first : null;
+    return ran.every((s) => s.meta && String(s.meta[key] || '') === String(first)) ? first : null;
   };
   const dateLabel = (value) => {
     const raw = String(value || '').trim();
@@ -2537,6 +3190,37 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       <div class="idxsearch">${searchIcon}<input id="runsearch" type="search" aria-label="Search" placeholder="Search" autocomplete="off" value="${esc(st.runSearch)}" /></div>
       <details class="idxsort idxgroup" id="rungroup" data-rungroup><summary aria-label="Group runs by ${groupLabel}"><span class="idxsortvalue">${groupIcon}<span>${groupLabel}</span></span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu"><div class="idxsortmenulabel">Group by</div><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'status'}" data-run-group="status">Status</button><button class="idxsortoption" type="button" aria-pressed="${st.runGroup === 'owner'}" data-run-group="owner">Owner</button></div></details>
       <details class="idxsort idxorder" id="runsort" data-runsort><summary aria-label="Sort runs by ${sortLabel}"><span class="idxsortvalue">${sortIcon}<span>${sortLabel}</span></span><span class="idxsortchev" aria-hidden="true"></span></summary><div class="idxsortmenu"><div class="idxsortmenulabel">Sort by</div><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'name'}" data-run-sort="name">Name</button><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'original'}" data-run-sort="original">Order</button><button class="idxsortoption" type="button" aria-pressed="${st.runSort === 'cost'}" data-run-sort="cost">Cost</button></div></details>
+    </div>`;
+  };
+
+  // The selection's own bar: what is picked, what opening it will do, and the way back out. Only
+  // present once something is picked — an empty bar would be a permanent strip of chrome over a
+  // report nobody is comparing anything in.
+  const renderPickBar = () => {
+    const picked = st.pick.filter((i) => SESSIONS[i]);
+    if (!picked.length) return '';
+    // Says which kind of stage the button opens, because that is the difference between a real
+    // step-by-step comparison and runs parked side by side. The stage's own rule, asked of what is
+    // ticked, so the promise here and the stage it opens cannot disagree.
+    const note = picked.length === 1
+      ? 'one run'
+      : joinFor(picked) === 'step' ? 'one trail — lanes line up step by step' : 'different trails — shown side by side';
+    // A diff is a two-sided question, so it is offered only for a two-run pick. Deliberately NOT
+    // gated on same-trail: the same test on two device types is exactly the pair whose differences
+    // matter. Link-out stubs carry no payload, so a pick containing one has nothing to diff.
+    const diffable = picked.length === 2 && picked.every((i) => !isLinkOut(SESSIONS[i]));
+    // Announced: the count and note change under a checkbox the reader is still standing on, and a
+    // bar that appears silently is a bar a screen reader never mentions.
+    return `<div class="pickbar" role="region" aria-label="Selected runs" aria-live="polite">
+      <div class="indexshell pickbarcontent"${indexShellStyle()}>
+        <span class="pickcount"><strong>${picked.length}</strong> selected</span>
+        <span class="picknote">${esc(note)}</span>
+        <span class="pickactions">
+          <button class="btn" type="button" data-pick-clear>Clear</button>
+          ${diffable ? '<button class="btn" type="button" data-pick-diff title="Diff these two runs: tool calls and captured event streams">Diff the two</button>' : ''}
+          <button class="btn pickopen" type="button" data-pick-open>Compare selected</button>
+        </span>
+      </div>
     </div>`;
   };
 
@@ -2567,8 +3251,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const reportMenu = reportMenuItems
       ? `<details class="exportmenu" data-export-menu><summary aria-label="Report options" title="Report options"><span class="exportdots" aria-hidden="true"><span class="exportdot"></span><span class="exportdot"></span><span class="exportdot"></span></span></summary><div class="exportmenuitems">${reportMenuItems}</div></details>`
       : '';
+    const documentTrail = documentTrailScope();
+    const trailButton = documentTrail ? `<button class="btn" type="button" data-goto-trail="${esc(documentTrail)}" title="${esc(trailEntryTitle(documentTrail))}">Trail view</button>` : '';
+    const compareButton = compareViewAvailable() ? '<button class="btn" type="button" data-goto-compare title="Diff two runs: tool calls and captured event streams">Compare</button>' : '';
     return `<header class="indexheader"><div class="indexshell"${indexShellStyle()}>
-      <div class="title-row indexheadrow"><h1>Trailblaze Report</h1><div class="indexheadactions">${renderThemeToggle()}${reportMenu}</div></div>
+      <div class="title-row indexheadrow"><h1>Trailblaze Report</h1><div class="indexheadactions">${trailButton}${compareButton}${renderThemeToggle()}${reportMenu}</div></div>
       <div class="indexcontext"><div class="meta indexmeta">${meta}</div>${renderIndexControls()}</div>
       </div>
     </header>`;
@@ -2582,8 +3269,11 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const pass = outcomes.filter((outcome) => outcome === 'passed').length;
     const selfHeal = outcomes.filter((outcome) => outcome === 'selfheal').length;
     const fail = outcomes.filter((outcome) => outcome === 'failed').length;
+    const skipped = outcomes.filter((outcome) => outcome === 'skipped').length;
     const other = outcomes.filter((outcome) => outcome === 'other').length;
-    return `<div class="idxsummary"><span class="stat fail"><strong>${fail}</strong> failed</span><span class="stat selfheal"><strong>${selfHeal}</strong> self-healed</span><span class="stat pass"><strong>${pass}</strong> passed</span>${other ? `<span class="stat"><strong>${other}</strong> other</span>` : ''}</div>`;
+    // Skipped is shown only when there is one, and after the three verdicts, so the footer keeps
+    // reading as a pass/fail tally that a skip count annotates rather than participates in.
+    return `<div class="idxsummary"><span class="stat fail"><strong>${fail}</strong> failed</span><span class="stat selfheal"><strong>${selfHeal}</strong> self-healed</span><span class="stat pass"><strong>${pass}</strong> passed</span>${skipped ? `<span class="stat skip"><strong>${skipped}</strong> skipped</span>` : ''}${other ? `<span class="stat"><strong>${other}</strong> other</span>` : ''}</div>`;
   };
 
   const durationMs = (value) => {
@@ -2604,8 +3294,9 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
 
   const aggregateDurationLabel = () => {
-    const durations = SESSIONS.map((s) => durationMs(s.meta && s.meta.duration)).filter((value) => value != null);
-    if (!durations.length || durations.length !== SESSIONS.length) return '—';
+    const ran = ranSessions();
+    const durations = ran.map((s) => durationMs(s.meta && s.meta.duration)).filter((value) => value != null);
+    if (!durations.length || durations.length !== ran.length) return '—';
     const totalSeconds = Math.round(durations.reduce((sum, value) => sum + value, 0) / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -2630,13 +3321,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // Total across runs, null as soon as one is unknown — same rule llmCostTotal applies to calls.
   const sumRunCosts = (runs) => { const costs = runs.map(runLlmCost); return costs.some((c) => c == null) ? null : costs.reduce((sum, c) => sum + c, 0); };
 
-  const aggregateLlmCostLabel = () => { const total = sumRunCosts(SESSIONS); return total == null ? '—' : fmtCost(total); };
+  const aggregateLlmCostLabel = () => { const total = sumRunCosts(ranSessions()); return total == null ? '—' : fmtCost(total); };
 
   const renderIndexMetrics = () => {
     // Token totals have no link-out equivalent (the generator carries cost and call count, not
     // tokens), so a document holding any payload-less run reports them as unknown rather than as
     // the zero an empty call list would sum to.
-    const tokens = SESSIONS.some((s) => isLinkOut(s) && !(s.llm || []).length) ? '—' : llmTokensLabel(SESSIONS.flatMap((s) => s.llm || []));
+    const ran = ranSessions();
+    const tokens = ran.some((s) => isLinkOut(s) && !(s.llm || []).length) ? '—' : llmTokensLabel(ran.flatMap((s) => s.llm || []));
     return `<div class="indexmetrics"><span class="detailfooteritem"><span class="k">Total duration</span><span class="v">${esc(aggregateDurationLabel())}</span></span><span class="detailfooteritem"><span class="k">Total tokens</span><span class="v">${esc(tokens)}</span></span><span class="detailfooteritem"><span class="k">Total LLM cost</span><span class="v">${esc(aggregateLlmCostLabel())}</span></span></div>`;
   };
 
@@ -2678,7 +3370,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     });
   };
 
-  const outcomeRank = { failed: 0, selfheal: 1, passed: 2, other: 3 };
+  const outcomeRank = { failed: 0, selfheal: 1, passed: 2, skipped: 3, other: 4 };
   // Mixed-platform reports coalesce a trail's per-platform runs into one row: a cell per
   // platform+lane column, holding the attempt history of every retry group that ran in that lane
   // (one group in the normal case - a sharded build only sends a trail to a single device per
@@ -2722,10 +3414,13 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       ? Array.from(entry.cells.values()).some((cell: any) => cell.attempts.length > 1)
       : entry.attempts.length > 1;
     // Every LLM call a row paid for: all attempts, and on a matrix row all platforms' cells —
-    // the total the row subtitle shows and the Cost sort orders by.
+    // the total the row subtitle shows and the Cost sort orders by. Skipped attempts are dropped
+    // for the same reason they're out of the footer totals: a skip paid for nothing, and
+    // `sumRunCosts` is null-if-any-unknown, so one held-back attempt would turn a real, finite row
+    // cost into "unknown" and sort the row last under Cost.
     const entryRuns = (entry) => (useMatrix
       ? Array.from(entry.cells.values()).flatMap((cell: any) => cell.attempts)
-      : entry.attempts).map((attempt) => attempt.s);
+      : entry.attempts).map((attempt) => attempt.s).filter((s) => !isSkipped(s));
     const compareOrder = (a, b) => {
       if (st.runSort === 'name') return String(a.latest.s.meta.title || '').localeCompare(String(b.latest.s.meta.title || '')) || a.first - b.first;
       if (st.runSort === 'cost') {
@@ -2755,7 +3450,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const searchText = (s, outcome) => {
       const status = String((s.meta && s.meta.status) || 'unknown').toLowerCase();
       const outcomeLabel = indexOutcomeLabel(outcome);
-      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceClassifier, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, ...Object.values(s.meta.metadata || {})]
+      return [s.meta.title, status, outcomeLabel !== status ? outcomeLabel : null, s.meta.platform, s.meta.deviceClassifier, s.meta.deviceType, s.meta.device, s.meta.target, s.meta.appId, s.meta.appVersion, s.meta.steps, s.meta.duration, s.meta.ranAt, s.meta.buildNumber, s.meta.commitSha, s.meta.branch, s.meta.failureCode, s.meta.skipReason, ...Object.values(s.meta.metadata || {})]
         .filter((v) => v != null && v !== '').join(' ').toLowerCase();
     };
     const facts = (pairs) => `<div class="idxfacts">${pairs.map(([label, value]) => `<div class="idxfact"><div class="k">${label}</div><div class="v">${esc(value != null && value !== '' ? value : '—')}</div></div>`).join('')}</div>`;
@@ -2767,15 +3462,26 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const parts = [...(steps != null ? [`${steps} step${steps === 1 ? '' : 's'}`] : []), fmtCostShort(sumRunCosts(entryRuns(entry)))];
       return `<div class="idxstats">${esc(parts.join(' · '))}</div>`;
     };
-    const attemptRows = (attempts) => attempts.map((attempt, attemptIndex) => {
+    // `offered` is the attempt the row ABOVE this panel already puts a checkbox on — a retry
+    // group's summary and a matrix cell both pick their latest attempt. Two controls for one run
+    // would carry two different names for it and split focus restore between them, so the attempt
+    // they stand for keeps only the gutter slot.
+    const attemptRows = (attempts, offered = -1) => attempts.map((attempt, attemptIndex) => {
       const label = indexOutcomeLabel(attempt.outcome);
       const ctl = openControl(attempt.s, 'div', `data-session="${attempt.i}" role="button" tabindex="0"`);
-      return `<${ctl.tag} class="idxattemptrow" ${ctl.attrs} data-outcome="${esc(attempt.outcome)}" aria-label="${ctl.interactive ? 'Open attempt' : 'Attempt'} ${attemptIndex + 1}, ${esc(label)}${ctl.interactive ? '' : ' (no report to open)'}">
+      // A skipped attempt takes the reason where a run shows its Duration/Tools/LLM facts, which
+      // are all "—" for it anyway. The row's own subtitle only carries the LATEST attempt's reason,
+      // so without this a trail skipped Monday and run Tuesday shows a "skipped" dot in its history
+      // with nothing anywhere in the report saying why.
+      const attemptFacts = attempt.outcome === 'skipped' && skipReason(attempt.s)
+        ? `<div class="idxattemptskip" title="${esc(skipReason(attempt.s))}">${esc(skipReason(attempt.s))}</div>`
+        : runFacts(attempt.s);
+      return `<div class="idxattemptline">${attempt.i === offered ? EMPTY_PICK_SLOT : pickControl(attempt.s, attempt.i, `attempt ${attemptIndex + 1}`)}<${ctl.tag} class="idxattemptrow" ${ctl.attrs} data-outcome="${esc(attempt.outcome)}" aria-label="${ctl.interactive ? 'Open attempt' : 'Attempt'} ${attemptIndex + 1}, ${esc(label)}${ctl.interactive ? '' : ' (no report to open)'}">
             <span class="idxstatus" role="img" aria-label="${esc(label)}" title="${esc(label)}"><span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true"></span></span>
             <div class="idxattemptmain"><span class="idxattemptlabel">Attempt ${attemptIndex + 1}</span><span class="idxattemptstatus ${esc(attempt.outcome)}">${esc(label)}</span></div>
-            ${runFacts(attempt.s)}
+            ${attemptFacts}
             <span class="arr" aria-hidden="true">→</span>
-          </${ctl.tag}>`;
+          </${ctl.tag}></div>`;
     }).join('');
     const renderRow = (entry) => {
       const { attempts, latest, outcome } = entry;
@@ -2784,25 +3490,34 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const search = attempts.map((attempt) => searchText(attempt.s, attempt.outcome)).join(' ');
       // The owner subtitle is redundant inside its own owner section — the section head already says it.
       const owner = st.runGroup === 'owner' ? '' : runOwner(s);
-      const context = [owner, qualifyFlatRowsByDevice ? runDeviceType(s) : ''].filter(Boolean).join(' · ');
+      // The skip reason is the only thing a skipped row has to say — it has no duration, no tools,
+      // no LLM calls — so it takes the subtitle line the way a failure's error takes the detail
+      // view. Without it the row is a title under a "Skipped" heading and the reader still has to
+      // go open the YAML to learn why.
+      const context = [owner, qualifyFlatRowsByDevice ? runDeviceType(s) : '', skipReason(s)].filter(Boolean).join(' · ');
       const rowMain = `<div class="idxmain"><div class="nm">${esc(s.meta.title || ('Run ' + (i + 1)))}</div>${context ? `<div class="idxowner">${esc(context)}</div>` : ''}${entryStats(entry)}</div>`;
       if (attempts.length > 1) {
         const attemptLabels = attempts.map((attempt) => indexOutcomeLabel(attempt.outcome));
         const attemptDots = attempts.map((attempt, attemptIndex) => `<span class="idxstatusdot ${esc(attempt.outcome)}" aria-hidden="true" title="Attempt ${attemptIndex + 1}: ${esc(attemptLabels[attemptIndex])}"></span>`).join('');
-        return `<details class="idxretry" data-run-entry data-search="${esc(search)}"><summary class="idxrow idxretryrow" aria-label="${attempts.length} attempts for ${esc(s.meta.title || ('Run ' + (i + 1)))}">
+        // The expansion is kept in state, not just in the DOM: ticking a checkbox re-renders the
+        // index, and a group that lived only as an open <details> would snap shut under the reader
+        // — taking the box they were standing on with it. Matrix cells already work this way.
+        const retryKey = retryOpenKey(i);
+        return `<details class="idxretry" data-run-entry data-retry-toggle="${i}"${st.idxOpen.indexOf(retryKey) >= 0 ? ' open' : ''} data-search="${esc(search)}"><summary class="idxrow idxretryrow" aria-label="${attempts.length} attempts for ${esc(s.meta.title || ('Run ' + (i + 1)))}">
+          ${pickControl(s, i, String(s.meta.title || ('Run ' + (i + 1))))}
           <span class="idxretrydots" role="img" aria-label="Attempt history: ${esc(attemptLabels.join(', '))}">${attemptDots}</span>
           ${rowMain}
           ${facts([['Latest', s.meta.duration], ['Attempts', attempts.length]])}
           <span class="idxretrychev" aria-hidden="true"></span>
-        </summary><div class="idxattempts">${attemptRows(attempts)}</div></details>`;
+        </summary><div class="idxattempts">${attemptRows(attempts, i)}</div></details>`;
       }
       const ctl = openControl(s, 'div', `data-session="${i}" role="button" tabindex="0"`);
-      return `<${ctl.tag} class="idxrow" data-run-entry ${ctl.attrs} data-search="${esc(search)}">
+      return `<div class="idxrowline" data-run-entry data-search="${esc(search)}">${pickControl(s, i, String(s.meta.title || ('Run ' + (i + 1))))}<${ctl.tag} class="idxrow" ${ctl.attrs}>
           <span class="idxstatus" role="img" aria-label="${esc(outcomeLabel)}" title="${esc(outcomeLabel)}"><span class="idxstatusdot ${esc(outcome)}" aria-hidden="true"></span></span>
           ${rowMain}
           ${runFacts(s)}
           <span class="arr">→</span>
-        </${ctl.tag}>`;
+        </${ctl.tag}></div>`;
     };
     // --- mixed-platform matrix rows ---------------------------------------------------------
     const matrixCols = useMatrix ? matrixColumns : [];
@@ -2826,11 +3541,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       const tools = runToolCallCount(cell.latest.s);
       const llmCalls = runLlmCallCount(cell.latest.s);
       const ctl = openControl(cell.latest.s, 'button', `type="button" data-session="${cell.latest.i}"`);
-      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"><${ctl.tag} class="idxcellopen" ${ctl.attrs} aria-label="${ctl.interactive ? 'Open latest' : 'Latest'} ${esc(col.label)} run, ${esc(outcomeLabel)}${ctl.interactive ? '' : ' (no report to open)'}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? `<span class="pvtxt">${esc(duration)}</span>` : ''}</span><span class="pcounts">${llmCalls != null ? `${llmCalls} LLM` : ''}</span></${ctl.tag}>${chev}</div>`;
+      // A skipped cell has no room for its reason beside the column label and the counts, so the
+      // reason rides the tooltip and the accessible name; the row subtitle carries it as text.
+      const reason = skipReason(cell.latest.s);
+      return `<div class="idxcell ${esc(cell.outcome)}${retried ? ' retried' : ''}"${reason ? ` title="${esc(reason)}"` : ''}>${pickControl(cell.latest.s, cell.latest.i, `${col.label} run of ${row.latest.s.meta.title || 'this trail'}`)}<${ctl.tag} class="idxcellopen" ${ctl.attrs} aria-label="${ctl.interactive ? 'Open latest' : 'Latest'} ${esc(col.label)} run, ${esc(outcomeLabel)}${reason ? `: ${esc(reason)}` : ''}${ctl.interactive ? '' : ' (no report to open)'}"><span class="pk">${esc(col.label)}</span><span class="pcounts">${tools != null ? `${tools} tool${tools === 1 ? '' : 's'}` : ''}</span><span class="pv">${value}${duration ? `<span class="pvtxt">${esc(duration)}</span>` : ''}</span><span class="pcounts">${llmCalls != null ? `${llmCalls} LLM` : ''}</span></${ctl.tag}>${chev}</div>`;
     };
     const renderMatrixRow = (row) => {
       const title = row.latest.s.meta.title || ('Run ' + (row.latest.i + 1));
       const owner = st.runGroup === 'owner' ? '' : runOwner(row.latest.s);
+      // Distinct skip reasons across the row's cells. One trail can be skipped on some devices and
+      // run on others, and for different stated reasons, so this is a set rather than the latest
+      // cell's reason - showing only one would attribute it to devices it was never written for.
+      const reasons = Array.from(new Set(Array.from(row.cells.values()).map((cell: any) => skipReason(cell.latest.s)).filter(Boolean)));
+      const subtitle = [owner, ...reasons].filter(Boolean).join(' · ');
       const search = Array.from(row.cells.values()).flatMap((cell: any) => cell.attempts.map((attempt) => searchText(attempt.s, attempt.outcome))).join(' ');
       const cells = matrixCols.map((col) => renderCell(row, col)).join('');
       const openPanels = matrixCols.filter((col) => {
@@ -2838,14 +3561,21 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         return cell && cell.attempts.length > 1 && st.idxOpen.indexOf(cellKey(row, col)) >= 0;
       });
       const panel = openPanels.length
-        ? `<div class="idxattempts idxmatrixattempts">${openPanels.map((col) => `<div class="idxatthead">${esc(col.label)}</div>${attemptRows(row.cells.get(col.key).attempts)}`).join('')}</div>`
+        ? `<div class="idxattempts idxmatrixattempts">${openPanels.map((col) => `<div class="idxatthead">${esc(col.label)}</div>${attemptRows(row.cells.get(col.key).attempts, row.cells.get(col.key).latest.i)}`).join('')}</div>`
         : '';
+      // When these runs are one trail on several devices, the row's title IS the trail: clicking it
+      // opens the cross-device view, the same as the header button. The per-device cells beside it
+      // keep opening their own run.
+      const rowTrail = trailKey(row.latest.s);
+      const name = trailViewAvailableFor(rowTrail)
+        ? `<button class="nm nmtrail" type="button" data-goto-trail="${esc(rowTrail)}" title="${esc(trailEntryTitle(rowTrail))}">${esc(title)}</button>`
+        : `<div class="nm">${esc(title)}</div>`;
       return `<div class="idxentry" data-run-entry data-search="${esc(search)}">
-          <div class="idxrow idxmatrixrow"><div class="idxmain"><div class="nm">${esc(title)}</div>${owner ? `<div class="idxowner">${esc(owner)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>
+          <div class="idxrow idxmatrixrow"><div class="idxmain">${name}${subtitle ? `<div class="idxowner">${esc(subtitle)}</div>` : ''}${entryStats(row)}</div><div class="idxcells">${cells}</div></div>
           ${panel}</div>`;
     };
     const renderEntry = useMatrix ? renderMatrixRow : renderRow;
-    const sectionLabel = { failed: 'Failed', selfheal: 'Self-healed', passed: 'Passed', other: 'Other' };
+    const sectionLabel = { failed: 'Failed', selfheal: 'Self-healed', passed: 'Passed', skipped: 'Skipped', other: 'Other' };
     // `ordered` is already owner-alphabetized (ownerless last), so distinct owners come out in
     // section order and each section's runs retain the selected ordering.
     const ownerSections = () => {
@@ -2859,12 +3589,1539 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         `<section class="idxsection" data-index-section="owner:${esc(owner)}"><div class="idxsectionhead">${owner ? esc(owner) : 'No owner'} <span class="idxsectioncount">${runs.length}</span></div><div class="idx">${runs.map(renderEntry).join('')}</div></section>`).join('');
     };
     const rows = st.runGroup === 'owner' ? ownerSections()
-      : ['failed', 'selfheal', 'passed', 'other'].map((outcome) => {
+      : ['failed', 'selfheal', 'passed', 'skipped', 'other'].map((outcome) => {
           const runs = ordered.filter((run) => run.outcome === outcome);
           if (!runs.length) return '';
           return `<section class="idxsection" data-index-section="${outcome}"><div class="idxsectionhead ${outcome}">${sectionLabel[outcome]} <span class="idxsectioncount">${runs.length}</span></div><div class="idx">${runs.map(renderEntry).join('')}</div></section>`;
         }).join('');
     return `<div class="idxsections">${rows}<div class="empty" id="runempty" ${ordered.length ? 'hidden' : ''}>No runs match these filters.</div></div>`;
+  };
+
+  // ── Trail view: the same trail across devices ─────────────────────────────────────────────────
+  // One lane per run, one row per authored step (the trail YAML is the shared spine, so lanes join
+  // on the step number). Two projections of the same matrix: `steps` aligns lanes row-by-row so
+  // per-device actualizations of one instruction sit side by side; `time` stretches each lane to
+  // its own wall clock so pacing differences and idle gaps become visible.
+  // The reader can hide lanes (st.trailLanesOff) to compare just the devices they care about, so
+  // the trail surfaces are built over a SELECTION of sessions. Inside the view a "lane" is a
+  // position in that selection — matrix columns, replay panes, and their DOM keys all agree on it —
+  // and only the exits into the rest of the viewer (Open →, the Lightbox) carry the session index.
+  // An off-set that would empty the stage falls back to every lane: a view of nothing helps nobody.
+  const trailSel = () => {
+    const scope = trailScopeSessions();
+    const on = scope.filter((i) => !st.trailLanesOff[i]);
+    return on.length ? on : scope;
+  };
+  // ── Device lanes: ONE session that drove several devices ──────────────────────────────────────
+  // A multi-device session (switchDevice handovers, TraceStep.device) loaded on its own splits
+  // into one lane per DEVICE instead of one lane per run: same matrix, same three projections,
+  // but the columns are the session's own devices. Only for a single-session document — a
+  // multi-run document keeps its run lanes, where each lane is a whole session (a device split
+  // INSIDE a cross-run comparison would multiply columns without a shared clock to defend it).
+  // Memoized on the trace array because hydration replaces it in place and every render asks —
+  // on its LENGTH too, since a live run appends rows to the same array and a handover arriving
+  // mid-run must re-split the lanes.
+  const deviceLanesMemo = { trace: null as TraceStep[] | null, traceLength: -1, lanes: [] as DeviceLaneTrace[], models: [] as ReportTraceModel[] };
+  const trailDeviceLanes = () => {
+    const scope = trailScopeSessions();
+    if (scope.length !== 1) return [];
+    const s = SESSIONS[scope[0]];
+    if (deviceLanesMemo.trace !== s.trace || deviceLanesMemo.traceLength !== (s.trace || []).length) {
+      deviceLanesMemo.trace = s.trace;
+      deviceLanesMemo.traceLength = (s.trace || []).length;
+      deviceLanesMemo.lanes = traceDeviceLanes(s.trace || []);
+      // Every device lane shares the SESSION's clock origin. The lanes ran interleaved in one run,
+      // so zeroing each on its own first record — the multi-run rule, where runs genuinely started
+      // at different wall times — would slide them against each other and hide the handovers.
+      const t0 = resolveTraceModel(s).traceT0;
+      deviceLanesMemo.models = deviceLanesMemo.lanes.map((lane) => ({ ...buildReportTraceModel(lane.trace, (s.llm || []).length), traceT0: t0 }));
+    }
+    return deviceLanesMemo.lanes;
+  };
+  const trailDeviceMode = () => trailDeviceLanes().length > 0;
+  const trailDeviceModels = () => { trailDeviceLanes(); return deviceLanesMemo.models; };
+  // Which session a lane's shots/clip/links resolve against: in device mode every lane is the one
+  // session; otherwise the lane's selected run.
+  const trailLaneSession = (lane: number) => trailDeviceMode() ? trailScopeSessions()[0] : trailSel()[lane];
+  const trailShotSrc = (lane, file) => safeImageSrc(((SESSIONS[trailLaneSession(lane)] || {}).shots || {})[file]);
+  // A lane's playable recording, and the epoch origin its clock is measured from. Only archives
+  // loaded in this page carry a clip (see VideoClip), so every consumer needs the no-clip path.
+  // In device mode only lane 0 gets the clip: recording runs on the session's launch device — the
+  // first lane by construction (traceDeviceLanes orders by first appearance) — and handing the
+  // same video to a companion lane would show the wrong device's screen. Companions step stills.
+  const trailClip = (lane: number) => {
+    if (trailDeviceMode()) return lane === 0 ? (SESSIONS[trailScopeSessions()[0]] || {}).videoClip || null : null;
+    return (SESSIONS[trailSel()[lane]] || {}).videoClip || null;
+  };
+  const trailLaneT0 = (lane: number) => SESSIONS[trailLaneSession(lane)] ? resolveTraceModel(SESSIONS[trailLaneSession(lane)]).traceT0 : null;
+  // A lane's failure anchor, for the cell outcomes: only a run the index calls failed has one, so a
+  // tolerated failed row inside a passing run can never redden its step. In device mode the one
+  // session's anchor belongs to exactly the lane whose device the anchor row acted on — the other
+  // devices didn't die, they were abandoned mid-run.
+  const trailLaneFailureAnchor = (lane: number) => {
+    const s = SESSIONS[trailLaneSession(lane)];
+    if (!s || indexOutcome(s) !== 'failed') return null;
+    const anchor = s.trace[traceFailureAnchorIndex(s.trace)] || null;
+    if (trailDeviceMode()) {
+      const laneDevice = (trailDeviceLanes()[lane] || {}).device ?? null;
+      return anchor && (anchor.device ?? null) === laneDevice ? anchor : null;
+    }
+    return anchor;
+  };
+  const trailMatrix = () => {
+    const matrix = buildTrailMatrix(
+      trailDeviceMode() ? trailDeviceModels() : trailSel().map((i) => resolveTraceModel(SESSIONS[i])),
+      (lane, file) => Boolean(file && trailShotSrc(lane, file)),
+      isLlmTurnRow,
+      trailLaneFailureAnchor,
+      trailScopeJoin(),
+    );
+    // Device lanes carry every step header for alignment; drop the cells where a device only sat
+    // and watched, so idle reads as the gap it was.
+    return trailDeviceMode() ? pruneIdleTrailCells(matrix) : matrix;
+  };
+  // Lane labels prefer the device classifier (`android-phone`, `ios-ipad`) — the identity the run
+  // was sharded by. Two runs of one classifier (a retry pair loaded side by side) stay two lanes,
+  // disambiguated by position rather than folded like the index matrix would. Labels are derived
+  // over EVERY session, hidden or not, so a lane keeps its "(2)" while its twin is toggled off.
+  const trailAllLanes = () => {
+    if (trailDeviceMode()) {
+      const only = trailScopeSessions()[0];
+      const s = SESSIONS[only];
+      const outcome = indexOutcome(s);
+      const classifier = runDeviceClassifier(s);
+      return trailDeviceLanes().map((lane, i) => ({
+        session: only,
+        // Binding names ARE the trail's own vocabulary for its devices. The unattributed-prefix
+        // lane (device null) is the start device — name it what the index names the run. The start
+        // lane also carries the run's classifier, because that is the one device the session
+        // metadata actually describes; companion identities aren't in the payload (yet).
+        label: lane.device ? (i === 0 && classifier ? `${lane.device} · ${classifier}` : lane.device) : classifier || 'start device',
+        on: true,
+        // One run, one verdict: the session's outcome dots every device lane, matching the index.
+        // Which lane the failure LANDED on is the anchor's job (trailLaneFailureAnchor), not the dot's.
+        outcome,
+        outcomeLabel: indexOutcomeLabel(outcome),
+        duration: '',
+      }));
+    }
+    const seen = new Map<string, number>();
+    // A stage spanning trails is titled by how many runs it holds, so the lane is the only place the
+    // reader can learn WHICH run each column is: lead with the run's own name and keep the device as
+    // the qualifier. A trail's own stage already names the trail in its heading, so there the device
+    // alone is the distinguishing fact and stays the whole label.
+    const nameByRun = Boolean(st.trailPick) && trailScopeJoin() === 'position';
+    return trailScopeSessions().map((session) => {
+      const s = SESSIONS[session];
+      const device = runDeviceClassifier(s) || [runPlatform(s), runDeviceType(s)].filter(Boolean).join(' · ');
+      const named = nameByRun ? String((s.meta && s.meta.title) || '') : '';
+      let label = [named, device].filter(Boolean).join(' · ') || `Run ${session + 1}`;
+      const n = (seen.get(label) || 0) + 1;
+      seen.set(label, n);
+      if (n > 1) label = `${label} (${n})`;
+      return { session, label, on: trailSel().indexOf(session) >= 0, outcome: indexOutcome(s), outcomeLabel: indexOutcomeLabel(indexOutcome(s)), duration: (s.meta && s.meta.duration) || '' };
+    });
+  };
+  const trailLanes = () => trailAllLanes().filter((lane) => lane.on).map((lane, index) => ({ ...lane, index }));
+  // Seconds are rounded before minutes are split off them: rounding the remainder instead lets a
+  // step of 119.6s render as "1m 60s".
+  const fmtTrailMs = (ms) => {
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    const seconds = Math.round(ms / 1000);
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
+  const trailRowOpen = (num) => (num in st.trailRowsOpen ? !!st.trailRowsOpen[num] : st.trailAll);
+  const trailStepToken = (num) => num === 0 ? 'TRAILHEAD' : `STEP ${num}`;
+  // Every trail control names its device: these surfaces exist to compare N devices' takes on one
+  // step, so a label that only says which STEP it belongs to is ambiguous by construction.
+  // `session` (not the lane position) keys `data-shot-run`: the Lightbox resolves frames straight
+  // off SESSIONS, and lane positions shift as lanes are toggled. The device rides along explicitly
+  // because a device-lane split puts EVERY lane on session 0 — deriving the name from the session
+  // index would label every companion's frame with the start device.
+  const trailFrameHtml = (row: TrailRow, frame, session: number, device: string, captioned: boolean) => `<figure class="trailframe">
+      <div class="galshot" data-shot="${esc(frame.file)}" data-shot-run="${session}" data-shot-device="${esc(device)}" data-shot-token="${esc(trailStepToken(row.num))}" data-shot-label="${esc(row.label)}" data-shot-tool="${esc(frame.label)}" role="button" tabindex="0" aria-label="${esc(device)} · ${esc(trailStepToken(row.num))} screenshot: ${esc(frame.label)}"><img alt="${esc(frame.label)}" loading="lazy" /></div>
+      ${captioned ? `<figcaption class="trailframecap">${esc(frame.label)}</figcaption>` : ''}
+    </figure>`;
+  const trailCellOutcome = (cell: TrailCell) => !cell.ok ? 'failed' : cell.selfHeal ? 'selfheal' : 'passed';
+  const trailOpenLabel = (row: TrailRow, device: string) => `Open ${trailStepToken(row.num)} on ${device} in that run's timeline`;
+  // `join` comes from the matrix being drawn rather than from the state, so a cell can't disagree
+  // with the stage it sits in — and the rule isn't re-derived once per cell.
+  const trailCellHtml = (row: TrailRow, cell: TrailCell | null, session: number, device: string, open: boolean, join: TrailJoin) => {
+    if (!cell) return `<div class="trailcell missing"><span class="traildot missing" aria-hidden="true"></span><div class="trailcard trailnotrun">${join === 'position' ? 'no step here' : 'not reached'}</div></div>`;
+    const outcome = trailCellOutcome(cell);
+    const frames = open ? cell.frames : (cell.lastFrame ? [cell.lastFrame] : []);
+    const shots = frames.map((frame) => trailFrameHtml(row, frame, session, device, open)).join('');
+    const stats = [
+      cell.durationMs != null ? fmtTrailMs(cell.durationMs) : null,
+      cell.toolCount ? `${cell.toolCount} tool${cell.toolCount === 1 ? '' : 's'}` : null,
+      open && cell.frames.length > 1 ? `${cell.frames.length} frames` : null,
+    ].filter(Boolean).join(' · ');
+    return `<div class="trailcell ${outcome}${open ? ' open' : ''}">
+        <span class="traildot ${outcome}" aria-hidden="true"></span>
+        <div class="trailcard">
+          ${shots ? `<div class="trailshots${open ? ' all' : ''}">${shots}</div>` : ''}
+          ${cell.labelDiffers ? `<div class="trailvariant" title="This device's own wording of the step">${esc(cell.label)}</div>` : ''}
+          <div class="trailcellmeta"><span class="trailcellstats">${esc(stats)}</span><button class="trailopenbtn" type="button" data-trail-open="${session}:${cell.headerId}" aria-label="${esc(trailOpenLabel(row, device))}">Open →</button></div>
+        </div>
+      </div>`;
+  };
+  const trailStepsBody = (lanes, matrix) => {
+    const heads = lanes.map((lane) => `<div class="traillanehead">
+        <span class="idxstatusdot ${esc(lane.outcome)}" role="img" aria-label="${esc(lane.outcomeLabel)}" title="${esc(lane.outcomeLabel)}"></span>
+        <span class="traillanename">${esc(lane.label)}</span>
+        ${lane.duration ? `<span class="traillanedur">${esc(lane.duration)}</span>` : ''}
+      </div>`).join('');
+    const rows = matrix.rows.map((row) => {
+      const open = trailRowOpen(row.num);
+      const label = `<div class="trailstep">
+          <button class="trailsteptoggle" type="button" data-trail-row="${row.num}" aria-expanded="${open}" aria-label="${open ? 'Show final frame only for' : 'Show every frame of'} ${esc(trailStepToken(row.num))}">
+            <span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span><span class="trailstepdisclosure" aria-hidden="true"><span class="trailstepchev${open ? ' open' : ''}"></span></span>
+          </button>
+          <div class="trailsteplabel">${esc(row.label)}</div>
+        </div>`;
+      return `<div class="trailrowgroup">${label}${row.cells.map((cell, pos) => trailCellHtml(row, cell, (lanes[pos] || {}).session ?? pos, (lanes[pos] || {}).label || '', open, matrix.join)).join('')}</div>`;
+    }).join('');
+    return `<div class="trailscroll"><div class="trailgrid" style="--trail-lanes:${lanes.length}"><div class="trailcorner"></div>${heads}${rows}</div></div>`;
+  };
+  // The Replay projection: the trail played back as it happened, one column per device on a single
+  // shared wall clock. The stage shows what every device had on screen at the playhead's instant —
+  // so the reader watches the devices diverge, one racing ahead while another is still on step 4 —
+  // and the strip underneath is the whole run in miniature: proportional step blocks per lane, a
+  // tick at every capture, one playhead across all of them. The clock math is pure
+  // (run-report-trail-replay); this renders a shell that wireTrailReplay then drives imperatively,
+  // because a full re-render per animation frame would be unaffordable.
+  const trailReplayBody = (lanes, matrix, timeline: ReplayTimeline) => {
+    if (!replayable(timeline)) {
+      return `<div class="trailscroll"><div class="rpempty">
+          <h2>Nothing to replay</h2>
+          <p>Replay needs timestamps to put the devices on one clock, and none of these runs recorded any. The Map and Grid projections don't need them.</p>
+        </div></div>`;
+    }
+    const total = timeline.totalMs;
+    const pct = (ms: number) => `${(clampTime(ms, total) / total) * 100}%`;
+    // The stage: one column per device. Two stacked images per screen so a new capture can slide in
+    // over the one it replaces instead of the frame flickering through blank.
+    const stage = lanes.map((lane) => `<div class="rplane" data-rp-lane="${lane.index}">
+        <div class="rplanehead" data-rp-pick="${lane.index}" role="button" tabindex="0" aria-pressed="false" aria-label="Follow ${esc(lane.label)} with the arrow keys">
+          <span class="idxstatusdot ${esc(lane.outcome)}" role="img" aria-label="${esc(lane.outcomeLabel)}" title="${esc(lane.outcomeLabel)}"></span>
+          <span class="traillanename">${esc(lane.label)}</span>
+          ${trailClip(lane.index) ? `<span class="rpsource" title="This device recorded video, so its pane plays the recording rather than stepping through screenshots">REC</span>` : ''}
+          <span class="rpstatus" data-rp-status="${lane.index}"></span>
+        </div>
+        <div class="rpchip" data-rp-chip="${lane.index}"><span class="galchip rpchipnum">—</span><span class="rpchiptxt"></span></div>
+        <div class="rpscreen" data-rp-screen="${lane.index}">
+          <div class="rpbox">
+            <div class="rpframe" data-rp-frame="${lane.index}">
+              ${trailClip(lane.index) ? `<video class="rpvid" data-rp-vid="${lane.index}" src="${esc(trailClip(lane.index).url)}" muted playsinline preload="auto" disablepictureinpicture tabindex="-1" aria-label="${esc(lane.label)} screen recording"></video>` : ''}
+              <img class="rpimg" data-rp-img="${lane.index}:0" alt="" draggable="false" />
+              <img class="rpimg" data-rp-img="${lane.index}:1" alt="" draggable="false" />
+              <div class="rpmarks" data-rp-marks="${lane.index}" aria-hidden="true"></div>
+            </div>
+          </div>
+          <span class="rpwaiting" data-rp-waiting="${lane.index}">not started</span>
+        </div>
+        <div class="rplanefoot"><button class="trailopenbtn" type="button" data-trail-open="${lane.session}:0" data-rp-open="${lane.index}" aria-label="Open the step ${esc(lane.label)} is on in that run's timeline" disabled>Open →</button></div>
+      </div>`).join('');
+    // The strip: names in one column, rails in the other, so a single playhead can span every rail.
+    const names = lanes.map((lane) => `<div class="rpstripname" data-rp-pick="${lane.index}" role="button" tabindex="-1" aria-label="Follow ${esc(lane.label)} with the arrow keys">${esc(lane.label)}</div>`).join('');
+    const rails = timeline.lanes.map((lane) => {
+      const blocks = lane.steps.map((step) => `<span class="rpblock ${step.outcome}" style="left:${pct(step.startMs)};width:${Math.max(0.35, ((step.endMs - step.startMs) / total) * 100)}%" title="${esc(`${trailStepToken(step.num)} · ${step.label} · ${(lanes[lane.index] || {}).label || ''} · ${fmtTrailMs(step.endMs - step.startMs)}`)}"></span>`).join('');
+      // A tick per capture: these are exactly the instants the stage above changes.
+      const ticks = lane.captures.map((capture) => `<span class="rpcap" style="left:${pct(capture.atMs)}"></span>`).join('');
+      // And a taller pip per interaction, so the rail reads as what the device DID, not only when
+      // its screen was photographed — on a lane recording video the two barely overlap.
+      const acts = lane.events.map((event) => `<span class="rpact ${esc(event.mark.kind)}" style="left:${pct(event.atMs)}"></span>`).join('');
+      // Past its own end a lane is visibly finished rather than just empty.
+      const after = lane.endMs < total ? `<span class="rpdone" style="left:${pct(lane.endMs)};width:${((total - lane.endMs) / total) * 100}%"></span>` : '';
+      // The death instant, marked where it happened. A click lands there via the rail's own seek —
+      // the marker just makes the one instant worth jumping to findable without hunting.
+      const fail = lane.failure ? `<span class="rpfailmark" style="left:${pct(lane.failure.atMs)}" role="img" aria-label="${esc(`${(lanes[lane.index] || {}).label || ''} failed at ${fmtReplayClock(lane.failure.atMs)}`)}" title="${esc(`${(lanes[lane.index] || {}).label || ''} · ${trailStepToken(lane.failure.stepNum)} · failed here — click to jump and follow this device`)}"><svg viewBox="0 0 8 8" aria-hidden="true"><path d="M1.5 1.5l5 5M6.5 1.5l-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>` : '';
+      return `<div class="rprail" data-rp-rail="${lane.index}">${after}${blocks}${ticks}${acts}${fail}</div>`;
+    }).join('');
+    return `<div class="rpwrap" tabindex="0" role="group" aria-label="Trail replay" aria-describedby="rpkeys">
+        <div class="rpstage" style="--rp-lanes:${lanes.length}">${stage}</div>
+        <div class="rptransport">
+          <button class="timelinecontrol play" type="button" data-rp-play aria-label="Play the replay" title="Play (space)"><svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5v17L20 12Z" fill="currentColor"/></svg></button>
+          <button class="btn rpspeed" type="button" data-rp-speed title="Playback speed">${st.trailSpeed}×</button>
+          <span class="rpclock" data-rp-clock aria-live="off">0:00 / ${esc(fmtReplayClock(total))}</span>
+          <span class="rpkeys" id="rpkeys">space plays · ← → steps · ↑ ↓ picks a device · esc clears</span>
+          ${lanes.some((lane) => trailClip(lane.index)) ? '' : `<span class="rpnote" title="Replay plays the capture video when a run recorded one. These runs did not, so each pane steps between screenshots.">screenshots only</span>`}
+        </div>
+        <div class="rpstrip">
+          <div class="rpstripnames"><div class="rpstripaxisgap"></div>${names}</div>
+          <div class="rprails" data-rp-rails role="slider" tabindex="0" aria-label="Replay position" aria-valuemin="0" aria-valuemax="${Math.round(total)}" aria-valuenow="0" aria-valuetext="0:00">
+            <div class="rpaxis" data-rp-axis></div>
+            ${rails}
+            <div class="rphead" data-rp-head style="left:0%"></div>
+            <div class="rphoverline" data-rp-hoverline hidden></div>
+            <div class="rphover" data-rp-hover hidden></div>
+          </div>
+        </div>
+      </div>`;
+  };
+  // The Map projection: the trail as a fan-out / fan-in graph. Each authored step is a small hub
+  // card holding the natural-language text; wires fan OUT from it to one screenshot card per
+  // device — every device in its own lane — and all lanes merge BACK into the next step's hub.
+  // Reading down follows the trail, reading across compares devices at that moment. Cards size
+  // to their screenshots (portrait phones narrow, landscape tablets wide), so the world lays out
+  // in normal flow, the wires are drawn from measured positions after layout, and the camera
+  // pans and zooms over the result.
+  const trailMapBody = (lanes, matrix) => {
+    const title = trailScopeTitle();
+    const startDevices = lanes.map((lane) => `<span class="wpdevchip">
+        <span class="wpdot ${esc(lane.outcome)}" role="img" aria-label="${esc(lane.outcomeLabel)}" title="${esc(lane.outcomeLabel)}"></span>
+        <span class="wpdevname">${esc(lane.label)}</span>${lane.duration ? `<span class="wpdevdur">${esc(lane.duration)}</span>` : ''}
+      </span>`).join('');
+    const start = `<section class="wpnode wpstart" data-wp-start>
+        <div class="wpstartkicker">Trail · ${lanes.length} device${lanes.length === 1 ? '' : 's'}</div>
+        <h2 class="wpstarttitle">${esc(title)}</h2>
+        <div class="wpstartdevices">${startDevices}</div>
+      </section>`;
+    const steps = matrix.rows.map((row, i) => {
+      // Each frame carries a pace bar: this device's time on the step as a share of the slowest
+      // device's, so pacing differences read at a glance without leaving the map.
+      const slowestMs = Math.max(...row.cells.map((cell) => (cell && cell.durationMs) || 0), 1);
+      const frames = lanes.map((lane) => {
+        const cell = row.cells[lane.index];
+        const head = (outcome: string) => `<div class="wpframehead"><span class="wpdot ${outcome}" aria-hidden="true"></span><span class="wpframedev">${esc(lane.label)}</span></div>`;
+        // An unreached step keeps the lane's slot (dashed ghost) so lanes hold their x position,
+        // but it gets no wires: the device's chain visibly stops feeding the next hub.
+        if (!cell) return `<div class="wpframe missing">${head('missing')}<div class="wpshot"><span class="wpnotreached">not reached</span></div></div>`;
+        const outcome = trailCellOutcome(cell);
+        const stats = [
+          cell.durationMs != null ? fmtTrailMs(cell.durationMs) : null,
+          cell.toolCount ? `${cell.toolCount} tool${cell.toolCount === 1 ? '' : 's'}` : null,
+          cell.frames.length > 1 ? `${cell.frames.length} frames` : null,
+        ].filter(Boolean).join(' · ');
+        const frameShot = (frame) => `<div class="galshot" data-shot="${esc(frame.file)}" data-shot-run="${lane.session}" data-shot-device="${esc(lane.label)}" data-shot-token="${esc(trailStepToken(row.num))}" data-shot-label="${esc(row.label)}" data-shot-tool="${esc(frame.label)}" role="button" tabindex="0" aria-label="${esc(lane.label)} · ${esc(trailStepToken(row.num))} screenshot: ${esc(frame.label)}"><img alt="${esc(frame.label)}" loading="lazy" /></div>`;
+        // The All screenshots switch applies to the flow too: every frame of the step joins the
+        // card as a strip, instead of the step's final frame alone.
+        const shown = st.trailAll ? cell.frames : (cell.lastFrame ? [cell.lastFrame] : []);
+        const shots = shown.length
+          ? `<div class="wpshots${st.trailAll && shown.length > 1 ? ' all' : ''}">${shown.map((frame) => `<div class="wpshot">${frameShot(frame)}</div>`).join('')}</div>`
+          : `<div class="wpshot"><span class="wpnotreached">no capture</span></div>`;
+        const pace = cell.durationMs != null
+          ? `<span class="wppace" title="${esc(fmtTrailMs(cell.durationMs))} — slowest device took ${esc(fmtTrailMs(slowestMs))}"><span class="wppacefill ${outcome}" style="width:${Math.max(4, Math.round(cell.durationMs / slowestMs * 100))}%"></span></span>`
+          : '';
+        return `<div class="wpframe ${outcome}" data-wp-frame="${i}:${lane.index}">${head(outcome)}${shots}${pace}
+            ${cell.labelDiffers ? `<div class="wpvariant" title="This device's own wording of the step">${esc(cell.label)}</div>` : ''}
+            <div class="wpframefoot"><span class="wpframestats">${esc(stats)}</span><button class="trailopenbtn" type="button" data-trail-open="${lane.session}:${cell.headerId}" aria-label="${esc(trailOpenLabel(row, lane.label))}">Open →</button></div>
+          </div>`;
+      }).join('');
+      return `<section class="wphub" data-wp-hub="${i}">
+          <span class="galchip${row.num === 0 ? ' trailhead' : ''}">${trailStepToken(row.num)}</span><div class="wpnodelabel">${esc(row.label)}</div>
+        </section>
+        <div class="wpframes">${frames}</div>`;
+    }).join('');
+    return `<div class="trailcanvas"><div class="trailworld wpflow${st.trailDir === 'h' ? ' wphoriz' : ''}">
+        <svg class="wpwires" aria-hidden="true"><defs><marker id="trailarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" /></marker><marker id="trailarrowfail" class="failed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" /></marker></defs></svg>
+        ${start}${steps}
+      </div></div>`;
+  };
+  // The map camera: drag the background (or scroll) to pan, pinch / ctrl+wheel / the header
+  // buttons to zoom. Camera state lives in st.trailCam so mode flips and Open→ round-trips return
+  // to the same framing — but NOT in the route: a shared link should land on the fitted default,
+  // not wherever the sender happened to leave the canvas.
+  const wireTrailMapCanvas = () => {
+    const canvas = root.querySelector<HTMLElement>('.trailcanvas');
+    if (!canvas) return;
+    const world = canvas.querySelector<HTMLElement>('.trailworld');
+    const horizontal = world.classList.contains('wphoriz');
+    // Nodes size to their screenshots, so the world is measured live rather than precomputed;
+    // fitCamera/zoomedCamera/wirePlan then own the arithmetic (run-report-trail-camera).
+    const fitCam = (whole: boolean) => fitCamera({
+      viewW: canvas.clientWidth || 1,
+      viewH: canvas.clientHeight || 1,
+      worldW: world.offsetWidth || 1,
+      worldH: world.offsetHeight || 1,
+      horizontal,
+      whole,
+    });
+    // The camera persists (st.trailCam) only once the reader has moved it; an untouched camera
+    // keeps re-fitting as lazy screenshots arrive and widen the nodes under it.
+    let touched = !!st.trailCam;
+    let cam: TrailCamera = st.trailCam || fitCam(false);
+    const apply = () => {
+      if (touched) st.trailCam = cam;
+      world.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.s})`;
+      // Step hubs counter-scale so their text keeps a readable size as the camera pulls back —
+      // the step wording is the map's spine, and a map you can't read the steps of is a wall of
+      // thumbnails. The hub floats in the gap between two ranks, so the growth is capped.
+      world.style.setProperty('--wp-inv', String(hubCounterScale(cam.s)));
+    };
+    apply();
+    // Wires connect measured positions: each hub fans out to that step's frames, and every frame
+    // merges into the next hub. offset* coordinates are pre-transform, so the camera never
+    // invalidates them — only layout changes (a screenshot arriving) do.
+    const wires = world.querySelector<SVGElement>('svg.wpwires');
+    const measure = (el: HTMLElement): WireBox => ({ left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight });
+    const drawWires = () => {
+      if (!wires) return;
+      wires.setAttribute('width', String(world.offsetWidth || 0));
+      wires.setAttribute('height', String(world.offsetHeight || 0));
+      const startNode = world.querySelector<HTMLElement>('[data-wp-start]');
+      const hubs: WireHub[] = Array.from(world.querySelectorAll<HTMLElement>('[data-wp-hub]')).map((hub, i) => ({
+        hub: measure(hub),
+        frames: Array.from(world.querySelectorAll<HTMLElement>(`[data-wp-frame^="${i}:"]`))
+          .map((frame) => ({ box: measure(frame), failed: frame.classList.contains('failed') })),
+      }));
+      const paths = wirePlan({ start: startNode ? measure(startNode) : null, hubs }, horizontal)
+        .map((path) => `<path class="wpwire${path.failed ? ' failed' : ''}" d="${path.d}" marker-end="url(#${path.failed ? 'trailarrowfail' : 'trailarrow'})" />`)
+        .join('');
+      const defs = wires.querySelector('defs');
+      wires.innerHTML = (defs ? defs.outerHTML : '') + paths;
+    };
+    drawWires();
+    // Screenshots arrive one at a time and each one reshapes the world. Redrawing per image would
+    // measure and rebuild the whole overlay dozens of times in a burst, so loads coalesce into a
+    // single frame's work.
+    let pendingFrame = 0;
+    const scheduleRedraw = () => {
+      if (pendingFrame) return;
+      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+      pendingFrame = raf(() => {
+        pendingFrame = 0;
+        drawWires();
+        if (!touched) { cam = fitCam(false); apply(); }
+      }) as unknown as number;
+    };
+    world.addEventListener('load', (e) => {
+      if ((e.target as HTMLElement).tagName !== 'IMG') return;
+      scheduleRedraw();
+    }, true);
+    // A step-jump tween in flight yields to ANY manual gesture — a reader who grabs the canvas
+    // mid-animation owns the camera from that instant, no fighting.
+    let tweenFrame = 0;
+    const stopTween = () => {
+      if (tweenFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(tweenFrame);
+      tweenFrame = 0;
+    };
+    const zoomAt = (px: number, py: number, factor: number) => {
+      stopTween();
+      touched = true;
+      cam = zoomedCamera(cam, px, py, factor);
+      apply();
+    };
+    canvas.onwheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      // Wheel and pinch both zoom — on a canvas this size, button-only zoom is a dozen clicks from
+      // an overview to a readable step. Panning is the drag, which works from anywhere. (A trackpad
+      // pinch reaches the page as ctrl+wheel, and shift+wheel keeps a one-handed pan.)
+      if (e.shiftKey) { stopTween(); touched = true; cam = { x: cam.x - e.deltaX, y: cam.y - e.deltaY, s: cam.s }; apply(); }
+      else zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * (e.ctrlKey || e.metaKey ? 0.01 : 0.0025)));
+    };
+    let pan: { px: number; py: number; x: number; y: number } | null = null;
+    canvas.onpointerdown = (e: PointerEvent) => {
+      // Interactive pieces keep their clicks (zoom gallery, Open →); everything else — node
+      // surfaces included — is a pan handle, so the canvas drags from anywhere.
+      if ((e.target as HTMLElement).closest && (e.target as HTMLElement).closest('.galshot, button, a')) return;
+      stopTween();
+      pan = { px: e.clientX, py: e.clientY, x: cam.x, y: cam.y };
+      canvas.classList.add('panning');
+      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+    };
+    canvas.onpointermove = (e: PointerEvent) => {
+      if (!pan) return;
+      touched = true;
+      cam = { x: pan.x + (e.clientX - pan.px), y: pan.y + (e.clientY - pan.py), s: cam.s };
+      apply();
+    };
+    canvas.onpointerup = canvas.onpointercancel = () => { pan = null; canvas.classList.remove('panning'); };
+    root.querySelectorAll<HTMLElement>('[data-trail-cam]').forEach((el) => el.onclick = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (el.dataset.trailCam === 'fit') { stopTween(); touched = true; cam = fitCam(true); apply(); }
+      // Zoom about the middle of the canvas, so the content the reader is looking at stays put
+      // instead of sliding toward a corner.
+      else zoomAt(rect.width / 2, rect.height / 2, el.dataset.trailCam === 'in' ? 1.4 : 1 / 1.4);
+    });
+    // ── Arrow keys walk the trail ── each press glides the camera to the next step's whole rank
+    // (its hub plus every device's take on it) and marks the hub, so the map can be READ step by
+    // step instead of only panned. The flight eases out and interpolates zoom geometrically
+    // (tweenCamera): the jump reads as travel across the trail, not a cut.
+    const animateTo = (target: TrailCamera) => {
+      stopTween();
+      touched = true;
+      const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+      const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!raf || reduced) { cam = target; apply(); return; }
+      const from = cam;
+      const FLIGHT_MS = 340;
+      let start = 0;
+      const step = (now: number) => {
+        if (!start) start = now;
+        const t = Math.min(1, (now - start) / FLIGHT_MS);
+        cam = tweenCamera(from, target, 1 - Math.pow(1 - t, 3));
+        apply();
+        tweenFrame = t < 1 ? raf(step) : 0;
+      };
+      tweenFrame = raf(step);
+    };
+    const clearHubFocus = () => world.querySelectorAll('.wpfocus').forEach((el) => el.classList.remove('wpfocus'));
+    const hubCount = world.querySelectorAll('[data-wp-hub]').length;
+    const focusHub = (i: number) => {
+      const hub = world.querySelector<HTMLElement>(`[data-wp-hub="${i}"]`);
+      if (!hub) return;
+      clearHubFocus();
+      hub.classList.add('wpfocus');
+      // Measured fresh at every press: screenshots keep arriving and reshaping the world, so a
+      // framing computed once at wire time would drift off its step.
+      const box = unionBox([measure(hub),
+        ...Array.from(world.querySelectorAll<HTMLElement>(`[data-wp-frame^="${i}:"]`)).map(measure)]);
+      if (box) animateTo(focusCamera({ viewW: canvas.clientWidth || 1, viewH: canvas.clientHeight || 1, box }));
+    };
+    if (hubCount) trailNavKeys = trailStepNavKeys(hubCount, focusHub, clearHubFocus);
+  };
+  // The Grid's arrow keys: the same cursor over the same steps, but here a step is a row, so the
+  // page scrolls to it and its label lights up.
+  const wireTrailGridNav = () => {
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('.trailrowgroup'));
+    if (!rows.length) return;
+    const clearRowFocus = () => rows.forEach((row) => row.classList.remove('trailrowfocus'));
+    const focusRow = (i: number) => {
+      clearRowFocus();
+      const row = rows[i];
+      if (!row) return;
+      row.classList.add('trailrowfocus');
+      // .trailrowgroup is display:contents — it has no box of its own to scroll to; the step's
+      // label cell does, and it is what the reader is stepping between anyway.
+      const label = row.querySelector<HTMLElement>('.trailstep');
+      const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (label && label.scrollIntoView) label.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start', inline: 'nearest' });
+    };
+    trailNavKeys = trailStepNavKeys(rows.length, focusRow, clearRowFocus);
+  };
+  // Replay's live driver. Playback repaints on every animation frame, so nothing here re-renders:
+  // the shell is stamped once and this mutates the pieces that changed. Playhead position and the
+  // followed device are view state (st.trailT / st.trailLane), not route state — a shared link
+  // should open at the start, not wherever the sender paused.
+  let trailReplayStop: (() => void) | null = null;
+  let trailReplayKeys: ((e: KeyboardEvent) => void) | null = null;
+  // Map and Grid step with the arrow keys too (re-set on every wire pass by whichever projection is
+  // on screen). One cursor implementation serves both: →/↓ next step, ←/↑ previous, Home/End the
+  // ends, Escape lets go. The cursor starts BEFORE the trail, so the first press lands on the
+  // trailhead rather than skipping it.
+  let trailNavKeys: ((e: KeyboardEvent) => void) | null = null;
+  const trailStepNavKeys = (count: number, go: (i: number) => void, clear: () => void) => {
+    let at = -1;
+    return (e: KeyboardEvent) => {
+      const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1
+        : (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 0;
+      if (dir) { e.preventDefault(); at = Math.max(0, Math.min(count - 1, at + dir)); go(at); return; }
+      if (e.key === 'Home') { e.preventDefault(); at = 0; go(at); return; }
+      if (e.key === 'End') { e.preventDefault(); at = count - 1; go(at); return; }
+      if (e.key === 'Escape' && at >= 0) { e.preventDefault(); at = -1; clear(); }
+    };
+  };
+  const stopTrailReplay = () => {
+    if (!trailReplayStop) return;
+    const stop = trailReplayStop;
+    trailReplayStop = null;
+    stop();
+  };
+  // Registered by the wiring so a re-render can silence the media elements it created: the new
+  // render replaces the <video> nodes, but a DETACHED element goes on playing, so a lane's
+  // recording would keep decoding forever behind whatever the reader navigated to. Separate from
+  // stopTrailReplay because pausing the transport must not deregister the teardown.
+  let trailReplayMediaStop: (() => void) | null = null;
+  const stopTrailReplayMedia = () => {
+    if (!trailReplayMediaStop) return;
+    const quiet = trailReplayMediaStop;
+    trailReplayMediaStop = null;
+    quiet();
+  };
+  const wireTrailReplay = () => {
+    trailReplayKeys = null;
+    const wrap = root.querySelector<HTMLElement>('.rpwrap');
+    if (!wrap) return;
+    const lanes = trailLanes();
+    const timeline = buildReplayTimeline(trailMatrix());
+    if (!replayable(timeline)) return;
+    const total = timeline.totalMs;
+    const rails = wrap.querySelector<HTMLElement>('[data-rp-rails]');
+    const head = wrap.querySelector<HTMLElement>('[data-rp-head]');
+    const clock = wrap.querySelector<HTMLElement>('[data-rp-clock]');
+    const playBtn = wrap.querySelector<HTMLElement>('[data-rp-play]');
+    const el = <T extends Element = HTMLElement>(selector: string) => wrap.querySelector<T>(selector);
+    // Frames come out of the archive as blob/data URLs, so warming them costs no network — but a
+    // cold decode still lands as a blank pane mid-playback. Ask for all of them up front.
+    timeline.lanes.forEach((lane) => lane.captures.forEach((capture) => {
+      const src = trailShotSrc(lane.index, capture.file);
+      if (src && typeof Image === 'function') { const warm = new Image(); warm.src = src; }
+    }));
+    // Per-lane paint memo: which of the two stacked images is showing, and what it is showing, so
+    // an unchanged lane is left completely alone.
+    const shown = timeline.lanes.map(() => ({ layer: 0, file: '', step: NaN, phase: '', marks: '', video: false, aspect: '' }));
+    let playing = false;
+    // The frame box is what everything inside a pane is positioned against, so it is set from the
+    // pixel dimensions of whatever is actually on screen — anything else and the marks are drawn in
+    // the wrong space. As a plain w/h number, because the CSS has to multiply by it.
+    const setAspect = (lane: number, w: number, h: number) => {
+      const memo = shown[lane];
+      if (!memo || !(w > 0) || !(h > 0)) return;
+      const aspect = w / h;
+      // Sub-percent wobble between captures is held, not applied (aspectHeld) — re-deriving the
+      // frame's width from every capture nudged the picture sideways all through playback.
+      if (aspectHeld(Number(memo.aspect), aspect)) return;
+      memo.aspect = String(aspect);
+      const frame = el(`[data-rp-frame="${lane}"]`);
+      if (frame) frame.style.setProperty('--rp-ar', memo.aspect);
+    };
+    // One media element per lane that recorded, plus the duration its clock needs. Duration only
+    // exists once the browser has read the container, so until then videoClipTimeAt declines and
+    // the lane shows screenshots — the pane is never blank waiting on metadata.
+    const media = timeline.lanes.map((lane) => {
+      const vid = el<HTMLVideoElement>(`[data-rp-vid="${lane.index}"]`);
+      const clip = trailClip(lane.index);
+      if (!vid || !clip) return null;
+      const entry = { vid, clip, t0: trailLaneT0(lane.index), duration: null as number | null };
+      const readDuration = () => {
+        if (Number.isFinite(vid.duration) && vid.duration > 0) entry.duration = vid.duration;
+        // Sizing the frame from the video's own pixels keeps the pane's aspect honest even before
+        // a single screenshot has loaded.
+        setAspect(lane.index, vid.videoWidth, vid.videoHeight);
+      };
+      vid.onloadedmetadata = readDuration;
+      vid.ondurationchange = readDuration;
+      readDuration();
+      return entry;
+    });
+    stopTrailReplayMedia();
+    trailReplayMediaStop = () => media.forEach((entry) => {
+      if (!entry) return;
+      entry.vid.onloadedmetadata = null;
+      entry.vid.ondurationchange = null;
+      entry.vid.pause();
+      // Dropping the source is what actually frees the decoder; pause alone leaves it resident.
+      entry.vid.removeAttribute('src');
+      if (entry.vid.load) entry.vid.load();
+    });
+    // The interaction overlay: every mark still lingering at t, drawn over the frame in the same
+    // percentage space the timeline's own overlay uses (markHtml), so a tap in Replay sits exactly
+    // where that step's screenshot would have put it. Rebuilt only when the live set changes —
+    // re-stamping identical HTML every frame would restart the animation on each one.
+    const paintMarks = (lane: ReplayLane, t: number, memo: { marks: string }) => {
+      const box = el(`[data-rp-marks="${lane.index}"]`);
+      if (!box) return;
+      const windowMs = markWindowMs(TRAIL_MARK_LINGER_MS, st.trailSpeed, playing);
+      const live = laneMarksAt(lane, t, windowMs, TRAIL_MARK_MAX);
+      const key = live.map((event) => `${event.atMs}:${event.mark.kind}`).join('|');
+      if (key === memo.marks) return;
+      memo.marks = key;
+      // Oldest first, so the freshest mark is the one on top and the one that pinged last.
+      box.innerHTML = live.map((event, n) =>
+        `<div class="rpmark">${markHtml({ i: `rp${lane.index}x${n}`, mark: event.mark })}</div>`).join('');
+    };
+    const paintLane = (lane: ReplayLane, t: number) => {
+      const state = laneStateAt(lane, t);
+      const memo = shown[lane.index];
+      const chip = el(`[data-rp-chip="${lane.index}"]`);
+      if (state.step && memo.step !== state.step.num) {
+        memo.step = state.step.num;
+        const num = chip?.querySelector('.rpchipnum');
+        const txt = chip?.querySelector('.rpchiptxt');
+        if (num) num.textContent = state.step.num === 0 ? 'TRAILHEAD' : `STEP ${state.step.num}`;
+        if (txt) txt.textContent = state.step.label;
+        if (chip) chip.className = `rpchip ${state.step.outcome}`;
+        const open = el(`[data-rp-open="${lane.index}"]`) as HTMLButtonElement | null;
+        // The Open→ target follows the playhead: it opens whatever step this device is on now.
+        // Keyed by SESSION — openSession's index — where everything else here is lane-positional.
+        if (open) { open.dataset.trailOpen = `${(lanes[lane.index] || {}).session}:${state.step.headerId}`; open.disabled = false; }
+      }
+      if (state.phase !== memo.phase) {
+        memo.phase = state.phase;
+        const status = el(`[data-rp-status="${lane.index}"]`);
+        if (status) {
+          // A crashed lane's terminal state is WHERE IT DIED, not "done" in passing green — the
+          // instant here is the same one the strip's ✕ badge marks.
+          const failed = state.phase === 'done' && lane.failure;
+          status.textContent = failed
+            ? `failed ${fmtReplayClock((lane.failure as ReplayLaneFailure).atMs)}`
+            : state.phase === 'done' ? `done ${fmtReplayClock(lane.endMs)}` : '';
+          status.className = `rpstatus ${failed ? 'failed' : state.phase}`;
+        }
+        const pane = el(`[data-rp-lane="${lane.index}"]`);
+        if (pane) pane.className = `rplane ${state.phase}${st.trailLane === lane.index ? ' selected' : ''}`;
+      }
+      paintMarks(lane, t, memo);
+      // A lane that recorded plays its recording wherever the recording reaches; outside that span
+      // (before it started rolling, past where it stopped) it falls back to captures, which may
+      // well be fresher than the video's last frame.
+      const clip = media[lane.index];
+      const videoAt = clip ? videoClipTimeAt(clip.clip, clip.t0, t, clip.duration) : null;
+      const onVideo = videoAt != null;
+      if (onVideo !== memo.video) {
+        memo.video = onVideo;
+        if (clip) clip.vid.classList.toggle('on', onVideo);
+        // Handing the frame's shape over with the picture. A recording and a capture of the same
+        // device need not agree — a rotated capture is a different rectangle — and the marks belong
+        // to whichever one is actually on screen.
+        const held = el<HTMLImageElement>(`[data-rp-img="${lane.index}:${memo.layer}"]`);
+        if (onVideo && clip) setAspect(lane.index, clip.vid.videoWidth, clip.vid.videoHeight);
+        else if (held) setAspect(lane.index, held.naturalWidth, held.naturalHeight);
+        // The still layers step aside rather than being torn down, so leaving the video's span
+        // resumes the cross-fade from whatever it was last showing.
+        wrap.querySelectorAll<HTMLElement>(`[data-rp-img^="${lane.index}:"]`).forEach((img) => {
+          img.classList.toggle('under', onVideo);
+        });
+        if (!onVideo && clip && !clip.vid.paused) clip.vid.pause();
+      }
+      const file = state.capture ? state.capture.file : '';
+      const waiting = el(`[data-rp-waiting="${lane.index}"]`);
+      // An empty pane means one of two different things — the device hasn't reached the trail yet,
+      // or it is working on a step that hasn't captured anything so far. A lane on video is never
+      // waiting: the recording covers the idle stretches a screenshot lane has nothing for.
+      if (waiting) {
+        waiting.hidden = Boolean(file) || onVideo;
+        waiting.textContent = state.phase === 'pending' ? 'not started' : 'no capture yet';
+      }
+      if (file === memo.file) return;
+      memo.file = file;
+      if (!file) {
+        // Scrubbing back before a lane's first capture has to empty the frame, not just label it:
+        // leaving the last capture up put "no capture yet" over a screenshot from further along the
+        // run, which reads as the device being on a screen it had not reached.
+        wrap.querySelectorAll<HTMLElement>(`[data-rp-img^="${lane.index}:"]`).forEach((img) => img.classList.remove('on'));
+        return;
+      }
+      // The incoming capture slides in over the outgoing one: two stacked layers, and the swap waits
+      // for the decode so a half-painted frame never animates in.
+      const next = memo.layer === 0 ? 1 : 0;
+      const incoming = el<HTMLImageElement>(`[data-rp-img="${lane.index}:${next}"]`);
+      const outgoing = el<HTMLImageElement>(`[data-rp-img="${lane.index}:${memo.layer}"]`);
+      const src = trailShotSrc(lane.index, file);
+      if (!incoming || !src) return;
+      const flip = () => {
+        // A later capture may have overtaken this one while it decoded; the memo is the referee.
+        if (memo.file !== file) return;
+        if (!memo.video) setAspect(lane.index, incoming.naturalWidth, incoming.naturalHeight);
+        incoming.classList.add('on');
+        if (outgoing) outgoing.classList.remove('on');
+        memo.layer = next;
+      };
+      incoming.onload = flip;
+      incoming.onerror = flip;
+      incoming.src = src;
+      if (incoming.complete) flip();
+    };
+    // Keeping a recording on the shared clock. While playing, the element plays ITSELF at the
+    // replay's speed and is only corrected when it drifts — seeking every animation frame is what
+    // makes scrubbed video stutter, because each seek discards the decode pipeline. Paused, the
+    // position is authoritative and set exactly.
+    const DRIFT_TOLERANCE_SEC = 0.25;
+    const syncMedia = (t: number) => {
+      media.forEach((entry) => {
+        if (!entry) return;
+        const want = videoClipTimeAt(entry.clip, entry.t0, t, entry.duration);
+        if (want == null) return;
+        if (!playing) {
+          if (!entry.vid.paused) entry.vid.pause();
+          if (Math.abs(entry.vid.currentTime - want) > 0.01) entry.vid.currentTime = want;
+          return;
+        }
+        // The rate carries the clip's own duration/window scale, not just the UI speed: playing at
+        // the bare speed walks off the clock at that ratio and turns the drift correction below into
+        // a seek about once a second. A rate the element refuses throws, and this runs inside the
+        // playback loop — an uncaught throw here would stop every lane, not just this one, so a
+        // refusal degrades to the drift correction doing the synchronizing on its own.
+        try {
+          entry.vid.playbackRate = videoClipRate(entry.clip, entry.duration, st.trailSpeed);
+        } catch (e) { /* keep playing at whatever rate the element kept */ }
+        if (Math.abs(entry.vid.currentTime - want) > DRIFT_TOLERANCE_SEC) entry.vid.currentTime = want;
+        // Autoplay policy can refuse a muted play() in some embeddings; the lane then simply holds
+        // its frame rather than the whole replay failing.
+        if (entry.vid.paused && entry.vid.play) { const p = entry.vid.play(); if (p && p.catch) p.catch(() => {}); }
+      });
+    };
+    const paint = (t: number) => {
+      st.trailT = clampTime(t, total);
+      timeline.lanes.forEach((lane) => paintLane(lane, st.trailT));
+      syncMedia(st.trailT);
+      const at = `${(st.trailT / total) * 100}%`;
+      if (head) head.style.left = at;
+      if (clock) clock.textContent = `${fmtReplayClock(st.trailT)} / ${fmtReplayClock(total)}`;
+      if (rails) {
+        rails.setAttribute('aria-valuenow', String(Math.round(st.trailT)));
+        rails.setAttribute('aria-valuetext', fmtReplayClock(st.trailT));
+      }
+    };
+    // Also the authority on whether the recordings should be rolling: syncMedia reads this flag, so
+    // every route into and out of playback (button, space, scrub, the loop's own end) moves the
+    // video with it and no path can leave a lane playing on underneath a paused replay.
+    const setPlaying = (on: boolean) => {
+      playing = on;
+      if (!on) media.forEach((entry) => { if (entry && !entry.vid.paused) entry.vid.pause(); });
+      if (!playBtn) return;
+      playBtn.innerHTML = on
+        ? '<span class="transporticon stopicon" aria-hidden="true"></span>'
+        : '<svg class="transporticon playicon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5v17L20 12Z" fill="currentColor"/></svg>';
+      playBtn.setAttribute('aria-label', on ? 'Pause the replay' : 'Play the replay');
+      playBtn.setAttribute('title', on ? 'Pause (space)' : 'Play (space)');
+    };
+    const play = () => {
+      // Playing from the end restarts: the alternative is a play button that does nothing.
+      const from = st.trailT >= total ? 0 : st.trailT;
+      setPlaying(true);
+      paint(from);
+      trailReplayStop = startPlaybackLoop(() => st.trailSpeed, (elapsed) => {
+        const at = from + elapsed;
+        paint(at);
+        if (at < total) return true;
+        // Stop at the end and stay there, so the last state of every device is what you're left
+        // looking at.
+        trailReplayStop = null;
+        setPlaying(false);
+        return false;
+      });
+    };
+    const pause = () => { stopTrailReplay(); setPlaying(false); };
+    const seek = (t: number) => { pause(); paint(t); };
+    if (playBtn) playBtn.onclick = () => { if (trailReplayStop) pause(); else play(); };
+    const speedBtn = wrap.querySelector<HTMLElement>('[data-rp-speed]');
+    if (speedBtn) speedBtn.onclick = () => {
+      st.trailSpeed = TRAIL_SPEEDS[(TRAIL_SPEEDS.indexOf(st.trailSpeed) + 1) % TRAIL_SPEEDS.length];
+      speedBtn.textContent = `${st.trailSpeed}×`;
+      // The rAF loop reads the new multiplier on its own next tick, but a rolling media element
+      // keeps its old rate until told, and the mark linger window is speed-scaled too.
+      syncMedia(st.trailT);
+    };
+    // Following a device: its rail is outlined, and the arrow keys switch from the trail's own step
+    // boundaries to that device's captures.
+    const applySelection = () => {
+      wrap.querySelectorAll<HTMLElement>('[data-rp-pick]').forEach((pick) => {
+        const on = st.trailLane === +pick.dataset.rpPick!;
+        if (pick.hasAttribute('aria-pressed')) pick.setAttribute('aria-pressed', String(on));
+      });
+      wrap.querySelectorAll<HTMLElement>('[data-rp-rail]').forEach((rail) => {
+        rail.classList.toggle('selected', st.trailLane === +rail.dataset.rpRail!);
+      });
+      wrap.querySelectorAll<HTMLElement>('[data-rp-lane]').forEach((pane) => {
+        pane.classList.toggle('selected', st.trailLane === +pane.dataset.rpLane!);
+      });
+      wrap.querySelectorAll<HTMLElement>('.rpstripname').forEach((name) => {
+        name.classList.toggle('selected', st.trailLane === +name.dataset.rpPick!);
+      });
+    };
+    const selectLane = (index: number | null) => {
+      st.trailLane = index != null && timeline.lanes[index] ? index : null;
+      applySelection();
+    };
+    wrap.querySelectorAll<HTMLElement>('[data-rp-pick]').forEach((pick) => {
+      pick.onclick = (e) => { if (e) e.stopPropagation(); const index = +pick.dataset.rpPick!; selectLane(st.trailLane === index ? null : index); };
+    });
+    // The stage frame enlarges, like every other screenshot in the report: the zoom walks THIS
+    // device's captures, which is the per-device filmstrip the other projections can't offer.
+    timeline.lanes.forEach((lane) => {
+      const screen = el(`[data-rp-screen="${lane.index}"]`);
+      if (!screen) return;
+      (screen as HTMLElement).onclick = () => {
+        const entries = lane.captures.map((capture) => ({
+          src: trailShotSrc(lane.index, capture.file),
+          token: capture.stepNum === 0 ? 'TRAILHEAD' : `STEP ${capture.stepNum}`,
+          label: capture.stepLabel,
+          tool: capture.label,
+          device: (lanes[lane.index] || {}).label,
+        })).filter((entry) => entry.src);
+        if (!entries.length) return;
+        const state = laneStateAt(lane, st.trailT);
+        const index = Math.max(0, entries.findIndex((entry) => state.capture && entry.tool === state.capture.label && entry.token === (state.capture.stepNum === 0 ? 'TRAILHEAD' : `STEP ${state.capture.stepNum}`)));
+        openZoom(entries[index].src, '', entries, index);
+      };
+    });
+    // Scrubbing the strip. Pointer capture so a drag that leaves the rails keeps scrubbing.
+    if (rails) {
+      const timeAt = (clientX: number) => {
+        const rect = rails.getBoundingClientRect();
+        return rect.width > 0 ? ((clientX - rect.left) / rect.width) * total : 0;
+      };
+      let scrubbing = false;
+      rails.onpointerdown = (e: PointerEvent) => {
+        scrubbing = true;
+        // A press on a failure badge seeks the EXACT instant it marks. The badge is 14px wide and
+        // the coordinate scrub reads the pointer's own x, so a press near its edge would land
+        // seconds off on a long run — the one instant the badge exists to make precise.
+        const badge = e.target instanceof Element ? e.target.closest('.rpfailmark') : null;
+        const rail = badge && (badge.closest('[data-rp-rail]') as HTMLElement | null);
+        const lane = rail ? timeline.lanes[+(rail.dataset.rpRail as string)] : null;
+        if (lane && lane.failure) {
+          // Jumping to a death also FOLLOWS that device: the next thing a reader does there is
+          // arrow backward through its own last captures, not the trail's shared step boundaries.
+          selectLane(lane.index);
+          seek(lane.failure.atMs);
+        } else {
+          seek(timeAt(e.clientX));
+        }
+        // Capture is an optimization for drags that leave the rails; a pointer id the browser has
+        // already released throws, and losing the drag is not worth losing the seek.
+        try { if (rails.setPointerCapture) rails.setPointerCapture(e.pointerId); } catch { /* no active pointer */ }
+      };
+      rails.onpointermove = (e: PointerEvent) => { if (scrubbing) paint(timeAt(e.clientX)); };
+      rails.onpointerup = rails.onpointercancel = () => { scrubbing = false; };
+      // The hover readout: what a click here would land on — the instant, and over a rail, that
+      // device's step at it. Without this the strip only answers questions AFTER you commit a seek.
+      const hoverLine = wrap.querySelector<HTMLElement>('[data-rp-hoverline]');
+      const hoverTip = wrap.querySelector<HTMLElement>('[data-rp-hover]');
+      const hideHover = () => {
+        if (hoverLine) hoverLine.hidden = true;
+        if (hoverTip) hoverTip.hidden = true;
+      };
+      rails.addEventListener('pointermove', (e: PointerEvent) => {
+        if (!hoverLine || !hoverTip) return;
+        // A coarse pointer has no hover state — a tap would leave a stuck readout — and during a
+        // scrub the guide line would just double the playhead it sits under.
+        if (!hoverCapablePointer(e) || scrubbing) { hideHover(); return; }
+        const t = clampTime(timeAt(e.clientX), total);
+        const frac = total > 0 ? t / total : 0;
+        const railEl = e.target instanceof Element ? e.target.closest('[data-rp-rail]') as HTMLElement | null : null;
+        const lane = railEl ? timeline.lanes[+(railEl.dataset.rpRail as string)] : null;
+        let text = fmtReplayClock(t);
+        if (lane) {
+          const device = (lanes[lane.index] || {}).label || '';
+          const state = laneStateAt(lane, t);
+          text += ` · ${device} · ${state.step ? `${trailStepToken(state.step.num)} ${state.step.label}` : 'not started'}`;
+        }
+        hoverLine.style.left = `${frac * 100}%`;
+        hoverTip.textContent = text;
+        hoverTip.style.left = `${frac * 100}%`;
+        hoverLine.hidden = false;
+        hoverTip.hidden = false;
+        // Flip to the guide line's left on MEASURED overflow, not a fixed fraction: a long
+        // device · step label overruns the strip well before any threshold a short clock-only
+        // label needs. Measured after unhide, because a hidden element has no width.
+        const width = rails.getBoundingClientRect().width;
+        hoverTip.classList.toggle('flip', frac * width + 8 + hoverTip.offsetWidth > width);
+      });
+      rails.addEventListener('pointerleave', hideHover);
+      // Touch interactions end with up/cancel, never leave — without these a tap-scrub on a
+      // hover-capable touchscreen would strand the readout on screen.
+      rails.addEventListener('pointerup', hideHover);
+      rails.addEventListener('pointercancel', hideHover);
+    }
+    // Axis ticks are measured, so they re-space when the pane resizes.
+    const drawAxis = () => {
+      const axis = wrap.querySelector<HTMLElement>('[data-rp-axis]');
+      if (!axis || !rails) return;
+      const width = rails.clientWidth || 0;
+      const step = replayTickSeconds(total, width);
+      let html = '';
+      for (let sec = 0; sec * 1000 <= total; sec += step) {
+        html += `<span class="rptick" style="left:${(((sec * 1000) / total) * 100)}%"><i>${fmtReplayClock(sec * 1000)}</i></span>`;
+      }
+      axis.innerHTML = html;
+    };
+    drawAxis();
+    if (typeof ResizeObserver === 'function' && rails) new ResizeObserver(drawAxis).observe(rails);
+    // Keyboard: the stops depend on whether a device is being followed — its own captures when one
+    // is, the instants the trail as a whole moves on when none is.
+    const stops = () => st.trailLane != null && timeline.lanes[st.trailLane]
+      ? laneStops(timeline.lanes[st.trailLane])
+      : timeline.boundaries;
+    const cycleLane = (delta: number) => {
+      const count = timeline.lanes.length;
+      if (!count) return;
+      const current = st.trailLane == null ? (delta > 0 ? -1 : 0) : st.trailLane;
+      selectLane((current + delta + count) % count);
+    };
+    trailReplayKeys = (e: KeyboardEvent) => {
+      const key = e.key;
+      if (key === ' ') { e.preventDefault(); if (trailReplayStop) pause(); else play(); return; }
+      if (key === 'ArrowLeft' || key === 'ArrowRight') { e.preventDefault(); seek(nextStop(stops(), st.trailT, key === 'ArrowRight' ? 1 : -1)); return; }
+      if (key === 'ArrowDown' || key === 'ArrowUp') { e.preventDefault(); cycleLane(key === 'ArrowDown' ? 1 : -1); return; }
+      if (key === 'Home') { e.preventDefault(); seek(0); return; }
+      if (key === 'End') { e.preventDefault(); seek(total); return; }
+      if (key === 'Escape' && st.trailLane != null) { e.preventDefault(); selectLane(null); }
+    };
+    wrap.onkeydown = (e: KeyboardEvent) => {
+      // Let the controls keep their own keys; everything else on the pane is a transport shortcut.
+      const target = e.target as HTMLElement | null;
+      if (target && /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(target.tagName) && (e.key === ' ' || e.key === 'Enter')) return;
+      if (target && target.getAttribute && target.getAttribute('role') === 'button' && (e.key === ' ' || e.key === 'Enter')) return;
+      if (trailReplayKeys) trailReplayKeys(e);
+    };
+    applySelection();
+    // st.trailT starts at the sentinel -1 meaning "never placed": open where the first device
+    // actually has something to show, not on a row of empty panes. Home still parks it at 0.
+    paint(st.trailT < 0 ? timeline.firstCaptureMs : st.trailT);
+  };
+  const renderTrailView = () => {
+    const lanes = trailLanes();
+    const matrix = trailMatrix();
+    const scope = trailScopeSessions();
+    const title = trailScopeTitle();
+    const stepCount = matrix.rows.filter((row) => row.num > 0).length;
+    const zoom = st.trailMode === 'map'
+      ? `<div class="lightboxzoom" role="group" aria-label="Map zoom"><button type="button" class="lightboxzoombtn" data-trail-cam="out" aria-label="Zoom out" title="Zoom out (or scroll on the map)">−</button><button type="button" class="lightboxzoombtn" data-trail-cam="in" aria-label="Zoom in" title="Zoom in (or scroll on the map)">+</button><button type="button" class="lightboxzoombtn trailfitbtn" data-trail-cam="fit" aria-label="Fit the trail" title="Fit as much of the trail as stays readable">Fit</button></div>`
+      : '';
+    const showAll = st.trailMode === 'steps' || st.trailMode === 'map'
+      ? `<button class="lightboxtoggle" type="button" role="switch" id="trailall" aria-checked="${st.trailAll}"><span class="lightboxtoggletrack" aria-hidden="true"><span class="lightboxtogglethumb"></span></span><span>All screenshots</span></button>`
+      : '';
+    const dir = st.trailMode === 'map'
+      ? `<div class="trailmodes" role="group" aria-label="Map orientation">
+          <button class="trailmodebtn${st.trailDir !== 'h' ? ' active' : ''}" type="button" data-trail-dir="v" aria-pressed="${st.trailDir !== 'h'}" title="Flow top to bottom">↓</button>
+          <button class="trailmodebtn${st.trailDir === 'h' ? ' active' : ''}" type="button" data-trail-dir="h" aria-pressed="${st.trailDir === 'h'}" title="Flow left to right">→</button>
+        </div>`
+      : '';
+    const modes = `<div class="trailmodes" role="group" aria-label="Trail layout">
+        ${matrix.join === 'position' ? '' : `<button class="trailmodebtn${st.trailMode === 'map' ? ' active' : ''}" type="button" data-trail-mode="map" aria-pressed="${st.trailMode === 'map'}">Map</button>`}
+        <button class="trailmodebtn${st.trailMode === 'steps' ? ' active' : ''}" type="button" data-trail-mode="steps" aria-pressed="${st.trailMode === 'steps'}">Grid</button>
+        <button class="trailmodebtn${st.trailMode === 'replay' ? ' active' : ''}" type="button" data-trail-mode="replay" aria-pressed="${st.trailMode === 'replay'}" title="Play the run back with every device on one clock">Replay</button>
+      </div>`;
+    const runDate = indexRunDate();
+    const body = st.trailMode === 'replay' ? trailReplayBody(lanes, matrix, buildReplayTimeline(matrix))
+      : st.trailMode === 'steps' ? trailStepsBody(lanes, matrix)
+      : trailMapBody(lanes, matrix);
+    // One chip per loaded run, shown or not: with five devices on stage the reader often wants just
+    // the two that diverge, so a chip toggles its lane rather than the set being all-or-nothing.
+    // Pointless for one run, so a single-session document renders no bar.
+    const laneBar = scope.length > 1
+      ? `<div class="traillanebar" role="group" aria-label="${matrix.join === 'position' ? 'Runs shown' : 'Devices shown'}">${trailAllLanes().map((lane) => `<button class="traillanechip${lane.on ? ' on' : ''}" type="button" data-trail-lane="${lane.session}" aria-pressed="${lane.on}" title="${esc(lane.on ? `Hide ${lane.label}` : `Show ${lane.label}`)}"><span class="idxstatusdot ${esc(lane.outcome)}" aria-hidden="true"></span><span>${esc(lane.label)}</span></button>`).join('')}</div>`
+      : '';
+    // What the stage IS, in the reader's words. Device mode's lanes are one run's devices, so
+    // "one lane per run" would claim these columns are separate executions; an unjoined pick's
+    // lanes are separate trails, so "same trail" would claim a spine they don't share — and they
+    // are counted as RUNS, since three of them can be the same device on three different trails.
+    const laneUnit = matrix.join === 'position' ? 'run' : 'device';
+    const laneCount = trailDeviceMode()
+      ? `${lanes.length} devices, one run`
+      : `${lanes.length}${scope.length > lanes.length ? ` of ${scope.length}` : ''} ${laneUnit}${scope.length === 1 ? '' : 's'}`;
+    return `
+      <header class="indexheader trailheader"><div class="indexshell trailshellwide">
+        <div class="title-row indexheadrow"><div class="runidentity"><h1>${esc(title)}</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
+        <div class="trailcontext"><div class="trailsub">${laneCount} · ${stepCount} step${stepCount === 1 ? '' : 's'} · ${trailDeviceMode() ? 'one trail, one lane per device' : matrix.join === 'position' ? 'different trails, side by side' : 'same trail, one lane per run'}${st.trailMode === 'replay' ? '' : ' <span class="trailkeys">· ← → walks the steps</span>'}</div><div class="trailtools">${laneBar}${dir}${showAll}${zoom}${modes}</div></div>
+      </div></header>
+      <main class="trailmain${st.trailMode === 'map' ? ' trailmapmain' : ''}${st.trailMode === 'replay' ? ' trailreplaymain' : ''}">${body}</main>
+      <footer class="indexfooter"><div class="indexshell indexfootercontent trailshellwide">${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
+  };
+
+  // ── Compare view: run-vs-run tool-call, event-stream and screen diffs ──
+  // The model (run-report-compare-model.ts) is the TS port of `trailblaze report diff`'s engines;
+  // this renders its results with the viewer's own chrome.
+
+  // Scene pixel diffs, computed off the render path: an entry moves pending → settled exactly once
+  // per (run, file) pair, and one re-render when the queue drains fills every "comparing…" cell.
+  // Keyed by run index as well as file so switching the picked pair never shows a stale overlay.
+  type SceneDiffEntry =
+    | { state: 'pending' }
+    | { state: 'unavailable' }
+    | { state: 'size_mismatch'; baseline: [number, number]; current: [number, number] }
+    | { state: 'done'; percent: number; differing: number; src: string };
+  const cmpSceneDiffs = new Map<string, SceneDiffEntry>();
+  let cmpDiffQueue: Promise<void> = Promise.resolve();
+  const cmpDiffKey = (scene: CompareScene) => `${st.cmpBase}:${scene.baselineFile}|${st.cmpVs}:${scene.currentFile}`;
+  // Decode one image to raw RGBA. Resolves null for a failed load AND for a canvas the browser
+  // taints (a remote frame served without CORS headers) — either way the pixels are unreadable,
+  // and the scene reports "unavailable" rather than pretending it compared something.
+  const loadScenePixels = (src: string) => new Promise<{ width: number; height: number; data: Uint8ClampedArray } | null>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const g = canvas.getContext('2d');
+        if (!g) { resolve(null); return; }
+        g.drawImage(img, 0, 0);
+        const data = g.getImageData(0, 0, canvas.width, canvas.height).data;
+        resolve({ width: canvas.width, height: canvas.height, data });
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+  // The diff overlay the JVM golden gate writes in its centre panel: baseline pixels, solid red
+  // where the runs disagree. JPEG — the overlay is opaque and a scene-sized PNG is 5-10x larger.
+  const sceneOverlaySrc = (base: { width: number; height: number; data: Uint8ClampedArray }, mask: Uint8Array) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = base.width;
+    canvas.height = base.height;
+    const g = canvas.getContext('2d');
+    if (!g) return null;
+    const imageData = g.createImageData(base.width, base.height);
+    imageData.data.set(base.data);
+    for (let p = 0; p < mask.length; p++) {
+      if (!mask[p]) continue;
+      const o = p * 4;
+      imageData.data[o] = 255;
+      imageData.data[o + 1] = 0;
+      imageData.data[o + 2] = 0;
+      imageData.data[o + 3] = 255;
+    }
+    g.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.75);
+  };
+  const queueSceneDiffs = (scenes: CompareScene[]) => {
+    // No Image constructor means no pixel access at all (embedders, tests): cells stay pending.
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return;
+    const fresh = scenes.filter((scene) => scene.baselineFile && scene.currentFile && !cmpSceneDiffs.has(cmpDiffKey(scene)));
+    if (!fresh.length) return;
+    fresh.forEach((scene) => cmpSceneDiffs.set(cmpDiffKey(scene), { state: 'pending' }));
+    const baseRun = st.cmpBase;
+    const vsRun = st.cmpVs;
+    fresh.forEach((scene) => {
+      const key = cmpDiffKey(scene);
+      // Sequential, not Promise.all: decoding two full-resolution frames per scene is the cost,
+      // and a 40-scene decode storm would freeze the tab the reader is scrolling.
+      cmpDiffQueue = cmpDiffQueue.then(async () => {
+        const baseSrc = safeImageSrc(((SESSIONS[baseRun] || {}).shots || {})[scene.baselineFile]);
+        const vsSrc = safeImageSrc(((SESSIONS[vsRun] || {}).shots || {})[scene.currentFile]);
+        const [basePx, vsPx] = await Promise.all([baseSrc ? loadScenePixels(baseSrc) : null, vsSrc ? loadScenePixels(vsSrc) : null]);
+        if (!basePx || !vsPx) { cmpSceneDiffs.set(key, { state: 'unavailable' }); return; }
+        const result = diffPixels(basePx, vsPx);
+        if (result.kind === 'size_mismatch') { cmpSceneDiffs.set(key, { state: 'size_mismatch', baseline: result.baseline, current: result.current }); return; }
+        const src = sceneOverlaySrc(basePx, result.mask);
+        cmpSceneDiffs.set(key, src
+          ? { state: 'done', percent: result.percent, differing: result.differing, src }
+          : { state: 'unavailable' });
+      });
+    });
+    // One repaint when this batch settles. The queue may have grown by then — the extra render is
+    // idempotent (render(true) holds the reader's scroll) and the later batch repaints again.
+    cmpDiffQueue.then(() => { if (st.view === 'compare') render(true); });
+  };
+
+  const compareRunLabel = (i) => {
+    const s = SESSIONS[i];
+    const device = runDeviceClassifier(s) || [runPlatform(s), runDeviceType(s)].filter(Boolean).join(' · ');
+    const title = (s.meta && s.meta.title) || `Run ${i + 1}`;
+    return `${i + 1}. ${device ? `${title} — ${device}` : title}`;
+  };
+  const renderCompareView = () => {
+    // A chunked document hydrates per-open: pull both picked runs' chunks in (synchronous when the
+    // chunk has streamed — the common case), and hold a loading shell for the ones still arriving.
+    const stillLoading = [st.cmpBase, st.cmpVs].filter((i) => unhydrated.has(i) && !hydrateSession(i));
+    if (stillLoading.length) {
+      Promise.all(stillLoading.map((i) => awaitSessionChunk(i))).then(() => { if (st.view === 'compare') { stillLoading.forEach((i) => hydrateSession(i)); render(); } });
+      return `
+        <header class="indexheader trailheader"><div class="indexshell trailshellwide">
+          <div class="title-row indexheadrow"><div class="runidentity"><h1>Compare runs</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
+        </div></header>
+        <main class="cmpmain"><div class="indexshell trailshellwide"><div class="runloading" role="status"><div class="tb-boot-spinner" aria-hidden="true"></div><div class="tb-boot-title">Loading runs…</div></div></div></main>`;
+    }
+    const a = SESSIONS[st.cmpBase];
+    const b = SESSIONS[st.cmpVs];
+    // Compressed payloads inflate lazily; kick both runs' inflations and re-render when they land.
+    // Pending means inflation hasn't SETTLED — a failed inflate settles with null, and asking the
+    // data accessor instead would re-arm this every render.
+    const pendingInflate = [a, b].some((s) => !eventsInflater.settled(s) || !logsInflater.settled(s));
+    if (pendingInflate) {
+      Promise.all([ensureEventsInflated(a), ensureEventsInflated(b), ensureLogsInflated(a), ensureLogsInflated(b)])
+        .then(() => { if (st.view === 'compare') render(); });
+    }
+    // Settled with nothing to show: the payload was there but could not be decoded.
+    const eventsUnavailable = !pendingInflate && [a, b].some((s) => (s.eventsGz && !sessionEvents(s)) || (s.networkGz && !sessionNetwork(s)));
+
+    const tools = compareToolTimelines(a.trace || [], b.trace || []);
+    const events = pendingInflate ? null : compareEventStreams(
+      { events: sessionEvents(a), network: sessionNetwork(a) },
+      { events: sessionEvents(b), network: sessionNetwork(b) },
+    );
+
+    // How each outcome finishes "The <side> run …" in the picker badge's tooltip.
+    const OUTCOME_PHRASE: Record<string, string> = {
+      passed: 'passed', failed: 'failed', 'self-healed': 'self-healed',
+      skipped: 'was skipped', cancelled: 'was cancelled', running: 'is still running',
+      'no result': 'has no recorded outcome',
+    };
+    // Grouped by trail so the structure the comparison depends on is visible BEFORE picking: the
+    // runs that can meaningfully pair sit together under one heading, and reaching across headings
+    // is a deliberate act rather than the accident of two adjacent list entries.
+    const picker = (side, selected, label) => {
+      const groups = new Map<string, number[]>();
+      comparableRuns().forEach((i) => {
+        const title = ((SESSIONS[i].meta || {}).title) || `Run ${i + 1}`;
+        groups.set(title, (groups.get(title) || []).concat(i));
+      });
+      const option = (i) => `<option value="${i}"${i === selected ? ' selected' : ''}>${esc(compareRunLabel(i))}</option>`;
+      const body = groups.size > 1
+        ? Array.from(groups.entries()).map(([title, indexes]) => `<optgroup label="${esc(title)}">${indexes.map(option).join('')}</optgroup>`).join('')
+        : comparableRuns().map(option).join('');
+      // The picked run's outcome, beside the picker. Every difference below reads differently
+      // depending on which side failed, and without this the reader has to leave the view to find out.
+      const outcome = indexOutcome(SESSIONS[selected]);
+      const tone = outcome === 'passed' || outcome === 'failed' ? outcome : 'unknown';
+      // `indexOutcome` folds everything that is neither a pass, a fail, nor a skip into 'other',
+      // but the generator does distinguish them — `cancelled` and `running` are statuses in the
+      // report contract, and a cancelled run reported as "no result" is a wrong answer, not a
+      // vague one. Fall back to the run's own status, and reserve "no result" for a run that
+      // genuinely recorded none.
+      const rawStatus = String(((SESSIONS[selected].meta || {}).status) || '').toLowerCase();
+      const outcomeText = outcome !== 'other' ? indexOutcomeLabel(outcome)
+        : rawStatus && rawStatus !== 'unknown' ? rawStatus
+        : 'no result';
+      // "The baseline run other" was the bug; the phrase map is what keeps any future status the
+      // generator adds from reintroducing it, since the fallback still finishes the sentence.
+      const outcomeTitle = `The ${label.toLowerCase()} run ${OUTCOME_PHRASE[outcomeText] || `reported ${outcomeText}`}`;
+      const badge = `<span class="badge ${tone}" title="${esc(outcomeTitle)}">${esc(outcomeText)}</span>`;
+      return `<label class="cmppick"><span class="cmppicklabel">${label}</span><select class="cmpsel" data-cmp-side="${side}" aria-label="${label} run">${body}</select>${badge}</label>`;
+    };
+
+    const openBtn = (sessionIndex, step, label) => (step == null ? '' : `<button class="cmpopen" type="button" data-cmp-open="${sessionIndex}:${step}" title="Open this call in the ${label} run's timeline">${label} →</button>`);
+
+    // One renderer for every diff line in this view, so the tool lane and the event lane read as the
+    // same document: a fixed −/+/space gutter down the left, and the side a line belongs to carried
+    // by that gutter rather than by prose the reader has to decode line by line. A line's `hi` span
+    // gets the deeper GitHub-style tint — the changed word inside the changed line — and a `gap`
+    // fold of matching context renders dim, as elision rather than content.
+    const gutterFor = (sign) => (sign === '-' ? '−' : sign === '+' ? '+' : ' ');
+    // The changed span inside a line, marked. Shared so a diff line and an event row — which is a
+    // line the reader can click — mark identically.
+    const markSpan = (text, hi) => (hi && hi[0] < hi[1] && hi[1] <= text.length
+      ? `${esc(text.slice(0, hi[0]))}<mark class="dlhi">${esc(text.slice(hi[0], hi[1]))}</mark>${esc(text.slice(hi[1]))}`
+      : esc(text));
+    const diffLine = (l) => {
+      const cls = l.sign === '+' ? ' dl-add' : l.sign === '-' ? ' dl-del' : l.gap ? ' dl-gap' : ' dl-ctx';
+      return `<span class="dl${cls}">${gutterFor(l.sign)} ${markSpan(l.text, l.hi)}</span>`;
+    };
+    const diffLines = (lines) => lines.map(diffLine).join('');
+    const diffGap = (text) => `<div class="cmpgap">${esc(text)}</div>`;
+    const diffGapKeep = (text) => `<div class="cmpgap cmpgapkeep">${esc(text)}</div>`;
+
+    const toolBadge = {
+      args_changed: '<span class="badge running">args changed</span>',
+      outcome_changed: '<span class="badge failed">outcome changed</span>',
+      baseline_only: '<span class="badge selfheal">only in baseline</span>',
+      current_only: '<span class="badge selfheal">only in current</span>',
+    };
+    // The screen a run was looking at when this call happened: the call's own capture, else the
+    // most recent one before it — a tool that captured nothing still ran ON some screen, and that
+    // screen is the context. Children are searched too: in a folded turn they often hold the only
+    // frames. Returns a file key into that session's shots map, or null when nothing precedes.
+    const frameFileAt = (sessionIndex, stepI) => {
+      const s = SESSIONS[sessionIndex];
+      const trace = (s && s.trace) || [];
+      const shots = (s && s.shots) || {};
+      const at = trace.findIndex((t) => t && t.i === stepI);
+      if (at < 0) return null;
+      for (let k = at; k >= 0; k--) {
+        if (trace[k].screenshotFile && shots[trace[k].screenshotFile]) return trace[k].screenshotFile;
+        const kids = trace[k].children || [];
+        for (let c = kids.length - 1; c >= 0; c--) {
+          if (kids[c].screenshotFile && shots[kids[c].screenshotFile]) return kids[c].screenshotFile;
+        }
+      }
+      return null;
+    };
+    // The [data-shot] gallery pass wires the img and the Lightbox; data-shot-run resolves the file
+    // against that run's own shots map, exactly as the Trail view's cross-run frames do.
+    const cmpFrame = (sessionIndex, file, side, position, tool) => (!file ? '' : `<figure class="cmpframe">
+      <div class="galshot" data-shot="${esc(file)}" data-shot-run="${sessionIndex}" data-shot-device="${esc(compareRunLabel(sessionIndex))}" data-shot-token="#${position}" data-shot-label="${esc(side)}" data-shot-tool="${esc(tool)}" role="button" tabindex="0" aria-label="${esc(side)} run's screen at ${esc(tool)}"><img alt="${esc(side)} run's screen at this call" loading="lazy" /></div>
+      <figcaption class="cmpframecap">${side}</figcaption>
+    </figure>`);
+    // The tool timeline as one unified diff rather than a table of rows. Runs of identical calls
+    // collapse to a gap line in place, so the reader keeps the shape of the run — where the two
+    // agreed and for how long, then exactly where they parted — instead of a list of surviving row
+    // numbers with the intervening agreement deleted and mentioned only in a footnote. The gap is
+    // a button: expanded, it lists the identical calls dimmed, so "what did they agree ON" has an
+    // answer without leaving the page.
+    const toolDiff = () => {
+      const out: string[] = [];
+      let matching: Array<{ row; position: number }> = [];
+      let gapIndex = 0;
+      // What the reader last saw for each side. A hunk shows its frames only when a side's screen
+      // moved on — repeating an unchanged screenshot under every hunk would bury the ones that
+      // mark an actual scene change.
+      const shown = { base: null, vs: null };
+      const flushMatching = () => {
+        if (!matching.length) return;
+        const k = gapIndex++;
+        const open = !!st.cmpGapsOpen[k];
+        const n = matching.length;
+        out.push(`<button class="cmpgap cmpgapkeep cmpgapbtn" type="button" data-cmp-gap="${k}" aria-expanded="${open}">⋯ ${n} matching tool call${n === 1 ? '' : 's'} — ${open ? 'hide' : 'show'}</button>`);
+        if (open) {
+          out.push(matching.map(({ row, position }) => `<div class="cmpsame"><span class="cmphunkpos">#${position + 1}</span><code>${esc(row.toolName)}</code><span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'baseline')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>`).join(''));
+        }
+        matching = [];
+      };
+      tools.rows.forEach((row, position) => {
+        if (row.status === 'same') { matching.push({ row, position }); return; }
+        flushMatching();
+        const baseFile = row.baselineStep == null ? null : frameFileAt(st.cmpBase, row.baselineStep);
+        const vsFile = row.currentStep == null ? null : frameFileAt(st.cmpVs, row.currentStep);
+        const fresh = (baseFile && baseFile !== shown.base) || (vsFile && vsFile !== shown.vs);
+        const frames = fresh
+          ? `<div class="cmphunkframes">${cmpFrame(st.cmpBase, baseFile, 'baseline', position + 1, row.toolName)}${cmpFrame(st.cmpVs, vsFile, 'current', position + 1, row.toolName)}</div>`
+          : '';
+        if (baseFile) shown.base = baseFile;
+        if (vsFile) shown.vs = vsFile;
+        out.push(`<div class="cmphunk cmp-${row.status}">
+          <div class="cmphunkhead"><span class="cmphunkpos">#${position + 1}</span><code class="cmphunktool">${esc(row.toolName)}</code>${toolBadge[row.status] || ''}<span class="cmphunklinks">${openBtn(st.cmpBase, row.baselineStep, 'baseline')}${openBtn(st.cmpVs, row.currentStep, 'current')}</span></div>
+          <div class="cmphunkrow"><div class="cmphunkbody">${diffLines(row.changes)}</div>${frames}</div>
+        </div>`);
+      });
+      flushMatching();
+      return out.join('');
+    };
+    const toolSection = !tools.rows.length
+      ? '<p class="cmpnote">Neither run recorded tool calls.</p>'
+      : tools.rows.every((r) => r.status === 'same')
+        ? `<p class="cmpnote">All ${tools.sameCount} tool calls identical.</p>`
+        : `<div class="cmpdiff cmptooldiff">${toolDiff()}</div>
+          <p class="cmpnote">− is the baseline, + is the current run. # is the call's position in the aligned timeline.</p>`;
+
+    // One stream's events as a list, diffed: one row per event — what fired and its fields —
+    // with the gutter saying which run it belongs to. A stream IS a list of events, so the row is
+    // the unit here the way a line is the unit of a file diff; the payload behind a row is detail,
+    // and expanding a row is how the reader asks for it. Events both runs emitted stay in place as
+    // context so a change can be read against the sequence it happened in, and only a long run of
+    // them folds. Big hunks cap at MAX_DIFF_EVENTS_SHOWN rows — the gap line says what was elided.
+    const MAX_DIFF_EVENTS_SHOWN = 20;
+    // Below this many events a fold's position in the run is noise — the whole list is already one
+    // screen, and "12%–34%" of forty events says less than the rows either side of the fold do.
+    const MIN_SLOTS_FOR_POSITION = 50;
+    const contentDiffBlock = (stream) => {
+      const content = stream.content;
+      if (!content) return '';
+      // Row keys index the stream's rendered rows in order. The diff is recomputed per render from
+      // the same data, so the Nth row is the same event across renders and an open row stays open.
+      let rowIndex = 0;
+      // The first row of each place the runs diverge carries an anchor, so the stepper can walk
+      // them without the reader scrolling a thousand matching rows to find the next one. Adjacent
+      // differing hunks share one anchor — they are one divergence, the same way the model counts
+      // clusters.
+      let anchorIndex = 0;
+      let diverging = false;
+      const anchorAttr = () => ` data-cmp-anchor="${esc(`${stream.stream}|${anchorIndex++}`)}"`;
+      const eventRow = (row, sign, detail, anchor = '') => {
+        const key = `${stream.stream}:${rowIndex++}`;
+        const open = !!st.cmpEventsOpen[key];
+        const cls = sign === '+' ? ' dl-add' : sign === '-' ? ' dl-del' : ' dl-ctx';
+        return `<button class="dl dlrow${cls}" type="button" data-cmp-event="${esc(key)}"${anchor} aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} this event's fields">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`
+          + (open ? `<div class="cmpevtdetail">${diffLines(detail)}</div>` : '');
+      };
+      const asContext = (lines) => lines.map((text) => ({ sign: ' ', text }));
+      const elided = (n, what) => (n > 0 ? diffGap(`… ${n} more ${what} event${n === 1 ? '' : 's'}`) : '');
+      // Where a fold sits in the run. A count alone ("152 matching events") says how much is hidden
+      // but not which stretch of the run it stands for, which is the half readers were working out
+      // by hand. Short streams skip it — a percentage across 12 events is noise.
+      const foldSpan = (hunk) => {
+        if (!content.ordered || content.slots < MIN_SLOTS_FOR_POSITION) return '';
+        const pctAt = (at) => Math.round((at / content.slots) * 100);
+        const from = hunk.from + hunk.head.length;
+        return ` (${pctAt(from)}%–${pctAt(from + hunk.folded)}%)`;
+      };
+      const hunkHtml = content.hunks.map((hunk) => {
+        if (hunk.kind === 'same') {
+          diverging = false;
+          return hunk.head.map((row) => eventRow(row, ' ', asContext(row.detail))).join('')
+            + (hunk.folded ? diffGapKeep(`⋯ ${hunk.folded} matching event${hunk.folded === 1 ? '' : 's'}${foldSpan(hunk)}`) : '')
+            + hunk.tail.map((row) => eventRow(row, ' ', asContext(row.detail))).join('');
+        }
+        const anchor = diverging ? '' : anchorAttr();
+        diverging = true;
+        if (hunk.kind === 'changed') {
+          // Both sides of a replaced event share one row key: they are one change, and expanding it
+          // shows the per-field diff rather than either side's payload alone.
+          const shown = hunk.pairs.slice(0, MAX_DIFF_EVENTS_SHOWN);
+          return shown.map((pair, at) => {
+            const key = `${stream.stream}:${rowIndex++}`;
+            const open = !!st.cmpEventsOpen[key];
+            const side = (row, sign, mark = '') => `<button class="dl dlrow ${sign === '+' ? 'dl-add' : 'dl-del'}" type="button" data-cmp-event="${esc(key)}"${mark} aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} what changed inside this event">${gutterFor(sign)} ${markSpan(row.summary, row.hi)}</button>`;
+            return side(pair.before, '-', at === 0 ? anchor : '') + side(pair.after, '+')
+              + (open ? `<div class="cmpevtdetail">${diffLines(pair.lines)}</div>` : '');
+          }).join('') + elided(hunk.pairs.length - shown.length, 'changed');
+        }
+        // ASCII, not the typographic minus the gutter prints: the styling keys off this, and an
+        // unrecognized sign would render the whole hunk as unmarked context.
+        const sign = hunk.kind === 'added' ? '+' : '-';
+        const shown = hunk.rows.slice(0, MAX_DIFF_EVENTS_SHOWN);
+        return shown.map((row, at) => eventRow(row, sign, asContext(row.detail), at === 0 ? anchor : '')).join('')
+          + elided(hunk.rows.length - shown.length, hunk.kind);
+      }).join('');
+      const counts = [
+        content.changedCount ? `${content.changedCount} changed` : '',
+        content.addedCount ? `${content.addedCount} added` : '',
+        content.removedCount ? `${content.removedCount} removed` : '',
+      ].filter(Boolean).join(', ');
+      // What the reader was computing by hand before reading a single row: how much of this run
+      // differs, and whether it went wrong in one place or all over.
+      const diffTotal = content.changedCount + content.addedCount + content.removedCount;
+      const pct = content.slots ? Math.round((diffTotal / content.slots) * 100) : 0;
+      const share = diffTotal && content.slots ? `${diffTotal} of ${content.slots} differ (${pct || '<1'}%)` : '';
+      const places = diffTotal && content.ordered && content.clusters
+        ? ` in ${content.clusters === 1 ? 'one place' : `${content.clusters} places`}` : '';
+      const headline = diffTotal ? `${share}${places}${counts ? ` · ${counts}` : ''}` : 'no event-level differences';
+      const orderNote = content.ordered ? '' : '<p class="cmpnote">Too many differing events to align in order — showing the unordered content difference.</p>';
+      // Walking the changes beats scrolling for them once there is more than one place to reach.
+      const stepper = content.ordered && anchorIndex > 1
+        ? `<div class="cmpstepper"><span class="cmpstepwhat">${anchorIndex} places differ</span>`
+          + `<button class="btn cmpstep" type="button" data-cmp-jump="${esc(`${stream.stream}|prev`)}" title="Jump to the previous difference">↑</button>`
+          + `<button class="btn cmpstep" type="button" data-cmp-jump="${esc(`${stream.stream}|next`)}" title="Jump to the next difference">↓</button></div>`
+        : '';
+      // A handful of differing events shows itself; a wall of them waits for the click.
+      const open = content.changedCount + content.addedCount + content.removedCount <= 10
+        || st.cmpStreamsOpen[stream.stream] ? ' open' : '';
+      return `<details class="cmpdiffwrap"${open}><summary>Events, in order — ${esc(headline)}</summary>${orderNote}${stepper}<div class="cmpdiff cmpeventlist">${hunkHtml}</div><p class="cmpnote">One row per event, in the order it fired. Click a row for its fields.</p></details>`;
+    };
+    const eventSection = () => {
+      if (pendingInflate) return '<p class="cmpnote">Inflating event payloads…</p>';
+      // A run that carried a payload we could not decode compares as if it captured nothing, so say
+      // so — silence here would read as "this run genuinely emitted no events".
+      const decodeNote = eventsUnavailable
+        ? '<p class="cmpnote">One or both runs carry event payloads that could not be decoded; streams missing from this diff may exist in the archive.</p>'
+        : '';
+      if (!events.streams.length) return `${decodeNote}<p class="cmpnote">Neither run captured event streams.</p>`;
+      // "I only care about analytics" is a real way to read this lane: one chip per stream narrows
+      // the section to that stream alone. A filter naming a stream this pair doesn't carry (a link
+      // from another pair, say) filters nothing rather than presenting an empty lane as "no diff".
+      const streamFilter = st.cmpStream && events.streams.some((s) => s.stream === st.cmpStream) ? st.cmpStream : null;
+      const chipFor = (s) => `<button class="cmpchip${streamFilter === s.stream ? ' on' : ''}" type="button" data-cmp-stream="${esc(s.stream)}" aria-pressed="${streamFilter === s.stream}">${esc(s.stream)}${s.changed ? `<span class="cmpchipdelta">${s.delta !== 0 ? `${s.delta > 0 ? '+' : ''}${s.delta}` : '±'}</span>` : ''}</button>`;
+      const chips = events.streams.length > 1
+        ? `<div class="cmpchips" role="group" aria-label="Event streams"><button class="cmpchip${streamFilter ? '' : ' on'}" type="button" data-cmp-stream="" aria-pressed="${!streamFilter}">All streams</button>${events.streams.map(chipFor).join('')}</div>`
+        : '';
+      const visible = streamFilter ? events.streams.filter((s) => s.stream === streamFilter) : events.streams;
+      const changed = visible.filter((s) => s.changed);
+      const unchanged = visible.filter((s) => !s.changed);
+      const sections = changed.map((stream) => {
+        const changedGroups = stream.groups.filter((g) => g.delta !== 0);
+        const deltaBadge = stream.delta !== 0
+          ? `<span class="badge running">${stream.delta > 0 ? '+' : ''}${stream.delta}</span>`
+          : changedGroups.length
+            ? '<span class="badge running">same count, different mix</span>'
+            : '<span class="badge running">same counts, content differs</span>';
+        const groupTable = stream.groupPath == null || !changedGroups.length ? '' : `
+          <table class="cmptable cmpevents">
+            <tr><th>${esc(stream.groupPath)}</th><th>Baseline</th><th>Current</th><th>Δ</th></tr>
+            ${changedGroups.map((g) => `<tr><td class="cmpkey">${esc(g.key)}</td><td class="cmpnum">${g.baselineCount}</td><td class="cmpnum">${g.currentCount}</td><td class="cmpnum">${g.delta > 0 ? '+' : ''}${g.delta}</td></tr>`).join('')}
+          </table>
+          <p class="cmpnote">${stream.groups.length - changedGroups.length} group(s) unchanged. Grouped by the auto-detected field <code>${esc(stream.groupPath)}</code>.</p>`;
+        // A capped stream only ever had its retained prefix compared, so say what the comparison
+        // could not see rather than letting a matching prefix read as a matching stream.
+        const partialNote = stream.incomplete
+          ? '<p class="cmpnote">One or both runs capped this stream, so only the events kept in the report were compared — anything past the cap is unknown.</p>'
+          : '';
+        // Name the masked fields. Masking is why ids and timestamps don't report as differences, but
+        // it also means those fields went uncompared, and a reader who can't see which ones they were
+        // can't tell "the runs agree" from "the field that disagreed is one we hid".
+        const masked = stream.maskedPaths;
+        const maskChip = masked.length
+          ? `<p class="cmpnote cmpmask" title="${esc(masked.join(', '))}">⊘ Not compared here: ${esc(masked.slice(0, 3).join(', '))}${masked.length > 3 ? ` and ${masked.length - 3} more` : ''}</p>`
+          : '';
+        return `<h3 class="cmpstream"><code>${esc(stream.stream)}</code> <span class="cmpcounts">${stream.baselineCount} → ${stream.currentCount}</span> ${deltaBadge}</h3>${partialNote}${maskChip}${groupTable}${contentDiffBlock(stream)}`;
+      }).join('');
+      const maskNote = visible.some((s) => s.maskedPaths.length)
+        ? '<p class="cmpnote">Fields whose values never repeat (ids, timestamps) are left out of the comparison — shown as ‹…› in content diffs, and listed per stream above.</p>'
+        : '';
+      // A stream reported unchanged is where the mask matters most: masking is what made the two
+      // runs agree, so "unchanged" and "the only field that disagreed is one we hid" read
+      // identically unless this names what went uncompared. The changed streams get the same list
+      // as a chip; an unchanged stream has no section to hang one on, so it rides the summary.
+      const maskedTail = (s) => (s.maskedPaths.length
+        ? `, not compared: ${esc(s.maskedPaths.slice(0, 3).join(', '))}${s.maskedPaths.length > 3 ? ` and ${s.maskedPaths.length - 3} more` : ''}`
+        : '');
+      const unchangedNote = unchanged.length
+        ? `<p class="cmpnote">${unchanged.length} stream(s) unchanged: ${unchanged.map((s) => `${esc(s.stream)} (${s.baselineCount}${maskedTail(s)})`).join(', ')}.</p>`
+        : '';
+      return chips + decodeNote + sections + maskNote + unchangedNote;
+    };
+
+    // ── Screens lane ──
+    // The aligned run reduced to its scene changes, each with both runs' frames and a pixel diff:
+    // the JVM golden gate's centre panel (baseline pixels, red where the runs disagree), computed
+    // in the browser off the same threshold, so this view and a CI golden failure agree.
+    const scenes = alignedScenes(tools.rows, (step) => frameFileAt(st.cmpBase, step), (step) => frameFileAt(st.cmpVs, step));
+    queueSceneDiffs(scenes);
+    const sceneEntry = (scene) => (scene.baselineFile && scene.currentFile ? cmpSceneDiffs.get(cmpDiffKey(scene)) : null) || null;
+    const pctLabel = (percent) => (percent === 0 ? 'identical pixels' : `${percent >= 10 ? percent.toFixed(0) : percent.toFixed(2)}% of pixels differ`);
+    const sceneDiffCell = (scene) => {
+      const note = (text) => `<figure class="cmpframe cmpdiffcell"><div class="cmpdiffnote">${esc(text)}</div><figcaption class="cmpframecap">diff</figcaption></figure>`;
+      if (!scene.baselineFile || !scene.currentFile) return note(`only the ${scene.baselineFile ? 'baseline' : 'current'} run has a frame here`);
+      const entry = sceneEntry(scene);
+      if (!entry || entry.state === 'pending') return note('comparing pixels…');
+      if (entry.state === 'unavailable') return note('pixels unreadable — an image failed to load or is remote without CORS');
+      if (entry.state === 'size_mismatch') return note(`different sizes: ${entry.baseline.join('×')} vs ${entry.current.join('×')} — no shared pixel grid to diff`);
+      const over = entry.percent > SCENE_DIFF_THRESHOLD_PERCENT;
+      return `<figure class="cmpframe cmpdiffcell${over ? ' cmpdiffover' : ''}">
+        <div class="galshot cmpdiffshot" data-cmp-diff="${esc(cmpDiffKey(scene))}" role="button" tabindex="0" aria-label="Pixel diff at #${scene.position}: ${esc(pctLabel(entry.percent))}"><img alt="Pixel diff: ${esc(pctLabel(entry.percent))}" src="${entry.src}" /></div>
+        <figcaption class="cmpframecap">${esc(pctLabel(entry.percent))}</figcaption>
+      </figure>`;
+    };
+    const screensSection = () => {
+      if (!scenes.length) return '<p class="cmpnote">Neither run resolved screenshots along the aligned timeline.</p>';
+      const cells = scenes.map((scene) => `<div class="cmpscene">
+        <div class="cmpscenehead"><span class="cmphunkpos">#${scene.position}</span><code>${esc(scene.toolName)}</code></div>
+        <div class="cmpsceneframes">${cmpFrame(st.cmpBase, scene.baselineFile, 'baseline', scene.position, scene.toolName)}${cmpFrame(st.cmpVs, scene.currentFile, 'current', scene.position, scene.toolName)}${sceneDiffCell(scene)}</div>
+      </div>`).join('');
+      return `<div class="cmpscenes">${cells}</div>
+        <p class="cmpnote">A scene starts where either run's screen moves on. The diff panel is the baseline's pixels, red where the current run disagrees (differ's 0.1 RGBA distance); "differ" in the overview means more than ${SCENE_DIFF_THRESHOLD_PERCENT}% of pixels moved — the golden gate's default threshold.</p>`;
+    };
+    // The screens headline: known scene count immediately, pixel verdicts as they land. States are
+    // spelled out — a scene that could not be compared must not disappear into the "match" tally.
+    const screensGlance = () => {
+      if (!scenes.length) return { text: 'no screenshots', differs: false };
+      const pairable = scenes.filter((scene) => scene.baselineFile && scene.currentFile);
+      const entries = pairable.map(sceneEntry);
+      const pending = entries.some((e) => !e || e.state === 'pending');
+      const parts = [`${scenes.length} scene${scenes.length === 1 ? '' : 's'}`];
+      let over = 0;
+      if (pending) parts.push('comparing pixels…');
+      else {
+        over = entries.filter((e) => e.state === 'done' && e.percent > SCENE_DIFF_THRESHOLD_PERCENT).length;
+        const mismatched = entries.filter((e) => e.state === 'size_mismatch').length;
+        const unavailable = entries.filter((e) => e.state === 'unavailable').length;
+        parts.push(`${over} differ >${SCENE_DIFF_THRESHOLD_PERCENT}%`);
+        if (mismatched) parts.push(`${mismatched} different sizes`);
+        if (unavailable) parts.push(`${unavailable} unreadable`);
+        if (pairable.length < scenes.length) parts.push(`${scenes.length - pairable.length} one-sided`);
+      }
+      return { text: parts.join(' · '), differs: over > 0 };
+    };
+
+    // Two different trails still diff — "how does this flow differ from that one" is a real
+    // question — but the rows below pair calls by tool name, and across trails that pairing carries
+    // no intent: a search trail's `textRegex: 'Pepperoni'` against a navigation trail's
+    // `textRegex: 'Search'` renders as a change when nothing changed. Say so rather than let the
+    // reader infer a comparison the data does not support.
+    //
+    // An empty identity is "unidentified", NOT a trail that two runs can share: comparing
+    // `'' !== ''` alone let two runs with no trail identity at all pass as the same trail and
+    // suppressed this note entirely, which is the one case the reader most needs it.
+    const keyA = trailKey(a);
+    const keyB = trailKey(b);
+    const unidentified = !keyA || !keyB;
+    const crossTrail = unidentified || keyA !== keyB;
+    const pairing = ' — rows below pair calls by tool name, not by intent, so a difference here is not necessarily a change.';
+    const crossTrailNote = !crossTrail ? ''
+      : unidentified
+        ? `<p class="cmpcross" role="note"><strong>These runs carry no trail identity.</strong> Whether they are the same test cannot be told from the report${pairing}</p>`
+        : `<p class="cmpcross" role="note"><strong>These are different trails.</strong> ${esc(((a.meta || {}).title) || 'Baseline')} vs ${esc(((b.meta || {}).title) || 'Current')}${pairing}</p>`;
+    // ── Overview: one card per lane, the drill-in control as well as the summary ──
+    // The reader's first question is "what KINDS of difference are there" — tool calls, events,
+    // screens — and only then "show me". A card answers the first; clicking it narrows the page to
+    // that lane, and clicking again restores the whole diff.
+    const toolChangedCount = tools.argsChangedCount + tools.outcomeChangedCount + tools.baselineOnlyCount + tools.currentOnlyCount;
+    const toolStat = !tools.rows.length ? 'none recorded'
+      : !toolChangedCount ? `all ${tools.sameCount} identical`
+        : [
+          tools.argsChangedCount ? `${tools.argsChangedCount} args changed` : '',
+          tools.outcomeChangedCount ? `${tools.outcomeChangedCount} outcome changed` : '',
+          tools.baselineOnlyCount ? `${tools.baselineOnlyCount} only in baseline` : '',
+          tools.currentOnlyCount ? `${tools.currentOnlyCount} only in current` : '',
+        ].filter(Boolean).join(' · ');
+    const changedStreamCount = events ? events.streams.filter((s) => s.changed).length : 0;
+    const eventStat = pendingInflate ? 'inflating…'
+      : !events.streams.length ? 'none captured'
+        : !changedStreamCount ? `all ${events.streams.length} stream${events.streams.length === 1 ? '' : 's'} match`
+          : `${changedStreamCount} of ${events.streams.length} stream${events.streams.length === 1 ? '' : 's'} differ`;
+    const laneCard = (lane, title, stat, differs) => `<button class="cmpcard${st.cmpLane === lane ? ' on' : ''}${differs ? ' cmpcarddiff' : ''}" type="button" data-cmp-lane="${lane}" aria-pressed="${st.cmpLane === lane}"><span class="cmpcardtitle">${title}</span><span class="cmpcardstat">${esc(stat)}</span></button>`;
+    const laneShown = (lane) => !st.cmpLane || st.cmpLane === lane;
+    const screens = screensGlance();
+    const cards = `<div class="cmpcards" role="group" aria-label="Difference lanes">
+      ${laneCard('tools', 'Tool calls', toolStat, toolChangedCount > 0)}
+      ${laneCard('events', 'Events', eventStat, changedStreamCount > 0)}
+      ${laneCard('screens', 'Screens', screens.text, screens.differs)}
+    </div>`;
+    return `
+      <header class="indexheader trailheader"><div class="indexshell trailshellwide">
+        <div class="title-row indexheadrow"><div class="runidentity"><h1>Compare runs</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
+        <div class="trailcontext"><div class="cmppickers">${picker('base', st.cmpBase, 'Baseline')}<button class="btn cmpswap" type="button" data-cmp-swap title="Swap baseline and current">⇄</button>${picker('vs', st.cmpVs, 'Current')}</div><div class="trailsub">what each run actually did — tool calls, captured events, and the screens along the way</div></div>
+      </div></header>
+      <main class="cmpmain"><div class="indexshell trailshellwide">
+        <section><h2>At a glance</h2>${crossTrailNote}${cards}</section>
+        ${laneShown('tools') ? `<section><h2>Tool calls</h2>${toolSection}</section>` : ''}
+        ${laneShown('events') ? `<section><h2>Event streams</h2>${eventSection()}</section>` : ''}
+        ${laneShown('screens') ? `<section><h2>Screens</h2>${screensSection()}</section>` : ''}
+      </div></main>`;
   };
 
   const render = (preserveTimelineScroll = false) => {
@@ -2873,6 +5130,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const previousPageScroll = preserveTimelineScroll && typeof window.scrollY === 'number' ? window.scrollY : null;
     const openEventKeys = preserveTimelineScroll ? openTimelineEventKeys() : null;
     const active = preserveTimelineScroll ? document.activeElement as HTMLElement | null : null;
+    timelinePreview = null;
     const focusSelector = active && active.matches('[data-scrub]') ? '[data-scrub]'
       : active && active.matches('[data-kidsel]') ? `[data-kidsel="${active.dataset.kidsel}"]`
       // A step header stays put across a render, so focus returns to the header the reader just
@@ -2884,16 +5142,56 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       : active && active.matches('[data-tlstreams]') ? `[data-tlstreams="${active.dataset.tlstreams}"]`
       : active && active.matches('[data-tlkind]') ? `[data-tlkind="${active.dataset.tlkind}"]`
       : active && active.matches('[data-tlkinds]') ? `[data-tlkinds="${active.dataset.tlkinds}"]`
+      // A pick checkbox survives its own toggle, so focus returns to the box the reader just ticked
+      // rather than falling to <body> — otherwise ticking a second run means finding the list again.
+      : active && active.matches('[data-pick]') ? `[data-pick="${active.dataset.pick}"]`
       : active && ['prev', 'next', 'tlplay'].indexOf(active.id) >= 0 ? `#${active.id}`
       : null;
     const pageTransition = st.pageTransition;
     st.pageTransition = '';
     root.className = pageTransition ? `page-enter-${pageTransition}` : '';
+    if (st.view === 'trail' && trailScopeSessions().some((i) => unhydrated.has(i))) {
+      // Same shell the detail view uses while a chunk streams in, so a deep-linked comparison on a
+      // big CI report reads as a download in flight instead of an empty stage.
+      root.innerHTML = `
+        <header class="indexheader trailheader"><div class="indexshell trailshellwide">
+          <div class="title-row indexheadrow"><div class="runidentity"><h1>${esc(trailScopeTitle())}</h1></div><div class="indexheadactions">${renderThemeToggle()}<button class="btn" type="button" data-back>${MULTI ? 'All runs' : 'Back to run'}</button></div></div>
+        </div></header>
+        <main><div class="runloading" role="status">
+          <div class="tb-boot-spinner" aria-hidden="true"></div>
+          <div class="tb-boot-title">Loading trail…</div>
+          <div class="tb-boot-note" data-run-loading-progress>${esc(loadingProgressText())}</div>
+          ${MULTI ? '<button class="btn" type="button" data-back>All runs</button>' : ''}
+        </div></main>`;
+      wire();
+      return;
+    }
+    if (st.view === 'trail') {
+      // In-view toggles (row expand, All screenshots, mode/zoom) re-render in place — hold the
+      // reader's position in the lane scroller instead of snapping a 20-step trail back to step 1.
+      const previousTrail = root.querySelector<HTMLElement>('.trailmain');
+      const trailScroll = previousTrail ? { top: previousTrail.scrollTop, left: previousTrail.scrollLeft } : null;
+      root.innerHTML = renderTrailView();
+      const trailMain = trailScroll && root.querySelector<HTMLElement>('.trailmain');
+      if (trailMain) { trailMain.scrollTop = trailScroll.top; trailMain.scrollLeft = trailScroll.left; }
+      wire();
+      return;
+    }
+    if (st.view === 'compare') {
+      root.innerHTML = renderCompareView();
+      // An in-view toggle (a gap expanding) re-renders in place: hold the reader's spot in the
+      // diff rather than snapping a 15,000px comparison back to the top.
+      const cmpMain = previousMainScroll != null && root.querySelector<HTMLElement>('main');
+      if (cmpMain) cmpMain.scrollTop = previousMainScroll;
+      wire();
+      return;
+    }
     if (st.view === 'index') {
       const runDate = indexRunDate();
       root.innerHTML = `
         ${renderIndexHeader()}
         <main><div class="indexshell"${indexShellStyle()}>${renderIndex()}</div></main>
+        ${renderPickBar()}
         <footer class="indexfooter"><div class="indexshell indexfootercontent"${indexShellStyle()}>${renderIndexSummary()}${renderIndexMetrics()}${runDate ? `<span class="detailfooteritem indexrundate"><span class="k">Run on</span><span class="v">${esc(runDate)}</span></span>` : ''}</div></footer>`;
       wire();
       return;
@@ -2973,7 +5271,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const header = EMBEDDED
       ? `<header class="detailheader notitle"><div class="tabrow">${tabsNav}<div class="detailactions">${exportMenu}</div></div></header>`
       : `<header class="detailheader">
-        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${renderThemeToggle()}${exportMenu}</div></div>
+        <div class="title-row detailtitle${MULTI ? '' : ' noback'}">${MULTI ? `<div class="detailedge"><button class="back" type="button" data-back aria-label="All runs" title="All runs">${BACK_ICON_SVG}</button></div>` : ''}<div class="runidentity"><span class="idxstatus" role="img" aria-label="${esc(detailOutcomeLabel)}" title="${esc(detailOutcomeLabel)}"><span class="idxstatusdot ${esc(detailOutcome)}" aria-hidden="true"></span></span><h1>${esc(m.title)}</h1></div><div class="detailactions">${trailViewAvailableFor(trailKey(SESSIONS[st.session])) ? `<button class="btn" type="button" data-goto-trail="${esc(trailKey(SESSIONS[st.session]))}" title="${esc(trailEntryTitle(trailKey(SESSIONS[st.session])))}">Trail view</button>` : ''}${renderThemeToggle()}${exportMenu}</div></div>
         ${tabsNav}
       </header>`;
     root.innerHTML = `
@@ -3033,13 +5331,17 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     zoomEl.remove(); zoomEl = null; zoomMove = null;
     if (zoomReturnFocus && zoomReturnFocus.focus) zoomReturnFocus.focus();
   };
-  const openZoom = (src: string, markup?: string, gallery: { src: string; token?: string; label?: string; tool?: string }[] = [{ src }], startIndex = 0) => {
+  const openZoom = (src: string, markup?: string, gallery: { src: string; token?: string; label?: string; tool?: string; device?: string }[] = [{ src }], startIndex = 0) => {
     zoomReturnFocus = document.activeElement;
     zoomEl = document.createElement('div'); zoomEl.className = gallery.length > 1 ? 'zoom haslist' : 'zoom';
     zoomEl.setAttribute('role', 'dialog'); zoomEl.setAttribute('aria-modal', 'true'); zoomEl.setAttribute('aria-label', 'Expanded screenshot'); zoomEl.tabIndex = -1;
     const wrap = document.createElement('div'); wrap.className = 'zoomwrap';
     const big = document.createElement('img'); big.src = src; big.alt = 'screenshot';
+    // Which device this frame came from. A trail gallery is N devices' takes on ONE step, so
+    // without it every entry — big image and rail alike — reads identically.
+    const deviceBadge = document.createElement('div'); deviceBadge.className = 'zoomdevice';
     wrap.appendChild(big);
+    wrap.appendChild(deviceBadge);
     if (markup) wrap.insertAdjacentHTML('beforeend', markup);
     zoomEl.appendChild(wrap);
     let galleryIndex = Math.max(0, Math.min(gallery.length - 1, startIndex));
@@ -3055,14 +5357,19 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       gallery.forEach((entry, i) => {
         const item = document.createElement('button'); item.type = 'button'; item.className = 'zoomstep';
         if (entry.token) { const chip = document.createElement('span'); chip.className = 'zoomstepchip'; chip.textContent = entry.token; item.appendChild(chip); }
+        if (entry.device) { const device = document.createElement('span'); device.className = 'zoomstepdev'; device.textContent = entry.device; item.appendChild(device); }
         const label = document.createElement('span'); label.className = 'zoomsteplabel'; label.textContent = entry.label || `Screenshot ${i + 1}`; item.appendChild(label);
         if (entry.tool) { const tool = document.createElement('span'); tool.className = 'zoomsteptool'; tool.textContent = entry.tool; item.appendChild(tool); }
+        item.setAttribute('aria-label', [entry.device, entry.token, entry.label].filter(Boolean).join(' · ') || `Screenshot ${i + 1}`);
         item.onclick = (e) => { e.stopPropagation(); if (i !== galleryIndex) { galleryIndex = i; show(); } };
         stepItems.push(item); stepList.appendChild(item);
       });
     }
     const show = () => {
-      big.src = gallery[galleryIndex].src;
+      const entry = gallery[galleryIndex];
+      big.src = entry.src;
+      deviceBadge.textContent = entry.device || '';
+      deviceBadge.hidden = !entry.device;
       previous.disabled = galleryIndex === 0; next.disabled = galleryIndex === gallery.length - 1;
       stepItems.forEach((item, i) => {
         item.className = i === galleryIndex ? 'zoomstep cur' : 'zoomstep';
@@ -3650,9 +5957,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   // otherwise leave a stuck preview behind.
   const hoverCapablePointer = (e) => {
     const kind = e && e.pointerType;
+    if (kind === 'mouse' || kind === 'pen') return true;
     if (kind && kind !== 'mouse' && kind !== 'pen') return false;
     if (typeof matchMedia !== 'function') return true;
-    try { return matchMedia('(hover: hover)').matches; } catch (err) { return true; }
+    try { return matchMedia('(any-hover: hover)').matches || matchMedia('(hover: hover)').matches; } catch (err) { return true; }
   };
   // Map a pointer position inside the screenshot to the smallest node containing it. Coordinates
   // are IMAGE-relative (the rect is re-read per hit), so the mapping stays correct while the shot
@@ -3907,46 +6215,113 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const scrollTarget = kidEl || el;
     if (scrollTarget.scrollIntoView) scrollTarget.scrollIntoView({ block: 'nearest' });
   };
-  // Per-step paint of the preview pane during playback: swap the screenshot <img> source (steps
-  // mode only — in video mode the frame follows the clock), the pane's accessible name (img alt /
-  // frame aria-label, kept in lockstep with what the static render would produce), and the
+  const wireTimelineShotZoom = () => {
+    const shot = document.getElementById('shot');
+    if (!shot) return;
+    const openCurrentShot = () => {
+      const view = timelinePaneView(false);
+      if (!view.cur || !view.shot) return;
+      openZoom(view.shot, view.captureShot
+        ? (view.capture && view.capture.mark ? markHtml({ i: `${view.cur.i}k${view.kid}`, mark: view.capture.mark }) : '')
+        : (view.cur.screenshotFile ? markHtml(view.cur) : ''));
+    };
+    // Zoom from the pane subject, not by reading the rendered <img>'s src back out of the DOM. Hover
+    // previews can temporarily make the pane point at a different row than the committed selection.
+    shot.onclick = openCurrentShot;
+    shot.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      openCurrentShot();
+    };
+  };
+  // Per-step paint of the preview pane during playback and hover: swap the screenshot <img> source
+  // (steps mode only — in video mode the frame follows the clock), the pane's accessible name (img
+  // alt / frame aria-label, kept in lockstep with what the static render would produce), and the
   // action-mark overlay in place.
   const paintTimelinePane = (hasVideo) => {
-    const wrap = root.querySelector<HTMLElement>('.preview .shotwrap');
-    const cur = D.trace.find((t) => t.i === st.step);
+    const view = timelinePaneView(hasVideo);
+    const cur = view.cur;
+    const player = root.querySelector<HTMLElement>('.preview .deviceplayer');
     const inspect = root.querySelector<HTMLButtonElement>('[data-preview-inspect]');
     if (inspect && cur) {
-      const available = stepInspectable(cur);
+      const available = view.inspectable;
       inspect.disabled = !available;
       if (available) inspect.dataset.inspect = String(cur.i);
       else inspect.removeAttribute('data-inspect');
       inspect.title = available ? 'Inspect the selected step\'s UI hierarchy' : 'No UI hierarchy captured for this step';
       inspect.setAttribute('aria-label', available ? `Inspect UI for: ${cur.label}` : `Inspect UI unavailable for: ${cur.label}`);
     }
+    if (player && player.classList && player.classList.toggle) {
+      player.classList.toggle('empty', !(view.cell || view.shot));
+    }
+    const hasShotEl = !!document.getElementById('shot');
+    const hasFrameEl = !!document.getElementById('tlvframe');
+    const hasNoShotEl = !!(player && player.querySelector && player.querySelector('.noshot'));
+    const replacePane = !!player && ((view.mode === 'shot' && !hasShotEl)
+      || (view.mode === 'frame' && !hasFrameEl)
+      || (view.mode === 'none' && !hasNoShotEl)
+      || (view.mode !== 'shot' && hasShotEl)
+      || (view.mode !== 'frame' && hasFrameEl));
+    if (replacePane) player.innerHTML = view.pane;
+    const wrap = root.querySelector<HTMLElement>('.preview .shotwrap');
     if (!wrap) return;
-    const pos = selectedEntryIndex();
-    // A dispatch position paints ITS own frame and mark — this is how every interaction inside a
-    // folded row replays instead of only the row's own.
-    const kid = cur ? selectedChild(cur) : null;
-    const kidShot = kid && kid.screenshotFile ? safeImageSrc(D.shots[kid.screenshotFile]) : null;
-    const paneLabel = cur ? (kid ? `${cur.label} · ${kid.label}` : cur.label) : '';
-    if (hasVideo) {
+    if (view.mode === 'frame' && view.cell) {
       const frame = document.getElementById('tlvframe');
-      if (frame && cur) frame.setAttribute('aria-label', `Video frame at ${paneLabel}, step ${pos + 1}`);
+      if (frame && cur) {
+        frame.setAttribute('aria-label', `Video frame at ${view.paneLabel}, step ${view.pos + 1}`);
+        frame.style.backgroundSize = view.cell.size;
+        frame.style.backgroundPosition = view.cell.position;
+        frame.style.backgroundImage = `url('${spriteUrl(tlVideo(), view.cell.sheet)}')`;
+      }
     } else {
       const img = document.getElementById('shot') as HTMLImageElement | null;
-      const src = kidShot || shotForStep(st.step);
-      if (img && src) { img.src = src; if (cur) img.alt = `${paneLabel} at step ${pos + 1}`; }
+      if (img && view.shot) { img.src = view.shot; if (cur) img.alt = `${view.paneLabel} at step ${view.pos + 1}`; }
     }
     wrap.querySelectorAll<HTMLElement>('.mark, .swipe, .markborder').forEach((el) => el.remove());
-    // The dispatch owns the frame on screen in both modes — its own screenshot in steps mode, the
-    // video frame at its instant in video mode — so its mark wins. A dispatch whose screenshot
-    // failed to inline is showing the row's frame, and keeps the row's mark.
-    const shownKid = kid && (hasVideo || kidShot) ? kid : null;
-    const markup = shownKid
-      ? (shownKid.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: shownKid.mark }) : '')
-      : cur && (hasVideo || cur.screenshotFile) ? markHtml(cur) : '';
-    if (markup) wrap.insertAdjacentHTML('beforeend', markup);
+    if (view.paneMark) wrap.insertAdjacentHTML('beforeend', view.paneMark);
+    wireTimelineShotZoom();
+  };
+  const selectableEntryIndexAtFraction = (axis, fraction) => {
+    const entries = timelineEntries();
+    let best = -1;
+    let dist = Infinity;
+    axis.stepFrac.forEach((sf, i) => {
+      if (!isSelectableTimelineEntry(entries[i])) return;
+      const d = Math.abs(sf - fraction);
+      if (d < dist) { dist = d; best = i; }
+    });
+    return best;
+  };
+  const timelineHoverPreviewAllowed = (e) => hoverCapablePointer(e) && st.tab === 'timeline' && !st.playing;
+  const previewTimelineEntry = (entryIndex, e) => {
+    if (!timelineHoverPreviewAllowed(e)) return;
+    const entry = timelineEntries()[entryIndex];
+    if (!entry) return;
+    if (timelinePreview && timelinePreview.step === entry.row.i && timelinePreview.kid === entry.kid) return;
+    timelinePreview = { step: entry.row.i, kid: entry.kid };
+    paintTimelinePane(!!tlVideo());
+  };
+  const previewTimelineSelection = (stepId, kid, e) => {
+    if (!timelineHoverPreviewAllowed(e) || !traceRowById(stepId)) return;
+    if (timelinePreview && timelinePreview.step === stepId && timelinePreview.kid === kid) return;
+    timelinePreview = { step: stepId, kid };
+    paintTimelinePane(!!tlVideo());
+  };
+  const previewTimelineGroup = (headerId, e) => {
+    if (!timelineHoverPreviewAllowed(e)) return;
+    const group = groupTrace().find((g) => g.header && g.header.i === headerId);
+    const frame = group ? lightboxStepFrame(group) : null;
+    previewTimelineSelection(frame ? frame.trace.i : headerId, frame ? frame.kidIndex ?? null : null, e);
+  };
+  const previewTimelineFraction = (fraction, e, axis = timelineAxis()) => {
+    const entryIndex = selectableEntryIndexAtFraction(axis, fraction);
+    if (entryIndex >= 0) previewTimelineEntry(entryIndex, e);
+  };
+  const clearTimelinePreview = () => {
+    if (!timelinePreview) return;
+    timelinePreview = null;
+    paintTimelinePane(!!tlVideo());
   };
   // Shared landing sequence when playback ends or is paused: drop the engine, then ONE route write
   // + full render restoring canonical (non-playing) state.
@@ -4060,12 +6435,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
   };
   const wire = () => {
     stopVideo(); // a re-render replaces the video element; drop any running playback timer.
+    stopTrailReplay(); // likewise the replay stage — its loop would paint into detached nodes.
+    stopTrailReplayMedia(); // and its recordings would go on decoding behind the new page.
     if (st.tab !== 'timeline') stopTimeline(); // playback only lives on the timeline tab
     root.querySelectorAll<HTMLElement>('[data-theme-toggle]').forEach((button) => button.onclick = () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'));
     root.querySelectorAll<HTMLElement>('[data-session]').forEach((el) => {
-      const open = () => { openSession(+el.dataset.session); st.pageTransition = 'forward'; writeRoute(false); render(); if (st.tab === 'timeline') centerTimelineSelection(true); };
+      const open = () => { openSession(+el.dataset.session); st.backTo = 'index'; st.pageTransition = 'forward'; writeRoute(false); render(); if (st.tab === 'timeline') centerTimelineSelection(true); };
       el.onclick = open;
       el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    });
+    // A flat row's attempt history opens natively, so nothing needs to re-render — but the state
+    // has to learn about it, or the next render (a checkbox tick) rebuilds the group closed.
+    root.querySelectorAll<HTMLElement>('[data-retry-toggle]').forEach((el) => {
+      el.ontoggle = () => {
+        const key = retryOpenKey(Number(el.dataset.retryToggle));
+        st.idxOpen = (el as HTMLDetailsElement).open
+          ? (st.idxOpen.indexOf(key) >= 0 ? st.idxOpen : [...st.idxOpen, key])
+          : st.idxOpen.filter((k) => k !== key);
+      };
     });
     root.querySelectorAll<HTMLElement>('[data-cell-toggle]').forEach((chev) => {
       const key = chev.dataset.cellToggle;
@@ -4143,8 +6530,231 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       filterIndexRows();
     }
     // querySelectorAll, not querySelector: the loading view offers the same escape as a labelled
-    // button in the body as well as the header's back arrow.
-    root.querySelectorAll<HTMLElement>('[data-back]').forEach((backBtn) => { backBtn.onclick = () => { stopTimeline(); st.view = 'index'; st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 }); }; });
+    // button in the body as well as the header's back arrow. Back returns to wherever the run was
+    // opened FROM — the Trail view when a lane cell opened it, the run index otherwise (and the
+    // Trail view's own header uses the same control to reach the index).
+    // `trailViewAvailable` asks about the scoped TRAIL, which a hand-picked stage doesn't have — so
+    // it has to be asked separately, or Back out of a run opened from a pick drops the reader on
+    // the index and the stage they assembled is gone.
+    const backToTrailStage = () => (st.trailPick ? trailPickSessions().length > 0 : trailViewAvailable());
+    root.querySelectorAll<HTMLElement>('[data-back]').forEach((backBtn) => { backBtn.onclick = () => { stopTimeline(); st.view = st.view !== 'trail' && st.backTo === 'trail' && backToTrailStage() ? 'trail' : st.view !== 'compare' && st.backTo === 'compare' && compareViewAvailable() ? 'compare' : MULTI ? 'index' : 'detail'; st.backTo = ''; st.pageTransition = 'back'; writeRoute(false); render(); window.scrollTo({ top: 0 }); }; });
+    // ── Picking runs to compare ──
+    // The checkbox sits inside a row that is itself a click target, so activation must not bubble
+    // into "open this run" — ticking a box and being thrown into a timeline is the whole failure
+    // mode. Re-renders so the bar's count, its note, and every box's checked state stay in step.
+    // The label as well as the input: a retry row's control lives inside its <summary>, and a click
+    // that lands on the label's padding bubbles into the disclosure even though the input's own
+    // click is stopped — ticking a box would also expand the attempt history.
+    root.querySelectorAll<HTMLElement>('.idxpick').forEach((el) => {
+      el.onclick = (e: any) => { if (e && e.stopPropagation) e.stopPropagation(); };
+    });
+    root.querySelectorAll<HTMLElement>('[data-pick]').forEach((el) => {
+      el.onclick = (e: any) => { if (e && e.stopPropagation) e.stopPropagation(); };
+      el.onchange = (e: any) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        const session = Number(el.dataset.pick);
+        if (!Number.isInteger(session)) return;
+        const at = st.pick.indexOf(session);
+        if (at >= 0) st.pick.splice(at, 1); else st.pick.push(session);
+        // Document order, so the lanes read the way the index does rather than in click order.
+        st.pick.sort((a, b) => a - b);
+        // Preserving: a bare render() rebuilds the index and drops both the page scroll and focus,
+        // so ticking the fortieth run of a build would throw the reader back to the top.
+        render(true);
+      };
+    });
+    root.querySelectorAll<HTMLElement>('[data-pick-clear]').forEach((el) => el.onclick = () => { st.pick = []; render(true); });
+    // The index's own way into the diff: tick two runs, open them. The Compare view's pickers then
+    // let the reader move either side without coming back here, so this is an entry point rather
+    // than the only way to choose a pair.
+    root.querySelectorAll<HTMLElement>('[data-pick-diff]').forEach((el) => el.onclick = () => {
+      const picked = st.pick.filter((i) => SESSIONS[i] && !isLinkOut(SESSIONS[i]));
+      if (picked.length !== 2) return;
+      stopTimeline();
+      st.cmpBase = picked[0];
+      st.cmpVs = picked[1];
+      st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {};
+      st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false);
+      render(); window.scrollTo({ top: 0 });
+    });
+    root.querySelectorAll<HTMLElement>('[data-pick-open]').forEach((el) => el.onclick = () => {
+      const picked = st.pick.filter((i) => SESSIONS[i]);
+      if (!picked.length) return;
+      stopTimeline();
+      // A new stage: lane visibility from a previous one is about other sessions entirely.
+      st.trailLanesOff = {};
+      st.trailPick = picked.slice();
+      st.trailScope = null;
+      // The Map's fan-out draws lanes leaving one shared step, which is a claim a mixed pick cannot
+      // make — so an unjoined stage opens on the Grid, where the cells simply sit side by side.
+      demoteMapForJoin();
+      st.view = 'trail'; st.pageTransition = 'forward'; writeRoute(false);
+      ensureScopeChunks(picked, pickToken(picked));
+      render(); window.scrollTo({ top: 0 });
+    });
+    // ── Trail view controls ──
+    root.querySelectorAll<HTMLElement>('[data-goto-trail]').forEach((el) => el.onclick = () => {
+      const key = el.dataset.gotoTrail || '';
+      if (!trailViewAvailableFor(key)) return;
+      stopTimeline();
+      // Lane visibility is per session index and the scopes are disjoint, but a stale off-set from
+      // a previously viewed trail would silently start this one with lanes hidden.
+      if (key !== st.trailScope) st.trailLanesOff = {};
+      st.trailScope = key;
+      st.trailPick = null;
+      st.view = 'trail'; st.pageTransition = 'forward'; writeRoute(false);
+      ensureScopeChunks(trailRuns(key), key);
+      render(); window.scrollTo({ top: 0 });
+    });
+    // ── Compare view controls ──
+    // A re-render replaces the whole subtree, so the control that was just clicked is detached and
+    // focus falls back to the document — a keyboard reader loses their place in the list. Re-focus
+    // the control that took its place.
+    const renderKeepingFocus = (attr: string, value: string) => {
+      render(true);
+      if (value.indexOf('"') >= 0) return;
+      const next = root.querySelector<HTMLElement>(`[${attr}="${value}"]`);
+      if (next && next.focus) next.focus();
+    };
+    root.querySelectorAll<HTMLElement>('[data-goto-compare]').forEach((el) => el.onclick = () => { stopTimeline(); st.view = 'compare'; st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 }); });
+    root.querySelectorAll<HTMLSelectElement>('[data-cmp-side]').forEach((el) => el.onchange = () => {
+      const i = Number(el.value);
+      if (comparableRuns().indexOf(i) < 0) return;
+      // Picking the run the other side already holds would compare a run against itself, and the
+      // pair-normalizer then substitutes a different partner when that URL is reopened — a shared
+      // link showing a comparison nobody made. Hand the other side this side's run instead, which
+      // is the swap the reader was reaching for.
+      const onBase = el.dataset.cmpSide === 'base';
+      if (i === (onBase ? st.cmpVs : st.cmpBase)) { if (onBase) st.cmpVs = st.cmpBase; else st.cmpBase = st.cmpVs; }
+      if (onBase) st.cmpBase = i; else st.cmpVs = i;
+      // Gap positions are meaningless across pairs — the Nth gap of this diff is not the Nth gap
+      // of the next one, so a stale open-set would expand arbitrary runs of the new diff.
+      st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {};
+      writeRoute(true); render();
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-swap]').forEach((el) => el.onclick = () => { const swap = st.cmpBase; st.cmpBase = st.cmpVs; st.cmpVs = swap; st.cmpGapsOpen = {}; st.cmpEventsOpen = {}; st.cmpStreamsOpen = {}; st.cmpJumpAt = {}; writeRoute(true); render(); });
+    root.querySelectorAll<HTMLElement>('[data-cmp-gap]').forEach((el) => el.onclick = () => {
+      const k = Number(el.dataset.cmpGap);
+      st.cmpGapsOpen[k] = !st.cmpGapsOpen[k];
+      renderKeepingFocus('data-cmp-gap', String(k));
+    });
+    // An event row is a one-liner by default; opening it reveals that event's fields.
+    root.querySelectorAll<HTMLElement>('[data-cmp-event]').forEach((el) => el.onclick = () => {
+      const key = el.dataset.cmpEvent || '';
+      st.cmpEventsOpen[key] = !st.cmpEventsOpen[key];
+      // A stream whose diff is large renders collapsed by default; without pinning it open, the
+      // click that asked for one event's fields would collapse the stream and hide them.
+      st.cmpStreamsOpen[key.slice(0, key.lastIndexOf(':'))] = true;
+      renderKeepingFocus('data-cmp-event', key);
+    });
+    // A lane card narrows the page to its lane; clicking the active card restores the whole diff.
+    root.querySelectorAll<HTMLElement>('[data-cmp-lane]').forEach((el) => el.onclick = () => {
+      const lane = el.dataset.cmpLane;
+      st.cmpLane = st.cmpLane === lane ? null : lane;
+      writeRoute(true); render(true);
+    });
+    // A stream chip narrows the events lane to one stream; the empty value is the All chip.
+    root.querySelectorAll<HTMLElement>('[data-cmp-stream]').forEach((el) => el.onclick = () => {
+      const stream = el.dataset.cmpStream || null;
+      st.cmpStream = st.cmpStream === stream ? null : stream;
+      writeRoute(true); render(true);
+    });
+    // Walk the places a stream's runs diverge. This moves the page rather than re-rendering it: a
+    // render would rebuild the list and drop the reader back at the top, which is the scrolling the
+    // stepper exists to avoid.
+    root.querySelectorAll<HTMLElement>('[data-cmp-jump]').forEach((el) => el.onclick = () => {
+      const raw = String(el.dataset.cmpJump || '');
+      const cut = raw.lastIndexOf('|');
+      const [stream, dir] = [raw.slice(0, cut), raw.slice(cut + 1)];
+      const anchors = Array.from(root.querySelectorAll<HTMLElement>('[data-cmp-anchor]'))
+        .filter((a) => String(a.dataset.cmpAnchor || '').startsWith(`${stream}|`));
+      if (!anchors.length) return;
+      const step = dir === 'prev' ? -1 : 1;
+      // First press of ↓ lands on the first difference, first press of ↑ on the last.
+      const was = st.cmpJumpAt[stream];
+      const from = typeof was === 'number' ? was : (step > 0 ? -1 : 0);
+      const at = ((from + step) % anchors.length + anchors.length) % anchors.length;
+      st.cmpJumpAt[stream] = at;
+      anchors.forEach((a) => a.classList && a.classList.remove('cmpjumphit'));
+      const target = anchors[at];
+      if (target.classList) target.classList.add('cmpjumphit');
+      if (target.scrollIntoView) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    // The diff overlay is a generated data URL, not a shots-map frame, so the gallery pass above
+    // can't wire it — zoom it directly.
+    root.querySelectorAll<HTMLElement>('[data-cmp-diff]').forEach((el) => el.onclick = () => {
+      const entry = cmpSceneDiffs.get(el.dataset.cmpDiff);
+      if (entry && entry.state === 'done') openZoom(entry.src, '');
+    });
+    root.querySelectorAll<HTMLElement>('[data-cmp-open]').forEach((el) => el.onclick = () => {
+      const parts = String(el.dataset.cmpOpen || '').split(':');
+      const si = Number(parts[0]);
+      const step = Number(parts[1]);
+      if (!Number.isFinite(si) || si < 0 || si >= SESSIONS.length) return;
+      stopTimeline();
+      openSession(si);
+      if (Number.isFinite(step) && (SESSIONS[si].trace || []).some((t) => t.i === step)) { st.step = step; revealTimelineStep(step); }
+      st.backTo = 'compare';
+      st.pageTransition = 'forward'; writeRoute(false); render(); window.scrollTo({ top: 0 });
+    });
+    root.querySelectorAll<HTMLElement>('[data-trail-mode]').forEach((el) => el.onclick = () => {
+      const mode = TRAIL_MODES.indexOf(el.dataset.trailMode) >= 0 ? el.dataset.trailMode : 'map';
+      if (st.trailMode === mode) return;
+      st.trailMode = mode; writeRoute(true); render();
+      root.querySelector<HTMLElement>(`[data-trail-mode="${mode}"]`)?.focus({ preventScroll: true });
+    });
+    root.querySelectorAll<HTMLElement>('[data-trail-dir]').forEach((el) => el.onclick = () => {
+      const direction = el.dataset.trailDir === 'h' ? 'h' : 'v';
+      if (st.trailDir === direction) return;
+      // A pivot reshapes the whole world, so the camera re-fits rather than pointing at the spot
+      // where the old orientation used to be.
+      st.trailDir = direction; st.trailCam = null;
+      writeRoute(true); render();
+      root.querySelector<HTMLElement>(`[data-trail-dir="${direction}"]`)?.focus({ preventScroll: true });
+    });
+    // The nav handler belongs to whichever projection is on screen; a wire pass that finds neither
+    // a map canvas nor a grid leaves it unset, so stale keys can't drive a torn-down view.
+    trailNavKeys = null;
+    wireTrailMapCanvas();
+    wireTrailGridNav();
+    wireTrailReplay();
+    const trailAllToggle = document.getElementById('trailall');
+    if (trailAllToggle) trailAllToggle.onclick = () => {
+      st.trailAll = !st.trailAll;
+      st.trailRowsOpen = {}; // the global switch resets per-row exceptions, so it reads as absolute
+      writeRoute(true); render(true);
+      document.getElementById('trailall')?.focus({ preventScroll: true });
+    };
+    root.querySelectorAll<HTMLElement>('[data-trail-row]').forEach((el) => el.onclick = () => {
+      const num = +el.dataset.trailRow;
+      st.trailRowsOpen[num] = !(num in st.trailRowsOpen ? st.trailRowsOpen[num] : st.trailAll);
+      render(true);
+      root.querySelector<HTMLElement>(`[data-trail-row="${num}"]`)?.focus({ preventScroll: true });
+    });
+    root.querySelectorAll<HTMLElement>('[data-trail-lane]').forEach((el) => el.onclick = () => {
+      const session = +el.dataset.trailLane;
+      const sel = trailSel();
+      // Hiding the last shown lane is refused outright: the fallback below trailSel would silently
+      // re-show everything, which reads as the click doing the opposite of what it says.
+      if (!st.trailLanesOff[session] && sel.length === 1 && sel[0] === session) return;
+      if (st.trailLanesOff[session]) delete st.trailLanesOff[session]; else st.trailLanesOff[session] = true;
+      // The world reshapes and lane positions shift, so the camera re-fits and replay's followed
+      // lane lets go; the playhead itself (st.trailT) survives — it is wall clock, not a lane.
+      st.trailCam = null;
+      st.trailLane = null;
+      render(true);
+      root.querySelector<HTMLElement>(`[data-trail-lane="${session}"]`)?.focus({ preventScroll: true });
+    });
+    root.querySelectorAll<HTMLElement>('[data-trail-open]').forEach((el) => el.onclick = () => {
+      const [lane, headerId] = String(el.dataset.trailOpen).split(':').map(Number);
+      if (!SESSIONS[lane]) return;
+      openSession(lane);
+      st.backTo = 'trail';
+      st.step = headerId; st.kid = null; st.tab = 'timeline';
+      revealTimelineStep(st.step);
+      st.pageTransition = 'forward';
+      writeRoute(false); render(); centerTimelineSelection(true);
+    });
     root.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) => b.onclick = () => { st.tab = b.dataset.tab; writeRoute(false); render(); if (st.tab === 'timeline') centerTimelineSelection(true); });
     root.querySelectorAll<HTMLElement>('[data-failure-step]').forEach((button) => button.onclick = () => {
       const at = D.trace.findIndex((trace) => trace.i === +button.dataset.failureStep);
@@ -4182,10 +6792,14 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (typeof requestAnimationFrame === 'undefined') reveal();
       else requestAnimationFrame(() => requestAnimationFrame(reveal));
     });
-    root.querySelectorAll<HTMLElement>('[data-step]').forEach((el) => el.onclick = (e) => {
-      if (e) e.stopPropagation();
-      if (el.focus) el.focus({ preventScroll: true });
-      stopTimeline(); st.step = +el.dataset.step; st.kid = null; revealTimelineStep(st.step); writeRoute(true); render(true);
+    root.querySelectorAll<HTMLElement>('[data-step]').forEach((el) => {
+      el.onpointerenter = (e) => previewTimelineSelection(+el.dataset.step, null, e);
+      el.onpointerleave = clearTimelinePreview;
+      el.onclick = (e) => {
+        if (e) e.stopPropagation();
+        if (el.focus) el.focus({ preventScroll: true });
+        stopTimeline(); st.step = +el.dataset.step; st.kid = null; revealTimelineStep(st.step); writeRoute(true); render(true);
+      };
     });
     // Highlight the activated per-request table row in place (no re-render — the lightbox opens
     // over an untouched table, and closing it leaves the reader at the highlighted row).
@@ -4254,19 +6868,23 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // first tool call — skipping agent-reasoning rows and trailing terminal snapshots — so the
     // preview pane jumps to that screenshot, which is what the header click has always done.
     // Collapsing leaves the selection alone; there is nothing to look at in a closed step.
-    root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => control.onclick = () => {
-      const headerId = +control.dataset.group;
-      const open = control.getAttribute('aria-expanded') !== 'true';
-      st.stepsOpen[headerId] = open;
-      const at = D.trace.findIndex((t) => t.i === headerId);
-      let nextIndex = -1;
-      if (open && at >= 0) {
-        for (let j = at + 1; j < D.trace.length && !D.trace[j].objective; j++) {
-          if (!D.trace[j].terminal && !isLlmTurn(D.trace[j])) { nextIndex = j; break; }
+    root.querySelectorAll<HTMLElement>('[data-group]').forEach((control) => {
+      control.onpointerenter = (e) => previewTimelineGroup(+control.dataset.group, e);
+      control.onpointerleave = clearTimelinePreview;
+      control.onclick = () => {
+        const headerId = +control.dataset.group;
+        const open = control.getAttribute('aria-expanded') !== 'true';
+        st.stepsOpen[headerId] = open;
+        const at = D.trace.findIndex((t) => t.i === headerId);
+        let nextIndex = -1;
+        if (open && at >= 0) {
+          for (let j = at + 1; j < D.trace.length && !D.trace[j].objective; j++) {
+            if (!D.trace[j].terminal && !isLlmTurn(D.trace[j])) { nextIndex = j; break; }
+          }
         }
-      }
-      if (nextIndex >= 0) { stopTimeline(); st.step = D.trace[nextIndex].i; st.kid = null; revealTimelineStep(st.step); }
-      writeRoute(true); render(true);
+        if (nextIndex >= 0) { stopTimeline(); st.step = D.trace[nextIndex].i; st.kid = null; revealTimelineStep(st.step); }
+        writeRoute(true); render(true);
+      };
     });
     const eventSelect = root.querySelector<HTMLDetailsElement>('[data-eventselect]');
     const streamSelect = root.querySelector<HTMLDetailsElement>('[data-streamselect]');
@@ -4285,6 +6903,16 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (eventSelect && eventSelect.open && !eventSelect.contains(target)) eventSelect.open = false;
       if (streamSelect && streamSelect.open && !streamSelect.contains(target)) streamSelect.open = false;
     };
+    root.querySelectorAll<HTMLElement>('.timelineevent[data-lazykey]').forEach((el) => {
+      el.onpointerenter = (e) => {
+        const ev = tlEventByKey.get(el.dataset.lazykey);
+        const axis = timelineAxis();
+        const fraction = ev && ev.t != null ? axis.tsFrac(ev.t) : null;
+        if (fraction != null) previewTimelineFraction(fraction, e, axis);
+        else if (el.dataset.tleventStep != null) previewTimelineSelection(+el.dataset.tleventStep, null, e);
+      };
+      el.onpointerleave = clearTimelinePreview;
+    });
     root.querySelectorAll<HTMLElement>('[data-yaml-step]').forEach((el) => el.onclick = () => {
       stopTimeline();
       st.step = +el.dataset.yamlStep;
@@ -4314,11 +6942,39 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       centerTimelineSelection();
     });
     const galleryShots = Array.from(root.querySelectorAll<HTMLElement>('[data-shot]'));
-    const galleryEntries = galleryShots.map((el) => ({ src: safeImageSrc(D.shots[el.dataset.shot]), token: el.dataset.shotToken, label: el.dataset.shotLabel, tool: el.dataset.shotTool }));
+    // `data-shot-run` names the session whose shots map resolves the frame — the Trail view shows
+    // every lane's frames on one page, so the open session's map (D.shots) is the fallback only.
+    // Lane names only mean something where several runs share a page: on a single run's own tabs
+    // the device is the whole page's subject, and naming it on every frame would be noise.
+    const laneNames = st.view === 'trail' ? trailAllLanes().map((lane) => lane.label) : null;
+    const galleryEntries = galleryShots.map((el) => {
+      const shots = el.dataset.shotRun != null ? ((SESSIONS[+el.dataset.shotRun] || {}).shots || {}) : D.shots;
+      return {
+        src: safeImageSrc(shots[el.dataset.shot]),
+        token: el.dataset.shotToken,
+        label: el.dataset.shotLabel,
+        tool: el.dataset.shotTool,
+        // A frame's own device wins where it has one (the Lightbox of a multi-device session stamps
+        // every cell); lane names cover the Trail view, where the run itself names the device.
+        device: el.dataset.shotDevice || (laneNames && el.dataset.shotRun != null ? laneNames[+el.dataset.shotRun] : undefined),
+      };
+    });
     galleryShots.forEach((el, index) => {
       const entry = galleryEntries[index];
       const image = el.querySelector?.('img') as HTMLImageElement | null;
-      if (entry.src && image) image.src = entry.src;
+      // Not draggable: a native image drag over a shell-hosted report reads as an archive drop.
+      if (image) image.draggable = false;
+      if (entry.src && image) {
+        // Frames stream in over the network. Say which state a blank box is in — plenty of real
+        // captures are near-white splash screens, so "still loading", "failed to load" and "the
+        // screen really is white" are otherwise indistinguishable.
+        const mark = (className: string) => { if (el.classList) { el.classList.remove('loading'); if (className) el.classList.add(className); } };
+        if (el.classList) el.classList.add('loading');
+        image.onload = () => mark('');
+        image.onerror = () => mark('broken');
+        image.src = entry.src;
+        if (image.complete) mark('');
+      }
       el.onclick = (e) => { if (e) e.stopPropagation(); if (entry.src) openZoom(entry.src, '', galleryEntries, index); };
     });
     root.querySelectorAll<HTMLElement>('[role="button"][tabindex="0"]').forEach((el) => el.onkeydown = (e) => {
@@ -4348,17 +7004,24 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         const [step, kid] = String(el.dataset.kidsel).split(':').map(Number);
         stopTimeline(); st.step = step; st.kid = kid; revealTimelineStep(st.step); writeRoute(true); render(true);
       };
+      el.onpointerenter = (e) => {
+        const [step, kid] = String(el.dataset.kidsel).split(':').map(Number);
+        previewTimelineSelection(step, kid, e);
+      };
+      el.onpointerleave = (e) => {
+        const parent = el.closest?.('[data-step]') as HTMLElement | null;
+        const related = (e as PointerEvent | null)?.relatedTarget as Node | null;
+        if (parent && related && parent.contains?.(related)) {
+          previewTimelineSelection(+parent.dataset.step, null, e);
+        } else {
+          clearTimelinePreview();
+        }
+      };
       el.onclick = activate;
       el.onkeydown = (e) => { if (e && (e.key === 'Enter' || e.key === ' ')) activate(e); };
     });
+    paintTimelinePane(!!tlVideo());
     const previewShot = root.querySelector<HTMLImageElement>('.preview .shot');
-    if (previewShot) {
-      // Same resolution as the pane render: a selected child dispatch's own frame wins.
-      const capture = selectedChild(D.trace.find((t) => t.i === st.step));
-      const captureSrc = capture && capture.screenshotFile ? safeImageSrc(D.shots[capture.screenshotFile]) : '';
-      const src = captureSrc || shotForStep(st.step);
-      if (src) previewShot.src = src;
-    }
     if (previewShot && !previewShot.complete) previewShot.addEventListener('load', () => centerTimelineSelection(), { once: true });
     // First timeline render with a video whose payload lacks frameWidth: measure the sprite once
     // and patch the live frame box in place (same as wireVideo) — a render(true) here would replace
@@ -4379,13 +7042,15 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const scrubHover = root.querySelector<HTMLElement>('[data-scrubhover]');
     const scrubHoverRange = root.querySelector<HTMLElement>('[data-scrubhover-range]');
     if (scrub && scrubHover) {
-      const hoverRanges = scrubTimelineModel(timelineAxis()).ranges;
+      const hoverAxis = timelineAxis();
+      const hoverRanges = scrubTimelineModel(hoverAxis).ranges;
       const hoverStep = scrubHover.querySelector<HTMLElement>('[data-scrubhover-step]');
       const hoverKind = scrubHover.querySelector<HTMLElement>('[data-scrubhover-kind]');
       scrub.onpointermove = (e) => {
         const r = scrub.getBoundingClientRect();
         const pointerX = Math.min(r.width, Math.max(0, e.clientX - r.left));
         const f = pointerX / Math.max(1, r.width);
+        previewTimelineFraction(f, e, hoverAxis);
         const hoveredRange = scrubStepAtFraction(hoverRanges, f);
         const marker = (e.target as HTMLElement | null)?.closest?.('.scrubtick,.scrubstatusbox') as HTMLElement | null;
         const step = marker?.dataset.scrubStep || hoveredRange.token;
@@ -4418,6 +7083,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
         scrubHover.style.left = `${Math.min(maxLeft, Math.max(0, desiredLeft))}px`;
       };
       scrub.onpointerleave = () => {
+        clearTimelinePreview();
         scrubHover.classList.remove('visible');
         scrubHover.setAttribute('aria-hidden', 'true');
         if (scrubHoverRange) {
@@ -4429,8 +7095,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     if (scrub) scrub.onclick = (e) => {
       const r = scrub.getBoundingClientRect();
       const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      const axis = timelineAxis(); const entries = timelineEntries(); let best = -1; let dist = Infinity;
-      axis.stepFrac.forEach((sf, i) => { if (!isSelectableTimelineEntry(entries[i])) return; const d = Math.abs(sf - f); if (d < dist) { dist = d; best = i; } });
+      const best = selectableEntryIndexAtFraction(timelineAxis(), f);
       if (best >= 0) gotoEntry(best);
     };
     if (scrub) scrub.onkeydown = (e) => {
@@ -4445,6 +7110,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (!D.trace.length) return;
       // Restart from the top if parked at the end.
       if (selectedEntryIndex() >= timelineEntries().length - 1) { st.step = D.trace[0].i; st.kid = null; }
+      timelinePreview = null;
       st.playing = true;
       // Render the playing state (pause icon, selection) FIRST, then start the engine so it caches
       // paint targets from the fresh DOM — playback itself never re-renders.
@@ -4453,22 +7119,7 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     };
     // While playing, keep the advancing step in view in the step list.
     if (st.playing) { const selEl = root.querySelector('.step.sel'); if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' }); }
-    // Zoom from the data model (the step's screenshot data URI), not by reading the rendered
-    // <img>'s src back out of the DOM. The zoomed view keeps the step's tap/swipe mark. Resolved
-    // at CLICK time, not captured at wire time — during playback the current step advances without
-    // a re-wire, and the zoom must show the step being played, not the step playback started on.
-    const shot = document.getElementById('shot');
-    if (shot) shot.onclick = () => {
-      const cur = D.trace.find((t) => t.i === st.step);
-      // A selected child dispatch zooms ITS own frame + mark (same resolution as the pane).
-      const capture = selectedChild(cur);
-      const captureSrc = capture && capture.screenshotFile ? safeImageSrc(D.shots[capture.screenshotFile]) || null : null;
-      const src = captureSrc || shotForStep(st.step);
-      if (!src) return;
-      openZoom(src, captureSrc
-        ? (capture.mark ? markHtml({ i: `${cur.i}k${st.kid}`, mark: capture.mark }) : '')
-        : (cur && cur.screenshotFile ? markHtml(cur) : ''));
-    };
+    wireTimelineShotZoom();
     if (st.tab === 'video') wireVideo();
     if (st.tab === 'device') wireLogFilter('dlpane', 'dlq', 'dlbar', 'dlcount');
     if (st.tab === 'network') wireLogFilter('nlpane', 'nlq', 'nlbar', 'nlcount');
@@ -4558,6 +7209,10 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
       if (e.key === 'Escape') { e.preventDefault(); closeInspector(true, true); }
       return; // the overlay is modal — timeline/zoom shortcuts stay inert underneath it
     }
+    // The attachment dialog is modal too, and its body is a native <audio>/<video> player: Space and
+    // the arrow keys belong to whichever control the reader focused, not to the timeline underneath,
+    // which would preventDefault them and leave the player unresponsive.
+    if (attachEl) { if (e.key === 'Escape') { e.preventDefault(); closeAttachment(); } return; }
     if (zoomEl) {
       if (e.key === 'Escape') { e.preventDefault(); closeZoom(); }
       if (e.key === 'ArrowLeft') { e.preventDefault(); if (zoomMove) zoomMove(-1); }
@@ -4566,6 +7221,26 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     }
     if (e.defaultPrevented) return;
     const target = e.target as HTMLElement | null;
+    // The replay transport answers from anywhere on the page, including while one of its own
+    // buttons holds focus — arrowing between steps shouldn't depend on where the last click landed.
+    // (The pane's own handler covers focus inside it and marks the event handled, so this doesn't
+    // double-fire; the controls keep Space/Enter for themselves.)
+    if (st.view === 'trail' && st.trailMode === 'replay' && trailReplayKeys) {
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const onControl = Boolean(target && target.closest && target.closest('button, [role="button"], a, summary'));
+      if (onControl && (e.key === ' ' || e.key === 'Enter')) return;
+      trailReplayKeys(e);
+      return;
+    }
+    // The Map and Grid step with the arrow keys under the same reach-from-anywhere rule: a reader
+    // shouldn't have to click a particular element before the trail answers the keyboard.
+    if (st.view === 'trail' && trailNavKeys) {
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const onControl = Boolean(target && target.closest && target.closest('button, [role="button"], a, summary'));
+      if (onControl && (e.key === ' ' || e.key === 'Enter')) return;
+      trailNavKeys(e);
+      return;
+    }
     if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON|SUMMARY|A)$/.test(target.tagName))) return;
     // Space toggles playback on the video tab too (parity with the legacy player's spacebar).
     if (st.view === 'detail' && st.tab === 'video' && e.key === ' ') { e.preventDefault(); const b = document.getElementById('vplay'); if (b) b.click(); return; }
@@ -4580,9 +7255,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     const previousView = st.view;
     const restoreTimelineFocus = st.view === 'detail' && st.tab === 'timeline'
       && Boolean((document.activeElement as HTMLElement | null)?.closest?.('[data-step]'));
-    // Navigating away closes the dialog: applyRoute's index branch never reaches openSession, so
-    // without this a Back to the runs index re-renders the index with the modal stranded over it.
+    // Navigating away closes the body-mounted dialogs: applyRoute's index branch never reaches
+    // openSession, so without this a Back to the runs index re-renders the index with the modal
+    // stranded over it — and an attachment left open goes on playing the previous run's audio
+    // under a view it has nothing to do with.
     closeTranscript();
+    closeAttachment();
     applyRoute(true);
     if (st.view !== previousView) st.pageTransition = st.view === 'detail' ? 'forward' : 'back';
     render(hadPushedDestination);
@@ -4610,9 +7288,12 @@ export function RUN_REPORT_VIEWER(booted?: boolean): void {
     // (the shell clearing #app for the next archive) would otherwise leave it stranded over the new
     // one — and the next boot's Escape handler sees its own zoomEl as null, so it can't dismiss it.
     try { closeZoom(); } catch (e) { /* overlay's own nodes are already gone */ }
-    // Same for the transcript dialog and the UI Inspector overlay.
+    // Same for the transcript dialog, the UI Inspector overlay, and the attachment dialog — all
+    // three live on document.body. The attachment one also holds a media element playing out of the
+    // previous report's bytes, so leaving it stranded keeps that audio going over the new run.
     try { closeTranscript(); } catch (e) { /* overlay's own nodes are already gone */ }
     try { closeInspector(); } catch (e) { /* overlay's own nodes are already gone */ }
+    try { closeAttachment(); } catch (e) { /* overlay's own nodes are already gone */ }
   };
 
   // The live seam. A same-origin embedder (Trail Runner's run details) follows a run as it executes —

@@ -107,130 +107,71 @@
     return lines.join('\n');
   }
 
-  // Locate independently runnable recorded tool calls in an authored trail. Each result points at
-  // the tool's list-item line so editors can put a Play control in their gutter, and carries the
-  // exact one-tool object + device classifier needed by buildToolListRunYaml. This intentionally
-  // recognizes both the unified `recording: -> <classifier>:` shape and the legacy
-  // `recording: -> tools:` / root `- tools:` shape. Invalid/in-progress YAML simply omits the
-  // affected marker until it becomes parseable; the editor's normal syntax diagnostics remain the
-  // source of truth for the error.
-  function runnableToolCalls(yaml) {
-    if (!window.jsyaml) return [];
+  // Locate the authored steps of a unified single-file trail, so an editor can put a Play control in
+  // its gutter at each STEP - the unit a run can start from. Each result carries the step's 0-based
+  // index in the document's `trail:` list, which is exactly what the record-range route and the
+  // unified merge mean by a step window.
+  //
+  // Only the unified shape (a top-level `trail:` key) is recognized. A legacy list-root trail has no
+  // per-step recording slots to record back into, and the server refuses a window on one, so it gets
+  // no markers rather than markers nothing can honour.
+  function runnableSteps(yaml) {
     var lines = String(yaml == null ? '' : yaml).split('\n');
-    var out = [];
-    var recordingIndent = -1;
-    var classifier = null;
-    var classifierIndent = -1;
-    var toolsIndent = -1;
-    var rootToolsIndent = -1;
     var indentOf = function (s) { var m = String(s).match(/^\s*/); return m ? m[0].length : 0; };
     var blank = function (s) { return /^\s*(?:#.*)?$/.test(s); };
-
+    var stepKey = /^(step|verify|prompt)\s*:\s*(.*)$/;
+    // The step's own prose, for the control's hover text. Block scalars (`step: >`) carry theirs on
+    // the following lines, which this deliberately does not chase: an empty label just means the
+    // hover says "step 3" instead of quoting it.
+    var scalar = function (raw) {
+      var t = String(raw == null ? '' : raw).trim();
+      if (!t || t === '>' || t === '|' || t === '>-' || t === '|-') return '';
+      if (window.jsyaml) {
+        try { var v = window.jsyaml.load(t); if (typeof v === 'string') return v; } catch (_) {}
+      }
+      return t.replace(/^['"]/, '').replace(/['"]$/, '');
+    };
+    var out = [];
+    var inTrail = false;
+    var itemIndent = -1;
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (blank(line)) continue;
       var indent = indentOf(line);
-      var item = line.match(/^\s*-\s+([A-Za-z_][A-Za-z0-9_.-]*)\s*:/);
-      var isRecording = /^\s*recording\s*:\s*(?:#.*)?$/.test(line);
-      var isRootTools = /^\s*-\s*tools\s*:\s*(?:#.*)?$/.test(line);
-
-      if (recordingIndent >= 0 && indent <= recordingIndent && !isRecording) {
-        recordingIndent = -1; classifier = null; classifierIndent = -1; toolsIndent = -1;
-      }
-      if (rootToolsIndent >= 0 && indent <= rootToolsIndent && !isRootTools) rootToolsIndent = -1;
-      if (isRecording) {
-        recordingIndent = indent; classifier = null; classifierIndent = -1; toolsIndent = -1;
+      // A top-level key ends the `trail:` block - including `trailhead:`, which the run performs
+      // first but which no step window can name. An unindented `- ` line is not a key: YAML permits
+      // an indentless sequence, so inside `trail:` that is still a step.
+      if (indent === 0 && !/^-/.test(line)) {
+        inTrail = /^trail\s*:\s*(?:#.*)?$/.test(line);
+        itemIndent = -1;
         continue;
       }
-      if (isRootTools) { rootToolsIndent = indent; continue; }
-
-      // A list item is runnable only while nested under a recognized recording/tools container.
-      // Check it before mapping-key handling because `- tapOn:` is itself a YAML mapping entry.
-      if (item && item[1] !== 'step' && item[1] !== 'verify' && item[1] !== 'prompt'
-          && item[1] !== 'trailhead' && item[1] !== 'tools') {
-        // YAML permits an "indentless sequence", where list items begin at the same indentation
-        // as their mapping key (`android:\n      - tapOn:`). Treat that as belonging to the
-        // classifier too; ordinary nested sequences continue to use the greater indentation.
-        var inClassifier = recordingIndent >= 0 && classifier && indent >= classifierIndent;
-        var inLegacyTools = recordingIndent >= 0 && toolsIndent >= 0 && indent >= toolsIndent;
-        var inRootTools = rootToolsIndent >= 0 && indent > rootToolsIndent;
-        if (inClassifier || inLegacyTools || inRootTools) {
-          var end = i + 1;
-          while (end < lines.length && (blank(lines[end]) || indentOf(lines[end]) > indent)) end++;
-          var snippet = lines.slice(i, end).map(function (s) { return s.slice(Math.min(indent, indentOf(s))); }).join('\n');
-          try {
-            var parsed = window.jsyaml.load(snippet);
-            var tool = Array.isArray(parsed) ? parsed[0] : null;
-            if (tool && typeof tool === 'object' && Object.keys(tool).length === 1) {
-              out.push({
-                line0: i,
-                endLine0: Math.max(i, end - 1),
-                name: item[1],
-                tool: tool,
-                platform: inClassifier ? classifier : null,
-              });
-            }
-          } catch (_) {}
-          i = end - 1;
+      if (!inTrail) continue;
+      var item = line.match(/^\s*-\s*(.*)$/);
+      // Steps are the list items of `trail:` itself. A deeper line belongs to the step above it (its
+      // recording), so it extends that step's block rather than starting a new one.
+      if (!item || (itemIndent >= 0 && indent !== itemIndent)) {
+        var open = out.length ? out[out.length - 1] : null;
+        if (open) {
+          open.endLine0 = i;
+          // The first key of an item is usually `step:`, but not necessarily - `- recording:` may
+          // come first. Take the prose from wherever in the item it turns up.
+          if (!open.label) {
+            var deep = line.trim().match(stepKey);
+            if (deep) { open.label = scalar(deep[2]); open.kind = deep[1] === 'verify' ? 'verify' : 'step'; }
+          }
         }
         continue;
       }
-
-      if (recordingIndent >= 0) {
-        // Compact trailheads may put the classifier and its single tool map on one line. The
-        // ordinary block-key state machine below cannot descend into flow-style YAML, so parse
-        // this line as a complete classifier entry and mark its one tool directly.
-        if (indent > recordingIndent) {
-          try {
-            var inlineEntry = window.jsyaml.load(line.trim());
-            var inlinePlatforms = inlineEntry && typeof inlineEntry === 'object' && !Array.isArray(inlineEntry) ? Object.keys(inlineEntry) : [];
-            if (inlinePlatforms.length === 1) {
-              var inlinePlatform = inlinePlatforms[0];
-              var inlineBody = inlineEntry[inlinePlatform];
-              // A block classifier may contain a compact one-line tool map:
-              // `android:\n  launchApp: {}`. In that shape the current line is the tool, not a
-              // second classifier.
-              if (classifier && toolsIndent < 0 && indent > classifierIndent && inlineBody != null) {
-                out.push({ line0: i, endLine0: i, name: inlinePlatform, tool: inlineEntry, platform: classifier });
-                continue;
-              }
-              var inlineNames = inlineBody && typeof inlineBody === 'object' && !Array.isArray(inlineBody) ? Object.keys(inlineBody) : [];
-              if (inlineNames.length === 1) {
-                var inlineName = inlineNames[0];
-                var inlineTool = {}; inlineTool[inlineName] = inlineBody[inlineName];
-                out.push({ line0: i, endLine0: i, name: inlineName, tool: inlineTool, platform: inlinePlatform });
-                continue;
-              }
-            }
-          } catch (_) {}
-        }
-        var key = line.match(/^\s*([^\s:#][^:#]*)\s*:\s*(?:#.*)?$/);
-        if (key && indent > recordingIndent) {
-          var name = key[1].trim();
-          // Unified trailheads encode their one recorded tool as a map rather than a list:
-          // `recording: -> android: -> launchApp:`. Parse that complete child block before
-          // treating its key as another classifier, so it gets the same runnable marker as a
-          // normal step recording.
-          if (classifier && toolsIndent < 0 && indent > classifierIndent) {
-            var mapEnd = i + 1;
-            while (mapEnd < lines.length && (blank(lines[mapEnd]) || indentOf(lines[mapEnd]) > indent)) mapEnd++;
-            var mapSnippet = lines.slice(i, mapEnd).map(function (s) { return s.slice(Math.min(indent, indentOf(s))); }).join('\n');
-            try {
-              var mapTool = window.jsyaml.load(mapSnippet);
-              if (mapTool && typeof mapTool === 'object' && !Array.isArray(mapTool) && Object.keys(mapTool).length === 1) {
-                out.push({ line0: i, endLine0: Math.max(i, mapEnd - 1), name: name, tool: mapTool, platform: classifier });
-                i = mapEnd - 1;
-                continue;
-              }
-            } catch (_) {}
-          }
-          if (name === 'tools') {
-            toolsIndent = indent; classifier = null; classifierIndent = -1;
-          } else {
-            classifier = name; classifierIndent = indent; toolsIndent = -1;
-          }
-        }
-      }
+      if (itemIndent < 0) itemIndent = indent;
+      var head = item[1].match(stepKey);
+      out.push({
+        line0: i,
+        endLine0: i,
+        index: out.length,
+        kind: head && head[1] === 'verify' ? 'verify' : 'step',
+        label: head ? scalar(head[2]) : '',
+      });
     }
     return out;
   }
@@ -650,7 +591,7 @@
   const api = {
     recordYamlValue, parseRecordStepTools, trailheadRunTools,
     buildRecordedTrailYaml, buildRunnableToolYaml, buildToolListRunYaml, buildTrailheadRunYaml,
-    runnableToolCalls,
+    runnableSteps,
     normalizeScratchTrailYaml,
     buildPromptTrailYaml, buildBlazeYaml, mergeBlazeYaml,
     normalizeTrailDoc, applyRecordingEdit,

@@ -1,13 +1,16 @@
 package xyz.block.trailblaze
 
+import android.app.UiAutomation
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.ParcelFileDescriptor
 import maestro.KeyCode
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
-import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
+import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.device.AndroidForegroundParser
 import xyz.block.trailblaze.device.InstalledApp
+import xyz.block.trailblaze.device.redactBulkPayloadsForLog
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
 import xyz.block.trailblaze.util.UiAutomationHandleErrors
@@ -21,18 +24,39 @@ object AdbCommandUtil {
   private const val SHELL_LIVENESS_TOKEN = "trailblaze-shell-liveness"
 
   fun execShellCommand(shellCommand: String): String {
-    Console.log("adb shell $shellCommand")
-    return withUiDevice {
-      val output = executeShellCommand(shellCommand)
-      // A dead UiAutomation connection makes executeShellCommand return "" instead of throwing,
-      // so every command looks successful while doing nothing. Empty output is also normal for
-      // many commands (`cp`, `input keyevent`), so double-check with a probe that always prints:
-      // if even that comes back empty, the connection is wedged — throw so the standard
-      // reconnect-and-retry runs.
-      if (output.isEmpty() && !executeShellCommand("echo $SHELL_LIVENESS_TOKEN").contains(SHELL_LIVENESS_TOKEN)) {
-        throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(shellCommand))
-      }
-      output
+    // Redact before logging, and again before the wedge message: `writeFileAs` carries a file's
+    // bytes base64-encoded inside the command line, and logcat is a captured CI artifact — so an
+    // unredacted log of that command line is a log of a seeded auth/session file.
+    val loggableCommand = redactBulkPayloadsForLog(shellCommand)
+    Console.log("adb shell $loggableCommand")
+    val output = runShellCommand(shellCommand)
+    // A dead UiAutomation connection makes the shell call return "" instead of throwing, so every
+    // command looks successful while doing nothing. Empty output is also normal for many commands
+    // (`cp`, `input keyevent`), so double-check with a probe that always prints: if even that comes
+    // back empty, the connection is wedged — throw so the standard reconnect-and-retry runs.
+    if (output.isEmpty() && !runShellCommand("echo $SHELL_LIVENESS_TOKEN").contains(SHELL_LIVENESS_TOKEN)) {
+      throw IllegalStateException(UiAutomationHandleErrors.silentShellWedgeMessage(loggableCommand))
+    }
+    return output
+  }
+
+  /**
+   * Runs [shellCommand] through [UiAutomation.executeShellCommand] directly rather than
+   * [androidx.test.uiautomator.UiDevice.executeShellCommand].
+   *
+   * UiDevice's wrapper is the same two lines plus `Log.d(TAG, "Executing shell command: %s")`, and
+   * that log is the one place [redactBulkPayloadsForLog] cannot reach — it would put the base64
+   * file body of every `writeFileAs` into logcat, which is captured into session artifacts by
+   * default. Going one layer down keeps the payload out of the log entirely instead of redacting a
+   * copy of it.
+   *
+   * Reading the whole stream before decoding also fixes a latent UiDevice bug: it decodes each
+   * 512-byte chunk separately, so a multi-byte UTF-8 character straddling a chunk boundary comes
+   * back mangled.
+   */
+  private fun runShellCommand(shellCommand: String): String = withUiAutomation {
+    ParcelFileDescriptor.AutoCloseInputStream(executeShellCommand(shellCommand)).use { stream ->
+      stream.readBytes().toString(Charsets.UTF_8)
     }
   }
 
@@ -183,13 +207,19 @@ object AdbCommandUtil {
     intervalMs = checkIntervalMs,
     conditionDescription = "App $appId should be in foreground",
   ) {
-    // Reliable resumed-activity signal (see [getForegroundPackage]), matched against EVERY
-    // resumed task so split-screen / multi-display can't hide the target app. The previous
-    // `UiDevice.currentPackageName` check polled the flaky UiAutomation window list, which on
-    // some images never reports the launching app on a cold start — so the poll ran out the full
-    // 30s timeout on every fresh launch even after the app was on screen.
-    getForegroundComponents().any { AndroidForegroundParser.packageFromComponent(it) == appId }
+    isAppInForeground(appId)
   }
+
+  /**
+   * Whether [appId] currently has a resumed activity, matched against EVERY resumed task so
+   * split-screen / multi-display can't hide it. Errors read as "not in foreground".
+   *
+   * Reads the reliable resumed-activity signal (see [getForegroundPackage]) rather than
+   * `UiDevice.currentPackageName`, which polls the flaky UiAutomation window list and on some
+   * images never reports a launching app during a cold start.
+   */
+  fun isAppInForeground(appId: String): Boolean =
+    getForegroundComponents().any { AndroidForegroundParser.packageFromComponent(it) == appId }
 
   /**
    * Disable Assistant from UiAutomator
@@ -357,7 +387,7 @@ object AdbCommandUtil {
    * cannot be determined.
    *
    * Reads the reliable resumed-activity signal (via [getForegroundComponent]) so it stays correct
-   * during cold starts — unlike [UiDevice.currentPackageName], which polls the flaky UiAutomation
+   * during cold starts — unlike [androidx.test.uiautomator.UiDevice.currentPackageName], which polls the flaky UiAutomation
    * window list and often reports the launcher (or nothing) while an app is still warming up.
    */
   fun getForegroundPackage(): String? =

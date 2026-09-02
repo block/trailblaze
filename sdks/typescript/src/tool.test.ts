@@ -9,6 +9,8 @@
 // envelope whose text content carries `name + ": " + message + "\n" + stack`. These tests
 // pin that shape against three failure modes (sync throw, async rejection, primitive throw).
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, test, beforeEach } from "bun:test";
 import { z } from "zod";
 
@@ -623,19 +625,32 @@ describe("tool() overload — typed authoring surface", () => {
     expect(out.content).toEqual([{ type: "text", text: "stored" }]);
   });
 
-  // Local re-implementation of the synthesized in-process wrapper's `__normalizeResult`
-  // (`sdks/typescript/tools/in-process-wrapper-template.mjs`) — kept minimal and inline rather than
-  // importing the .mjs template (it's a build-time text template, not an importable module). Proves
-  // that whatever `defineTypedTool` returns survives the SAME normalization step production applies
-  // before the Kotlin host ever sees the envelope.
-  function normalizeResultLikeInProcessWrapper(result: unknown): { content: unknown[]; _meta?: unknown } {
-    if (result == null) return { content: [] };
-    if (typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
-      return result as { content: unknown[]; _meta?: unknown };
+  // The synthesized in-process wrapper's `__normalizeResult`, lifted out of the real template
+  // (`sdks/typescript/tools/in-process-wrapper-template.mjs`) rather than re-implemented here. The
+  // template can't be imported — it's a build-time text template with unresolved placeholders — but
+  // that function is self-contained, so slicing and evaluating it keeps these tests pinned to the
+  // code production actually runs. A copy drifted from it once already, and the drift is invisible:
+  // the copy keeps passing while the shipped normalization does something else. Renaming or
+  // removing the function fails here loudly, which is the intended signal to revisit these tests.
+  function loadInProcessNormalizer(): (result: unknown) => Record<string, unknown> {
+    const template = readFileSync(
+      new URL("../tools/in-process-wrapper-template.mjs", import.meta.url),
+      "utf8",
+    );
+    const start = template.indexOf("function __normalizeResult");
+    const end = template.indexOf("\n}\n", start);
+    if (start < 0 || end < 0) {
+      throw new Error("__normalizeResult not found in in-process-wrapper-template.mjs");
     }
-    if (typeof result === "string") return { content: [{ type: "text", text: result }] };
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    const source = template.slice(start, end + 2);
+    return new Function(`${source}; return __normalizeResult;`)() as (
+      result: unknown,
+    ) => Record<string, unknown>;
   }
+
+  const normalizeResultLikeInProcessWrapper = loadInProcessNormalizer() as (
+    result: unknown,
+  ) => { content: unknown[]; _meta?: unknown; structuredContent?: unknown };
 
   test("typed handler returning a plain object still flushes the delta through the in-process wrapper's normalization", async () => {
     // Code-review regression: a typed tool's `TResult` can be any author-declared object (e.g.
@@ -675,6 +690,42 @@ describe("tool() overload — typed authoring surface", () => {
     const definition = tool<Record<string, never>, Output>(async (_input, _ctx) => ({ ok: true }));
     const out = await definition({}, { memory: {} } as never, { tools: {} } as never);
     expect(out).toEqual({ ok: true });
+  });
+
+  test("in-process normalization sends a bare object as structuredContent, matching the subprocess path", async () => {
+    // The write-free typed tool above returns a bare object, so normalization is the only thing
+    // standing between its declared `TResult` and the caller. The caller's proxy reads
+    // `structuredContent` first and falls back to text: with text alone it receives the JSON
+    // *string* typed as the declared object and every field read is `undefined`. The subprocess
+    // path (`normalizeInlineToolResult`) has always sent both; in-process sent only text, so the
+    // same tool behaved differently depending on runtime — and in-process is the on-device one.
+    interface Output { matched: boolean; scanned: number }
+    const definition = tool<Record<string, never>, Output>(async () => ({ matched: true, scanned: 3 }));
+    const out = await definition({}, { memory: {} } as never, { tools: {} } as never);
+
+    const normalized = normalizeResultLikeInProcessWrapper(out);
+
+    expect(normalized.structuredContent).toEqual({ matched: true, scanned: 3 });
+    // Text stays populated too — raw-MCP consumers that only read content still get a value.
+    expect(normalized.content).toEqual([
+      { type: "text", text: JSON.stringify({ matched: true, scanned: 3 }) },
+    ]);
+  });
+
+  test("in-process normalization leaves strings and hand-rolled envelopes alone", () => {
+    // Guards the fix's blast radius: adding structuredContent must not start attaching it to
+    // returns that were never structured. A string tool's caller reads text, and an author who
+    // hand-rolled an envelope owns its structuredContent (present or deliberately absent).
+    const fromString = normalizeResultLikeInProcessWrapper("plain");
+    expect(fromString.content).toEqual([{ type: "text", text: "plain" }]);
+    expect("structuredContent" in fromString).toBe(false);
+
+    const handRolled = { content: [{ type: "text", text: "mine" }] };
+    expect(normalizeResultLikeInProcessWrapper(handRolled)).toBe(handRolled);
+
+    const fromNumber = normalizeResultLikeInProcessWrapper(42);
+    expect(fromNumber.content).toEqual([{ type: "text", text: "42" }]);
+    expect("structuredContent" in fromNumber).toBe(false);
   });
 
   test("typed handler does NOT attach a delta on the subprocess path (already-wrapped TrailblazeMemory)", async () => {

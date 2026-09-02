@@ -1,6 +1,8 @@
 import javax.inject.Inject
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.Named
+import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.ConfigurableFileCollection
@@ -16,11 +18,10 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 
 /**
- * Extension for the `trailblaze.dto-ts-codegen` plugin. A consuming module points the plugin at the
- * generator `main` it ships, that module's runtime classpath (so the `@Serializable` classes are
- * loadable), and the committed `.ts` the bindings land in.
+ * One generator → one committed `.ts` file. A module declares as many of these as it exports
+ * bindings for; each gets its own generate/verify task pair.
  */
-interface TrailblazeDtoTsCodegenExtension {
+interface TrailblazeDtoTsBinding : Named {
   /**
    * Fully-qualified name of the generator entry point (e.g.
    * `xyz.block.trailblaze.trailrunner.codegen.TrailRunnerDtoTsBindingsKt`). It must accept the
@@ -38,9 +39,28 @@ interface TrailblazeDtoTsCodegenExtension {
 
   /**
    * The committed output `.ts` (e.g. the SDK's `sdks/typescript/src/generated/<name>.ts`).
-   * `generateDtoTs` writes here; `verifyDtoTs` byte-diffs a fresh codegen against it.
+   * The generate task writes here; the verify task byte-diffs a fresh codegen against it.
    */
   val generatedTsFile: RegularFileProperty
+}
+
+/**
+ * Extension for the `trailblaze.dto-ts-codegen` plugin. A consuming module registers one
+ * [TrailblazeDtoTsBinding] per committed `.ts` it exports.
+ *
+ * A container rather than a single generator, because one module can legitimately own more than one
+ * TypeScript surface — `:trailblaze-models` exports both the host RPC DTOs and the `usages` report
+ * contract, and they are read by different consumers with different lifetimes. Sharing one generator
+ * would either fuse two unrelated surfaces into one file or push a model's bindings into whichever
+ * other module still had its single slot free.
+ */
+interface TrailblazeDtoTsCodegenExtension {
+  /**
+   * One entry per committed `.ts`. The entry name suffixes its task names. At least one is
+   * required — an empty container fails configuration, because it would leave `check` green with
+   * nothing verified.
+   */
+  val bindings: NamedDomainObjectContainer<TrailblazeDtoTsBinding>
 }
 
 /**
@@ -62,32 +82,70 @@ class TrailblazeDtoTsCodegenPlugin : Plugin<Project> {
       TrailblazeDtoTsCodegenExtension::class.java,
     )
 
-    val generate = project.tasks.register("generateDtoTs", GenerateDtoTsTask::class.java) { task ->
+    // `generateDtoTs` / `verifyDtoTs` stay the names a developer types and every doc and generated
+    // header names — they are now aggregates over the module's bindings, so regenerating a module
+    // still means regenerating everything it exports.
+    val generateAll = project.tasks.register("generateDtoTs") { task ->
       task.group = "build"
       task.description =
-        "Regenerates the committed TypeScript DTO bindings from the Kotlin @Serializable models. " +
-          "Run after changing an exported model or the root list, and commit the regenerated file."
-      task.codegenClasspath.from(ext.codegenClasspath)
-      task.generatorMainClass.set(ext.mainClass)
-      task.outputFile.set(ext.generatedTsFile)
+        "Regenerates every committed TypeScript DTO binding this module exports from the Kotlin " +
+          "@Serializable models. Run after changing an exported model or a root list, and commit."
     }
-
-    project.tasks.register("verifyDtoTs", VerifyDtoTsTask::class.java) { task ->
+    val verifyAll = project.tasks.register("verifyDtoTs") { task ->
       task.group = "verification"
       task.description =
-        "Verifies the committed TypeScript DTO bindings match a fresh codegen against the Kotlin " +
-          "models. Fails with the regenerate command on drift. Wired into check."
-      task.codegenClasspath.from(ext.codegenClasspath)
-      task.generatorMainClass.set(ext.mainClass)
-      task.committedFile.set(ext.generatedTsFile)
-      task.freshFile.set(project.layout.buildDirectory.file("dto-ts-codegen/fresh-dto-bindings.ts"))
-      task.regenerateTaskPath.set("${project.path}:generateDtoTs")
-      // `check` runs verify but never generate, so this is ordering-only (NOT a dependency): if
-      // both are scheduled in one build, verify runs after generate's write to the committed file.
-      task.mustRunAfter(generate)
+        "Verifies every committed TypeScript DTO binding this module exports matches a fresh " +
+          "codegen. Fails with the regenerate command on drift. Wired into check."
     }
 
-    project.tasks.named("check") { it.dependsOn("verifyDtoTs") }
+    ext.bindings.all { binding ->
+      val suffix = binding.name.replaceFirstChar { it.uppercaseChar() }
+      val generate = project.tasks.register("generateDtoTs$suffix", GenerateDtoTsTask::class.java) { task ->
+        task.group = "build"
+        task.description = "Regenerates the committed TypeScript bindings for `${binding.name}`."
+        task.codegenClasspath.from(binding.codegenClasspath)
+        task.generatorMainClass.set(binding.mainClass)
+        task.outputFile.set(binding.generatedTsFile)
+      }
+      val verify = project.tasks.register("verifyDtoTs$suffix", VerifyDtoTsTask::class.java) { task ->
+        task.group = "verification"
+        task.description = "Byte-diffs the committed TypeScript bindings for `${binding.name}`."
+        task.codegenClasspath.from(binding.codegenClasspath)
+        task.generatorMainClass.set(binding.mainClass)
+        task.committedFile.set(binding.generatedTsFile)
+        // Per-binding, so two bindings in one module cannot overwrite each other's fresh output —
+        // which would make one of them verify against the other's codegen.
+        task.freshFile.set(
+          project.layout.buildDirectory.file("dto-ts-codegen/fresh-${binding.name}-bindings.ts"),
+        )
+        task.regenerateTaskPath.set("${project.path}:generateDtoTs$suffix")
+        // `check` runs verify but never generate, so this is ordering-only (NOT a dependency): if
+        // both are scheduled in one build, verify runs after generate's write to the committed file.
+        task.mustRunAfter(generate)
+      }
+      generateAll.configure { it.dependsOn(generate) }
+      verifyAll.configure { it.dependsOn(verify) }
+    }
+
+    // A module that applies this plugin and registers nothing would get an aggregate `verifyDtoTs`
+    // with no dependencies, so `check` would pass having verified no TypeScript at all — silently,
+    // and exactly in the case worth catching (a `bindings.register` block dropped or mis-nested
+    // during an edit). The single-generator shape this replaced failed loudly on an unset
+    // `mainClass`; keep that property. Configuration time, not `check` time, so the mistake surfaces
+    // on the next build of any kind rather than only under a verification task.
+    project.afterEvaluate {
+      if (ext.bindings.isEmpty()) {
+        throw GradleException(
+          "${project.path} applies the trailblaze.dto-ts-codegen plugin but registers no bindings, " +
+            "so verifyDtoTs would verify nothing and check would pass with the TypeScript " +
+            "freshness gate gone. Register at least one: trailblazeDtoTsCodegen { " +
+            "bindings.register(\"<name>\") { mainClass.set(...); generatedTsFile.set(...) } }, or " +
+            "remove the plugin.",
+        )
+      }
+    }
+
+    project.tasks.named("check") { it.dependsOn(verifyAll) }
   }
 }
 

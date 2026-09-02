@@ -16,6 +16,8 @@ interface PerfDriverInput {
   sessions?: Array<{
     meta?: RunMeta;
     logs?: TrailblazeLogRecord[];
+    /** The session's `trace.json` (TrailblazeTracer Complete events); absent for older sessions. */
+    trace?: TrailblazeTraceEvent[];
   }>;
 }
 
@@ -23,7 +25,7 @@ const require = createRequire(import.meta.url);
 // The core is loaded at runtime (in main) from the sibling transpiled artifact; assert its API
 // surface here so this driver typechecks against the same contract the viewer implements.
 type PerfCore = {
-  extractPerfSession(logs: TrailblazeLogRecord[]): PerfSessionData | null;
+  extractPerfSession(logs: TrailblazeLogRecord[], trace?: TrailblazeTraceEvent[]): PerfSessionData | null;
   buildPerfReportHtml(args: { generatedAt?: string; sessions: PerfSessionPayload[] }): string;
 };
 
@@ -37,7 +39,7 @@ function main(): void {
   const input: PerfDriverInput = JSON.parse(readFileSync(inputPath, "utf8"));
   const sessions: PerfSessionPayload[] = [];
   for (const s of input.sessions || []) {
-    const data = core.extractPerfSession(s.logs || []);
+    const data = core.extractPerfSession(s.logs || [], s.trace || []);
     // A session with no host-clock timestamps has nothing to profile; skip it rather than
     // rendering an empty timeline.
     if (data) sessions.push({ meta: s.meta || {}, data });

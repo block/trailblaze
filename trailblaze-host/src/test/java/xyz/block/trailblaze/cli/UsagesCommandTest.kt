@@ -10,7 +10,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import picocli.CommandLine
+import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
+import xyz.block.trailblaze.usages.ChangedSinceSummary
+import xyz.block.trailblaze.usages.ToolUsageResult
 import xyz.block.trailblaze.usages.ToolUsagesReport
+import xyz.block.trailblaze.usages.UsagesDiagnostic
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -158,6 +163,393 @@ class UsagesCommandTest {
     assertTrue(
       report.warnings.any { it.contains("broken.trail.yaml") },
       "the unscannable file must be named: ${report.warnings}",
+    )
+    val diagnostic = report.diagnostics.single()
+    assertEquals(UsagesDiagnostic.TRAIL_UNPARSEABLE, diagnostic.kind)
+    assertTrue(
+      diagnostic.subject.endsWith("broken.trail.yaml"),
+      "the subject is the file itself, so a consumer can act on it without parsing the message: $diagnostic",
+    )
+  }
+
+  @Test
+  fun `warnings is exactly the incompleteness diagnostics' messages, so the two can never disagree`() {
+    // The failure this forbids: a human reading `warnings` is told the scan was clean while a
+    // machine reading `diagnostics` is told otherwise (or vice versa). Asserted on a report
+    // carrying BOTH kinds at once, because a per-site check cannot see the two lists diverging.
+    // The hint-severity half of the same invariant is covered by the fail-open gate test below.
+    writeTrail(
+      "good.trail.yaml",
+      """
+      config:
+        id: good
+      trail:
+        - step: Fine
+          recording:
+            android:
+              - demo_tap: {}
+      """,
+    )
+    File(trailsDir, "broken.trail.yaml").writeText("- this is the retired v1 list-root shape\n")
+    val gone = File(trailsDir, "moved-away")
+
+    val report = UsagesCommand().buildReport(listOf("demo_tap"), trailsDir, listOf(gone))
+
+    assertEquals(
+      report.diagnostics.filter { it.severity == UsagesDiagnostic.INCOMPLETENESS }.map { it.message },
+      report.warnings,
+    )
+    assertTrue(
+      report.diagnostics.all { it.severity == UsagesDiagnostic.INCOMPLETENESS },
+      "both of these ARE incompleteness, so this report's two lists must match entry for entry",
+    )
+    assertEquals(
+      setOf(UsagesDiagnostic.ROOT_UNSCANNED, UsagesDiagnostic.TRAIL_UNPARSEABLE),
+      report.diagnostics.map { it.kind }.toSet(),
+      "an unread ROOT hides a whole subtree and one unparseable TRAIL hides one file — a consumer " +
+        "that must fail the build on the first and annotate the second needs them told apart",
+    )
+  }
+
+  @Test
+  fun `a named tool reports where it is declared, and an undeclared one says so`() {
+    // Workspace-shaped: trails root with trailmaps above it, holding one real scripted tool. The
+    // point is the pair of answers — a resolvable name gets its source path, and a name the
+    // inventory never heard of gets a diagnostic, because otherwise both look like "zero usages"
+    // and one of them is a typo that greenlights deleting the wrong thing.
+    val workspace = File(trailsDir, "ws").apply { mkdirs() }
+    val trails = File(workspace, "trails").apply { mkdirs() }
+    val toolsDir = File(workspace, "trailblaze-config/trailmaps/demo-map/tools").apply { mkdirs() }
+    val script = File(toolsDir, "addItem.ts").apply { writeText("export function demo_addItem() {}\n") }
+    File(toolsDir, "addItem.yaml").writeText(
+      """
+      name: demo_addItem
+      script: ./addItem.ts
+      """.trimIndent(),
+    )
+    writeTrail(
+      "ws/trails/case_a.trail.yaml",
+      """
+      config:
+        id: case_a
+      trail:
+        - step: Add
+          recording:
+            android:
+              - demo_addItem: {}
+        - step: Tap
+          recording:
+            android:
+              - demo_tap: {}
+      """,
+    )
+
+    val report = runForReport(listOf(trails), "demo_addItem", "demo_addItm", "demo_tap")
+
+    val declared = report.tools.first { it.tool == "demo_addItem" }
+    assertEquals(listOf(script.absolutePath), declared.sourcePaths, "diagnostics: ${report.diagnostics}")
+    assertEquals(ToolUsageResult.NAMED, declared.changeKind, "the caller named it; nothing derived it")
+    assertEquals(1, declared.usages.size)
+
+    val typo = report.tools.first { it.tool == "demo_addItm" }
+    assertTrue(typo.usages.isEmpty() && typo.sourcePaths.isEmpty())
+    val diagnostic = report.diagnostics.single { it.kind == UsagesDiagnostic.TOOL_NOT_IN_SCRIPTED_INVENTORY }
+    assertEquals(
+      "demo_addItm",
+      diagnostic.subject,
+      "only the name with NOTHING to show for itself: `demo_tap` is also absent from the scripted " +
+        "inventory, but a trail demonstrably invokes it, so saying so is noise: ${report.diagnostics}",
+    )
+    assertEquals(1, report.tools.first { it.tool == "demo_tap" }.usages.size)
+    assertTrue(
+      report.diagnostics.none { it.subject == "demo_addItem" },
+      "the tool that IS declared must not be flagged: ${report.diagnostics}",
+    )
+  }
+
+  @Test
+  fun `a tool entry written before changeKind existed decodes as unknown, not as named`() {
+    // The additive-field trap, in its worst form: an absent field that defaults to a REAL value
+    // rather than an empty one. `named` would make an older `--changed-since` report present its
+    // removed tools — whose usages are broken trails — as merely caller-named, and a consumer
+    // reading the per-tool field has no way to notice.
+    val legacy = """
+      {
+        "schemaVersion": 1,
+        "trailsRoot": "/tmp/trails",
+        "tools": [{ "tool": "demo_gone", "usages": [] }],
+        "changedSince": {
+          "ref": "HEAD~1",
+          "resolvedSha": "abc123",
+          "removed": ["demo_gone"]
+        }
+      }
+    """.trimIndent()
+
+    val report = Json { ignoreUnknownKeys = true }
+      .decodeFromString(ToolUsagesReport.serializer(), legacy)
+
+    assertEquals(ToolUsageResult.UNKNOWN, report.tools.single().changeKind)
+    assertEquals(
+      listOf("demo_gone"),
+      report.changedSince?.removed,
+      "the only place this report says what happened to the tool, which is why `unknown` has to " +
+        "send the consumer here instead of answering for it",
+    )
+  }
+
+  @Test
+  fun `an all-keyed invocation is shadowed on a device whose step declares a more specific key`() {
+    // The trap the field exists for. Both devices see a step keyed `all:` that invokes the tool —
+    // but the iPhone's closest match is its OWN `ios-iphone:` recording, which does not. Reading
+    // `classifiers` (`[all]`) and concluding "runs everywhere" would replay an iOS lane that never
+    // touches the tool, and — worse in the other direction — a REMOVED tool would be reported as
+    // breaking an iOS leg it was never on.
+    writeTrail(
+      "shadowed.trail.yaml",
+      """
+      config:
+        id: shadowed
+        devices:
+          android-phone: {}
+          ios-iphone: {}
+      trail:
+        - step: Add an item
+          recording:
+            all:
+              - demo_addItem: {}
+            ios-iphone:
+              - demo_signOut: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(listOf("all"), usage.classifiers, "the authored key is unchanged — raw facts stay raw")
+    assertEquals(
+      setOf("android-phone", "ios-iphone", "all"),
+      usage.devices.toSet(),
+      "the denominator is every classifier the trail declares direction for",
+    )
+    assertEquals(
+      setOf("android-phone", "all"),
+      usage.invokingDevices.toSet(),
+      "the iPhone's closest declared key is its own non-invoking recording, so it never reaches " +
+        "the tool — which is exactly what set membership in `classifiers` cannot tell you",
+    )
+  }
+
+  @Test
+  fun `a device whose closest key does invoke is reported as reaching the tool`() {
+    // The other half of the pair: same shape, but now the iPhone's own recording IS the invoking
+    // one. Without this, an implementation that simply dropped every device with a more specific
+    // key would pass the shadowing test above while being wrong.
+    writeTrail(
+      "specific.trail.yaml",
+      """
+      config:
+        id: specific
+        devices:
+          android-phone: {}
+          ios-iphone: {}
+      trail:
+        - step: Add an item
+          recording:
+            all:
+              - demo_signOut: {}
+            ios-iphone:
+              - demo_addItem: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(
+      setOf("ios-iphone"),
+      usage.invokingDevices.toSet(),
+      "only the device whose own recording invokes it: the android phone falls back to `all:`, " +
+        "which does not",
+    )
+  }
+
+  @Test
+  fun `a broader family key covers a more specific declared device`() {
+    // `android-phone` string-derives to `android`, so an `android:`-keyed invocation reaches it even
+    // though no `android-phone:` recording exists. A consumer that matched device keys literally
+    // against `classifiers` would report this trail as reaching NO declared device.
+    writeTrail(
+      "family.trail.yaml",
+      """
+      config:
+        id: family
+        devices:
+          android-phone: {}
+          ios-iphone: {}
+      trail:
+        - step: Add an item
+          recording:
+            android:
+              - demo_addItem: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(
+      setOf("android-phone", "android"),
+      usage.invokingDevices.toSet(),
+      "the iPhone is declared but has nothing to resolve to: ${usage.devices}",
+    )
+  }
+
+  @Test
+  fun `a tool with no usages carries no device claim at all`() {
+    // Empty must mean "nothing reached", never "not computed" — a consumer treating the two the
+    // same would silently skip every lane for a tool it could not resolve.
+    writeTrail(
+      "unrelated.trail.yaml",
+      """
+      config:
+        id: unrelated
+        devices:
+          android-phone: {}
+      trail:
+        - step: Something else
+          recording:
+            android:
+              - demo_signOut: {}
+      """,
+    )
+
+    val result = runForReport("demo_addItem").tools.single()
+
+    assertTrue(result.usages.isEmpty())
+  }
+
+  @Test
+  fun `every report names the CLI that produced it`() {
+    // schemaVersion says which FIELDS to expect, not which behavior produced the values. An
+    // archived report whose numbers a triager distrusts has to be attributable to a build, or the
+    // only remaining move is to re-run and hope.
+    writeTrail(
+      "case_v.trail.yaml",
+      """
+      config:
+        id: case_v
+      trail:
+        - step: Tap
+          recording:
+            android:
+              - demo_tap: {}
+      """,
+    )
+
+    val report = runForReport("demo_tap")
+
+    assertEquals(TrailblazeVersion.displayVersion, report.generatedBy)
+    assertTrue(
+      !report.generatedBy.isNullOrBlank(),
+      "a null or blank value is the same as not having the field: ${report.generatedBy}",
+    )
+  }
+
+  @Test
+  fun `with no workspace above the trails root, no tool is accused of being a typo`() {
+    // The plain-directory case: `--trails /some/dir` with no trailmaps anywhere above it. There is
+    // no inventory to be absent from, so flagging every queried name would make the hint noise
+    // exactly where it knows least.
+    writeTrail(
+      "case_x.trail.yaml",
+      """
+      config:
+        id: case_x
+      trail:
+        - step: Tap
+          recording:
+            android:
+              - demo_tap: {}
+      """,
+    )
+
+    val report = runForReport("demo_tap", "demo_whoKnows")
+
+    assertTrue(
+      report.diagnostics.none { it.kind == UsagesDiagnostic.TOOL_NOT_IN_SCRIPTED_INVENTORY },
+      "an unreadable inventory must stay silent, not accuse: ${report.diagnostics}",
+    )
+    assertTrue(report.tools.all { it.sourcePaths.isEmpty() })
+  }
+
+  @Test
+  fun `a derived tool set carries its change kind, and a removed tool is not called a typo`() {
+    // `--changed-since` needs git and esbuild, so the derivation itself is exercised end to end
+    // elsewhere; what is asserted here is the wiring it feeds, which is where the trap is. A REMOVED
+    // tool is absent from the current inventory BY DEFINITION — it was just deleted — so a
+    // typo hint keyed on "absent from the inventory" would accuse the very deletion being analysed.
+    writeTrail(
+      "case_r.trail.yaml",
+      """
+      config:
+        id: case_r
+      trail:
+        - step: Add
+          recording:
+            android:
+              - demo_gone: {}
+      """,
+    )
+
+    val report = UsagesCommand().buildReport(
+      listOf("demo_gone", "demo_edited"),
+      trailsDir,
+      emptyList(),
+      UsagesCommand.ToolAttribution(
+        changeKinds = mapOf(
+          "demo_gone" to ToolUsageResult.REMOVED,
+          "demo_edited" to ToolUsageResult.MODIFIED,
+        ),
+        scriptedToolPaths = mapOf("demo_edited" to listOf("/ws/trailmaps/m/tools/edited.ts")),
+        flagNamesAbsentFromInventory = false,
+      ),
+    )
+
+    val gone = report.tools.first { it.tool == "demo_gone" }
+    assertEquals(ToolUsageResult.REMOVED, gone.changeKind)
+    assertEquals(1, gone.usages.size, "a removed tool's usages are the trails now BROKEN")
+    assertTrue(gone.sourcePaths.isEmpty(), "a deleted tool has no current source")
+    assertEquals(
+      emptyList(),
+      report.diagnostics,
+      "nothing here is a typo — the set was derived, not typed: ${report.diagnostics}",
+    )
+    val edited = report.tools.first { it.tool == "demo_edited" }
+    assertEquals(ToolUsageResult.MODIFIED, edited.changeKind)
+    assertEquals(listOf("/ws/trailmaps/m/tools/edited.ts"), edited.sourcePaths)
+  }
+
+  @Test
+  fun `each of the four changed-since tiers maps to its own change kind`() {
+    val kinds = UsagesCommand().changeKindsOf(
+      ChangedSinceSummary(
+        ref = "main",
+        resolvedSha = "0".repeat(40),
+        added = listOf("demo_new"),
+        removed = listOf("demo_gone"),
+        modified = listOf("demo_edited"),
+        impactedViaCallers = listOf("demo_delegator"),
+      ),
+    )
+
+    assertEquals(
+      mapOf(
+        "demo_new" to ToolUsageResult.ADDED,
+        "demo_gone" to ToolUsageResult.REMOVED,
+        "demo_edited" to ToolUsageResult.MODIFIED,
+        "demo_delegator" to ToolUsageResult.IMPACTED_VIA_CALLERS,
+      ),
+      kinds,
+      "collapsing any tier into another loses the distinction a consumer reads this to get — " +
+        "most of all `removed`, whose usages are broken rather than merely worth replaying",
     )
   }
 
@@ -341,6 +733,11 @@ class UsagesCommandTest {
       report.warnings.any { it.contains(gone.path) },
       "the unread root must be named so a zero-usage gate can fail open: ${report.warnings}",
     )
+    // The kind a CI gate keys on: this is the one failure class that hides whole subtrees of
+    // usages, so a build deriving a blast radius has to be able to find it without regexing prose.
+    val diagnostic = report.diagnostics.single()
+    assertEquals(UsagesDiagnostic.ROOT_UNSCANNED, diagnostic.kind)
+    assertEquals(gone.path, diagnostic.subject)
     assertEquals(1, report.tools.single().usages.size, "the readable root is still scanned")
   }
 
@@ -445,6 +842,293 @@ class UsagesCommandTest {
     val exit = CommandLine(UsagesCommand())
       .execute("--changed-since", "no-such-ref", "--trails", trails.absolutePath)
     assertEquals(TrailblazeExitCode.MISUSE.code, exit)
+  }
+
+  @Test
+  fun `the SDK alias falls back to the workspace's extracted SDK in both config layouts`() {
+    // What makes the ref side of a --changed-since comparison bundleable at all. A ref tree is a
+    // plain git checkout, and neither `.trailblaze/sdk/` nor the generated per-trailmap
+    // tsconfig.json that points at it is committed — so without this alias esbuild has nothing to
+    // resolve `@trailblaze/scripting` to there, every tool degrades to a bytes-only fingerprint,
+    // and the import-closure detection the flag exists for is dead.
+    for (configDir in listOf("trailblaze-config", "trails/config")) {
+      val root = File(trailsDir, configDir.replace('/', '-') + "-workspace")
+      File(root, "$configDir/trailmaps").mkdirs()
+      // Where `.trailblaze/` anchors: the config dir's parent — the root itself for the
+      // standalone layout, `<root>/trails` for the nested one.
+      val artifactsRoot = if (configDir.contains('/')) File(root, configDir.substringBefore('/')) else root
+
+      assertEquals(
+        null,
+        UsagesCommand().workspaceSdkAliasFallback(root.toPath()),
+        "a workspace whose SDK was never extracted has no alias target to offer",
+      )
+
+      val sdkEntry = File(artifactsRoot, ".trailblaze/sdk/dist/index.js")
+      sdkEntry.parentFile.mkdirs()
+      sdkEntry.writeText("export const trailblaze = {};")
+
+      assertEquals(
+        sdkEntry.canonicalFile,
+        UsagesCommand().workspaceSdkAliasFallback(root.toPath())?.canonicalFile,
+        "the alias must find the SDK the workspace's own tsconfig `paths` resolve to ($configDir layout)",
+      )
+    }
+  }
+
+  @Test
+  fun `a workspace with no extracted SDK still gets an alias target from the framework JAR`() {
+    // The fresh-worktree case: `.trailblaze/` is gitignored, so a `git worktree add` checkout has
+    // no SDK to borrow and no `trailblaze check` has run there. `validate-trailmap-tool-change.sh`
+    // runs `usages --changed-since` in exactly such a worktree, and without this tier both sides
+    // fail to bundle — which reports an edit confined to an imported helper as no change at all.
+    val cacheRoot = File(trailsDir, "framework-sdk-cache")
+
+    val entry = WorkspaceTypeScriptSetup.frameworkSdkRuntimeEntry(cacheRoot)
+
+    assertTrue(
+      entry != null && entry.isFile && entry.length() > 0,
+      "the framework ships its own SDK; a caller with no workspace extract must still resolve " +
+        "`@trailblaze/scripting` rather than silently bundle nothing",
+    )
+    assertEquals(
+      File(cacheRoot, "dist/index.js").canonicalFile,
+      entry!!.canonicalFile,
+      "the alias target is the SDK's runtime entry, not its declaration bundle",
+    )
+    assertEquals(
+      entry.canonicalFile,
+      WorkspaceTypeScriptSetup.frameworkSdkRuntimeEntry(cacheRoot)?.canonicalFile,
+      "extraction is idempotent — a second run reuses the cache instead of re-materializing",
+    )
+  }
+
+  @Test
+  fun `a configuration-keyed recording reaches the devices that configuration casts`() {
+    // A multi-device trail records under the CONFIGURATION's name, and no member device's lineage
+    // contains that name — so a plain chain walk answers "reaches nothing" for a trail that
+    // definitely invokes the tool. Selection is what makes the leg reachable, and a consumer
+    // choosing lanes from `invokingDevices` would otherwise skip every multi-device replay.
+    writeTrail(
+      "paired.trail.yaml",
+      """
+      config:
+        id: paired
+        devices:
+          pos-pair:
+            description: Dual-display pair
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+      trail:
+        - step: Ring up an item
+          recording:
+            pos-pair:
+              - demo_addItem: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(
+      setOf("lab-a", "lab-b"),
+      usage.devices.toSet(),
+      "the configuration's members are the devices, the configuration name is not one",
+    )
+    assertEquals(
+      setOf("lab-a", "lab-b"),
+      usage.invokingDevices.toSet(),
+      "selecting `pos-pair` runs this recording on both cast devices: ${usage.invokingDevices}",
+    )
+  }
+
+  @Test
+  fun `a configuration whose recording does not invoke leaves its members out`() {
+    // The other half of the pair, and the reason resolving through a configuration cannot degrade
+    // into "a configuration key exists, so every member reaches it". `lab-a`/`lab-b` are cast only
+    // by `pos-pair`, whose leg invokes something else, and there is no broader leg for them to fall
+    // through to — so neither reaches the tool. Neither does `solo`: no configuration casts it, and
+    // a configured trail always replays with its configuration selected, so no session runs `solo`
+    // at all — not even the second step, where its own leg is the only one invoking.
+    writeTrail(
+      "paired-negative.trail.yaml",
+      """
+      config:
+        id: paired-negative
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+          solo: {}
+      trail:
+        - step: Ring up an item
+          recording:
+            solo:
+              - demo_addItem: {}
+            pos-pair:
+              - demo_signOut: {}
+        - step: Check the receipt
+          recording:
+            solo:
+              - demo_addItem: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(
+      setOf("lab-a", "lab-b", "solo"),
+      usage.devices.toSet(),
+      "all three are declared — the denominator does not shrink",
+    )
+    assertEquals(
+      emptySet(),
+      usage.invokingDevices.toSet(),
+      "the paired devices resolve their configuration's own leg, which invokes something else, " +
+        "and `solo`, which no configuration casts, never runs this trail: ${usage.invokingDevices}",
+    )
+  }
+
+  @Test
+  fun `a configuration's own leg shadows a broader invoking leg for every device`() {
+    // The over-report this field must not make: `all:` invokes the tool, but
+    // MultiDeviceConfigurationResolver.resolve always selects the sole declared configuration
+    // (rejecting a trail with more than one), so every session of this trail resolves the
+    // `pos-pair:` leg from the head of the chain and the `all:` leg never replays. Offering a
+    // configuration-free session here would report both cast devices as reaching the tool — and a
+    // CI consumer keying replay lanes on `invokingDevices` would run lanes that never touch it.
+    writeTrail(
+      "paired-shadowed.trail.yaml",
+      """
+      config:
+        id: paired-shadowed
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+      trail:
+        - step: Ring up an item
+          recording:
+            all:
+              - demo_addItem: {}
+            pos-pair:
+              - demo_signOut: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(listOf("all"), usage.classifiers, "the authored key is unchanged — raw facts stay raw")
+    assertEquals(
+      emptySet(),
+      usage.invokingDevices.toSet(),
+      "no runnable session reaches the `all:` leg — the selected configuration's own leg is " +
+        "always closer: ${usage.invokingDevices}",
+    )
+  }
+
+  @Test
+  fun `a configured trail's devices still fall through to a broader leg the configuration leaves open`() {
+    // The overcorrection guard for the shadowing test above: always selecting the configuration
+    // must not mean members only ever see configuration-keyed legs. A step with no `pos-pair:` leg
+    // resolves each member's chain past the configuration name down to `all:`, exactly as replay
+    // does. `all` itself stays out: it is not cast by the configuration, so nothing runs it.
+    writeTrail(
+      "paired-fallthrough.trail.yaml",
+      """
+      config:
+        id: paired-fallthrough
+        devices:
+          pos-pair:
+            devices:
+              seller:
+                classifier: lab-a
+              buyer:
+                classifier: lab-b
+      trail:
+        - step: Ring up an item
+          recording:
+            all:
+              - demo_addItem: {}
+      """,
+    )
+
+    val usage = runForReport("demo_addItem").tools.single().usages.single()
+
+    assertEquals(
+      setOf("lab-a", "lab-b"),
+      usage.invokingDevices.toSet(),
+      "with no `pos-pair:` leg on the step, each cast member's chain falls through to `all:`, " +
+        "which invokes: ${usage.invokingDevices}",
+    )
+  }
+
+  @Test
+  fun `an incomplete inventory is reported, and suppresses the typo hint it would explain`() {
+    // A descriptor naming a script that does not exist leaves the tool it declares OUT of the
+    // inventory. Reducing the snapshot to paths and dropping its warnings turned that into the one
+    // wrong answer available — "check the spelling" — while discarding the reason.
+    val workspaceTrails = workspaceWithTrailmaps { tools ->
+      File(tools, "broken.yaml").writeText("name: demo_ghost\nscript: ./missing.ts\n")
+    }
+
+    val report = runForReport(listOf(workspaceTrails), "demo_ghost")
+
+    val incomplete = report.diagnostics.filter { it.kind == UsagesDiagnostic.TOOL_INVENTORY_INCOMPLETE }
+    assertEquals(1, incomplete.size, "the scan's own failure must reach the report: ${report.diagnostics}")
+    assertEquals("current", incomplete.single().subject, "the same side vocabulary --changed-since uses")
+    assertTrue(
+      report.diagnostics.none { it.kind == UsagesDiagnostic.TOOL_NOT_IN_SCRIPTED_INVENTORY },
+      "a name the scan never managed to read is not evidence of a typo: ${report.diagnostics}",
+    )
+    assertEquals(
+      incomplete.map { it.message },
+      report.warnings,
+      "an unreadable inventory IS incompleteness, so it belongs in the fail-open list",
+    )
+  }
+
+  @Test
+  fun `the typo hint stays out of warnings, so a fail-open gate does not trip on it`() {
+    // `warnings` means "this report may be incomplete — fail open". A hint about a name the caller
+    // typed is not that: `usages tapOn` in a workspace where nothing uses it would otherwise trip a
+    // CI gate permanently, with nothing to fix.
+    val workspaceTrails = workspaceWithTrailmaps { tools ->
+      File(tools, "declared.ts").writeText("export const demo_declared = trailblaze.tool({});\n")
+      File(tools, "declared.yaml").writeText("name: demo_declared\nscript: ./declared.ts\n")
+    }
+
+    val report = runForReport(listOf(workspaceTrails), "demo_ghost")
+
+    val hint = report.diagnostics.single { it.kind == UsagesDiagnostic.TOOL_NOT_IN_SCRIPTED_INVENTORY }
+    assertEquals("demo_ghost", hint.subject)
+    assertEquals(UsagesDiagnostic.HINT, hint.severity, "a hint classifies itself, so a gate need not enumerate kinds")
+    assertEquals(
+      emptyList(),
+      report.warnings,
+      "nothing about a queried name says the SCAN was incomplete: ${report.warnings}",
+    )
+  }
+
+  /**
+   * A workspace-shaped fixture rooted at `<trailsDir>/ws`: `ws/trails` is the trails root and
+   * `ws/trails/config/trailmaps/demo-map/tools` is the scripted-tool inventory [populate] writes
+   * into. Returns the trails root to pass as `--trails`.
+   */
+  private fun workspaceWithTrailmaps(populate: (toolsDir: File) -> Unit): File {
+    val workspace = File(trailsDir, "ws")
+    val workspaceTrails = File(workspace, "trails").apply { mkdirs() }
+    val tools = File(workspace, "trails/config/trailmaps/demo-map/tools").apply { mkdirs() }
+    populate(tools)
+    return workspaceTrails
   }
 
   private fun writeTrail(relativePath: String, yaml: String, root: File = trailsDir) {

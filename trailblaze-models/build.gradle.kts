@@ -40,16 +40,30 @@ plugins {
 }
 
 trailblazeDtoTsCodegen {
-  mainClass.set("xyz.block.trailblaze.codegen.HostRpcDtoTsBindingsKt")
-  // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
-  // after this extension block, so resolve the compilation lazily at execution time.
-  codegenClasspath.from(
-    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
-    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
-  )
-  generatedTsFile.set(
-    layout.projectDirectory.file("../sdks/typescript/src/generated/host-rpc.ts"),
-  )
+  bindings.register("hostRpc") {
+    mainClass.set("xyz.block.trailblaze.codegen.HostRpcDtoTsBindingsKt")
+    // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
+    // after this extension block, so resolve the compilation lazily at execution time.
+    codegenClasspath.from(
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
+    )
+    generatedTsFile.set(
+      layout.projectDirectory.file("../sdks/typescript/src/generated/host-rpc.ts"),
+    )
+  }
+  // The `trailblaze usages --json` report. A separate binding from `hostRpc`, not an addition to it:
+  // this is a CLI stdout contract, not a daemon endpoint, and the two have different consumers.
+  bindings.register("usagesReport") {
+    mainClass.set("xyz.block.trailblaze.codegen.ToolUsagesReportTsBindingsKt")
+    codegenClasspath.from(
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
+    )
+    generatedTsFile.set(
+      layout.projectDirectory.file("../sdks/typescript/src/generated/usages-report.ts"),
+    )
+  }
 }
 
 trailblazeSelectorTsCodegen {
@@ -89,6 +103,14 @@ trailblazeSdkDtsBundle {
   // load time — see PR #3338's `contacts_ios_searchContacts` doc-block for the
   // historical failure mode.
   sdkRuntimeBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/index.js"))
+  // Bundles for `@trailblaze/scripting/matcher` (selector resolver + view-hierarchy node
+  // types). A trailmap tool that matches a `TrailblazeNodeSelector` against a captured
+  // hierarchy — or a `*.test.ts` that asserts one resolves — imports from this subpath
+  // instead of reaching into the SDK source tree by relative path, which only resolves at
+  // the exact depth the author wrote it at and breaks the moment the trailmap is vendored
+  // into a consumer repo one level shallower.
+  sdkDtsMatcherBundleOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/matcher.d.ts"))
+  sdkMatcherRuntimeOutputFile.set(layout.projectDirectory.file("../sdks/typescript/dist/matcher.js"))
 }
 
 configurations.all {
@@ -156,6 +178,7 @@ kotlin {
   }
 
   androidTarget {
+    publishLibraryVariants("release", "debug")
     compilerOptions {
       jvmTarget = JvmTarget.JVM_17
     }
@@ -357,6 +380,11 @@ val copyTypescriptSdkResources by tasks.registering(Copy::class) {
   // executable module at load time. `WorkspaceTypeScriptSetup.extractSdk` walks the
   // prefix recursively, so the file flows through with no further code changes.
   from(layout.projectDirectory.file("../sdks/typescript/dist/index.js"))
+  // Declaration + runtime pair for `@trailblaze/scripting/matcher`. Same extraction path
+  // as the pairs above — the per-trailmap tsconfig's `@trailblaze/scripting/*` glob
+  // resolves the `dist/matcher` stem to `matcher.d.ts` under tsc and `matcher.js` under bun.
+  from(layout.projectDirectory.file("../sdks/typescript/dist/matcher.d.ts"))
+  from(layout.projectDirectory.file("../sdks/typescript/dist/matcher.js"))
   into(layout.buildDirectory.dir("generated-resources/sdk/trails/config/sdk/typescript/dist"))
 }
 

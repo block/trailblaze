@@ -37,6 +37,15 @@ class OnDeviceRpcClient(
    */
   @PublishedApi
   internal val onNonRecoverableWedge: () -> Unit = {},
+  /**
+   * Which wire this client may use, defaulting to the process-wide rollback switch.
+   *
+   * Overridden per client because the choice can be a property of the DRIVER, not of the
+   * environment: see [TrailblazeDriverType.protoWireSafe]. `@PublishedApi internal`
+   * for the same inline-visibility reason as [onNonRecoverableWedge].
+   */
+  @PublishedApi
+  internal val wireTransportMode: AndroidWireTransportMode = AndroidWireTransport.mode,
 ) : AutoCloseable {
 
   /**
@@ -142,7 +151,7 @@ class OnDeviceRpcClient(
     val methodName = TRequest::class.simpleName
 
     return try {
-      if (AndroidWireTransport.mode != AndroidWireTransportMode.JSON) {
+      if (wireTransportMode != AndroidWireTransportMode.JSON) {
         tryBinaryRpc<TResponse>(
           request = request,
           urlPath = urlPath,
@@ -228,7 +237,7 @@ class OnDeviceRpcClient(
 
     return when (attempt) {
       is OnDeviceRpcWebSocketClient.Attempt.FallbackToHttp -> {
-        if (AndroidWireTransport.mode == AndroidWireTransportMode.AUTO) {
+        if (wireTransportMode == AndroidWireTransportMode.AUTO) {
           null
         } else {
           RpcResult.Failure(

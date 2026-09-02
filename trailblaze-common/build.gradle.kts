@@ -164,19 +164,15 @@ abstract class BundleFrameworkScriptedToolsTask @Inject constructor(objects: Obj
       appendLine("// over the host's `__trailblazeCall` binding, and registers each export on")
       appendLine("// `globalThis.__trailblazeTools[<exportName>]` so QuickJsToolHost.callTool can dispatch it.")
     }
-    val registration = buildString {
-      appendLine("for (const __exportName of Object.keys(__userModule)) {")
-      appendLine("  const __def = __userModule[__exportName];")
-      appendLine("  if (typeof __def !== 'function') continue;")
-      appendLine("  globalThis.__trailblazeTools[__exportName] = {")
-      appendLine("    handler: async (args, ctx) => {")
-      appendLine("      const result = await __def(args, ctx, __client);")
-      appendLine("      return __normalizeResult(result);")
-      appendLine("    },")
-      appendLine("  };")
-      appendLine("}")
-    }
-    return templateFile.readText()
+    // The multi-export footer comes from the template too, not from a copy built here: the three
+    // renderers of this wrapper cannot import each other, and copies that drift make a
+    // Gradle-built and a `make-test-apk`-built APK register different tools from one source.
+    val beginLine = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__\n"
+    val endLine = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__\n"
+    val templateText = templateFile.readText()
+    val registration = templateText.substringAfter(beginLine).substringBefore(endLine)
+    return templateText
+      .substringBefore(beginLine)
       .replace("// __TRAILBLAZE_HEADER__\n", header)
       .replace("__TRAILBLAZE_IMPORT_SOURCE__", "./$userScriptFileName")
       .replace("// __TRAILBLAZE_PRELUDE__\n", "")
@@ -263,16 +259,18 @@ plugins {
 }
 
 trailblazeDtoTsCodegen {
-  mainClass.set("xyz.block.trailblaze.codegen.BuiltInToolResultTsBindingsKt")
-  // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
-  // after this extension block, so resolve the compilation lazily at execution time.
-  codegenClasspath.from(
-    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
-    provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
-  )
-  generatedTsFile.set(
-    layout.projectDirectory.file("../sdks/typescript/src/generated/built-in-tool-results.ts"),
-  )
+  bindings.register("builtInToolResults") {
+    mainClass.set("xyz.block.trailblaze.codegen.BuiltInToolResultTsBindingsKt")
+    // Deferred via providers: the `kotlin {}` block (which registers the `jvm` target) is evaluated
+    // after this extension block, so resolve the compilation lazily at execution time.
+    codegenClasspath.from(
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").output.allOutputs },
+      provider { kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles },
+    )
+    generatedTsFile.set(
+      layout.projectDirectory.file("../sdks/typescript/src/generated/built-in-tool-results.ts"),
+    )
+  }
 }
 
 android {

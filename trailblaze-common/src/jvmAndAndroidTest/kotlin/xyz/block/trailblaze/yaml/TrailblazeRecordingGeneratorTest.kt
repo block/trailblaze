@@ -42,6 +42,7 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwitchDeviceTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
@@ -112,13 +113,19 @@ class TrailblazeRecordingGeneratorTest {
     timestamp = now,
   )
 
-  private fun objectiveStart(prompt: PromptStep) = TrailblazeLog.ObjectiveStartLog(
+  private fun objectiveStart(
+    prompt: PromptStep,
+    timestamp: kotlinx.datetime.Instant = now,
+  ) = TrailblazeLog.ObjectiveStartLog(
     promptStep = prompt,
     session = testSession,
-    timestamp = now,
+    timestamp = timestamp,
   )
 
-  private fun objectiveComplete(prompt: PromptStep) = TrailblazeLog.ObjectiveCompleteLog(
+  private fun objectiveComplete(
+    prompt: PromptStep,
+    timestamp: kotlinx.datetime.Instant = now,
+  ) = TrailblazeLog.ObjectiveCompleteLog(
     promptStep = prompt,
     objectiveResult = AgentTaskStatus.Success.ObjectiveComplete(
       llmExplanation = "Done",
@@ -126,12 +133,12 @@ class TrailblazeRecordingGeneratorTest {
         taskId = TaskId.generate(),
         prompt = prompt.prompt,
         callCount = 1,
-        taskStartTime = now,
+        taskStartTime = timestamp,
         totalDurationMs = 100,
       ),
     ),
     session = testSession,
-    timestamp = now,
+    timestamp = timestamp,
   )
 
   private fun objectiveCompleteFailed(prompt: PromptStep, failureReason: String) =
@@ -263,6 +270,41 @@ class TrailblazeRecordingGeneratorTest {
       |      android:
       |        - assertVisibleWithText:
       |            text: Results
+    """.trimMargin() + "\n"
+    assertThat(yaml).isEqualTo(expected)
+  }
+
+  @Test
+  fun aiStepLegKeepsItsHandoverInDispatchOrder() {
+    // Load-bearing for multi-device. `MultiDeviceSessionPreflight` lets an AI step run on a device
+    // pair precisely because the recording writer does not have to be device-aware: `switchDevice`
+    // is itself a recorded tool, so the device change lands INSIDE the leg it belongs to, ahead of
+    // the tools that depend on it. Drop it or reorder it and the leg replays onto whichever device
+    // the previous step happened to leave active — a wrong-device replay with nothing in the trail
+    // to show why.
+    val step = DirectionStep(step = "On the buyer display, approve the total")
+    val handover = SwitchDeviceTrailblazeTool(name = "buyer")
+    val logs = listOf(
+      objectiveStart(step),
+      // Recordability read from the annotation, exactly as the dispatch boundary stamps it
+      // (`TrailblazeAgentContext`) — hard-coding `true` here would let the tool be marked
+      // unrecordable without this test noticing.
+      toolLog(handover, "switchDevice", isRecordable = handover.getIsRecordableFromAnnotation()),
+      toolLog(AssertVisibleWithTextTrailblazeTool(text = "Approve"), "assertVisibleWithText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.recordedYaml()
+
+    val expected = """
+      |trail:
+      |  - step: "On the buyer display, approve the total"
+      |    recording:
+      |      android:
+      |        - switchDevice:
+      |            name: buyer
+      |        - assertVisibleWithText:
+      |            text: Approve
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -1083,6 +1125,81 @@ class TrailblazeRecordingGeneratorTest {
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
   }
 
+  @Test
+  fun category2RecordingPreservesSuccessfulReplayPrefixBeforeRecoverySuffix() {
+    val step = DirectionStep(step = "Press the system back button")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(InputTextTrailblazeTool(text = "successful prefix"), "inputText"),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Stale selector",
+          nodeSelector = TrailblazeNodeSelector.withMatch(
+            DriverNodeMatch.AndroidAccessibility(textRegex = "Missing button"),
+          ),
+        ),
+        "tapOnElementBySelector",
+        successful = false,
+      ),
+      objectiveCompleteFailed(step, "Recorded action failed"),
+      objectiveStart(step),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
+      objectiveComplete(step),
+    )
+
+    val decoded =
+      logs.generateRecordedTrailItems(
+        trailblazeYaml,
+        successfulObjectivesOnly = true,
+      )
+
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("inputText", "mobile_pasteClipboard"))
+  }
+
+  @Test
+  fun deviceClockSkewDoesNotShiftAWindowsFirstToolIntoThePriorWindow() {
+    // Objective logs and tool logs can be stamped by different clocks: the host runner emits
+    // ObjectiveStart/Complete while the device stamps each TrailblazeToolLog, and a device clock
+    // that lags by under a second makes a window's first tool SORT before the prior window's
+    // complete log. The log readers hand the generator that sorted order, so positionally the tool
+    // sits in the prior window — here the trailhead, which then carries two tools and fails the
+    // unified emit. Window membership must follow the tool's execution span, not its sorted slot.
+    val trailheadStep = DirectionStep(step = "Launch the app", isTrailhead = true)
+    val menuStep = DirectionStep(step = "Open the menu")
+    fun at(ms: Long): kotlinx.datetime.Instant =
+      kotlinx.datetime.Instant.fromEpochMilliseconds(now.toEpochMilliseconds() + ms)
+    // Host clock: trailhead window [0, 3800], menu window [3810, 10400]. Device clock ~0.7s
+    // behind: the menu step's first tap stamps 3200 and so sorts inside the trailhead window,
+    // but its span [3200, 6600] overlaps the menu window far more.
+    val logs = listOf(
+      objectiveStart(trailheadStep, timestamp = at(0)),
+      toolLog(LaunchAppTrailblazeTool(appId = "com.example.app"), "launchApp", timestamp = at(1_000), durationMs = 500),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap the menu",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Menu")),
+        ),
+        "tapOnElementBySelector",
+        timestamp = at(3_200),
+        durationMs = 3_400,
+      ),
+      objectiveComplete(trailheadStep, timestamp = at(3_800)),
+      objectiveStart(menuStep, timestamp = at(3_810)),
+      toolLog(InputTextTrailblazeTool(text = "settings"), "inputText", timestamp = at(6_900), durationMs = 1_000),
+      objectiveComplete(menuStep, timestamp = at(10_400)),
+    )
+
+    val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
+
+    val trailhead = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single()
+    assertThat(trailhead.trailhead.tools!!.map { it.name }).isEqualTo(listOf("launchApp"))
+    val prompts = decoded.filterIsInstance<TrailYamlItem.PromptsTrailItem>().single()
+    assertThat(prompts.promptSteps.single().recording!!.tools.map { it.name })
+      .isEqualTo(listOf("tapOnElementBySelector", "inputText"))
+  }
+
   /**
    * Simulates a realistic AI-driven session where the LLM calls multiple tools
    * within an objective window, including non-recordable infrastructure tools,
@@ -1558,6 +1675,14 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.recordedYaml()
 
+    // The rendered document holds all three tools: the trailhead keeps the first, the heal's tools
+    // replay at the start of step 1 ahead of that step's own.
+    val rendered = trailblazeYaml.decodeUnifiedTrail(yaml)
+    assertThat(rendered.trailhead?.recordings?.getValue("android")?.map { it.name })
+      .isEqualTo(listOf("launchApp"))
+    assertThat(rendered.trail.single().recordings.getValue("android").map { it.name })
+      .isEqualTo(listOf("inputText", "tapOnElementBySelector", "mobile_pasteClipboard"))
+
     // Round-trips through the strict parser (this decode threw before the merge fix).
     val decoded = logs.generateRecordedTrailItems(trailblazeYaml)
     val th = decoded.filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
@@ -1597,11 +1722,14 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.recordedYaml()
 
-    assertThat(yaml).doesNotContain(TrailheadDefinition.DEFAULT_STEP)
     val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.step).isEqualTo(null)
     assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("launchApp", "inputText"))
+    // A unified `trailhead:` requires a `step:`, so the shorthand's absent text renders as the
+    // documented stand-in there — never as authored prose in the lowered items above.
+    assertThat(trailblazeYaml.decodeUnifiedTrail(yaml).trailhead?.step)
+      .isEqualTo(TrailheadDefinition.DEFAULT_STEP)
   }
 
   @Test
@@ -2182,10 +2310,55 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun unifiedPreviewWithMultiToolTrailheadRendersNothing() {
-    // A self-healed/retried trailhead can record more than one tool for a device, which a trail's
-    // one-tool-per-device trailhead can't hold. There is no valid document to render, so the
-    // preview is empty rather than something that can't be run — the session logs keep the tools.
+  fun aiBlazedTrailheadKeepsOneToolAndReplaysTheRestInTheFirstStep() {
+    // The reported live case: a bare natural-language trailhead the agent blazes, satisfied with
+    // five tools on a clean first pass. A trailhead slot holds ONE tool, so this used to render
+    // nothing at all — a green run produced no recording. Every tool must survive, in the order it
+    // ran, split across the trailhead and the first step.
+    val trailhead = DirectionStep(step = "Launch the sample app", isTrailhead = true)
+    val firstStep = DirectionStep(step = "Open the cart")
+    val logs = listOf(
+      objectiveStart(trailhead),
+      toolLog(PasteClipboardTrailblazeTool, "mobile_pasteClipboard"),
+      toolLog(LaunchAppTrailblazeTool("com.example"), "launchApp"),
+      toolLog(WaitForIdleSyncTrailblazeTool(), "waitForIdleSync"),
+      toolLog(
+        AssertVisibleBySelectorTrailblazeTool(
+          reason = "Home screen is up",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Home")),
+        ),
+        "assertVisibleBySelector",
+      ),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveComplete(trailhead),
+      objectiveStart(firstStep),
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Open the cart",
+          nodeSelector = TrailblazeNodeSelector.withMatch(DriverNodeMatch.AndroidAccessibility(textRegex = "Cart")),
+        ),
+        "tapOnElementBySelector",
+      ),
+      objectiveComplete(firstStep),
+    )
+
+    val yaml = logs.recordedYaml()
+
+    // Both halves of the bug: a document is produced, and the READER accepts it (relaxing the
+    // emitter instead would have written a file this decode rejects).
+    val decoded = trailblazeYaml.decodeUnifiedTrail(yaml)
+    assertThat(decoded.trailhead?.recordings?.getValue("android")?.map { it.name })
+      .isEqualTo(listOf("mobile_pasteClipboard"))
+    assertThat(decoded.trail.single().recordings.getValue("android").map { it.name }).isEqualTo(
+      listOf("launchApp", "waitForIdleSync", "assertVisibleBySelector", "inputText", "tapOnElementBySelector"),
+    )
+  }
+
+  @Test
+  fun trailheadOnlyMultiToolSessionStillRendersEveryTool() {
+    // A session whose ONLY objective was the trailhead has no recorded step to relocate into, so the
+    // relocated tools get the placeholder step that names itself for replacement. A trailhead-only
+    // document can't be emitted at all, so the placeholder is what keeps the recording.
     val trailhead = DirectionStep(step = "Sign in", isTrailhead = true)
     val logs = listOf(
       objectiveStart(trailhead),
@@ -2196,8 +2369,13 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateUnifiedRecordedYaml(trailblazeYaml, classifierOverride = "android-phone")
 
-    assertThat(yaml).isEqualTo("")
-    // The tools are still in the lowered items, so the session's own record of them is intact.
+    val decoded = trailblazeYaml.decodeUnifiedTrail(yaml)
+    assertThat(decoded.trailhead?.recordings?.getValue("android-phone")?.map { it.name })
+      .isEqualTo(listOf("inputText"))
+    assertThat(decoded.trail.single().recordings.getValue("android-phone").map { it.name })
+      .isEqualTo(listOf("waitForIdleSync"))
+    // The lowered v1 items are unchanged — the session's own record of step 0 keeps both tools, and
+    // only the unified mapping splits them.
     val th = logs.generateRecordedTrailItems(trailblazeYaml)
       .filterIsInstance<TrailYamlItem.TrailheadTrailItem>().single().trailhead
     assertThat(th.tools!!.map { it.name }).isEqualTo(listOf("inputText", "waitForIdleSync"))

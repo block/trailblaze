@@ -5,6 +5,8 @@ import kotlinx.serialization.json.Json
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.host.WorkspaceTypeScriptSetup
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
 import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
@@ -17,18 +19,23 @@ import xyz.block.trailblaze.usages.ChangedToolAnalysis
 import xyz.block.trailblaze.usages.GitRefTree
 import xyz.block.trailblaze.usages.ScriptedToolSourceSnapshotScanner
 import xyz.block.trailblaze.usages.ToolCallerEdgeScanner
+import xyz.block.trailblaze.usages.ToolFingerprint
+import xyz.block.trailblaze.usages.ToolSourceSnapshot
 import xyz.block.trailblaze.usages.ToolUsageResult
 import xyz.block.trailblaze.usages.ToolUsagesReport
 import xyz.block.trailblaze.usages.TrailStepToolUsage
 import xyz.block.trailblaze.usages.TrailToolUsage
 import xyz.block.trailblaze.usages.TrailToolUsageScanner
+import xyz.block.trailblaze.usages.UsagesDiagnostic
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.runJsonOutput
 import xyz.block.trailblaze.util.runQuiet
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.unified.TrailDocument
+import xyz.block.trailblaze.yaml.unified.UnifiedTrailTargets
 import java.io.File
 import java.io.IOException
+import java.nio.file.Path
 import java.util.concurrent.Callable
 
 /**
@@ -221,10 +228,55 @@ class UsagesCommand : Callable<Int> {
   /** True when this canonical path is strictly inside [other] — equal paths are duplicates, not nesting. */
   private fun String.isNestedIn(other: String): Boolean = startsWith(other + File.separator)
 
-  private fun produceReport(ref: String?, queried: List<String>, primary: File, extras: List<File>): Outcome {
-    if (ref == null) return Outcome.Report(buildReport(queried, primary, extras))
+  /**
+   * Per-tool provenance the trail scan cannot know on its own: WHY a tool is in the queried set, and
+   * which scripted-tool script declares it.
+   *
+   * [scriptedToolPaths] is null when no workspace inventory could be read at all — distinct from an
+   * empty map, which means the inventory WAS read and named none of the queried tools. Only the
+   * second justifies telling a caller their tool name might be a typo.
+   */
+  internal data class ToolAttribution(
+    val changeKinds: Map<String, String>,
+    val scriptedToolPaths: Map<String, List<String>>?,
+    /**
+     * Whether a queried name missing from [scriptedToolPaths] is worth telling the caller about.
+     *
+     * True only when the caller NAMED the tools, which is the only mode where a name can be a typo.
+     * `--changed-since` derives its own set, so every name there is real by construction — and a
+     * REMOVED tool is legitimately absent from the current inventory, which under this flag would
+     * be reported as a possible misspelling of the very deletion being analysed.
+     *
+     * Also false when the inventory scan itself was incomplete: a name the scan never managed to
+     * read is absent for a reason that has nothing to do with spelling, and saying otherwise points
+     * the caller at the one explanation that is definitely wrong.
+     */
+    val flagNamesAbsentFromInventory: Boolean,
+    /**
+     * What went wrong while reading the inventory, if anything — carried so it reaches the report
+     * instead of being dropped at the point the inventory is reduced to paths. These are exactly the
+     * cases where a real tool is missing from [scriptedToolPaths] (a descriptor that did not decode,
+     * a descriptor naming a script that does not exist, an ambiguous bare `.ts`), which is also
+     * exactly what makes an "absent from the inventory" hint misleading.
+     */
+    val diagnostics: List<UsagesDiagnostic> = emptyList(),
+  ) {
+    companion object {
+      val NONE = ToolAttribution(emptyMap(), null, flagNamesAbsentFromInventory = false)
+    }
+  }
 
-    val trailmapsDir = resolveTrailmapsDir(primary)
+  private fun produceReport(ref: String?, queried: List<String>, primary: File, extras: List<File>): Outcome {
+    if (ref == null) {
+      // Explicit mode never needed the workspace before. It is read now — a directory walk over the
+      // trailmaps' tool dirs, no esbuild and no git — so `usages myapp_doThing` can answer "declared
+      // where?" and can tell a misspelled scripted-tool name from a tool nothing uses.
+      return Outcome.Report(buildReport(queried, primary, extras, explicitModeAttribution(primary)))
+    }
+
+    // Walked up, because the trails root need not be the workspace root — e.g. a repo whose
+    // trails live in `legacy-trails/` with config at `<repo>/trailblaze-config/`.
+    val workspaceRoot = CliPathUtils.findWorkspaceRoot(primary.absoluteFile.toPath())
       ?: return Outcome.Failure(
         TrailblazeExitCode.MISUSE,
         "No trailmaps directory found walking up from ${primary.path} (looked for " +
@@ -232,6 +284,7 @@ class UsagesCommand : Callable<Int> {
             .joinToString(" and ") { "<root>/$it/${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}" } +
           "). --changed-since needs scripted-tool sources to compare.",
       )
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot).toFile()
     val gitRoot = GitRefTree.gitRootOf(trailmapsDir)
       ?: return Outcome.Failure(
         TrailblazeExitCode.MISUSE,
@@ -256,10 +309,10 @@ class UsagesCommand : Callable<Int> {
       )
     val bundler = DaemonScriptedToolBundler(
       esbuildBinary = esbuild,
-      inProcessSdkEntryOverride = LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry(),
+      inProcessSdkEntryOverride = resolveSdkAliasTarget(workspaceRoot),
     )
 
-    val (summary, analysisWarnings) = try {
+    val (summary, analysisDiagnostics, currentScriptedToolPaths) = try {
       GitRefTree.withRefTree(gitRoot, ref) { refRoot, resolvedSha ->
         val base = ScriptedToolSourceSnapshotScanner.snapshot(File(refRoot, relTrailmaps.path))
         val currentRaw = ScriptedToolSourceSnapshotScanner.snapshot(trailmapsDir)
@@ -267,24 +320,31 @@ class UsagesCommand : Callable<Int> {
         // here, so no ref checkout contains them — leaving them in would misreport every one of
         // their tools as "added" on every run.
         val ignored = GitRefTree.ignoredPaths(gitRoot, currentRaw.toolSources.values.map { it.script.absoluteFile })
-        val current = ChangedToolAnalysis.excludeRefInvisible(currentRaw, ignored)
+        val excluded = ChangedToolAnalysis.excludeRefInvisible(currentRaw, ignored)
+        val current = excluded.snapshot
         // LinkedHashSet: the fallback fires once per side with an identical message, and a
         // subprocess tool would otherwise repeat its warning on every run of both sides.
-        val fingerprintWarnings = linkedSetOf<String>()
+        val fingerprintDiagnostics = linkedSetOf<UsagesDiagnostic>()
         val result = ChangedToolAnalysis.compute(base, current) { source, toolName ->
-          val scriptKey = runCatching { runBlocking { bundler.bundleOne(source.script, toolName) }.name }
-            .recoverCatching { e ->
-              // A tool the in-process bundler can't bundle (e.g. `runtime: subprocess` importing
-              // Node built-ins) still gets a stable fingerprint — its raw script bytes — instead
-              // of failing open into a false "modified" on every run. The tradeoff is honest:
-              // imports aren't followed for it, and the warning says so.
-              fingerprintWarnings +=
-                "$toolName: bundling failed (${e.message?.lineSequence()?.firstOrNull()}); compared by " +
-                  "script file bytes only — edits to files it imports will not flag it"
-              ChangedToolAnalysis.sha256(source.script.readBytes())
+          // Both strengths, every time. A tool the in-process bundler can't bundle (e.g. a
+          // `runtime: subprocess` tool importing Node built-ins) still gets the weaker bytes
+          // fingerprint, and the analysis compares like for like rather than treating a
+          // one-sided bundling failure as a detected edit.
+          val closureKey = runCatching { runBlocking { bundler.bundleOne(source.script, toolName) }.name }
+            .onFailure { e ->
+              fingerprintDiagnostics += UsagesDiagnostic(
+                kind = UsagesDiagnostic.TOOL_BUNDLING_FAILED,
+                subject = toolName,
+                message = "$toolName: bundling failed (${e.message?.lineSequence()?.firstOrNull()}) — its import " +
+                  "closure is unknown on that side, so edits to files it imports cannot flag it",
+              )
             }
-            .getOrNull() ?: return@compute null
-          ChangedToolAnalysis.composeFingerprint(scriptKey, source.descriptor)
+            .getOrNull()
+          val bytesKey = runCatching { ChangedToolAnalysis.sha256(source.script.readBytes()) }.getOrNull()
+          ToolFingerprint(
+            closure = closureKey?.let { ChangedToolAnalysis.composeFingerprint(it, source.descriptor) },
+            bytes = bytesKey?.let { ChangedToolAnalysis.composeFingerprint(it, source.descriptor) },
+          )
         }
         // Tool→tool dispatch is invisible to the fingerprints above: `ctx.tools.other(...)` is a
         // runtime call through the host, not an import, so the callee never enters the closure the
@@ -294,14 +354,25 @@ class UsagesCommand : Callable<Int> {
         val callerEdges = ToolCallerEdgeScanner.scan(current, changedNames) { source, toolName ->
           runCatching { runBlocking { bundler.bundleOne(source.script, toolName) }.readText() }
         }
-        ChangedSinceSummary(
+        val summary = ChangedSinceSummary(
           ref = ref,
           resolvedSha = resolvedSha,
           added = result.added,
           removed = result.removed,
           modified = result.modified,
           impactedViaCallers = ToolCallerEdgeScanner.impactedBy(changedNames, callerEdges.edges),
-        ) to result.warnings + fingerprintWarnings + callerEdges.unscannableWarnings()
+          // The other half of the comparison. Read from `gitRoot`, not the ref tree — the ref tree
+          // is a detached checkout of `resolvedSha` and would trivially report itself.
+          workingTree = GitRefTree.workingTreeStateOf(gitRoot),
+        )
+        // The CURRENT side's inventory, so `sourcePaths` names where each flagged tool lives now.
+        // A `removed` tool is absent from it by definition and correctly reports no source.
+        ChangedSinceOutcome(
+          summary = summary,
+          diagnostics = excluded.diagnostics + result.diagnostics + fingerprintDiagnostics +
+            callerEdges.unscannableDiagnostics(),
+          scriptedToolPaths = scriptedToolPathsOf(current),
+        )
       }
     } catch (e: IOException) {
       return Outcome.Failure(TrailblazeExitCode.INFRA_FAILED, e.message ?: "git worktree materialization failed")
@@ -311,27 +382,134 @@ class UsagesCommand : Callable<Int> {
     // trails replay. They stay distinguishable in the summary, where a consumer that wants only the
     // certain tiers can read `modified`/`added`/`removed` on their own.
     val changedTools = summary.modified + summary.added + summary.removed + summary.impactedViaCallers
-    val report = buildReport(changedTools, primary, extras)
+    val report = buildReport(
+      changedTools,
+      primary,
+      extras,
+      ToolAttribution(
+        changeKinds = changeKindsOf(summary),
+        scriptedToolPaths = currentScriptedToolPaths,
+        // Every name here was DERIVED from the inventory or the ref, so none of them can be a typo.
+        flagNamesAbsentFromInventory = false,
+      ),
+    )
+    // Rebuilt through `of` rather than `copy`, so `warnings` is re-derived from the combined
+    // diagnostics. A `copy` that set one and not the other is exactly the drift `of` exists to
+    // prevent — and this is the only place in the command where both lists are already populated.
     return Outcome.Report(
-      report.copy(changedSince = summary, warnings = analysisWarnings + report.warnings),
+      ToolUsagesReport.of(
+        trailsRoot = report.trailsRoot,
+        scannedRoots = report.scannedRoots,
+        tools = report.tools,
+        diagnostics = analysisDiagnostics + report.diagnostics,
+        changedSince = summary,
+        generatedBy = report.generatedBy,
+      ),
     )
   }
 
   /**
-   * The trailmaps directory owning this workspace's scripted-tool sources, found by walking up
-   * from the trails root and probing both workspace config layouts at each level (standalone
-   * `trailblaze-config/` wins over `trails/config/`, matching
-   * [TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES] precedence). The walk matters
-   * because the trails root need not be the workspace root — e.g. a repo whose trails live in
-   * `legacy-trails/` with config at `<repo>/trailblaze-config/`.
+   * What esbuild aliases `@trailblaze/scripting` to while fingerprinting both sides of the
+   * comparison. Null leaves the alias off, and each side then resolves the import on its own.
+   *
+   * The alias is what makes the REF side bundleable at all. A ref tree is a plain git checkout, so
+   * it carries only committed files — and in a workspace that consumes the SDK as a framework
+   * artifact, neither the SDK (`.trailblaze/sdk/`) nor the generated per-trailmap `tsconfig.json`
+   * that points at it is committed. Without an alias esbuild has nothing to resolve the import to
+   * there, every tool falls back to a bytes-only fingerprint, and the import-closure detection this
+   * command exists for is dead. The working tree resolves the same import fine, so the failure is
+   * one-sided: every tool reads as modified, on every run, against any ref.
+   *
+   * 1. The SDK source tree, when one is reachable (`TRAILBLAZE_SDK_DIR`, or a `sdks/typescript`
+   *    ancestor of the cwd) — the slim in-process entry, so bundles stay KB-scale.
+   * 2. The workspace's extracted SDK runtime bundle, which is exactly what this workspace's own
+   *    tsconfig `paths` resolve to. Heavier, but it makes the two sides resolve IDENTICALLY, which
+   *    is the property a comparison needs.
+   * 3. The framework's own SDK, extracted from this JAR. Tier 2 requires a workspace some
+   *    `trailblaze check` has already touched, and a FRESH worktree is not that — which is the
+   *    state `scripts/validate-trailmap-tool-change.sh` runs this command in.
    */
-  private fun resolveTrailmapsDir(primary: File): File? =
-    generateSequence(primary.absoluteFile) { it.parentFile }
-      .flatMap { root ->
-        TrailblazeConfigPaths.WORKSPACE_CONFIG_DIR_CANDIDATES.asSequence()
-          .map { File(root, "$it/${TrailblazeConfigPaths.TRAILMAPS_SUBDIR}") }
-      }
-      .firstOrNull { it.isDirectory }
+  private fun resolveSdkAliasTarget(workspaceRoot: Path): File? =
+    LazyYamlScriptedToolRegistration.resolveInProcessSdkEntry()
+      ?: workspaceSdkAliasFallback(workspaceRoot)
+      ?: WorkspaceTypeScriptSetup.frameworkSdkRuntimeEntry(
+        File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), TrailblazeDesktopUtil.SDK_CACHE_SUBDIR),
+      )
+
+  /**
+   * Tier 2 of [resolveSdkAliasTarget], split out so a test can pin it without a reachable SDK
+   * source tree deciding the answer first.
+   *
+   * Where `.trailblaze/` anchors is [CliPathUtils.workspaceGeneratedArtifactsRoot]'s rule to own —
+   * it is what `CheckCommand` and `WorkspaceCompileBootstrap` hand to
+   * [WorkspaceTypeScriptSetup.setUp]. Routing through it means a layout change cannot move the
+   * extracted SDK out from under this alias.
+   */
+  internal fun workspaceSdkAliasFallback(workspaceRoot: Path): File? =
+    WorkspaceTypeScriptSetup.extractedSdkRuntimeEntry(
+      CliPathUtils.workspaceGeneratedArtifactsRoot(workspaceRoot).toFile(),
+    )
+
+  /**
+   * What the `--changed-since` comparison produced, carried out of the ref-tree block together: the
+   * summary, the diagnostics it accumulated, and the CURRENT side's scripted-tool inventory (which
+   * only exists while the ref tree is materialized).
+   */
+  private data class ChangedSinceOutcome(
+    val summary: ChangedSinceSummary,
+    val diagnostics: List<UsagesDiagnostic>,
+    val scriptedToolPaths: Map<String, List<String>>,
+  )
+
+  /**
+   * Tool name → its [ToolUsageResult] change kind. The four lists are disjoint by construction —
+   * added/removed/modified partition the tools present on either side, and `impactedViaCallers`
+   * excludes all three — so no name gets two answers.
+   */
+  internal fun changeKindsOf(summary: ChangedSinceSummary): Map<String, String> = buildMap {
+    summary.added.forEach { put(it, ToolUsageResult.ADDED) }
+    summary.removed.forEach { put(it, ToolUsageResult.REMOVED) }
+    summary.modified.forEach { put(it, ToolUsageResult.MODIFIED) }
+    summary.impactedViaCallers.forEach { put(it, ToolUsageResult.IMPACTED_VIA_CALLERS) }
+  }
+
+  /**
+   * The scripted-tool inventory for a plain (non-`--changed-since`) run, or [ToolAttribution.NONE]
+   * when this trails root has no workspace above it. Every queried tool is [ToolUsageResult.NAMED]
+   * here by definition — the caller named it.
+   */
+  private fun explicitModeAttribution(primary: File): ToolAttribution {
+    val workspaceRoot = CliPathUtils.findWorkspaceRoot(primary.absoluteFile.toPath()) ?: return ToolAttribution.NONE
+    val trailmapsDir = CliPathUtils.workspaceTrailmapsDir(workspaceRoot).toFile()
+    if (!trailmapsDir.isDirectory) return ToolAttribution.NONE
+    val snapshot = ScriptedToolSourceSnapshotScanner.snapshot(trailmapsDir)
+    return ToolAttribution(
+      changeKinds = emptyMap(),
+      scriptedToolPaths = scriptedToolPathsOf(snapshot),
+      // A partial inventory cannot support "this name is not a scripted tool" — the tool the scan
+      // failed to read is absent from the map for that reason, and the hint would blame a typo.
+      flagNamesAbsentFromInventory = snapshot.warnings.isEmpty(),
+      // Same kind and same `current` subject `--changed-since` uses for its own side's inventory,
+      // so a consumer matches one vocabulary regardless of which mode produced the report.
+      diagnostics = snapshot.warnings.map { warning ->
+        UsagesDiagnostic(
+          kind = UsagesDiagnostic.TOOL_INVENTORY_INCOMPLETE,
+          subject = ChangedToolAnalysis.SIDE_CURRENT,
+          message = "${ChangedToolAnalysis.SIDE_CURRENT}: $warning",
+        )
+      },
+    )
+  }
+
+  /**
+   * Tool name → the script(s) declaring it. Grouped rather than associated because the inventory is
+   * keyed per trailmap and two trailmaps may legally declare one name, which a single-valued map
+   * would silently resolve to whichever came last.
+   */
+  private fun scriptedToolPathsOf(snapshot: ToolSourceSnapshot): Map<String, List<String>> =
+    snapshot.toolSources.entries
+      .groupBy { it.key.name }
+      .mapValues { (_, entries) -> entries.map { it.value.script.absolutePath }.sorted() }
 
   private sealed interface Outcome {
     data class Report(val report: ToolUsagesReport) : Outcome
@@ -344,8 +522,18 @@ class UsagesCommand : Callable<Int> {
    * called with come from Trail Runner's saved list and can name a directory that no longer exists,
    * and reaching that path through `call()` would mean reading the developer's real settings.
    */
-  internal fun buildReport(queried: List<String>, primary: File, extras: List<File>): ToolUsagesReport {
-    val warnings = mutableListOf<String>()
+  internal fun buildReport(queried: List<String>, primary: File, extras: List<File>): ToolUsagesReport =
+    buildReport(queried, primary, extras, ToolAttribution.NONE)
+
+  internal fun buildReport(
+    queried: List<String>,
+    primary: File,
+    extras: List<File>,
+    attribution: ToolAttribution,
+  ): ToolUsagesReport {
+    // First, because they are about the inventory the whole report is attributed against — a reader
+    // needs "the inventory was partial" before any per-tool conclusion drawn from it.
+    val diagnostics = attribution.diagnostics.toMutableList()
     val usagesByTool = LinkedHashMap<String, MutableList<TrailToolUsage>>()
     queried.forEach { usagesByTool[it] = mutableListOf() }
 
@@ -356,7 +544,13 @@ class UsagesCommand : Callable<Int> {
     // `scannedRoots` exists to prevent. Drop those, and say so where a consumer already looks.
     val (readableExtras, missingExtras) = extras.partition { it.isDirectory }
     missingExtras.forEach {
-      warnings.add("${it.path}: configured trails root not scanned (no such directory)")
+      diagnostics.add(
+        UsagesDiagnostic(
+          kind = UsagesDiagnostic.ROOT_UNSCANNED,
+          subject = it.path,
+          message = "${it.path}: configured trails root not scanned (no such directory)",
+        ),
+      )
     }
 
     val yaml = createTrailblazeYaml()
@@ -369,11 +563,18 @@ class UsagesCommand : Callable<Int> {
       val trail = decoded.getOrNull()
       if (trail == null) {
         val reason = decoded.exceptionOrNull()?.message?.lineSequence()?.firstOrNull() ?: "unreadable"
-        warnings.add("${file.path}: not scanned ($reason)")
+        diagnostics.add(
+          UsagesDiagnostic(
+            kind = UsagesDiagnostic.TRAIL_UNPARSEABLE,
+            subject = file.path,
+            message = "${file.path}: not scanned ($reason)",
+          ),
+        )
         continue
       }
       val stepUsages: Map<String, List<TrailStepToolUsage>> = TrailToolUsageScanner.toolUsages(trail)
       val relativePath = file.relativeToOrSelf(root).path
+      val declaredDevices = UnifiedTrailTargets.declaredClassifiers(trail).toList()
       for (tool in queried) {
         val steps = stepUsages[tool] ?: continue
         usagesByTool.getValue(tool).add(
@@ -383,6 +584,8 @@ class UsagesCommand : Callable<Int> {
             root = root.absolutePath,
             title = trail.config.title,
             classifiers = steps.flatMap { it.classifiers }.distinct(),
+            devices = declaredDevices,
+            invokingDevices = TrailToolUsageScanner.invokingClassifiers(trail, steps).toList(),
             skip = trail.config.skip,
             steps = steps,
           ),
@@ -390,11 +593,46 @@ class UsagesCommand : Callable<Int> {
       }
     }
 
-    return ToolUsagesReport(
+    // Only when the inventory was actually READ, and read COMPLETELY. With no workspace above the
+    // trails root there is nothing to be absent from; with a partial scan the absence is explained
+    // by the scan itself (already reported above as `tool-inventory-incomplete`), and blaming a
+    // typo would be the one answer that is definitely wrong.
+    //
+    // Restricted to names with ZERO usages, because that is the whole ambiguity this resolves: a
+    // name a trail actually invokes has demonstrated it exists, so saying it is not a scripted tool
+    // is true but useless noise (`tapOn` is a built-in). Zero usages is the reading a caller cannot
+    // otherwise disambiguate — a real tool nothing invokes, or a name that never existed.
+    attribution.scriptedToolPaths?.takeIf { attribution.flagNamesAbsentFromInventory }?.let { declared ->
+      usagesByTool.filter { (tool, usages) -> usages.isEmpty() && tool !in declared }.keys.forEach { tool ->
+        diagnostics.add(
+          UsagesDiagnostic(
+            kind = UsagesDiagnostic.TOOL_NOT_IN_SCRIPTED_INVENTORY,
+            subject = tool,
+            message = "$tool: no usages found, and not declared as a scripted tool in this " +
+              "workspace's trailmaps. Built-in and class-backed tools are legitimately absent from " +
+              "that inventory — but if you meant a scripted tool, check the spelling, because a " +
+              "misspelled name reports zero usages exactly like a tool nothing invokes",
+            // A HINT, so it stays out of `warnings`. Nothing here says the scan was incomplete, and
+            // a fail-open gate reading `warnings` would otherwise trip on `usages tapOn` forever.
+            severity = UsagesDiagnostic.HINT,
+          ),
+        )
+      }
+    }
+
+    return ToolUsagesReport.of(
+      generatedBy = TrailblazeVersion.displayVersion,
       trailsRoot = primary.absolutePath,
       scannedRoots = (listOf(primary) + readableExtras).map { it.absolutePath },
-      tools = usagesByTool.map { (tool, usages) -> ToolUsageResult(tool = tool, usages = usages) },
-      warnings = warnings,
+      tools = usagesByTool.map { (tool, usages) ->
+        ToolUsageResult(
+          tool = tool,
+          usages = usages,
+          changeKind = attribution.changeKinds[tool] ?: ToolUsageResult.NAMED,
+          sourcePaths = attribution.scriptedToolPaths?.get(tool) ?: emptyList(),
+        )
+      },
+      diagnostics = diagnostics,
     )
   }
 
@@ -428,15 +666,33 @@ class UsagesCommand : Callable<Int> {
     val multipleRoots = roots.size > 1
     for (result in report.tools) {
       Console.log("")
+      // Named right on the tool's own line rather than only in the change summary above, which
+      // scrolls off once more than a handful of tools flagged — and `removed` is the one kind a
+      // reader must not miss, because its usages are trails that no longer resolve.
+      val kind = if (result.changeKind == ToolUsageResult.NAMED) "" else " [${result.changeKind}]"
       if (result.usages.isEmpty()) {
-        Console.log("${result.tool}: no direct trail usages found")
+        Console.log("${result.tool}$kind: no direct trail usages found")
+        result.sourcePaths.forEach { Console.log("  declared in $it") }
         continue
       }
-      Console.log("${result.tool}: used by ${result.usages.size} trail(s)")
+      Console.log("${result.tool}$kind: used by ${result.usages.size} trail(s)")
+      // Where to go edit it — the question a reader running this before a change asks next.
+      result.sourcePaths.forEach { Console.log("  declared in $it") }
       for (usage in result.usages) {
         val title = usage.title?.let { " — $it" }.orEmpty()
         val rootSuffix = if (multipleRoots) " [root: ${usage.root}]" else ""
         Console.log("  ${usage.trail} (${usage.classifiers.joinToString(", ")})$title$rootSuffix")
+        // Only when some declared device does NOT reach the tool. That is the case a reader cannot
+        // work out from the classifier keys on the line above — closest-wins resolution shadows an
+        // `all:` invocation on any device whose step declares something more specific — and it is
+        // the case that decides whether an iOS lane needs replaying. When every declared device
+        // reaches it, saying so again would just repeat the line above.
+        if (usage.invokingDevices.size < usage.devices.size) {
+          Console.log(
+            "    reaches ${usage.invokingDevices.joinToString(", ").ifEmpty { "no device" }} " +
+              "— NOT ${(usage.devices - usage.invokingDevices.toSet()).joinToString(", ")}",
+          )
+        }
         for (step in usage.steps) {
           val label = step.stepIndex?.let { "step $it" } ?: "trailhead"
           Console.log("    $label [${step.classifiers.joinToString(", ")}] ${step.step}")
@@ -448,8 +704,20 @@ class UsagesCommand : Callable<Int> {
     }
     if (report.warnings.isNotEmpty()) {
       Console.log("")
-      Console.log("${report.warnings.size} file(s) could not be scanned — the report may be incomplete:")
+      // Not "file(s) could not be scanned": diagnostics cover unread roots and tools whose
+      // comparison degraded — neither of which is an unscannable file, and calling them one sends a
+      // reader looking for a broken trail that does not exist.
+      Console.log("${report.warnings.size} caveat(s) on this report — it may be incomplete:")
       report.warnings.forEach { Console.log("  $it") }
+    }
+    // Printed separately from the caveats above, matching their split in the document: a hint is
+    // about the QUERY, not about what the scan could not see, and folding it into a list headed
+    // "may be incomplete" is what made a plain `usages tapOn` read as a degraded scan.
+    val hints = report.diagnostics.filter { it.severity == UsagesDiagnostic.HINT }
+    if (hints.isNotEmpty()) {
+      Console.log("")
+      Console.log("${hints.size} note(s) on the tools you asked for:")
+      hints.forEach { Console.log("  ${it.message}") }
     }
   }
 

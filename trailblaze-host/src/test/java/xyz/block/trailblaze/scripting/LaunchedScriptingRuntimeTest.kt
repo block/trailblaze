@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.scripting
 
+import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -162,6 +163,51 @@ class LaunchedScriptingRuntimeTest {
     )
     assertTrue(analyzerSourced.declaresExhaustiveParameters)
     assertFalse(yamlSynthesized.declaresExhaustiveParameters)
+  }
+
+  /**
+   * A `--no-logging` session materializes its bundles and subprocess wrappers into a scratch
+   * directory instead of the session directory, and this handle is what owns it: nothing else runs
+   * after the subprocesses stop. Without the delete the flag would trade session files for temp
+   * files that accumulate one per run.
+   */
+  @Test
+  fun `shutdownAll deletes the no-logging scratch directory and its contents`() = runBlocking {
+    val tempWorkDir = kotlin.io.path.createTempDirectory("launched-scripting-runtime-test").toFile()
+    // Non-empty, and nested: a plain File.delete() would leave all of this behind.
+    File(tempWorkDir, "inline-script-tools/server").mkdirs()
+    File(tempWorkDir, "inline-script-tools/server/index.mjs").writeText("// wrapper\n")
+
+    val runtime = LaunchedScriptingRuntime(
+      subprocessRuntime = null,
+      inlineRegistrations = emptyList(),
+      toolRepo = newRepo(),
+      tempWorkDir = tempWorkDir,
+    )
+    runtime.shutdownAll()
+
+    assertFalse(
+      tempWorkDir.exists(),
+      "expected the scratch directory to be gone after shutdown; still at ${tempWorkDir.absolutePath}",
+    )
+  }
+
+  /** A normal session's artifacts belong to its session directory, which teardown must not touch. */
+  @Test
+  fun `shutdownAll leaves a session directory alone when there is no scratch directory`() = runBlocking {
+    val sessionDir = kotlin.io.path.createTempDirectory("launched-scripting-runtime-session").toFile()
+    File(sessionDir, "trailblaze-log.json").writeText("{}")
+
+    val runtime = LaunchedScriptingRuntime(
+      subprocessRuntime = null,
+      inlineRegistrations = emptyList(),
+      toolRepo = newRepo(),
+    )
+    runtime.shutdownAll()
+
+    val survived = File(sessionDir, "trailblaze-log.json").isFile
+    sessionDir.deleteRecursively()
+    assertTrue(survived, "expected session files to survive teardown at ${sessionDir.absolutePath}")
   }
 
   // --- helpers ---

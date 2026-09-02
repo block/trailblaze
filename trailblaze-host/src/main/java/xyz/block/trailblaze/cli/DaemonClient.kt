@@ -30,6 +30,7 @@ import xyz.block.trailblaze.logs.server.endpoints.CliShutdownResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.RunState
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -260,10 +261,15 @@ class DaemonClient(
     request: CliRunRequest,
     onProgress: (String) -> Unit,
   ): CliRunResponse {
+    // Stamp the level THIS process resolved from its environment, so the daemon records the run
+    // the way its caller asked rather than the way the daemon was started. Done here, at the one
+    // place a run request leaves the CLI, so a new call site cannot forget it.
+    val stampedRequest = request.copy(traceLevel = TrailblazeTracer.level.name.lowercase())
+
     // Submit the run
     val response = client.post("$baseUrl${CliEndpoints.RUN_ASYNC}") {
       contentType(ContentType.Application.Json)
-      setBody(request)
+      setBody(stampedRequest)
     }
     val body = response.bodyAsText()
     if (!response.status.isSuccess() && response.status.value != 202) {

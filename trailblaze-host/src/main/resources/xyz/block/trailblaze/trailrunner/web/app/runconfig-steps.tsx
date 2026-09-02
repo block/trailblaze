@@ -73,11 +73,10 @@ function ToggleGroup({ label, children }) {
   );
 }
 
-// A jump-to-anchor section: the header doubles as the scroll target the left nav
-// scrolls to. `id` matches the `data-section` the dialog's scroll-spy reads.
-function Section({ id, title, ico, children, registerRef }) {
+// One titled block of the Run dialog's form column.
+function Section({ id, title, ico, children }) {
   return (
-    <section data-section={id} ref={registerRef ? (el) => registerRef(id, el) : null} style={{ scrollMarginTop: 12, paddingBottom: 8 }}>
+    <section data-section={id} style={{ paddingBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 6 }}>
         <div style={{ flex: '0 0 auto', width: 30, height: 30, borderRadius: 9, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', display: 'grid', placeItems: 'center', marginTop: 1 }}>
           <Ico n={ico} s={16} c="var(--text-subtle)" />
@@ -104,15 +103,23 @@ function TargetSection({ devices, deviceIds = [], toggleDevice, connectedIds = [
       <Field flag="Devices" ico={sel ? <PlatformGlyph platform={sel.platform} s={15} c="var(--text-subtle)" /> : 'smartphone'} full>
         {devices.length === 0
           ? <span className="tb-sub" style={{ fontSize: 12.5 }}>No connected devices.</span>
-          : <div data-testid="run-device-picker" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {devices.map((d) => (
-                <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '3px 0', cursor: launching ? 'default' : 'pointer', opacity: launching ? 0.6 : 1 }}>
-                  <input type="checkbox" checked={deviceIds.includes(d.id)} onChange={() => toggleDevice(d.id)} disabled={!!launching} aria-label={`Run on ${d.name}`} />
-                  <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
-                  {connectedIds.includes(d.id) && <span className="tb-sub" style={{ fontSize: 11, flex: '0 0 auto' }}>✓ connected</span>}
-                </label>
-              ))}
-              <span className="tb-sub" style={{ fontSize: 11.5, marginTop: 4 }}>
+          : <div data-testid="run-device-picker" style={{ display: 'flex', flexDirection: 'column', gap: 1, margin: '0 -8px' }}>
+              {devices.map((d) => {
+                const on = deviceIds.includes(d.id);
+                return (
+                  <label key={d.id} className={'tb-pick' + (on ? ' is-on' : '') + (launching ? ' is-static' : '')}
+                    style={{ alignItems: 'center', fontSize: 13, opacity: launching ? 0.6 : 1 }}>
+                    <input className="tb-pick-input" type="checkbox" checked={on} onChange={() => toggleDevice(d.id)}
+                      disabled={!!launching} aria-label={`Run on ${d.name}`} />
+                    <span className="tb-pick-box" style={{ marginTop: 0 }}><Ico n="check" s={11} c="currentColor" /></span>
+                    <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</span>
+                    {/* Right-aligned rather than trailing each name: the statuses then form one column
+                        instead of stepping in and out with the length of every device name. */}
+                    {connectedIds.includes(d.id) && <span className="tb-sub" style={{ fontSize: 11, flex: '0 0 auto' }}>connected</span>}
+                  </label>
+                );
+              })}
+              <span className="tb-sub" style={{ fontSize: 11.5, marginTop: 5, paddingLeft: 33 }}>
                 {deviceIds.length > 1
                   ? `Runs this trail on all ${deviceIds.length} checked devices - one run each.`
                   : 'Check more devices to run this trail on each of them.'}
@@ -204,44 +211,127 @@ function CaptureSection(p) {
   );
 }
 
-function RightRail({ trail, detail, liveYaml, tab, setTab, targetId, driver, platform }) {
-  const steps = detail.data?.steps || [];
+// The right-hand pane of the Run dialog: WHICH steps this run covers, and the control that changes
+// it. Every step is selectable, because running a trail is usually not running the whole trail - the
+// device is already in the state the earlier steps would put it in, so only the tail is worth
+// running.
+//
+// The selection is a contiguous span by construction. A run window is one `from..to`: it is what
+// gets sliced into the dispatched trail, and for a Record run it is also the window the recording is
+// merged back into, so a non-contiguous set has nothing to mean.
+//
+// `steps` are the trail's authored steps (the unified `trail:` list, whose indices the server means
+// by a step window). A trail that has none - a legacy list-root file - falls back to the read-only
+// step list from the trail detail and can only be run whole.
+function RunStepsPane({ steps, trailhead, range, total, onPick, onAll, detailSteps, loading, tab, setTab, showTabs, liveYaml, targetId, driver, platform }) {
+  // No span yet - the first render, before the dialog has read the trail's step count - reads as the
+  // whole trail, which is also what it will settle on. Every span below is therefore non-null.
+  const inRange = (i) => !range || (i >= range.start && i <= range.end);
+  const whole = !range || (range.start === 0 && range.end === total - 1);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
-      <div style={{ padding: '18px 18px 12px' }}>
-        <div style={{ display: 'flex', gap: 4, padding: 4, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 10 }}>
-          {[['steps', 'Steps', 'list'], ['yaml', 'YAML', 'code'], ['tools', 'Tools', 'box']].map(([id, label, ico]) => {
-            const on = tab === id;
-            return (
-              <button key={id} onClick={() => setTab(id)}
-                style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '7px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
-                  border: '1px solid ' + (on ? 'var(--tb-hairline-strong)' : 'transparent'),
-                  background: on ? 'var(--bg-subtle)' : 'transparent',
-                  color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>
-                <Ico n={ico} s={14} />{label}
-              </button>
-            );
-          })}
+      {showTabs && (
+        <div style={{ padding: '14px 16px 10px', flex: '0 0 auto' }}>
+          <div style={{ display: 'flex', gap: 4, padding: 4, background: 'var(--bg-standard)', border: '1px solid var(--tb-hairline)', borderRadius: 10 }}>
+            {[['steps', 'Steps', 'list'], ['yaml', 'YAML', 'code'], ['tools', 'Tools', 'box']].map(([id, label, ico]) => {
+              const on = tab === id;
+              return (
+                <button key={id} onClick={() => setTab(id)}
+                  style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '7px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+                    border: '1px solid ' + (on ? 'var(--tb-hairline-strong)' : 'transparent'),
+                    background: on ? 'var(--bg-subtle)' : 'transparent',
+                    color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>
+                  <Ico n={ico} s={14} />{label}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 18px 18px' }}>
-        {tab === 'steps' ? (
-          <>
-            {detail.loading && <div className="tb-sub" style={{ fontSize: 12 }}>Loading steps…</div>}
-            {!detail.loading && steps.length === 0 && (
-              <div className="tb-sub" style={{ fontSize: 12 }}>No recorded steps - the agent will drive from the objective.</div>
-            )}
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {/* The trailhead (step 0) keeps its own kind and shows unnumbered above the trail steps. */}
-              {(() => { let n = 0; return steps.map((s, i) => <RailStep key={i} idx={s.kind === 'trailhead' ? null : n++} step={s} last={i === steps.length - 1} />); })()}
+      )}
+      {(!showTabs || tab === 'steps') && (
+        <React.Fragment>
+          <div style={{ flex: '0 0 auto', padding: showTabs ? '0 16px 10px' : '16px 16px 10px', borderBottom: '1px solid var(--tb-hairline)' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, flex: 1, minWidth: 0 }}>
+                {steps.length === 0 ? 'Steps' : whole ? `All ${total} step${total === 1 ? '' : 's'}` : (
+                  range.start === range.end ? `Step ${range.start + 1} of ${total}` : `Steps ${range.start + 1}-${range.end + 1} of ${total}`
+                )}
+              </div>
+              {steps.length > 0 && !whole && (
+                <button data-testid="run-steps-all" onClick={onAll} className="tb-btn ghost sm">All steps</button>
+              )}
             </div>
-          </>
-        ) : tab === 'tools' ? (
-          <RunToolsPanel targetId={targetId} driver={driver} platform={platform} />
-        ) : (
-          <SearchableText text={liveYaml} language="yaml" fontSize={12} minHeight={120} />
-        )}
-      </div>
+            <div className="tb-sub" style={{ fontSize: 11.5, lineHeight: 1.5, marginTop: 3 }}>
+              {steps.length === 0
+                ? 'This trail runs as a whole.'
+                : whole
+                  ? 'Click a step to run from there to the end instead. Shift-click to set the other end.'
+                  : "Starts from whatever is on the device's screen right now - the trailhead is skipped."}
+            </div>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 8px 16px' }}>
+            {loading && steps.length === 0 && detailSteps.length === 0 && <div className="tb-sub" style={{ fontSize: 12, padding: 6 }}>Loading steps…</div>}
+            {steps.length === 0
+              ? (
+                <React.Fragment>
+                  {!loading && detailSteps.length === 0 && (
+                    <div className="tb-sub" style={{ fontSize: 12, padding: 6 }}>No recorded steps - the agent will drive from the objective.</div>
+                  )}
+                  {/* Read-only: a legacy list-root trail has no per-step recording slots, so neither a
+                      slice nor a save-back has an index to name. */}
+                  {(() => { let n = 0; return detailSteps.map((st, i) => <RailStep key={i} idx={st.kind === 'trailhead' ? null : n++} step={st} last={i === detailSteps.length - 1} />); })()}
+                </React.Fragment>
+              )
+              : (
+                <div data-testid="run-steps-picker" style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {trailhead && (
+                    // Not selectable: the trailhead is the run's deterministic step 0, and a window
+                    // names steps of `trail:`. It runs only when the whole trail does, which is
+                    // exactly what makes a partial run start from the current screen.
+                    <div className="tb-pick is-static" style={{ opacity: whole ? 0.9 : 0.45 }}>
+                      {/* Empty box column and the flag in the number column: the trailhead's prose then
+                          starts on the same line as every step's, which is the point of the columns. */}
+                      <span className="tb-pick-box" style={{ border: 0, background: 'transparent' }} />
+                      <span className="tb-pick-num" style={{ display: 'grid', placeItems: 'center', height: 18 }}>
+                        <Ico n="flag" s={12} c={whole ? 'var(--tb-primary-green)' : 'var(--text-subtle)'} />
+                      </span>
+                      <span style={{ minWidth: 0, flex: 1, fontSize: 12.5, lineHeight: 1.45 }}>
+                        {trailhead.text || 'Trailhead'}
+                        <span className="tb-sub" style={{ display: 'block', fontSize: 11 }}>{whole ? 'Runs first' : 'Skipped'}</span>
+                      </span>
+                    </div>
+                  )}
+                  {steps.map((st, i) => {
+                    const on = inRange(i);
+                    const recorded = Object.keys(st.recording || {}).some((k) => (st.recording[k] || []).length > 0);
+                    return (
+                      <button key={i} type="button" aria-pressed={on} className={'tb-pick' + (on ? ' is-on' : '')}
+                        onClick={(e) => onPick(i, e.shiftKey)}
+                        title={`Run from step ${i + 1} to the end (shift-click to end the range here)`}>
+                        <span className="tb-pick-box"><Ico n="check" s={11} c="currentColor" /></span>
+                        <span className="tb-pick-num">{i + 1}</span>
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ display: 'block', fontSize: 12.5, lineHeight: 1.45, wordBreak: 'break-word' }}>{st.text || 'step'}</span>
+                          {/* Says what a Play of this step would actually do: with nothing recorded
+                              for any device, replay has nothing to replay and the agent drives it. */}
+                          {!recorded && <span className="tb-sub" style={{ display: 'block', fontSize: 10.5, marginTop: 1 }}>no recording - the agent drives this step</span>}
+                        </span>
+                        {st.kind === 'verify' && <span style={{ flex: '0 0 auto', marginTop: 1 }}><Chip tone="blue">VERIFY</Chip></span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+          </div>
+        </React.Fragment>
+      )}
+      {showTabs && tab !== 'steps' && (
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 16px 16px' }}>
+          {tab === 'tools'
+            ? <RunToolsPanel targetId={targetId} driver={driver} platform={platform} />
+            : <SearchableText text={liveYaml} language="yaml" fontSize={12} minHeight={120} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -326,44 +416,8 @@ function ToolSetRow({ ts }) {
   );
 }
 
-// Sections shown top-to-bottom in the single-page config. The left rail jumps to
-// each; the dialog's scroll-spy highlights the one in view.
-const SECTIONS = [
-  ['target', 'Target', 'crosshair'],
-  ['behavior', 'Behavior', 'bot'],
-  ['capture', 'Capture', 'clapperboard'],
-];
-
-// The nav items double as a live summary of the run: each carries the current
-// value for its section (device, context counts, agent, artifact count). Fills
-// what would otherwise be dead rail space with glanceable state.
-function SectionNav({ active, onJump }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 8px' }}>
-      {SECTIONS.map(([id, name, ico]) => {
-        const on = active === id;
-        return (
-          <button key={id} onClick={() => onJump(id)}
-            style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', padding: '9px 12px', borderRadius: 10, cursor: 'pointer',
-              border: '1px solid ' + (on ? 'var(--tb-hairline-strong)' : 'transparent'),
-              background: on ? 'var(--bg-standard)' : 'transparent' }}>
-            <span style={{ flex: '0 0 auto', width: 26, height: 26, borderRadius: 8, display: 'grid', placeItems: 'center',
-              background: on ? 'var(--tb-selection)' : 'var(--bg-standard)',
-              border: on ? 'none' : '1px solid var(--tb-hairline-strong)' }}>
-              <Ico n={ico} s={14} c={on ? 'var(--tb-on-selection)' : 'var(--text-subtle)'} />
-            </span>
-            <span style={{ minWidth: 0, flex: 1 }}>
-              <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: on ? 'var(--text-standard)' : 'var(--text-subtle)' }}>{name}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 Object.assign(window, {
   RcInput, RcSelect, Field, CompactField, ToggleRow, ToggleGroup, Section, TargetSection,
   BehaviorSection, CaptureSection,
-  RightRail, RailStep, RunToolsPanel, ToolSetRow, SECTIONS, SectionNav,
+  RunStepsPane, RailStep, RunToolsPanel, ToolSetRow,
 });

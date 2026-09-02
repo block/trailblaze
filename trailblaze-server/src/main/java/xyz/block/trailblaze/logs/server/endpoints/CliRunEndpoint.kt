@@ -56,7 +56,7 @@ data class CliRunRequest(
    * (from `--self-heal` / `--no-self-heal`).
    */
   val selfHeal: Boolean? = null,
-  /** Override capture video setting (null = use app config default). */
+  /** Override capture video setting (null = default: video off, opt-in per run). */
   val captureVideo: Boolean? = null,
   /** Override capture Android logcat setting (null = use app config default). */
   val captureLogcat: Boolean? = null,
@@ -106,6 +106,52 @@ data class CliRunRequest(
    * CLI clients and for non-CLI submissions (MCP/HTTP), which keep the daemon-anchored behavior.
    */
   val callerWorkspaceDir: String? = null,
+  /**
+   * How much of this run the daemon should record — `off`, `normal` or `verbose`, as resolved by
+   * the caller's `TRAILBLAZE_TRACE_LEVEL` / `trailblaze.trace.level`.
+   *
+   * A daemon outlives the run that started it, so without this the level is whatever the daemon
+   * inherited at startup: `TRAILBLAZE_TRACE_LEVEL=verbose trailblaze run …` would silently record
+   * at `normal`, and a daemon launched under `verbose` would keep recording every later run that
+   * way. The daemon applies this for the run and restores its own level after.
+   *
+   * A string rather than the enum so an unrecognized value from a newer CLI leaves the daemon's
+   * level alone instead of failing to decode the request. Null (an older CLI, or a non-CLI
+   * submission over MCP/HTTP) also keeps the daemon's level.
+   */
+  val traceLevel: String? = null,
+  /**
+   * CLI `--configuration <name>`, forwarded into [RunYamlRequest.deviceConfiguration] — which of a
+   * trail's `config.devices:` casts this run binds. Null leaves the daemon's
+   * `TRAILBLAZE_DEVICE_CONFIGURATION` fallback in charge, as before.
+   */
+  val deviceConfiguration: String? = null,
+  /**
+   * CLI `--bind NAME=DEVICE_ID` entries, forwarded into [RunYamlRequest.deviceBindings] — the
+   * selected cast's COMPANION devices (the start device is [deviceId]).
+   *
+   * Per-request rather than read from the daemon's environment, which is what lets two multi-device
+   * runs bind different device sets on one daemon: `TRAILBLAZE_DEVICE_BINDINGS` is daemon-wide, so
+   * two casts sharing a device name (two pairs both naming `buyer`) cannot both be expressed there.
+   * Empty falls back to that env var.
+   */
+  val deviceBindings: Map<String, String> = emptyMap(),
+  /**
+   * CLI `--snapshot-baseline <ref>`: a previous run to diff this run's `takeSnapshot` captures
+   * against — an http(s) URL to a session logs zip, a local zip, or an extracted session
+   * directory. Null = no per-run baseline; the daemon then falls back to its own
+   * `TRAILBLAZE_SNAPSHOT_BASELINE` env var, and skips comparison when that's unset too.
+   *
+   * Version-skew note: a daemon predating this field ignores it and runs no comparison — update
+   * host and daemon together (or set the env var on the daemon) when relying on baseline diffs.
+   */
+  val snapshotBaseline: String? = null,
+  /**
+   * CLI `--snapshot-baseline-threshold <percent>`: a snapshot passes when its pixel diff
+   * percentage is <= this value. Null inherits the daemon's
+   * `TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD`, else the built-in default (2.0).
+   */
+  val snapshotBaselineThresholdPercent: Double? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:
@@ -147,6 +193,14 @@ data class CliRunResponse(
    * degrade gracefully in both directions.
    */
   val errorKind: String? = null,
+  /**
+   * Absolute path of the logs directory the daemon actually wrote this session into, so the CLI
+   * reads the recording from where it landed rather than re-deriving it. The two can differ: the
+   * daemon pins its logs repository at boot, and a client attached to a daemon started from
+   * another checkout (or before a `logsDirectory` change) resolves a different directory from the
+   * same settings. Null from older daemons — absent degrades to the client's own resolution.
+   */
+  val logsDir: String? = null,
 ) {
   companion object {
     /**

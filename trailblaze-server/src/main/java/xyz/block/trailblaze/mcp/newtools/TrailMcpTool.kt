@@ -109,6 +109,11 @@ class TrailMcpTool(
     filter: String? = null,
     @LLMDescription("Page number for LIST results (1-based, 20 results per page)")
     page: Int? = null,
+    @LLMDescription(
+      "Which multi-device configuration to bind (for RUN), e.g. \"pos-pair\". Only needed when " +
+        "the trail declares more than one — a trail declaring exactly one binds it automatically.",
+    )
+    deviceConfiguration: String? = null,
   ): String {
     return when (action) {
       TrailAction.START -> handleStart(name, platform, device)
@@ -116,7 +121,7 @@ class TrailMcpTool(
         Console.log("[trail] Deprecation: trail(action=SAVE) is deprecated. Use session(action=SAVE, title='...') instead.")
         handleSave(name)
       }
-      TrailAction.RUN -> handleRun(name, file, platform, device)
+      TrailAction.RUN -> handleRun(name, file, platform, device, deviceConfiguration)
       TrailAction.LIST -> handleList(filter, page ?: 1)
       TrailAction.END -> {
         Console.log("[trail] Deprecation: trail(action=END) is deprecated. Use session(action=STOP) instead.")
@@ -246,7 +251,14 @@ class TrailMcpTool(
     // Write through the shared file manager so this log-backed save honors the same refusal/merge
     // routing as every other save surface (it's the daemon-default path). Feed the items straight
     // in — no YAML encode/decode round-trip.
-    val saveResult = trailFileManager.saveTrailItems(trailName, recordedItems, platform)
+    // A multi-device session's legs are keyed by the configuration it bound, not by the launch
+    // device's platform — the session's own Started record is the only place that name survives.
+    val saveResult = trailFileManager.saveTrailItems(
+      name = trailName,
+      recordedItems = recordedItems,
+      platform = platform,
+      selectedDeviceConfiguration = startedStatus?.selectedDeviceConfiguration,
+    )
     return if (saveResult.success) {
       Console.log("[TrailMcpTool] Saved trail from logs to: ${saveResult.filePath}")
       TrailSaveResult(
@@ -310,6 +322,7 @@ class TrailMcpTool(
     file: String?,
     platform: TrailblazeDevicePlatform?,
     device: String?,
+    deviceConfiguration: String?,
   ): String {
     // Resolve trail file
     val trailFile = when {
@@ -352,10 +365,14 @@ class TrailMcpTool(
       }
     }
 
-    // Load with the bound device's classifiers so a unified trail lowers to its recordings.
+    // Load with the bound device's classifiers so a unified trail lowers to its recordings, and with
+    // the device configuration it binds — a configuration's recording legs resolve by exact name
+    // only, so loading a two-device trail without one lowers every step with no recording and
+    // reports a fully recorded trail as unrecorded.
     val loadResult = trailFileManager.loadTrail(
       trailFile,
       deviceClassifiers = deviceClassifiersProvider(sessionContext?.associatedDeviceId),
+      requestedDeviceConfiguration = deviceConfiguration,
     )
     if (!loadResult.success) {
       return TrailRunResult(
@@ -370,6 +387,7 @@ class TrailMcpTool(
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
     Console.log("│ [trail] Running: $trailFile")
     Console.log("│ Title: ${loadResult.config?.title ?: "untitled"}")
+    loadResult.selectedDeviceConfiguration?.let { Console.log("│ Device configuration: $it") }
     Console.log("│ Steps: $stepCount")
 
     // Execute the trail deterministically using TrailExecutor

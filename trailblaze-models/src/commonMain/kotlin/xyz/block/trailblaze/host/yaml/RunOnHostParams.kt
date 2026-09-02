@@ -33,12 +33,27 @@ class RunOnHostParams(
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
   /**
-   * Resolved per-run session-video toggle (CLI `--no-capture-video` > daemon appConfig > default).
-   * The web / Electron rules self-instrument their own video capture (the capture coordinator skips
-   * WEB), so this is how the user's opt-out reaches them — they gate their `ensure*VideoCaptureStarted`
-   * on it. Defaults to true to preserve capture for callers that don't thread the flag.
+   * Resolved per-run session-video toggle (CLI `--capture-video` > `TRAILBLAZE_CAPTURE_VIDEO` >
+   * `trailblaze config capture-video` > default off). The web / Electron rules self-instrument
+   * their own video capture (the capture coordinator skips WEB), so this is how the user's opt-in
+   * reaches them — they gate their `ensure*VideoCaptureStarted` on it. Defaults to false: video is
+   * opt-in (large files, expensive sprite extraction).
    */
-  val captureVideo: Boolean = true,
+  val captureVideo: Boolean = false,
+  /**
+   * Reference to a PREVIOUS run to diff this run's `takeSnapshot` captures against — an http(s)
+   * URL to a session logs zip (e.g. the CI artifact store's `latest_success.zip`), a local zip,
+   * or an extracted session directory. Null (the default) falls back to the
+   * `TRAILBLAZE_SNAPSHOT_BASELINE` env var in the executing process; comparison is skipped when
+   * neither is set. The goldens-free alternative to checked-in `*.golden.png` files.
+   */
+  val snapshotBaselineRef: String? = null,
+  /**
+   * Pass threshold for the baseline comparison: a snapshot passes when its pixel diff percentage
+   * is <= this value. Null inherits `TRAILBLAZE_SNAPSHOT_BASELINE_THRESHOLD`, else the built-in
+   * default (2.0).
+   */
+  val snapshotBaselineThresholdPercent: Double? = null,
 ) {
 
   val trailblazeDevicePlatform: TrailblazeDevicePlatform = device.platform

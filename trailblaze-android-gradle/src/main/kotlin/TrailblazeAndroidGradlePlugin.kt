@@ -143,8 +143,12 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
 
     // Conventions chosen to match the repo's existing on-disk convention
     // (assets/trails/<ClassName>/<methodName>.trail.yaml). Consumers override on the extension.
+    // A `com.android.test` module has no `androidTest` source set at all — its ONE source set,
+    // `main`, is the test APK — so the convention follows the module type. See [testSourceSetName].
     extension.trailsAssetsDir.convention(
-      project.layout.projectDirectory.dir("src/androidTest/assets/trails")
+      project.layout.dir(
+        project.provider { project.file("src/${testSourceSetName(project)}/assets/trails") }
+      )
     )
     extension.generatedSourceDir.convention(
       project.layout.buildDirectory.dir("generated/source/trailblazeTrails/androidTest")
@@ -206,15 +210,13 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
     //   - lintAnalyze*AndroidTest        (AGP lint analyze)
     //   - lintReport*AndroidTest         (AGP lint report)
     //
+    // On a `com.android.test` module the same four families carry no `AndroidTest` infix at all
+    // (`compileDebugKotlin`, `generateDebugLintModel`, …) because the module's single variant IS
+    // the test APK — see [testTaskInfix].
+    //
     // Matched on task NAMES, not types — works regardless of AGP's own configuration timing.
     project.tasks
-      .matching { task ->
-        val n = task.name
-        (n.startsWith("compile") && n.contains("AndroidTest")) ||
-          (n.startsWith("generate") && n.endsWith("AndroidTestLintModel")) ||
-          (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
-          (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
-      }
+      .matching { task -> matchesTestCompileOrLintTask(task.name, testTaskInfix(project)) }
       .configureEach { it.dependsOn(generate) }
 
     // AGP-aware auto-wiring, deferred to `afterEvaluate` so it runs after AGP's own `android { }`
@@ -224,12 +226,13 @@ class TrailblazeAndroidGradlePlugin : Plugin<Project> {
       val android = project.extensions.findByName("android")
       if (android == null) {
         throw GradleException(
-          "xyz.block.trailblaze.android-gradle requires `com.android.library` or " +
-            "`com.android.application` to be applied to this project — this plugin exists to wire " +
-            "JUnit-shell codegen (and, when configured, scripted-tool bundling) into AGP's " +
-            "`androidTest` source set, and has nothing to wire without one of those. Apply " +
-            "`alias(libs.plugins.android.library)` (or `.application`), or remove this plugin if " +
-            "this project doesn't build an Android test APK."
+          "xyz.block.trailblaze.android-gradle requires `com.android.library`, " +
+            "`com.android.application` or `com.android.test` to be applied to this project — this " +
+            "plugin exists to wire JUnit-shell codegen (and, when configured, scripted-tool " +
+            "bundling) into the AGP source set that becomes the test APK, and has nothing to wire " +
+            "without one of those. Apply `alias(libs.plugins.android.library)` (or `.application`, " +
+            "or `com.android.test` for a module that instruments a SEPARATE app), or remove this " +
+            "plugin if this project doesn't build an Android test APK."
         )
       }
       wireAgpSourceSets(project, android, extension)
@@ -267,7 +270,7 @@ private fun wireAgpSourceSets(
     } catch (e: ClassCastException) {
       throw agpReflectionError(android, "getSourceSets", e)
     }
-  sourceSets.named("androidTest").configure { androidTest ->
+  sourceSets.named(testSourceSetName(project)).configure { androidTest ->
     reflectSrcDir(androidTest, "getJava", extension.generatedSourceDir)
     // These two registrations make AGP MERGE the staging roots. They do NOT make AGP WATCH them —
     // see the input declarations below, which are gated on the same conditions.
@@ -283,14 +286,7 @@ private fun wireAgpSourceSets(
     listOf(extension.allStagingTasks, extension.inProcessIdleApkTasks).filter { it.isNotEmpty() }
   if (assetProducingTasks.isNotEmpty()) {
     project.tasks
-      .matching { task ->
-        val n = task.name
-        (n.startsWith("merge") && n.endsWith("AndroidTestAssets")) ||
-          (n.startsWith("package") && n.endsWith("AndroidTestAssets")) ||
-          (n.startsWith("generate") && n.endsWith("AndroidTestLintModel")) ||
-          (n.startsWith("lintAnalyze") && n.endsWith("AndroidTest")) ||
-          (n.startsWith("lintReport") && n.endsWith("AndroidTest"))
-      }
+      .matching { task -> matchesTestAssetOrLintTask(task.name, testTaskInfix(project)) }
       .configureEach { task ->
         task.dependsOn(assetProducingTasks)
         // `dependsOn` is ordering only, and a `srcDir` added to an already-finalized source set
@@ -341,6 +337,52 @@ private fun wireAgpSourceSets(
       }
   }
 }
+
+internal const val ANDROID_TEST_PLUGIN_ID = "com.android.test"
+
+/**
+ * The AGP source set whose contents become the test APK.
+ *
+ * `com.android.library` / `com.android.application` build the app (or library) from `main` and the
+ * test APK from `androidTest`. [ANDROID_TEST_PLUGIN_ID] builds ONLY a test APK, from `main` — it has
+ * no `androidTest` source set to name, and asking for one throws. That plugin is the supported way
+ * for a module to instrument an app it does not contain: AGP takes `targetProjectPath`'s
+ * applicationId as the merged manifest's `android:targetPackage`, which is what makes the tests run
+ * inside the app's process. A library module cannot do that — AGP pins its `targetPackage` to its
+ * own `testApplicationId` and ignores a `tools:replace` on it — so an in-process driver hosted in a
+ * library module would instrument itself and see none of the app's UI.
+ */
+internal fun testSourceSetName(project: Project): String =
+  if (project.plugins.hasPlugin(ANDROID_TEST_PLUGIN_ID)) "main" else "androidTest"
+
+/**
+ * The infix AGP puts in the test variant's task names. `compileDebugAndroidTestKotlin` on a library
+ * or application module; `compileDebugKotlin` on a `com.android.test` module, where the only variant
+ * IS the test one — see [testSourceSetName].
+ */
+internal fun testTaskInfix(project: Project): String =
+  if (project.plugins.hasPlugin(ANDROID_TEST_PLUGIN_ID)) "" else "AndroidTest"
+
+/** Compile + lint task families that must not run before the shell codegen. */
+internal fun matchesTestCompileOrLintTask(name: String, infix: String): Boolean =
+  if (infix.isEmpty()) {
+    (name.startsWith("compile") && (name.endsWith("Kotlin") || name.endsWith("JavaWithJavac"))) ||
+      (name.startsWith("generate") && name.endsWith("LintModel")) ||
+      name.startsWith("lintAnalyze") ||
+      name.startsWith("lintReport")
+  } else {
+    (name.startsWith("compile") && name.contains(infix)) ||
+      (name.startsWith("generate") && name.endsWith("${infix}LintModel")) ||
+      (name.startsWith("lintAnalyze") && name.endsWith(infix)) ||
+      (name.startsWith("lintReport") && name.endsWith(infix))
+  }
+
+/** Asset-merge + lint task families that consume the staged asset trees. */
+internal fun matchesTestAssetOrLintTask(name: String, infix: String): Boolean =
+  ((name.startsWith("merge") || name.startsWith("package")) && name.endsWith("${infix}Assets")) ||
+    (name.startsWith("generate") && name.endsWith("${infix}LintModel")) ||
+    (name.startsWith("lintAnalyze") && name.endsWith(infix)) ||
+    (name.startsWith("lintReport") && name.endsWith(infix))
 
 /** `sourceSet.<getterName>().srcDir(value)`, reflected — see [wireAgpSourceSets]'s kdoc for why. */
 private fun reflectSrcDir(sourceSet: Any, getterName: String, value: Any) {

@@ -6,7 +6,8 @@ config:
     then attribute-based disambiguation (the prior duplicate-list trail
     tests positional disambiguation; this one tests semantic).
   devices:
-    web: PLAYWRIGHT_NATIVE
+    web:
+      driver: PLAYWRIGHT_NATIVE
   title: 'LLM Benchmark: Search + disambiguate by attribute'
 
 trail:

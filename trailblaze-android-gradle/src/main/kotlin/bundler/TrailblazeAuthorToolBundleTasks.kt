@@ -11,6 +11,7 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Project
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.FileCollection
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.Property
@@ -213,6 +214,10 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
  *  - `--alias:@trailblaze/scripting=<scriptingSdkSrc>` — author code does
  *    `import { trailblaze } from "@trailblaze/scripting"`. Aliasing to the SLIM in-process entry
  *    keeps the bundle KB-scale (no MCP, no ajv, no zod).
+ *  - `--alias:@trailblaze/scripting/matcher=<scriptingSdkSrc's ../matcher/index.ts>` — the package
+ *    alias above rewrites SUBPATHS too, so without this one `@trailblaze/scripting/matcher`
+ *    resolves to `<slim entry>.ts/matcher` and the bundle fails. esbuild takes the longest
+ *    matching alias, so the two coexist in any order.
  *  - `--external:node:process` — defensive carry-over so any author who reaches for
  *    `node:process` doesn't break the on-device build at bundle time (the runtime fails such a
  *    tool at evaluation, which is the correct outcome for an in-process tool).
@@ -225,7 +230,9 @@ abstract class InstallAuthorToolDepsTask : DefaultTask() {
  * flags, they're outside the on-device contract this plugin exists to maintain, and they
  * should drive esbuild themselves.
  */
-abstract class BundleAuthorToolsTask : DefaultTask() {
+abstract class BundleAuthorToolsTask @Inject constructor(
+  private val objects: ObjectFactory,
+) : DefaultTask() {
 
   /**
    * The directory `ProcessBuilder` runs esbuild from (cwd). Marked `@Internal` because Gradle
@@ -266,6 +273,27 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
   @get:InputFile
   @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val scriptingSdkSrc: RegularFileProperty
+
+  /**
+   * Every SDK source esbuild can inline through the aliases — the directory holding
+   * [scriptingSdkSrc], which is also the parent of the `matcher/` subpath entry.
+   *
+   * A tree rather than the two entry FILES because both entries are barrels: `in-process.ts`
+   * and `matcher/index.ts` re-export siblings, so their real input surface is the directory.
+   * With only [scriptingSdkSrc] declared, an edit to `matcher/resolver.ts` (or to anything else
+   * the slim entry re-exports) left this task UP-TO-DATE and every on-device bundle kept the
+   * previous SDK code inlined — a stale bundle that no test and no build log reported.
+   *
+   * Derived from [scriptingSdkSrc] rather than wired by each plugin, so a new call site cannot
+   * forget it; empty when that property is unset, which is the functional tests' stub layout.
+   */
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  val scriptingSdkSources: FileCollection
+    get() {
+      val entryDir = scriptingSdkSrc.orNull?.asFile?.parentFile ?: return objects.fileCollection()
+      return objects.fileTree().from(entryDir)
+    }
 
   /**
    * The shared registration-wrapper template, read at bundle time. Declared as an `@InputFile`
@@ -357,18 +385,12 @@ abstract class BundleAuthorToolsTask : DefaultTask() {
       )
     }
 
-    val argv = listOf(
-      esbuild.absolutePath,
-      wrapperFile.absolutePath,
-      "--bundle",
-      "--platform=neutral",
-      "--format=iife",
-      "--target=es2020",
-      "--main-fields=module,main",
-      "--external:node:process",
-      "--alias:@trailblaze/scripting=${sdk.absolutePath}",
-      "--alias:@modelcontextprotocol/sdk/server/stdio.js=${stdioStubFile.absolutePath}",
-      "--outfile=${output.absolutePath}",
+    val argv = authorToolEsbuildArgv(
+      esbuild = esbuild,
+      wrapperFile = wrapperFile,
+      scriptingSdkEntry = sdk,
+      stdioStubFile = stdioStubFile,
+      output = output,
     )
 
     // `relativeToOrSelf` instead of `relativeTo` — the latter throws when [output] is
@@ -456,29 +478,10 @@ fun synthesizeInProcessScriptedToolWrapper(importSource: String, displayName: St
     importSource = importSource,
     // Multi-export: no single-export prelude — the empty replacement removes the token line.
     prelude = "",
-    registration = MULTI_EXPORT_REGISTRATION,
+    registration = multiExportRegistrationFrom(templateFile.readText()),
   )
 }
 
-/**
- * The multi-export registration footer shared by the two build-time bundlers (this plugin and
- * `:trailblaze-common`'s framework bundler). Registers every function-valued export under its own
- * export name. Type-only exports erase at bundle time; the `typeof === 'function'` filter skips any
- * non-tool export (e.g. esbuild's namespace markers). `const` in the for-of loop gives each
- * iteration its own binding so the handler closure captures the right tool definition.
- */
-val MULTI_EXPORT_REGISTRATION: String = buildString {
-  appendLine("for (const __exportName of Object.keys(__userModule)) {")
-  appendLine("  const __def = __userModule[__exportName];")
-  appendLine("  if (typeof __def !== 'function') continue;")
-  appendLine("  globalThis.__trailblazeTools[__exportName] = {")
-  appendLine("    handler: async (args, ctx) => {")
-  appendLine("      const result = await __def(args, ctx, __client);")
-  appendLine("      return __normalizeResult(result);")
-  appendLine("    },")
-  appendLine("  };")
-  appendLine("}")
-}
 
 /**
  * Token substitution over the shared wrapper template. Each `// __TOKEN__\n` line is replaced
@@ -494,10 +497,68 @@ fun renderInProcessScriptedToolWrapper(
   registration: String,
 ): String =
   templateText
+    .substringBefore(MULTI_EXPORT_BEGIN_LINE)
     .replace("// __TRAILBLAZE_HEADER__\n", header)
     .replace("__TRAILBLAZE_IMPORT_SOURCE__", importSource)
     .replace("// __TRAILBLAZE_PRELUDE__\n", prelude)
     .replace("// __TRAILBLAZE_REGISTRATION__\n", registration)
+
+/**
+ * The esbuild command line for one author-tool bundle.
+ *
+ * Extracted as a pure function because the flag set is a lockstep contract with
+ * `DaemonScriptedToolBundler.runEsbuild` (the daemon's equivalent of this path) and nothing
+ * else pins it: the plugin's functional tests point `esbuildBinary` at a stub file and never
+ * launch a real esbuild, so a flag that silently stops being passed here produces no test
+ * failure — only a differently-shaped on-device bundle. See `AuthorToolEsbuildArgvTest`.
+ *
+ * [scriptingSdkEntry] is the SLIM in-process entry; the matcher subpath's entry is resolved as
+ * its sibling so it follows `scriptingSdkSrc` wherever that points, and is aliased only when
+ * present — an SDK layout without it should fail on the author's import, not on an alias
+ * naming a file that isn't there.
+ */
+internal fun authorToolEsbuildArgv(
+  esbuild: File,
+  wrapperFile: File,
+  scriptingSdkEntry: File,
+  stdioStubFile: File,
+  output: File,
+): List<String> {
+  val matcherEntry = File(scriptingSdkEntry.parentFile, "matcher/index.ts")
+  return listOfNotNull(
+    esbuild.absolutePath,
+    wrapperFile.absolutePath,
+    "--bundle",
+    "--platform=neutral",
+    "--format=iife",
+    "--target=es2020",
+    "--main-fields=module,main",
+    "--external:node:process",
+    // MUST accompany the package alias below: esbuild's `--alias` rewrites subpaths, so the
+    // package alias alone turns `@trailblaze/scripting/matcher` into `<slim entry>.ts/matcher`
+    // and the bundle fails to resolve. esbuild takes the longest match, so order is irrelevant.
+    "--alias:@trailblaze/scripting/matcher=${matcherEntry.absolutePath}".takeIf { matcherEntry.isFile },
+    "--alias:@trailblaze/scripting=${scriptingSdkEntry.absolutePath}",
+    "--alias:@modelcontextprotocol/sdk/server/stdio.js=${stdioStubFile.absolutePath}",
+    "--outfile=${output.absolutePath}",
+  )
+}
+
+/**
+ * The multi-export registration footer, taken from the template rather than built here.
+ *
+ * It registers every function-valued export under its own export name. The three renderers of this
+ * wrapper live in three classpaths that cannot import each other, and each used to carry its own
+ * copy of this JS — copies that could disagree, and then a Gradle-built and a `make-test-apk`-built
+ * APK register different tools from the same source. The template file is reachable by all three,
+ * so it holds the footer and [renderInProcessScriptedToolWrapper] strips the block from every
+ * rendered wrapper.
+ */
+fun multiExportRegistrationFrom(templateText: String): String =
+  templateText.substringAfter(MULTI_EXPORT_BEGIN_LINE).substringBefore(MULTI_EXPORT_END_LINE)
+
+private const val MULTI_EXPORT_BEGIN_LINE = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_BEGIN__\n"
+private const val MULTI_EXPORT_END_LINE = "// __TRAILBLAZE_MULTI_EXPORT_REGISTRATION_END__\n"
 
 /**
  * Walk-up + immediate-children scan for the framework root marker
